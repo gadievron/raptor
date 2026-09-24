@@ -448,3 +448,133 @@ class TestChecklistPathContainment:
         cands = iter_call_graph_candidates(tmp_path, checklist)
         rels = [rel for rel, _, _ in cands]
         assert rels == ["ok.py"]
+
+
+# ---------------------------------------------------------------------------
+# Literal dynamic-dispatch facts (dispatch_tables / subscript_calls /
+# getattr_calls)
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_table_harvested():
+    g = extract_call_graph_python(
+        "def handle_a():\n    pass\n"
+        "def handle_b():\n    pass\n"
+        "HANDLERS = {'a': handle_a, 'b': mod.handle_b}\n"
+    )
+    assert g.dispatch_tables == {
+        "HANDLERS": [["handle_a"], ["mod", "handle_b"]],
+    }
+
+
+def test_dispatch_table_under_module_level_if():
+    """A table bound under a module-level ``if`` still binds the
+    module namespace at import — it must be harvested."""
+    g = extract_call_graph_python(
+        "if FLAG:\n    TABLE = {'x': fx}\n"
+    )
+    assert g.dispatch_tables == {"TABLE": [["fx"]]}
+
+
+def test_dispatch_table_not_harvested_inside_function_or_class():
+    g = extract_call_graph_python(
+        "def f():\n    LOCAL = {'a': ha}\n"
+        "class C:\n    CLS = {'b': hb}\n"
+    )
+    assert g.dispatch_tables == {}
+
+
+def test_dispatch_table_non_chain_values_skipped():
+    """Literal / lambda / call values have no name to join on —
+    skipped individually, chain values kept."""
+    g = extract_call_graph_python(
+        "T = {'a': ha, 'b': 42, 'c': lambda: 1, 'd': make()}\n"
+    )
+    assert g.dispatch_tables == {"T": [["ha"]]}
+
+
+def test_dispatch_table_later_assignment_wins():
+    g = extract_call_graph_python(
+        "T = {'a': ha}\nT = {'b': hb}\n"
+    )
+    assert g.dispatch_tables == {"T": [["hb"]]}
+
+
+def test_dispatch_table_value_cap():
+    from core.inventory.call_graph import _DISPATCH_TABLE_VALUE_CAP
+    entries = ", ".join(
+        f"'k{i}': f{i}" for i in range(_DISPATCH_TABLE_VALUE_CAP + 5)
+    )
+    g = extract_call_graph_python(f"T = {{{entries}}}\n")
+    assert len(g.dispatch_tables["T"]) == _DISPATCH_TABLE_VALUE_CAP
+    assert g.dispatch_tables["T"][0] == ["f0"]
+
+
+def test_subscript_call_records_root_and_caller():
+    g = extract_call_graph_python(
+        "def dispatch(k):\n    HANDLERS[k]()\n"
+    )
+    assert len(g.subscript_calls) == 1
+    site = g.subscript_calls[0]
+    assert site.chain == ["HANDLERS"]
+    assert site.caller == "dispatch"
+    assert site.line == 2
+    assert INDIRECTION_BRACKET_DISPATCH in g.indirection
+
+
+def test_subscript_call_attribute_root():
+    g = extract_call_graph_python("registry.table[k]()\n")
+    assert [c.chain for c in g.subscript_calls] == [["registry", "table"]]
+    assert g.subscript_calls[0].caller is None
+
+
+def test_subscript_call_rootless_not_recorded():
+    """``f()[0](...)`` has no static root — flag only, no site."""
+    g = extract_call_graph_python("f()[0]()\n")
+    assert g.subscript_calls == []
+    assert INDIRECTION_BRACKET_DISPATCH in g.indirection
+
+
+def test_getattr_call_site_literal():
+    g = extract_call_graph_python(
+        "def go(obj):\n    getattr(obj, 'run')()\n"
+    )
+    assert g.getattr_calls == [(2, "go", "run")]
+
+
+def test_getattr_call_site_opaque():
+    g = extract_call_graph_python(
+        "def go(obj, name):\n    getattr(obj, name)()\n"
+    )
+    assert g.getattr_calls == [(2, "go", None)]
+
+
+def test_dispatch_facts_round_trip():
+    g = extract_call_graph_python(
+        "T = {'a': ha}\n"
+        "def d(k, obj):\n"
+        "    T[k]()\n"
+        "    getattr(obj, 'ha')()\n"
+    )
+    g2 = FileCallGraph.from_dict(g.to_dict())
+    assert g2.dispatch_tables == g.dispatch_tables
+    assert [(c.line, c.chain, c.caller) for c in g2.subscript_calls] == [
+        (c.line, c.chain, c.caller) for c in g.subscript_calls
+    ]
+    assert g2.getattr_calls == g.getattr_calls
+
+
+def test_dispatch_facts_absent_from_old_inventories():
+    """Inventories written before these facts existed lack the keys —
+    from_dict must default all three to empty."""
+    g = FileCallGraph.from_dict({"imports": {}, "calls": []})
+    assert g.dispatch_tables == {}
+    assert g.subscript_calls == []
+    assert g.getattr_calls == []
+
+
+def test_dispatch_facts_omitted_from_dict_when_empty():
+    d = extract_call_graph_python("x = 1\n").to_dict()
+    assert "dispatch_tables" not in d
+    assert "subscript_calls" not in d
+    assert "getattr_calls" not in d
