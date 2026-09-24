@@ -210,6 +210,25 @@ def _fail_or_warn_missing_analysis(out_dir: Path, rc: int,
                    rc, stderr[:200])
 
 
+def _warn_analysis_rc_with_report(rc: int) -> None:
+    """Phase 3 wrote its report but the subprocess exited nonzero.
+
+    The report existing means the failure hit AFTER the results were
+    persisted (post-report teardown), so the run deliberately proceeds
+    on the written report and still exits 0 — but the child's rc must
+    be visible, not silently absorbed into "Analysis complete".
+    """
+    if rc == 0:
+        return
+    print(f"⚠️  Analysis subprocess exited {rc} after writing its "
+          "report — continuing on the written report",
+          file=sys.stderr)
+    logger.warning(
+        "Phase 3 subprocess exited %d after writing the analysis "
+        "report — proceeding on the written report", rc,
+    )
+
+
 def _collect_child_pass_costs(prepass_result, postpass_result,
                               audit_postpass) -> list[tuple[str, float]]:
     """(label, spend_usd) per opt-in pass subprocess that recorded spend.
@@ -4203,6 +4222,7 @@ def main() -> int:
         # Parse analysis results
         analysis_report = autonomous_out / "autonomous_analysis_report.json"
         if analysis_report.exists():
+            _warn_analysis_rc_with_report(rc)
             analysis = load_json(analysis_report)
             if not isinstance(analysis, dict):
                 analysis = {}

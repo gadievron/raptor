@@ -306,6 +306,31 @@ class TestMissingAnalysisReport:
         assert "produced no output" in capsys.readouterr().err
 
 
+class TestReportWithNonzeroRc:
+    """Phase 3 wrote its report but exited nonzero (post-report
+    teardown window). The run deliberately proceeds on the written
+    report and exits 0 — but the child rc must surface as a warning,
+    never be silently absorbed into "Analysis complete"."""
+
+    def test_nonzero_rc_warns_and_returns(self, capsys):
+        agentic = _import_agentic()
+        agentic._warn_analysis_rc_with_report(3)
+        err = capsys.readouterr().err
+        assert "exited 3" in err
+        assert "written report" in err
+
+    def test_zero_rc_stays_silent(self, capsys):
+        agentic = _import_agentic()
+        agentic._warn_analysis_rc_with_report(0)
+        assert capsys.readouterr().err == ""
+
+    def test_call_site_guards_the_report_branch(self):
+        src = (_RAPTOR_ROOT / "raptor_agentic.py").read_text(
+            encoding="utf-8")
+        assert ("if analysis_report.exists():\n"
+                "            _warn_analysis_rc_with_report(rc)") in src
+
+
 # ---------------------------------------------------------------------------
 # _cli_entry lifecycle backstop
 # ---------------------------------------------------------------------------
