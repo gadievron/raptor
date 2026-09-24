@@ -357,8 +357,12 @@ def _compare_pair(
     so, sn = fo.signature, fn.signature
     constants_changed = False
     if rename_aware:
-        from .match import (_mask_own_name, _normalize_decomp,
-                            _normalize_keep_constants, _strip_nul)
+        from .similarity import (
+            mask_own_name as _mask_own_name,
+            normalize_decomp as _normalize_decomp,
+            normalize_keep_constants as _normalize_keep_constants,
+            strip_nul as _strip_nul,
+        )
 
         def _norm(text: Optional[str], own: str,
                   normalizer) -> Optional[str]:

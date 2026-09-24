@@ -559,9 +559,10 @@ class TestHostileResourceBounds:
 
     def test_shingles_are_token_capped(self):
         import packages.ghidra.match as m
+        from packages.ghidra.similarity import MAX_SHINGLE_TOKENS
         f = _func("big", 0x1000,
                   decomp="x = a + b; " * 200_000)
-        assert len(m._shingles(f)) <= m._MAX_SHINGLE_TOKENS
+        assert len(m._shingles(f)) <= MAX_SHINGLE_TOKENS
 
     def test_set_work_budget_skips_loudly(self, monkeypatch):
         monkeypatch.setattr(match_mod, "_MAX_SIM_WORK", 10)

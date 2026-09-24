@@ -43,7 +43,6 @@ matching into a CPU sink.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 from bisect import bisect_right
@@ -52,18 +51,23 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from .model import REDatabase, REFunction
 
+# Similarity primitives live in packages.ghidra.similarity (one home,
+# two consumers: this 1:1 cascade and many-to-many peer clustering).
+# Bound here under the historical private names so every internal
+# call site keeps working unchanged; other consumers (the diff path,
+# clustering) import the seam directly.
+from .similarity import (
+    decomp_hash as _decomp_hash,
+    jaccard as _jaccard,
+    shingles as _shingles,
+)
+
 logger = logging.getLogger(__name__)
 
 _MAX_NAME_CHARS = 200
 #: Pairwise-comparison budget for the similarity tier — beyond this
 #: the tier stops with a loud note rather than melting the CPU.
 _MAX_PAIRWISE = 250_000
-#: Tokens per function fed into shingling — attacker decompilation is
-#: unbounded; ~1k tokens is plenty for similarity.
-_MAX_SHINGLE_TOKENS = 1024
-#: Text prefix fed into shingle normalization — 1024 tokens fit in a
-#: fraction of this; the rest only costs memory.
-_MAX_SHINGLE_TEXT = 262_144
 #: Work budget for the similarity tier: Σ set-elements touched across
 #: all pairwise comparisons. The pair-count budget alone under-counts
 #: when a hostile database pads every decompilation to the shingle
@@ -87,20 +91,6 @@ _SIZE_SLACK = 64
 #: exist, so exhaustion is reported, not silent.
 _T4_MAX_SWEEPS = 32
 
-_AUTO_NAME = re.compile(
-    r"\b(?:thunk_FUN|j_FUN|FUN|DAT|LAB|SUB|loc|fcn|sub|switchD|caseD)"
-    r"_[0-9a-fA-F]+\b")
-_HEX_CONST = re.compile(r"0x[0-9a-fA-F]+")
-_WS = re.compile(r"\s+")
-#: Mask sentinels are NUL-delimited so no legal C/C++ identifier can
-#: collide with them (a genuine variable named "A1" or "H" must not
-#: hash-equal a masked auto-name or constant); _TOKEN matches them so
-#: masked positions still participate in shingles.
-_MASK_HEX = "\x00H\x00"
-_MASK_OWN = "\x00F\x00"
-_TOKEN = re.compile(
-    r"\x00[A-Za-z0-9]+\x00|[A-Za-z_][A-Za-z0-9_]*"
-    r"|[{}();,*&\[\]=+<>!-]")
 _CONTROL = re.compile(
     "[\\x00-\\x1f\\x7f-\\x9f"          # C0/C1 control (incl. ESC)
     "\\u200b-\\u200f\\u2028\\u2029"     # zero-width, marks, line/para sep
@@ -137,119 +127,6 @@ def _is_auto_named(func: REFunction) -> bool:
         return True
     from .parser import _looks_auto_named
     return _looks_auto_named(name)
-
-
-def _strip_nul(text: str) -> str:
-    """Remove raw NUL bytes from attacker-derived text.
-
-    Mask sentinels are NUL-delimited; input text containing literal
-    NULs (legal in the JSON round-trip) could forge a sentinel and
-    fake normalized equality. Applied at every text entry point,
-    BEFORE any masking."""
-    return text.replace("\x00", " ")
-
-
-def _mask_own_name(text: str, own: str) -> str:
-    """Mask a function's own (possibly renamed) name in its text.
-
-    Word-bounded — a name that is a substring of other identifiers
-    ("a" in "max") must not be masked there — and replaced via a
-    callable so the sentinel is never interpreted for backreferences.
-    """
-    if not own:
-        return text
-    return re.sub(
-        r"(?<![A-Za-z0-9_])" + re.escape(own) + r"(?![A-Za-z0-9_])",
-        lambda _m: _MASK_OWN, text)
-
-
-def _mask_auto_names(text: str) -> str:
-    """Auto-generated names → canonical per-text indices (A1, A2, …).
-
-    A rebase renames every auto-name consistently, which preserves
-    the occurrence structure — but a retargeted reference (FUN_X →
-    FUN_Y where Y is referenced elsewhere in the body) changes it, so
-    canonical numbering keeps rebase tolerance without flattening
-    every auto-name into one indistinguishable token.
-    """
-    seen: Dict[str, str] = {}
-
-    def _canon(mo: "re.Match[str]") -> str:
-        name = mo.group(0)
-        idx = seen.get(name)
-        if idx is None:
-            idx = f"\x00A{len(seen) + 1}\x00"
-            seen[name] = idx
-        return idx
-
-    return _AUTO_NAME.sub(_canon, text)
-
-
-def _normalize_decomp(text: str) -> str:
-    """Decompilation normalized for cross-build comparison.
-
-    Auto-generated names and hex constants embed addresses that shift
-    between builds; whitespace embeds none. Both are masked so the
-    hash keys on structure and real identifiers only.
-    """
-    text = _mask_auto_names(text)
-    text = _HEX_CONST.sub(_MASK_HEX, text)
-    return _WS.sub(" ", text).strip()
-
-
-def _normalize_keep_constants(text: str) -> str:
-    """Like :func:`_normalize_decomp` but hex constants survive.
-
-    The comparison layer uses this as the second stage: a pair whose
-    fully-normalized text matches but whose constants differ carries
-    a real change (bounds, masks, auth constants) that full masking
-    would silently swallow.
-    """
-    text = _mask_auto_names(text)
-    return _WS.sub(" ", text).strip()
-
-
-def _decomp_hash(func: REFunction) -> Optional[str]:
-    if not func.decompilation:
-        return None
-    norm = _normalize_decomp(_strip_nul(str(func.decompilation)))
-    if len(norm) < 16:
-        # single-line stubs collide constantly; too weak to key on
-        return None
-    return hashlib.sha256(norm.encode("utf-8", "replace")).hexdigest()
-
-
-def _shingles(func: REFunction) -> FrozenSet[str]:
-    """3-token shingles of the normalized decompilation (capped).
-
-    The token cap is applied while ITERATING — materializing the full
-    token list first turned one hostile multi-megabyte decompilation
-    into hundreds of MB of peak memory before the cap could bite.
-    """
-    if not func.decompilation:
-        return frozenset()
-    from itertools import islice
-    text = _strip_nul(str(func.decompilation))
-    if len(text) > _MAX_SHINGLE_TEXT:
-        # the token cap never needs more input than this; without the
-        # text cap the normalizer's intermediate strings are the
-        # memory sink on hostile multi-MB decompilations
-        text = text[:_MAX_SHINGLE_TEXT]
-    toks = [m.group(0) for m in islice(
-        _TOKEN.finditer(_normalize_decomp(text)),
-        _MAX_SHINGLE_TOKENS)]
-    if len(toks) < 3:
-        return frozenset(toks)
-    return frozenset(
-        " ".join(toks[i:i + 3]) for i in range(len(toks) - 2)
-    )
-
-
-def _jaccard(a: FrozenSet[str], b: FrozenSet[str]) -> Optional[float]:
-    if not a or not b:
-        return None
-    union = len(a | b)
-    return len(a & b) / union if union else None
 
 
 @dataclass
