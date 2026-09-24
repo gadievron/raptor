@@ -47,3 +47,82 @@ def test_prefer_kwarg_forwarded(monkeypatch):
     )
     get_client(prefer="anthropic")
     assert seen["prefer"] == "anthropic"
+
+
+class TestTranscriptRouting:
+    """Transcript-session routing (core.llm.transcript adoption)."""
+
+    def _seed_transcript(self, tmp_path):
+        from core.llm.providers import LLMResponse
+        from core.llm.transcript import TranscriptRecorder
+        path = tmp_path / "t.jsonl"
+        TranscriptRecorder(path).record_generate(
+            "p", None, "analyse", {},
+            LLMResponse(
+                content="frozen", model="m", provider="anthropic",
+                tokens_used=1, cost=0.0, finish_reason="stop",
+            ),
+        )
+        return path
+
+    def test_replay_mode_returns_client_without_any_provider(
+        self, tmp_path, monkeypatch,
+    ):
+        from core.llm.transcript import (
+            TranscriptLLMClient,
+            reset_active_transcript,
+        )
+        path = self._seed_transcript(tmp_path)
+        monkeypatch.setenv("RAPTOR_LLM_TRANSCRIPT", f"replay:{path}")
+        monkeypatch.setattr(
+            "core.llm.config._get_default_primary_model",
+            lambda prefer=None: None,
+        )
+        reset_active_transcript()
+        try:
+            client = get_client()
+            assert isinstance(client, TranscriptLLMClient)
+            assert client.generate("p", task_type="analyse").content == \
+                "frozen"
+            assert client.providers == {}
+        finally:
+            reset_active_transcript()
+
+    def test_garbled_transcript_env_is_loud_not_none(self, monkeypatch):
+        from core.llm.transcript import (
+            TranscriptError,
+            reset_active_transcript,
+        )
+        import pytest as _pytest
+        monkeypatch.setenv("RAPTOR_LLM_TRANSCRIPT", "garbled-value")
+        reset_active_transcript()
+        try:
+            with _pytest.raises(TranscriptError):
+                get_client()
+        finally:
+            reset_active_transcript()
+
+    def test_record_mode_wraps_the_constructed_client(
+        self, tmp_path, monkeypatch,
+    ):
+        from core.llm.config import LLMConfig, ModelConfig
+        from core.llm.transcript import (
+            TranscriptLLMClient,
+            reset_active_transcript,
+        )
+        monkeypatch.setenv(
+            "RAPTOR_LLM_TRANSCRIPT", f"record:{tmp_path / 't.jsonl'}",
+        )
+        reset_active_transcript()
+        try:
+            client = get_client(config=LLMConfig(
+                primary_model=ModelConfig(
+                    provider="anthropic", model_name="test-model-stub",
+                    api_key="k",
+                ),
+                enable_caching=False,
+            ))
+            assert isinstance(client, TranscriptLLMClient)
+            assert client.transcript_session.mode == "record"
+        finally:
+            reset_active_transcript()
