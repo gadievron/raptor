@@ -1863,9 +1863,16 @@ def _fold_journal_into_covered(
                 # them to one arbitrary site, dropping the coverage
                 # credit for its siblings and re-buying their reviews
                 # on every resume.
-                from .journal import load_entries
+                # SPEND-AUTHORIZING read: this fold decides which
+                # functions re-import at $0 versus re-review at full
+                # price, so a PARTIAL journal load must refuse (raise)
+                # rather than silently re-buy every missing verdict —
+                # require_complete_entries raises JournalIncomplete
+                # with the compaction remedy, and the except arm
+                # below re-raises it past the best-effort boundary.
+                from .journal import require_complete_entries
                 per_site: dict[tuple, Any] = {}
-                own_entries = load_entries(out_dir)
+                own_entries = require_complete_entries(out_dir)
                 for _e in own_entries:
                     _k = (_e.file, _e.function, _e.line_start)
                     _prev = per_site.get(_k)
@@ -1910,7 +1917,14 @@ def _fold_journal_into_covered(
                     and is_function_grade(e)
                     and not getattr(e, "provisional", None)
                 )
-        except Exception:
+        except Exception as exc:
+            from core.coverage.journal import JournalIncomplete
+            if isinstance(exc, JournalIncomplete):
+                # The own-run reuse fold authorizes spend: degrading
+                # here converts every unloaded verdict into a fresh
+                # full-price review. Refuse loudly instead — the
+                # operator compacts and resumes.
+                raise
             logger.warning(
                 "journal-fold: failed to read per-run journal at %s — "
                 "gap computation will treat this run's reviews as absent",

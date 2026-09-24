@@ -1174,3 +1174,45 @@ class TestDarkRecordSurfaces:
         assert bool(
             store.tool_coverage_of_range("auth.c", 1, 5)
         ) is bool(marked), status
+
+
+class TestOwnRunFoldSpendRefusal:
+    """The own-run reuse fold is a SPEND-AUTHORIZING journal read: a
+    partial load silently re-buys every unloaded verdict, so it must
+    refuse (raise) instead of degrading. The plain (reuse-disabled)
+    fold keeps the historical degrade direction — it only grants
+    coverage credit, never $0 imports."""
+
+    def test_incomplete_journal_refuses_own_run_fold(
+            self, tmp_path, monkeypatch):
+        import core.coverage.journal as journal_mod
+        from core.coverage.journal import JournalIncomplete
+        target = _write_target(tmp_path)
+        run_dir = _run_dir(
+            tmp_path, _entry(target),
+            _entry(target, function="other_fn", line_start=2),
+        )
+        size = (run_dir / "review-journal.jsonl").stat().st_size
+        monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_BYTES", size - 1)
+        with pytest.raises(JournalIncomplete):
+            compute_gaps(
+                _checklist(target), [], out_dir=run_dir,
+                reuse_sink={}, own_run_reuse=True,
+                current_model="model-a",
+            )
+
+    def test_incomplete_journal_degrades_plain_fold(
+            self, tmp_path, monkeypatch):
+        import core.coverage.journal as journal_mod
+        target = _write_target(tmp_path)
+        run_dir = _run_dir(
+            tmp_path, _entry(target),
+            _entry(target, function="other_fn", line_start=2),
+        )
+        size = (run_dir / "review-journal.jsonl").stat().st_size
+        monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_BYTES", size - 1)
+        gaps = compute_gaps(
+            _checklist(target), [], out_dir=run_dir,
+            own_run_reuse=False,
+        )
+        assert isinstance(gaps, list)
