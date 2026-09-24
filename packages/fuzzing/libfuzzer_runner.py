@@ -29,6 +29,20 @@ from packages.fuzzing.output_hygiene import strip_terminal_controls
 
 logger = get_logger()
 
+# libFuzzer status-line grammar, shared by every libFuzzer-driven
+# engine (native harnesses here, atheris in atheris_runner — atheris
+# IS libFuzzer with a Python front-end, its stderr uses this exact
+# format). \b pins the corp count to its full number — the digits
+# group and the lazy filler overlapped on digits (quadratic on a
+# crafted stats line). Earliest-match captures unchanged.
+LIBFUZZER_STATS_RE = re.compile(
+    # the mid-line gap is bounded too: unbounded, a crafted
+    # stats stream that repeats the "#N ... corp:" head re-scans
+    # the rest from every occurrence — quadratic. Real stat
+    # lines keep exec/s within a few dozen chars of corp.
+    r"#(\d+)\s+(?:DONE|REDUCE|RELOAD|NEW|pulse)\s+cov:\s*(\d+)\s+ft:\s*(\d+)\s+corp:\s*(\d+)\b.{0,200}?exec/s:\s*(\d+)"
+)
+
 
 @dataclass
 class LibFuzzerStats:
@@ -73,16 +87,12 @@ class LibFuzzerResult:
 class LibFuzzerRunner:
     """Run a libFuzzer harness."""
 
-    # \b pins the corp count to its full number — the digits group
-    # and the lazy filler overlapped on digits (quadratic on a
-    # crafted stats line). Earliest-match captures unchanged.
-    _STATS_RE = re.compile(
-        # the mid-line gap is bounded too: unbounded, a crafted
-        # stats stream that repeats the "#N ... corp:" head re-scans
-        # the rest from every occurrence — quadratic. Real stat
-        # lines keep exec/s within a few dozen chars of corp.
-        r"#(\d+)\s+(?:DONE|REDUCE|RELOAD|NEW|pulse)\s+cov:\s*(\d+)\s+ft:\s*(\d+)\s+corp:\s*(\d+)\b.{0,200}?exec/s:\s*(\d+)"
-    )
+    _STATS_RE = LIBFUZZER_STATS_RE
+
+    #: Engine label used in operator-facing log lines. Subclasses
+    #: driving libFuzzer through a front-end (atheris) override it so
+    #: their campaigns do not report as "libFuzzer".
+    _ENGINE_NAME = "libFuzzer"
 
     def __init__(
         self,
@@ -98,12 +108,7 @@ class LibFuzzerRunner:
         workers: int = 0,
     ) -> None:
         self.harness = Path(harness_path).resolve()
-        if not self.harness.exists():
-            msg = f"Harness binary not found: {harness_path}"
-            raise FileNotFoundError(msg)
-        if not self.harness.stat().st_mode & 0o111:
-            msg = f"Harness is not executable: {harness_path}"
-            raise PermissionError(msg)
+        self._validate_harness()
 
         # Anchor the default output dir to RaptorConfig.get_out_dir()
         # (active project run dir, or the configured output base) —
@@ -144,9 +149,20 @@ class LibFuzzerRunner:
         self.crashes_dir = self.output_dir / "crashes"
         self.crashes_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info("libFuzzer runner: harness=%s", self.harness)
+        logger.info("%s runner: harness=%s", self._ENGINE_NAME, self.harness)
         logger.info("  corpus: %s", self.corpus_dir)
         logger.info("  output: %s", self.output_dir)
+
+    def _validate_harness(self) -> None:
+        """Constructor-time harness checks. Subclass seam: the native
+        harness is directly executed so it must carry the executable
+        bit; interpreter-driven engines (atheris) override this."""
+        if not self.harness.exists():
+            msg = f"Harness binary not found: {self.harness}"
+            raise FileNotFoundError(msg)
+        if not self.harness.stat().st_mode & 0o111:
+            msg = f"Harness is not executable: {self.harness}"
+            raise PermissionError(msg)
 
     # Per-file cap for the corpus stager — corpus_manager's bounded-
     # copy idiom. Real fuzz seeds are kilobytes-to-low-MB; a hostile
@@ -219,17 +235,9 @@ class LibFuzzerRunner:
         event stream after the sandboxed campaign exits.
         """
         cmd = self._build_command()
-        logger.info("libFuzzer command: %s", ' '.join(cmd))
+        logger.info("%s command: %s", self._ENGINE_NAME, ' '.join(cmd))
 
-        # The harness is untrusted target code — same identity scrub
-        # as the AFL campaign env.
-        from packages.fuzzing.env_hygiene import scrub_identity_env
-        env = scrub_identity_env(RaptorConfig.get_safe_env())
-        env.setdefault(
-            "ASAN_OPTIONS",
-            "abort_on_error=1:symbolize=1:detect_leaks=1:detect_stack_use_after_return=1",
-        )
-        env.setdefault("UBSAN_OPTIONS", "abort_on_error=1:symbolize=1:print_stacktrace=1")
+        env = self._campaign_env()
 
         start = time.time()
         # The harness's streams go straight to disk (same shape as the
@@ -251,6 +259,7 @@ class LibFuzzerRunner:
                     output=str(self.output_dir),
                     restrict_reads=True,
                     readable_paths=self._readable_paths(),
+                    tool_paths=self._sandbox_tool_paths() or None,
                     stdout=stdout_fp,
                     stderr=stderr_fp,
                     timeout=self.max_total_time + max(30, self.timeout_seconds + 5),
@@ -259,7 +268,7 @@ class LibFuzzerRunner:
                 )
             returncode = completed.returncode
         except subprocess.TimeoutExpired:
-            logger.warning("libFuzzer exceeded campaign timeout; parsing partial output")
+            logger.warning("%s exceeded campaign timeout; parsing partial output", self._ENGINE_NAME)
             returncode = -1
             wedge_timeout = True
         except KeyboardInterrupt:
@@ -289,11 +298,11 @@ class LibFuzzerRunner:
         )
         if result.campaign_failed:
             logger.error(
-                "libFuzzer campaign FAILED (rc=%s, no findings) — see %s",
-                returncode, stderr_path,
+                "%s campaign FAILED (rc=%s, no findings) — see %s",
+                self._ENGINE_NAME, returncode, stderr_path,
             )
         logger.info(
-            "libFuzzer done (rc=%s): %s execs, %s/s, cov=%s features, crashes=%s", returncode, result.stats.total_executions, result.stats.executions_per_second, result.stats.coverage_features, len(result.crashes)
+            "%s done (rc=%s): %s execs, %s/s, cov=%s features, crashes=%s", self._ENGINE_NAME, returncode, result.stats.total_executions, result.stats.executions_per_second, result.stats.coverage_features, len(result.crashes)
         )
         return result
 
@@ -311,6 +320,28 @@ class LibFuzzerRunner:
                 return fh.read(cls._MAX_PARSE_BYTES).decode(errors="replace")
         except OSError:
             return ""
+
+    def _campaign_env(self) -> dict:
+        """Sandbox environment for the campaign process.
+
+        The harness is untrusted target code — same identity scrub
+        as the AFL campaign env. Subclass seam: interpreter-driven
+        engines extend this with their runtime variables.
+        """
+        from packages.fuzzing.env_hygiene import scrub_identity_env
+        env = scrub_identity_env(RaptorConfig.get_safe_env())
+        env.setdefault(
+            "ASAN_OPTIONS",
+            "abort_on_error=1:symbolize=1:detect_leaks=1:detect_stack_use_after_return=1",
+        )
+        env.setdefault("UBSAN_OPTIONS", "abort_on_error=1:symbolize=1:print_stacktrace=1")
+        return env
+
+    def _sandbox_tool_paths(self) -> list[str]:
+        """Extra sandbox read-allowed tool roots. Subclass seam: a
+        native harness needs none; interpreter-driven engines add
+        their runtime directories."""
+        return []
 
     def _readable_paths(self) -> list[str]:
         paths = [str(self.harness.parent), str(self.corpus_dir), str(self.output_dir)]
@@ -384,17 +415,22 @@ class LibFuzzerRunner:
             cmd.append(f"-workers={self.workers}")
         return cmd
 
+    def _new_result(self) -> LibFuzzerResult:
+        """Fresh result record for this campaign. Subclass seam:
+        engines with extra parse output return their own subtype."""
+        return LibFuzzerResult(
+            target=str(self.harness),
+            output_dir=self.output_dir,
+            corpus_dir=self.corpus_dir,
+        )
+
     def _parse_result(
         self,
         stderr: str,
         _stdout: str,
         elapsed: float,
     ) -> LibFuzzerResult:
-        result = LibFuzzerResult(
-            target=str(self.harness),
-            output_dir=self.output_dir,
-            corpus_dir=self.corpus_dir,
-        )
+        result = self._new_result()
         result.stats.elapsed_seconds = elapsed
 
         # Parse stats from stderr
