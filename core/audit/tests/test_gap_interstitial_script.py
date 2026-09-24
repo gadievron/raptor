@@ -454,10 +454,10 @@ class TestStarContinuationCloseTag:
             "include '1'\n* 2 ?>output\n")
 
     def test_docblock_body_slice_stays_skipped(self):
-        # Two-direction: a genuine mid-docblock hydration slice (no
-        # close tag) keeps the skip.
+        # Two-direction: a genuine mid-docblock hydration slice —
+        # prose without code-capable characters — keeps the skip.
         assert not _php_interstitial_is_handler(
-            "* @param string $x\n"
+            "* Sanitizes the output buffer.\n"
             "* @return int\n"
             "*/\n"
             "include('a.php');\n")
@@ -467,3 +467,45 @@ class TestStarContinuationCloseTag:
         # docblock stays comment prose (PHP-correct).
         assert not _php_interstitial_is_handler(
             "/**\n * example: x ?><?php y\n */\ninclude('a.php');\n")
+
+
+class TestStarLinePayloadGuard:
+    """A ``*``-led line is docblock prose ONLY when it cannot carry
+    code (no ``$`` and no paren): ``*`` continues the previous
+    statement, so a payload can live in the star line itself — with
+    or without a close tag."""
+
+    def test_star_line_payload_without_close_tag(self):
+        # One expression statement across two lines — the star line
+        # evaluates, no close tag anywhere for a tag-conditional rule
+        # to notice.
+        assert _php_interstitial_is_handler(
+            "include '1'\n* printf('%d', 20);\n")
+        assert _php_interstitial_is_handler(
+            "include '1'\n** printf('%d', 20);\n")
+
+    def test_star_line_payload_before_close_tag(self):
+        # Payload in the PRE-close-tag portion; the re-entry is
+        # wiring-only, so no segment rescues it.
+        assert _php_interstitial_is_handler(
+            "include '1'\n* system($_GET['c']) ?><?php global $x;\n")
+        assert _php_interstitial_is_handler(
+            "include '1'\n** system($_GET['c']) ?><?php global $x;\n")
+
+    def test_inline_block_comment_then_star_payload(self):
+        # The inline /* */ strip leaves a *-led remainder — same
+        # guard, same scan.
+        assert _php_interstitial_is_handler(
+            "include '1'\n/* x */ * system($_GET['c']);\n")
+
+    def test_docblock_tags_with_code_chars_cost_a_review_slot(self):
+        # @param carries a $, a call example carries a paren — the
+        # guard prices these one review slot each; inclusion is the
+        # cheap direction.
+        assert _php_interstitial_is_handler("* @param string $x\n")
+        assert _php_interstitial_is_handler("* see config($opt)\n")
+
+    def test_prose_docblock_slice_stays_skipped(self):
+        assert not _php_interstitial_is_handler(
+            "* Sanitizes the output buffer.\n"
+            "* and trims trailing whitespace.\n")
