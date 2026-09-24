@@ -1865,6 +1865,11 @@
     "count": 12,
     "kind": "literal"
   },
+  "packages/binary_analysis/hunt.py::payload": {
+    "count": 12,
+    "kind": "literal",
+    "note": "artifact schema keys of the binary-hunt calls payload (binary-hunt-<slug>.json top-level fields, in lockstep with the anchor payload and the report renderer), not a learned name vocabulary"
+  },
   "packages/binary_analysis/harness.py::_APP_INGRESS_KINDS": {
     "count": 10,
     "kind": "literal"

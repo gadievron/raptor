@@ -27,6 +27,7 @@ With no command, `/binary <path>` defaults to `investigate`.
 | `trace-parser <run-dir>` | Run parser-focused Frida tracing and fold the new runtime evidence back into the existing binary run |
 | `harness <run-dir>` | Turn one recovered ingress into a harness plan, and emit candidate source only when the contract is explicit |
 | `corpus <samples-dir>` | Profile a directory of input samples with byte statistics: per-offset header stats, size-field discovery, entropy, TLV likelihood, seed min-set and fuzz.dict |
+| `hunt <run-dir\|binary>` | Operator-steered hunt: `--anchor` string families and `--calls`/`--and-not-calls` caller set algebra |
 | `fuzz <binary> [fuzz args]` | Hand off to the normal `/fuzz` orchestrator for crash witnesses |
 | `graph <run-dir>` | Query the persistent binary graph |
 | `report <run-dir>` | Print `binary-investigation-report.md` when present, otherwise the lower-level map report |
@@ -54,6 +55,11 @@ With no command, `/binary <path>` defaults to `investigate`.
 /binary corpus /var/lib/target/samples --family 'C-*.sys' --max-samples 500
 /binary corpus /var/lib/target/samples --max-bytes-per-sample 1048576 --out out/understand_target_.../
 
+/binary hunt out/understand_JamfCheck_.../ --anchor 'record blob'
+/binary hunt out/understand_codec_.../ --anchor 'frame [0-9]+ truncated' --anchor-re
+/binary hunt out/understand_codec_.../ --calls parse_frame --and-not-calls validate_header --transitive
+/binary hunt /path/to/binary --anchor 'license' --calls sym.imp.memcpy
+
 /binary fuzz /path/to/fuzzable-binary --duration 60
 
 /binary graph out/understand_JamfCheck_.../
@@ -65,6 +71,55 @@ With no command, `/binary <path>` defaults to `investigate`.
 /binary diagram out/understand_JamfCheck_.../
 /binary diagram out/understand_JamfCheck_.../ --stdout
 ```
+
+## Hunt Behaviour
+
+`hunt` is the operator-steered follow-up to a map: directed questions about a
+binary the autonomous passes cannot ask for you.
+
+**Modes** (combinable in one invocation):
+
+- `--anchor "<text>"` (repeatable) — find every collected string matching the
+  anchor (substring by default, case-insensitive; `--anchor-re` opts into
+  bounded regexes), xref each hit, and cluster the referencing functions into
+  ANCHOR FAMILIES: sibling handlers sharing vocabulary. Each family reports
+  its members (fid + name + size), shared callees (how common helpers
+  surface), inter-member call edges, and a bounded set of sample strings
+  (`FAMILY_SAMPLE_STRINGS` in `packages/binary_analysis/hunt.py` — the
+  map's per-function sample bound).
+- `--calls <fid|name>` — list the callers of one function over the best
+  available call substrate (a co-located Ghidra re-database's call xrefs,
+  else the map's whole-binary radare2 call graph, else the binary-oracle
+  cached edge index). `--transitive` walks bounded-depth caller chains
+  (`--max-depth`, clamped); `--and-not-calls <fid|name>` subtracts the
+  (transitive) callers of a second function — the chokepoint residual:
+  "which callers of X never reach the shared validator Y".
+
+**Input:** an existing `/binary` run directory (artifacts land beside the
+map's), or a bare binary — which is mapped first, exactly like `map`, and
+then hunted inside the fresh run.
+
+**Outputs:** `binary-hunt-<slug>.json` + `binary-hunt-<slug>.md` in the run
+directory, plus `HUNT_ANCHOR_FAMILY_MEMBER` / `HUNT_CHOKEPOINT_RESIDUAL`
+records in the run's graph (queryable via `/binary graph --edges --kind ...`).
+
+**Claims and non-claims.** Hunt output is xref-backed STRUCTURE, never
+findings:
+
+- An anchor family is a review lead — shared strings and helpers are not
+  taint proof.
+- Absence of a call edge is not dataflow proof: the chokepoint residual is a
+  hypothesis-tier REVIEW QUEUE (function pointers, wrappers, and substrate
+  gaps all hide edges).
+- Presence of a call edge is not protection: a planted or dominated call
+  empties the residual without sanitising anything. An empty residual list is
+  never coverage.
+- Truncations are surfaced in-band ("capped at N of M"), and member
+  truncation keeps xref-weight order so flooding cannot silently bury the
+  real family.
+
+The untrusted-content envelope below applies to hunt artifacts too: they
+quote strings and names from the analysed binary.
 
 ## Investigation Behaviour
 
