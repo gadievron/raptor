@@ -13,6 +13,14 @@ function load_allowlisted() {
     }
     include 'modules/' . $page . '.php';
 }
+function load_mapped() {
+    $pages = ['home' => 'modules/home.php', 'about' => 'modules/about.php'];
+    $key = $_GET['page'];
+    if (!array_key_exists($key, $pages)) {
+        return;
+    }
+    include $pages[$key];
+}
 function load_switched() {
     switch ($_GET['view']) {
         case 'compact':

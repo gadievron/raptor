@@ -27,6 +27,12 @@ rules:
   #   - The in_array/array_key_exists/isset sanitizers are
   #     by-side-effect and blind to haystack content and branch
   #     polarity (the php/unsafe-reflection.yaml precedent).
+  #   - A tainted INDEX taints the element read: an UNCHECKED lookup
+  #     into a literal-keyed map (include $pages[$_GET['k']]) fires
+  #     even though the reachable values are the map's literals (an
+  #     unknown key includes null — a warning, not traversal). The
+  #     recommended form — the same map behind an array_key_exists
+  #     guard — is silent, so the remediation never re-fires.
   # Known FN modes:
   #   - Taint through helper indirection (a getter function wrapping
   #     the superglobal read) is invisible to single-function taint.
