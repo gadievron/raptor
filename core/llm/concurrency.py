@@ -59,21 +59,39 @@ def _claudecode_worker_cap() -> int:
 # visibly with the operator's own interactive Claude Code session on
 # the same account, which a 32-worker analysis burst can 429-starve.
 # ``RAPTOR_BEDROCK_MAX_WORKERS`` overrides; ``tuning.json``'s
-# ``max_llm_workers`` still beats both.
+# ``max_llm_workers`` still beats both. This is the fair-share value
+# under the default ``llm_account_posture=shared``.
 BEDROCK_MAX_WORKERS_DEFAULT = 8
 
+# Bedrock ceiling under ``llm_account_posture=solo`` — the operator
+# asserts the per-account-per-region quota belongs to this host's
+# runs, so the fair-share ceiling would leave a latency-bound run
+# slow for nobody's benefit. Still a ceiling, not the 32-worker cap:
+# too HIGH churns 429s even on a solo account (a burst past the
+# quota's token-rate makes the adaptive throttle oscillate instead of
+# stream, and every retry re-pays prompt tokens); too LOW leaves
+# latency-bound runs serialised behind a limit whose protective
+# rationale the posture just revoked. 16 doubles fair-share while
+# staying under the burst size observed to trip account-level 429
+# storms at 32.
+BEDROCK_MAX_WORKERS_SOLO = 16
 
-def _bedrock_worker_cap() -> int:
+
+def _bedrock_worker_cap(posture: str = "shared") -> int:
     import os
+    default = (BEDROCK_MAX_WORKERS_SOLO if posture == "solo"
+               else BEDROCK_MAX_WORKERS_DEFAULT)
     raw = os.environ.get("RAPTOR_BEDROCK_MAX_WORKERS", "")
     try:
-        cap = int(raw) if raw else BEDROCK_MAX_WORKERS_DEFAULT
+        # The env override beats posture in BOTH directions — it is
+        # the more specific operator statement.
+        cap = int(raw) if raw else default
     except ValueError:
         logger.warning(
             "RAPTOR_BEDROCK_MAX_WORKERS=%r is not an integer — using %d",
-            raw, BEDROCK_MAX_WORKERS_DEFAULT,
+            raw, default,
         )
-        cap = BEDROCK_MAX_WORKERS_DEFAULT
+        cap = default
     return max(1, min(cap, MAX_WORKERS_CAP))
 
 
@@ -118,6 +136,13 @@ def derive_max_workers(model: str) -> int:
     when the primary model is served by the CLI transport.
     Falls back to 1 when RPM is unknown.
 
+    The account-contention ceiling (Bedrock) is posture-aware:
+    ``llm_account_posture=shared`` (the default) keeps the fair-share
+    cap, ``solo`` uses the solo cap. The claudecode ceiling is
+    deliberately NOT posture-routed — it bounds subprocess RSS and the
+    server-side prompt-cache write race, costs a solo account pays
+    exactly like a shared one.
+
     ``"default"`` is resolved to the actual primary model inside
     ``rpm_for`` so callers need not resolve it themselves.
     """
@@ -146,8 +171,13 @@ def derive_max_workers(model: str) -> int:
     if _is_bedrock_primary(model):
         # Bedrock quota is per-account-per-region and shared (most
         # visibly with the operator's live Claude Code session) —
-        # RPM headroom alone over-provisions.
-        workers = min(workers, _bedrock_worker_cap())
+        # RPM headroom alone over-provisions. Under the solo posture
+        # the operator revokes that assumption and the higher solo
+        # ceiling applies.
+        workers = min(
+            workers,
+            _bedrock_worker_cap(read_tuning_llm_account_posture()),
+        )
     return workers
 
 
