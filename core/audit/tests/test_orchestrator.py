@@ -5570,6 +5570,19 @@ class TestSageFpPrimer:
     never examined. Hermetic: both SAGE hooks stubbed at their seams.
     """
 
+    @pytest.fixture(autouse=True)
+    def _stub_mechanical_detectors(self, monkeypatch) -> None:
+        """Stub the pre-loop mechanical-detector pass at its seam (the
+        test_consistency_wiring / test_peer_group idiom): it does real
+        I/O — sandboxed coccinelle spawns where spatch is installed,
+        plus the detector-cache import-closure fingerprint — seconds
+        per run, entirely orthogonal to the FP-primer injection under
+        test, and enough to trip the default-tier duration guard on a
+        loaded CI runner."""
+        from core.audit import orchestrator as orch
+        monkeypatch.setattr(orch, "_run_mechanical_detectors",
+                            lambda *a, **k: ({}, set()))
+
     @staticmethod
     def _hash_for(target: Path, line: int) -> str:
         from core.sage.hooks import compute_finding_source_hash
@@ -5666,10 +5679,6 @@ class TestSageFpPrimer:
         )
         assert not (out / "suppressions.jsonl").exists()
 
-    # A full run_orchestrator pass over the fixture target — over the
-    # fast tier's budget on loaded workers. The matching-prior sibling
-    # keeps the primer's injection path in the default tier.
-    @pytest.mark.slow
     def test_blind_first_pass_withholds_hint(self, tmp_path: Path):
         def rows(target, **kw):
             if kw["function"] != "check_pw":
