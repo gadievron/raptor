@@ -429,3 +429,45 @@ class TestDriftLoadNonDictRecords:
     def test_bug_pattern_as_number(self, tmp_path):
         m = self._load(tmp_path, {"bug_patterns": [42]})
         assert m.bug_patterns == []
+
+
+class TestDecompEvidenceCeiling:
+    """The shared decompiled-evidence grading ceiling.
+
+    ONE spelling for every decomp-evidence consumer (binary --study's
+    domain-model clamp, the audit's decomp-tree sweep): these pins
+    make silently forking the ceiling a test-visible act.
+    """
+
+    def test_ceiling_is_a_legal_grade(self):
+        from core.concepts.model import DECOMP_EVIDENCE_MAX_CONFIDENCE
+        assert DECOMP_EVIDENCE_MAX_CONFIDENCE in CONFIDENCE_GRADES
+
+    def test_ceiling_value(self):
+        from core.concepts.model import DECOMP_EVIDENCE_MAX_CONFIDENCE
+        assert DECOMP_EVIDENCE_MAX_CONFIDENCE == "traced"
+
+    def test_tag_value(self):
+        from core.concepts.model import DECOMP_EVIDENCE_TAG
+        assert DECOMP_EVIDENCE_TAG == "decompiled-evidence"
+
+    def test_clamp_caps_above_ceiling(self):
+        from core.concepts.model import (
+            DECOMP_EVIDENCE_MAX_CONFIDENCE,
+            clamp_decomp_confidence,
+        )
+        for grade in ("corroborated", "documented", "tested"):
+            assert clamp_decomp_confidence(grade) == \
+                DECOMP_EVIDENCE_MAX_CONFIDENCE
+
+    def test_clamp_passes_below_ceiling_unchanged(self):
+        from core.concepts.model import clamp_decomp_confidence
+        assert clamp_decomp_confidence("inferred") == "inferred"
+        assert clamp_decomp_confidence("observed") == "observed"
+        assert clamp_decomp_confidence("traced") == "traced"
+
+    def test_unknown_grade_floors_never_lifts(self):
+        from core.concepts.model import clamp_decomp_confidence
+        assert clamp_decomp_confidence("proven!!") == "inferred"
+        assert clamp_decomp_confidence(None) == "inferred"
+        assert clamp_decomp_confidence("") == "inferred"

@@ -9366,6 +9366,33 @@ def _run_audit_body(
     except Exception:
         logger.debug("generated-file detection failed", exc_info=True)
 
+    # Tree-wide decompiler Semgrep sweep (binary targets only — the
+    # module returns None for source runs): the per-hypothesis
+    # decompiler lane only sees functions the review loop visited;
+    # this pass runs the curated decompiler rule corpus over the
+    # WHOLE decomp-tree, mapping matches back to function@address+fid
+    # and journaling them as mechanical echo rows. Missing tree /
+    # re-database is a LOUD skip recorded in decomp-sweep.json, never
+    # a silent no-sweep — hence warning, not debug, on a crash here.
+    try:
+        from .decomp_sweep import run_decomp_tree_sweep
+
+        _ds_record = run_decomp_tree_sweep(
+            target_path=Path(config.target_path),
+            out_dir=config.out_dir,
+            gaps=gaps,
+            run_id=(config.out_dir.name if config.out_dir else ""),
+        )
+        # Journalled but NOT tallied as reviewed — counted like the
+        # other mechanical-row writers so the console summary's
+        # "(+N mechanical post-loop)" line matches the journal.
+        _ds_rows = int((_ds_record or {}).get("journal_rows", 0) or 0)
+        if _ds_rows:
+            with result._lock:
+                result.post_loop_mechanical += _ds_rows
+    except Exception:
+        logger.warning("decomp-tree sweep failed", exc_info=True)
+
     _pass_ledger.end_phase()  # post_loop_checks
 
     if post_loop_findings:

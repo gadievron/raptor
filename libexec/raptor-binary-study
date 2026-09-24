@@ -74,15 +74,33 @@ from core.json.utils import (  # noqa: E402
 
 #: Confidence order for the decomp clamp — from the model's own
 #: grade ladder so a legal below-ceiling grade ("observed") is never
-#: demoted to the floor by the unknown-grade fallback.
+#: demoted to the floor by the unknown-grade fallback. Ceiling and
+#: tag come from the SAME module (the one shared spelling — the
+#: audit's tree-wide decomp sweep clamps against the identical
+#: constants); the literals below exist only for the import-failure
+#: fallback, mirroring the grading-table fallback above.
 try:
-    from core.concepts.model import CONFIDENCE_GRADES
+    from core.concepts.model import (
+        CONFIDENCE_GRADES,
+        DECOMP_EVIDENCE_MAX_CONFIDENCE,
+        DECOMP_EVIDENCE_TAG,
+        clamp_decomp_confidence as _clamp_shared,
+    )
     _CONF_ORDER = list(CONFIDENCE_GRADES)
-except Exception:  # noqa: BLE001 — study.md grading table fallback
+    _DECOMP_MAX_CONF = DECOMP_EVIDENCE_MAX_CONFIDENCE
+    _DECOMP_TAG = DECOMP_EVIDENCE_TAG
+except ImportError:  # study.md grading table fallback — ImportError
+    # ONLY: any non-import failure class (a broken model module, a
+    # future refactor exception) fails loudly instead of silently
+    # pinning this script to the fallback spelling forever. A typo'd
+    # import NAME still lands here (it raises ImportError), so the
+    # identity tests additionally pin that the shared objects are
+    # actually bound on a healthy tree.
     _CONF_ORDER = ["inferred", "observed", "traced", "corroborated",
                    "documented", "tested"]
-_DECOMP_MAX_CONF = "traced"
-_DECOMP_TAG = "decompiled-evidence"
+    _DECOMP_MAX_CONF = "traced"
+    _DECOMP_TAG = "decompiled-evidence"
+    _clamp_shared = None
 
 
 #: Do not launch another study pass with less than this much budget
@@ -351,6 +369,12 @@ def _clamp_domain_model(output_dir: Path, tree_root: Path) -> None:
     del tree_root  # every entry clamps; kept for signature stability
 
     def _clamp(conf: object) -> str:
+        if _clamp_shared is not None:
+            # The shared ceiling mechanism (core.concepts.model) —
+            # one clamp implementation for every decomp-evidence
+            # consumer; the local logic below is the import-failure
+            # fallback only.
+            return _clamp_shared(conf)
         c = str(conf or "inferred")
         try:
             if (_CONF_ORDER.index(c)

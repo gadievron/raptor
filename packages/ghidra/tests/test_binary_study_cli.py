@@ -314,3 +314,36 @@ class TestRunChildBound:
         blocker = tmp_path / "not-a-dir"
         blocker.write_text("x")
         mod._record_analysis_gap(blocker, "tool", "detail")
+
+
+class TestDecompCeilingIdentity:
+    """The script's ceiling constants must BE the shared
+    core.concepts.model objects on a healthy tree — a silent fork of
+    the spelling (or a typo'd import name quietly living in the
+    fallback) is test-visible here."""
+
+    def test_shared_objects_bound(self, monkeypatch):
+        import core.concepts.model as model
+        mod = _load_cli(monkeypatch)
+        assert mod._DECOMP_MAX_CONF is model.DECOMP_EVIDENCE_MAX_CONFIDENCE
+        assert mod._DECOMP_TAG is model.DECOMP_EVIDENCE_TAG
+        assert mod._clamp_shared is model.clamp_decomp_confidence
+        assert mod._CONF_ORDER == list(model.CONFIDENCE_GRADES)
+
+    def test_forced_fallback_is_value_equivalent(self, monkeypatch):
+        """With core.concepts.model spoofed bare (ImportError on the
+        names), the fallback literals must equal the real constants —
+        the two spellings can never drift apart unnoticed."""
+        import sys
+        import types
+
+        import core.concepts.model as real_model
+
+        monkeypatch.setitem(sys.modules, "core.concepts.model",
+                            types.ModuleType("core.concepts.model"))
+        mod = _load_cli(monkeypatch)
+        assert mod._clamp_shared is None
+        assert mod._DECOMP_MAX_CONF == \
+            real_model.DECOMP_EVIDENCE_MAX_CONFIDENCE
+        assert mod._DECOMP_TAG == real_model.DECOMP_EVIDENCE_TAG
+        assert mod._CONF_ORDER == list(real_model.CONFIDENCE_GRADES)

@@ -474,6 +474,16 @@
     "count": 13,
     "kind": "literal"
   },
+  "core/audit/decomp_sweep.py::record": {
+    "count": 11,
+    "kind": "literal",
+    "note": "per-finding record shape inside decomp-sweep.json (fid/address join fields + escaped match text) — JSON schema keys, not a name vocabulary; same class as the baselined manifest/context-map to_dict shapes"
+  },
+  "core/audit/decomp_sweep.py::sweep_record": {
+    "count": 17,
+    "kind": "literal",
+    "note": "decomp-sweep.json artifact summary shape (counts + record lists + loud-skip fields) — JSON schema keys, not a name vocabulary; same class as the baselined manifest/context-map to_dict shapes"
+  },
   "core/audit/defassign.py::_ALLOWED_STATEMENTS": {
     "count": 12,
     "kind": "literal",

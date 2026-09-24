@@ -113,21 +113,35 @@ def get_rule_role(rule_path: str) -> str:
 # promote; this marker governs what a NON-match means.
 _CONFIRM_ONLY_MARKER = "# raptor: confirm-only"
 
+# Per-rule decomp-safe marker, same anchored-header convention: a
+# CURATED rule that also tolerates decompiler output (synthetic
+# variable names, flattened control flow, no macros) declares
+# `# raptor: decomp-safe` in its leading comment block and the
+# decomp-tree sweep (core.audit.decomp_sweep) then runs it over
+# binary pseudo-source alongside the dedicated decompiler corpus.
+# Opt-in on purpose: most source rules key on API names and idioms
+# stripped decompilation lacks, so running the whole library over a
+# decomp-tree would manufacture noise, not coverage.
+_DECOMP_SAFE_MARKER = "# raptor: decomp-safe"
+
 #: The curated rule library. The confirm-only role is scoped to it:
 #: dynamic per-hypothesis tempfile rules and synthesized checkers are
 #: authored by the LLM at run time, and letting a rule's AUTHOR opt
 #: its own rule out of refutation semantics would be refutation
-#: evasion.
+#: evasion. The decomp-safe marker is scoped the same way for the
+#: same reason — an LLM-authored rule must not opt itself onto the
+#: attacker-shaped decomp-tree surface.
 _CURATED_SEMGREP_RULES_DIR = (
     Path(__file__).resolve().parents[2] / "engine" / "semgrep" / "rules"
 )
 
-# Per-path memo — curated rule files are read once per process, not
-# per sweep. Bounded: only curated paths are ever cached.
-_CONFIRM_ONLY_CACHE: dict[str, bool] = {}
+# Per-(path, marker) memo — curated rule files are read once per
+# process per marker, not per sweep. Bounded: only curated paths are
+# ever cached and the marker vocabulary is the two module constants.
+_RULE_MARKER_CACHE: dict[tuple[str, str], bool] = {}
 
 
-def _parse_confirm_only_header(text: str) -> bool:
+def _parse_header_marker(text: str, marker: str) -> bool:
     """Anchored marker parse: the exact marker line must appear in
     the file's LEADING comment block (before the first line that is
     neither blank nor a ``#`` comment). Marker-shaped text anywhere
@@ -137,7 +151,8 @@ def _parse_confirm_only_header(text: str) -> bool:
     missing colon) deliberately do not parse — the loud companion
     test over the curated library catches them so a mis-spelled
     marker fails CI instead of silently reverting a rule to
-    refutation semantics.
+    refutation semantics (confirm-only) or silently dropping it from
+    the decomp-tree sweep (decomp-safe).
     """
     for line in text.splitlines():
         stripped = line.lstrip("\ufeff").strip()
@@ -145,21 +160,27 @@ def _parse_confirm_only_header(text: str) -> bool:
             continue
         if not stripped.startswith("#"):
             return False
-        if stripped == _CONFIRM_ONLY_MARKER:
+        if stripped == marker:
             return True
     return False
 
 
-def is_confirm_only_rule(rule_path: str) -> bool:
-    """True when a CURATED rule file declares the confirm-only marker.
+def _parse_confirm_only_header(text: str) -> bool:
+    """Confirm-only variant of :func:`_parse_header_marker`."""
+    return _parse_header_marker(text, _CONFIRM_ONLY_MARKER)
+
+
+def _curated_rule_has_marker(rule_path: str, marker: str) -> bool:
+    """True when a CURATED rule file declares *marker* in its header.
 
     Curated paths only (under ``engine/semgrep/rules``): dynamic
     per-hypothesis tempfile rules and on-demand synthesized checkers
     return False regardless of content — their author is the LLM, and
-    an author-controlled opt-out of refutation semantics is
-    refutation evasion. Unreadable files return False — only an
-    explicit, well-formed header declaration narrows a rule's
-    silence.
+    an author-controlled role declaration is either refutation
+    evasion (confirm-only) or an opt onto the attacker-shaped
+    decomp-tree surface (decomp-safe). Unreadable files return False
+    — only an explicit, well-formed header declaration activates a
+    role.
     """
     if not rule_path:
         return False
@@ -169,18 +190,50 @@ def is_confirm_only_rule(rule_path: str) -> bool:
             return False
     except OSError:
         return False
-    key = str(resolved)
-    cached = _CONFIRM_ONLY_CACHE.get(key)
+    key = (str(resolved), marker)
+    cached = _RULE_MARKER_CACHE.get(key)
     if cached is not None:
         return cached
     try:
-        result = _parse_confirm_only_header(
-            resolved.read_text(encoding="utf-8"),  # raw-open: RAPTOR-owned cocci rule file, resolved above
+        result = _parse_header_marker(
+            resolved.read_text(encoding="utf-8"),  # raw-open: RAPTOR-owned curated rule file, resolved above
+            marker,
         )
     except (OSError, UnicodeDecodeError):
         result = False
-    _CONFIRM_ONLY_CACHE[key] = result
+    _RULE_MARKER_CACHE[key] = result
     return result
+
+
+def is_confirm_only_rule(rule_path: str) -> bool:
+    """True when a CURATED rule file declares the confirm-only marker
+    (see :func:`_curated_rule_has_marker` for the scoping rules)."""
+    return _curated_rule_has_marker(rule_path, _CONFIRM_ONLY_MARKER)
+
+
+def is_decomp_safe_rule(rule_path: str) -> bool:
+    """True when a CURATED rule file declares the decomp-safe marker
+    (see :func:`_curated_rule_has_marker` for the scoping rules)."""
+    return _curated_rule_has_marker(rule_path, _DECOMP_SAFE_MARKER)
+
+
+def decomp_safe_curated_rules() -> "list[Path]":
+    """Curated rules opted onto decomp-trees, sorted for determinism.
+
+    Walks the curated library once per call (54 small YAML files at
+    the time of writing; the per-(path, marker) memo makes repeat
+    calls header-read-free). Consumed by the decomp-tree sweep
+    alongside :func:`core.audit.binary_verification
+    .decompiler_rules_for_tree` — the dedicated decompiler corpus is
+    the seed; these are the explicit opt-ins.
+    """
+    if not _CURATED_SEMGREP_RULES_DIR.is_dir():
+        return []
+    out = []
+    for path in sorted(_CURATED_SEMGREP_RULES_DIR.rglob("*.yaml")):
+        if path.is_file() and is_decomp_safe_rule(str(path)):
+            out.append(path)
+    return out
 
 
 _IDENTIFIER_QUALIFIED_RE = None  # lazy import
