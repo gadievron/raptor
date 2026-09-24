@@ -2456,6 +2456,49 @@ def cmd_resume(args: argparse.Namespace) -> int:
         )
         return 1
 
+    # --- segment-boundary journal hygiene ---
+    # Per-segment re-emission of reused verdicts is LOAD-BEARING
+    # (core.audit.verdict_reuse: every run carries a complete record
+    # of the project state it asserted; same-run re-import "is the
+    # point"), so segments keep appending reused rows — and a long
+    # resume chain's journal grows without bound. Auto-compact at the
+    # segment boundary once the file passes half the loader's
+    # retained-entry budget: the newest row per identity survives, so
+    # the run's record stays complete while the chain stops drifting
+    # toward the loader budget and the spend-authorizing refusal
+    # below. Best-effort — a refused auto-compact (e.g. another
+    # process appeared) falls through to the completeness gate, which
+    # decides whether the resume may proceed.
+    from core.coverage.journal import JOURNAL_FILENAME
+    from core.coverage.journal_compact import (
+        CompactRefused,
+        auto_compact_threshold_bytes,
+        compact_journal,
+    )
+    try:
+        _journal_size = (out_dir / JOURNAL_FILENAME).stat().st_size
+    except OSError:
+        _journal_size = 0
+    _compact_threshold = auto_compact_threshold_bytes()
+    if _journal_size > _compact_threshold:
+        print(
+            f"journal is {_journal_size} bytes (over the "
+            f"{_compact_threshold}-byte segment-start "
+            "threshold) — compacting duplicate re-emission rows",
+            flush=True,
+        )
+        try:
+            _cstats = compact_journal(out_dir)
+            print(
+                f"  compacted: {_cstats.rows_before} -> "
+                f"{_cstats.rows_after} rows, {_cstats.bytes_before} "
+                f"-> {_cstats.bytes_after} bytes "
+                f"(backup: {_cstats.backup_path})",
+                flush=True,
+            )
+        except CompactRefused as exc:
+            print(f"  auto-compact skipped: {exc}", file=sys.stderr)
+
     # --- journal completeness gate (spend-authorizing read) ---
     # Everything downstream — the drift gate, the own-run $0 reuse
     # import, the journal spend floor — reads the review journal, and
