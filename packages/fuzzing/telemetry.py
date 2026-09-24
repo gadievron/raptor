@@ -17,12 +17,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO, TYPE_CHECKING
+
+from core.atomic_fs import open_hardened_append
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -239,7 +242,15 @@ class FuzzingTelemetry:
         with self._lock:
             self.stats.started = time.time()
             self.stats.last_path_at = self.stats.started
-            self._events_fp = self.events_path.open("a", buffering=1, encoding="utf-8")
+            # Hardened append open: campaigns reuse output dirs, and
+            # a previous campaign's (attacker-built) target had write
+            # there — a planted symlink at the predictable trail name
+            # would be followed by a bare "a" open, and a planted
+            # reader-less FIFO would block campaign start forever.
+            self._events_fp = os.fdopen(
+                open_hardened_append(self.events_path),
+                "a", buffering=1, encoding="utf-8",
+            )
             self._emit(FuzzEvent(
                 kind="campaign_start",
                 timestamp=self.stats.started,

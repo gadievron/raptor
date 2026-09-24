@@ -228,6 +228,39 @@ class TestMergeCrashFiles:
         main_crashes.mkdir(parents=True)
         assert runner._merge_crash_files([]) == main_crashes
 
+    def test_planted_dangling_symlink_at_dest_is_never_followed(
+        self, tmp_path,
+    ):
+        """merged_crashes is inside the (attacker-built) target's
+        sandbox write grant: a planted DANGLING symlink at the merge
+        destination passes exists() == False, and the copy fallback
+        then created the symlink's target at an attacker-chosen
+        path. The lstat gate skips anything occupying the name."""
+        runner = self._make_runner(tmp_path)
+        self._plant_crash(tmp_path, "main",
+                          "id:000000,sig:11,src:000000,op:havoc,rep:1", b"a")
+        self._plant_crash(tmp_path, "secondary1",
+                          "id:000001,sig:06,src:000002,op:havoc,rep:2", b"b")
+        merged = tmp_path / "merged_crashes"
+        merged.mkdir()
+        victim = tmp_path / "victim"
+        planted = (
+            merged
+            / "id:000000,sig:11,src:000000,op:havoc,rep:1,instance:main"
+        )
+        planted.symlink_to(victim)
+
+        crash_files = runner._collect_all_crash_files()
+        result = runner._merge_crash_files(crash_files)
+
+        assert result == merged
+        assert not victim.exists()
+        # The other crash still merged normally.
+        assert (
+            merged
+            / "id:000001,sig:06,src:000002,op:havoc,rep:2,instance:secondary1"
+        ).read_bytes() == b"b"
+
     def test_merge_is_idempotent(self, tmp_path):
         runner = self._make_runner(tmp_path)
         self._plant_crash(tmp_path, "main",
@@ -1063,7 +1096,16 @@ class TestBoundedTargetWritableReads:
         map_file = tmp_path / "showmap-edges.txt"
         map_file.write_text(
             "".join(f"{i:06d}:1\n" for i in range(1024)))
-        with caplog.at_level("WARNING", logger="packages.fuzzing.afl_runner"):
+        # The module logs through the "raptor" logger (get_logger()
+        # singleton), which configures itself from the environment
+        # and may set propagate=False — caplog's root handler then
+        # never sees the record and the assertion below goes
+        # env-sensitive. Pin propagation for this test so capture is
+        # hermetic regardless of host env.
+        import logging as _logging
+        monkeypatch.setattr(
+            _logging.getLogger("raptor"), "propagate", True)
+        with caplog.at_level("WARNING", logger="raptor"):
             coverage = AFLRunner._parse_showmap_output(map_file, "")
         assert coverage == {}
         assert any("cap" in r.getMessage() for r in caplog.records), (

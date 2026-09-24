@@ -37,7 +37,26 @@ Symlink handling at the destination path:
 The primitive is intended for durability-critical writers (state
 stores, sandbox files, credentials). Regeneratable outputs (scripts,
 one-shot corpus generators) shouldn't use it — the fsync overhead is
-unearned for outputs that just get re-run on failure.
+unearned for outputs that just get re-run on failure. Those writers
+use the EXCLUSIVE-create family below instead:
+
+  * ``open_exclusive_artifact`` / ``write_new_bytes`` /
+    ``write_new_text`` — ``O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC``
+    creation of a NEW artifact. The artifact's directory is (or was)
+    inside a sandboxed child's write grant, so anything already
+    occupying the destination name — a planted symlink aimed at a
+    victim file, a reader-less FIFO, a pre-created file — makes the
+    open fail closed instead of following/truncating/blocking.
+    ``replace=True`` adds an lstat-honest pre-unlink for writers that
+    own the name and legitimately re-emit it (campaign logs, staged
+    seeds): ``Path.unlink`` removes a planted symlink ITSELF (never
+    its target), and the O_EXCL create still fails loud if something
+    reappears in the unlink→open window.
+  * ``open_hardened_append`` — the trail-append open shape
+    (``O_APPEND | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK`` + post-open
+    fstat S_ISREG refusal) for callers that keep a long-lived append
+    handle and therefore cannot route through
+    ``core.json.append_jsonl``'s one-shot write.
 
 Consumers:
   * ``packages/sca`` fixer / rewriter modules — via the thin
@@ -72,6 +91,11 @@ import secrets
 import stat as _stat
 import threading
 from pathlib import Path
+
+
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 
 # Perm mask: only the low 9 bits are legal via ``mode=``. Rejects
@@ -283,4 +307,132 @@ def write_bytes_atomically(
         raise
 
 
-__all__ = ["write_bytes_atomically", "write_text_atomically"]
+def open_exclusive_artifact(
+    path: str | Path,
+    *,
+    mode: int = 0o644,
+    replace: bool = False,
+) -> int:
+    """Exclusively create the NEW artifact at *path*; return the fd.
+
+    ``O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC``: anything
+    already occupying the destination — a planted symlink (even a
+    dangling one, which passes ``exists() == False``), a FIFO, a
+    pre-created file — fails the open with ``OSError``
+    (``FileExistsError`` for an occupied name) instead of being
+    followed or truncated. Generalises the seed-writer idiom the
+    corpus profiler carried locally.
+
+    ``replace=True``: for writers that OWN the name and legitimately
+    re-emit it (campaign logs, staged seeds, generated scripts) —
+    pre-unlink with lstat honesty (``Path.unlink`` removes a planted
+    symlink/FIFO ITSELF, never what it points at; a directory at the
+    name still raises), then the O_EXCL create fails loud if anything
+    reappears in the unlink→open window.
+
+    ``mode`` is validated like the atomic writers' (0o000..0o777, no
+    setuid/setgid/sticky) and enforced via best-effort ``fchmod`` so
+    a caller-requested mode (0o600 secrets, 0o755 scripts) wins over
+    the process umask.
+
+    The caller owns the returned fd (``os.fdopen`` or ``os.close``).
+    """
+    _validate_mode(mode)
+    p = Path(path)
+    if replace:
+        p.unlink(missing_ok=True)
+    fd = os.open(
+        str(p),
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_CLOEXEC,
+        mode,
+    )
+    try:
+        os.fchmod(fd, mode)
+    except (OSError, AttributeError):
+        # Windows + some mounts don't honour fchmod — the O_CREAT
+        # mode argument was already best-effort.
+        pass
+    return fd
+
+
+def write_new_bytes(
+    path: str | Path,
+    content: bytes,
+    *,
+    mode: int = 0o644,
+    replace: bool = False,
+) -> None:
+    """Write *content* to a NEW artifact at *path* via
+    :func:`open_exclusive_artifact` (see there for the refusal and
+    ``replace`` semantics). Raises ``OSError`` on refusal or write
+    failure; no tempfile, no fsync — for regeneratable outputs where
+    the atomic writers' durability cost is unearned."""
+    fd = open_exclusive_artifact(path, mode=mode, replace=replace)
+    try:
+        view = memoryview(content)
+        written = 0
+        while written < len(view):
+            n = os.write(fd, view[written:])
+            if n <= 0:
+                raise OSError(
+                    f"short write to {path}: os.write returned {n}",
+                )
+            written += n
+    finally:
+        os.close(fd)
+
+
+def write_new_text(
+    path: str | Path,
+    content: str,
+    *,
+    encoding: str = "utf-8",
+    mode: int = 0o644,
+    replace: bool = False,
+) -> None:
+    """Text variant of :func:`write_new_bytes`."""
+    write_new_bytes(
+        path, content.encode(encoding), mode=mode, replace=replace,
+    )
+
+
+def open_hardened_append(path: str | Path, *, mode: int = 0o644) -> int:
+    """Open *path* for appending with the hardened trail shape; return
+    the fd.
+
+    ``O_NOFOLLOW`` refuses a planted symlink (ELOOP); ``O_NONBLOCK``
+    makes a planted reader-less FIFO fail fast (ENXIO) instead of
+    blocking the writer forever; the post-open ``fstat`` S_ISREG
+    check refuses everything else non-regular (a FIFO that has a
+    reader, a device). Same flags as ``core.json.append_jsonl`` — use
+    this when the caller keeps a persistent append handle (streamed
+    event trails) instead of appending one record per call.
+
+    Raises ``OSError`` on refusal. The caller owns the returned fd.
+    """
+    _validate_mode(mode)
+    flags = (
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK
+    )
+    fd = os.open(str(path), flags, mode)
+    try:
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(
+                f"refusing to append to {path}: not a regular file "
+                "(planted FIFO/device at the trail path?)",
+            )
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+__all__ = [
+    "open_exclusive_artifact",
+    "open_hardened_append",
+    "write_bytes_atomically",
+    "write_new_bytes",
+    "write_new_text",
+    "write_text_atomically",
+]
