@@ -223,19 +223,21 @@ def stamp_script_handler_items(
     items: list[dict[str, Any]],
     language: str,
     content: str,
-    *,
-    only_missing: bool = False,
 ) -> bool:
     """Stamp ``script_handler`` on every interstitial item of one
     script-per-file-language file record. Mutates the item dicts.
 
-    ``only_missing`` is the incremental-reuse backfill mode: a
-    SHA-256-matched record reuses the previous run's parse, so a
-    pre-stamp entry would carry the gap forward run after run;
-    content is identical by construction, so stamping only the
-    missing fields is exact, not a guess. Returns True when any item
-    was stamped (informational — the builder call sites don't branch
-    on it; the record dicts are mutated in place either way).
+    Always re-derives from ``content`` — existing values are
+    overwritten, never trusted. On the builder's SHA-256 reuse path
+    this is the self-healing property: the checklist sits in a
+    writable run/cache directory, so a tampered stamp on a
+    content-unchanged file (and any stale verdict from an older
+    classifier) converges back to the content's truth on the next
+    build instead of persisting indefinitely; content is identical by
+    construction, so the re-derivation equals the original parse's.
+    Returns True when any item was stamped (informational — the
+    builder call sites don't branch on it; the record dicts are
+    mutated in place either way).
     """
     if (language or "").lower() not in SCRIPT_PER_FILE_LANGUAGES:
         return False
@@ -243,9 +245,6 @@ def stamp_script_handler_items(
     stamped = False
     for item in items:
         if not isinstance(item, dict) or item.get("kind") != "interstitial":
-            continue
-        if only_missing and isinstance(
-                item.get(SCRIPT_HANDLER_FIELD), bool):
             continue
         if source_lines is None:
             source_lines = content.splitlines()

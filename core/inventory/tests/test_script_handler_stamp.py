@@ -143,6 +143,43 @@ class TestBuilderStamps:
         for it in by_file["count.c"]:
             assert SCRIPT_HANDLER_FIELD not in it
 
+    def test_sha_reuse_heals_tampered_stamps(self, tmp_path):
+        # The checklist lives in a writable run/cache dir; the SHA
+        # match reuses records indefinitely on unchanged files. A
+        # tampered stamp must NOT persist: the reuse path re-derives
+        # from content, both directions — a flipped true→false (which
+        # would write the handler off in every consumer) heals back
+        # to true, and a flipped false→true heals back to false.
+        target = _write_tree(tmp_path)
+        out = tmp_path / "out"
+        inv = build_inventory(str(target), str(out))
+        truth = {
+            (f["path"], it["name"]): it[SCRIPT_HANDLER_FIELD]
+            for f in inv["files"]
+            for it in f.get("items", [])
+            if SCRIPT_HANDLER_FIELD in it
+        }
+        assert True in truth.values() and False in truth.values()
+
+        ck_path = out / "checklist.json"
+        ck = json.loads(ck_path.read_text())
+        flipped = 0
+        for f in ck.get("files", []):
+            for it in f.get("items", []):
+                if isinstance(it.get(SCRIPT_HANDLER_FIELD), bool):
+                    it[SCRIPT_HANDLER_FIELD] = (
+                        not it[SCRIPT_HANDLER_FIELD])
+                    flipped += 1
+        assert flipped
+        ck_path.write_text(json.dumps(ck))
+
+        healed = build_inventory(str(target), str(out))
+        for f in healed["files"]:
+            for it in f.get("items", []):
+                if SCRIPT_HANDLER_FIELD in it:
+                    assert it[SCRIPT_HANDLER_FIELD] is truth[
+                        (f["path"], it["name"])]
+
 
 class TestStampHelpers:
     def test_reader_accepts_only_genuine_bools(self):
@@ -155,7 +192,7 @@ class TestStampHelpers:
         assert script_handler_stamp(None) is None
         assert script_handler_stamp("junk") is None
 
-    def test_only_missing_preserves_existing_stamps(self):
+    def test_existing_stamps_are_rederived_not_trusted(self):
         items = [
             {"kind": "interstitial", "name": "interstitial:1-2",
              "line_start": 1, "line_end": 2,
@@ -165,13 +202,14 @@ class TestStampHelpers:
             {"kind": "function", "name": "f",
              "line_start": 4, "line_end": 5},
         ]
-        # Content classifies BOTH spans as wiring — but the existing
-        # True stamp must survive only_missing mode.
+        # Content classifies BOTH spans as wiring — the pre-existing
+        # True stamp is overwritten (checklists live in writable
+        # run/cache dirs; values are re-derived, never trusted), the
+        # missing one is filled, and non-interstitials stay untouched.
         content = "include('a.php');\ninclude('b.php');\nrequire('c.php');\n"
-        changed = stamp_script_handler_items(
-            items, "php", content, only_missing=True)
+        changed = stamp_script_handler_items(items, "php", content)
         assert changed is True
-        assert items[0][SCRIPT_HANDLER_FIELD] is True
+        assert items[0][SCRIPT_HANDLER_FIELD] is False
         assert items[1][SCRIPT_HANDLER_FIELD] is False
         assert SCRIPT_HANDLER_FIELD not in items[2]
 
