@@ -859,16 +859,18 @@ class TestSourceReadMemo:
     ):
         from core.audit.run_memo import BoundedMemo
 
+        from core.audit import propagation
+
         src = tmp_path / "caller.c"
         src.write_text("void a() { parse_header(len); }\n")
         reads: list = []
-        orig = Path.read_text
+        orig = propagation.read_text_capped
 
-        def counting(self, *args, **kwargs):
-            reads.append(str(self))
-            return orig(self, *args, **kwargs)
+        def counting(path, *args, **kwargs):
+            reads.append(str(path))
+            return orig(path, *args, **kwargs)
 
-        monkeypatch.setattr(Path, "read_text", counting)
+        monkeypatch.setattr(propagation, "read_text_capped", counting)
         c = _constraint()
         memo: BoundedMemo = BoundedMemo(8)
         for _ in range(3):
