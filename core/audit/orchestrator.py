@@ -1525,7 +1525,11 @@ def _taint_approx_has_flow(approx) -> bool:
             approx.get("dangerous_flows") or approx.get("direct_flows")
         )
     return bool(
-        getattr(approx, "has_any_dangerous_flow", lambda: False)()
+        # CTaintApprox spells the probe has_any_dangerous — a wrong
+        # name in this getattr is masked whenever every dangerous
+        # position is also a direct one, so it must match the real
+        # method exactly.
+        getattr(approx, "has_any_dangerous", lambda: False)()
         or getattr(approx, "direct_flows", None)
     )
 

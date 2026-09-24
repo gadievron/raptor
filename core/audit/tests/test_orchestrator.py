@@ -6138,12 +6138,33 @@ class TestTaintApproxHasFlow:
                 self._dangerous = dangerous
                 self.direct_flows = direct
 
-            def has_any_dangerous_flow(self):
+            def has_any_dangerous(self):
                 return self._dangerous
 
         assert _taint_approx_has_flow(FakeApprox(True, {}))
         assert _taint_approx_has_flow(FakeApprox(False, {0: [("f", 1)]}))
         assert not _taint_approx_has_flow(FakeApprox(False, {}))
+
+    def test_real_class_dangerous_only(self):
+        # Pin the getattr probe against the real CTaintApprox method
+        # name: dangerous-only (no direct flows) makes the dangerous
+        # probe the sole True path — a misspelt probe is masked when
+        # direct_flows is populated too.
+        from core.analysis.taint_approx import CTaintApprox
+        from core.audit.orchestrator import _taint_approx_has_flow
+
+        assert _taint_approx_has_flow(CTaintApprox(
+            function="f",
+            params=["buf"],
+            direct_flows={},
+            dangerous_flows={0: [("memcpy", 1)]},
+        ))
+        assert not _taint_approx_has_flow(CTaintApprox(
+            function="f",
+            params=["buf"],
+            direct_flows={},
+            dangerous_flows={},
+        ))
 
     def test_none(self):
         from core.audit.orchestrator import _taint_approx_has_flow
