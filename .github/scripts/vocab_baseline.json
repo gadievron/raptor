@@ -1272,6 +1272,11 @@
     "count": 81,
     "kind": "literal"
   },
+  "core/inventory/module_load_abort.py::_PHP_NONCALL_PAREN_WORDS": {
+    "count": 23,
+    "kind": "literal",
+    "note": "closed PHP language-construct taxonomy: keywords whose trailing paren is a construct header (control flow, isset/list/echo family) or a declaration parameter list, not a call into user code \u2014 fixed language grammar facts for the module-abort witness's call-shape guard, not a learned name vocabulary"
+  },
   "core/inventory/module_load_abort.py::_RB_OPENER": {
     "count": 10,
     "kind": "alternation"

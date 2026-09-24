@@ -475,6 +475,265 @@ def test_php_exit_method_call_does_not_fire():
     assert detect_module_load_abort("php", "<?php\n$o->exit();\nfunction f(){}\n") is None
 
 
+def test_php_terminal_exit_on_live_page_does_not_fire():
+    # The live-page shape: top-level dispatch CALLS the file's
+    # functions, then ends in a file-scope ``exit()``. PHP hoists the
+    # declarations (they bind at compile time, before any statement),
+    # so the terminal exit proves nothing — gating here suppressed
+    # review of live entry-point code.
+    _requires_lexical_grammar("php")
+    src = (
+        "<?php\n"
+        "if (isset($send)) {\n"
+        "    showForm($session);\n"
+        "} else {\n"
+        "    showForm($session, true);\n"
+        "}\n"
+        "exit();\n"
+        "function showForm($s, $v = false) { echo $s; }\n"
+    )
+    assert detect_module_load_abort("php", src) is None
+
+
+def test_php_call_before_abort_does_not_fire():
+    _requires_lexical_grammar("php")
+    assert detect_module_load_abort(
+        "php", "<?php\nsetup();\ndie('done');\nfunction setup(){}\n") is None
+
+
+def test_php_include_before_abort_does_not_fire():
+    # An included file executes arbitrary code and can call back into
+    # this file's hoisted functions.
+    _requires_lexical_grammar("php")
+    assert detect_module_load_abort(
+        "php", "<?php\nrequire_once('init.php');\ndie('x');\n") is None
+    assert detect_module_load_abort(
+        "php", "<?php\ninclude 'init.php';\ndie('x');\n") is None
+
+
+def test_php_new_before_abort_does_not_fire():
+    # A constructor is user code executing before the abort.
+    _requires_lexical_grammar("php")
+    assert detect_module_load_abort(
+        "php", "<?php\n$o = new App();\nexit;\n") is None
+    assert detect_module_load_abort(
+        "php", "<?php\n$o = new App;\nexit;\n") is None
+
+
+def test_php_dynamic_call_shapes_before_abort_do_not_fire():
+    _requires_lexical_grammar("php")
+    assert detect_module_load_abort(
+        "php", "<?php\n$f = 'x';\n$f();\ndie();\n") is None
+    assert detect_module_load_abort(
+        "php", "<?php\n$h['k']();\ndie();\n") is None
+
+
+def test_php_goto_before_abort_does_not_fire():
+    # A goto can jump PAST the abort — the top-to-bottom model the
+    # witness relies on no longer holds.
+    _requires_lexical_grammar("php")
+    assert detect_module_load_abort(
+        "php", "<?php\ngoto skip;\ndie();\nskip:\n$x = 1;\n") is None
+
+
+def test_php_alternative_syntax_abstains():
+    # ``if (...): ... endif;`` opens no brace, so the depth model
+    # would read the body as file scope — the end keyword anywhere
+    # abstains the whole file.
+    _requires_lexical_grammar("php")
+    src = "<?php\nif ($x):\n$y = 1;\ndie();\nendif;\n"
+    assert detect_module_load_abort("php", src) is None
+
+
+def test_php_declarations_before_abort_still_fire():
+    # The other direction: declarations are not execution. A file
+    # whose only top-level statements are declarations followed by an
+    # unconditional abort is genuinely dead-on-include — every include
+    # kills the request before anything can call the functions.
+    _requires_lexical_grammar("php")
+    src = (
+        "<?php\n"
+        "function helper($x) { return other($x); }\n"
+        "class C { function m() { helper(1); } }\n"
+        "die('this file is disabled');\n"
+        "function other($x) { return $x; }\n"
+    )
+    abort = detect_module_load_abort("php", src)
+    assert abort is not None
+    assert abort.line == 4
+    assert abort.summary == "die"
+
+
+def test_php_calless_assignments_before_abort_still_fire():
+    # Plain assignments cannot invoke the file's functions — the
+    # witness survives them (pins the existing calibration).
+    _requires_lexical_grammar("php")
+    src = "<?php\n$a = 1;\n$b = $a + 2;\nexit;\nfunction f(){}\n"
+    abort = detect_module_load_abort("php", src)
+    assert abort is not None
+    assert abort.line == 4
+
+
+def test_php_string_callable_before_abort_does_not_fire():
+    # ``'name'();`` / ``"name"();`` invokes the named function — user
+    # code executing before the abort. The blanked view spaces string
+    # INTERIORS but keeps the quotes, so the surviving quote before
+    # ``(`` is the call witness (same branch as ``)``/``]`` dynamic
+    # calls).
+    _requires_lexical_grammar("php")
+    assert detect_module_load_abort(
+        "php",
+        "<?php\n'setup'();\ndie('x');\nfunction setup(){}\n") is None
+    assert detect_module_load_abort(
+        "php",
+        '<?php\n"setup"();\ndie(\'x\');\nfunction setup(){}\n') is None
+
+
+def test_php_string_data_before_abort_still_fires():
+    # Control: plain string DATA (a quote not followed by ``(``)
+    # proves no execution — the witness survives it.
+    _requires_lexical_grammar("php")
+    src = "<?php\n$a = 'setup';\ndie('x');\nfunction setup(){}\n"
+    abort = detect_module_load_abort("php", src)
+    assert abort is not None
+    assert abort.line == 3
+
+
+def test_php_namespaced_define_before_abort_does_not_fire():
+    # Inside a namespace an unqualified function name resolves
+    # namespace-first: a hoisted ``function define(...)`` shadow makes
+    # the unqualified ``define(`` a call into user code, so the bare
+    # ``define`` construct exemption must not apply.
+    _requires_lexical_grammar("php")
+    src = (
+        "<?php\nnamespace n;\ndefine('x', 1);\ndie();\n"
+        "function define($a, $b) { work($a, $b); }\n"
+    )
+    assert detect_module_load_abort("php", src) is None
+
+
+def test_php_qualified_define_before_abort_does_not_fire():
+    # ``a\define(...)`` names a user function in namespace ``a`` —
+    # constructs cannot be namespace-qualified, so any qualified
+    # spelling bypasses the bare-word exemption even without a
+    # namespace declaration in this file.
+    _requires_lexical_grammar("php")
+    src = "<?php\nmyns\\define('x', 1);\ndie();\nfunction f(){}\n"
+    assert detect_module_load_abort("php", src) is None
+
+
+def test_php_global_define_prelude_still_fires():
+    # Control both spellings of the genuine maintenance-page prelude:
+    # unqualified ``define`` in the GLOBAL scope binds to the builtin,
+    # and ``\define`` names it explicitly even inside a namespace.
+    _requires_lexical_grammar("php")
+    src = "<?php\ndefine('OFF', 1);\ndie('x');\nfunction f(){}\n"
+    abort = detect_module_load_abort("php", src)
+    assert abort is not None
+    assert abort.line == 3
+    src2 = (
+        "<?php\nnamespace n;\n\\define('OFF', 1);\ndie('x');\n"
+        "function f(){}\n"
+    )
+    abort2 = detect_module_load_abort("php", src2)
+    assert abort2 is not None
+    assert abort2.line == 4
+
+
+def test_php_uppercase_exec_words_before_abort_do_not_fire():
+    # PHP keywords fold case, and these are DISQUALIFIERS: a
+    # case-sensitive miss keeps a wrong witness on a live file
+    # (worst: an upper-cased goto jumps PAST the abort and the whole
+    # file executes).
+    _requires_lexical_grammar("php")
+    prefixes = [
+        "$o = New App;",
+        "Include 'x.php';",
+        "REQUIRE_ONCE 'x.php';",
+        "Goto skip;",
+    ]
+    for prefix in prefixes:
+        src = f"<?php\n{prefix}\ndie();\nskip:\n$x = 1;\n"
+        assert detect_module_load_abort("php", src) is None, prefix
+
+
+def test_php_uppercase_return_before_abort_does_not_fire():
+    # A file-scope ``Return;`` ends the include exactly like
+    # ``return;`` — the later abort never runs.
+    _requires_lexical_grammar("php")
+    src = "<?php\nReturn;\ndie('x');\nfunction f(){}\n"
+    assert detect_module_load_abort("php", src) is None
+
+
+def test_php_uppercase_alt_syntax_end_abstains():
+    # Colon-syntax end keywords fold case too; an upper-cased ENDIF
+    # marks the same brace-less block form the depth model cannot
+    # follow. ``enddeclare`` completes the keyword set.
+    _requires_lexical_grammar("php")
+    assert detect_module_load_abort(
+        "php", "<?php\nIf ($x):\ndie();\nENDIF;\n") is None
+    assert detect_module_load_abort(
+        "php",
+        "<?php\ndeclare(ticks=1):\ndie();\nenddeclare;\n") is None
+
+
+def test_php_uppercase_function_body_still_classified():
+    # The trigger side of the case fold: an upper-cased FUNCTION
+    # header must classify its brace as a function body, so the
+    # ``return`` inside it stays a body statement and the witness
+    # survives (a miss here loses the witness, but a miss on the
+    # RETURN disqualifier in the mirrored spelling keeps a wrong
+    # one — both directions pinned).
+    _requires_lexical_grammar("php")
+    src = "<?php\nFUNCTION f($x) { return $x; }\ndie('off');\n"
+    abort = detect_module_load_abort("php", src)
+    assert abort is not None
+    assert abort.line == 3
+
+
+def test_php_construct_named_method_call_before_abort_does_not_fire():
+    # ``$o->exit()`` / ``C::exit()`` are user calls whatever the
+    # method is named: semi-reserved words are legal method names, so
+    # the construct-word exemption must not apply after ``->``/``::``.
+    _requires_lexical_grammar("php")
+    assert detect_module_load_abort(
+        "php", "<?php\n$o->exit();\ndie('x');\nfunction f(){}\n") is None
+    assert detect_module_load_abort(
+        "php", "<?php\nApp::exit();\ndie('x');\nfunction f(){}\n") is None
+
+
+# ---------------------------------------------------------------------------
+# PHP linear-model boundary pins. The call-free walk models the
+# EXPLICIT execution statements of top-level code: call shapes, new,
+# include/require, goto, return. Execution reached through object
+# protocol dispatch (magic methods run by clone / property access /
+# string conversion / string interpolation) follows those surfaces'
+# own shapes; these fixtures pin where the current model stands on
+# them so any change to that boundary is a deliberate, visible one.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("label,src", [
+    ("clone runs __clone",
+     "<?php\n$b = $GLOBALS['o'];\n$a = clone $b;\ndie();\n"
+     "class C { function __clone() { work(); } }\n"),
+    ("property read runs __get",
+     "<?php\n$o = $GLOBALS['o'];\n$x = $o->p;\ndie();\n"
+     "class C { function __get($n) { return work($n); } }\n"),
+    ("string cast runs __toString",
+     "<?php\n$o = $GLOBALS['o'];\n$x = (string)$o;\ndie();\n"
+     "class C { function __toString() { return work(); } }\n"),
+    ("interpolated method call (interior blanked as string data)",
+     "<?php\n$o = $GLOBALS['o'];\necho \"hi {$o->check()}\";\nexit;\n"
+     "class U { function check() { return work(); } }\n"),
+    ("backtick shell string (blanked as string data)",
+     "<?php\n`ls`;\ndie();\nfunction f(){}\n"),
+])
+def test_php_object_protocol_shape_pins(label, src):
+    _requires_lexical_grammar("php")
+    assert detect_module_load_abort("php", src) is not None, label
+
+
 # ---------------------------------------------------------------------------
 # Ruby — column-0 unconditional raise / abort / exit / fail aborts require.
 # ---------------------------------------------------------------------------
