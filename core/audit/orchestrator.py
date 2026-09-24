@@ -6022,6 +6022,26 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     except Exception:
         logger.debug("consistency prepass failed", exc_info=True)
 
+    # Context-map sink seeding: the map phase records sink details
+    # whose reachability prose can state a finding in all but name
+    # (a redirect sink noting client-controllable headers reaching
+    # the redirect base). Convert them into hint-tier injected
+    # hypotheses on the matching gaps — hypotheses are cheap and
+    # verdicts stay with the tools, so the map's own signal can no
+    # longer die unread in context-map.json when its function is
+    # never otherwise prioritised.
+    try:
+        from .map_seeds import seed_map_sink_hypotheses
+
+        n_map_seeds = seed_map_sink_hypotheses(gaps, context_map)
+        if n_map_seeds:
+            logger.info(
+                "context-map sink seeding: %d hypothesis(es) "
+                "injected onto gaps", n_map_seeds,
+            )
+    except Exception:
+        logger.debug("map-sink seeding failed", exc_info=True)
+
     # Fail-open census pre-pass: detection-grade leg-1 x
     # leg-2 sweep over the handler-outcome family; leads land on gap
     # dicts so the review prompt renders a hypothesize-or-discharge
