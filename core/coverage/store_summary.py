@@ -20,9 +20,11 @@ from typing import Any, TYPE_CHECKING
 
 from core.json import loads
 
+from core.inventory.script_handler import script_handler_stamp
+
 from .registry import DEPTH_SCANNED, category_of, depth_of
 from .schema import iter_file_entries
-from .store import CoverageStore, iter_inventory_functions
+from .store import CoverageStore, iter_inventory_items
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -37,8 +39,25 @@ _CATEGORIES = ("static", "llm", "runtime")
 _MAX_PROGRESS_BYTES = 64 * 1024 * 1024
 # Kinds an LLM reviews unit-by-unit. The LLM-review gap is scoped to these:
 # globals/macros/typedefs/classes are whole-file-scanner territory and
-# interstitial is glue — listing them overstates "unreviewed".
+# interstitial is glue — listing them overstates "unreviewed". EXCEPT the
+# script-per-file handler spans: an interstitial whose builder-persisted
+# ``script_handler`` stamp is True is the unit gap selection schedules for
+# review (a classic PHP request handler), so it belongs in the reviewable
+# denominator too — on script-heavy trees the handler share is roughly a
+# third of the scheduled units, and excluding it made the coverage report
+# claim completion the review loop never had. Stamp absent (a pre-stamp
+# checklist) keeps the old exclusion: this is a reporting surface with no
+# source access, and understating "reviewable" is the safe direction
+# (never overstates "reviewed").
 _REVIEWABLE_KINDS = ("function", "top_level")
+
+
+def _is_reviewable(kind: str, item: dict[str, Any]) -> bool:
+    """Unit-by-unit LLM-reviewable: the fixed kinds, plus stamped
+    script-handler interstitials (see _REVIEWABLE_KINDS)."""
+    if kind in _REVIEWABLE_KINDS:
+        return True
+    return kind == "interstitial" and script_handler_stamp(item) is True
 
 
 def _str_members(value: Any) -> list[str]:
@@ -361,7 +380,7 @@ def file_breakdown(store: CoverageStore, checklist: dict[str, Any]) -> list[dict
     reviewable units, examined items, findings, and file coverage %. Sorted
     worst-first by LLM-review ratio so files needing attention surface first."""
     files: dict[str, dict[str, Any]] = {}
-    for f, _name, lo, hi, kind in iter_inventory_functions(checklist):
+    for f, _name, lo, hi, kind, item in iter_inventory_items(checklist):
         high = hi if hi is not None else lo
         row = files.setdefault(f, {
             "path": f, "items": 0, "reviewable": 0, "llm": 0, "examined": 0})
@@ -369,7 +388,7 @@ def file_breakdown(store: CoverageStore, checklist: dict[str, Any]) -> list[dict
         cov = store.tool_coverage_of_range(f, lo, high)
         if store.function_verdict(f, lo, high) != "unexamined":
             row["examined"] += 1
-        if kind in _REVIEWABLE_KINDS:
+        if _is_reviewable(kind, item):
             row["reviewable"] += 1
             # reviewed = deep llm review (depth >= analysed), not a whole-file read.
             if any(category_of(t) == "llm" and depth_of(t) != DEPTH_SCANNED
@@ -524,7 +543,7 @@ def store_view(store: CoverageStore, checklist: dict[str, Any]) -> dict[str, Any
     workflow_files = _workflow_step_files(checklist)
     workflow_excluded = 0
 
-    for file, name, lo, hi, kind in iter_inventory_functions(checklist):
+    for file, name, lo, hi, kind, item in iter_inventory_items(checklist):
         total += 1
         by_kind[kind] = by_kind.get(kind, 0) + 1
         high = hi if hi is not None else lo
@@ -551,14 +570,15 @@ def store_view(store: CoverageStore, checklist: dict[str, Any]) -> dict[str, Any
         for c in _CATEGORIES:
             if c in cats:
                 by_category[c] += 1
-        is_interstitial = kind == "interstitial"
-        # The LLM-review gap lists only REVIEWABLE units (function / top_level).
+        reviewable = _is_reviewable(kind, item)
+        # The LLM-review gap lists only REVIEWABLE units (function /
+        # top_level / stamped script-handler interstitials).
         # Globals/macros/typedefs/classes are whole-file-scanner territory and
-        # interstitial is glue — none are units the LLM reviews one-by-one, so
+        # interstitial glue is not a unit the LLM reviews one-by-one, so
         # listing them overstates "unreviewed" and drowns the real gaps.
         # (Completeness counts above — total/by_kind/examined/verdicts — still
         # include every kind.)
-        if kind in _REVIEWABLE_KINDS:
+        if reviewable:
             # CI workflow jobs/steps carry kind "function" but are not
             # units an LLM reviews one-by-one — scanners own them.
             # Leading the gap with `.github/workflows/...:job:ci.step-N`
@@ -579,9 +599,12 @@ def store_view(store: CoverageStore, checklist: dict[str, Any]) -> dict[str, Any
 
         verdicts[verdict] = verdicts.get(verdict, 0) + 1
         # The re-review gap: never examined (by ANY tool) or found-then-lost.
-        # Interstitial glue excluded; other kinds kept — a genuinely unexamined
-        # global (no scanner ran over it) is a real gap worth surfacing.
-        if verdict in ("unexamined", "found_then_lost") and not is_interstitial:
+        # Interstitial glue excluded — but stamped script-handler spans are
+        # reviewable units, not glue; other kinds kept — a genuinely
+        # unexamined global (no scanner ran over it) is a real gap worth
+        # surfacing.
+        if verdict in ("unexamined", "found_then_lost") and (
+                kind != "interstitial" or reviewable):
             review_gap.append(
                 {"file": file, "function": name, "line": lo, "verdict": verdict}
             )
