@@ -145,6 +145,13 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
         "joern": True,
         "codeql": "js/xss",
         "sinks": ["document.write", "innerHTML", "eval"],
+        # PHP leg: the quote-breakout attribute subset only (raw
+        # request data into a single-quoted/unquoted attribute) — the
+        # encoded-but-wrong-flags residual stays with CWE-116's
+        # php/attr-encoding.yaml. Language-gated: every other target
+        # keeps the pre-existing chain byte-identical.
+        "semgrep": "php/attr-xss.yaml",
+        "semgrep_langs": ("php",),
     },
     "CWE-90": {
         "smt": None,
@@ -191,6 +198,13 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
                   "sendFile", "include", "require_once"],
         "dark_verify": True,
         "dark_verify_statuses": ("dark", "suspicious", "finding"),
+        # PHP leg: include/require path injection only (the
+        # code-inclusion class) — read/write file-op traversal shapes
+        # are out of the rule's sink scope by design. Language-gated:
+        # every other target keeps the pre-existing chain
+        # byte-identical.
+        "semgrep": "php/include-injection.yaml",
+        "semgrep_langs": ("php",),
     },
     "CWE-23": {
         "smt": None,
@@ -211,6 +225,12 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
                   "Marshal.load", "readObject", "ObjectInputStream", "loads"],
         "dark_verify": True,
         "dark_verify_statuses": ("dark", "suspicious", "finding"),
+        # PHP leg: request data reaching one-arg unserialize(); the
+        # two-arg options form is out of scope (its safe variant is
+        # the rule's own remediation). Language-gated: every other
+        # target keeps the pre-existing chain byte-identical.
+        "semgrep": "php/unserialize-taint.yaml",
+        "semgrep_langs": ("php",),
     },
     # Server-side request forgery
     "CWE-918": {
@@ -244,6 +264,12 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
                   "RedirectResponse"],
         "dark_verify": True,
         "dark_verify_statuses": ("dark", "suspicious", "finding"),
+        # PHP leg: Location headers built from request params or the
+        # attacker-controlled $_SERVER echoes (host header,
+        # PHP_SELF, REQUEST_URI). Language-gated: every other target
+        # keeps the pre-existing chain byte-identical.
+        "semgrep": "php/open-redirect.yaml",
+        "semgrep_langs": ("php",),
     },
     # Prototype pollution
     "CWE-1321": {
