@@ -87,6 +87,55 @@ _PHP_LITERAL_INCLUDE_RE = re.compile(
 )
 
 
+# Prose-shape allowlist for star-led docblock slices (see the guard
+# in ``php_interstitial_is_handler``). Enumerating what CODE needs
+# (keywords, then capability characters) repeatedly left a next
+# member — the sound direction is to enumerate what PROSE looks like
+# and scan everything else. A star-led line is skippable prose only
+# when it carries NONE of the characters that can form, feed, or
+# terminate an expression statement:
+#   `        shell execution
+#   $        variables / superglobals
+#   (        calls / grouping
+#   ;        a terminator completes an executing statement
+#   ' "      string literals (operands to include/require, string
+#            arithmetic)
+#   {        blocks / interpolation
+#   ?>       close tag — re-enters markup/code mid-line
+# AND no parenless expression-head keyword as a whole word: PHP
+# executes ``new C`` / ``clone``-family / ``print`` / backtickless
+# ``include``/``require`` (bare-constant operand) without any of the
+# characters above when the terminator lands on a LATER line, so the
+# word check is what closes the split-terminator family. Keywords are
+# case-insensitive in PHP, so the match is too.
+#
+# Both directions of the trade, priced deliberately: prose that
+# merely LOOKS code-capable — inline code spans in backticks,
+# ``{@inheritdoc}``, a semicolon or quote in a sentence, or the
+# English words "new" / "print" / "include" / "yield" — flips its
+# span to one review slot (inclusion, the cheap direction). Tightening
+# the allowlist back toward "skip more prose" re-opens force-False
+# channels one spelling at a time; loosening further (dropping the
+# skip entirely) is blocked only by the cost of writing every bare
+# docblock slice into the review queue.
+_PHP_STAR_PROSE_REJECT_CHARS = ("`", "$", "(", ";", "'", '"', "{", "?>")
+_PHP_STAR_PROSE_REJECT_WORD_RE = re.compile(
+    r"\b(?:new|clone|print|throw|yield|include|include_once|require|"
+    r"require_once)\b",
+    re.IGNORECASE,
+)
+
+
+def _php_star_line_is_prose(line: str) -> bool:
+    """Whether a ``*``-led line is skippable docblock prose (the
+    allowlist above): no code-capable characters, no parenless
+    expression-head keywords."""
+    body = line.lstrip("*").strip()
+    if any(needle in body for needle in _PHP_STAR_PROSE_REJECT_CHARS):
+        return False
+    return not _PHP_STAR_PROSE_REJECT_WORD_RE.search(body)
+
+
 def _php_wiring_statement(stmt: str) -> bool:
     """Whether one ``;``-delimited file-scope statement is wiring."""
     if _PHP_INCLUDE_KEYWORD_RE.match(stmt):
@@ -148,33 +197,23 @@ def php_interstitial_is_handler(source: str | None) -> bool:
             line = line[end + 2:].strip()
             if not line:
                 continue
-        if line.startswith("*") and "$" not in line and "(" not in line:
+        if line.startswith("*") and _php_star_line_is_prose(line):
             # Docblock-body heuristic: span hydration can slice
             # mid-docblock, where in_comment was never armed, so a
             # ``*``-led line reads as comment prose. But ``*`` (and
             # ``**``) also begins a valid CONTINUATION of the
-            # previous statement — numeric-string arithmetic after an
-            # unterminated ``include '1'`` — so the payload can live
-            # in the star line ITSELF, with or without a close tag.
-            # A line is skippable prose ONLY when it cannot carry
-            # code: no ``$`` (no variable, no superglobal) AND no
-            # ``(`` (no call). Anything else goes through the normal
-            # statement/segment scan — which prices docblock tag
-            # lines like ``@param string $x`` at one review slot
-            # each (inclusion is the cheap direction; prose without
-            # those characters still skips). ``*`` / ``**`` are the
-            # only continuation operators skipped at all — ``/`` /
-            # ``+`` / ``%`` continuations already classify True, and
-            # ``//`` / ``#`` really are comments.
-            #
-            # Even for guard-passing prose, a close tag still ends
-            # the comment context: the pre-close-tag portion is the
-            # only skippable part, the remainder re-enters markup /
-            # code through the segment scan.
-            tag = line.find("?>")
-            if tag < 0:
-                continue
-            line = line[tag:]
+            # previous statement — arithmetic on an unterminated
+            # ``include '1'`` — so a payload can live in the star
+            # line itself. Only PROSE-SHAPED lines skip (see
+            # ``_php_star_line_is_prose`` for the allowlist and the
+            # priced trade); everything else takes the normal
+            # statement/segment scan, which also handles any close
+            # tag on the line (``?>`` is in the reject set).
+            # ``*`` / ``**`` are the only continuation operators
+            # skipped at all — ``/`` / ``+`` / ``%`` continuations
+            # already classify True, and ``//`` / ``#`` really are
+            # comments.
+            continue
         for seg_index, segment in enumerate(line.split("?>")):
             segment = segment.strip()
             if not segment:
