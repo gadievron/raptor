@@ -6,25 +6,23 @@ rules:
   # attacker-chosen properties. Direct superglobal arguments, nested
   # array-field reads, and single-assignment hops are all in scope
   # (intraprocedural taint); decoding wrappers (base64_decode and
-  # friends) propagate taint through to the sink.
+  # friends) propagate taint through to the sink; the fully-qualified
+  # (\unserialize) and error-suppressed (@unserialize) spellings
+  # match.
   #
-  # Only the ONE-argument unserialize form is the sink: the two-arg
-  # form carries an options array, and 'allowed_classes' => false is
-  # this rule's own recommended remediation — the rule must stay
-  # silent on it.
+  # Two-arg calls: the options form is matched ONLY in its cheapest
+  # dangerous spelling — a literal 'allowed_classes' => true (any
+  # bracket syntax, extra keys allowed). 'allowed_classes' => false
+  # is this rule's own recommended remediation and stays silent.
   #
   # Known FP modes:
   #   - Integrity checks the rule cannot see (an hash_equals/HMAC
   #     guard branch before the call, a preg_match shape check) still
   #     fire — guard-shaped validation is invisible to taint mode.
-  # Known FN modes:
-  #   - The two-arg form with a PERMISSIVE options array
-  #     ('allowed_classes' => true, or a gadget-bearing class list) is
-  #     out of the one-arg sink scope and stays silent — stated
-  #     residual; distinguishing safe from unsafe options arrays needs
-  #     value analysis the pattern cannot express.
-  #   - Taint through helper indirection (a getter function wrapping
-  #     the superglobal read) is invisible to single-function taint.
+  # Scope pins: taint is single-function, and options arrays
+  #   participate only in the literal-true spelling above. The
+  #   negative fixture carries out-of-scope shape pins for both
+  #   boundaries — each flips when a matching shape lands.
   - id: raptor.php.unserialize-taint.request-data
     mode: taint
     languages: [php]
@@ -43,6 +41,12 @@ rules:
           - pattern: $_REQUEST[...]
           - pattern: $_COOKIE[...]
     pattern-sinks:
-      - pattern: unserialize($DATA)
+      - pattern-either:
+          - pattern: unserialize($DATA)
+          - pattern: \unserialize($DATA)
+          - pattern: unserialize($DATA, [..., 'allowed_classes' => true, ...])
+          - pattern: \unserialize($DATA, [..., 'allowed_classes' => true, ...])
+          - pattern: unserialize($DATA, array(..., 'allowed_classes' => true, ...))
+          - pattern: \unserialize($DATA, array(..., 'allowed_classes' => true, ...))
     metadata:
       cwe: ["CWE-502"]
