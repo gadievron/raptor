@@ -1966,6 +1966,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             if args.prior_journal else None
         ),
         prior_claims_per_function=args.prior_claims,
+        hypothesis_seed_paths=(
+            [Path(p) for p in getattr(args, "hypothesis_seeds", None) or []]
+            or None
+        ),
         max_workers=args.max_workers,
     )
 
@@ -2751,6 +2755,13 @@ def cmd_resume(args: argparse.Namespace) -> int:
         prior_claims_per_function=int(
             run_cfg.get("prior_claims_per_function", 3)
         ),
+        # Resume passthrough: gap prep re-runs each segment, so the
+        # seed intake must see the ORIGINAL run's explicit seed files
+        # again (the co-located file re-discovers itself).
+        hypothesis_seed_paths=(
+            [Path(p) for p in run_cfg["hypothesis_seeds"]]
+            if run_cfg.get("hypothesis_seeds") else None
+        ),
         max_workers=_resume_max_workers(args.max_workers, run_cfg),
     )
 
@@ -2937,6 +2948,7 @@ def _run_config_from_args(
         "deepen_reserve_fraction": args.deepen_reserve,
         "prior_journal_dirs": args.prior_journal,
         "prior_claims_per_function": args.prior_claims,
+        "hypothesis_seeds": getattr(args, "hypothesis_seeds", None),
         "max_workers": getattr(args, "max_workers", 0),
         # Informational: the self-bound applied to segment 1 (the
         # operator's explicit max_seconds above stays authoritative
@@ -3365,6 +3377,18 @@ def main() -> int:
                             "per function into review context, newest "
                             "first (default: 3; 0 disables the "
                             "injection entirely)")
+    p_run.add_argument("--hypothesis-seeds", action="append", default=None,
+                       metavar="FILE",
+                       help="sibling-hypotheses.json seed file: "
+                            "externally-produced hypothesis claims "
+                            "(with evidence refs and disproof recipes) "
+                            "boost matching gap-queue entries and ride "
+                            "into review context as hint-tier blocks "
+                            "(repeatable). A co-located "
+                            "sibling-hypotheses.json in the output dir "
+                            "is picked up automatically. Seeds never "
+                            "mint findings — the LLM still reviews and "
+                            "tools still render verdicts")
     p_run.add_argument("--prior-journal", action="append", default=None,
                        metavar="RUN_DIR",
                        help="Run directory whose review-journal.jsonl "

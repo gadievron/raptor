@@ -220,6 +220,11 @@ class AuditPipelineOpts:
     # (--prior-journal, repeatable). Covers journals not yet merged
     # into the project index.
     prior_journal_dirs: list[Path] | None = None
+    # Explicit ``--hypothesis-seeds`` files (repeatable): external
+    # hypothesis-seed intake (core.audit.hypothesis_intake). A
+    # co-located sibling-hypotheses.json in the run dir is discovered
+    # without this. Hint-tier only — seeds never mint findings.
+    hypothesis_seed_paths: list[Path] | None = None
     # Per-function cap on prior finding-grade claims in review context
     # (--prior-claims; 0 disables) and the per-claim body excerpt.
     prior_claims_per_function: int = 3
@@ -408,6 +413,7 @@ def _build_orchestrator_config(
         prior_booked_spend_usd=opts.prior_booked_spend_usd,
         resume_segment=opts.resume_segment,
         prior_journal_dirs=opts.prior_journal_dirs,
+        hypothesis_seed_paths=opts.hypothesis_seed_paths,
         prior_claims_per_function=opts.prior_claims_per_function,
         prior_claim_excerpt_chars=opts.prior_claim_excerpt_chars,
         llm_budget_client=client,
