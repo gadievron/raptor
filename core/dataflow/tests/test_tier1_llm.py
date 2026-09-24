@@ -775,6 +775,47 @@ def test_sink_uri_inner_dotdot_resolving_inside_still_reads(tmp_path: Path):
     assert r.status is t1.Tier0Status.SOUND
 
 
+def test_tier1b_source_read_is_capped(tmp_path: Path, monkeypatch):
+    """The post-fix source read routes through the shared capped
+    reader: a planted huge file truncates (never buffers whole), and
+    a validator/sink past the truncated prefix reads NOT_APPLICABLE —
+    a barrier is never proved from missing text."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    filler = "pad = 0\n" * 200
+    (repo_root / "app.py").write_text(
+        filler
+        + "from werkzeug.security import safe_join\n"
+        + "def f(path):\n"
+        + "    abs_path = safe_join(BASE, path)\n"
+        + "    return open(abs_path)\n"
+    )
+    real = t1.read_text_capped
+
+    def tiny_cap(path, max_chars=None, **kw):
+        return real(path, 256, **kw)
+
+    monkeypatch.setattr(t1, "read_text_capped", tiny_cap)
+    diff = (
+        "+from werkzeug.security import safe_join\n"
+        "+    abs_path = safe_join(BASE, path)\n"
+    )
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "abs_path = safe_join(BASE, path)",
+        "variable_name": "abs_path",
+        "charset": "", "forbidden": "",
+        "library_call": "werkzeug.security.safe_join",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=repo_root,
+        sink_uri="app.py", sink_line=204,
+        sink_class="pathtrav", language="python",
+        complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+
+
 @_requires_z3
 def test_charset_branch_wrapped_declines_js(tmp_path: Path):
     """Tier 1B charset (guard) kind, non-Python: the guard-and-exit

@@ -49,6 +49,7 @@ from core.dataflow.cvefix_loader import CveFixPair
 from core.git import safe_git_readonly_command
 from core.sarif.parser import SARIF_MAX_BYTES
 from core.paths import confine, strip_file_uri
+from core.source import read_text_capped
 from typing import TYPE_CHECKING
 from core.source.lines import split_lines
 
@@ -365,7 +366,17 @@ def _extract_proposal(
                 src = _resolve_in_repo(repo_root, raw_uri)
                 if src is None or not src.is_file():
                     continue
-                lines = split_lines(src.read_text(encoding="utf-8", errors="replace"))
+                # Capped read (shared default): the path is contained
+                # but the file is untrusted repo content — a
+                # multi-hundred-MB generated file must truncate, not
+                # buffer whole. A line past the cap just fails the
+                # bounds check below and the finding is skipped.
+                # newline="" + split_lines keep the \n-only line
+                # model the SARIF line numbers were counted in.
+                got = read_text_capped(src, errors="replace", newline="")
+                if got is None:
+                    continue
+                lines = split_lines(got[0])
                 snippet = lines[line - 1].strip() if 0 < line <= len(lines) else raw_uri
                 if len(lines) <= _SMALL_FILE:
                     body = "\n".join(lines)

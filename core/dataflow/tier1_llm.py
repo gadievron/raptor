@@ -69,6 +69,7 @@ from core.dataflow.smt_barrier import (
     extract_validator as _mechanical_extract,
 )
 from core.paths import confine
+from core.source import read_text_capped
 from core.llm.coerce import extract_fenced_code
 
 # A bare-minimum LLM completer signature, compatible with the existing
@@ -711,13 +712,16 @@ def try_tier1b(
             Tier0Status.NOT_APPLICABLE,
             f"Tier 1B: post-fix source not readable at {sink_uri!r}",
         )
-    try:
-        source_text = src_path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
+    # Capped read (shared default) like try_tier0's: a truncated read
+    # can only make the validator/sink lines unfindable below —
+    # NOT_APPLICABLE, never a barrier proved from missing text.
+    got = read_text_capped(src_path, errors="replace")
+    if got is None:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
-            f"Tier 1B: could not read source: {exc}",
+            f"Tier 1B: could not read source {sink_uri!r}",
         )
+    source_text = got[0]
 
     if spec.kind in ("charset", "charset_sub"):
         # Mechanical re-extract on the LLM-named line; agreement gates
