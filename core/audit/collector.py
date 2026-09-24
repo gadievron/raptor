@@ -400,6 +400,22 @@ def append_journal_for_outcome(
             gap.get("line_start", 0),
         ) or []
 
+    # External hypothesis-seed provenance: which sibling-hypotheses
+    # claims were injected into this review's context (id + source
+    # only — the claims themselves live in the seed file and the
+    # intake receipt). Audit-trail field, never verdict weight.
+    seed_provenance: list[dict] | None = None
+    stamped_seeds = gap.get("seed_hypotheses")
+    if isinstance(stamped_seeds, list) and stamped_seeds:
+        seed_provenance = [
+            {
+                "id": str(s.get("id", ""))[:200],
+                "source": str(s.get("source", ""))[:200],
+            }
+            for s in stamped_seeds
+            if isinstance(s, dict)
+        ] or None
+
     entry = ReviewJournalEntry(
         ts=now_iso(),
         run_id=run_id,
@@ -432,6 +448,7 @@ def append_journal_for_outcome(
         context_reduced=context_reduced,
         reused=reused,
         reused_from_run=reused_from_run,
+        seed_provenance=seed_provenance,
         provisional=provisional,
         producer=producer,
         # Machine-readable failure class on error verdicts only:

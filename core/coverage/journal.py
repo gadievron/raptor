@@ -269,6 +269,13 @@ class ReviewJournalEntry:
     # ``[{callee, call_line, verdict}]``. Additive; absent when the
     # review carried no edge-contract section.
     edge_verdicts: list[dict] | None = None
+    # ``seed_provenance``: external hypothesis seeds injected into
+    # this review's context (``[{id, source}]`` from
+    # core.audit.hypothesis_intake) — the audit-trail record of which
+    # sibling-hypotheses.json claims this reviewer SAW. Provenance
+    # only: a seed is a hint, never evidence, and this field carries
+    # no verdict weight anywhere. Additive; absent on seedless rows.
+    seed_provenance: list[dict] | None = None
     # ``provisional``: this finding-grade row was appended by the
     # mid-loop promotion cadence, BEFORE the post-loop resolution
     # passes (refutation gates, binary-oracle demotion, the
@@ -1168,6 +1175,7 @@ def _entry_from_dict(raw: dict[str, Any]) -> ReviewJournalEntry:
         error_class=raw.get("error_class"),
         edge_callee=raw.get("edge_callee"),
         edge_verdicts=raw.get("edge_verdicts"),
+        seed_provenance=raw.get("seed_provenance"),
         provisional=raw.get("provisional"),
         integrity=raw.get("integrity"),
         schema_version=version,

@@ -85,6 +85,9 @@
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::pp": {
       "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; same disposition as this file's other rows"
     },
+    "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::seed_hyp_text": {
+      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; the seed body additionally rides wrap_untrusted at construction; same disposition as this file's other rows"
+    },
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::source": {
       "note": "prompt/context construction \u2014 the analysed function's own source is fenced into the LLM prompt (the analysis subject), not an operator render surface"
     },

@@ -5425,9 +5425,20 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     # --max-cost ledger.
 
     # Graph store: boost gap-queue items connected to prior findings/hypotheses.
-    # Bumps priority_score so graph-connected items rank higher in the budget cut.
+    # Bumps priority_score AFTER the sort that fixed the budget cut,
+    # so membership in the cut is unchanged — the bump steers review
+    # ORDER (workqueue topological tiebreak, subsystem grouping,
+    # schedule=priority) and crosses the folded spec-inference gate
+    # (priority_score >= 0.7). Deliberately NOT re-sorted: a
+    # post-boost re-sort would let graph/seed signals displace
+    # unboosted gaps out of the cut (see the both-directions
+    # rationale at SEED_PRIORITY_BOOST — the shared magnitude for
+    # this site and the file-seed intake below; change both or
+    # neither).
     try:
         from core.understand_graph import graph_path_for_run, hypothesis_seeds
+
+        from .hypothesis_intake import SEED_PRIORITY_BOOST as _seed_boost
         _gp = graph_path_for_run(config.out_dir, str(config.target_path or ""))
         if _gp.exists():
             # Target-scoped: an unscoped call answers with whatever
@@ -5438,7 +5449,9 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
                 _boosted = 0
                 for gap in gaps:
                     if (gap.get("file", ""), gap.get("name", "")) in _seed_keys:
-                        gap["priority_score"] = gap.get("priority_score", 0) + 10
+                        gap["priority_score"] = (
+                            gap.get("priority_score", 0) + _seed_boost
+                        )
                         _boosted += 1
                 if _boosted:
                     logger.info("graph store: boosted %d/%d gaps from %d hypothesis seeds",
@@ -5452,6 +5465,28 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     except Exception as _gexc:
         logger.warning("graph hypothesis_seeds skipped: %s", _gexc)
         logger.debug("graph hypothesis_seeds skipped", exc_info=True)
+
+    # File-based hypothesis-seed intake (sibling-hypotheses.json +
+    # --hypothesis-seeds): the second consumer of the same boost
+    # semantics as the graph seeds above — matched gaps get one
+    # bounded priority_score bump (SEED_PRIORITY_BOOST, the shared
+    # constant) and the seed claims are stamped for the hint-tier
+    # review context block. Like the graph sibling, the bump lands
+    # after the budget-cut sort: it steers review ORDER and the
+    # spec-inference gate, never cut membership (both-directions
+    # rationale at the constant). Placed with its sibling: after the
+    # mechanical re-sorts, before rank_gaps/hoist_pins/budget.
+    # Best-effort by design — a hostile or malformed seed file must
+    # cost only its own records, never prep.
+    try:
+        from .hypothesis_intake import apply_hypothesis_seeds
+        apply_hypothesis_seeds(
+            gaps, config.out_dir,
+            getattr(config, "hypothesis_seed_paths", None),
+        )
+    except Exception as _sexc:  # noqa: BLE001 — enrichment, never a gate
+        logger.warning("hypothesis-seed intake skipped: %s", _sexc)
+        logger.debug("hypothesis-seed intake skipped", exc_info=True)
 
     if getattr(config, "rank_gaps", False):
         try:
@@ -11939,6 +11974,14 @@ def _build_context(
         # Mechanically derived hypotheses (IRIS bypass detection,
         # fix-history mining) ride the gap into the review prompt.
         ctx["injected_hypotheses"] = list(gap["injected_hypotheses"])
+
+    if not blind and gap.get("seed_hypotheses"):
+        # External hypothesis seeds (core.audit.hypothesis_intake)
+        # stamped at prep time: claim + disproof recipe rendered as a
+        # hint-tier enveloped block. Withheld in blind mode like the
+        # other advisory prior claims — the seed is external context,
+        # not code.
+        ctx["seed_hypotheses"] = list(gap["seed_hypotheses"])
 
     if not blind and config.prior_finding_analyses:
         # Prior finding-grade claims (/agentic per-finding analyses of
