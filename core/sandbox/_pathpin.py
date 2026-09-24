@@ -74,6 +74,14 @@ caller runs it:
 Fork-safety: only ``os`` syscall wrappers and str/bytes ops — callable
 from post-fork children and preexec functions (same constraints as
 core/sandbox/landlock.py / mount_ns.py setup code).
+
+Sibling: :mod:`core.source.beneath` carries the READER-side anchored
+open (``open_regular_beneath`` — openat2/dir-fd walk returning a file
+object, macOS-capable). Same walk doctrine, different substrate
+constraints: this module must stay fork-safe and returns an O_PATH
+pin for mount/grant targeting, so the two bodies deliberately do not
+merge — new READERS of attacker-influenced paths consume
+core.source, not this module.
 """
 
 from __future__ import annotations
