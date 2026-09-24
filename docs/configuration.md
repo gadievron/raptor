@@ -32,6 +32,7 @@ based on system hardware.
 | `joern_query_timeout_s` | `300` | Per-query timeout |
 | `max_llm_workers` | `"auto"` | Parallel LLM API calls; beats the RPM-derived and claudecode caps |
 | `throttle_cooldown_s` | `30` | Cooldown after an LLM rate-limit response |
+| `default_max_cost_usd` | `"auto"` | Standing USD ceiling applied when a run configures **no** LLM cost cap anywhere; a CLI/programmatic cap always wins. `"auto"` (or any non-positive/non-numeric value) = no default — uncapped runs print a warning banner instead |
 | `max_semgrep_workers` | `"auto"` | Parallel Semgrep packs; auto = half CPUs. Each pack's `--jobs` is divided so concurrent packs share the host instead of each claiming every core |
 | `max_codeql_workers` | `"auto"` | Parallel CodeQL DB builds/analyses; auto = half CPUs, capped at 8 and RAM-limited. Per-invocation `-j` is divided between concurrent builds when `codeql_threads` is auto; an explicit numeric `codeql_threads` is never second-guessed |
 | `max_fuzz_parallel` | `"auto"` | AFL++ parallel instances ceiling; auto = half CPUs |
