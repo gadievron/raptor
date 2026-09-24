@@ -33,12 +33,17 @@ from core.json import dumps_display
 from core.config import RaptorConfig
 from core.inventory.lookup import lookup_function as _lookup_function
 from core.json import load_json, save_json
-from core.llm.client import LLMClient, _is_auth_error
+from core.llm.client import _is_auth_error
 from core.llm.coerce import to_lower_token_safe
 from core.llm.config import LLMConfig
 from core.llm.detection import detect_llm_availability
 from core.llm.providers import ClaudeCodeProvider
 from core.llm.task_types import TaskType
+from core.llm.transcript import (
+    build_llm_client,
+    transcript_replay_active,
+    transcript_subject,
+)
 from core.logging import get_logger
 from core.paths import confine, strip_file_uri
 from core.run.finding_status import read_verdict
@@ -875,10 +880,18 @@ class AutonomousSecurityAgentV2:
             self.llm_config = None
             self.llm = ClaudeCodeProvider()
             logger.debug("Prep mode: %s → %s", repo_path, out_dir)
-        elif availability.external_llm:
-            # External LLM configured — use LLMClient
-            self.llm_config = llm_config or LLMConfig()
-            self.llm = LLMClient(self.llm_config)
+        elif availability.external_llm or transcript_replay_active():
+            # External LLM configured — use LLMClient. Transcript
+            # replay (core.llm.transcript) also takes this branch:
+            # recorded responses need no external provider, so a
+            # hermetic eval run with no credentials still drives the
+            # full analysis loop. build_llm_client is a plain
+            # LLMClient construction when no transcript session is
+            # active; in replay it substitutes an inert placeholder
+            # primary when none is configured, so the banner below
+            # keeps working.
+            self.llm = build_llm_client(llm_config or LLMConfig())
+            self.llm_config = self.llm.config
 
             logger.info("RAPTOR Autonomous Security Agent initialised")
             logger.info("Repository: %s", repo_path)
@@ -1059,31 +1072,41 @@ class AutonomousSecurityAgentV2:
         try:
             logger.info("Sending dataflow to LLM for deep validation...")
 
-            raw_validation, _response = self.llm.generate_structured(
-                prompt=validation_prompt,
-                schema=validation_schema,
-                system_prompt=system_prompt,
-                task_type=TaskType.ANALYSE,
-            )
+            # transcript_subject keys the LLM-transcript record/
+            # replay seam to this finding (see analyze_vulnerability);
+            # no-op-cheap when no transcript is active.
+            with transcript_subject(vuln.finding_id):
+                raw_validation, _response = self.llm.generate_structured(
+                    prompt=validation_prompt,
+                    schema=validation_schema,
+                    system_prompt=system_prompt,
+                    task_type=TaskType.ANALYSE,
+                )
 
-            if raw_validation is None:
-                logger.info("No external LLM available — skipping dataflow validation")
-                return {}
+                if raw_validation is None:
+                    logger.info(
+                        "No external LLM available — skipping dataflow "
+                        "validation"
+                    )
+                    return {}
 
-            from core.llm.response_validation import (
-                attempt_quality_retry,
-                validate_structured_response,
-            )
-            validated = validate_structured_response(raw_validation, validation_schema)
-            # Single-retry uplift: if the LLM's first response is missing
-            # required fields or had to be coerced, re-prompt with the
-            # specific problems called out. Returns the higher-quality
-            # of the two responses (original if retry didn't beat it).
-            validated = attempt_quality_retry(
-                self.llm, validated, validation_prompt, validation_schema,
-                system_prompt=system_prompt, task_type=TaskType.ANALYSE,
-                threshold=0.5,
-            )
+                from core.llm.response_validation import (
+                    attempt_quality_retry,
+                    validate_structured_response,
+                )
+                validated = validate_structured_response(
+                    raw_validation, validation_schema,
+                )
+                # Single-retry uplift: if the LLM's first response is
+                # missing required fields or had to be coerced,
+                # re-prompt with the specific problems called out.
+                # Returns the higher-quality of the two responses
+                # (original if retry didn't beat it).
+                validated = attempt_quality_retry(
+                    self.llm, validated, validation_prompt,
+                    validation_schema, system_prompt=system_prompt,
+                    task_type=TaskType.ANALYSE, threshold=0.5,
+                )
             validation = validated.data
             if validated.quality < 0.5:
                 logger.warning(
@@ -1313,29 +1336,37 @@ class AutonomousSecurityAgentV2:
             if not isinstance(self.llm, ClaudeCodeProvider):
                 logger.info("Sending vulnerability to LLM for analysis...")
 
-            # Use LLM for intelligent analysis
-            raw_analysis, _full_response = self.llm.generate_structured(
-                prompt=prompt,
-                schema=analysis_schema,
-                system_prompt=system_prompt,
-                task_type=TaskType.ANALYSE,
-            )
+            # Use LLM for intelligent analysis. transcript_subject
+            # keys the LLM-transcript record/replay seam to this
+            # finding's identity — replay then survives queue
+            # re-ordering and prompt-template drift. No-op-cheap when
+            # no transcript is active. The quality retry shares the
+            # tag: its call belongs to the same finding.
+            with transcript_subject(vuln.finding_id):
+                raw_analysis, _full_response = self.llm.generate_structured(
+                    prompt=prompt,
+                    schema=analysis_schema,
+                    system_prompt=system_prompt,
+                    task_type=TaskType.ANALYSE,
+                )
 
-            if raw_analysis is None:
-                logger.debug("Prep mode — Phase 4 will handle analysis")
-                return False
+                if raw_analysis is None:
+                    logger.debug("Prep mode — Phase 4 will handle analysis")
+                    return False
 
-            from core.llm.response_validation import (
-                attempt_quality_retry,
-                validate_structured_response,
-            )
-            validated = validate_structured_response(raw_analysis, analysis_schema)
-            # See validate_dataflow above for the retry rationale.
-            validated = attempt_quality_retry(
-                self.llm, validated, prompt, analysis_schema,
-                system_prompt=system_prompt, task_type=TaskType.ANALYSE,
-                threshold=0.5,
-            )
+                from core.llm.response_validation import (
+                    attempt_quality_retry,
+                    validate_structured_response,
+                )
+                validated = validate_structured_response(
+                    raw_analysis, analysis_schema,
+                )
+                # See validate_dataflow above for the retry rationale.
+                validated = attempt_quality_retry(
+                    self.llm, validated, prompt, analysis_schema,
+                    system_prompt=system_prompt, task_type=TaskType.ANALYSE,
+                    threshold=0.5,
+                )
             analysis = validated.data
             if validated.quality < 0.5:
                 logger.warning(
@@ -1778,12 +1809,15 @@ class AutonomousSecurityAgentV2:
         try:
             logger.info("Requesting exploit code from LLM...")
 
-            response = self.llm.generate(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                temperature=0.8,  # Higher creativity for exploit generation. YMMV
-                task_type=TaskType.GENERATE_CODE,
-            )
+            # transcript_subject keys the LLM-transcript record/replay
+            # seam to this finding (see analyze_vulnerability).
+            with transcript_subject(vuln.finding_id):
+                response = self.llm.generate(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    temperature=0.8,  # Higher creativity for exploit generation. YMMV
+                    task_type=TaskType.GENERATE_CODE,
+                )
 
             if response is None:
                 logger.info("No external LLM available — skipping exploit generation")
@@ -2303,12 +2337,15 @@ class AutonomousSecurityAgentV2:
         try:
             logger.info("   🤖 Requesting secure patch from LLM...")
 
-            response = self.llm.generate(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                temperature=0.3,  # Lower temperature for safer patches
-                task_type=TaskType.GENERATE_CODE,
-            )
+            # transcript_subject keys the LLM-transcript record/replay
+            # seam to this finding (see analyze_vulnerability).
+            with transcript_subject(vuln.finding_id):
+                response = self.llm.generate(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    temperature=0.3,  # Lower temperature for safer patches
+                    task_type=TaskType.GENERATE_CODE,
+                )
 
             if response is None:
                 logger.info("   No external LLM available — skipping patch generation")
@@ -3364,14 +3401,18 @@ class AutonomousSecurityAgentV2:
                                 from packages.llm_analysis.checker_followup import (
                                     emit_variant_matches_for_finding,
                                 )
-                                n_variants = emit_variant_matches_for_finding(
-                                    vuln,
-                                    out_dir=self.out_dir,
-                                    checklist=checklist,
-                                    repo_root=self.repo_path,
-                                    llm_client=self.llm,
-                                    refine=self.refine_checkers,
-                                )
+                                # transcript_subject: the followup's
+                                # LLM calls belong to this finding
+                                # (see analyze_vulnerability).
+                                with transcript_subject(vuln.finding_id):
+                                    n_variants = emit_variant_matches_for_finding(
+                                        vuln,
+                                        out_dir=self.out_dir,
+                                        checklist=checklist,
+                                        repo_root=self.repo_path,
+                                        llm_client=self.llm,
+                                        refine=self.refine_checkers,
+                                    )
                                 variant_matches += n_variants
                             except Exception:
                                 logger.warning(
