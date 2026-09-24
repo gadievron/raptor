@@ -882,12 +882,39 @@ def run_semgrep_sweep(
         # future caller adding unknown-extension extra_targets must
         # re-audit this.
         extra_args: list[str] | None = None
+        # Receipt-policy honesty for foreign-extension targets: when
+        # the inventory language is known but semgrep CANNOT witness
+        # the file (no language key for the probed language, or the
+        # rule's own languages: key does not name it), the inevitable
+        # no-witness inconclusive below must SAY so — a silent cap
+        # reads as a rule failure and hides that no executed receipt
+        # was ever possible on this target/rule pair.
+        capability_note: str | None = None
         if language:
-            from .hypothesis_mapping import semgrep_probed_language
+            from .hypothesis_mapping import (
+                semgrep_extension_mapped,
+                semgrep_probed_language,
+            )
 
             _probed = semgrep_probed_language(file_path, language)
             if _probed and _rule_languages_include(rule_config, _probed):
                 extra_args = ["--scan-unknown-extensions"]
+            elif _probed:
+                capability_note = (
+                    f"rule languages do not include the probed "
+                    f"language '{_probed}' for foreign-extension "
+                    f"target {file_path} — regenerate the rule with "
+                    f"languages: [{_probed}] to earn an executed "
+                    "receipt"
+                )
+            elif not semgrep_extension_mapped(file_path):
+                capability_note = (
+                    "engine capability absent: semgrep has no "
+                    f"language key for inventory language "
+                    f"'{language}' (content-probed foreign "
+                    "extension) — no executed receipt is possible "
+                    "in either direction"
+                )
 
         # When a dynamic rule will need its negative control anyway,
         # fold the control fixture into the SAME invocation as an
@@ -1077,7 +1104,12 @@ def run_semgrep_sweep(
                     ),
                 )
             else:
-                if _examined:
+                if capability_note:
+                    # The dispatch-time capability analysis names the
+                    # real cause of the missing witness — record it
+                    # instead of the generic skip message.
+                    capped_reason = capability_note
+                elif _examined:
                     capped_reason = (
                         f"no scanned-target witness: {file_path} missing "
                         "from semgrep's files_examined (paths.scanned) — "

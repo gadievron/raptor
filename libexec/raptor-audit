@@ -968,6 +968,20 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             fn_line_start = 0
             fn_line_end = 0
 
+        # Inventory-stamped language for the swept file: content-probed
+        # foreign extensions (script "module" files with the language
+        # only detectable from content) are silently SKIPPED by
+        # semgrep's extension-based target selection, so without the
+        # hint no in-session sweep on such a file could ever earn an
+        # executed receipt in either direction — finding-grade results
+        # stayed capped at suspicious by receipt policy. The engine
+        # gates the hint (probe + rule-language agreement) exactly as
+        # the orchestrator path does; binary sentinels sweep a .c
+        # decompilation tempfile and never consult it.
+        file_language: str | None = None
+        if tool == "semgrep" and _bin_tmp is None:
+            file_language = _checklist_file_language(out_dir, args.file)
+
         try:
             if tool == "semgrep":
                 result = run_semgrep_sweep(
@@ -977,6 +991,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
                     rule_config=str(rule_path),
                     line_start=fn_line_start or 0,
                     line_end=fn_line_end or 0,
+                    language=file_language,
                 )
             elif tool == "codeql":
                 result = run_codeql_sweep(
@@ -3044,6 +3059,29 @@ def _mismatched_checklist_target(
         if Path(recorded).resolve() != Path(target_path).resolve():
             return recorded
     except (OSError, RuntimeError):
+        return None
+    return None
+
+
+def _checklist_file_language(out_dir: Path, file_path: str) -> str | None:
+    """Inventory-stamped language for ``file_path``, or None.
+
+    Read from the run's checklist (same source the gap computation
+    uses). The value matters for content-probed foreign extensions:
+    the walk stamps the probed language on the file record, and the
+    semgrep sweep needs it to license ``--scan-unknown-extensions``
+    (without it the engine silently skips the file and no executed
+    receipt is possible). Best-effort — any load failure degrades to
+    None, which keeps today's behaviour.
+    """
+    try:
+        from core.audit.gaps import load_checklist
+        checklist = load_checklist(out_dir) or {}
+        for f in checklist.get("files", []) or []:
+            if isinstance(f, dict) and f.get("path") == file_path:
+                lang = f.get("language")
+                return lang if isinstance(lang, str) and lang else None
+    except Exception:  # noqa: BLE001 — hint only, never blocks a sweep
         return None
     return None
 
