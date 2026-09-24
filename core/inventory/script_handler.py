@@ -42,8 +42,16 @@ SCRIPT_HANDLER_FIELD = "script_handler"
 # include family is handled separately — it is wiring ONLY with a
 # literal-string argument. Everything else (assignments, superglobal
 # reads, echo/output, control flow, calls) counts as handler code.
+#
+# The declare arm is END-ANCHORED: PHP's declare accepts a statement
+# body (``declare(ticks=1) f($x);`` runs f), so a bare prefix match
+# let the body ride as "wiring". Only a whole ``declare(<directive>)``
+# piece is wiring; a statement body, a block opener ``{``, or an
+# unclosed paren classifies toward inclusion — a declare BLOCK's
+# content and its closing ``}`` line classify independently anyway,
+# so block-form files were never wiring-only.
 _PHP_WIRING_STMT_RE = re.compile(
-    r"^(?:use|namespace|global)\b|^declare\s*\(",
+    r"^(?:use|namespace|global)\b|^declare\s*\([^()]*\)\s*$",
 )
 _PHP_INCLUDE_KEYWORD_RE = re.compile(
     r"^(?:include|include_once|require|require_once)\b",

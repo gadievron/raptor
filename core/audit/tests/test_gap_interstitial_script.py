@@ -392,3 +392,24 @@ class TestCloseTagTermination:
             "/* x ?><?php system($_GET['c']); */\ninclude('a.php');\n")
         assert not _php_interstitial_is_handler(
             "/* x ?>\nsystem($_GET['c']);\n*/\nrequire 'b.php';\n")
+
+
+class TestDeclareStatementBody:
+    """PHP's declare accepts a statement body — the body is code, not
+    wiring. Only a whole ``declare(<directive>)`` piece is wiring."""
+
+    def test_statement_body_is_handler_code(self):
+        assert _php_interstitial_is_handler(
+            "declare(ticks=1) process($request);\n")
+
+    def test_block_body_content_is_handler_code(self):
+        assert _php_interstitial_is_handler(
+            "declare(ticks=1) {\n  process($request);\n}\n")
+
+    def test_bare_declare_stays_wiring(self):
+        # Two-direction: whole-piece declares keep classifying as
+        # wiring, spacing and directive variants included.
+        assert not _php_interstitial_is_handler(
+            "declare(strict_types=1);\n"
+            "declare (ticks = 1);\n"
+            "declare(encoding='UTF-8') ;\n")
