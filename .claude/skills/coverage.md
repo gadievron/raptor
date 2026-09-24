@@ -106,10 +106,18 @@ Inline (few functions):
 libexec/raptor-coverage-summary <run_dir> --mark src/auth.c:check_pw src/db.c:query
 ```
 
-From file (many functions — preferred for `/understand` and `/validate`):
+From file (many functions):
 ```bash
 libexec/raptor-coverage-summary <run_dir> --mark-file "$OUTPUT_DIR/reviewed-items.json"
 ```
+
+**Grade discipline:** a plain `--mark`/`--mark-file` is a REVIEW assertion —
+it suppresses the function from every later review plan. Only use it for
+completed reviews. Mapping/context phases (`/understand --map`, any
+"functions I read while building context" list) MUST append `--map-grade`:
+the marks then land on the `understand` record (examination evidence,
+scanned depth) and never remove functions from the review gap. Statuses
+are not accepted with `--map-grade` (map passes render no verdicts).
 
 The JSON file is a flat array of `{file, item}` objects. The `item` key matches any inventory item (function, global, struct, macro). `function` is accepted as a backwards-compatible alias. An optional `status` (`clean` / `suspicious` / `finding` / `dormant`) sets the journaled verdict; default `clean`.
 ```json

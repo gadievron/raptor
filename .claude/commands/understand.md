@@ -246,9 +246,9 @@ When present, use it as operator-owned context during analysis:
 
 **Step 3: Record coverage** (for `--map` — list every item you examined):
 
-Write a JSON file listing every function, global, struct, and macro you analysed, then pass it to the coverage tool:
+Write a JSON file listing every function, global, struct, and macro you examined, then pass it to the coverage tool **with `--map-grade`**:
 ```json
-// $OUTPUT_DIR/reviewed-items.json
+// $OUTPUT_DIR/map-examined-items.json
 [
   {"file": "src/auth.c", "item": "check_pw"},
   {"file": "src/auth.c", "item": "credentials"},
@@ -256,8 +256,15 @@ Write a JSON file listing every function, global, struct, and macro you analysed
 ]
 ```
 ```bash
-libexec/raptor-coverage-summary "$OUTPUT_DIR" --mark-file "$OUTPUT_DIR/reviewed-items.json"
+libexec/raptor-coverage-summary "$OUTPUT_DIR" --mark-file "$OUTPUT_DIR/map-examined-items.json" --map-grade
 ```
+
+`--map-grade` is mandatory for map-phase recording: it stores the marks on
+the `understand` coverage record (examination evidence, scanned depth), so
+`/project coverage` shows what was examined WITHOUT granting review credit.
+A plain `--mark`/`--mark-file` from the map phase would count every mapped
+function as reviewed and exclude it from later audit review plans — mapped
+functions must stay in the review gap until an actual review pass covers them.
 
 **Step 4: Generate diagrams** (for `--map` or `--trace`):
 ```bash

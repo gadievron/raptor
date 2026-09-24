@@ -434,18 +434,23 @@ graph store's IMPORTS edge producer and downstream consumers handle
 classification. Idempotent. Skip if `$WORKDIR/checklist.json` doesn't
 exist or doesn't carry `target_path`.
 
-**[MAP-6] Record Coverage**
+**[MAP-6] Record Coverage (map-grade)**
 
-After writing `context-map.json`, update the inventory with which functions you examined.
-Write a JSON array of every function you read and analysed (entry points, sinks, trust boundary
-checks) to `$WORKDIR/reviewed-items.json`, then run the coverage recorder:
+After writing `context-map.json`, record which functions you examined.
+Write a JSON array of every function you read while mapping (entry points, sinks, trust boundary
+checks) to `$WORKDIR/map-examined-items.json`, then run the coverage recorder **with `--map-grade`**:
 
 Record coverage using the understand command's Step 3:
 ```bash
-libexec/raptor-coverage-summary "$WORKDIR" --mark src/routes/query.py:handle_query src/db/query.py:run_query
+libexec/raptor-coverage-summary "$WORKDIR" --mark src/routes/query.py:handle_query src/db/query.py:run_query --map-grade
 ```
 
-This updates the coverage record so `/project coverage` reflects what was examined.
+`--map-grade` is mandatory here: mapping a function is not reviewing it.
+Map-grade marks record examination (visible in `/project coverage`) without
+granting review credit — a plain `--mark` from this phase would silently
+drop every mapped function from the audit review plan (`gaps.json`), so
+they would never be LLM-reviewed at all. Plain `--mark` is reserved for
+actual review assertions (operator review, completed audit passes).
 
 **[MAP-7] Runtime Probe (optional)**
 

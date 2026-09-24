@@ -10,6 +10,14 @@ Usage:
   raptor-coverage-summary [<dir>] --gaps                List unreviewed items
   raptor-coverage-summary [<dir>] --mark <file:item>    Mark item(s) as reviewed
   raptor-coverage-summary [<dir>] --mark-file <json>    Mark functions from JSON file
+  raptor-coverage-summary [<dir>] --mark ... --map-grade  Record map-phase
+      examination instead of review: writes the `understand` coverage
+      record (llm category, scanned depth). Map-grade marks NEVER
+      suppress review gaps and are never journaled as review
+      assertions — reading a function while building a context map is
+      not a security review of it. Use from /understand --map and any
+      other mapping/context phase; plain --mark stays the operator's
+      review assertion.
   raptor-coverage-summary [<dir>] --unmark <file:item>  Remove item from reviewed
   raptor-coverage-summary [<dir>] --import <path>       Ingest external runtime
       [--format gcov|lcov|coverage.py] [--tool <label>] coverage (gcov/lcov/
@@ -338,8 +346,23 @@ def _build_path_normaliser(
 
 
 def _cmd_mark(mark_targets: list, run_dir: Path | None,
-              statuses: dict[tuple[str, str], str] | None = None) -> None:
-    """Mark items as reviewed in the coverage record."""
+              statuses: dict[tuple[str, str], str] | None = None,
+              map_grade: bool = False) -> None:
+    """Mark items as reviewed in the coverage record.
+
+    ``map_grade`` switches the write to the ``understand`` coverage
+    record (llm category, SCANNED depth — the registry's map/read
+    bucket). Map-phase examination must never earn review credit:
+    the review-grade ``llm`` record's ``functions_analysed`` entries
+    suppress gaps in ``compute_gaps``/the coverage store, so a
+    context-map pass recording there silently excluded every function
+    it touched from the review plan — those functions were then never
+    LLM-reviewed and invisible in the report. Map-grade marks keep
+    the examination visible (/project coverage, prioritisation) while
+    leaving the functions in the review gap; they are also never
+    journaled as review assertions (a journaled mark carries a
+    verdict, and a map pass renders none).
+    """
     if not run_dir:
         print("ERROR: cannot determine run directory for --mark.", file=sys.stderr)
         print("Specify a run directory explicitly.", file=sys.stderr)
@@ -354,19 +377,25 @@ def _cmd_mark(mark_targets: list, run_dir: Path | None,
     # (the import path already takes this lock).
     from core.coverage.record import load_records, write_record
 
-    with coverage_store_lock(Path(run_dir) / "coverage-llm.json"):
-        # Load existing LLM record or create new
+    # Review-grade marks land on the ``llm`` record (analysed depth —
+    # suppresses gaps); map-grade marks land on the ``understand``
+    # record (scanned depth — examination evidence only, never review
+    # credit; the registry and both gap consumers already grade the
+    # label that way).
+    tool_label = "understand" if map_grade else "llm"
+    with coverage_store_lock(Path(run_dir) / f"coverage-{tool_label}.json"):
+        # Load existing record for this tool label or create new
         records = load_records(run_dir)
         llm_record = None
         for r in records:
-            if r.get("tool") == "llm":
+            if r.get("tool") == tool_label:
                 llm_record = r
                 break
 
         if not llm_record:
             from datetime import datetime, timezone
             llm_record = {
-                "tool": "llm",
+                "tool": tool_label,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "files_examined": [],
                 "functions_analysed": [],
@@ -420,16 +449,25 @@ def _cmd_mark(mark_targets: list, run_dir: Path | None,
         # Marking a function records function-level review only — it must NOT add
         # the file to files_examined (which is the whole-file "tool scanned this
         # file" signal; the store would otherwise mark the entire file reviewed).
-        write_record(run_dir, llm_record, tool_name="llm")
-    journaled = _journal_marks(run_dir, marked, statuses or {})
+        write_record(run_dir, llm_record, tool_name=tool_label)
+    # Map-grade marks never journal: a journal entry is a review
+    # assertion with a verdict, and the map phase renders none — a
+    # journaled default-clean row would suppress gaps cross-run, the
+    # exact exclusion this grade exists to prevent.
+    journaled = 0 if map_grade else _journal_marks(run_dir, marked, statuses or {})
     durable = " (journaled to project index)" if journaled else ""
     skipped = f" ({len(unmatched)} unmatched)" if unmatched else ""
+    verb = "examined (map-grade)" if map_grade else "reviewed"
     print(f"Marked {added} item{'s' if added != 1 else ''} "
-          f"as reviewed{skipped} in {run_dir.name}{durable}")
+          f"as {verb}{skipped} in {run_dir.name}{durable}")
 
 
-def _cmd_unmark(unmark_targets, run_dir):
-    """Remove functions from the LLM coverage record."""
+def _cmd_unmark(unmark_targets, run_dir, map_grade: bool = False):
+    """Remove functions from the LLM coverage record.
+
+    ``map_grade`` targets the ``understand`` record instead (the
+    map-grade mark channel) — symmetric with ``_cmd_mark``.
+    """
     if not run_dir:
         print("ERROR: cannot determine run directory for --unmark.", file=sys.stderr)
         sys.exit(1)
@@ -443,16 +481,18 @@ def _cmd_unmark(unmark_targets, run_dir):
     # (the import path already takes this lock).
     from core.coverage.record import load_records, write_record
 
-    with coverage_store_lock(Path(run_dir) / "coverage-llm.json"):
+    tool_label = "understand" if map_grade else "llm"
+    with coverage_store_lock(Path(run_dir) / f"coverage-{tool_label}.json"):
         records = load_records(run_dir)
         llm_record = None
         for r in records:
-            if r.get("tool") == "llm":
+            if r.get("tool") == tool_label:
                 llm_record = r
                 break
 
         if not llm_record:
-            print("No LLM coverage record found.")
+            print(f"No {'understand' if map_grade else 'LLM'} "
+                  "coverage record found.")
             return
 
         # Unmark must resolve operator path spellings exactly the way mark
@@ -479,14 +519,16 @@ def _cmd_unmark(unmark_targets, run_dir):
         ]
         removed = original - len(llm_record["functions_analysed"])
 
-        write_record(run_dir, llm_record, tool_name="llm")
+        write_record(run_dir, llm_record, tool_name=tool_label)
     # Neutralise any journaled mark for the same key: the journal is
     # append-only, so unmark appends a NEWER error-verdict entry under
     # the same (file, function, operator) index key — the index's
     # latest-wins merge replaces the mark row, and error verdicts are
     # skipped by both import_journal and the gap folds, restoring the
-    # function to the gap list.
-    _neutralise_journaled_marks(run_dir, sorted(to_remove))
+    # function to the gap list. Map-grade marks were never journaled,
+    # so there is nothing to neutralise on that channel.
+    if not map_grade:
+        _neutralise_journaled_marks(run_dir, sorted(to_remove))
     print(f"Removed {removed} item{'s' if removed != 1 else ''} from reviewed in {run_dir.name}")
 
 
@@ -586,6 +628,13 @@ def main():
 
     detailed = "--detailed" in argv
     show_gaps = "--gaps" in argv
+    # Map-grade marks (see _cmd_mark): examination evidence from a
+    # mapping/context phase, recorded at scanned depth so it never
+    # satisfies review coverage. Stripped here so the positional-arg
+    # extraction below never mistakes it for a <dir>.
+    map_grade = "--map-grade" in argv
+    if map_grade:
+        argv = [a for a in argv if a != "--map-grade"]
     # `--store` is the default behaviour now; accepted (and stripped as a
     # flag) for back-compat, no separate branch.
 
@@ -691,9 +740,18 @@ def main():
                 except Exception as exc:
                     logger.debug("get_run_dirs failed: %s", exc)
         if mark_targets:
-            _cmd_mark(mark_targets, run_dir, statuses=mark_statuses)
+            if map_grade and mark_statuses:
+                # A map pass renders no verdicts; a status riding a
+                # map-grade mark is a category error — drop it loudly
+                # rather than minting an unjournaled pseudo-verdict.
+                print("WARNING: per-entry statuses ignored for "
+                      "--map-grade marks (map passes render no verdicts)",
+                      file=sys.stderr)
+                mark_statuses = {}
+            _cmd_mark(mark_targets, run_dir, statuses=mark_statuses,
+                      map_grade=map_grade)
         if unmark_targets:
-            _cmd_unmark(unmark_targets, run_dir)
+            _cmd_unmark(unmark_targets, run_dir, map_grade=map_grade)
         return
 
     if import_path:
