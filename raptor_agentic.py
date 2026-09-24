@@ -2771,6 +2771,21 @@ def main() -> int:
                 # operator even on Ctrl-C.
                 try:
                     shutil.rmtree(str(p))
+                except FileNotFoundError as e:
+                    # Root already gone: this run's own late-path
+                    # rmtree, an outer cleaner (a containing test
+                    # harness's scratch sweep, tmpfiles reaping)...
+                    # Nothing leaked, so warning would be a false
+                    # alarm — but only when the tree really is gone:
+                    # pre-3.13 rmtree can propagate a mid-walk child
+                    # ENOENT with siblings still on disk, so re-check
+                    # before staying quiet.
+                    if os.path.lexists(str(p)):
+                        with contextlib.suppress(OSError, ValueError):
+                            sys.stderr.write(
+                                f"[atexit] git_temp_dir cleanup "
+                                f"failed for {p}: {e}\n",
+                            )
                 except OSError as e:
                     # At interpreter teardown stderr can be a closed
                     # stream (ValueError) or broken fd (OSError).
