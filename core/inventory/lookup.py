@@ -12,6 +12,8 @@ from typing import Any
 
 from core.paths import strip_file_uri, to_repo_relative
 
+from .script_handler import script_handler_stamp
+
 
 def normalise_path(path: str, repo_root: str) -> str:
     """Normalise a file path relative to the repo root.
@@ -194,12 +196,32 @@ def lookup_function(checklist: dict[str, Any], file_path: str, line: int,
     for file_entry in _file_index(checklist, repo_root).get(norm_path, ()):
         for func in (file_entry.get("items", file_entry.get("functions", [])) or []):
             # Only FUNCTION items enclose a "function" — globals, macros,
-            # classes, top_level and interstitial are not callable units, so a
-            # sink landing in one has no enclosing function (callers expect
+            # classes and top_level are not callable units, so a sink
+            # landing in one has no enclosing function (callers expect
             # None there, e.g. reachability stays conservative rather than
             # mislabelling import-time / glue code as "not_called").
-            if func.get("kind", "function") != "function":
-                continue
+            #
+            # One exception: an interstitial span whose builder-persisted
+            # ``script_handler`` stamp is True IS the unit that executes
+            # (a script-per-file request handler) — a sink inside it
+            # encloses, so enrichment (metadata attach, journal naming,
+            # variant-candidate resolution) reaches the handler span.
+            # Safe for the reachability consumers: classify_reachability
+            # stops at ``uncertain`` for interstitial items (graph
+            # verdicts are vacuous for their synthetic names), so the
+            # enclosure can never manufacture a dead verdict. A missing
+            # stamp (pre-stamp checklist) keeps the old no-enclosure
+            # behavior — the conservative direction for every caller —
+            # and a forged non-bool stamp reads as missing. Exact spans
+            # only: interstitials always carry line_end, and by
+            # construction they never overlap extracted items, so the
+            # exact-match return order stays unambiguous.
+            kind = func.get("kind", "function")
+            if kind != "function":
+                if kind != "interstitial":
+                    continue
+                if script_handler_stamp(func) is not True:
+                    continue
             func_start = func.get("line_start", 0)
             func_end = func.get("line_end")
 
@@ -210,8 +232,9 @@ def lookup_function(checklist: dict[str, Any], file_path: str, line: int,
             if func_end is not None and func_end >= line:
                 return func
 
-            # Fuzzy match: only for functions without line_end
-            if func_end is None and (
+            # Fuzzy match: only for FUNCTIONS without line_end (an
+            # interstitial missing its span has no inferable extent).
+            if kind == "function" and func_end is None and (
                 best_fuzzy is None
                 or func_start > best_fuzzy.get("line_start", 0)
             ):
