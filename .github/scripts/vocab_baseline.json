@@ -2471,6 +2471,11 @@
     "count": 20,
     "kind": "literal"
   },
+  "packages/openant/forecast.py::result": {
+    "count": 10,
+    "kind": "literal",
+    "note": "forecast result-document field names (an artifact schema the report embeds), not a learned name vocabulary"
+  },
   "packages/openant/translator.py::_translate_finding": {
     "count": 12,
     "kind": "literal",

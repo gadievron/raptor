@@ -185,6 +185,12 @@ class OpenAntConfig:
     # execution must not rest on a minutes-old verdict. Consented runs
     # skip the recheck (the operator accepted non-pinned content).
     expect_clean_pinned: bool = False
+    # True when this run's openant_scan directory was SEEDED from a
+    # prior run (--resume): the scan spawn then rebases the seeded
+    # checkpoint identity sidecars to this run's gateway endpoint
+    # (port-only) before the child adopts them. Never set on fresh
+    # runs — rebasing only ever applies to state RAPTOR itself copied.
+    resume_seeded: bool = False
     # Per-run operator raise of the dispatcher-gateway spend cap.
     # None = the scanner's shipped constants ($25 / 10k requests).
     # Always finite: the dispatcher's child-token contract has no
