@@ -169,6 +169,60 @@ class MatchKnownFPTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertIsInstance(match, mod.KnownFP)
 
+    def test_matches_redos_on_equivalence_fixture_tests(self):
+        """The sca equivalence tests keep deliberately-superlinear
+        legacy grammars verbatim to prove the linear rewrite accepts
+        the same language; a redos result on those files restates
+        the fixture's documented purpose."""
+        for uri in (
+            "packages/sca/tests/test_refresh_typosquat_lists.py",
+            "packages/sca/supply_chain/tests/test_name_grammar.py",
+        ):
+            match = mod._matches_known_fp(_make_result("py/redos", uri))
+            self.assertIsNotNone(match, msg=uri)
+            self.assertIsInstance(match, mod.KnownFP)
+
+    def test_redos_on_other_files_not_suppressed(self):
+        """The redos entry is fixture-file-specific — a superlinear
+        pattern anywhere else (production code, other tests) must
+        still surface."""
+        for uri in (
+            "packages/web/fuzzer.py",
+            "packages/sca/tests/test_sarif.py",
+        ):
+            self.assertIsNone(
+                mod._matches_known_fp(_make_result("py/redos", uri)),
+                msg=uri,
+            )
+
+    def test_other_rules_on_fixture_tests_not_suppressed(self):
+        """Suppression is rule-specific — a non-redos result on the
+        fixture-bearing test files must still surface."""
+        result = _make_result(
+            "py/sql-injection",
+            "packages/sca/tests/test_refresh_typosquat_lists.py",
+        )
+        self.assertIsNone(mod._matches_known_fp(result))
+
+    def test_matches_control_char_reject_range(self):
+        """The annotations storage validator's wide C0/C1 range exists
+        to REJECT control bytes at write time — breadth is the
+        defence, not an authoring mistake."""
+        result = _make_result(
+            "py/overly-large-range", "core/annotations/storage.py"
+        )
+        match = mod._matches_known_fp(result)
+        self.assertIsNotNone(match)
+        self.assertIsInstance(match, mod.KnownFP)
+
+    def test_overly_large_range_elsewhere_not_suppressed(self):
+        """The reject-class entry is file-specific — a suspicious
+        range in any other module must still surface for review."""
+        result = _make_result(
+            "py/overly-large-range", "packages/web/markers.py"
+        )
+        self.assertIsNone(mod._matches_known_fp(result))
+
 
 class SanitizerFPTests(unittest.TestCase):
     """Test the SanitizerFP flow-matching logic.
@@ -419,7 +473,7 @@ class TableShapeTests(unittest.TestCase):
         """Adding a KnownFP entry requires updating this count.
         If this test fails, you added a suppression — update the
         expected count after confirming the new entry is justified."""
-        self.assertEqual(len(mod.KNOWN_FP_RULES), 4)
+        self.assertEqual(len(mod.KNOWN_FP_RULES), 6)
 
     def test_sanitizer_fp_count_pinned(self):
         """Adding a SanitizerFP entry requires updating this count."""
