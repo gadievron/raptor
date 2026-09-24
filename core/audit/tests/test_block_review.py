@@ -1123,6 +1123,57 @@ class TestTryBuildCfg:
         cfg = try_build_cfg(str(outside), "hello", target)
         assert cfg is None
 
+    def test_in_tree_fifo_returns_instead_of_wedging(self, tmp_path: Path):
+        """An in-tree reader-less FIFO named like a source file passes
+        containment (it resolves under the root) but must REFUSE at
+        the open — the raw read_text this replaced blocked forever,
+        wedging the in-flight audit run on a content-only plant
+        (tar-extracted targets preserve FIFOs). Run in a child so a
+        regression fails the test instead of hanging the suite."""
+        import multiprocessing
+        import os
+
+        fifo = tmp_path / "wedge.py"
+        os.mkfifo(fifo)
+
+        child = multiprocessing.Process(
+            target=try_build_cfg, args=("wedge.py", "hello", tmp_path),
+        )
+        child.start()
+        child.join(timeout=20)
+        try:
+            assert not child.is_alive(), (
+                "try_build_cfg blocked on an in-tree FIFO (the wedge "
+                "regression)"
+            )
+        finally:
+            if child.is_alive():
+                child.kill()
+                child.join()
+
+    def test_read_is_capped(self, tmp_path: Path, monkeypatch):
+        """The gap-record read is size-capped: the CFG builder must
+        never receive more than DEFAULT_MAX_SOURCE_CHARS of a planted
+        oversized file (the raw read buffered it whole, per record)."""
+        from core.analysis import cfg_builder
+        from core.source import DEFAULT_MAX_SOURCE_CHARS
+
+        big = tmp_path / "big.py"
+        with big.open("w") as fh:  # raw-open: test fixture writes its own sparse tmp plant
+            fh.write("def hello():\n    pass\n")
+            fh.seek(DEFAULT_MAX_SOURCE_CHARS + 4 * 1024 * 1024)
+            fh.write("\n")
+
+        seen: dict = {}
+
+        def capture(src, function_name):
+            seen["len"] = len(src)
+            return None
+
+        monkeypatch.setattr(cfg_builder, "build_python_cfg", capture)
+        try_build_cfg("big.py", "hello", tmp_path)
+        assert seen["len"] <= DEFAULT_MAX_SOURCE_CHARS
+
 
 # ---- E2E: real CFG from eval target ----
 
