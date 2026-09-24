@@ -228,3 +228,29 @@ jobs:
       - name: Run workflow pipefail lint against baseline
         run: |
           python3 .github/scripts/check_workflow_pipefail.py
+
+  # Tracked-file census: every tracked file in the enumerable
+  # rule-pack subsystems (engine/*, core/audit/rules) must match its
+  # subsystem's declared shapes — the content gates never open a
+  # stray file, so shape is the only tripwire. No baseline file; the
+  # daily run is belt-and-braces parity with lint's repo-invariants
+  # job.
+  tracked-file-census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run tracked-file census over the rule-pack subsystems
+        # --require-git: CI runs post-checkout, so the exported-tree
+        # notice arm must never be reachable here.
+        run: |
+          python3 .github/scripts/check_tracked_file_census.py --require-git

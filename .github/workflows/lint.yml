@@ -262,7 +262,7 @@ jobs:
   # direct push to main cannot smuggle a finding either.
   #
   # Pure stdlib Python; no setup beyond checkout + interpreter.
-  # Wall-clock budget: ~1 min total for all seven; check_miswiring's
+  # Wall-clock budget: ~1 min total for all eight; check_miswiring's
   # single-pass parallel AST index is ~5-10 s on 4-vCPU runners; the
   # others are ~5-20 s each. timeout-minutes: 10 leaves generous
   # headroom.
@@ -308,3 +308,8 @@ jobs:
 
       - name: Run workflow pipefail lint against baseline
         run: python3 .github/scripts/check_workflow_pipefail.py
+
+      - name: Run tracked-file census over the rule-pack subsystems
+        # --require-git: CI runs post-checkout, so the exported-tree
+        # notice arm must never be reachable here.
+        run: python3 .github/scripts/check_tracked_file_census.py --require-git
