@@ -366,3 +366,207 @@ def discover_seed_paths(
     for extra in extra_paths or []:
         paths.append(Path(extra))
     return paths
+
+
+def _looks_placeholder(name: str) -> bool:
+    """Tool-synthetic placeholder check via the single existing
+    definition; unavailable = refuse the name as a join key
+    (fail-closed — ``FUN_00401000`` is base-dependent, and matching
+    it by name joins the claim to whatever function happens to carry
+    that rendering here)."""
+    try:
+        from packages.ghidra.model import looks_tool_synthetic
+    except ImportError:  # pragma: no cover - packages tree absent
+        return True
+    return looks_tool_synthetic(name)
+
+
+def _gap_indexes(
+    gaps: list[dict[str, Any]],
+) -> tuple[dict[tuple[str, str], dict], dict[tuple[str, int], dict]]:
+    """(file, name) and binary (file, address) lookup over the queue."""
+    from core.inventory.binary_builder import is_binary_item
+
+    by_name: dict[tuple[str, str], dict] = {}
+    by_addr: dict[tuple[str, int], dict] = {}
+    for gap in gaps:
+        file_val = gap.get("file") or ""
+        name = gap.get("name") or ""
+        if file_val and name:
+            by_name.setdefault((file_val, name), gap)
+        if is_binary_item(gap):
+            metadata = gap.get("metadata") or {}
+            addr = metadata.get("address")
+            if isinstance(addr, int) and not isinstance(addr, bool):
+                by_addr.setdefault((file_val, addr), gap)
+    return by_name, by_addr
+
+
+def _match_gap(
+    seed: SeedRecord,
+    by_name: dict[tuple[str, str], dict],
+    by_addr: dict[tuple[str, int], dict],
+) -> tuple[dict | None, str]:
+    """Resolve one seed against the queue → ``(gap, miss_reason)``.
+
+    The audit's real binary join is the ``binary:<stem>`` file
+    sentinel plus the function's address (core.inventory.
+    binary_builder — checklist items carry no fid), so address wins,
+    then a non-placeholder name. Both keys are FILE-scoped: the same
+    address in a different binary, or the same function name in a
+    different file, is a miss, never a cross-file join. The seed's
+    fid is identity metadata for producers/miss records; it grew no
+    join key here because the queue side has none to compare against.
+
+    Miss reasons are differentiated for the producer:
+    ``address_name_conflict`` — the address key and the name key
+    resolve to DIFFERENT gaps (a cross-base address collision would
+    otherwise silently misdirect the claim; refusing keeps the trace
+    visible), ``placeholder_name_refused`` — the only name offered is
+    a tool-synthetic placeholder (actionable producer error: emit a
+    real name or a checklist-space address), ``no_matching_gap`` —
+    genuinely unknown to the queue.
+    """
+    addr_gap = None
+    if seed.address is not None:
+        addr_gap = by_addr.get((seed.file, seed.address))
+    name_gap = None
+    name_is_placeholder = bool(
+        seed.function and _looks_placeholder(seed.function),
+    )
+    if seed.function and not name_is_placeholder:
+        name_gap = by_name.get((seed.file, seed.function))
+    if (
+        addr_gap is not None
+        and name_gap is not None
+        and addr_gap is not name_gap
+    ):
+        return None, "address_name_conflict"
+    if addr_gap is not None:
+        return addr_gap, ""
+    if name_gap is not None:
+        return name_gap, ""
+    if name_is_placeholder:
+        return None, "placeholder_name_refused"
+    return None, "no_matching_gap"
+
+
+def apply_hypothesis_seeds(
+    gaps: list[dict[str, Any]],
+    out_dir: Path,
+    extra_paths: list[Path] | None = None,
+) -> dict[str, Any] | None:
+    """Load seeds, boost matched gaps, stamp review-context hints.
+
+    Sources: the co-located ``sibling-hypotheses.json`` in *out_dir*
+    plus any explicit paths. Returns the intake summary (also written
+    to ``hypothesis-seed-intake.json``) or ``None`` when there is
+    nothing to ingest. Never raises past its own logging — the caller
+    treats the whole intake as best-effort.
+    """
+    paths = discover_seed_paths(out_dir, extra_paths)
+    if not paths:
+        # A prior segment's receipt must not survive its sources: a
+        # co-located file deleted between runs would otherwise leave a
+        # stale "loaded N, matched N" claim standing in the run dir.
+        try:
+            (Path(out_dir) / INTAKE_SUMMARY_FILENAME).unlink(
+                missing_ok=True,
+            )
+        except OSError:
+            logger.debug("stale intake receipt removal failed",
+                         exc_info=True)
+        return None
+
+    seeds, skips, sources = load_seed_files(paths)
+    boosted: set[int] = set()
+    matched = 0
+    conflicts = 0
+    misses: list[dict[str, Any]] = []
+    if seeds:
+        by_name, by_addr = _gap_indexes(gaps)
+        for seed in seeds:
+            gap, miss_reason = _match_gap(seed, by_name, by_addr)
+            if gap is None:
+                # A seed the queue cannot place is a recorded miss,
+                # never an error: entry-detection disagreements and
+                # out-of-scope functions are expected residue of any
+                # cross-tool join. The reason differentiates producer
+                # errors (placeholder names, address/name conflicts)
+                # from genuinely-unknown functions.
+                if miss_reason == "address_name_conflict":
+                    conflicts += 1
+                miss: dict[str, Any] = {
+                    "seed_id": seed.seed_id,
+                    "file": seed.file,
+                    "reason": miss_reason,
+                }
+                if seed.function:
+                    miss["function"] = seed.function
+                if seed.address is not None:
+                    miss["address"] = f"{seed.address:#x}"
+                if seed.fid:
+                    miss["fid"] = seed.fid
+                misses.append(miss)
+                continue
+            matched += 1
+            stamped = gap.setdefault("seed_hypotheses", [])
+            if len(stamped) < MAX_SEEDS_PER_FUNCTION:
+                stamped.append(seed.stamp())
+            else:
+                skips["stamp_cap"] = skips.get("stamp_cap", 0) + 1
+            if id(gap) not in boosted:
+                boosted.add(id(gap))
+                gap["priority_score"] = (
+                    gap.get("priority_score", 0) + SEED_PRIORITY_BOOST
+                )
+
+    summary: dict[str, Any] = {
+        "schema_version": 1,
+        "sources": sources,
+        "loaded": len(seeds),
+        "matched": matched,
+        "boosted_gaps": len(boosted),
+        "missed": len(misses),
+        "conflicts": conflicts,
+        "skipped": skips,
+    }
+    if misses:
+        # Pointer for reviewers: the per-miss records live in the
+        # addrmap ledger, not in this receipt.
+        from core.binary.addrmap import MISSES_FILENAME
+        summary["misses_ledger"] = MISSES_FILENAME
+    try:
+        from core.json import save_json
+        save_json(Path(out_dir) / INTAKE_SUMMARY_FILENAME, summary)
+    except OSError:
+        logger.warning("hypothesis-seed intake receipt write failed",
+                       exc_info=True)
+    if misses:
+        # The addrmap miss ledger is the ONE place cross-tool join
+        # residue lands (escape/clip/caps live there). The FULL miss
+        # list goes in: the loader's record cap (MAX_SEED_RECORDS,
+        # 200) keeps it under the ledger's own per-operation cap
+        # (500), so the ledger's per-operation count always equals
+        # this receipt's ``missed`` — no divergence under floods.
+        try:
+            from core.binary.addrmap import record_fid_misses
+            record_fid_misses(Path(out_dir), "audit-seed-intake", misses)
+        except Exception:  # noqa: BLE001 — miss log never fails intake
+            logger.warning("hypothesis-seed miss recording failed",
+                           exc_info=True)
+    if seeds or skips:
+        # Operator-visible ingest banner naming the RESOLVED sources:
+        # an external artifact just influenced review order and prompt
+        # content, and a planted seed file must not be discoverable
+        # only by reading the run dir. Paths are escaped at capture in
+        # load_seed_files.
+        logger.info(
+            "hypothesis-seed intake: %d external hypothesis seeds "
+            "ingested from %s — %d matched (%d gaps boosted), "
+            "%d missed (%d conflicts), skips=%s",
+            len(seeds),
+            ", ".join(s["path"] for s in sources) or "no readable source",
+            matched, len(boosted), len(misses), conflicts, skips or {},
+        )
+    return summary
