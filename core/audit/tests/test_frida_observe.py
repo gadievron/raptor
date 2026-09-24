@@ -1,5 +1,6 @@
 """Tests for core.audit.frida_observe — Frida runtime observation."""
 
+import contextlib
 import json
 import logging
 import os
@@ -205,6 +206,17 @@ def _raise_timeout(*args, **kwargs):
     raise subprocess.TimeoutExpired(cmd=["frida"], timeout=kwargs.get("timeout", 0))
 
 
+@contextlib.contextmanager
+def _session_log_fd(log_file: Path):
+    """The kept-fd contract of _run_frida_session: production keeps
+    the mkstemp fd open and every log write/read goes through it."""
+    fd = os.open(str(log_file), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        yield fd
+    finally:
+        os.close(fd)
+
+
 class TestRunFridaSession:
     """Timeout handling in _run_frida_session logs the applied timeout value."""
 
@@ -214,7 +226,8 @@ class TestRunFridaSession:
         config = SimpleNamespace(frida_timeout_s=7)
 
         with caplog.at_level(logging.DEBUG, logger="core.audit.frida_observe"):
-            ok = fo._run_frida_session(1234, "// script", log_file, config)
+            with _session_log_fd(log_file) as log_fd:
+                ok = fo._run_frida_session(1234, "// script", log_fd, config)
 
         assert ok is False
         timeout_msgs = [
@@ -232,7 +245,8 @@ class TestRunFridaSession:
         config = SimpleNamespace()  # no frida_timeout_s
 
         with caplog.at_level(logging.DEBUG, logger="core.audit.frida_observe"):
-            fo._run_frida_session(1234, "// script", log_file, config)
+            with _session_log_fd(log_file) as log_fd:
+                fo._run_frida_session(1234, "// script", log_fd, config)
 
         timeout_msgs = [
             r.getMessage() for r in caplog.records if "timed out" in r.getMessage()
@@ -246,7 +260,9 @@ class TestRunFridaSession:
         log_file.write_text('{"type": "ready", "hooked": 1}\n')
         config = SimpleNamespace(frida_timeout_s=1)
 
-        assert fo._run_frida_session(1234, "// script", log_file, config) is True
+        with _session_log_fd(log_file) as log_fd:
+            assert fo._run_frida_session(
+                1234, "// script", log_fd, config) is True
 
     def test_script_tempfile_cleaned_up(self, tmp_path, monkeypatch):
         created: list[Path] = []
@@ -259,8 +275,9 @@ class TestRunFridaSession:
 
         monkeypatch.setattr(fo.tempfile, "mkstemp", _tracking_mkstemp)
         monkeypatch.setattr(fo.subprocess, "run", _raise_timeout)
-        fo._run_frida_session(1234, "// script", tmp_path / "obs.jsonl",
-                              SimpleNamespace(frida_timeout_s=1))
+        with _session_log_fd(tmp_path / "obs.jsonl") as log_fd:
+            fo._run_frida_session(1234, "// script", log_fd,
+                                  SimpleNamespace(frida_timeout_s=1))
         assert created and not any(p.exists() for p in created)
 
 
@@ -288,10 +305,11 @@ class TestSessionCommandLine:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         monkeypatch.setattr(fo.subprocess, "run", _fake_run)
-        fo._run_frida_session(
-            1234, "// script", tmp_path / "obs.jsonl",
-            SimpleNamespace(frida_timeout_s=30),
-        )
+        with _session_log_fd(tmp_path / "obs.jsonl") as log_fd:
+            fo._run_frida_session(
+                1234, "// script", log_fd,
+                SimpleNamespace(frida_timeout_s=30),
+            )
         return captured["cmd"]
 
     def test_no_pause_flag_absent(self, tmp_path, monkeypatch):
@@ -315,9 +333,11 @@ class TestSessionCommandLine:
 
         monkeypatch.setattr(fo.subprocess, "run", _fake_run)
         log_file = tmp_path / "obs.jsonl"
-        ok = fo._run_frida_session(
-            1234, "// script", log_file, SimpleNamespace(frida_timeout_s=30),
-        )
+        with _session_log_fd(log_file) as log_fd:
+            ok = fo._run_frida_session(
+                1234, "// script", log_fd,
+                SimpleNamespace(frida_timeout_s=30),
+            )
         assert ok is True
         assert log_file.read_text() == stdout
 
@@ -330,9 +350,11 @@ class TestSessionCommandLine:
 
         monkeypatch.setattr(fo.subprocess, "run", _raise_with_partial)
         log_file = tmp_path / "obs.jsonl"
-        ok = fo._run_frida_session(
-            1234, "// script", log_file, SimpleNamespace(frida_timeout_s=1),
-        )
+        with _session_log_fd(log_file) as log_fd:
+            ok = fo._run_frida_session(
+                1234, "// script", log_fd,
+                SimpleNamespace(frida_timeout_s=1),
+            )
         assert ok is True
         assert "call" in log_file.read_text()
 
@@ -434,3 +456,55 @@ class TestParseLogBounds:
         monkeypatch.setattr(fo, "_MAX_LOG_BYTES", 1024)
         p = self._log(tmp_path, "x" * 10_000 + "\n")
         assert _parse_observations(p) == []
+
+
+class TestKeptFdSessionLog:
+    """The session log lives in shared /tmp while the observed
+    SAME-UID target runs: every write and read must go through the fd
+    mkstemp returned (the original inode), so a path swapped under us
+    never receives our writes and never feeds us forged content."""
+
+    def test_write_survives_path_swap(self, tmp_path):
+        log_file = tmp_path / "obs.jsonl"
+        fd = os.open(str(log_file), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            victim = tmp_path / "victim"
+            victim.write_text("do not touch")
+            # Attacker swaps the path between mkstemp and the write.
+            log_file.unlink()
+            log_file.symlink_to(victim)
+
+            payload = json.dumps(
+                {"type": "call", "function": "f", "args": []}) + "\n"
+            fo._write_session_log(fd, payload)
+
+            assert victim.read_text() == "do not touch"
+            # The kept-fd read still sees our own bytes.
+            obs = fo._parse_observations(log_file, log_fd=fd)
+            assert [o.function for o in obs] == ["f"]
+        finally:
+            os.close(fd)
+
+    def test_fd_read_ignores_swapped_path_content(self, tmp_path):
+        log_file = tmp_path / "obs.jsonl"
+        fd = os.open(str(log_file), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fo._write_session_log(fd, "")
+            forged = tmp_path / "forged.jsonl"
+            forged.write_text(json.dumps(
+                {"type": "call", "function": "attacker", "args": []}) + "\n")
+            log_file.unlink()
+            log_file.symlink_to(forged)
+            assert fo._parse_observations(log_file, log_fd=fd) == []
+        finally:
+            os.close(fd)
+
+    def test_write_truncates_previous_content(self, tmp_path):
+        log_file = tmp_path / "obs.jsonl"
+        fd = os.open(str(log_file), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fo._write_session_log(fd, "long previous content\n")
+            fo._write_session_log(fd, "short\n")
+            assert log_file.read_text() == "short\n"
+        finally:
+            os.close(fd)

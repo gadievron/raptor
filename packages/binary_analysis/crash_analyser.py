@@ -5,6 +5,7 @@ Analyses crashes from fuzzing to extract exploitability information.
 This is so much of a WIP, it's not even funny. However, you can see what we are trying to do and how it could be useful. 
 """
 
+import contextlib
 import os
 import platform
 import re
@@ -566,20 +567,25 @@ class CrashAnalyser:
         including the random name (defeats symlink pre-plant on shared
         systems) and the explicit 0o600.
         """
+        # binary_dir placement is a sandbox-visibility constraint (see
+        # docstring) — the dir is target-writable by design, so the
+        # write goes through the fd mkstemp returned (O_EXCL-created,
+        # race-free): a close-then-reopen-by-path write_text would
+        # follow a symlink swapped in at the tempfile name.
         binary_dir = self.binary.parent
         fd, script_name = tempfile.mkstemp(
             prefix=prefix, suffix=".txt", dir=str(binary_dir),
         )
         script_file = Path(script_name)
-        os.close(fd)
         try:
-            os.chmod(script_file, 0o600)
-        except OSError:
+            os.fchmod(fd, 0o600)
+        except (OSError, AttributeError):
             # Non-POSIX filesystem — mkstemp's own 0600 default is the
             # best available; not fatal.
             pass
         try:
-            script_file.write_text("\n".join(commands), encoding="utf-8")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(commands))
         except BaseException:
             script_file.unlink(missing_ok=True)
             raise
@@ -678,28 +684,46 @@ class CrashAnalyser:
     _INFERIOR_OUTPUT_CAP = 64 * 1024
 
     @staticmethod
-    def _read_inferior_capped(path: Path | None, cap: int) -> str:
-        """First ``cap`` chars of an inferior redirect stub ('' when
-        missing/unreadable — the stub may not exist if launch failed)."""
-        if path is None:
+    def _read_inferior_capped(fd: int | None, cap: int) -> str:
+        """First ``cap`` chars of an inferior redirect stub, read via
+        the KEPT mkstemp fd ('' when unset/unreadable).
+
+        The attacker binary runs between stub creation and this read,
+        so a by-path reopen would follow a symlink swapped in at the
+        stub name and fold an attacker-chosen host file's head into
+        the crash report. The fd is bound to the original inode:
+        LLDB's ``-o``/``-e`` redirect truncates the existing path in
+        place (same inode), so our fd sees the inferior's output — and
+        a swapped path yields an empty read, fail-safe."""
+        if fd is None:
             return ""
         try:
-            with Path(path).open(
-                "r", encoding="utf-8", errors="replace",
-            ) as f:
-                return f.read(cap)
+            dup = os.dup(fd)
         except OSError:
             return ""
+        try:
+            os.lseek(dup, 0, os.SEEK_SET)
+            reader = os.fdopen(dup, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.close(dup)
+            return ""
+        with reader:
+            try:
+                return reader.read(cap)
+            except OSError:
+                return ""
 
     @classmethod
     def _inferior_output_sections(
-        cls, lldb_out: Path | None, lldb_err: Path | None,
+        cls, out_fd: int | None, err_fd: int | None,
     ) -> str:
         """Labelled, size-capped dump of the inferior's redirected
-        stdout/stderr, or '' when both are empty."""
+        stdout/stderr (via the kept stub fds), or '' when both are
+        empty."""
         sections = []
-        for label, stub in (("stdout", lldb_out), ("stderr", lldb_err)):
-            text = cls._read_inferior_capped(stub, cls._INFERIOR_OUTPUT_CAP)
+        for label, stub_fd in (("stdout", out_fd), ("stderr", err_fd)):
+            text = cls._read_inferior_capped(stub_fd, cls._INFERIOR_OUTPUT_CAP)
             if text.strip():
                 sections.append(f"=== inferior {label} ===\n{text}")
         return "\n".join(sections)
@@ -716,20 +740,26 @@ class CrashAnalyser:
         # `process launch -o/-e <host-tmp-path>` would fail there.
         lldb_out = None
         lldb_err = None
+        out_fd = None
+        err_fd = None
         cmd_file = None
         binary_dir_path = self.binary.parent
         try:
+            # The stub fds stay OPEN for the whole session: the
+            # attacker binary runs (with write on this dir) between
+            # mkstemp and the read-back, so the reads go through the
+            # kept fds — bound to the original inodes — never a
+            # by-path reopen of the swappable stub names (see
+            # _read_inferior_capped).
             out_fd, out_name = tempfile.mkstemp(
                 prefix=".raptor_lldb_out_", suffix=".txt",
                 dir=str(binary_dir_path),
             )
-            os.close(out_fd)
             lldb_out = Path(out_name)
             err_fd, err_name = tempfile.mkstemp(
                 prefix=".raptor_lldb_err_", suffix=".txt",
                 dir=str(binary_dir_path),
             )
-            os.close(err_fd)
             lldb_err = Path(err_name)
 
             # LLDB commands - different syntax from GDB
@@ -781,7 +811,7 @@ class CrashAnalyser:
                 # report / abort message to the redirect stubs before
                 # LLDB wedged — read them before the cleanup below so
                 # the diagnostics survive into the fallback's output.
-                inferior = self._inferior_output_sections(lldb_out, lldb_err)
+                inferior = self._inferior_output_sections(out_fd, err_fd)
                 # Clean up temp files before fallback
                 try:
                     lldb_out.unlink()
@@ -813,11 +843,15 @@ class CrashAnalyser:
             # the stubs (size-capped) into the returned analysis output
             # before the finally below deletes them.
             output = result.stdout or ""
-            inferior = self._inferior_output_sections(lldb_out, lldb_err)
+            inferior = self._inferior_output_sections(out_fd, err_fd)
             if inferior:
                 output = f"{output}\n{inferior}" if output else inferior
             return output
         finally:
+            for stub_fd in (out_fd, err_fd):
+                if stub_fd is not None:
+                    with contextlib.suppress(OSError):
+                        os.close(stub_fd)
             # Clean up temp files. cmd_file may be None if the initial
             # write raised before assignment.
             if cmd_file:

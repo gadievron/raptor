@@ -10,8 +10,11 @@ trace-parser vs harness on one run dir).
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 import time
+
+import pytest
 
 import packages.binary_analysis.pipeline as pipeline
 from core.json import load_json, save_json
@@ -46,6 +49,47 @@ class TestRunArtifactsLock:
         missing = tmp_path / "gone"          # lock file uncreatable
         with run_artifacts_lock(missing):
             pass                              # no raise
+
+    def test_planted_symlink_degrades_without_following(self, tmp_path):
+        """The run dir is (or was) a sandboxed child's write grant: a
+        planted symlink at the predictable lock name must not make
+        this process create/flock an attacker-chosen path."""
+        victim = tmp_path / "victim"
+        (tmp_path / ".binary-artifacts.lock").symlink_to(victim)
+        entered = False
+        with run_artifacts_lock(tmp_path):
+            entered = True
+        assert entered
+        assert not victim.exists()
+
+    @pytest.mark.skipif(
+        not hasattr(os, "mkfifo"), reason="mkfifo unavailable (non-POSIX)")
+    def test_planted_readerless_fifo_degrades_without_blocking(
+        self, tmp_path,
+    ):
+        """A planted reader-less FIFO fails the open fast (ENXIO via
+        O_NONBLOCK) instead of wedging every artifact append."""
+        os.mkfifo(tmp_path / ".binary-artifacts.lock")
+        entered = False
+        with run_artifacts_lock(tmp_path):
+            entered = True
+        assert entered
+
+    @pytest.mark.skipif(
+        not hasattr(os, "mkfifo"), reason="mkfifo unavailable (non-POSIX)")
+    def test_planted_fifo_with_reader_refused_by_regularity_check(
+        self, tmp_path,
+    ):
+        fifo = tmp_path / ".binary-artifacts.lock"
+        os.mkfifo(fifo)
+        reader = os.open(str(fifo), os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            entered = False
+            with run_artifacts_lock(tmp_path):
+                entered = True
+            assert entered
+        finally:
+            os.close(reader)
 
 
 class TestConcurrentFuzzAppend:
