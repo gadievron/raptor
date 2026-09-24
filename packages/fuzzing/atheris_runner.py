@@ -38,6 +38,13 @@ the untrusted-target treatment):
     captured to files, parsed as a bounded tail, and stripped of
     terminal control sequences before any operator-facing relay.
 
+Known-and-accepted within the boundary: ``PYTHONPATH`` roots at the
+target tree, so a hostile package's ``sitecustomize.py`` executes at
+interpreter startup — before ``TestOneInput`` ever runs. That is
+target code executing inside the same containment with no privilege
+change (fuzzing runs target code by definition); nothing outside the
+sandbox contract above becomes reachable through it.
+
 Atheris itself is an optional dependency: the RUNNER never imports it
 (the spawned harness does), but construction preflights that the
 interpreter which will run the harness can find it, and refuses with
@@ -174,6 +181,22 @@ class AtherisRunner(LibFuzzerRunner):
         rss_limit_mb: int = 2048,
     ) -> None:
         self.python_executable = python_executable or sys.executable
+        # An operator-suppliable interpreter path feeds the sandbox
+        # read-ALLOWLIST derivation (_sandbox_tool_paths /
+        # _readable_paths): a relative value like "python3" would make
+        # those derive from the CWD — read-allowing whatever tree the
+        # runner happened to be constructed in to hostile in-process
+        # code. Validate absolute + existing BEFORE any derivation.
+        exe = Path(self.python_executable)
+        if not exe.is_absolute():
+            msg = (
+                f"python_executable must be an absolute path "
+                f"(got {self.python_executable!r})"
+            )
+            raise ValueError(msg)
+        if not exe.is_file():
+            msg = f"python_executable not found: {self.python_executable}"
+            raise ValueError(msg)
         self.target_dir = Path(target_dir).resolve() if target_dir else None
         if not atheris_available(self.python_executable):
             raise RuntimeError(ATHERIS_INSTALL_HINT)
