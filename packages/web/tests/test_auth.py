@@ -118,12 +118,17 @@ def test_bearer_verify_never_raises_on_transport_failure():
 def test_cross_origin_login_url_is_refused_loudly():
     pytest.importorskip("bs4")
     from packages.web.auth import AuthenticationError, FormAuthManager
+    from packages.web.origin import origin_of
 
     class _ScopedClient(_StubClient):
         base_url = "https://target.example"
 
         def _is_in_scope(self, url: str) -> bool:
-            return url.startswith("https://target.example")
+            # Same origin-equality predicate as WebClient._is_in_scope
+            # — a prefix check here would accept crafted hosts like
+            # https://target.example.evil.test and no longer model the
+            # scope gate the production client actually applies.
+            return origin_of(url) == origin_of(self.base_url)
 
         def get_cookies(self):
             return {}
