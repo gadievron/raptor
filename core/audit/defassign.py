@@ -103,6 +103,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+from core.source import read_text_capped
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -402,13 +404,18 @@ def resolve_include_closure(
         seen.add(path)
         if len(seen) > max_files:
             raise ProofRefusal("include closure exceeds the file cap")
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        # Capped fd read: closure members are in-tree (resolve +
+        # is_relative_to below) but target-writable — a FIFO plant
+        # blocked the raw read forever, and the byte cap fired only
+        # AFTER an unbounded buffer. A single over-budget file busts
+        # the closure budget by definition, so truncation refuses.
+        got = read_text_capped(path, max_bytes)
+        if got is None:
             unresolved.append(str(path))
             continue
+        text, truncated = got
         total_bytes += len(text)
-        if total_bytes > max_bytes:
+        if truncated or total_bytes > max_bytes:
             raise ProofRefusal("include closure exceeds the byte cap")
         resolved.append(path)
         for m in _INCLUDE_RE.finditer(text):
@@ -458,10 +465,10 @@ def _build_macro_table(target_path: str | Path, rel_file: str) -> MacroTable:
     table = MacroTable(unresolved_includes=tuple(unresolved))
     parser = _c_parser()
     for path in files:
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        got = read_text_capped(path, _MAX_CLOSURE_BYTES)
+        if got is None:
             continue
+        text = got[0]
         table.files_scanned += 1
         if parser is not None:
             table.function_names |= _declared_function_names(text, parser)

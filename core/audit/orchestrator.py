@@ -9289,12 +9289,12 @@ def _run_audit_body(
             post_loop_findings.extend(nf.to_dict() for nf in check_url_boundary_composition(g, target_path=tp))
             if (g.get("file") or "").endswith(".go"):
                 _swr_g = dict(g)
-                with contextlib.suppress(OSError):
-                    _gfp = tp / (g.get("file") or "")
-                    if _gfp.is_file():
-                        _swr_g["file_source"] = _gfp.read_text(
-                            errors="replace",
-                        )
+                # gap-record path (LLM-writable): contained + capped
+                # + fd-checked regular, never a bare join + raw read.
+                from core.source import read_contained as _read_contained
+                _swr_src = _read_contained(tp, g.get("file") or "")
+                if _swr_src is not None:
+                    _swr_g["file_source"] = _swr_src
                 post_loop_findings.extend(nf.to_dict() for nf in check_shared_writer_race(_swr_g))
         post_loop_findings.extend(nf.to_dict() for nf in check_missing_app_features(gaps, target_path=tp))
         post_loop_findings.extend(nf.to_dict() for nf in check_signal_safety(
@@ -15895,13 +15895,14 @@ def _flatten_checklist_with_source(
                             )
                             src_cache[rel_path] = []
                         else:
-                            try:
-                                src_cache[rel_path] = (
-                                    src_file.read_text(errors="replace")
-                                    .splitlines()
-                                )
-                            except OSError:
-                                src_cache[rel_path] = []
+                            from core.source import (
+                                read_text_capped as _rtc,
+                            )
+                            _got = _rtc(src_file)
+                            src_cache[rel_path] = (
+                                [] if _got is None
+                                else _got[0].splitlines()
+                            )
                     lines = src_cache[rel_path]
                     source = "\n".join(lines[ls - 1:le])
             result.append({
@@ -17084,11 +17085,12 @@ def _read_raw_source(
             _file_lines_cache.move_to_end(cache_key)
             lines = _file_lines_cache[cache_key]
         else:
-            lines = None
-            try:
-                lines = full_path.read_text(errors="replace").splitlines()
-            except OSError:
-                lines = None
+            # Capped fd read — the cache weighed st_size only AFTER
+            # a raw read had already buffered the file whole; the cap
+            # bounds the read itself (FIFO plants refuse at the open).
+            from core.source import read_text_capped as _rtc
+            _got = _rtc(full_path)
+            lines = None if _got is None else _got[0].splitlines()
             # Byte-weighted admission + eviction: the key's st_size is
             # the entry's weight (splitlines memory is proportional to
             # it). Oversized files are returned uncached.

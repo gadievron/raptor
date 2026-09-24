@@ -40,6 +40,8 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+
+from core.source import read_text_capped
 from typing import Any
 
 from core.json import load_json
@@ -618,12 +620,14 @@ def _closure_suppression_witness(
         )
     for fname in repo_files:
         p = Path(fname)
-        try:
-            if p.stat().st_size > _MAX_CLOSURE_FILE_BYTES:
-                return "", f"closure file {fname} exceeds the byte cap"
-            text = p.read_text(errors="replace")
-        except OSError:
+        # Capped fd read, not stat-then-read (target-writable files
+        # race a by-name gate; FIFO plants block raw reads).
+        got = read_text_capped(p, _MAX_CLOSURE_FILE_BYTES)
+        if got is None:
             return "", f"closure file {fname} unreadable"
+        text, truncated = got
+        if truncated:
+            return "", f"closure file {fname} exceeds the byte cap"
         w = _suppression_witness(text)
         if w:
             return f"{w} (in {fname})", ""
@@ -1095,10 +1099,8 @@ def run_compiler_analyzer_sweep(
         result.raw_output = raw
         return result
 
-    try:
-        source_text = full_path.read_text(errors="replace")
-    except OSError:
-        source_text = ""
+    got_src = read_text_capped(full_path)
+    source_text = "" if got_src is None else got_src[0]
     source_lines = source_text.split("\n")
     identifiers = extract_hypothesis_identifiers(
         hypothesis, source_text, function_name,

@@ -42,6 +42,8 @@ from pathlib import Path
 from typing import Any
 from typing import TYPE_CHECKING
 
+from core.source import read_text_capped
+
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
     from tree_sitter import Node
@@ -614,11 +616,10 @@ def _constants_for_root(
     for path in _c_family_files(Path(root), budget):
         if not budget.ok():
             break
-        try:
-            text = path.read_text(errors="replace", encoding="utf-8")
-        except OSError:
+        got = read_text_capped(path)
+        if got is None:
             continue
-        text = _strip_include_guard(text)
+        text = _strip_include_guard(got[0])
         depths = _compute_conditional_depths(text)
         for m in _MACRO_DEF_RE.finditer(text):
             name = m.group(1)

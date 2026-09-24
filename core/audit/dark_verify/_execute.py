@@ -2180,6 +2180,39 @@ def _execute_cpp(spec: DarkWitnessSpec, target_root: Path, timeout_s: int) -> Da
     return _execute_native(spec, target_root, timeout_s, lang="cpp")
 
 
+def _read_splice_source(target_root: Path, rel_file: str) -> str:
+    """Contained, capped, fd-checked read of the target source that a
+    harness splices into its own compile.
+
+    ``rel_file`` is record-derived, so the join is containment-checked
+    (an absolute value replaces the base under pathlib semantics,
+    ``../`` escapes it); the open refuses FIFOs/devices instead of
+    blocking; and oversize files REFUSE rather than truncate — a
+    silently truncated source must never be compiled as if it were
+    the real one. Raises ``OSError`` so the executors' existing
+    error paths report the refusal.
+    """
+    from core.paths import confine
+    from core.source import read_text_capped
+
+    resolved = confine(target_root, rel_file)
+    if resolved is None:
+        msg = f"target source escapes the target root: {rel_file!r}"
+        raise OSError(msg)
+    got = read_text_capped(resolved, errors="strict")
+    if got is None:
+        msg = (
+            f"target source unreadable or not a regular file: "
+            f"{rel_file!r}"
+        )
+        raise OSError(msg)
+    text, truncated = got
+    if truncated:
+        msg = f"target source exceeds the read cap: {rel_file!r}"
+        raise OSError(msg)
+    return text
+
+
 def _execute_go(
     spec: DarkWitnessSpec,
     target_root: Path,
@@ -2202,8 +2235,11 @@ def _execute_go(
             go_package = spec.lang_config.get("package", "main")
             build_files = [str(harness_file)]
             if go_package == "main":
-                source_file = target_root / spec.file
-                src_text = source_file.read_text(encoding="utf-8")
+                # spec.file is record-derived: contained + capped +
+                # fd-checked regular. A truncated or escaping source
+                # must never be spliced into the harness compile —
+                # refuse via the existing error path (OSError shape).
+                src_text = _read_splice_source(target_root, spec.file)
                 src_text = re.sub(
                     r'(?m)^func\s+main\s*\(\s*\)\s*\{',
                     'func _original_main() {',
@@ -2422,9 +2458,8 @@ def _execute_rust(
             # main so it cannot collide with the harness main once
             # spliced into the same crate (same idiom as the Go
             # executor).
-            source_file = target_root / spec.file
             source_copy = work_dir / "target_source.rs"
-            src_content = source_file.read_text(encoding="utf-8")
+            src_content = _read_splice_source(target_root, spec.file)
             src_content = re.sub(
                 r'(?m)^fn\s+main\s*\(\s*\)',
                 'fn _original_main()',

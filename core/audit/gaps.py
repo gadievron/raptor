@@ -570,22 +570,22 @@ def compute_gaps(
             # symlink escaping the target is rejected (treated as
             # unreadable) rather than read from outside the target.
             resolved = safe_join(_target_root, file_path)
-            if resolved is not None and resolved.is_file():
-                try:
-                    # Same oversized-file refusal as _read_spans: a
-                    # planted multi-hundred-MB file must degrade to
-                    # signature-only, not buffer wholesale (and a
-                    # capped PREFIX would silently misclassify
-                    # functions past the cap, so refuse outright).
-                    if (resolved.stat().st_size
-                            <= _MAX_HYDRATED_FILE_BYTES):
-                        source_lines = (
-                            resolved
-                            .read_text(encoding="utf-8", errors="replace")
-                            .splitlines()
-                        )
-                except OSError:
-                    source_lines = None
+            if resolved is not None:
+                # Same oversized-file refusal as _read_spans: a
+                # planted multi-hundred-MB file must degrade to
+                # signature-only, not buffer wholesale (and a
+                # capped PREFIX would silently misclassify
+                # functions past the cap, so refuse outright) —
+                # enforced on the read itself, not a by-name stat
+                # that races a growing plant; FIFO plants refuse
+                # at the open.
+                from core.source import read_text_capped
+
+                got = read_text_capped(
+                    resolved, _MAX_HYDRATED_FILE_BYTES,
+                )
+                if got is not None and not got[1]:
+                    source_lines = got[0].splitlines()
             _source_lines_cache[file_path] = source_lines
         lines = _source_lines_cache[file_path]
         if lines is None:
