@@ -95,6 +95,7 @@ operator's behalf.
 | `--verify` | off | Enable stage-2 LLM verification pass |
 | `--workers <n>` | `4` | Parallel analysis workers |
 | `--gateway-budget <usd>` | `$25` | Per-run raise of the dispatcher-gateway spend cap on gateway-minted runs (any positive finite USD; the anti-runaway request cap scales with it, never below 10k). No uncapped spelling — dispatcher child tokens carry a finite budget by contract. Argv-only (no env twin); no effect on direct-credential runs (noted loudly) |
+| `--timeout-seconds <n>` | `1800` | Wall-clock deadline for the OpenAnt child (hard-killed at it, every credential posture). Positive integer, no ceiling; on gateway-minted runs the token TTL follows it (timeout + 600s slack), so raising it never strands a live child on an expired token |
 | `--max-findings <n>` | `50` | Cap findings rendered in the markdown report (severity-first, truncation stated; must be >= 1). `openant_findings.json` is never capped |
 | `--openant-core <path>` | auto-detect at `<raptor-parent>/libs/openant-core` (`$OPENANT_CORE` applies to direct unscrubbed invocations only — the dispatch lane's safe-env rebuild drops it) | Path to openant-core (flag surface is consent-gated: a core that is not a clean pinned checkout refuses at startup) |
 | `--openant-core-unpinned` | off | Consent to run a `--openant-core` checkout that is not a clean pinned checkout this run (the project `config` trust marker grants the same, standing) |

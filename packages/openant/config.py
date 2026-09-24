@@ -130,6 +130,29 @@ def gateway_budget_arg(value: str) -> float:
     return budget
 
 
+def timeout_seconds_arg(value: str) -> int:
+    """argparse type for the per-run scan timeout override: a
+    positive integer number of seconds.
+
+    No artificial ceiling — how long one run may take is the
+    operator's call (the gateway TTL follows it structurally:
+    mint TTL = timeout + slack, so the token always outlives the
+    child). Zero/negative would kill the child at spawn, which no
+    operator means; non-integer spellings refuse rather than being
+    silently rounded.
+    """
+    import argparse
+    try:
+        seconds = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid integer value: {value!r}") from exc
+    if seconds <= 0:
+        raise argparse.ArgumentTypeError(
+            "timeout must be a positive integer number of seconds")
+    return seconds
+
+
 _CORE_MARKER = "core/scanner.py"
 
 
@@ -141,6 +164,12 @@ class OpenAntConfig:
     enhance: bool = True
     verify: bool = False
     workers: int = 4
+    # Wall-clock deadline for the OpenAnt child (subprocess timeout —
+    # the child is hard-killed at it, in every credential posture).
+    # Operator-raisable per run via --timeout-seconds /
+    # --openant-timeout-seconds (timeout_seconds_arg validates); the
+    # gateway token's TTL follows it (timeout + slack), so raising it
+    # never strands a live child on an expired token.
     timeout_seconds: int = 1800
     language: str = "auto"
     # Enriched provenance record from enforce_core_consent when the

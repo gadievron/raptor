@@ -90,6 +90,7 @@ def _build_parser() -> argparse.ArgumentParser:
         OPENANT_MODEL_DEFAULT,
         env_choice,
         gateway_budget_arg,
+        timeout_seconds_arg,
     )
 
     parser.add_argument(
@@ -171,6 +172,17 @@ def _build_parser() -> argparse.ArgumentParser:
              "dispatcher child tokens carry a finite budget by "
              "contract. No effect on direct-credential runs (noted "
              "loudly)",
+    )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=timeout_seconds_arg,
+        metavar="N",
+        default=None,
+        help="Wall-clock deadline for the OpenAnt child in seconds "
+             "(default: 1800). The child is hard-killed at it in "
+             "every credential posture; on gateway-minted runs the "
+             "token TTL follows it (timeout + 600s slack). Positive "
+             "integer, no ceiling",
     )
 
     return parser
@@ -291,6 +303,8 @@ def main() -> int:
         oa_config.language = args.language
         oa_config.workers = args.workers
         oa_config.gateway_budget_usd = args.gateway_budget
+        if args.timeout_seconds is not None:
+            oa_config.timeout_seconds = args.timeout_seconds
 
     except RuntimeError as e:
         # Not configured: no openant-core checkout is discoverable, so
