@@ -27,7 +27,7 @@ site.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, NamedTuple
 
 from .languages import SCRIPT_PER_FILE_LANGUAGES
 
@@ -72,18 +72,56 @@ _PHP_WIRING_STMT_RE = re.compile(
 _PHP_INCLUDE_KEYWORD_RE = re.compile(
     r"^(?:include|include_once|require|require_once)\b",
 )
-# include/require with a single literal-string argument (parens
-# optional). A non-literal argument — variable, concatenation,
-# constant — makes the statement a request-controllable dispatcher
-# (``include($_GET['page'] . '.php')`` is the classic local-file-
-# inclusion shape), which is exactly handler code, never wiring.
-# The optional parens gate their own whitespace ((?:\(\s*)? /
-# (?:\s*\))?): the naive \s*\(?\s* put two whitespace runs around
-# an optional atom — quadratic on an "include"-opening statement
-# ending in a long space run. Match set unchanged.
-_PHP_LITERAL_INCLUDE_RE = re.compile(
-    r"^(?:include|include_once|require|require_once)\b\s*(?:\(\s*)?"
-    r"(?:'[^'\n]*'|\"[^\"\n]*\")(?:\s*\))?\s*$",
+# ---------------------------------------------------------------------------
+# Include-argument shape classification — the ONE include-literal
+# decision, shared by two consumers:
+#
+#   * the wiring test below (a literal include is wiring; anything
+#     else — variable, concatenation, constant prefix — is handler
+#     code: ``include($_GET['page'] . '.php')`` is the classic
+#     local-file-inclusion shape);
+#   * the PHP call-graph walker's structured include edges
+#     (``core.inventory.call_graph._PhpCallGraph``), which record the
+#     shape census per edge.
+#
+# The classification is a SYNTACTIC census, never a resolution
+# verdict: ``const_prefix`` says "constant then literal material",
+# it does not say the constant resolves (shared library files
+# inherit their prefix constant from the includer, so resolution is
+# a per-entry concern, not a per-statement one).
+# ---------------------------------------------------------------------------
+
+#: Shape enum. ``config_bounded`` is reserved for enumerable loader
+#: patterns resolved from machine-readable config (Composer PSR-4,
+#: plugin registries) — no producer emits it yet; consumers must
+#: treat it like ``dynamic``.
+INCLUDE_SHAPES = ("literal", "const_prefix", "config_bounded", "dynamic")
+
+
+class IncludeClassification(NamedTuple):
+    """Shape census for one include/require argument expression.
+
+    ``literal_tail`` is the trailing run of literal string material
+    (after the last non-literal part), when any. ``literal_stem`` is
+    the literal run immediately BEFORE the last non-literal part of a
+    ``dynamic`` argument (``"modules/$MOD.mod"`` → stem ``modules/``,
+    tail ``.mod``) — census/candidate material only.
+    """
+
+    shape: str
+    const_name: str | None = None
+    literal_tail: str | None = None
+    literal_stem: str | None = None
+
+
+_CONST_NAME_RE = re.compile(r"^[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*$")
+
+# PHP string-interpolation hole openers inside a double-quoted string:
+# $name, ${expr}, {$expr}.
+_INTERP_VAR_RE = re.compile(
+    r"\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*(?:\[[^\]]*\]|->[A-Za-z_]\w*)?"
+    r"|\$\{[^}]*\}"
+    r"|\{\$[^}]*\}",
 )
 
 
@@ -136,10 +174,186 @@ def _php_star_line_is_prose(line: str) -> bool:
     return not _PHP_STAR_PROSE_REJECT_WORD_RE.search(body)
 
 
+def _strip_outer_parens(text: str) -> str:
+    """Strip matched outer parentheses (repeatedly, whitespace-aware)."""
+    s = text.strip()
+    while s.startswith("(") and s.endswith(")"):
+        depth = 0
+        balanced = True
+        for i, ch in enumerate(s):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0 and i != len(s) - 1:
+                    balanced = False
+                    break
+        if not balanced or depth != 0:
+            break
+        s = s[1:-1].strip()
+    return s
+
+
+def _split_concat_parts(text: str) -> list[str] | None:
+    """Split an expression on top-level ``.`` concatenation.
+
+    Quote- and bracket-aware. Returns None when the text is not
+    scannable (unterminated string, unbalanced brackets) — callers
+    classify that as ``dynamic`` (inclusion-biased, same trade as the
+    unrecognised-line rule above).
+    """
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch in "'\"":
+            quote = ch
+            j = i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == quote:
+                    break
+                j += 1
+            if j >= n:
+                return None  # unterminated string
+            buf.append(text[i:j + 1])
+            i = j + 1
+            continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+            if depth < 0:
+                return None
+        if ch == "." and depth == 0:
+            # ``.=`` / floats can't appear at the top level of an
+            # include argument; a bare top-level dot is concatenation.
+            parts.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    if depth != 0:
+        return None
+    parts.append("".join(buf))
+    return parts
+
+
+def _unescape_single(text: str) -> str:
+    """PHP single-quote semantics: only ``\\'`` and ``\\\\`` escape."""
+    return text.replace("\\\\", "\\").replace("\\'", "'")
+
+
+def _unescape_double_literal(text: str) -> str:
+    """Minimal double-quote unescape for path material."""
+    return (
+        text.replace("\\\\", "\\").replace('\\"', '"').replace("\\$", "$")
+    )
+
+
+def _atomize(part: str) -> list[tuple[str, str]]:
+    """One concatenation operand → ``(kind, text)`` atoms.
+
+    Kinds: ``lit`` (text = literal value), ``const`` (text = name),
+    ``dyn`` (text = ""). A double-quoted string with interpolation
+    holes expands into an alternating lit/dyn sequence.
+    """
+    s = part.strip()
+    if not s:
+        return [("dyn", "")]
+    if s.startswith("'") and s.endswith("'") and len(s) >= 2:
+        return [("lit", _unescape_single(s[1:-1]))]
+    if s.startswith('"') and s.endswith('"') and len(s) >= 2:
+        body = s[1:-1]
+        atoms: list[tuple[str, str]] = []
+        pos = 0
+        for m in _INTERP_VAR_RE.finditer(body):
+            # An escaped ``\$`` is literal, not a hole.
+            if m.start() > 0 and body[m.start() - 1] == "\\":
+                continue
+            if m.start() > pos:
+                atoms.append(
+                    ("lit", _unescape_double_literal(body[pos:m.start()])))
+            atoms.append(("dyn", ""))
+            pos = m.end()
+        if pos < len(body):
+            atoms.append(("lit", _unescape_double_literal(body[pos:])))
+        return atoms or [("lit", "")]
+    if _CONST_NAME_RE.match(s):
+        return [("const", s)]
+    return [("dyn", "")]
+
+
+def classify_include_argument(arg: str) -> IncludeClassification:
+    """Classify one include/require argument expression's shape.
+
+    Never a resolution verdict — a ``const_prefix`` edge's constant
+    may only bind under a specific entry's environment (phase-1b
+    walk); ``literal`` means the whole argument is static string
+    material. Unscannable input classifies ``dynamic`` (the safe
+    census direction: nothing is silently treated as static).
+    """
+    s = _strip_outer_parens(arg.strip().rstrip(";").strip())
+    if not s:
+        return IncludeClassification("dynamic")
+    parts = _split_concat_parts(s)
+    if parts is None:
+        return IncludeClassification("dynamic")
+    atoms: list[tuple[str, str]] = []
+    for p in parts:
+        atoms.extend(_atomize(p))
+    if not atoms:
+        return IncludeClassification("dynamic")
+
+    kinds = [k for k, _ in atoms]
+    # Trailing literal run (tail) — census material for every shape.
+    tail_atoms: list[str] = []
+    for kind, text in reversed(atoms):
+        if kind != "lit":
+            break
+        tail_atoms.append(text)
+    tail = "".join(reversed(tail_atoms)) or None
+
+    if all(k == "lit" for k in kinds):
+        return IncludeClassification(
+            "literal", literal_tail="".join(t for _, t in atoms))
+    if (kinds[0] == "const" and len(kinds) > 1
+            and all(k == "lit" for k in kinds[1:])):
+        return IncludeClassification(
+            "const_prefix", const_name=atoms[0][1], literal_tail=tail)
+
+    # dynamic: record the first-position constant (if any) and the
+    # literal run immediately before the LAST non-literal atom (the
+    # candidate-matching stem, e.g. "modules/" in "modules/$MOD.mod").
+    const_name = atoms[0][1] if kinds[0] == "const" else None
+    last_nonlit = max(i for i, k in enumerate(kinds) if k != "lit")
+    stem_atoms: list[str] = []
+    for i in range(last_nonlit - 1, -1, -1):
+        if kinds[i] != "lit":
+            break
+        stem_atoms.append(atoms[i][1])
+    stem = "".join(reversed(stem_atoms)) or None
+    return IncludeClassification(
+        "dynamic", const_name=const_name, literal_tail=tail,
+        literal_stem=stem)
+
+
 def _php_wiring_statement(stmt: str) -> bool:
     """Whether one ``;``-delimited file-scope statement is wiring."""
-    if _PHP_INCLUDE_KEYWORD_RE.match(stmt):
-        return bool(_PHP_LITERAL_INCLUDE_RE.match(stmt))
+    m = _PHP_INCLUDE_KEYWORD_RE.match(stmt)
+    if m:
+        # The include-literal decision is the shared classifier's —
+        # one parser, two consumers (this wiring test and the
+        # call-graph include edges). Literal → wiring; const_prefix /
+        # dynamic → handler code (a request-controllable or
+        # environment-dependent include is never boilerplate).
+        return classify_include_argument(stmt[m.end():]).shape == "literal"
     return bool(_PHP_WIRING_STMT_RE.match(stmt))
 
 
