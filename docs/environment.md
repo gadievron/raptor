@@ -231,6 +231,7 @@ AWS credentials alone never select Bedrock.
 | `RAPTOR_LLM_CACHE_TTL_S` | `86400` (24 h) | TTL of the on-disk LLM response cache (guards against same-name model drift). `none`/`off`/`0`/non-positive disables expiry entirely; garbled values fall back to 24 h. |
 | `RAPTOR_SCORECARD_PATH` | `out/llm_scorecard.json` | Per-model reliability scorecard location (feeds `/scorecard` and cross-model merge weights). Set by tests/sandboxed runs for isolation. |
 | `RAPTOR_SCORECARD_TEST_FLUSH` | unset | Test-harness escape hatch. Under pytest the process-exit scorecard flush is suppressed (per-test isolation is torn down before atexit; flushing would corrupt real reliability data with mock usage). Any non-empty value opts the atexit flush back in — for tests exercising that path against an isolated `RAPTOR_SCORECARD_PATH`. No effect outside pytest. |
+| `RAPTOR_LLM_TRANSCRIPT` | unset | LLM transcript seam (`core/llm/transcript.py`): `record:<path>` appends every client-level request/response pair (secret-redacted at write) to a JSONL trail during a live run; `replay:<path>` serves the recorded responses back through the same client surface — no provider, no network, no cost — for hermetic detection-quality evals. A directory path gets `llm-transcript.jsonl` appended. Garbled values raise instead of being ignored (dropping `replay:` silently would dispatch live). See [LLM guide](llm.md#transcript-record--replay). |
 
 ### Degraded-mode breaker (`RAPTOR_LLM_BREAKER*`)
 
