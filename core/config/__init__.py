@@ -572,6 +572,23 @@ class RaptorConfig:
         #                    An attacker setting it gains nothing
         #                    beyond same-UID file write access.
         "RAPTOR_SCORECARD_PATH",
+        #   RAPTOR_LLM_TRANSCRIPT  LLM transcript record/replay seam
+        #                    (core/llm/transcript.py). Must survive the
+        #                    subprocess boundary: raptor.py spawns the
+        #                    analysis scripts through this env, and a
+        #                    stripped var means record mode silently
+        #                    produces a paid run with NO transcript
+        #                    while replay mode silently dispatches
+        #                    LIVE — the two failures the seam exists
+        #                    to prevent. Parse-validated in the child
+        #                    (a garbled value raises), record writes
+        #                    go through the O_NOFOLLOW append-JSONL
+        #                    writer, and replayed content is treated
+        #                    as untrusted — an attacker setting it
+        #                    gains nothing beyond same-UID file access
+        #                    (the RAPTOR_OUT_DIR argument). Stripped
+        #                    from target-bound envs below.
+        "RAPTOR_LLM_TRANSCRIPT",
         # Session identity credential: the launcher-exported
         # pid + token that lets deep children (skill dispatches, nested
         # claude subagents, PID-namespace-blind helpers) resolve their
@@ -633,6 +650,10 @@ class RaptorConfig:
         # by contract.
         "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND",
         "RAPTOR_SCORECARD_PATH",
+        # LLM transcript seam: framework tell plus a host path that
+        # leaks the run layout. No target consumes it; RAPTOR's own
+        # LLM-calling children ride the keep-trust dispatch arm.
+        "RAPTOR_LLM_TRANSCRIPT",
         # Sanitizer-cut transport: framework tell plus two host paths
         # (parity log, audit dir) that leak the run layout. No target
         # consumes them.
