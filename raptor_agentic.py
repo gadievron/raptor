@@ -2264,6 +2264,7 @@ Examples:
         OPENANT_MODEL_CHOICES,
         OPENANT_MODEL_DEFAULT,
         env_choice,
+        gateway_budget_arg,
     )
     parser.add_argument("--openant-model",
                         default=env_choice("OPENANT_MODEL",
@@ -2277,6 +2278,21 @@ Examples:
                                            OPENANT_LEVEL_DEFAULT),
                         choices=list(OPENANT_LEVEL_CHOICES),
                         help="OpenAnt analysis depth (default: $OPENANT_LEVEL or reachable)")
+    parser.add_argument("--openant-gateway-budget",
+                        type=gateway_budget_arg, metavar="USD",
+                        # Flag-only like /openant's --gateway-budget:
+                        # a spend authority is an operator argv
+                        # decision, never env-seeded.
+                        default=None,
+                        help="Per-run raise of the OpenAnt dispatcher-"
+                             "gateway spend cap for gateway-minted "
+                             "runs (default: $25; the anti-runaway "
+                             "request cap scales with it, never below "
+                             "10k). Any positive finite USD amount — "
+                             "no uncapped spelling: dispatcher child "
+                             "tokens carry a finite budget by "
+                             "contract. No effect on direct-credential "
+                             "runs (noted loudly)")
 
     parser.add_argument(
         "--rank", action="store_true",
@@ -3778,6 +3794,8 @@ def main() -> int:
                 oa_config = get_config(raptor_dir=script_root)
             oa_config.model = getattr(args, "openant_model", "sonnet")
             oa_config.level = getattr(args, "openant_level", "reachable")
+            oa_config.gateway_budget_usd = getattr(
+                args, "openant_gateway_budget", None)
 
             print("\n" + "=" * 70)
             print("OPENANT SEMANTIC SCAN")

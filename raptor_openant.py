@@ -89,6 +89,7 @@ def _build_parser() -> argparse.ArgumentParser:
         OPENANT_MODEL_CHOICES,
         OPENANT_MODEL_DEFAULT,
         env_choice,
+        gateway_budget_arg,
     )
 
     parser.add_argument(
@@ -154,6 +155,22 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=4,
         help="OpenAnt parallel workers (default: 4)",
+    )
+    parser.add_argument(
+        "--gateway-budget",
+        type=gateway_budget_arg,
+        metavar="USD",
+        # Deliberately flag-only (no env twin): a spend authority is
+        # an operator argv decision, never something the environment
+        # around a scan of an untrusted repo can seed.
+        default=None,
+        help="Per-run raise of the dispatcher-gateway spend cap for "
+             "gateway-minted runs (default: $25; the anti-runaway "
+             "request cap scales with it, never below 10k). Any "
+             "positive finite USD amount — no uncapped spelling: "
+             "dispatcher child tokens carry a finite budget by "
+             "contract. No effect on direct-credential runs (noted "
+             "loudly)",
     )
 
     return parser
@@ -273,6 +290,7 @@ def main() -> int:
         oa_config.verify = args.verify
         oa_config.language = args.language
         oa_config.workers = args.workers
+        oa_config.gateway_budget_usd = args.gateway_budget
 
     except RuntimeError as e:
         # Not configured: no openant-core checkout is discoverable, so

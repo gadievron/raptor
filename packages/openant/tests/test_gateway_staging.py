@@ -17,7 +17,11 @@ credentials authenticate on the loopback plane with the pinned
 adapter's wire dialect — and stop authenticating after settlement.
 """
 
+import argparse
+import contextlib
+import io
 import json
+import math
 import os
 import subprocess
 import sys
@@ -368,6 +372,150 @@ class TestGatewayStaging(_GatewayHarness):
         self.assertEqual(entry["api_key"], f"{_TOKEN}-1")
         self.assertIn("RAPTOR-owned", "\n".join(logs.output))
         self.assertEqual(cfg.read_text(), operator_raw)
+
+
+class TestGatewayBudgetOverride(_GatewayHarness):
+    """Per-run operator raise of the gateway spend cap
+    (``OpenAntConfig.gateway_budget_usd``): steers ONLY the gateway
+    posture's mint; absent, the mint carries the shipped constants."""
+
+    _KEYLESS_DISPATCHER = {"RAPTOR_LLM_SOCKET": "/nonexistent/llm.sock"}
+
+    @staticmethod
+    def _exit2(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 2, stdout="", stderr="e")
+
+    def test_override_raises_budget_and_scales_request_cap(self):
+        self.config.gateway_budget_usd = 100.0
+        self._run(self._exit2, env_extra=dict(self._KEYLESS_DISPATCHER))
+        (mint,) = self.mint_calls
+        self.assertEqual(mint["budget_usd"], 100.0)
+        # Requests-per-dollar headroom preserved: 10k * (100 / 25).
+        self.assertEqual(mint["request_budget"], 40_000)
+
+    def test_no_override_mints_the_shipped_constants(self):
+        self.assertIsNone(self.config.gateway_budget_usd)
+        self._run(self._exit2, env_extra=dict(self._KEYLESS_DISPATCHER))
+        (mint,) = self.mint_calls
+        self.assertEqual(mint["budget_usd"], _GATEWAY_BUDGET_USD)
+        self.assertEqual(mint["request_budget"], _GATEWAY_REQUEST_BUDGET)
+
+    def test_lowered_budget_never_shrinks_the_request_cap(self):
+        self.config.gateway_budget_usd = 5.0
+        self._run(self._exit2, env_extra=dict(self._KEYLESS_DISPATCHER))
+        (mint,) = self.mint_calls
+        self.assertEqual(mint["budget_usd"], 5.0)
+        self.assertEqual(mint["request_budget"], _GATEWAY_REQUEST_BUDGET)
+
+    def test_admitted_huge_budget_mints_a_finite_request_cap(self):
+        # 1e304 clears the validator (scaled cap still finite): the
+        # mint must carry it with a finite scaled request cap, not
+        # crash in the scaling arithmetic.
+        self.config.gateway_budget_usd = 1e304
+        self._run(self._exit2, env_extra=dict(self._KEYLESS_DISPATCHER))
+        (mint,) = self.mint_calls
+        self.assertEqual(mint["budget_usd"], 1e304)
+        expected = math.ceil(
+            _GATEWAY_REQUEST_BUDGET * 1e304 / _GATEWAY_BUDGET_USD)
+        self.assertEqual(mint["request_budget"], expected)
+        self.assertIsInstance(mint["request_budget"], int)
+
+    def test_programmatic_overflow_budget_fails_honestly(self):
+        # Setting the config field directly bypasses the CLI
+        # validator; the mint must fail as a hard error through the
+        # RuntimeError contract, never let OverflowError escape.
+        self.config.gateway_budget_usd = 1e308
+        result = self._run(self._exit2, env_extra=dict(
+            self._KEYLESS_DISPATCHER))
+        self.assertTrue(result.get("hard_error"))
+        self.assertIn("request cap", result.get("error") or "")
+        self.assertEqual(self.mint_calls, [])
+
+    def test_direct_posture_ignores_the_override_loudly(self):
+        self.config.gateway_budget_usd = 100.0
+        with self.assertLogs("raptor", level="WARNING") as logs:
+            self._run(self._exit2, env_extra={
+                "ANTHROPIC_API_KEY": "sk-direct",
+                "RAPTOR_LLM_SOCKET": "/nonexistent/llm.sock",
+            })
+        self.assertEqual(self.mint_calls, [])
+        self.assertEqual(self.loopback_calls, [])
+        self.assertTrue(any("no effect" in line for line in logs.output))
+
+    def test_keyless_without_dispatcher_ignores_the_override_loudly(self):
+        self.config.gateway_budget_usd = 100.0
+        with self.assertLogs("raptor", level="WARNING") as logs:
+            self._run(self._exit2)  # conftest scrubbed both env vars
+        self.assertEqual(self.mint_calls, [])
+        self.assertTrue(any("no effect" in line for line in logs.output))
+
+
+class TestGatewayBudgetArgValidation(unittest.TestCase):
+    """The override refuses at parse time — before any lifecycle
+    state exists — and both CLI surfaces bind the shared validator."""
+
+    def test_valid_values_parse(self):
+        from packages.openant.config import gateway_budget_arg
+        self.assertEqual(gateway_budget_arg("80"), 80.0)
+        self.assertEqual(gateway_budget_arg("0.5"), 0.5)
+        # No ceiling: how much one run may spend is the operator's
+        # call — any finite positive value is theirs to grant.
+        self.assertEqual(gateway_budget_arg("1e6"), 1_000_000.0)
+        # ... up to the point where the proportional request-cap
+        # scaling would overflow float range (1e304 * 400 is finite).
+        self.assertEqual(gateway_budget_arg("1e304"), 1e304)
+
+    def test_budget_overflowing_the_request_cap_scale_refuses(self):
+        # 1e308 is positive and finite but its scaled request cap is
+        # not — it must refuse at parse time (the validator's
+        # contract), never crash downstream in the mint arithmetic.
+        from packages.openant.config import gateway_budget_arg
+        with self.assertRaises(argparse.ArgumentTypeError) as ctx:
+            gateway_budget_arg("1e308")
+        self.assertIn("request cap", str(ctx.exception))
+
+    def test_refusals(self):
+        from packages.openant.config import gateway_budget_arg
+        for bad in ("0", "-5", "nan", "-inf", "abc", ""):
+            with self.subTest(value=bad):
+                with self.assertRaises(argparse.ArgumentTypeError):
+                    gateway_budget_arg(bad)
+
+    def test_uncapped_spellings_refuse_with_the_reason(self):
+        # The dispatcher's child-token contract has no uncapped
+        # representation (allocate_child requires a finite budget
+        # > 0) — the uncapped ask is refused honestly, never
+        # translated into a made-up huge number.
+        from packages.openant.config import gateway_budget_arg
+        for uncapped in ("0", "inf"):
+            with self.subTest(value=uncapped):
+                with self.assertRaises(
+                        argparse.ArgumentTypeError) as ctx:
+                    gateway_budget_arg(uncapped)
+                self.assertIn("uncapped", str(ctx.exception))
+
+    def test_openant_cli_binds_the_validator(self):
+        import raptor_openant
+        parser = raptor_openant._build_parser()
+        ns = parser.parse_args(["--gateway-budget", "80"])
+        self.assertEqual(ns.gateway_budget, 80.0)
+        self.assertIsNone(parser.parse_args([]).gateway_budget)
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as ctx:
+                parser.parse_args(["--gateway-budget", "nan"])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_agentic_cli_binds_the_validator(self):
+        import raptor_agentic
+        parser = raptor_agentic.build_parser()
+        ns = parser.parse_args(
+            ["--repo", "/x", "--openant-gateway-budget", "80"])
+        self.assertEqual(ns.openant_gateway_budget, 80.0)
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as ctx:
+                parser.parse_args(
+                    ["--repo", "/x", "--openant-gateway-budget", "nan"])
+        self.assertEqual(ctx.exception.code, 2)
 
 
 class TestGatewayRouteResolution(_GatewayHarness):
