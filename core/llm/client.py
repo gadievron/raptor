@@ -136,6 +136,27 @@ class LLMBudgetExceededError(RuntimeError):
     """
 
 
+class LLMDegradedModeError(LLMBudgetExceededError):
+    """Sustained aggregate LLM degradation — TERMINAL for the run.
+
+    Raised at dispatch entry once the run-level degraded-mode breaker
+    (:mod:`core.llm.breaker`) has latched: a sliding window of
+    provider outcomes shows a sustained majority of transport-class
+    failures (provider brown-out, systematic truncation/parse loop,
+    wire flakiness), so further dispatch mostly buys failed attempts.
+
+    Subclasses :class:`LLMBudgetExceededError` DELIBERATELY: budget
+    exhaustion already carries the graceful run-terminal contract this
+    stop needs — loop drivers stop dispatching, in-flight work drains,
+    run state and spend evidence persist (e.g. the audit executor's
+    budget-stop predicate) — and every consumer keys on the type via
+    :func:`is_budget_exceeded_error`. The message names the dominant
+    failure class and the retry/resume story, so a stop recorded under
+    the budget label still reads as what it is: a provider incident,
+    not a spend cap.
+    """
+
+
 def is_budget_exceeded_error(exc: BaseException) -> bool:
     """True when *exc* signals LLM budget exhaustion.
 
@@ -2747,6 +2768,14 @@ class LLMClient:
             )
             raise LLMBudgetExceededError(msg)
 
+        # Degraded-mode breaker — same position and same terminal
+        # contract as the budget check above (before the cache lookup,
+        # so post-trip behaviour is uniform rather than dependent on
+        # what happens to be cached). In-flight calls drain; every new
+        # dispatch refuses with the typed run-terminal error.
+        from .breaker import check_degraded_mode
+        check_degraded_mode()
+
         # Get appropriate model for task (priority: explicit model_config > task_type > primary)
         model_config = kwargs.pop('model_config', None)
         # exclude_fallback_to: optional set[str] of model names that should
@@ -3016,6 +3045,11 @@ class LLMClient:
                             cache_write_tokens=getattr(
                                 response, "cache_write_tokens", 0),
                         )
+                        # Degraded-mode breaker: successes dilute the
+                        # window's failure fraction (cache hits are
+                        # never fed — they fire no provider call).
+                        from .breaker import note_llm_outcome
+                        note_llm_outcome("ok")
 
                         logger.debug("Generation successful: %s/%s (tokens: %s, cost: $%.4f, duration: %.1fs)", model.provider, model.model_name, response.tokens_used, response.cost, duration)
 
@@ -3141,6 +3175,10 @@ class LLMClient:
                         _veto = _consumed_attempt_veto(
                             e, model.provider, model.model_name,
                         )
+                        _disposition = (
+                            "consumed" if _veto is not None
+                            else _failure_disposition(e)
+                        )
 
                         # Paid usage the raising guard stamped on the
                         # exception rides the row: without it a burn
@@ -3154,10 +3192,7 @@ class LLMClient:
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
                             event="attempt_failed",
-                            disposition=(
-                                "consumed" if _veto is not None
-                                else _failure_disposition(e)
-                            ),
+                            disposition=_disposition,
                             call_class=call_class,
                             provider=model.provider.lower(),
                             model=model.model_name,
@@ -3176,6 +3211,12 @@ class LLMClient:
                                 else {}
                             ),
                         )
+                        # Degraded-mode breaker sees the same label
+                        # telemetry recorded; it counts only transport-
+                        # class dispositions toward its trip fraction
+                        # (see core.llm.breaker.COUNTED_DISPOSITIONS).
+                        from .breaker import note_llm_outcome
+                        note_llm_outcome(_disposition)
 
                         if _veto is not None:
                             last_error = _veto
@@ -3322,6 +3363,11 @@ class LLMClient:
                 f"Increase budget with: LLMConfig(max_cost_per_scan={self.config.max_cost_per_scan * 2:.1f})"
             )
             raise LLMBudgetExceededError(msg)
+
+        # Degraded-mode breaker — same placement and rationale as in
+        # ``generate`` above.
+        from .breaker import check_degraded_mode
+        check_degraded_mode()
 
         # Get appropriate model (priority: explicit model_config > task_type > primary)
         model_config = kwargs.pop('model_config', None)
@@ -3705,6 +3751,10 @@ class LLMClient:
                             cache_read_tokens=cread_delta,
                             cache_write_tokens=cwrite_delta,
                         )
+                        # Degraded-mode breaker — same seam as
+                        # ``generate``: successes dilute the window.
+                        from .breaker import note_llm_outcome
+                        note_llm_outcome("ok")
                         # Schema reliability signal — the response parsed and
                         # matched the schema (otherwise we'd be in the except
                         # branch). Recorded under _structured at flush time.
@@ -3814,6 +3864,10 @@ class LLMClient:
                         _veto = _consumed_attempt_veto(
                             e, model.provider, model.model_name,
                         )
+                        _disposition = (
+                            "consumed" if _veto is not None
+                            else _failure_disposition(e)
+                        )
 
                         # Same paid-usage attribution as the generate
                         # loop above — the structured path is where
@@ -3825,10 +3879,7 @@ class LLMClient:
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
                             event="attempt_failed",
-                            disposition=(
-                                "consumed" if _veto is not None
-                                else _failure_disposition(e)
-                            ),
+                            disposition=_disposition,
                             call_class=call_class,
                             provider=model.provider.lower(),
                             model=model.model_name,
@@ -3848,6 +3899,10 @@ class LLMClient:
                                 else {}
                             ),
                         )
+                        # Degraded-mode breaker — same seam and same
+                        # label discipline as the ``generate`` loop.
+                        from .breaker import note_llm_outcome
+                        note_llm_outcome(_disposition)
 
                         if _veto is not None:
                             last_error = _veto
