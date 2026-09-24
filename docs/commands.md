@@ -115,6 +115,7 @@ patches.
 | `--openant-model <name>` | OpenAnt LLM model: `sonnet` (default) or `opus` |
 | `--openant-level <depth>` | OpenAnt analysis depth: `all`, `reachable` (default), `codeql`, `exploitable` |
 | `--openant-gateway-budget <usd>` | Per-run raise of the OpenAnt dispatcher-gateway spend cap on gateway-minted runs (default $25; any positive finite USD, no uncapped spelling; the anti-runaway request cap scales with it). No effect on direct-credential runs (noted loudly) |
+| `--openant-timeout-seconds <n>` | Wall-clock deadline for the OpenAnt child in seconds (default 1800; positive integer, no ceiling). On gateway-minted runs the token TTL follows it (timeout + 600s slack) |
 
 **Output control**
 
@@ -461,6 +462,7 @@ non-zero and the run is marked failed.
 | `--workers <n>` | Parallel analysis workers (default 4) |
 | `--max-findings <n>` | Maximum findings to include in the report (default 50) |
 | `--gateway-budget <usd>` | Per-run raise of the dispatcher-gateway spend cap on gateway-minted runs (default $25; any positive finite USD, no uncapped spelling — dispatcher child tokens carry a finite budget by contract; the anti-runaway request cap scales with it, never below 10k). Argv-only; no effect on direct-credential runs (noted loudly) |
+| `--timeout-seconds <n>` | Wall-clock deadline for the OpenAnt child in seconds (default 1800; positive integer, no ceiling). The child is hard-killed at it in every credential posture; on gateway-minted runs the token TTL follows it (timeout + 600s slack) |
 | `--openant-core <path>` | Path to the `openant-core` directory (default `$OPENANT_CORE`). The flag surface is consent-gated: a core that is not a clean checkout of the pinned commit refuses at startup unless `--openant-core-unpinned` or the project `config` trust marker consents |
 | `--out <dir>` | Output directory override |
 

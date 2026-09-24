@@ -2265,6 +2265,7 @@ Examples:
         OPENANT_MODEL_DEFAULT,
         env_choice,
         gateway_budget_arg,
+        timeout_seconds_arg,
     )
     parser.add_argument("--openant-model",
                         default=env_choice("OPENANT_MODEL",
@@ -2293,6 +2294,16 @@ Examples:
                              "tokens carry a finite budget by "
                              "contract. No effect on direct-credential "
                              "runs (noted loudly)")
+    parser.add_argument("--openant-timeout-seconds",
+                        type=timeout_seconds_arg, metavar="N",
+                        default=None,
+                        help="Wall-clock deadline for the OpenAnt "
+                             "child in seconds (default: 1800). The "
+                             "child is hard-killed at it in every "
+                             "credential posture; on gateway-minted "
+                             "runs the token TTL follows it (timeout "
+                             "+ 600s slack). Positive integer, no "
+                             "ceiling")
 
     parser.add_argument(
         "--rank", action="store_true",
@@ -3796,6 +3807,9 @@ def main() -> int:
             oa_config.level = getattr(args, "openant_level", "reachable")
             oa_config.gateway_budget_usd = getattr(
                 args, "openant_gateway_budget", None)
+            _oa_timeout = getattr(args, "openant_timeout_seconds", None)
+            if _oa_timeout is not None:
+                oa_config.timeout_seconds = _oa_timeout
 
             print("\n" + "=" * 70)
             print("OPENANT SEMANTIC SCAN")

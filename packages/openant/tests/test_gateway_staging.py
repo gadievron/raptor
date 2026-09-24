@@ -518,6 +518,83 @@ class TestGatewayBudgetArgValidation(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
 
 
+class TestTimeoutOverride(_GatewayHarness):
+    """Per-run timeout override: the subprocess kill deadline and the
+    gateway token TTL both follow ``OpenAntConfig.timeout_seconds``,
+    so a raised timeout never strands a live child on an expired
+    token."""
+
+    def test_ttl_and_kill_deadline_follow_a_raised_timeout(self):
+        self.config.timeout_seconds = 14_400  # a four-hour scan
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+            return subprocess.CompletedProcess(cmd, 2, stdout="",
+                                               stderr="e")
+
+        self._run(fake_run, env_extra={
+            "RAPTOR_LLM_SOCKET": "/nonexistent/llm.sock",
+        })
+        (mint,) = self.mint_calls
+        # Token outlives the child by exactly the slack, at any value.
+        self.assertEqual(mint["ttl_s"], 14_400 + _GATEWAY_TTL_SLACK_S)
+        self.assertEqual(mint["ttl_s"], 15_000)
+        self.assertEqual(captured["timeout"], 14_400)
+
+    def test_default_timeout_unchanged(self):
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+            return subprocess.CompletedProcess(cmd, 2, stdout="",
+                                               stderr="e")
+
+        self._run(fake_run)
+        self.assertEqual(captured["timeout"], 1800)
+
+
+class TestTimeoutSecondsArgValidation(unittest.TestCase):
+    """The timeout override refuses garbage at parse time and both
+    CLI surfaces bind the shared validator."""
+
+    def test_valid_values_parse(self):
+        from packages.openant.config import timeout_seconds_arg
+        self.assertEqual(timeout_seconds_arg("7200"), 7200)
+        # No ceiling: multi-hour full-target scans are the point.
+        self.assertEqual(timeout_seconds_arg("86400"), 86_400)
+
+    def test_refusals(self):
+        from packages.openant.config import timeout_seconds_arg
+        for bad in ("0", "-1", "abc", "", "1800.5", "inf", "nan"):
+            with self.subTest(value=bad):
+                with self.assertRaises(argparse.ArgumentTypeError):
+                    timeout_seconds_arg(bad)
+
+    def test_openant_cli_binds_the_validator(self):
+        import raptor_openant
+        parser = raptor_openant._build_parser()
+        ns = parser.parse_args(["--timeout-seconds", "14400"])
+        self.assertEqual(ns.timeout_seconds, 14_400)
+        self.assertIsNone(parser.parse_args([]).timeout_seconds)
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as ctx:
+                parser.parse_args(["--timeout-seconds", "0"])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_agentic_cli_binds_the_validator(self):
+        import raptor_agentic
+        parser = raptor_agentic.build_parser()
+        ns = parser.parse_args(
+            ["--repo", "/x", "--openant-timeout-seconds", "14400"])
+        self.assertEqual(ns.openant_timeout_seconds, 14_400)
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as ctx:
+                parser.parse_args(
+                    ["--repo", "/x", "--openant-timeout-seconds", "0"])
+        self.assertEqual(ctx.exception.code, 2)
+
+
 class TestGatewayRouteResolution(_GatewayHarness):
     """The gateway dials the front the dispatcher actually serves —
     the same install-level signal proxy-mode CC children trust — and
