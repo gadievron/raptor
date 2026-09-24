@@ -135,8 +135,19 @@ class TestWithCommentsDefaultBudget(unittest.TestCase):
 
 class TestConstantSingleHomed(unittest.TestCase):
     def test_run_artifact_budget_aliases_the_default(self):
-        from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
-        self.assertIs(RUN_ARTIFACT_MAX_BYTES, DEFAULT_JSON_MAX_BYTES)
+        # Identity is proven against the DEFAULT_JSON_MAX_BYTES that
+        # record.py itself imported (reached through its held
+        # load_json's globals — the same import statement pulled
+        # both names), NOT this module's collection-time binding:
+        # sibling suites purge core.json.* from sys.modules, so when
+        # record's first import happens after a purge it aliases a
+        # freshly-minted int and the cross-binding `is` splits even
+        # though the aliasing is intact.
+        import core.coverage.record as record_mod
+        self.assertIs(
+            record_mod.RUN_ARTIFACT_MAX_BYTES,
+            record_mod.load_json.__globals__["DEFAULT_JSON_MAX_BYTES"],
+        )
 
     def test_default_is_the_run_artifact_class(self):
         # Churn guard, both directions documented at the constant:
