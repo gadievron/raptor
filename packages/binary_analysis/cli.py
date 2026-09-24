@@ -70,6 +70,7 @@ _COMMANDS = {
     "harness",
     "corpus",
     "hunt",
+    "siblings",
     "fuzz",
     "graph",
     "report",
@@ -194,6 +195,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Transitive caller depth (clamped to the documented cap)",
     )
     hunt_p.add_argument("--json", action="store_true", help="Emit compact JSON")
+
+    siblings_p = sub.add_parser(
+        "siblings",
+        help=("Sibling-consistency pass: peer clusters, per-member "
+              "check vectors, N-vs-K outlier flagging (review leads, "
+              "never findings)"),
+    )
+    siblings_p.add_argument(
+        "run_dir",
+        help="Existing /binary investigate or map output directory",
+    )
+    siblings_p.add_argument(
+        "--family", metavar="ID",
+        help="Analyse one hunt anchor family (BHUNTFAM-... id)",
+    )
+    siblings_p.add_argument(
+        "--auto", action="store_true",
+        help=("Full bounded peer-group formation (all layers) instead "
+              "of hunt-artifact families only"),
+    )
+    from packages.binary_analysis.siblings import MIN_CLUSTER_DEFAULT
+    siblings_p.add_argument(
+        "--min-cluster", type=_positive_int, default=MIN_CLUSTER_DEFAULT,
+        help=(f"Smallest cluster analysed (default: "
+              f"{MIN_CLUSTER_DEFAULT} — the smallest split where a "
+              f"majority exists)"),
+    )
+    siblings_p.add_argument("--json", action="store_true", help="Emit compact JSON")
 
     fuzz_p = sub.add_parser("fuzz", help="Hand off to RAPTOR's existing fuzz workflow")
     fuzz_p.add_argument("target", help="Binary to fuzz")
@@ -1012,6 +1041,69 @@ def _run_hunt(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_siblings_summary(payload: dict[str, Any]) -> None:
+    _sft = sanitise_for_terminal
+    print("Mode: siblings")
+    clusters = payload.get("clusters") or []
+    rows = payload.get("asymmetries") or []
+    print(f"Clusters analysed: {len(clusters)}")
+    print(f"Asymmetries: {len(rows)} "
+          f"(review leads with disproof recipes, not findings)")
+    for row in rows[:5]:
+        outliers = ", ".join(_sft(str(o)) for o in row.get("outliers") or [])
+        print(f"  - [{_sft(str(row.get('severity')))}] "
+              f"{_sft(str(row.get('property')))}: outlier {outliers} "
+              f"({_sft(str(row.get('evidence_tier')))})")
+    # The honesty lines ARE the result contract — they reach the
+    # terminal, not just the artifacts.
+    for note in payload.get("honesty") or []:
+        print(f"  ℹ️ {_sft(str(note))}")
+    for note in (payload.get("substrate_notes") or []):
+        print(f"  ⚠️ {_sft(str(note))}")
+    for note in payload.get("notes") or []:
+        print(f"  ⚠️ {_sft(str(note))}")
+    artifacts = payload.get("artifacts") or {}
+    print(f"Artifact: {artifacts.get('json')}")
+    print(f"Hypotheses: {artifacts.get('hypotheses')}")
+    print(f"Report: {artifacts.get('report')}")
+
+
+def _run_siblings(args: argparse.Namespace) -> int:
+    from packages.binary_analysis.hunt import HuntError
+    from packages.binary_analysis.siblings import run_siblings
+    run_dir = Path(args.run_dir).expanduser().resolve()
+    if not run_dir.is_dir():
+        print(f"raptor-binary: not a run directory: {run_dir}",
+              file=sys.stderr)
+        return 2
+    try:
+        payload = run_siblings(
+            run_dir,
+            family=args.family,
+            auto=args.auto,
+            min_cluster=args.min_cluster,
+        )
+    except HuntError as exc:
+        print(f"raptor-binary: siblings refused: "
+              f"{sanitise_for_terminal(str(exc), max_len=300)}",
+              file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - operator-facing clean failure
+        print(f"raptor-binary: siblings failed: {type(exc).__name__}: "
+              f"{sanitise_for_terminal(str(exc), max_len=300)}",
+              file=sys.stderr)
+        return 1
+    if args.json:
+        # ensure_ascii: same terminal-JSON lane as the handoff print —
+        # payload strings are escaped at capture, but C1 controls in a
+        # hand-edited artifact must not reach the terminal raw.
+        print(json.dumps(payload, sort_keys=True, ensure_ascii=True,
+                         default=str))
+        return 0
+    _print_siblings_summary(payload)
+    return 0
+
+
 def _run_fuzz(args: argparse.Namespace) -> int:
     target = Path(args.target).expanduser().resolve()
     cmd = [
@@ -1162,6 +1254,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_corpus(args)
     if args.command == "hunt":
         return _run_hunt(args)
+    if args.command == "siblings":
+        return _run_siblings(args)
     if args.command == "fuzz":
         return _run_fuzz(args)
     if args.command == "graph":

@@ -1865,11 +1865,6 @@
     "count": 12,
     "kind": "literal"
   },
-  "packages/binary_analysis/hunt.py::payload": {
-    "count": 12,
-    "kind": "literal",
-    "note": "artifact schema keys of the binary-hunt calls payload (binary-hunt-<slug>.json top-level fields, in lockstep with the anchor payload and the report renderer), not a learned name vocabulary"
-  },
   "packages/binary_analysis/harness.py::_APP_INGRESS_KINDS": {
     "count": 10,
     "kind": "literal"
@@ -1877,6 +1872,11 @@
   "packages/binary_analysis/harness.py::spec": {
     "count": 15,
     "kind": "literal"
+  },
+  "packages/binary_analysis/hunt.py::payload": {
+    "count": 12,
+    "kind": "literal",
+    "note": "artifact schema keys of the binary-hunt calls payload (binary-hunt-<slug>.json top-level fields, in lockstep with the anchor payload and the report renderer), not a learned name vocabulary"
   },
   "packages/binary_analysis/ingress.py::to_dict": {
     "count": 16,
@@ -1970,6 +1970,16 @@
   "packages/binary_analysis/runtime_evidence.py::load_runtime_evidence": {
     "count": 11,
     "kind": "literal"
+  },
+  "packages/binary_analysis/siblings.py::_asymmetry_rows": {
+    "count": 15,
+    "kind": "literal",
+    "note": "asymmetry-row field manifest for the sibling-clusters artifact schema (serializer keys, not a learned name vocabulary); same class as the serializer field manifests already baselined"
+  },
+  "packages/binary_analysis/siblings.py::payload": {
+    "count": 15,
+    "kind": "literal",
+    "note": "sibling-clusters.json top-level field manifest (artifact schema keys, not a learned name vocabulary)"
   },
   "packages/binary_analysis/topology.py::_boundary_description": {
     "count": 11,
