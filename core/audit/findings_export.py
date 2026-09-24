@@ -569,3 +569,112 @@ def format_findings_summary(export: dict[str, Any]) -> str:
         lines.append(f"Attack chains: {len(chains)} ({confirmed} confirmed)")
 
     return "\n".join(lines)
+
+
+def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
+    """Emit findings-graded.json from the review journal when the
+    orchestrator's richer export is absent (in-session runs).
+
+    findings-graded.json is the finding-level escrow hand-off: the
+    /validate import and cross-run dedup read it, and suspicious/dark
+    records ride it into downstream adjudication. The orchestrator
+    writes it unconditionally, but in-session runs (reviews recorded
+    via ``raptor-audit record``) never produced one at all — a
+    tool-confirmed suspicious result from such a run was invisible to
+    every later dedup/validation set and got re-discovered as novel.
+    A pass with suspicious/dark items and ZERO findings must still
+    emit the artifact.
+
+    Returns the graded container, or ``None`` when nothing was
+    written (an existing export is never overwritten — the
+    orchestrator's outcome-based export carries evidence chains this
+    journal reconstruction cannot; and a run with no journal has
+    nothing to grade).
+    """
+    out_dir = Path(out_dir)
+    if (out_dir / "findings-graded.json").exists():
+        return None
+    if not (out_dir / "review-journal.jsonl").exists():
+        return None
+    from types import SimpleNamespace
+
+    from core.coverage import journal_mac
+    from core.coverage.journal import latest_entries
+
+    outcomes = []
+    unverified_rows = 0
+    for entry in latest_entries(out_dir).values():
+        if entry.verdict not in ("finding", "suspicious", "dark"):
+            continue
+        hypothesis = ""
+        for hyp in entry.hypotheses or []:
+            if isinstance(hyp, dict):
+                hypothesis = str(
+                    hyp.get("mechanism") or hyp.get("text") or "",
+                )
+                if hypothesis:
+                    break
+        if not hypothesis:
+            hypothesis = (entry.body or "")[:500]
+        review_result: dict[str, Any] = {}
+        if entry.cwe:
+            review_result["vuln_type"] = entry.cwe
+        # Receipt authority is tiered on row provenance: the journal
+        # lives in the target-writable run dir, and the journaled
+        # ``evidence_tools`` stamp is what mints ``confirmed_by``
+        # receipts and confidence=high downstream. Only a row whose
+        # MAC verifies (this install's writer recorded it in some
+        # run — the in-session record gate enforced tool grounding
+        # at record time) keeps its receipts; unstamped/tampered rows
+        # export receipt-less, so the grading caps their confidence
+        # at the LLM-only tier instead of shipping a forged receipt.
+        verified = (
+            journal_mac.entry_provenance(entry)
+            == journal_mac.ROW_VERIFIED
+        )
+        if not verified:
+            unverified_rows += 1
+        outcomes.append(SimpleNamespace(
+            file=entry.file,
+            function=entry.function,
+            line=entry.line_start or 0,
+            status=entry.verdict,
+            hypothesis=hypothesis,
+            review_result=review_result,
+            evidence_tool=(
+                "+".join(entry.evidence_tools or []) if verified else ""
+            ),
+            model=entry.model or "",
+        ))
+    # out_dir deliberately NOT passed to export_findings: the
+    # promotion-alarm sweep correlates orchestrator outcome objects
+    # with dispatch receipts; journal reconstructions carry only the
+    # journaled evidence stamp, and the in-session ``record`` gate
+    # (G2: executed confirmed sweep receipt) already enforced tool
+    # grounding at record time. Re-demoting here on a correlation the
+    # reconstruction cannot express would strip gated statuses.
+    graded = export_findings(outcomes)
+    # Provenance marker, container AND per-record: this export is a
+    # journal reconstruction, not the orchestrator's outcome-based
+    # export — downstream consumers (and cross-run merges that lift
+    # records out of the container) can weigh its evidence chains
+    # accordingly. Consumers tolerate extra keys by contract.
+    graded["derivation"] = {
+        "source": "review-journal",
+        "unverified_rows": unverified_rows,
+    }
+    for rec in graded["findings"]:
+        rec.setdefault("provenance", {})["derivation"] = "journal"
+    if unverified_rows:
+        logger.warning(
+            "graded findings (journal-derived): %d row(s) without a "
+            "verifying integrity token — exported without tool "
+            "receipts (confidence capped at the LLM-only tier)",
+            unverified_rows,
+        )
+    write_graded_findings(graded, out_dir)
+    logger.info(
+        "graded findings (journal-derived): %d record(s) exported",
+        graded["stats"]["total"],
+    )
+    return graded
