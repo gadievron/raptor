@@ -39,12 +39,44 @@ JOURNAL_FILENAME = "review-journal.jsonl"
 INDEX_FILENAME = "review-journal-index.json"
 INDEX_SCHEMA_VERSION = 1
 
-# Byte budget for loading the journal / index. Both can arrive via a
-# /project archive import, so the st_size gate (before any read)
-# keeps an oversize file from being buffered. Real journals are one
-# ~1 KiB line per reviewed function — even huge audits stay far under
-# this.
+# Byte budget for the journal loader's RETAINED entries and for the
+# index document (which is read whole). Both files can arrive via a
+# /project archive import, so the loader's memory must stay bounded —
+# but the bound is on what the reader KEEPS, never a whole-file
+# refusal: a resume-segment chain re-emits every reused verdict as a
+# fresh row per segment, and a real multi-segment audit journal
+# crossed a former file-size gate whose fail direction was "load
+# nothing" — the resume then saw zero prior verdicts and re-reviewed
+# the entire run (unbounded duplicate spend). Duplicate re-emission
+# rows prune at load (newest per identity, see
+# ``_prune_reemission_rows``); only a journal that stays over budget
+# AFTER pruning reads as incomplete, and spend-authorizing callers
+# refuse on that flag (:func:`require_complete_entries`).
 _MAX_JOURNAL_BYTES = 256 * 1024 * 1024
+
+# Per-line bound. Real rows are ~1 KiB; the largest legitimate rows
+# (full review bodies, hypothesis lists, study receipts) reach tens
+# of KiB, so 8 MiB is ~3 orders of magnitude of headroom while
+# keeping a single hostile line from being buffered whole.
+_MAX_JOURNAL_LINE_BYTES = 8 * 1024 * 1024
+
+# Retained-entry COUNT bound. The byte budget alone does not bound
+# the reader's memory: a parsed entry costs ~1 KiB of object overhead
+# regardless of row size (the dataclass's per-entry default lists),
+# so a flood of minimal ~60-byte rows under the byte budget would
+# still retain millions of entries. Trade-off, both directions: too
+# low and a legitimate mega-audit reads incomplete until compacted
+# (bounded remedy — `raptor-audit journal compact`); too high and a
+# hostile tiny-row flood OOMs the reader through object overhead the
+# byte budget cannot see. 300k is ~3x the largest observed journal
+# (a ~100k-row multi-segment incident journal).
+_MAX_RETAINED_ENTRIES = 300_000
+
+# Total-bytes-consumed multiplier over the retained budget: bounds
+# the read LOOP (CPU/IO on a hostile multi-GiB plant, and a writer
+# growing the file mid-read) while leaving room for the loader to
+# stream past prunable duplicates several times the retained budget.
+_READ_BUDGET_MULTIPLIER = 4
 
 # domain-model.json is a small RAPTOR-written study artifact.
 _MAX_DOMAIN_MODEL_BYTES = 64 * 1024 * 1024
@@ -518,11 +550,92 @@ def flush_journal(out_dir: Path) -> None:
 
 # ── Read ─────────────────────────────────────────────────────────────
 
+class JournalIncomplete(RuntimeError):
+    """The journal exists but could not be loaded COMPLETELY within
+    the loader's memory bounds (retained-entry budget or read budget
+    exceeded after duplicate pruning). Read-only consumers may degrade
+    to the partial view; spend-authorizing consumers (same-run resume,
+    the own-run reuse fold) must refuse — an incomplete verdict set
+    silently re-buys every missing review, which is the maximum-spend
+    fail direction a bounded read must never take."""
+
+
+@dataclass
+class JournalLoad:
+    """Result of :func:`load_entries_checked`.
+
+    ``complete`` is False only when rows were LOST — the loader
+    stopped before end-of-file or gave up retaining. Duplicate
+    re-emission rows pruned at load (``pruned``) do not clear the
+    flag: the newest row of each identity survives, so no verdict,
+    coverage key, or spend evidence is lost (only zero-cost duplicate
+    rows prune — see ``_reemission_identity``)."""
+
+    entries: list[ReviewJournalEntry] = field(default_factory=list)
+    complete: bool = True
+    pruned: int = 0
+    reason: str | None = None
+
+
+def compact_hint(out_dir: Path | str) -> str:
+    """The operator remedy line for an over-budget journal."""
+    return (
+        "compact it first: libexec/raptor-audit journal compact "
+        f"{out_dir}"
+    )
+
+
+def require_complete_entries(out_dir: Path) -> list[ReviewJournalEntry]:
+    """Load journal entries, REFUSING a partial load.
+
+    The chokepoint for spend-authorizing consumers: ``raptor-audit
+    resume`` and the own-run reuse fold import prior verdicts at $0,
+    so a silently partial entry list converts directly into duplicate
+    LLM spend for every missing row. Raises :class:`JournalIncomplete`
+    with the compaction remedy; returns the (possibly load-pruned,
+    never lossy) entry list otherwise.
+    """
+    loaded = load_entries_checked(out_dir)
+    if not loaded.complete:
+        raise JournalIncomplete(
+            f"review journal in {out_dir} could not be loaded "
+            f"completely ({loaded.reason}) — refusing to treat a "
+            f"partial verdict set as the run's prior state; "
+            + compact_hint(out_dir)
+        )
+    return loaded.entries
+
+
 def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
     """Load all valid entries from review-journal.jsonl.
 
     Skips corrupt trailing line (truncated write) with a warning.
-    Interior corrupt lines are also skipped with warnings.
+    Interior corrupt lines are also skipped with warnings. Degrades
+    to a bounded PARTIAL list (loud warning) when the journal exceeds
+    the loader's memory bounds — read-only consumers keep working;
+    spend-authorizing consumers must use
+    :func:`require_complete_entries` instead.
+    """
+    return load_entries_checked(out_dir).entries
+
+
+def load_entries_checked(out_dir: Path) -> JournalLoad:
+    """Streaming, memory-bounded journal load with completeness flag.
+
+    Memory bounds (the old whole-file st_size refusal failed OPEN —
+    an over-cap journal loaded as ``[]`` and a resume re-reviewed the
+    entire run):
+
+    * per line: ``_MAX_JOURNAL_LINE_BYTES`` — an over-long line is
+      quarantined as a row and streamed past in bounded chunks;
+    * retained: ``_MAX_JOURNAL_BYTES`` raw bytes /
+      ``_MAX_RETAINED_ENTRIES`` rows — crossing either prunes
+      duplicate re-emission rows in place (lossless: newest per
+      identity, zero-cost rows only); only when pruning cannot get
+      back under budget does the load stop, flagged incomplete;
+    * consumed: ``_READ_BUDGET_MULTIPLIER`` x the retained budget —
+      bounds the read loop itself against multi-GiB plants and
+      writers growing the file mid-read.
     """
     journal_path = out_dir / JOURNAL_FILENAME
     # fd-discipline open (core.source.open_regular): the journal sits
@@ -535,21 +648,20 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
     from core.source import open_regular
     fh = open_regular(journal_path, "rb")
     if fh is None:
-        return []
-
-    # Size gate on the OPENED fd, before the read buffers anything.
-    try:
-        size = os.fstat(fh.fileno()).st_size
-    except OSError:
-        fh.close()
-        return []
-    if size > _MAX_JOURNAL_BYTES:
-        fh.close()
-        logger.warning(
-            "journal: %s is %d bytes (over the %d byte cap); "
-            "refusing to load", journal_path, size, _MAX_JOURNAL_BYTES,
-        )
-        return []
+        # Absent journal: empty AND complete (a run with no reviews
+        # has no prior state to protect). A journal that EXISTS but
+        # refused the disciplined open (permissions, planted
+        # non-regular file) is incomplete: for a resume, "cannot read
+        # the verdicts" must not read as "there are none".
+        exists = False
+        with contextlib.suppress(OSError):
+            exists = journal_path.exists()
+        if exists:
+            return JournalLoad(
+                complete=False,
+                reason="journal exists but refused the read open",
+            )
+        return JournalLoad()
 
     entries: list[ReviewJournalEntry] = []
     # Read raw BYTES and hand each line to the parser individually. A
@@ -564,12 +676,16 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
     # small bytes object PER LINE when split eagerly (~20x the file
     # size in peak RSS — an at-cap journal of tiny rows OOM-killed the
     # reader that exists to contain hostile bytes). Iterating the file
-    # keeps one line alive at a time, so the byte cap bounds the
+    # keeps one line alive at a time, so the byte budgets bound the
     # reader's own memory, not just the file. Pinned by the RSS-bounded
     # test in core/coverage/tests/test_journal_containment.py.
+    sizes: list[int] = []      # raw line length per retained entry
+    retained_bytes = 0
+    pruned_total = 0
     corrupt = 0
     row_warnings = 0
-    budget = _MAX_JOURNAL_BYTES
+    incomplete_reason: str | None = None
+    read_budget = _READ_BUDGET_MULTIPLIER * _MAX_JOURNAL_BYTES
 
     def _row_warning(msg: str, *args: object) -> None:
         # Rate-limit per-row warnings: a hostile journal is millions of
@@ -592,26 +708,48 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
         with fh:
             i = -1
             while True:
-                # Bounded readline: the fstat gate above races a
-                # writer that grows the file after the check, so the
-                # cap is re-enforced on the bytes actually read — and
-                # at LINE granularity too: a plain ``for line in fh``
-                # materialised one multi-GiB line whole before the
-                # budget check fired, so the cap held only between
-                # lines. readline(budget + 1) bounds the worst case
-                # to one capped chunk.
-                line = fh.readline(budget + 1)
+                # Bounded readline: a plain ``for line in fh``
+                # materialised one multi-GiB line whole before any
+                # budget check fired. readline(cap + 1) bounds the
+                # worst case to one capped chunk; the read budget arm
+                # of the min() keeps that chunk within what the loop
+                # is still allowed to consume at all.
+                line_cap = min(_MAX_JOURNAL_LINE_BYTES, read_budget)
+                line = fh.readline(line_cap + 1)
                 if not line:
                     break
                 i += 1
-                budget -= len(line)
-                if budget < 0:
-                    logger.warning(
-                        "journal: %s grew past the %d byte cap "
-                        "mid-read; stopping (%d entries loaded)",
-                        journal_path, _MAX_JOURNAL_BYTES, len(entries),
+                read_budget -= len(line)
+                if len(line) > line_cap and not line.endswith(b"\n"):
+                    # Over-long line: quarantine the ROW and stream
+                    # past it in bounded chunks (never buffer it).
+                    skipped, budget_hit = _discard_to_newline(
+                        fh, read_budget)
+                    read_budget -= skipped
+                    corrupt += 1
+                    _row_warning(
+                        "journal: skipping over-long line %d in %s "
+                        "(exceeds the %d byte per-line bound)",
+                        i + 1, journal_path, line_cap,
+                    )
+                    if budget_hit or read_budget <= 0:
+                        incomplete_reason = (
+                            f"read budget "
+                            f"({_READ_BUDGET_MULTIPLIER}x"
+                            f"{_MAX_JOURNAL_BYTES} bytes) exhausted"
+                        )
+                        break
+                    continue
+                if read_budget <= 0:
+                    # Also covers a writer growing the file mid-read:
+                    # the loop consumes at most the read budget no
+                    # matter what st_size claimed at open.
+                    incomplete_reason = (
+                        f"read budget ({_READ_BUDGET_MULTIPLIER}x"
+                        f"{_MAX_JOURNAL_BYTES} bytes) exhausted"
                     )
                     break
+                raw_len = len(line)
                 line = line.strip()
                 if not line:
                     continue
@@ -648,6 +786,8 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
                     continue
                 try:
                     entries.append(_entry_from_dict(raw))
+                    sizes.append(raw_len)
+                    retained_bytes += raw_len
                 except Exception as exc:  # noqa: BLE001 — row containment boundary
                     # The journal lives inside the run dir — SANDBOX-
                     # WRITABLE — so ONE planted row must quarantine
@@ -664,19 +804,151 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
                         "journal: skipping malformed entry on line %d: %s",
                         i + 1, exc,
                     )
+                    continue
+                if (retained_bytes > _MAX_JOURNAL_BYTES
+                        or len(entries) > _MAX_RETAINED_ENTRIES):
+                    # Over the retained budget: prune duplicate
+                    # re-emission rows in place (lossless — newest per
+                    # identity, zero-cost rows only) and continue only
+                    # with >=10% headroom back, so repeated prunes
+                    # amortize instead of running per row.
+                    freed_rows, freed_bytes = _prune_reemission_rows(
+                        entries, sizes)
+                    pruned_total += freed_rows
+                    retained_bytes -= freed_bytes
+                    if (retained_bytes * 10 > _MAX_JOURNAL_BYTES * 9
+                            or len(entries) * 10
+                            > _MAX_RETAINED_ENTRIES * 9):
+                        incomplete_reason = (
+                            "retained-entry budget exceeded "
+                            f"({len(entries)} rows / {retained_bytes} "
+                            "bytes retained; duplicate pruning freed "
+                            "too little)"
+                        )
+                        break
     except OSError as exc:
         # Open failure, or a read failure mid-iteration (EIO): keep
         # whatever already loaded (degrade, never propagate) and warn.
         logger.warning(
             "journal: failed to read %s: %s", journal_path, exc,
         )
+        incomplete_reason = incomplete_reason or f"read failed: {exc}"
+    if pruned_total:
+        # Final pass so a pruned load is FULLY deduplicated —
+        # mid-stream prunes keep the newest row seen so far, and
+        # later re-emissions of the same identity would otherwise
+        # leave the result depending on where the budget crossings
+        # happened to fall.
+        freed_rows, _freed = _prune_reemission_rows(entries, sizes)
+        pruned_total += freed_rows
     if corrupt:
         logger.warning(
             "journal: skipped %d corrupt line(s) in %s "
             "(%d entries loaded)",
             corrupt, journal_path, len(entries),
         )
-    return entries
+    if pruned_total:
+        logger.warning(
+            "journal: %s exceeded the retained-entry budget — pruned "
+            "%d duplicate re-emission row(s) at load (newest per "
+            "identity kept; no verdict or spend evidence lost); %s",
+            journal_path, pruned_total, compact_hint(out_dir),
+        )
+    if incomplete_reason:
+        logger.warning(
+            "journal: PARTIAL load of %s — %s (%d entries loaded); "
+            "read-only consumers degrade, spend-authorizing consumers "
+            "refuse; %s",
+            journal_path, incomplete_reason, len(entries),
+            compact_hint(out_dir),
+        )
+    return JournalLoad(
+        entries=entries,
+        complete=incomplete_reason is None,
+        pruned=pruned_total,
+        reason=incomplete_reason,
+    )
+
+
+def _discard_to_newline(fh: Any, budget: int) -> tuple[int, bool]:
+    """Stream past the remainder of an over-long line in bounded
+    chunks. Returns ``(bytes_consumed, budget_hit)``."""
+    consumed = 0
+    chunk_cap = 1 << 20
+    while budget - consumed > 0:
+        chunk = fh.readline(min(chunk_cap, budget - consumed))
+        if not chunk:
+            return consumed, False          # EOF
+        consumed += len(chunk)
+        if chunk.endswith(b"\n"):
+            return consumed, False
+    return consumed, True
+
+
+def _reemission_identity(entry: ReviewJournalEntry) -> tuple | None:
+    """Load-prune identity for a duplicate re-emission row, or None
+    when the row must never prune.
+
+    A resume-segment chain re-emits every reused verdict as a fresh
+    ``reused=true`` row per segment (per-segment completeness — see
+    ``core.audit.verdict_reuse``), so identical rows dominate a long
+    run's journal. Prunable rows are exactly the ones whose loss is
+    provably invisible to every consumer once a NEWER identical row
+    survives:
+
+    * ``reused`` only — live reviews, corrections, echoes never prune;
+    * zero-cost only — ``journal_spend_usd`` sums per-row ``cost_usd``,
+      so a $-bearing row is spend evidence and always survives;
+    * no ``validate_verdict``/``lesson`` — survival stats and FP
+      feedback read those fields from non-latest rows;
+    * never ``finding``/``suspicious`` — claim rows keep every
+      emission (re-validation sweeps can stamp differing evidence);
+    * never ``provisional`` — not a settled verdict.
+
+    The identity spans every field the per-key consumers key on
+    (``key`` carries the edge suffix; ``line_start`` the site).
+    """
+    if not entry.reused or entry.cost_usd:
+        return None
+    if entry.validate_verdict or entry.lesson or entry.provisional:
+        return None
+    if entry.verdict in ("finding", "suspicious"):
+        return None
+    return (
+        entry.key, entry.line_start or 0, entry.source_hash,
+        entry.verdict, entry.model or "",
+        _canonical_strategy_hash(entry.strategies),
+    )
+
+
+def _prune_reemission_rows(
+    entries: list[ReviewJournalEntry],
+    sizes: list[int],
+) -> tuple[int, int]:
+    """Drop all-but-the-NEWEST duplicate re-emission row per identity,
+    in place, preserving order. Returns ``(rows_freed, bytes_freed)``.
+
+    "Newest" is last-in-file, matching the append-order convention
+    every latest-wins consumer already applies on ``ts`` ties.
+    """
+    seen: set[tuple] = set()
+    keep = [True] * len(entries)
+    freed_rows = 0
+    freed_bytes = 0
+    for idx in range(len(entries) - 1, -1, -1):
+        ident = _reemission_identity(entries[idx])
+        if ident is None:
+            continue
+        if ident in seen:
+            keep[idx] = False
+            freed_rows += 1
+            freed_bytes += sizes[idx]
+        else:
+            seen.add(ident)
+    if freed_rows:
+        entries[:] = [e for e, k in zip(entries, keep) if k]
+        sizes[:] = [s for s, k in zip(sizes, keep) if k]
+    return freed_rows, freed_bytes
 
 
 # ── row field-type validation ────────────────────────────────────────

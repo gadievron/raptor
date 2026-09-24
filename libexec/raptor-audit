@@ -2406,6 +2406,23 @@ def cmd_resume(args: argparse.Namespace) -> int:
         )
         return 1
 
+    # --- journal completeness gate (spend-authorizing read) ---
+    # Everything downstream — the drift gate, the own-run $0 reuse
+    # import, the journal spend floor — reads the review journal, and
+    # a PARTIAL read fails toward maximum spend: missing verdicts are
+    # silently re-reviewed at full price and the booked-spend floor
+    # under-reports. Refuse the resume instead; the error names the
+    # compaction remedy.
+    from core.coverage.journal import (
+        JournalIncomplete,
+        require_complete_entries,
+    )
+    try:
+        require_complete_entries(out_dir)
+    except JournalIncomplete as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
     # --- staleness gate: the run's recorded hashes vs the tree NOW ---
     drifted, checked = compute_drift(out_dir, target_path)
     if drifted and not args.allow_drift:

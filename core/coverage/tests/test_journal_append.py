@@ -609,16 +609,72 @@ class TestSerializationHostility:
 
 
 class TestJournalByteBudget:
-    """Journal + index loads are size-gated before any read."""
+    """Journal loads are memory-bounded but NEVER fail open: an
+    over-budget journal keeps loading what fits (duplicate
+    re-emissions pruned losslessly first), the load flags incomplete
+    when rows were actually lost, and spend-authorizing consumers
+    refuse an incomplete load instead of reading a partial journal
+    as 'nothing was reviewed' (the old size gate returned [] and a
+    resume re-bought every prior verdict)."""
 
-    def test_oversize_journal_loads_empty(
+    def test_over_budget_journal_still_loads_flagged_incomplete(
         self, tmp_path: Path, monkeypatch,
     ) -> None:
         append_entry(tmp_path, _entry(1))
         append_entry(tmp_path, _entry(2))
         size = (tmp_path / "review-journal.jsonl").stat().st_size
         monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_BYTES", size - 1)
-        assert load_entries(tmp_path) == []
+        loaded = journal_mod.load_entries_checked(tmp_path)
+        # Distinct live rows cannot prune, so the load is partial —
+        # but everything read up to the stop IS returned.
+        assert loaded.entries, "over-budget journal read as empty"
+        assert not loaded.complete
+        assert load_entries(tmp_path) == loaded.entries
+
+    def test_incomplete_load_refused_for_spend_callers(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        append_entry(tmp_path, _entry(1))
+        append_entry(tmp_path, _entry(2))
+        size = (tmp_path / "review-journal.jsonl").stat().st_size
+        monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_BYTES", size - 1)
+        with pytest.raises(journal_mod.JournalIncomplete) as exc_info:
+            journal_mod.require_complete_entries(tmp_path)
+        # The refusal names the operator remedy.
+        assert "journal compact" in str(exc_info.value)
+
+    def test_complete_load_passes_spend_callers(
+        self, tmp_path: Path,
+    ) -> None:
+        append_entry(tmp_path, _entry(1))
+        entries = journal_mod.require_complete_entries(tmp_path)
+        assert [e.function for e in entries] == ["fn1"]
+
+    def test_reemission_rows_prune_within_budget(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """A journal dominated by duplicate reused re-emissions (the
+        resume-segment shape) loads COMPLETE past the byte budget:
+        pruning keeps the newest row per identity and loses no
+        verdict, key, or spend evidence."""
+        live = _entry(1)
+        live.cost_usd = 0.42
+        append_entry(tmp_path, live)
+        for _ in range(6):
+            dup = _entry(1)
+            dup.reused = True
+            dup.reused_from_run = "run-0"
+            dup.cost_usd = 0.0
+            append_entry(tmp_path, dup)
+        size = (tmp_path / "review-journal.jsonl").stat().st_size
+        monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_BYTES", size // 2)
+        loaded = journal_mod.load_entries_checked(tmp_path)
+        assert loaded.complete
+        assert loaded.pruned > 0
+        # The newest reused row and the $-bearing live row survive.
+        assert sum(1 for e in loaded.entries if e.reused) == 1
+        assert any(e.cost_usd == 0.42 for e in loaded.entries)
+        assert {e.key for e in loaded.entries} == {"src/f1.c:fn1"}
 
     def test_journal_at_cap_still_loads(
         self, tmp_path: Path, monkeypatch,
@@ -627,6 +683,42 @@ class TestJournalByteBudget:
         size = (tmp_path / "review-journal.jsonl").stat().st_size
         monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_BYTES", size)
         assert len(load_entries(tmp_path)) == 1
+
+    def test_overlong_line_quarantined_neighbours_load(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """A single line past the per-line bound quarantines as a row
+        (streamed past, never buffered) while its neighbours load."""
+        append_entry(tmp_path, _entry(1))
+        journal = tmp_path / "review-journal.jsonl"
+        with journal.open("ab") as fh:
+            fh.write(b'{"pad": "' + b"A" * 4096 + b'"}\n')
+        append_entry(tmp_path, _entry(2))
+        monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_LINE_BYTES", 1024)
+        loaded = journal_mod.load_entries_checked(tmp_path)
+        assert [e.function for e in loaded.entries] == ["fn1", "fn2"]
+        assert loaded.complete
+
+    def test_retained_entry_count_bounded(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """A flood of distinct minimal rows under the byte budget is
+        bounded by the COUNT cap (per-entry object overhead is what
+        OOMs the reader, not raw bytes) and flags incomplete."""
+        journal = tmp_path / "review-journal.jsonl"
+        rows = b"".join(
+            json.dumps({
+                "ts": now_iso(), "run_id": "r", "file": f"h{i}.c",
+                "function": f"h{i}", "verdict": "clean",
+                "schema_version": 1,
+            }).encode() + b"\n"
+            for i in range(50)
+        )
+        journal.write_bytes(rows)
+        monkeypatch.setattr(journal_mod, "_MAX_RETAINED_ENTRIES", 20)
+        loaded = journal_mod.load_entries_checked(tmp_path)
+        assert not loaded.complete
+        assert len(loaded.entries) <= 22
 
     def test_oversize_index_starts_fresh(
         self, tmp_path: Path, monkeypatch,
