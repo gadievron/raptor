@@ -48,6 +48,30 @@ class TestAppendJsonl:
             append_jsonl(link, {"evil": True})
         assert victim.read_text() == "do not touch\n"
 
+    @pytest.mark.skipif(
+        not hasattr(os, "mkfifo"), reason="mkfifo unavailable (non-POSIX)")
+    def test_refuses_readerless_fifo_without_blocking(self, tmp_path: Path):
+        """A planted reader-less FIFO must fail fast (ENXIO via
+        O_NONBLOCK), never wedge the appender on the open."""
+        p = tmp_path / "trail.jsonl"
+        os.mkfifo(p)
+        with pytest.raises(OSError):
+            append_jsonl(p, {"evil": True})
+
+    @pytest.mark.skipif(
+        not hasattr(os, "mkfifo"), reason="mkfifo unavailable (non-POSIX)")
+    def test_refuses_fifo_with_reader(self, tmp_path: Path):
+        """A FIFO that HAS a reader opens fine — the post-open fstat
+        regularity check is what refuses it."""
+        p = tmp_path / "trail.jsonl"
+        os.mkfifo(p)
+        reader = os.open(str(p), os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            with pytest.raises(OSError):
+                append_jsonl(p, {"evil": True})
+        finally:
+            os.close(reader)
+
     def test_raises_on_missing_parent(self, tmp_path: Path):
         with pytest.raises(OSError):
             append_jsonl(tmp_path / "no" / "such" / "dir.jsonl", {"a": 1})
