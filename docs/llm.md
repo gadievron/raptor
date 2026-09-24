@@ -480,8 +480,63 @@ atomic pre-debit reservation before each provider call. Concurrent dispatchers c
 race past the cap. Override with `--max-cost-usd` on the CLI.
 
 **Note:** there is no `RAPTOR_MAX_COST` environment variable — no code reads it.
-The budget cap is set exclusively via `--max-cost-usd` (CLI) or `max_cost_per_scan`
-(config).
+The budget cap is set via `--max-cost-usd` (CLI), `max_cost_per_scan` (config), or —
+for runs that configure no cap at all — the tuning.json default ceiling below.
+
+### Default Ceiling for Uncapped Runs
+
+Some entry points express "no cap" as `max_cost_per_scan = float('inf')` (the audit
+pipeline without `--max-cost`, `/agentic`'s audit post-pass when no `--max-cost-usd`
+was given). At first dispatch the client resolves the run's ceiling once:
+
+- `default_max_cost_usd` in `tuning.json`, when set, applies to an uncapped run
+  exactly as if passed on the CLI. A CLI/programmatic cap always wins — the knob is
+  only consulted when nothing else set a cap.
+- With no knob, the run **stays uncapped** (no hard default is ever imposed) and a
+  single prominent warning banner names the cap flags and the knob.
+
+Invalid knob values (non-numeric, non-finite, zero/negative) are ignored — the run
+stays uncapped with the banner, never surprise-capped at zero.
+`enable_cost_tracking=False` is a deliberate programmatic opt-out of all spend
+accounting and bypasses both the knob and the banner.
+
+### Degraded-Mode Breaker
+
+Budget caps bound *total* spend; the run-level degraded-mode breaker
+(`core/llm/breaker.py`) bounds spend on *failure*. It watches a sliding window of
+provider outcomes across the whole process, and when transport-class failures
+(timeouts, wire/5xx errors and response-shape failures, mid-response deaths) make up
+a sustained majority of recent attempts — a provider brown-out, or a systematic
+`max_tokens`-truncation loop — it latches and every new LLM dispatch raises
+`LLMDegradedModeError`. That error is a subclass of `LLMBudgetExceededError`, so the
+run stops on the same graceful contract as budget exhaustion: loop drivers stop
+dispatching, in-flight calls drain, run state and per-attempt spend evidence persist,
+and the trip verdict (dominant failure class, window stats) is appended to the run's
+`llm-telemetry.jsonl`.
+
+The breaker deliberately does **not** trip on:
+
+- model refusals / content filters (`blocked`) — a hostile corpus legitimately
+  drives those, and they must not become a denial-of-analysis lever;
+- 429s (`quota`) — the adaptive throttle and daily-quota latch own that lane;
+- auth failures — the consecutive-auth-streak tracker aborts the phase;
+- short bursts (a minimum sustain span) or low-volume runs (a minimum-sample floor).
+
+Two accepted subtleties: response-shape failures (malformed JSON, schema
+violations) count as `retryable`, so a corpus that steers the model into
+systematic non-JSON output *can* contribute to the fraction — the deliberate
+price of catching the truncation-loop class; the refusal exclusion narrows the
+denial-of-analysis lever rather than fully closing it. And the fraction is
+per-*attempt*, not per-call: a dead primary whose retries all fail can trip the
+breaker even while calls complete through a healthy fallback — a run burning
+several failed attempts per completed call is degradation an operator should
+rule on.
+
+Thresholds default to: failure fraction 0.5 over a 10-minute window, minimum 20
+outcomes, sustained for at least 5 minutes. Each is env-overridable
+(`RAPTOR_LLM_BREAKER_THRESHOLD` / `_WINDOW_S` / `_MIN_SAMPLES` / `_SUSTAIN_S`), and
+`RAPTOR_LLM_BREAKER=0` disables the breaker for a run — see
+[Environment Variables](environment.md).
 
 ### Token Pricing
 

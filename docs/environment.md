@@ -232,6 +232,22 @@ AWS credentials alone never select Bedrock.
 | `RAPTOR_SCORECARD_PATH` | `out/llm_scorecard.json` | Per-model reliability scorecard location (feeds `/scorecard` and cross-model merge weights). Set by tests/sandboxed runs for isolation. |
 | `RAPTOR_SCORECARD_TEST_FLUSH` | unset | Test-harness escape hatch. Under pytest the process-exit scorecard flush is suppressed (per-test isolation is torn down before atexit; flushing would corrupt real reliability data with mock usage). Any non-empty value opts the atexit flush back in — for tests exercising that path against an isolated `RAPTOR_SCORECARD_PATH`. No effect outside pytest. |
 
+### Degraded-mode breaker (`RAPTOR_LLM_BREAKER*`)
+
+Run-level breaker on sustained aggregate LLM degradation (provider
+brown-out, systematic truncation loop) — see the Cost Management
+section of [LLM Configuration](llm.md). Numeric overrides that are
+non-numeric or out of bounds warn and keep the default.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RAPTOR_LLM_BREAKER` | on | Kill switch: `0`/`false`/`no`/`off` disables the breaker for the run — for soaks where degraded-but-crawling beats stopping, with the budget cap as the only backstop. |
+| `RAPTOR_LLM_BREAKER_THRESHOLD` | `0.5` | Failure fraction (counted transport-class failures / all provider outcomes in the window) at which the breaker trips. Bounds `0.05`–`1.0`. |
+| `RAPTOR_LLM_BREAKER_WINDOW_S` | `600` | Sliding-window length (seconds) the fraction is computed over. Bounds `30`–`86400`. |
+| `RAPTOR_LLM_BREAKER_MIN_SAMPLES` | `20` | Minimum outcomes in the window before the fraction is evaluated — the low-volume floor. Bounds `1`–`100000`. |
+| `RAPTOR_LLM_BREAKER_SUSTAIN_S` | `300` | Minimum span between the window's oldest outcome and the tripping one — separates a real brown-out from burst blips the retry ladder rides out. Clamped to 90% of the window. Bounds `0`–`86400`. |
+| `RAPTOR_LLM_BREAKER_TEST` | unset | Test-harness escape hatch. Under pytest the process-wide breaker is inert (the suite deliberately drives failure streams that would trip it across tests). Any non-empty value opts it back in — for tests exercising the breaker end-to-end against their own installed instance. No effect outside pytest. |
+
 ### Credential-isolation dispatcher knobs
 
 Numeric knobs on the dispatcher server
