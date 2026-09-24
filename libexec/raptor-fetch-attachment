@@ -113,6 +113,12 @@ def _open_attachments_dir(attachments_dir: Path) -> int:
 
     Returns the directory fd (caller closes). Raises OSError on any
     refusal.
+
+    Sibling: :mod:`core.source.beneath` is the shared home for the
+    READER-side anchored open (``open_regular_beneath``). This walk
+    stays script-local because it is write-side — it mkdirs the
+    final component mid-walk — and adopts a shared
+    ``open_dir_beneath`` when that flavor earns a second consumer.
     """
     base_fd = os.open(str(attachments_dir.parent), _O_DIR_FLAGS)
     try:
