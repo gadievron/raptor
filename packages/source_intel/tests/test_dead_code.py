@@ -121,6 +121,37 @@ def test_pointer_ref_negative_only_call_present(tmp_path):
     assert _function_referenced_as_pointer(tmp_path, "helper") is False
 
 
+def test_pointer_ref_found_in_hh_header(tmp_path):
+    """A callback reference living only in a ``.hh`` header must count.
+
+    The pointer scan is the final guard before dead-code suppression:
+    when ``.hh`` drifted out of the scan's extension set, a static
+    function referenced only there read as dead code — a wrong Not
+    Exploitable, the direction this axis promises not to err in.
+    """
+    (tmp_path / "def.c").write_text(
+        "static int handler(int a) { return a; }\n"
+    )
+    (tmp_path / "ops.hh").write_text(
+        "extern int handler(int);\n"
+        "struct ops_t my_ops = { .handler = handler, };\n"
+    )
+    assert _function_referenced_as_pointer(tmp_path, "handler") is True
+
+
+def test_pointer_ref_extension_match_is_case_insensitive(tmp_path):
+    """Uppercase spellings (``.HH``) compare via ``suffix.lower()``,
+    matching the sibling walks in analyze.py and cache.py."""
+    (tmp_path / "def.c").write_text(
+        "static int handler(int a) { return a; }\n"
+    )
+    (tmp_path / "ops.HH").write_text(
+        "extern int handler(int);\n"
+        "struct ops_t my_ops = { .handler = handler, };\n"
+    )
+    assert _function_referenced_as_pointer(tmp_path, "handler") is True
+
+
 def test_pointer_ref_searches_recursively(tmp_path):
     sub = tmp_path / "sub"
     sub.mkdir()
