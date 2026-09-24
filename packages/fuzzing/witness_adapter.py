@@ -23,6 +23,7 @@ from core.witness import Witness, WitnessOutcome, WitnessSource
 from core.witness.types import compute_bytes_hash
 
 if TYPE_CHECKING:
+    from packages.fuzzing.atheris_runner import PythonExceptionInfo
     from packages.fuzzing.crash_collector import Crash
     from packages.fuzzing.crash_attribution import CrashAttribution
 
@@ -125,5 +126,78 @@ def witness_from_crash(
         target_binary_hash=target_binary_hash,
         target_source_hash=target_source_hash,
         produced_by=produced_by,
+    )
+    return witness, data
+
+
+def witness_from_atheris_artifact(
+    artifact: Path,
+    *,
+    exception: PythonExceptionInfo | None = None,
+    harness_path: Path | None = None,
+    target_source_hash: str | None = None,
+) -> tuple[Witness, bytes]:
+    """Wrap an atheris crash artifact as a ``Witness`` + raw bytes.
+
+    Same shape and store path as the AFL adapter above, so atheris
+    crashes join /validate, reporting, and ``raptor-verified-outcomes``
+    on the identical data path. Differences worth naming:
+
+    * Atheris crashes are usually uncaught Python exceptions: atheris
+      prints the traceback and aborts the process, and libFuzzer's
+      crash handler writes the artifact. The fuzzer observed the
+      target die on these bytes — the outcome is ``EXIT_SIGNAL``
+      (same evidentiary weight as an AFL signal exit), with the
+      Python-side truth carried precisely in ``outcome_detail``
+      (``crash_kind=python_exception``, exception type/message,
+      ``stack_hash`` from the traceback frames). Native crashes in C
+      extensions surface identically minus the exception detail
+      (``crash_kind=native``).
+    * There is no target binary to hash — the harness file is hashed
+      instead (``harness_hash``), binding the witness to the harness
+      that produced it; ``target_source_hash`` binds the package tree
+      when the caller has one.
+
+    The artifact lives in the target-writable crashes dir: same
+    bounded-read cap and oversize refusal as the AFL adapter.
+    """
+    got = read_bytes_capped(artifact, _MAX_CRASH_INPUT_BYTES)
+    if got is None:
+        msg = f"crash artifact {artifact} could not be read"
+        raise OSError(msg)
+    data, truncated = got
+    if truncated:
+        msg = (
+            f"crash artifact {artifact} exceeds the "
+            f"{_MAX_CRASH_INPUT_BYTES}-byte witness cap — refusing to "
+            f"load a target-planted oversized file into the witness "
+            f"store"
+        )
+        raise ValueError(msg)
+
+    outcome_detail: dict = {"crash_id": artifact.name}
+    if exception is not None:
+        outcome_detail["crash_kind"] = "python_exception"
+        outcome_detail["exception_type"] = exception.exception_type
+        if exception.message:
+            outcome_detail["exception_message"] = exception.message
+        if exception.stack_key:
+            outcome_detail["stack_hash"] = exception.stack_key
+    else:
+        outcome_detail["crash_kind"] = "native"
+
+    harness_hash: str | None = None
+    if harness_path is not None and Path(harness_path).is_file():
+        harness_hash = sha256_file(Path(harness_path))
+        outcome_detail["harness_hash"] = harness_hash
+
+    witness = Witness(
+        bytes_hash=compute_bytes_hash(data),
+        bytes_len=len(data),
+        source=WitnessSource.FUZZ,
+        observed_outcome=WitnessOutcome.EXIT_SIGNAL,
+        outcome_detail=outcome_detail,
+        target_source_hash=target_source_hash,
+        produced_by="atheris",
     )
     return witness, data
