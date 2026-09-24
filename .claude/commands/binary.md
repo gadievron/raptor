@@ -28,6 +28,7 @@ With no command, `/binary <path>` defaults to `investigate`.
 | `harness <run-dir>` | Turn one recovered ingress into a harness plan, and emit candidate source only when the contract is explicit |
 | `corpus <samples-dir>` | Profile a directory of input samples with byte statistics: per-offset header stats, size-field discovery, entropy, TLV likelihood, seed min-set and fuzz.dict |
 | `hunt <run-dir\|binary>` | Operator-steered hunt: `--anchor` string families and `--calls`/`--and-not-calls` caller set algebra |
+| `siblings <run-dir>` | Sibling consistency: peer clusters × per-member check vectors, N-vs-K outlier flagging (review leads with disproof recipes, never findings) |
 | `fuzz <binary> [fuzz args]` | Hand off to the normal `/fuzz` orchestrator for crash witnesses |
 | `graph <run-dir>` | Query the persistent binary graph |
 | `report <run-dir>` | Print `binary-investigation-report.md` when present, otherwise the lower-level map report |
@@ -59,6 +60,10 @@ With no command, `/binary <path>` defaults to `investigate`.
 /binary hunt out/understand_codec_.../ --anchor 'frame [0-9]+ truncated' --anchor-re
 /binary hunt out/understand_codec_.../ --calls parse_frame --and-not-calls validate_header --transitive
 /binary hunt /path/to/binary --anchor 'license' --calls sym.imp.memcpy
+
+/binary siblings out/understand_codec_.../
+/binary siblings out/understand_codec_.../ --family BHUNTFAM-feed01
+/binary siblings out/understand_codec_.../ --auto --min-cluster 4
 
 /binary fuzz /path/to/fuzzable-binary --duration 60
 
@@ -120,6 +125,51 @@ findings:
 
 The untrusted-content envelope below applies to hunt artifacts too: they
 quote strings and names from the analysed binary.
+
+## Sibling Consistency
+
+`siblings <run-dir>` is the differential follow-up: form peer clusters of
+functions that should behave identically for security, extract each
+member's check vector from the run's PERSISTED artifacts (no new
+disassembler pass), and let the audit lane's existing N-vs-K comparison
+flag the member that skips a check its peers perform.
+
+**Formation** — by default, the anchor families already hunted in this run
+(`--family <id>` narrows to one; with no hunt artifacts the command refuses
+and points at `/binary hunt` or `--auto`). `--auto` runs the full bounded
+peer-group formation instead: anchor families, shared-distinctive-callee
+signatures (hub helpers never glue), and decompilation similarity (tier-
+labelled lower confidence). `--min-cluster` (default 3) drops clusters too
+small for a majority.
+
+**Check vectors per member** — called-helper presence (fid-keyed where the
+substrate allows) and compare-operand constants: decoded compare evidence
+where a producer persisted it, else constants parsed from the persisted
+decompilation, each column carrying its evidence tier. Absence of
+evidence never reads as absence of the check: a member with no record in
+the call substrate is WITHHELD from the calls columns, and a member with
+no compare evidence is WITHHELD from the compare columns — neither can
+become a false outlier.
+
+**Outputs:** `sibling-clusters.json` (member×check matrix + asymmetry
+rows), `sibling-hypotheses.json` (audit hypothesis-seed intake: claims
+with evidence refs, tier, disproof recipe — `/audit` discovers it
+co-located; seeds boost gap priority and ride into review context as
+hints), and `sibling-clusters.md`.
+
+**Claims and non-claims.** Sibling output is differential structure,
+never findings:
+
+- Only ASYMMETRIC weaknesses are found. A fully-consistent cluster is
+  unexamined, not safe — a check every member skips reports nothing.
+- Check presence is SYNTACTIC: a dead or dominated call satisfies every
+  column. Every outlier row carries its disproof recipe and an
+  alternative-explanations line (different role, wrapper indirection,
+  dead code, decompiler failure, over-merged cluster).
+- Clustering recall is attacker-influenced: a function shaped to not
+  cluster with its siblings is out of scope.
+- Export-contract asymmetries (length-cap / null-check presence across a
+  named export family) ride the same artifacts under the same caveats.
 
 ## Investigation Behaviour
 
