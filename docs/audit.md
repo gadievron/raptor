@@ -67,6 +67,7 @@ full flag table.
 | `--schedule {cost,priority}` | Parallel review ordering: `cost` packs predicted-longest reviews first, `priority` reviews most promising first |
 | `--prior-journal <run-dir>` | Run dir whose review journal feeds prior finding-grade claims into review context (repeatable; used by `/agentic --gap-audit`) |
 | `--prior-claims <N>` | Max prior finding-grade claims injected per function (default 3; 0 disables) |
+| `--hypothesis-seeds <file>` | `sibling-hypotheses.json` seed file (repeatable); a co-located file in the output dir is picked up automatically — see [Hypothesis seeds](#hypothesis-seeds) |
 | `--dynamic` / `--no-dynamic` | Enable/disable dynamic validation (Frida observation / target execution) for confirmed findings |
 | `--binary <path>` / `--binary-auto` / `--no-binary-oracle` | Binary-oracle reachability enrichment of the inventory |
 | `--no-vendored-triage` | Disable the vendored/generated-code triage tier (corroborated generated files → skip tier, uncorroborated banners / vendored paths / generated-shape structure → glance tier; every decision leaves a `suppressions.jsonl` record and the run summary counts them) |
@@ -461,6 +462,44 @@ Query audit state across all four layers:
 `/audit` requires `context-map.json` from `/understand --map`.  If
 missing, it runs the map automatically.  The context map provides
 entry points, sinks, and trust boundaries that drive priority ordering.
+
+### Hypothesis seeds
+
+External producers (sibling-consistency analysis, contract checkers)
+can hand the audit hypothesis seeds: a `sibling-hypotheses.json` file
+of per-function records — `file` (source path, or the `binary:<stem>`
+sentinel plus `address` for binary functions), optional `fid`, a
+`claim`, evidence references (`{artifact, pointer}`), an
+`evidence_tier` (a `core.evidence` value spelling), a `disproof`
+recipe, and `derived_from_target` flags on the text fields.  A
+co-located file in the run's output directory is discovered
+automatically; `--hypothesis-seeds <file>` (repeatable) names others,
+and the flag is persisted so `resume` segments see the same seeds.
+
+Seeds are an attention channel riding two existing seams: matched
+gap-queue entries get one bounded priority boost — applied after the
+sort that fixes the `--budget` cut, so it moves a matched function
+earlier in the review order (and across the folded spec-inference
+gate) without displacing any other function out of the run — and the
+matched function's review context gains a hint-tier block with the
+claim and its disproof recipe, enveloped as untrusted content.
+Binary seeds join on the checklist's own address space (the
+`binary:<stem>` sentinel plus the address the audit's RE database
+recorded) — a producer emitting another tool's base gets loud misses,
+not silent wrong-function joins.  The journal entry records which
+seeds the reviewer saw (`seed_provenance`), and the intake receipt
+(`hypothesis-seed-intake.json`) carries per-source resolved paths and
+file hashes plus loaded/matched/missed/conflict/skip counts; seeds
+naming unknown functions are recorded misses in `fid-misses.json`
+(reason-differentiated: placeholder names and address/name conflicts
+are called out as producer errors), never run errors.
+
+What seeds NEVER do: they mint no findings (the Ghidra bookmarks
+bridge remains the only pre-identified-finding lane), carry no
+verdict weight, and suppress nothing — the LLM still forms and
+validates every hypothesis, and tool output is still the verdict.
+A junk or hostile seed file degrades to counted skips, never a
+failed run.
 
 ### /agentic → /audit
 
