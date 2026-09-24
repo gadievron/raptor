@@ -790,7 +790,7 @@ class EnvironmentGuard:
             if cls == CLASS_DISK:
                 return self._disk_probe(hint)
             if cls == CLASS_FDS:
-                fd = os.open(os.devnull, os.O_RDONLY)
+                fd = os.open(os.devnull, os.O_RDONLY)  # raw-open: os.devnull, fixed system device path
                 os.close(fd)
                 return True
             if cls == CLASS_MEMORY:

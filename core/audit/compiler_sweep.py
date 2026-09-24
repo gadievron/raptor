@@ -41,7 +41,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.source import read_text_capped
+from core.source import open_regular, read_text_capped
 from typing import Any
 
 from core.json import load_json
@@ -379,7 +379,14 @@ def _tu_cache_key(cmd: list[str], full_path: Path) -> tuple | None:
     import hashlib
 
     try:
-        tu_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
+        # Whole-file bytes BY DESIGN (a capped hash would equate TUs
+        # differing past the cap and serve a stale memo); the open is
+        # the hardened one, so FIFO/symlink plants refuse.
+        fh = open_regular(full_path, "rb")
+        if fh is None:
+            return None
+        with fh:
+            tu_hash = hashlib.sha256(fh.read()).hexdigest()
     except OSError:
         return None
     bin_sig: tuple | None

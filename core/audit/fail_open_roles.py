@@ -645,7 +645,7 @@ def _iris_spec_role(
         return None
     try:
         from core.audit.iris_specs import specs_from_json
-        specs = specs_from_json(spec_path.read_text(encoding="utf-8"))
+        specs = specs_from_json(spec_path.read_text(encoding="utf-8"))  # raw-open: RAPTOR-written IRIS spec artifact in the run out dir
     except Exception:
         logger.debug("fail_open role: iris spec load failed", exc_info=True)
         return None

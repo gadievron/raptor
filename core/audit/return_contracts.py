@@ -413,7 +413,7 @@ def _iris_specs_cached(spec_path: Path) -> list[Any] | None:
     try:
         from core.audit.iris_specs import specs_from_json
         specs = list(
-            specs_from_json(spec_path.read_text(encoding="utf-8")),
+            specs_from_json(spec_path.read_text(encoding="utf-8")),  # raw-open: RAPTOR-written IRIS spec artifact in the run out dir
         )
     except Exception:
         logger.debug("return contract: iris spec load failed",

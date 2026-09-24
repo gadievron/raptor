@@ -92,7 +92,7 @@ def load_prep_cache(
     try:
         from core.coverage import journal_mac
 
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))  # raw-open: RAPTOR-written prep cache in the run dir
         if data.get("fingerprint") != fingerprint:
             logger.info(
                 "%s prep cache stale (input fingerprint changed) — "

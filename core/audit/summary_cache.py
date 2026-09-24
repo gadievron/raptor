@@ -242,7 +242,7 @@ def detect_library_version(
                 # lives in the scanned target and can grow between a
                 # stat and an unbounded read_text() (TOCTOU) — read
                 # at most cap+1 bytes and skip on overflow instead.
-                with manifest.open("rb") as fh:
+                with manifest.open("rb") as fh:  # raw-open: RAPTOR-written summary-cache manifest
                     data = fh.read(_MAX_MANIFEST_BYTES + 1)
                 if len(data) > _MAX_MANIFEST_BYTES:
                     logger.warning(

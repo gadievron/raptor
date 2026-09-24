@@ -4326,7 +4326,7 @@ def _load_pattern_file(name: str) -> list[tuple]:
     if not p.is_file():
         return []
     try:
-        text = p.read_text()
+        text = p.read_text()  # raw-open: shipped pattern pack under core/audit/patterns (RAPTOR-owned)
     except OSError:
         return []
     tier1_set = _TIER1.get(name, set())

@@ -437,7 +437,7 @@ def _verify_recorded(
     try:
         if not sink.is_file():
             return False
-        with sink.open("rb") as fh:
+        with sink.open("rb") as fh:  # raw-open: suppressions ledger written by this run (bounded tail read)
             fh.seek(0, 2)
             size = fh.tell()
             fh.seek(max(0, size - 65536))

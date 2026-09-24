@@ -10292,7 +10292,7 @@ def _run_invariant_prescreening(
             continue
 
         try:
-            body = rule_path.read_text(encoding="utf-8")
+            body = rule_path.read_text(encoding="utf-8")  # raw-open: RAPTOR rules-dir file recorded by the synthesis registry
         except OSError:
             continue
 
@@ -10730,7 +10730,7 @@ def _run_mechanical_detectors(
         z3_marker,
     )
 
-    det_cache = MechanicalDetectorCache.open(
+    det_cache = MechanicalDetectorCache.open(  # raw-open: not a filesystem open — detector cache constructor
         getattr(config, "out_dir", None),
     )
     content_shas = {
@@ -11417,7 +11417,7 @@ def _run_mechanical_detectors(
 
                     def _rule_bytes(rule_path_str: str) -> bytes:
                         try:
-                            return Path(rule_path_str).read_bytes()
+                            return Path(rule_path_str).read_bytes()  # raw-open: RAPTOR rules-dir file, hashed for the memo key
                         except OSError:
                             return b"<unreadable>"
 

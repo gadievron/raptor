@@ -87,7 +87,7 @@ def get_rule_role(rule_path: str) -> str:
     """
     header_lines: list[str] = []
     try:
-        with Path(rule_path).open() as f:
+        with Path(rule_path).open() as f:  # raw-open: RAPTOR-owned cocci rule file (shipped or run-dir synthesized)
             for line in f:
                 stripped = line.strip()
                 if stripped and not stripped.startswith("//"):
@@ -175,7 +175,7 @@ def is_confirm_only_rule(rule_path: str) -> bool:
         return cached
     try:
         result = _parse_confirm_only_header(
-            resolved.read_text(encoding="utf-8"),
+            resolved.read_text(encoding="utf-8"),  # raw-open: RAPTOR-owned cocci rule file, resolved above
         )
     except (OSError, UnicodeDecodeError):
         result = False
@@ -1420,7 +1420,7 @@ def _rule_languages_include(rule_config: str, lang: str) -> bool:
         path = Path(rule_config)
         if not path.is_file():
             return False
-        with path.open(encoding="utf-8", errors="replace") as fh:
+        with path.open(encoding="utf-8", errors="replace") as fh:  # raw-open: RAPTOR-owned rule config (shipped pack or run-dir generated)
             text = fh.read(_RULE_LANGS_MAX_BYTES)
     except OSError:
         return False
@@ -1463,7 +1463,7 @@ def _relanguage_rule_config(
         path = Path(rule_config)
         if not path.is_file():
             return None
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")  # raw-open: RAPTOR-owned generated rule in the run dir
     except OSError:
         return None
     needle = f"languages: [{rule_lang}]"
@@ -3285,7 +3285,7 @@ def _codeql_db_stamp(db_path: Path) -> tuple | None:
     manifest = db_path / "codeql-database.yml"
     try:
         st = manifest.stat()
-        digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        digest = hashlib.sha256(manifest.read_bytes()).hexdigest()  # raw-open: CodeQL pack manifest (RAPTOR-owned), hashed for the memo key
     except OSError:
         return None
     return ("manifest", st.st_size, st.st_mtime_ns, digest)
@@ -3296,7 +3296,7 @@ def _codeql_query_stamp(query_path: Path) -> tuple | None:
     import hashlib
 
     try:
-        return ("sha256", hashlib.sha256(query_path.read_bytes()).hexdigest())
+        return ("sha256", hashlib.sha256(query_path.read_bytes()).hexdigest())  # raw-open: CodeQL query file (RAPTOR-owned), hashed for the memo key
     except OSError:
         return None
 
@@ -3667,7 +3667,7 @@ def _codeql_query_id(qpath: Path) -> str | None:
     multi-query SARIF attributed back to it.
     """
     try:
-        text = qpath.read_text(encoding="utf-8", errors="replace")
+        text = qpath.read_text(encoding="utf-8", errors="replace")  # raw-open: CodeQL query file (RAPTOR-owned)
     except OSError:
         return None
     m = _CODEQL_QUERY_ID_RE.search(text)

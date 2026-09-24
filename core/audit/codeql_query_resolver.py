@@ -181,7 +181,7 @@ def _index_pack(pack: str) -> dict[str, str] | None:
                 )
                 return index
             try:
-                with open(ql, encoding="utf-8", errors="replace") as fh:
+                with open(ql, encoding="utf-8", errors="replace") as fh:  # raw-open: shipped CodeQL query pack file (RAPTOR-owned)
                     header = fh.read(_HEADER_READ_BYTES)
             except OSError:
                 continue

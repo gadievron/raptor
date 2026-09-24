@@ -99,7 +99,7 @@ def _database_language_source(db_path: Path) -> tuple[str | None, str]:
     db_path = Path(db_path)
     marker = db_path / "codeql-database.yml"
     try:
-        text = marker.read_text(encoding="utf-8", errors="ignore")
+        text = marker.read_text(encoding="utf-8", errors="ignore")  # raw-open: RAPTOR-created DB creation marker in the run dir
     except OSError:
         text = ""
     for line in text.splitlines():

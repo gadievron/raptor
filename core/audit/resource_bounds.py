@@ -274,7 +274,7 @@ def _pack_collection_verbs(
         if cached is not None:
             return cached
         raw = json.loads(
-            (_PACK_DIR / "linux_kernel.json").read_text(encoding="utf-8"),
+            (_PACK_DIR / "linux_kernel.json").read_text(encoding="utf-8"),  # raw-open: shipped vocab pack under _PACK_DIR (RAPTOR-owned)
         )
     except Exception:
         return frozenset(), frozenset()

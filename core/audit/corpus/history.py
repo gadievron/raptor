@@ -371,7 +371,7 @@ def iter_records(path: Path) -> Iterator[dict[str, Any]]:
         # the whole generator, losing every record after it. Replaced
         # bytes make that line fail JSON parse and skip like any other
         # malformed line.
-        f = Path(path).open(encoding="utf-8", errors="replace")
+        f = Path(path).open(encoding="utf-8", errors="replace")  # raw-open: corpus history ledger owned by this harness (eval lane)
     except OSError:
         return
     with f:

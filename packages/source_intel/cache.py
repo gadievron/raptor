@@ -381,7 +381,7 @@ def _file_hash(path: Path) -> str:
     """SHA-256 of a single file's contents."""
     h = hashlib.sha256()
     try:
-        with path.open("rb") as f:
+        with path.open("rb") as f:  # raw-open: RAPTOR-owned cache file written by this module
             while True:
                 chunk = f.read(65536)
                 if not chunk:

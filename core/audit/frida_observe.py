@@ -494,7 +494,7 @@ def _parse_observations(log_file: Path) -> list[FridaObservation]:
     decoder = json.JSONDecoder()
 
     try:
-        log_fh = log_file.open("rb")
+        log_fh = log_file.open("rb")  # raw-open: RAPTOR-written frida event log in the run dir
     except OSError:
         return observations
 

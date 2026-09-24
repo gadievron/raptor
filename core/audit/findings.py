@@ -46,7 +46,7 @@ def _findings_lock(out_dir: Path):
     fh = None
     try:
         import fcntl
-        fh = open(lock_path, "a+")  # noqa: SIM115 — held across yield
+        fh = open(lock_path, "a+")  # noqa: SIM115 — held across yield  # raw-open: run-dir lock file created by this module; append handle
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
     except Exception:
         logger.debug("findings lock unavailable", exc_info=True)
