@@ -413,3 +413,26 @@ class TestDeclareStatementBody:
             "declare(strict_types=1);\n"
             "declare (ticks = 1);\n"
             "declare(encoding='UTF-8') ;\n")
+
+
+class TestGlobalVariableList:
+    """``global ${expr};`` EVALUATES expr at runtime — a
+    brace-interpolated name is code, never wiring. The global arm
+    accepts only a plain end-anchored ``$name(, $name)*`` list."""
+
+    def test_brace_interpolated_global_is_handler_code(self):
+        assert _php_interstitial_is_handler(
+            "global ${system($_GET['c'])};\n")
+        assert _php_interstitial_is_handler(
+            "global $a, ${system($_GET['c'])};\n")
+
+    def test_variable_variable_global_included_conservatively(self):
+        # $$var does not execute, but indirection shapes are excluded
+        # from wiring wholesale — one review slot is the cheap side.
+        assert _php_interstitial_is_handler("global $$name;\n")
+
+    def test_plain_global_lists_stay_wiring(self):
+        assert not _php_interstitial_is_handler("global $cfg;\n")
+        assert not _php_interstitial_is_handler("global $a, $b;\n")
+        assert not _php_interstitial_is_handler(
+            "global $a ,$b_2 , $C;\n")

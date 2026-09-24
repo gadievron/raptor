@@ -50,8 +50,24 @@ SCRIPT_HANDLER_FIELD = "script_handler"
 # unclosed paren classifies toward inclusion — a declare BLOCK's
 # content and its closing ``}`` line classify independently anyway,
 # so block-form files were never wiring-only.
+#
+# The global arm accepts ONLY a plain end-anchored variable list
+# (``$name`` identifiers, comma-separated): ``global ${expr};``
+# EVALUATES expr at runtime, so a brace-interpolated name is code,
+# never wiring. ``$$var`` doesn't execute but is excluded too —
+# including it would save one review slot at the cost of reasoning
+# about every indirection shape; exclusion is the inclusion-biased
+# direction. PHP identifiers allow bytes 0x80-0xff; the class covers
+# the decoded Latin-1 range, and anything wider falls out of the
+# match — toward inclusion, like every unrecognised piece.
+# ``use``/``namespace`` stay prefix-anchored: their tails are
+# compile-time-only syntax (imports incl. function/const/group forms;
+# a namespace BLOCK's body classifies independently).
 _PHP_WIRING_STMT_RE = re.compile(
-    r"^(?:use|namespace|global)\b|^declare\s*\([^()]*\)\s*$",
+    r"^(?:use|namespace)\b"
+    r"|^global\s+\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*"
+    r"(?:\s*,\s*\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)*\s*$"
+    r"|^declare\s*\([^()]*\)\s*$",
 )
 _PHP_INCLUDE_KEYWORD_RE = re.compile(
     r"^(?:include|include_once|require|require_once)\b",
