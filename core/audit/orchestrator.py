@@ -927,6 +927,14 @@ class OrchestratorConfig:
     # /agentic post-pass launches the audit BEFORE the parent run
     # completes (the lifecycle merge happens at completion).
     prior_journal_dirs: list[Path] | None = None
+    # Explicit ``--hypothesis-seeds`` files (repeatable): external
+    # hypothesis-seed intake (core.audit.hypothesis_intake) — seeds
+    # boost matching gap-queue entries and ride into review context
+    # as hint-tier blocks. A co-located sibling-hypotheses.json in
+    # the run dir is discovered without this. Seeds never mint
+    # findings; the bookmarks bridge stays the only
+    # pre-identified-finding lane.
+    hypothesis_seed_paths: list[Path] | None = None
     # Derived at run start (never set by callers): ``file:function`` →
     # newest-first finding-grade journal entries, consumed by
     # ``_build_context`` as prior claims. Kind-gated OUT of coverage
