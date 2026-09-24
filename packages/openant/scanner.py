@@ -808,6 +808,111 @@ def _spawn_recheck_failure(core_path: Path) -> str | None:
     return None
 
 
+def will_mint_gateway() -> bool:
+    """Whether a scan run in THIS process would route the child through
+    the dispatcher gateway (keyless posture + a dispatcher route).
+    Mirrors the mint predicate in :func:`_run_subprocess` — the
+    forecast line's "before minting" placement keys on it."""
+    return (not _operator_has_direct_credential()
+            and bool(os.environ.get("RAPTOR_LLM_SOCKET")))
+
+
+def effective_model_id(model: str) -> str:
+    """The concrete model id this run's LLM calls will bill — the
+    gateway-routed id on keyless-with-dispatcher hosts (the install's
+    Bedrock pin on that front), the pinned catalog id otherwise. This
+    is the id the cost forecast prices."""
+    if will_mint_gateway():
+        return _gateway_route(model)[1]
+    return _OPENANT_MODEL_IDS[_normalized_model(model)]
+
+
+def run_openant_parse(
+    repo_path: str | Path,
+    out_dir: str | Path,
+    config: OpenAntConfig,
+) -> dict[str, Any]:
+    """Run the pinned CLI's ``parse`` step alone — the LLM-FREE phase
+    (tree-sitter extraction; the pinned ``cmd_parse`` builds no LLM
+    registry and dials nothing). Produces ``dataset.json`` in *out_dir*
+    for the pre-spend unit census.
+
+    Spawn posture is deliberately TIGHTER than the scan child's: no
+    credential env var, no proxy route, and the network is blocked
+    outright — a parse has no legitimate egress, and it executes the
+    same external core over the same untrusted repo.
+
+    Returns ``{"dataset": dict | None, "error": str | None}``; the
+    dataset is the bounded-read ``dataset.json`` document on success.
+    Never raises for child failures (the forecast is informational and
+    must not block a run); configuration failures (missing core)
+    propagate as RuntimeError exactly like the scan lane's env build.
+    """
+    repo_path = Path(repo_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    config.core_path = Path(config.core_path).resolve()
+    if config.expect_clean_pinned:
+        drift = _spawn_recheck_failure(config.core_path)
+        if drift is not None:
+            return {"dataset": None, "error": drift}
+    # gateway_active=True is the KEYLESS env shape: safe allowlist, no
+    # ANTHROPIC_API_KEY, no proxy route — exactly what a no-egress
+    # parse child should see. No llm-config staging: cmd_parse never
+    # reads it.
+    env = _build_subprocess_env(config, gateway_active=True)
+    lang = (config.language if config.language in _OPENANT_CLI_LANGUAGES
+            else "auto")
+    cmd = [
+        _find_venv_python(config.core_path), "-m", "openant",
+        "parse", str(repo_path),
+        "--output", str(out_dir),
+        "--level", config.level,
+        "--language", lang,
+    ]
+    logger.info(f"Running OpenAnt parse: {' '.join(str(c) for c in cmd)}")
+    try:
+        from core.sandbox.context import run as sandbox_run
+        proc = sandbox_run(
+            cmd,
+            block_network=True,
+            target=str(repo_path),
+            output=str(out_dir),
+            tool_paths=[str(_tool_root(config.core_path))],
+            caller_label="openant-parse",
+            capture_output=True,
+            text=True,
+            max_capture_bytes=_CAPTURE_MAX_BYTES,
+            timeout=config.timeout_seconds,
+            env=env,
+            env_caller_filtered=True,
+            cwd=str(config.core_path),
+        )
+    except subprocess.TimeoutExpired:
+        return {"dataset": None,
+                "error": f"OpenAnt parse timed out after "
+                         f"{config.timeout_seconds}s"}
+    except Exception as exc:  # noqa: BLE001
+        return {"dataset": None, "error": f"OpenAnt parse failed: {exc}"}
+    if proc.stderr:
+        try:
+            _persist_capped(out_dir / "openant.parse.stderr.log",
+                            proc.stderr)
+        except OSError:
+            pass
+    if proc.returncode != 0:
+        snippet = (proc.stderr or proc.stdout or "").strip()[:400]
+        return {"dataset": None,
+                "error": f"OpenAnt parse exited {proc.returncode}: "
+                         f"{snippet}"}
+    dataset = _load_json(out_dir / "dataset.json")
+    if not dataset:
+        return {"dataset": None,
+                "error": f"OpenAnt parse produced no dataset.json in "
+                         f"{out_dir}"}
+    return {"dataset": dataset, "error": None}
+
+
 def _run_subprocess(
     repo_path: Path,
     out_dir: Path,
@@ -850,6 +955,15 @@ def _run_subprocess(
             "this run — the child is not gateway-minted (direct "
             "credential, or no dispatcher route)",
             float(config.gateway_budget_usd))
+    if config.resume_seeded and gateway is not None:
+        # Resume on a gateway host: the seeded checkpoint identity
+        # sidecars carry the PRIOR dispatcher's loopback port in their
+        # config_base_url; rebase them to this run's port (and nothing
+        # else) so the upstream adopt gate compares real backend
+        # identity instead of ephemeral transport plumbing — see
+        # resume.rebase_gateway_fingerprints for the guard rails.
+        from .resume import rebase_gateway_fingerprints
+        rebase_gateway_fingerprints(out_dir, gateway["base_url"])
     try:
         env = _build_subprocess_env(config, gateway_active=gateway is not None)
         # Model selection: the child resolves `--llm-config raptor-<model>`

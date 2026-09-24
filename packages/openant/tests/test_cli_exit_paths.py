@@ -347,6 +347,93 @@ class TestConsentRouteRecorded(unittest.TestCase):
                              proc.stderr)
 
 
+_FAKE_MAIN_PARSE = """\
+import json
+import sys
+
+out = None
+for i, a in enumerate(sys.argv):
+    if a == "--output" and i + 1 < len(sys.argv):
+        out = sys.argv[i + 1]
+if out and "parse" in sys.argv:
+    with open(out + "/dataset.json", "w") as f:
+        json.dump({"units": [
+            {"id": "app.py:f", "code": {"primary_code": "x" * 200}},
+            {"id": "app.py:g", "code": {"primary_code": "y" * 300}},
+        ]}, f)
+sys.exit(0)
+"""
+
+
+class TestForecastExitPath(unittest.TestCase):
+    """--forecast: exit 0 with $0 LLM spend, report outcome=
+    forecast_only, and NO findings file — a forecast can never read as
+    a scan (clean or otherwise) in cross-run views."""
+
+    def test_forecast_only_exit_zero_no_findings(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            src = _make_repo(base)
+            core = _make_fake_core(src, _FAKE_MAIN_PARSE)
+            out_dir = base / "out"
+            out_dir.mkdir()
+            proc = _run(
+                [sys.executable, str(_REPO_ROOT / "raptor_openant.py"),
+                 "--repo", str(src), "--out", str(out_dir), "--forecast",
+                 "--openant-core", str(core),
+                 "--openant-core-unpinned"],
+                {},
+            )
+            self.assertEqual(proc.returncode, 0,
+                             f"stdout={proc.stdout}\nstderr={proc.stderr}")
+            self.assertIn("Cost forecast:", proc.stdout)
+            self.assertIn("no scan performed", proc.stdout)
+            self.assertFalse(
+                (out_dir / "openant_findings.json").exists(),
+                "a forecast must not leave a findings file behind")
+            report = json.loads(
+                (out_dir / "raptor_openant_report.json").read_text())
+            self.assertEqual(report["outcome"], "forecast_only")
+            self.assertEqual(report["forecast"]["units"],
+                             {"enhance": 2, "analyze": 2})
+            self.assertEqual(report["cost"]["total_usd"], 0.0)
+
+
+class TestResumeRefusalExitPath(unittest.TestCase):
+    """--resume validation refusal: exit 2, report outcome=
+    resume_refused, no findings file."""
+
+    def test_resume_of_never_scanned_run_refuses(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            src = _make_repo(base)
+            core = _make_fake_core(src, _FAKE_MAIN_PARSE)
+            prior = base / "prior"
+            prior.mkdir()
+            (prior / "raptor_openant_report.json").write_text(json.dumps({
+                "repository": str(src),
+                "outcome": "not_configured",
+                "phases": {"openant_scan": {"completed": False}},
+            }))
+            out_dir = base / "out"
+            out_dir.mkdir()
+            proc = _run(
+                [sys.executable, str(_REPO_ROOT / "raptor_openant.py"),
+                 "--repo", str(src), "--out", str(out_dir),
+                 "--resume", str(prior),
+                 "--openant-core", str(core),
+                 "--openant-core-unpinned"],
+                {},
+            )
+            self.assertEqual(proc.returncode, 2,
+                             f"stdout={proc.stdout}\nstderr={proc.stderr}")
+            self.assertIn("never scanned", proc.stdout + proc.stderr)
+            self.assertFalse((out_dir / "openant_findings.json").exists())
+            report = json.loads(
+                (out_dir / "raptor_openant_report.json").read_text())
+            self.assertEqual(report["outcome"], "resume_refused")
+
+
 class TestScannerResultShape(unittest.TestCase):
     """The scanner's skipped result carries the structured hard_error
     distinction consumers key off."""

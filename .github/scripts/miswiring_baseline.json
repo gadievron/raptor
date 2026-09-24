@@ -705,6 +705,12 @@
     },
     "plumbing:orphan_config_field:core/llm/tool_use/types.py:TurnStarted.input_token_estimate": {
       "note": "kept: published observability API (2026-08-17 config-orphan pass). TurnStarted is a frozen event dataclass exported in core.llm.tool_use.__all__ for external subscribers; per-turn input-token telemetry is the point of the event. The in-repo hunt_dispatch subscriber deliberately skips TurnStarted; the value is computed regardless for the context-policy gate (loop.py)."
+    },
+    "artifacts:orphan_reader::dataset.json": {
+      "note": "written by the pinned OpenAnt child subprocess (parse step) into the scan output dir; RAPTOR only reads it (forecast unit census, resume seeding)"
+    },
+    "artifacts:orphan_reader::_summary.json": {
+      "note": "written by the pinned OpenAnt child subprocess into each {step}_checkpoints dir (upstream StepCheckpoint.write_summary); RAPTOR only reads it (resume remainder assessment)"
     }
   },
   "version": 1

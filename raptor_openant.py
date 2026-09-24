@@ -11,9 +11,14 @@ Usage:
     python3 raptor.py openant --repo /path/to/code [options]
 
 Exit codes:
-    0  the target was scanned (findings written, possibly zero)
-    1  the scan was attempted and failed (report outcome=scan_failed)
-    2  refused before any work (argparse error, --openant-core consent)
+    0  the target was scanned (findings written, possibly zero), or a
+       --forecast run completed (report outcome=forecast_only — NOT a
+       scan; no findings artifact is written)
+    1  the scan was attempted and failed (report outcome=scan_failed),
+       or a --forecast run's free parse phase failed
+       (outcome=forecast_failed)
+    2  refused before any work (argparse error, --openant-core
+       consent, --resume validation: drift or nothing to resume)
     3  OpenAnt is not configured — the target was NOT scanned (report
        outcome=not_configured; the lifecycle records a failed run so
        the empty run cannot masquerade as a clean completed scan)
@@ -184,13 +189,89 @@ def _build_parser() -> argparse.ArgumentParser:
              "token TTL follows it (timeout + 600s slack). Positive "
              "integer, no ceiling",
     )
+    parser.add_argument(
+        "--resume",
+        metavar="RUN_DIR",
+        default=None,
+        help="Complete a truncated prior /openant run: seed a NEW run "
+             "directory from RUN_DIR's scan state (the prior dir is "
+             "never mutated) and pay only for the remainder — "
+             "completed units restore from checkpoints, errored units "
+             "are retried. The prior run's scan-shape config (model, "
+             "level, enhance, verify, language) is adopted; detected "
+             "target/core drift refuses. A fresh gateway token is "
+             "minted with the standard (or --gateway-budget) budget "
+             "applying to the remainder",
+    )
+    parser.add_argument(
+        "--forecast",
+        action="store_true",
+        help="Run only the free phases (parse + unit census), print a "
+             "pre-spend cost forecast, and exit with $0 LLM spend "
+             "(report outcome=forecast_only — not a scan). Combines "
+             "with --resume to forecast the cost of completing a "
+             "truncated run",
+    )
 
     return parser
+
+
+def _forecast_for_scan_dir(
+    oa_out: Path,
+    args,
+    *,
+    dataset: dict | None = None,
+    resumed: bool = False,
+) -> dict:
+    """Build the pre-spend forecast for the scan state in *oa_out*.
+
+    On a resume the census is the REMAINDER: units whose checkpoints
+    the seeded state already completed are excluded per phase (they
+    restore at zero LLM cost; the forecast prices only what this run
+    will actually dispatch).
+    """
+    from packages.openant.forecast import (
+        forecast_scan_cost,
+        unit_sizes_from_dataset,
+    )
+    from packages.openant.scanner import effective_model_id
+
+    if dataset is None:
+        from core.json import load_json
+        dataset = load_json(oa_out / "dataset.json")
+    sizes = unit_sizes_from_dataset(dataset or {})
+    enhance_ids = set(sizes) if not args.no_enhance else set()
+    analyze_ids = set(sizes)
+    if resumed:
+        from packages.openant.resume import completed_unit_ids
+        enhance_ids -= completed_unit_ids(
+            oa_out / "enhance_checkpoints", "enhance")
+        analyze_ids -= completed_unit_ids(
+            oa_out / "analyze_checkpoints", "analyze")
+    return forecast_scan_cost(
+        enhance_sizes=[sizes[u] for u in sorted(enhance_ids)],
+        analyze_sizes=[sizes[u] for u in sorted(analyze_ids)],
+        verify=args.verify,
+        model_id=effective_model_id(args.model),
+    )
 
 
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
+
+    if args.resume and not args.repo:
+        # A resume completes the prior run's scan: when no --repo was
+        # given (standalone invocation with no project back-fill),
+        # adopt the prior run's recorded target. An injected --repo
+        # that names a DIFFERENT target is refused by the resume
+        # validation below.
+        from core.json import load_json as _load_json
+        _prior_report = _load_json(
+            Path(args.resume) / "raptor_openant_report.json")
+        if isinstance(_prior_report, dict) and isinstance(
+                _prior_report.get("repository"), str):
+            args.repo = _prior_report["repository"]
 
     if not args.repo:
         parser.error("--repo is required")
@@ -242,10 +323,21 @@ def main() -> int:
         out_dir = get_output_dir("openant", target_path=str(repo_path))
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Lifecycle (best-effort; raptor.py manages the outer lifecycle)
+    # Lifecycle (best-effort; raptor.py manages the outer lifecycle).
+    # The run-mode stamp keeps cross-run views honest without a new
+    # lifecycle status: a forecast run is a completed FORECAST (its
+    # report says outcome=forecast_only and writes no findings file,
+    # so it can never read as a scanned-clean target), a resume run is
+    # a scan with seeded provenance.
+    _mode_extra = {}
+    if args.forecast:
+        _mode_extra["openant_mode"] = "forecast"
+    elif args.resume:
+        _mode_extra["openant_mode"] = "resume"
     try:
         from core.run import start_run
-        start_run(out_dir, "openant", target=str(repo_path))
+        start_run(out_dir, "openant", target=str(repo_path),
+                  extra=_mode_extra or None)
     except Exception as e:
         logger.debug(f"Run metadata: {e}")
 
@@ -323,13 +415,121 @@ def main() -> int:
         return 3
 
     # ------------------------------------------------------------------
+    # --resume: validate the prior run (detected drift refuses), adopt
+    # its scan-shape config, and seed THIS run's scan dir from it.
+    # ------------------------------------------------------------------
+    resume_prior = None
+    oa_out = out_dir / "openant_scan"
+    if args.resume:
+        from packages.openant.config import OPENANT_PINNED_COMMIT
+        from packages.openant.resume import (
+            OpenAntResumeError,
+            seed_scan_dir,
+            validate_prior_run,
+        )
+        from packages.openant.scanner import checkout_provenance
+        current_head = (gate_provenance or {}).get("head")
+        if current_head is None:
+            current_head = checkout_provenance(
+                Path(oa_config.core_path).resolve()).get("head")
+        try:
+            resume_prior = validate_prior_run(
+                Path(args.resume), repo_path,
+                pinned_commit=OPENANT_PINNED_COMMIT,
+                current_core_head=current_head,
+            )
+            _adopt_prior_scan_config(args, resume_prior.report)
+            seed_scan_dir(resume_prior.scan_dir, oa_out)
+        except OpenAntResumeError as e:
+            print(f"\n✗ {_sft(str(e), max_len=600)}", file=sys.stderr)
+            _write_skip_report(out_dir, repo_path, str(e),
+                               outcome="resume_refused")
+            return 2
+        # Re-apply the adopted knobs (oa_config was populated from the
+        # pre-adoption args above).
+        oa_config.model = args.model
+        oa_config.level = args.level
+        oa_config.enhance = not args.no_enhance
+        oa_config.verify = args.verify
+        oa_config.language = args.language
+        oa_config.resume_seeded = True
+        print(f"\n↻ Resuming from {resume_prior.run_dir}")
+        for reason in resume_prior.remaining["reasons"]:
+            print(f"  remaining: {_sft(reason, max_len=200)}")
+
+    # ------------------------------------------------------------------
+    # Pre-spend cost forecast. --forecast runs ONLY the free phases
+    # (parse + unit census; the pinned cmd_parse builds no LLM registry
+    # — generate-context is NOT free, it makes one app-context LLM
+    # call, so it is excluded) and exits with $0 LLM spend. Real runs
+    # print the same line informationally BEFORE the gateway token is
+    # minted (never blocking); resumes always print it — their census
+    # is free (the seeded dataset) and it states what the remainder
+    # will cost.
+    # ------------------------------------------------------------------
+    from packages.openant.forecast import format_forecast_line
+    from packages.openant.scanner import run_openant_parse, will_mint_gateway
+
+    forecast = None
+    if args.forecast:
+        if resume_prior is None:
+            try:
+                parse_res = run_openant_parse(
+                    str(repo_path), str(oa_out), oa_config)
+            except RuntimeError as e:
+                # Not-configured discovered at env build time — same
+                # honest outcome as the scan lane's.
+                print(f"\n⚠️  OpenAnt not available: {_sft(str(e))}",
+                      file=sys.stderr)
+                _write_skip_report(out_dir, repo_path, str(e),
+                                   outcome="not_configured")
+                return 3
+            if parse_res.get("error"):
+                print(f"\n✗ Forecast parse failed: "
+                      f"{_sft(str(parse_res['error']))}", file=sys.stderr)
+                _write_skip_report(out_dir, repo_path,
+                                   str(parse_res["error"]),
+                                   outcome="forecast_failed")
+                return 1
+            forecast = _forecast_for_scan_dir(
+                oa_out, args, dataset=parse_res["dataset"])
+        else:
+            forecast = _forecast_for_scan_dir(oa_out, args, resumed=True)
+        print("\n" + format_forecast_line(forecast))
+        _write_forecast_report(
+            out_dir, repo_path, forecast,
+            resumed_from=(str(resume_prior.run_dir)
+                          if resume_prior else None))
+        print("\n" + "=" * 70)
+        print("OPENANT FORECAST COMPLETE (no scan performed — $0 LLM spend)")
+        print("=" * 70)
+        print(f"\n  Output:    {out_dir}")
+        return 0
+    if resume_prior is not None or will_mint_gateway():
+        try:
+            if resume_prior is not None:
+                forecast = _forecast_for_scan_dir(oa_out, args,
+                                                  resumed=True)
+            else:
+                parse_res = run_openant_parse(
+                    str(repo_path), str(oa_out), oa_config)
+                if parse_res.get("error"):
+                    raise RuntimeError(parse_res["error"])
+                forecast = _forecast_for_scan_dir(
+                    oa_out, args, dataset=parse_res["dataset"])
+            print("\n" + format_forecast_line(forecast))
+        except Exception as e:  # noqa: BLE001 — informational, never blocks
+            forecast = None
+            print(f"⚠️  Cost forecast unavailable (continuing): "
+                  f"{_sft(str(e))}", file=sys.stderr)
+
+    # ------------------------------------------------------------------
     # PHASE 1: OPENANT SCAN
     # ------------------------------------------------------------------
     print("\n" + "=" * 70)
     print("OPENANT SCAN")
     print("=" * 70)
 
-    oa_out = out_dir / "openant_scan"
     oa_out.mkdir(exist_ok=True)
 
     try:
@@ -397,9 +597,15 @@ def main() -> int:
 
     cost = _reconcile_run_cost(oa_out, scan_result.get("token_usage") or {})
 
+    # Recorded on EVERY scan run so a later --resume can verify the
+    # target did not drift in between (the checkpoints are only valid
+    # against the tree that produced them).
+    from packages.openant.resume import target_fingerprint
+
     final_report = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "repository": str(repo_path),
+        "target_fingerprint": target_fingerprint(repo_path),
         "duration_seconds": round(duration, 2),
         "config": {
             "model": oa_config.model,
@@ -425,6 +631,22 @@ def main() -> int:
         },
         "cost": cost,
     }
+    if forecast is not None:
+        final_report["forecast"] = forecast
+    if resume_prior is not None:
+        # Resumed-from provenance: the findings above are the UNION
+        # (restored checkpoints + this run's remainder — the pinned
+        # build-output reconstructs pipeline_output.json over both);
+        # the cost block above is THIS run's spend only, so the
+        # combined figure is stated explicitly.
+        final_report["resume"] = {
+            "resumed_from": str(resume_prior.run_dir),
+            "prior_cost_usd": resume_prior.prior_cost_usd,
+            "combined_cost_usd": round(
+                resume_prior.prior_cost_usd + cost["total_usd"], 5),
+            "prior_remaining": resume_prior.remaining["reasons"],
+            "validation_warnings": resume_prior.warnings,
+        }
 
     report_path = out_dir / "raptor_openant_report.json"
     save_json(report_path, final_report)
@@ -440,6 +662,10 @@ def main() -> int:
     print(f"\n  Findings:  {len(translated)}")
     print(f"  Duration:  {duration:.1f}s")
     print(f"  Cost:      ${cost['total_usd']:.4f}")
+    if resume_prior is not None:
+        print(f"  Resumed:   {resume_prior.run_dir}")
+        print(f"  Combined:  ${final_report['resume']['combined_cost_usd']:.4f}"
+              f" (prior ${resume_prior.prior_cost_usd:.4f} + this run)")
     print(f"  Output:    {out_dir}")
     print(f"  Report:    {report_path}")
 
@@ -479,13 +705,100 @@ def _reconcile_run_cost(oa_out: Path, token_usage: dict) -> dict:
     }
 
 
+def _adopt_prior_scan_config(args, prior_report: dict) -> list:
+    """Adopt the prior run's scan-shape knobs onto *args* — a resume
+    completes the SAME scan, and a shape change (model, level, enhance,
+    verify, language) mid-resume would either invalidate the seeded
+    checkpoints (upstream's identity gate re-pays the phase) or change
+    which units exist at all. Differing resolved argv values are
+    OVERRIDDEN with a loud warning naming each adoption — to scan with
+    a different shape, run a fresh /openant. Per-run OPERATIONAL knobs
+    (--workers, --timeout-seconds, --gateway-budget, --max-findings)
+    are deliberately not adopted.
+
+    A prior report whose model/level fall outside this integration's
+    choice universe refuses (it would ship an argv/profile the pinned
+    CLI rejects mid-run).
+    """
+    from packages.openant.config import (
+        OPENANT_LEVEL_CHOICES,
+        OPENANT_MODEL_CHOICES,
+    )
+    from packages.openant.resume import OpenAntResumeError
+
+    cfg = prior_report.get("config") or {}
+    notes: list = []
+
+    def _adopt(label: str, argname: str, value) -> None:
+        current = getattr(args, argname)
+        if value is not None and current != value:
+            notes.append(f"{label} {current!r} -> {value!r}")
+            setattr(args, argname, value)
+
+    model = cfg.get("model")
+    if model is not None and model not in OPENANT_MODEL_CHOICES:
+        raise OpenAntResumeError(
+            f"--resume: the prior run's model {_sft(str(model), max_len=40)!r} "
+            f"is not a valid choice for this integration "
+            f"({', '.join(OPENANT_MODEL_CHOICES)})")
+    _adopt("model", "model", model)
+    level = cfg.get("level")
+    if level is not None and level not in OPENANT_LEVEL_CHOICES:
+        raise OpenAntResumeError(
+            f"--resume: the prior run's level {_sft(str(level), max_len=40)!r} "
+            f"is not a valid choice for this integration "
+            f"({', '.join(OPENANT_LEVEL_CHOICES)})")
+    _adopt("level", "level", level)
+    lang = cfg.get("language")
+    if isinstance(lang, str) and lang:
+        _adopt("language", "language", lang)
+    if "enhance" in cfg and (not args.no_enhance) != bool(cfg["enhance"]):
+        notes.append(f"enhance {not args.no_enhance} -> {bool(cfg['enhance'])}")
+        args.no_enhance = not bool(cfg["enhance"])
+    if "verify" in cfg and args.verify != bool(cfg["verify"]):
+        notes.append(f"verify {args.verify} -> {bool(cfg['verify'])}")
+        args.verify = bool(cfg["verify"])
+    if notes:
+        print("⚠️  --resume adopts the prior run's scan configuration "
+              "(a resume completes the SAME scan): "
+              + "; ".join(_sft(n, max_len=120) for n in notes),
+              file=sys.stderr)
+    return notes
+
+
+def _write_forecast_report(out_dir: Path, repo_path: Path, forecast: dict,
+                           *, resumed_from: str | None = None) -> None:
+    """Report for a --forecast run. outcome=forecast_only: the target
+    was NOT scanned — like the skip reports, deliberately NO
+    ``openant_findings.json`` is written, so cross-run findings views
+    can never read the forecast as a target that scanned clean."""
+    from packages.openant.resume import target_fingerprint
+    report = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "repository": str(repo_path),
+        "target_fingerprint": target_fingerprint(repo_path),
+        "outcome": "forecast_only",
+        "forecast": forecast,
+        "phases": {"openant_scan": {"completed": False,
+                                    "reason": "forecast_only"}},
+        "outputs": {},
+        "cost": {"total_usd": 0.0},
+    }
+    if resumed_from:
+        report["resume"] = {"resumed_from": resumed_from}
+    save_json(out_dir / "raptor_openant_report.json", report)
+
+
 def _write_skip_report(out_dir: Path, repo_path: Path, error: str,
                        *, outcome: str) -> None:
     """Report for a run in which the target was NOT scanned.
 
     ``outcome`` (snake_case, machine-readable): ``not_configured`` (no
-    usable openant-core — nothing was attempted) or ``scan_failed``
-    (the scan ran and hard-failed). Deliberately writes NO
+    usable openant-core — nothing was attempted), ``scan_failed``
+    (the scan ran and hard-failed), ``resume_refused`` (--resume
+    validation refused: drift or nothing to resume), or
+    ``forecast_failed`` (a --forecast run's free parse phase failed).
+    Deliberately writes NO
     ``openant_findings.json``: cross-run findings views load that file
     from every run directory, so an empty list here reads as "OpenAnt
     scanned this target and found nothing" — a claim neither outcome
