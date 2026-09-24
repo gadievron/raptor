@@ -13,7 +13,10 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from packages.fuzzing.atheris_runner import AtherisResult
 
 from core.binary.inspect import inspect_binary as _inspect_binary
 from core.json import save_json
@@ -986,7 +989,7 @@ class FuzzingOrchestrator:
 
     @staticmethod
     def _record_atheris_witnesses(out_dir: Path, harness: Path,
-                                  result) -> int:
+                                  result: AtherisResult) -> int:
         """Record each atheris crash artifact as a canonical Witness.
 
         Same store path (``<out>/witnesses``) and best-effort posture
