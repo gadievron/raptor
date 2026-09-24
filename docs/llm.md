@@ -559,6 +559,62 @@ Unknown models log a warning and record $0 cost (budget caps silently defeated).
 Costs are reported at the end of each run. The scorecard also tracks cumulative
 per-model cost and token usage.
 
+## Transcript Record / Replay
+
+The transcript seam (`core/llm/transcript.py`) freezes a run's LLM
+behaviour so the detection pipeline can be re-run against it
+hermetically — no network, no cost, deterministic. This is the
+substrate for detection-quality evals in CI: record once on a live
+run, then replay the frozen responses through *new* pipeline code.
+
+```bash
+# Record: a normal (paid) run, plus a JSONL transcript in the run dir
+RAPTOR_LLM_TRANSCRIPT=record:out/myrun/llm-transcript.jsonl \
+    python3 raptor.py analyze --sarif findings.sarif ...
+
+# Replay: the same analysis, served entirely from the transcript.
+# Needs NO provider configuration or credentials.
+RAPTOR_LLM_TRANSCRIPT=replay:out/myrun/llm-transcript.jsonl \
+    python3 raptor.py analyze --sarif findings.sarif ...
+```
+
+How it works:
+
+- **Record** wraps `LLMClient.generate` / `generate_structured` (the
+  same chokepoint the response cache intercepts) and appends every
+  request/response pair — and every failure, so replay stays
+  sequence-faithful — to the trail. All recorded strings are
+  secret-redacted at write time; prompts are stored as hashes plus a
+  bounded diagnostic excerpt, never in full.
+- **Replay** serves recorded responses before model resolution — no
+  provider is ever constructed, and provider dispatch is hard-blocked.
+  Matching survives prompt-template drift and queue re-ordering:
+  exact prompt/schema hashes first, then the per-finding subject tag
+  the analysis loop declares, then recorded order within the call
+  class — positionally, a tagged entry never serves a different
+  subject (a new finding misses instead of stealing its neighbour's
+  verdict). An unmatched call fails loudly with a structured miss
+  report (at the /analyze surface it lands as that finding's
+  error-status record); it never falls through to a live provider.
+  An eval harness should fail on all three signals: misses
+  (`session.misses`), error-status findings, and leftovers — recorded
+  entries the replay never consumed (`session.leftover_report()`),
+  which mean the replay run issued fewer calls than the recorded one.
+- Dispatch surfaces not yet transcript-adopted (the orchestrated
+  multi-model path, the ranking stage) refuse under replay with a
+  clear error and warn under record that the transcript will
+  under-record — they never silently dispatch live during a replay.
+- Replayed structured responses re-run the strict schema floor
+  against the current schema and flow through the same downstream
+  validation as live responses — transcript content is treated as
+  untrusted, exactly like model output.
+
+Scope: the seam covers clients constructed through
+`core.llm.factory.get_client` and the /analyze agent. A replayed
+response that originally contained a secret comes back with the
+redaction placeholder — evals score verdict fields, not echoed
+secrets.
+
 ## Rate Limiting
 
 RAPTOR adapts dispatch concurrency to each provider's rate limits.  The
@@ -744,6 +800,7 @@ behavior, and credential-isolation details — is
 | `RAPTOR_CC_PROBE_WARM` | `0` skips the run-start probe warm |
 | `RAPTOR_LLM_CACHE` | `off` disables the LLM response cache entirely |
 | `RAPTOR_LLM_CACHE_TTL_S` | LLM response cache TTL override (default 24 h) |
+| `RAPTOR_LLM_TRANSCRIPT` | `record:<path>` / `replay:<path>` LLM transcript seam (see above) |
 | `RAPTOR_HTTP_KEEPALIVE_S` | SDK transport idle keepalive expiry (default 60) |
 | `RAPTOR_HTTP_MAX_KEEPALIVE` | SDK transport pooled idle connections (default 20) |
 | `RAPTOR_HTTP_MAX_CONNECTIONS` | SDK transport total connections (default 100) |
