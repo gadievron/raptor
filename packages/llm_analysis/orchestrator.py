@@ -884,11 +884,15 @@ def orchestrate(
     is_cc_dispatch = not (llm_config and llm_config.primary_model)
 
     if max_parallel <= 0:
-        from core.llm.concurrency import derive_max_workers
+        from core.llm.concurrency import (
+            derive_max_workers,
+            read_tuning_llm_account_posture,
+        )
         max_parallel = derive_max_workers(analysis_model_name) if analysis_model_name else 3
         logger.info(
-            "auto workers: model=%s → max_parallel=%d",
-            analysis_model_name or "(cc)", max_parallel,
+            "auto workers: model=%s posture=%s → max_parallel=%d",
+            analysis_model_name or "(cc)",
+            read_tuning_llm_account_posture(), max_parallel,
         )
     analysis_models_all = role_resolution.get("analysis_models", [])
     n_analysis = len(analysis_models_all)

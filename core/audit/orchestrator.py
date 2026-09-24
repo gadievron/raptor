@@ -8033,9 +8033,11 @@ def _run_audit_body(
 
     resolved_workers = _resolve_max_workers(config)
     if config.max_workers == 0:
+        from core.llm.concurrency import read_tuning_llm_account_posture
         logger.info(
-            "auto workers: model=%s → max_workers=%d",
+            "auto workers: model=%s posture=%s → max_workers=%d",
             config.models[0] if config.models else "default",
+            read_tuning_llm_account_posture(),
             resolved_workers,
         )
     executor_config = ExecutorConfig(max_workers=resolved_workers)
