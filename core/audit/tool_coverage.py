@@ -24,6 +24,13 @@ import re
 #
 # A class is "covered" if at least one tool in the set is available.
 # Classes absent from this map are treated as uncovered (→ dark).
+#
+# dark_verify exception: for classes whose cwe_dispatch entry declares
+# ``dark_verify``, the SEMGREP channel is withheld from the
+# silence→clean direction (see _semgrep_silence_withheld) — witness
+# execution is those classes' primary grounding, and a clean-on-
+# silence resolution would disarm it. Their rows stay listed here for
+# every other channel.
 # ---------------------------------------------------------------------------
 
 _CWE_TOOL_MAP: dict[str, frozenset[str]] = {
@@ -279,9 +286,54 @@ def is_class_covered(
     }
     ran -= unavailable
 
+    # The withholding operates on the claim's extracted class SET,
+    # not per row: a claim naming any dark_verify class must not
+    # resolve clean through a sibling row that happens to lack the
+    # key ("path traversal" extracts CWE-22 AND CWE-23; without the
+    # set semantics, CWE-23's row hands the CWE-22 claim a clean on
+    # semgrep silence and disarms the witness). Adjudication is
+    # claim-granular, so it must be at least as conservative as the
+    # most-protected class the claim names. Over-withholding on
+    # mixed-class claims errs dark — an attention cost, never a
+    # suppression.
+    withhold_semgrep = any(_semgrep_silence_withheld(c) for c in cwes)
+
     for cwe in cwes:
         tools_for_cwe = _CWE_TOOL_MAP.get(cwe)
-        if tools_for_cwe and tools_for_cwe & ran:
+        if not tools_for_cwe:
+            continue
+        if withhold_semgrep:
+            tools_for_cwe = tools_for_cwe - {"semgrep"}
+        if tools_for_cwe & ran:
             return True
 
     return False
+
+
+def _semgrep_silence_withheld(cwe: str) -> bool:
+    """Whether the semgrep channel is withheld from silence→clean.
+
+    For classes whose dispatch entry declares ``dark_verify``, witness
+    execution is the table's own primary grounding mechanism — but the
+    witness pass runs AFTER gate resolution and ``clean`` is outside
+    its status filter, so a clean-on-silence resolution permanently
+    disarms it. Curated semgrep legs made semgrep receipts systematic
+    on their languages; for these classes that silence therefore stays
+    DARK (the witness stays armed) instead of resolving clean. Only
+    the semgrep channel (including the sarif_cache alias) is withheld,
+    and only the silence direction: semgrep CONFIRMS still stamp
+    receipts through the chain, and every other channel's row
+    semantics are unchanged.
+
+    Granularity: receipts are function-granular and extraction is
+    claim-granular, so the caller applies this predicate to the
+    claim's whole extracted class SET — a claim that names any
+    dark_verify class alongside a sibling without the key (e.g.
+    "path traversal" naming CWE-22 and CWE-23) is withheld as a
+    whole and never resolves clean through the sibling's row.
+    """
+    try:
+        from .cwe_dispatch import dark_verify_applicable
+    except ImportError:  # pragma: no cover — first-party module
+        return False
+    return dark_verify_applicable(cwe)

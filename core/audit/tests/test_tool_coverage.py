@@ -172,27 +172,144 @@ class TestIsClassCovered:
             ) is True
             assert is_class_covered(cwe, "", "", self.ALL_TOOLS) is False
 
-    def test_preexisting_web_family_rows_now_systematically_armed(self):
-        """DOCUMENTED consequence, not a change: CWE-502/79/601/22
-        carried semgrep coverage rows before the PHP web-family legs
-        existed, but no PHP semgrep leg ever dispatched for them — on
-        PHP targets the rows were dormant (only cached SARIF or the
-        keyword-mapped dynamic rules could stamp semgrep receipts).
-        The cwe_dispatch entries make semgrep receipts systematic on
-        PHP targets, so silence in these classes now resolves
-        clean-when-silent through the pre-existing rows despite each
-        rule adjudicating a narrow sub-shape (one-arg unserialize
-        only; the quote-breakout attribute subset; header-Location
-        sinks only; include/require sinks only) and each having
-        helper-indirection FNs — the shapes are committed as
-        executable FN fixtures beside each rule. Accepted per the
-        CWE-88/327 precedent above; the rule-granular receipt design
-        (see the _CWE_TOOL_MAP comment) is the path to closing it."""
-        for cwe in ("CWE-502", "CWE-79", "CWE-601", "CWE-22"):
+    def test_web_family_semgrep_silence_contract(self):
+        """Pins the per-class silence-adjudication contract by name
+        for the classes with curated PHP semgrep legs: armed-clean
+        for the non-dark_verify class (CWE-79 — semgrep-ran silence
+        resolves the class, the CWE-88/327 precedent), dark-preserved
+        for the dark_verify classes (CWE-502/601/22 — semgrep silence
+        does not resolve clean, keeping the witness channel armed;
+        gate resolution runs before the witness pass with clean
+        outside its status filter). The sarif_cache alias reduces to
+        semgrep and follows it. Confirms are unaffected — pinned in
+        test_semgrep_silence_differential and
+        test_dark_verify_confirm_direction_untouched."""
+        for cwe in ("CWE-79",):
             assert is_class_covered(
                 cwe, "", "", self.ALL_TOOLS, ran_tools={"semgrep"},
             ) is True
             assert is_class_covered(cwe, "", "", self.ALL_TOOLS) is False
+        for cwe in ("CWE-502", "CWE-601", "CWE-22"):
+            assert is_class_covered(
+                cwe, "", "", self.ALL_TOOLS, ran_tools={"semgrep"},
+            ) is False
+            # The sarif_cache alias reduces to semgrep and is withheld
+            # with it — a cached cross-language SARIF hit must not
+            # launder the same silence back to clean.
+            assert is_class_covered(
+                cwe, "", "", self.ALL_TOOLS, ran_tools={"sarif_cache"},
+            ) is False
+
+    def test_semgrep_silence_differential(self):
+        """Full-map differential for the dark_verify withholding: for
+        EVERY mapped (cwe, channel) pair, coverage equals the plain
+        row-intersection semantics EXCEPT the semgrep channel on
+        dark_verify classes. Pins that the change touches nothing
+        else: the d2-landed CWE-88/327 arming, every non-semgrep
+        channel (codeql/prefilter/coccinelle/smt/joern silences keep
+        their pre-existing clean resolution, dark_verify or not), and
+        every non-dark_verify class. Single-class claims only — the
+        claim-SET layer (a dark_verify class extracted alongside a
+        sibling) is pinned in
+        test_withholding_operates_on_the_claim_set and the
+        sibling-row sweep."""
+        from core.audit.cwe_dispatch import dark_verify_applicable
+        from core.audit.tool_coverage import _CWE_TOOL_MAP
+
+        flipped: list[tuple[str, str]] = []
+        for cwe, row in _CWE_TOOL_MAP.items():
+            for channel in sorted(row):
+                covered = is_class_covered(
+                    cwe, "", "", self.ALL_TOOLS | {channel: True},
+                    ran_tools={channel},
+                )
+                old = True  # channel is in the row by construction
+                new = not (
+                    channel == "semgrep" and dark_verify_applicable(cwe)
+                )
+                assert covered is (old and new), (cwe, channel)
+                if covered is not old:
+                    flipped.append((cwe, channel))
+        # The exact flipped set — additions here need their own
+        # adjudication (a new dark_verify entry on a semgrep-mapped
+        # class flips its silence to dark BY DESIGN, but must be a
+        # decision, not a drive-by).
+        assert sorted(flipped) == [
+            ("CWE-22", "semgrep"), ("CWE-502", "semgrep"),
+            ("CWE-601", "semgrep"), ("CWE-918", "semgrep"),
+            ("CWE-94", "semgrep"), ("CWE-95", "semgrep"),
+        ], sorted(flipped)
+
+    def test_withholding_operates_on_the_claim_set(self):
+        """A claim naming a dark_verify class must not resolve clean
+        through a sibling row without the key: "path traversal"
+        extracts CWE-22 (dark_verify) AND CWE-23 (no key), and the
+        withholding applies to the claim's whole extracted set, so
+        semgrep silence stays dark for the phrased claim exactly as
+        for the explicit CWE-22 field. Non-semgrep channels on the
+        same claim keep their row semantics (codeql silence still
+        resolves clean through either row)."""
+        assert is_class_covered(
+            "", "path traversal", "", self.ALL_TOOLS,
+            ran_tools={"semgrep"},
+        ) is False
+        assert is_class_covered(
+            "", "directory traversal", "", self.ALL_TOOLS,
+            ran_tools={"semgrep"},
+        ) is False
+        assert is_class_covered(
+            "CWE-22, CWE-23", "", "", self.ALL_TOOLS,
+            ran_tools={"semgrep"},
+        ) is False
+        assert is_class_covered(
+            "", "path traversal", "", self.ALL_TOOLS,
+            ran_tools={"codeql"},
+        ) is True
+        # A pure sibling claim (no dark_verify class extracted) keeps
+        # its pre-existing semgrep-silence resolution.
+        assert is_class_covered(
+            "CWE-23", "", "", self.ALL_TOOLS, ran_tools={"semgrep"},
+        ) is True
+
+    def test_no_dark_verify_class_escapes_through_sibling_rows(self):
+        """Mechanical sweep over the LIVE phrase map: every phrase
+        whose extracted set names a dark_verify class must stay dark
+        on semgrep-only silence — zero sibling-row escapes. A future
+        phrase-map edit that pairs a dark_verify class with a
+        semgrep-rowed sibling trips this instead of shipping an
+        escape."""
+        from core.audit.cwe_dispatch import dark_verify_applicable
+        from core.audit.tool_coverage import _MECHANISM_CWE_MAP
+
+        swept = 0
+        escapes = []
+        for phrase, cwes in _MECHANISM_CWE_MAP.items():
+            if not any(dark_verify_applicable(c) for c in cwes):
+                continue
+            swept += 1
+            if is_class_covered(
+                "", phrase, "", self.ALL_TOOLS, ran_tools={"semgrep"},
+            ):
+                escapes.append(phrase)
+        assert swept >= 3, "sweep went vacuous — phrase map moved?"
+        assert escapes == [], escapes
+
+    def test_dark_verify_confirm_direction_untouched(self):
+        """is_class_covered only adjudicates silence; confirms flow
+        through evidence receipts, not this predicate. Pin the
+        adjacent behaviors: a dark_verify class with a NON-semgrep
+        mapped channel ran still resolves clean on silence, and a
+        dark_verify class whose row lacks semgrep entirely (CWE-134)
+        is untouched in both directions."""
+        assert is_class_covered(
+            "CWE-22", "", "", self.ALL_TOOLS, ran_tools={"codeql"},
+        ) is True
+        assert is_class_covered(
+            "CWE-502", "", "", self.ALL_TOOLS, ran_tools={"prefilter"},
+        ) is True
+        assert is_class_covered(
+            "CWE-134", "", "", self.ALL_TOOLS, ran_tools={"codeql"},
+        ) is True
 
     def test_php_family_mechanisms_name_but_never_cover(self):
         """Mechanism keywords for the unmapped families are
@@ -243,10 +360,18 @@ class TestIsClassCovered:
         ) is True
 
     def test_covered_via_hypothesis(self):
+        # Extraction from hypothesis text feeds coverage — pinned on
+        # a non-withheld channel; the phrase extracts CWE-22
+        # (dark_verify), so the semgrep channel is withheld from the
+        # whole claim set (see the claim-set tests).
+        assert is_class_covered(
+            "", "", "path traversal via user input", self.ALL_TOOLS,
+            ran_tools={"codeql"},
+        ) is True
         assert is_class_covered(
             "", "", "path traversal via user input", self.ALL_TOOLS,
             ran_tools={"semgrep"},
-        ) is True
+        ) is False
 
     def test_unavailable_tool_discarded_from_ran_record(self):
         """A stale dispatch record can't claim coverage for a dead tool."""
