@@ -231,6 +231,15 @@ class RelayHandlerLiveTests(unittest.TestCase):
         self._env = os.environ.copy()
         self._argv = list(sys.argv)
         self._patched: list[tuple[object, str, object]] = []
+        # main() is an entry point: driving it in-process runs its
+        # process-scoped side effects for real — set_process_project
+        # (these lanes pass ``--project -``) and bootstrap_process_pin
+        # both write the process-global project override, which is
+        # process-lifetime state by design. Snapshot/restore it like
+        # env and argv, or every later test on this worker resolves
+        # its ambient project through this test's override.
+        from core.run.pin import get_process_project, set_process_project
+        self.addCleanup(set_process_project, get_process_project())
 
     def tearDown(self):
         for obj, name, original in reversed(self._patched):
