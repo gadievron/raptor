@@ -89,14 +89,21 @@ class TestKevCaching:
 
     @staticmethod
     def _warp_cache_clock(monkeypatch, days: float) -> None:
-        """Advance the clock the cache's freshness check reads —
-        confined to ``core.json.cache``'s namespace."""
+        """Advance the clock the cache's freshness check reads.
+
+        Patched through ``JsonCache``'s own function globals, not
+        ``sys.modules["core.json.cache"]``: the lazy-reexport suite
+        purges ``core.json.*`` from ``sys.modules``, so after it runs
+        in the same process a module-attr warp would land on a
+        freshly re-imported module while this suite's ``JsonCache``
+        binding still reads ``time`` from the detached original —
+        the warp misses and expired envelopes look fresh."""
         import types
 
-        import core.json.cache as cache_mod
-        real_time = cache_mod.time.time
-        monkeypatch.setattr(
-            cache_mod, "time",
+        cache_globals = JsonCache.try_get.__globals__
+        real_time = cache_globals["time"].time
+        monkeypatch.setitem(
+            cache_globals, "time",
             types.SimpleNamespace(time=lambda: real_time() + days * 86400),
         )
 
@@ -290,6 +297,42 @@ class TestKevJunkCatalog:
                         JsonCache(root=tmp_path))
         assert kev.contains("CVE-2021-44228") is False
         assert kev.is_loaded() is True
+
+    def test_legacy_envelope_pin_survives_module_purge(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """Order-dependence fence: sibling suites purge ``core.json.*``
+        from ``sys.modules`` (lazy-reexport and sentinel-stability
+        tests). Re-run the legacy-envelope pin under that condition —
+        the clock warp must land on the namespace THIS suite's
+        ``JsonCache`` binding reads, or the expired envelope looks
+        fresh and gets served."""
+        import sys
+
+        purged = {
+            name: sys.modules[name] for name in list(sys.modules)
+            if name == "core.json" or name.startswith("core.json.")
+        }
+        for name in purged:
+            del sys.modules[name]
+        try:
+            cache = JsonCache(root=tmp_path)
+            cache.put("kev", _PAYLOAD, ttl_seconds=24 * 3600)
+            TestKevCaching._warp_cache_clock(monkeypatch, days=3)
+            kev = KevClient(FakeHttp(error=HttpError("boom")),
+                            JsonCache(root=tmp_path))
+            assert kev.contains("CVE-2021-44228") is False
+            assert kev.is_loaded() is True
+        finally:
+            # Restore the ORIGINAL module objects (drop any fresh
+            # re-imports the body may have triggered): leaving the
+            # purge in place would split identities for later tests
+            # in the same process — the very ordering-bug class this
+            # fence pins.
+            for name in list(sys.modules):
+                if name == "core.json" or name.startswith("core.json."):
+                    del sys.modules[name]
+            sys.modules.update(purged)
 
 
 # ---------------------------------------------------------------------------
