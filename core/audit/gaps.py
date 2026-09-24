@@ -87,7 +87,8 @@ def _script_interstitials_enabled(include_kinds: set | None) -> bool:
 # inventory builder stamps the verdict on checklist items at build
 # time, and every consumer — including this module — reads that stamp.
 # ``interstitial_is_handler`` is imported above only for the
-# stamp-absent recompute fallback in ``compute_gaps``.
+# stamp-absent recompute fallbacks (``compute_gaps`` and
+# ``_site_script_handler``).
 
 
 def _resolve_reviewable_kinds(include_kinds: set | None) -> frozenset:
@@ -1450,6 +1451,63 @@ def _read_spans(
     return {s: b for s, b in done.items() if b and s not in abandoned}
   
   
+def _site_script_handler(
+    item: dict[str, Any],
+    file_info: dict[str, Any],
+    target_path: str,
+) -> bool:
+    """Whether an interstitial checklist item is a script-per-file
+    HANDLER span for site binding (``gap_for_site``).
+
+    Stamp-first: the builder-persisted ``script_handler`` bool is the
+    verdict. On a pre-stamp checklist the classification is recomputed
+    from source (loudly, once per process) — a mechanical tool HIT is
+    confirmed signal, and silently dropping it on old checklists while
+    stamped ones bind would make the same sweep's yield depend on
+    checklist vintage. When the source is unreachable too, the span
+    stays unbound (the landed conservative behavior; compiled-language
+    residue always stays unbound — the recompute classifies only
+    script-per-file languages).
+    """
+    stamp = script_handler_stamp(item)
+    if stamp is not None:
+        return stamp
+    language = (file_info.get("language") or "").lower()
+    if language not in SCRIPT_PER_FILE_LANGUAGES:
+        return False
+    line_start = item.get("line_start")
+    line_end = item.get("line_end")
+    if (not isinstance(line_start, int) or isinstance(line_start, bool)
+            or line_start <= 0):
+        return False
+    if not target_path:
+        return False
+    global _SITE_STAMP_FALLBACK_LOGGED
+    if not _SITE_STAMP_FALLBACK_LOGGED:
+        _SITE_STAMP_FALLBACK_LOGGED = True
+        logger.info(
+            "gap_for_site: checklist items lack the script_handler "
+            "stamp (pre-stamp inventory) — recomputing the handler "
+            "classification from source",
+        )
+    resolved = safe_join(Path(target_path), file_info.get("path") or "")
+    if resolved is None:
+        return False
+    from core.source import read_text_capped
+    got = read_text_capped(resolved, _MAX_HYDRATED_FILE_BYTES)
+    if got is None or got[1]:
+        return False
+    lines = got[0].splitlines()
+    end = line_end if (isinstance(line_end, int)
+                       and not isinstance(line_end, bool)
+                       and line_end) else line_start
+    return interstitial_is_handler(
+        language, "\n".join(lines[line_start - 1:end]))
+
+
+_SITE_STAMP_FALLBACK_LOGGED = False
+
+
 def gap_for_site(
     checklist: dict[str, Any],
     file_path: str,
@@ -1492,15 +1550,28 @@ def gap_for_site(
         if not isinstance(raw_items, list):
             continue
 
+        target_path = ""
+        if isinstance(checklist.get("target_path"), str):
+            target_path = checklist["target_path"]
         items = [
             it for it in raw_items
             if isinstance(it, dict)
             # A mechanical sweep HIT landing in top-level code, a
             # macro body, or a global initializer is evidence in hand
             # — dropping the site because of its kind silently
-            # discarded confirmed signal.
-            and it.get("kind", "") in (
-                _REVIEWABLE_KINDS | {"top_level", "macro", "global"})
+            # discarded confirmed signal. Same rule for a hit inside
+            # a script-per-file HANDLER interstitial (stamp-gated):
+            # the span is schedulable cold, so a tool hit in it must
+            # be bindable too. Compiled-language interstitial residue
+            # stays refused.
+            and (
+                it.get("kind", "") in (
+                    _REVIEWABLE_KINDS | {"top_level", "macro", "global"})
+                or (
+                    it.get("kind", "") == "interstitial"
+                    and _site_script_handler(it, file_info, target_path)
+                )
+            )
             and it.get("name")
             and isinstance(it.get("line_start"), int)
             and not isinstance(it.get("line_start"), bool)
