@@ -63,6 +63,28 @@ function single_quote_delimited_launder() {
     // matching shape lands. Same adjudication pin as above.
     echo '<font color=\'' . $_POST['color'] . '\'>x</font>';
 }
+function comment_before_dot_boundary() {
+    // Out-of-scope shape pin: only whitespace may sit between the
+    // opener literal and the dot — a comment there breaks the text
+    // anchor's adjacency. Flips when a matching shape lands. Same
+    // adjudication pin as above.
+    echo "<font color='" /* theme */ . $_POST['color'] . "'>x</font>";
+}
+function comment_after_dot_boundary() {
+    // Out-of-scope shape pin: same adjacency boundary, comment on
+    // the value side of the dot. Same adjudication pin as above.
+    echo "<font color='" . /* theme */ $_POST['color'] . "'>x</font>";
+}
+function multi_line_opener_literal_boundary() {
+    // Out-of-scope shape pin: the opener literal itself spans lines,
+    // and the anchor's literal-content classes are newline-bounded
+    // (dot-continuation across lines, by contrast, fires — the
+    // whitespace between literal, dot, and value may span lines).
+    // Flips when a matching shape lands. Same adjudication pin as
+    // above.
+    echo "<font
+        color='" . $_POST['color'] . "'>x</font>";
+}
 function legacy_flagless_launder() {
     // Sanitizer-decision pin: flagless htmlspecialchars clears taint
     // — since PHP 8.1 the default flags include ENT_QUOTES, and
