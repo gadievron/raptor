@@ -237,13 +237,17 @@ def _evaluate_caller_gate(
     inventory: dict | None = None,
 ) -> CallerGateDecision:
     target_path = Path(target_path)
-    defining_source = ""
-    try:
-        p = target_path / file_path
-        if p.is_file():
-            defining_source = p.read_text(errors="replace")
-    except OSError:
-        pass
+    # ``file_path`` arrives from receipt records (LLM-writable): the
+    # bare ``target_path / file_path`` join this replaced let an
+    # absolute path REPLACE the base and a ``../`` walk out of it
+    # (pathlib join semantics), reading arbitrary host files into
+    # ``defining_source`` — which feeds param parsing and the
+    # api_boundary adjudication. Contained + capped + fd-checked
+    # regular; an escaping or unreadable path reads as "no defining
+    # source", the existing degrade.
+    from core.source import read_contained
+
+    defining_source = read_contained(target_path, file_path) or ""
     param_names = (
         parse_param_names(defining_source, function_name)
         if defining_source else []

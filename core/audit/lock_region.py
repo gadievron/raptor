@@ -785,17 +785,20 @@ def run_lock_region_check(
             f"{Path(file_path).suffix or 'unknown'}",
         )
     if source_texts is None:
-        try:
-            p = Path(target_path) / file_path
-            source_texts = {
-                file_path: p.read_text(encoding="utf-8",
-                                       errors="replace"),
-            }
-        except OSError:
+        # ``file_path`` arrives from gap records (LLM-writable): a
+        # bare join lets an absolute path replace the base and a
+        # ``../`` escape it; a FIFO plant would block the raw read
+        # forever. Contained + capped + fd-checked regular — every
+        # refusal degrades to the existing unbindable outcome.
+        from core.source import read_contained
+
+        text = read_contained(Path(target_path), file_path)
+        if text is None:
             return _inconclusive(
                 REASON_HYPOTHESIS_UNBINDABLE,
                 f"could not read {file_path}",
             )
+        source_texts = {file_path: text}
     source = source_texts.get(file_path, "")
     if not source:
         return _inconclusive(

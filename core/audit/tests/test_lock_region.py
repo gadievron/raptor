@@ -623,3 +623,61 @@ class TestStemPairing:
         m = lr._STEM_LOCK_RE.match("spin_lock")
         assert m and m.group(1) == "spin"
         assert lr._STEM_LOCK_RE.match("foo_unlock") is None
+
+
+class TestSourceReadContainment:
+    """run_lock_region_check's own source read (source_texts=None)
+    is contained + capped: file_path arrives from gap records."""
+
+    def test_escaping_file_path_holds_unbindable(self, tmp_path):
+        import sys
+
+        target = tmp_path / "target"
+        target.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "evil.c"
+        secret.write_text(
+            "void cb_under_lock(void) { }\n",
+        )
+        opened: list = []
+
+        def hook(event, args):
+            if event == "open" and args and str(secret) in str(args[0]):
+                opened.append(args)
+
+        sys.addaudithook(hook)
+        for fp in (str(secret), "../outside/evil.c"):
+            res = lr.run_lock_region_check(
+                target, fp, "cb_under_lock",
+                "callback invoked while lock is held",
+            )
+            assert res.outcome == "inconclusive"
+            assert res.reason.startswith(lr.REASON_HYPOTHESIS_UNBINDABLE)
+        assert opened == [], (
+            "out-of-root file was opened by the lock_region source read"
+        )
+
+    def test_in_tree_fifo_refuses_instead_of_wedging(self, tmp_path):
+        """A reader-less FIFO named like a C file passed the suffix
+        check and blocked the raw read forever. Bounded child so a
+        regression fails instead of hanging the suite."""
+        import multiprocessing
+        import os
+
+        fifo = tmp_path / "wedge.c"
+        os.mkfifo(fifo)
+        child = multiprocessing.Process(
+            target=lr.run_lock_region_check,
+            args=(tmp_path, "wedge.c", "f", "callback under lock"),
+        )
+        child.start()
+        child.join(timeout=20)
+        try:
+            assert not child.is_alive(), (
+                "run_lock_region_check blocked on an in-tree FIFO"
+            )
+        finally:
+            if child.is_alive():
+                child.kill()
+                child.join()

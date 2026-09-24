@@ -887,17 +887,18 @@ def run_ptr_lifecycle_check(
         )
 
     if source_texts is None:
-        try:
-            p = Path(target_path) / file_path
-            source_texts = {
-                file_path: p.read_text(encoding="utf-8",
-                                       errors="replace"),
-            }
-        except OSError:
+        # Same join class as lock_region: ``file_path`` arrives from
+        # gap records (LLM-writable) — contained + capped +
+        # fd-checked regular instead of a bare join + raw read.
+        from core.source import read_contained
+
+        text = read_contained(Path(target_path), file_path)
+        if text is None:
             return _inconclusive(
                 REASON_HYPOTHESIS_UNBINDABLE,
                 f"could not read {file_path}",
             )
+        source_texts = {file_path: text}
     source = source_texts.get(file_path, "")
     if not source:
         return _inconclusive(
