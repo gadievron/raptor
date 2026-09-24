@@ -37,6 +37,13 @@ function helper_indirection_launder() {
     // mode).
     header('Location: http://' . request_host() . '/home.php');
 }
+function refresh_header_out_of_scope() {
+    // Documented FN by scope: the anchor is the Location: literal
+    // only, so a Refresh-header redirect stays silent (stated
+    // in-rule). Same accepted clean-when-silent consequence as the
+    // helper shape above.
+    header('Refresh: 0; url=' . $_GET['next']);
+}
 function meta_refresh_out_of_scope() {
     // Documented FN by scope: markup/script redirects are not
     // header() sinks (stated in-rule) — they belong to the
