@@ -99,6 +99,18 @@ def rank_findings_for_analysis(
         print("  Ranking skipped — needs an external analysis model")
         return findings, 0.0, ""
 
+    # Honesty fence for the LLM transcript seam — deliberately OUTSIDE
+    # the best-effort try below: a replay-mode refusal must propagate,
+    # not degrade into a silent pass-through (the ranking client here
+    # is a plain LLMClient outside the record/replay seam, so under
+    # replay it would dispatch live+paid; under record its calls
+    # would be missing from the transcript).
+    from core.llm.transcript import fence_unadopted_dispatch
+    fence_unadopted_dispatch(
+        "ranking stage (packages/llm_analysis/rank_stage"
+        ".rank_findings_for_analysis)",
+    )
+
     try:
         import copy
 

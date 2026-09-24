@@ -751,6 +751,19 @@ def orchestrate(
     Returns:
         Orchestrated report dict, or None if orchestration was skipped.
     """
+    # Honesty fence for the LLM transcript seam: orchestrated dispatch
+    # (external-LLM parallel AND the CC sub-agent path) constructs its
+    # clients outside the record/replay seam. Under replay this
+    # refuses (it would dispatch live+paid while the operator believes
+    # the run is hermetic); under record it warns that the transcript
+    # will under-record. Adoption requires per-task subject tags first
+    # — positional replay is nondeterministic under parallel dispatch.
+    from core.llm.transcript import fence_unadopted_dispatch
+    fence_unadopted_dispatch(
+        "orchestrated dispatch (packages/llm_analysis/orchestrator"
+        ".orchestrate)",
+    )
+
     # Load Phase 3 report
     from core.json import load_json
     try:
