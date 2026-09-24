@@ -20,6 +20,7 @@ Capability requirements:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -28,7 +29,10 @@ import subprocess
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
 
 from core.function_taxonomy import (
     ALLOC_FUNCS as _T_ALLOC,
@@ -818,64 +822,11 @@ class BinaryUnderstand:
         quick mode — callers that need them must run the full
         pipeline.
         """
-        import contextlib as _contextlib
-
-        from core.run.scratch import scratch_dir
-
-        # Sandbox r2 via the libexec wrapper. r2pipe reads R2PIPE_R2 from
-        # env and spawns the wrapper instead of `radare2` directly; the
-        # wrapper engages mount-ns + Landlock + seccomp + UTS-ns +
-        # fingerprint sanitisation around the r2 child, then exits when
-        # r2 exits. r2pipe's pipe protocol flows unchanged through the
-        # wrapper's inherited stdin/stdout.
-        #
-        # Required env for the wrapper: OUTPUT_DIR (scratch writable
-        # dir; we mkdtemp one per analysis) and R2_TARGET_DIR (binary's
-        # parent, bound RO into the sandbox so r2 can resolve the
-        # absolute path it was given). The wrapper falls back to
-        # `dirname(binary)` if R2_TARGET_DIR isn't set, but we pass it
-        # explicitly so the substrate stays simple.
-        _wrapper = (
-            Path(__file__).resolve().parents[2]
-            / "libexec" / "raptor-r2-sandboxed"
-        )
-        if not _wrapper.is_file():
-            msg = (
-                f"r2 sandbox wrapper missing: {_wrapper}. "
-                f"Reinstall RAPTOR or check libexec/ is intact."
-            )
-            raise RuntimeError(msg)
-        # Scratch creation happens inside the try below — pre-fix it
-        # ran outside, so KeyboardInterrupt / MemoryError between the
-        # creation call and entering the try block left the scratch
-        # dir behind. The ExitStack is empty until then, so the
-        # finally's close() is safe on the early-raise path. Cleanup
-        # and reaper listing come from core.run.scratch (the
-        # r2-sandbox- prefix is in the reaper's static tuple, so a
-        # SIGKILLed analysis strands nothing past the age floor).
-        _r2_stack = _contextlib.ExitStack()
         ctx = BinaryContextMap(binary_path=self.binary)
         ctx.analysis_depth = "metadata_only" if quick else "full"
         ctx.decompiler = str(self.cap.get("decompiler") or "")
         ctx.decompilation_limit = max_decompile
-        session: _R2Session | None = None
-        try:
-            # Scratch entered inside the try — pre-fix this ran
-            # outside, so KeyboardInterrupt / MemoryError between
-            # creation and entering the try left the scratch dir
-            # behind.
-            _r2_scratch = str(
-                _r2_stack.enter_context(scratch_dir("r2-sandbox-")))
-            # The session wrapper owns the r2pipe handle so a
-            # per-command timeout (which kills r2 to unblock the
-            # pipe) can respawn the sandboxed session and the
-            # analysis continues with recorded degradation instead
-            # of silently hollowing out (see _cmd_deg).
-            session = _R2Session(
-                lambda: self._spawn_r2(_wrapper, _r2_scratch),
-                reanalyse_timeout_s=self._T_AAA,
-            )
-            session.open()
+        with self._sandboxed_session() as session:
             r2 = session
             try:
                 if quick:
@@ -939,14 +890,79 @@ class BinaryUnderstand:
                 )
                 ctx.notes.append(note)
                 logger.warning("%s", note)
-            if not quick:
-                # Prioritisation runs on whatever was extracted —
-                # partial data still ranks (and the partial stamp +
-                # notes ride along in the output).
-                if self.llm:
-                    self._llm_prioritise(ctx)
-                else:
-                    self._heuristic_prioritise(ctx)
+        if not quick:
+            # Prioritisation runs on whatever was extracted — partial
+            # data still ranks (and the partial stamp + notes ride
+            # along in the output). It needs no r2 commands, so it
+            # runs after the session context has torn down.
+            if self.llm:
+                self._llm_prioritise(ctx)
+            else:
+                self._heuristic_prioritise(ctx)
+
+        logger.info(
+            "radare2 analysis: %s interesting funcs, %s dangerous sinks, %s entry points, %s fuzz priorities", len(ctx.interesting_functions), len(ctx.dangerous_sinks), len(ctx.entry_points), len(ctx.fuzz_priorities)
+        )
+        return ctx
+
+    @contextlib.contextmanager
+    def _sandboxed_session(self) -> "Iterator[_R2Session]":
+        """Own one sandboxed r2 session for the duration of the block.
+
+        Extracted from ``analyse()`` so bounded companion passes (the
+        operator-steered hunt's string scan) reuse the same wrapper,
+        scratch and restart machinery instead of growing a second
+        spawn path with its own sandbox wiring.
+
+        Sandbox r2 via the libexec wrapper. r2pipe reads R2PIPE_R2
+        from env and spawns the wrapper instead of ``radare2``
+        directly; the wrapper engages mount-ns + Landlock + seccomp +
+        UTS-ns + fingerprint sanitisation around the r2 child, then
+        exits when r2 exits. r2pipe's pipe protocol flows unchanged
+        through the wrapper's inherited stdin/stdout.
+
+        Required env for the wrapper: OUTPUT_DIR (scratch writable
+        dir; one per session) and R2_TARGET_DIR (binary's parent,
+        bound RO into the sandbox so r2 can resolve the absolute path
+        it was given). The wrapper falls back to ``dirname(binary)``
+        if R2_TARGET_DIR isn't set, but we pass it explicitly so the
+        substrate stays simple.
+        """
+        from core.run.scratch import scratch_dir
+
+        wrapper = (
+            Path(__file__).resolve().parents[2]
+            / "libexec" / "raptor-r2-sandboxed"
+        )
+        if not wrapper.is_file():
+            msg = (
+                f"r2 sandbox wrapper missing: {wrapper}. "
+                f"Reinstall RAPTOR or check libexec/ is intact."
+            )
+            raise RuntimeError(msg)
+        # Scratch creation happens inside the try — a
+        # KeyboardInterrupt / MemoryError between the creation call
+        # and entering the try must not leave the scratch dir behind.
+        # The ExitStack is empty until then, so the finally's close()
+        # is safe on the early-raise path. Cleanup and reaper listing
+        # come from core.run.scratch (the r2-sandbox- prefix is in the
+        # reaper's static tuple, so a SIGKILLed analysis strands
+        # nothing past the age floor).
+        stack = contextlib.ExitStack()
+        session: _R2Session | None = None
+        try:
+            scratch = str(stack.enter_context(scratch_dir("r2-sandbox-")))
+            # The session wrapper owns the r2pipe handle so a
+            # per-command timeout (which kills r2 to unblock the
+            # pipe) can respawn the sandboxed session and the
+            # analysis continues with recorded degradation instead
+            # of silently hollowing out (see _cmd_deg).
+            session = _R2Session(
+                lambda: self._spawn_r2(wrapper, scratch),
+                reanalyse_timeout_s=self._T_AAA,
+            )
+            session.open()
+            yield session
         finally:
             if session is not None:
                 try:
@@ -959,12 +975,7 @@ class BinaryUnderstand:
             # tear down with the namespace and the dir's contents
             # (if any) are ours to remove. The stack is empty when
             # the early-raise path never entered the scratch.
-            _r2_stack.close()
-
-        logger.info(
-            "radare2 analysis: %s interesting funcs, %s dangerous sinks, %s entry points, %s fuzz priorities", len(ctx.interesting_functions), len(ctx.dangerous_sinks), len(ctx.entry_points), len(ctx.fuzz_priorities)
-        )
-        return ctx
+            stack.close()
 
     def _spawn_r2(self, wrapper: Path, scratch: str):
         """Spawn one sandboxed r2pipe handle.
@@ -1345,18 +1356,32 @@ class BinaryUnderstand:
                 break
         ctx.strings_sample = strings
 
-    def _extract_string_anchors(self, r2, ctx: BinaryContextMap) -> None:
-        """Bounded string-anchor pass: rank functions by how many
-        diagnostic-shaped strings they reference.
+    def _collect_selected_string_xrefs(
+        self,
+        r2,
+        ctx: BinaryContextMap,
+        select_fn: "Callable[[str], bool]",
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Shared collection core of the string-anchor machinery.
 
-        On large stripped executables the ingress ranking degrades to
-        bare libc imports because symbol names carry nothing
-        format-aware to rank on. Diagnostic/error strings survive
-        stripping, and the functions referencing many of them are very
-        likely parsers or handlers — a strong mechanical review anchor.
-        Selection is structural only (see ``_is_diagnostic_string``);
-        anchor density is structure, not taint proof, and consumers
-        must present these as review leads, never findings.
+        One ``izj`` scan (at most ``_MAX_ANCHOR_STRINGS`` entries
+        examined), ``select_fn`` decides which strings matter (the
+        diagnostic-shape pass and the operator-steered hunt supply
+        different predicates over the same bounded plumbing), then at
+        most ``_MAX_ANCHOR_XREF_LOOKUPS`` selected strings are
+        xref-resolved via ``axtj``.
+
+        Returns ``(records, stats)``: one record per selected string,
+        in scan order — ``{"text": <escaped>, "vaddr": int,
+        "functions": [{"address": int, "name": <escaped>}]}`` with
+        referencing functions deduplicated per string. Text and names
+        are escaped at capture (hostile-binary bytes that ride into
+        JSON artifacts, reports and LLM prompts). ``stats`` carries
+        the truncation facts (``strings_total``, ``strings_scanned``,
+        ``selected``, ``selection_truncated``) so callers can surface
+        truncation in-band instead of silently under-reporting; an
+        EMPTY stats dict means the scan itself degraded (izj failed)
+        and the caller must not overwrite prior results with [].
         """
         try:
             strings_raw = json.loads(
@@ -1366,14 +1391,20 @@ class BinaryUnderstand:
             raise
         except Exception as e:  # noqa: BLE001 — r2 output is hostile; degrade
             logger.debug("string-anchor extraction failed: %s", e)
-            return
+            return [], {}
         if not isinstance(strings_raw, list):
-            return
+            return [], {}
 
         selected: list[tuple[int, str]] = []
+        selection_truncated = False
+        scanned = 0
         for s in strings_raw[:self._MAX_ANCHOR_STRINGS]:
             if len(selected) >= self._MAX_ANCHOR_XREF_LOOKUPS:
+                # More matches may exist past the lookup budget — the
+                # flag lets consumers say so in-band.
+                selection_truncated = True
                 break
+            scanned += 1
             if not isinstance(s, dict):
                 continue  # r2 output is hostile; skip malformed elements
             text = str(s.get("string", ""))
@@ -1383,15 +1414,22 @@ class BinaryUnderstand:
                 # OverflowError: json.loads accepts Infinity/NaN and
                 # int() refuses them — never-raise contract.
                 continue
-            if _is_diagnostic_string(text):
+            if select_fn(text):
                 selected.append((vaddr, text))
+        stats: dict[str, Any] = {
+            "strings_total": len(strings_raw),
+            "strings_scanned": scanned,
+            "scan_truncated": len(strings_raw) > self._MAX_ANCHOR_STRINGS,
+            "selected": len(selected),
+            "selection_truncated": selection_truncated,
+        }
 
         fn_by_addr = {
             int(fn.address): fn
             for fn in ctx.interesting_functions
             if fn.address is not None
         }
-        by_function: dict[int, dict[str, Any]] = {}
+        records: list[dict[str, Any]] = []
         for vaddr, text in selected:
             try:
                 refs = json.loads(
@@ -1406,6 +1444,7 @@ class BinaryUnderstand:
             if not isinstance(refs, list):
                 refs = []
             seen_fns: set[int] = set()
+            functions: list[dict[str, Any]] = []
             for ref in refs:
                 if not isinstance(ref, dict):
                     continue
@@ -1421,27 +1460,104 @@ class BinaryUnderstand:
                         else str(ref.get("fcn_name") or ""))
                 if not name:
                     continue
-                entry = by_function.setdefault(fcn_addr, {
-                    # Escaped at capture, like the samples below: the
-                    # name is hostile-binary content and rides into
-                    # every downstream JSON artifact and report.
-                    "name": escape_nonprintable(name),
+                functions.append({
+                    # Escaped at capture: the name is hostile-binary
+                    # content and rides into every downstream JSON
+                    # artifact and report.
                     "address": fcn_addr,
+                    "name": escape_nonprintable(name),
+                })
+            records.append({
+                # Escaped at capture: the bytes come straight out of
+                # a hostile binary and later land in operator reports
+                # and LLM prompts.
+                "text": escape_nonprintable(text),
+                "vaddr": vaddr,
+                "functions": functions,
+            })
+        return records, stats
+
+    def _extract_string_anchors(self, r2, ctx: BinaryContextMap) -> None:
+        """Bounded string-anchor pass: rank functions by how many
+        diagnostic-shaped strings they reference.
+
+        On large stripped executables the ingress ranking degrades to
+        bare libc imports because symbol names carry nothing
+        format-aware to rank on. Diagnostic/error strings survive
+        stripping, and the functions referencing many of them are very
+        likely parsers or handlers — a strong mechanical review anchor.
+        Selection is structural only (see ``_is_diagnostic_string``);
+        anchor density is structure, not taint proof, and consumers
+        must present these as review leads, never findings.
+        """
+        records, stats = self._collect_selected_string_xrefs(
+            r2, ctx, _is_diagnostic_string,
+        )
+        if not stats:
+            # izj itself degraded — keep whatever was there (the
+            # default is []) rather than stamping an empty result
+            # over a failure.
+            return
+        by_function: dict[int, dict[str, Any]] = {}
+        for record in records:
+            for item in record["functions"]:
+                entry = by_function.setdefault(item["address"], {
+                    "name": item["name"],
+                    "address": item["address"],
                     "anchor_string_count": 0,
                     "sample_strings": [],
                 })
                 entry["anchor_string_count"] += 1
                 if len(entry["sample_strings"]) < self._ANCHOR_SAMPLE_STRINGS:
-                    # Escaped at capture: the bytes come straight out
-                    # of a hostile binary and later land in operator
-                    # reports and LLM prompts.
-                    entry["sample_strings"].append(escape_nonprintable(text))
+                    entry["sample_strings"].append(record["text"])
 
         ranked = sorted(
             by_function.values(),
             key=lambda item: (-item["anchor_string_count"], item["address"]),
         )
         ctx.string_anchor_functions = ranked[:self._MAX_ANCHOR_FUNCTIONS]
+
+    def string_xref_scan(
+        self,
+        select_fn: "Callable[[str], bool]",
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Standalone bounded string→xref scan over this binary.
+
+        The operator-steered hunt's anchor substrate: its own
+        sandboxed session runs ``aaa`` (xref queries need radare2's
+        analysis pass) plus the shared bounded collection core —
+        nothing else, so the pass stays much cheaper than a full map.
+        Function names come from ``axtj``'s per-ref data (no inventory
+        pass here); callers bind names, sizes and fids from their
+        run's persisted context map.
+
+        Returns ``(records, scan_meta)`` — the collector's records
+        plus ``{"stats": ..., "notes": [...]}`` where notes carry any
+        recorded degradation (timeouts, session loss) so consumers can
+        surface partial scans honestly.
+        """
+        ctx = BinaryContextMap(binary_path=self.binary)
+        records: list[dict[str, Any]] = []
+        stats: dict[str, Any] = {}
+        with self._sandboxed_session() as session:
+            self._cmd_t(session, "aaa", self._T_AAA)
+            # aaa succeeded once — a session restart replays it so
+            # the xref commands keep working.
+            session.analysed = True
+            try:
+                records, stats = self._collect_selected_string_xrefs(
+                    session, ctx, select_fn,
+                )
+            except R2SessionLost as e:
+                note = (
+                    f"WARNING: radare2 session lost mid-scan ({e}); "
+                    "string-xref results are missing — an empty hunt "
+                    "result may reflect the dead session, not the "
+                    "binary."
+                )
+                ctx.notes.append(note)
+                logger.warning("%s", note)
+        return records, {"stats": stats, "notes": list(ctx.notes)}
 
     def _tag_dangerous_callers(self, r2, ctx: BinaryContextMap) -> None:
         """For each function, record any dangerous import it calls.

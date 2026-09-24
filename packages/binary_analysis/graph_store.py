@@ -423,6 +423,43 @@ class BinaryGraphStore:
                 )
         return node_id
 
+    def add_node_if_absent(
+        self,
+        snapshot_id: str,
+        binary_sha256: str,
+        kind: str,
+        key: str,
+        *,
+        name: str = "",
+        address: str = "",
+        props: dict[str, Any] | None = None,
+        evidence_ids: list[str] | None = None,
+    ) -> str:
+        """``add_node`` without the REPLACE: an existing
+        (snapshot, id) row keeps its props.
+
+        For enrichment producers attaching records to ANOTHER
+        producer's snapshot — the hunt referencing the map's function
+        nodes must not wipe the map's props_json (add_node's INSERT OR
+        REPLACE would). Evidence links still attach either way.
+        """
+        node_id = stable_node_id(binary_sha256, kind, key)
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO nodes
+                (snapshot_id, id, kind, stable_key, name, address, props_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (snapshot_id, node_id, kind, key, name, address, _json(props or {})),
+            )
+            for evidence_id in evidence_ids or []:
+                conn.execute(
+                    "INSERT OR IGNORE INTO node_evidence(snapshot_id, node_id, evidence_id) VALUES (?, ?, ?)",
+                    (snapshot_id, node_id, evidence_id),
+                )
+        return node_id
+
     def add_edge(
         self,
         snapshot_id: str,
