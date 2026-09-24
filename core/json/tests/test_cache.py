@@ -411,15 +411,22 @@ def test_reaper_skipped_when_sentinel_is_fresh(
     to detect the call."""
     JsonCache(root=tmp_path)
     # Sentinel now exists with current mtime.
-    from core.json import cache as cache_mod
+    # Patch through the reaper's OWN globals rather than the
+    # sys.modules entry — suites that purge core.json.* from
+    # sys.modules (lazy-reexport tests) leave this file's JsonCache
+    # binding as a class whose function globals belong to a detached
+    # module object; a module-attr patch would
+    # then land on a fresh re-import the spy never observes, making
+    # the no-walk assertion vacuously true.
+    reaper_globals = JsonCache._reap_orphan_tempfiles.__globals__
     calls: list = []
-    original = cache_mod._iter_tempfile_candidates
+    original = reaper_globals["_iter_tempfile_candidates"]
 
     def spy(root, **kwargs):
         calls.append(str(root))
         return original(root, **kwargs)
 
-    monkeypatch.setattr(cache_mod, "_iter_tempfile_candidates", spy)
+    monkeypatch.setitem(reaper_globals, "_iter_tempfile_candidates", spy)
     JsonCache(root=tmp_path)
     cache_walks = [c for c in calls if str(tmp_path) in c]
     assert cache_walks == [], (
