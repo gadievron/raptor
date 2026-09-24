@@ -149,7 +149,22 @@ def php_interstitial_is_handler(source: str | None) -> bool:
             if not line:
                 continue
         if line.startswith("*"):
-            continue  # docblock body
+            # Docblock-body heuristic: span hydration can slice
+            # mid-docblock, where in_comment was never armed, so a
+            # ``*``-led line reads as comment prose. But ``*`` also
+            # begins a valid CONTINUATION of the previous statement
+            # (numeric-string arithmetic after an unterminated
+            # ``include '1'``), and a close tag on such a line
+            # re-enters markup/code — only the pre-close-tag portion
+            # is skippable prose. Without a close tag the whole line
+            # skips as before; with one, the remainder goes through
+            # the segment scan (a genuine docblock line mentioning
+            # ``?>`` classifies toward inclusion — one review slot,
+            # the cheap direction).
+            tag = line.find("?>")
+            if tag < 0:
+                continue
+            line = line[tag:]
         for seg_index, segment in enumerate(line.split("?>")):
             segment = segment.strip()
             if not segment:
