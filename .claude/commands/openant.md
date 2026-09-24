@@ -94,6 +94,7 @@ operator's behalf.
 | `--no-enhance` | off | Skip OpenAnt enhance phase (faster, less accurate) |
 | `--verify` | off | Enable stage-2 LLM verification pass |
 | `--workers <n>` | `4` | Parallel analysis workers |
+| `--gateway-budget <usd>` | `$25` | Per-run raise of the dispatcher-gateway spend cap on gateway-minted runs (any positive finite USD; the anti-runaway request cap scales with it, never below 10k). No uncapped spelling — dispatcher child tokens carry a finite budget by contract. Argv-only (no env twin); no effect on direct-credential runs (noted loudly) |
 | `--max-findings <n>` | `50` | Cap findings rendered in the markdown report (severity-first, truncation stated; must be >= 1). `openant_findings.json` is never capped |
 | `--openant-core <path>` | auto-detect at `<raptor-parent>/libs/openant-core` (`$OPENANT_CORE` applies to direct unscrubbed invocations only — the dispatch lane's safe-env rebuild drops it) | Path to openant-core (flag surface is consent-gated: a core that is not a clean pinned checkout refuses at startup) |
 | `--openant-core-unpinned` | off | Consent to run a `--openant-core` checkout that is not a clean pinned checkout this run (the project `config` trust marker grants the same, standing) |
@@ -137,9 +138,9 @@ No setup is needed beyond RAPTOR's own: with a direct credential
 the operator's OpenAnt `config.json`) the child calls the Anthropic
 API itself; on a keyless host running under the RAPTOR LLM dispatcher
 the scan automatically routes the child through a dispatcher child
-token on the loopback gateway — spend-capped, model-pinned, TTL'd to
-the scan, revoked at exit. Direct always wins; the gateway is the
-fallback. Keyless *and* dispatcher-less runs fail honestly at the
+token on the loopback gateway — spend-capped ($25 default; raise per
+run with `--gateway-budget`), model-pinned, TTL'd to the scan, revoked
+at exit. Direct always wins; the gateway is the fallback. Keyless *and* dispatcher-less runs fail honestly at the
 child's startup credential probe. See docs/environment.md § OpenAnt
 integration for the full posture rules.
 

@@ -81,6 +81,55 @@ def env_choice(env_var: str, choices: tuple[str, ...], fallback: str) -> str:
     )
     return fallback
 
+def gateway_budget_arg(value: str) -> float:
+    """argparse type for the per-run gateway spend-cap override:
+    any finite USD amount > 0.
+
+    Refusals happen at parse time, before any lifecycle state exists.
+    No upper ceiling: the flag is operator argv — how much one run
+    may spend is the operator's call. No uncapped spelling either
+    (``0`` in the /audit resume ``--max-cost`` convention, or
+    ``inf``): the dispatcher's child-token contract requires a finite
+    budget > 0 by design — an uncapped token would present as capped
+    while enforcing nothing — so the request is refused honestly with
+    that reason instead of being translated into a made-up huge
+    number. Zero/negative would otherwise mint an instantly-exhausted
+    token, and nan flows through every budget comparison as
+    effectively-uncapped. Budgets so large that the proportional
+    request-cap scaling overflows float range (~1e305 dollars and up)
+    refuse here too — see the inline comment.
+    """
+    import argparse
+    import math
+    try:
+        budget = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid float value: {value!r}") from exc
+    if budget == 0 or budget == math.inf:
+        raise argparse.ArgumentTypeError(
+            "uncapped gateway spend is not supported: dispatcher "
+            "child tokens carry a finite budget by contract — pass "
+            "the dollar amount this run may spend")
+    if not math.isfinite(budget) or budget <= 0:
+        raise argparse.ArgumentTypeError(
+            "gateway budget must be a positive finite dollar amount")
+    # The mint scales the anti-runaway request cap proportionally
+    # with the budget (scanner._mint_gateway_credentials); a budget
+    # large enough that the scaled cap overflows float range would
+    # crash there — refuse it here instead, keeping the contract
+    # that refusals happen at parse time. No spend intent lives in
+    # that range (~1e305 dollars); the import is lazy to keep this
+    # module free of the scanner's heavier import graph.
+    from .scanner import _GATEWAY_BUDGET_USD, _GATEWAY_REQUEST_BUDGET
+    if not math.isfinite(
+            _GATEWAY_REQUEST_BUDGET * budget / _GATEWAY_BUDGET_USD):
+        raise argparse.ArgumentTypeError(
+            f"gateway budget ${budget:g} is too large to scale the "
+            f"anti-runaway request cap — pass a smaller value")
+    return budget
+
+
 _CORE_MARKER = "core/scanner.py"
 
 
@@ -107,6 +156,18 @@ class OpenAntConfig:
     # execution must not rest on a minutes-old verdict. Consented runs
     # skip the recheck (the operator accepted non-pinned content).
     expect_clean_pinned: bool = False
+    # Per-run operator raise of the dispatcher-gateway spend cap.
+    # None = the scanner's shipped constants ($25 / 10k requests).
+    # Always finite: the dispatcher's child-token contract has no
+    # uncapped representation (allocate_child refuses non-finite
+    # budgets by design), so "uncapped" is refused at the CLI
+    # boundary (gateway_budget_arg), never smuggled through here.
+    # Argv-only by design: no env twin (a spend authority must never
+    # be steerable from anything the scanned repo or a child process
+    # can influence). Only the gateway posture's mint reads it —
+    # direct-credential and dispatcher-less runs ignore it with a
+    # loud note (the operator's own key and its limits apply there).
+    gateway_budget_usd: Optional[float] = None
 
     def validate(self) -> None:
         marker = self.core_path / _CORE_MARKER

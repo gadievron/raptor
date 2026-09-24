@@ -840,6 +840,16 @@ def _run_subprocess(
                 f"OpenAnt dispatcher gateway unavailable: {e}",
                 hard_error=True,
             )
+    if config.gateway_budget_usd is not None and gateway is None:
+        # The operator asked for a raised gateway cap but this run
+        # never mints: loud, so a raise typed on a direct-credential
+        # host is not mistaken for a granted limit (the operator's
+        # own key and its account limits apply instead).
+        logger.warning(
+            "openant: gateway budget override $%.2f has no effect on "
+            "this run — the child is not gateway-minted (direct "
+            "credential, or no dispatcher route)",
+            float(config.gateway_budget_usd))
     try:
         env = _build_subprocess_env(config, gateway_active=gateway is not None)
         # Model selection: the child resolves `--llm-config raptor-<model>`
@@ -1153,11 +1163,38 @@ def _mint_gateway_credentials(config: OpenAntConfig) -> dict[str, Any] | None:
     )
     port = enable_child_loopback()
     route, model_id = _gateway_route(config.model)
+    budget_usd = _GATEWAY_BUDGET_USD
+    request_budget = _GATEWAY_REQUEST_BUDGET
+    if config.gateway_budget_usd is not None:
+        budget_usd = float(config.gateway_budget_usd)
+        # The anti-runaway request cap scales UP with the raised
+        # budget (same requests-per-dollar headroom as the shipped
+        # pair) instead of growing a second knob: a raised budget
+        # behind the fixed 10k cap would trip requests-first on
+        # exactly the large-tree scans the raise exists for,
+        # silently defeating it. It never scales DOWN on a lowered
+        # budget — the USD budget is the operative spend bound, and
+        # shrinking the cap would promote the retry-loop backstop
+        # into the binding limit.
+        import math
+        scaled = (_GATEWAY_REQUEST_BUDGET
+                  * budget_usd / _GATEWAY_BUDGET_USD)
+        if not math.isfinite(scaled):
+            # The CLI validator refuses budgets in this range, but
+            # programmatic callers set the config field directly —
+            # fail the mint honestly (RuntimeError is this
+            # function's documented failure contract, caught at the
+            # posture site) instead of letting math.ceil's
+            # OverflowError escape uncaught.
+            raise RuntimeError(
+                "gateway budget override too large to scale the "
+                "anti-runaway request cap")
+        request_budget = max(_GATEWAY_REQUEST_BUDGET, math.ceil(scaled))
     minted = mint_child_token(
-        budget_usd=_GATEWAY_BUDGET_USD,
+        budget_usd=budget_usd,
         models=[model_id],
         ttl_s=int(config.timeout_seconds) + _GATEWAY_TTL_SLACK_S,
-        request_budget=_GATEWAY_REQUEST_BUDGET,
+        request_budget=request_budget,
         label="openant",
     )
     logger.info(
@@ -1170,7 +1207,7 @@ def _mint_gateway_credentials(config: OpenAntConfig) -> dict[str, Any] | None:
     return {
         "token": minted["token"],
         "token_id": minted["token_id"],
-        "budget_usd": float(minted.get("budget_usd") or _GATEWAY_BUDGET_USD),
+        "budget_usd": float(minted.get("budget_usd") or budget_usd),
         "base_url": f"http://127.0.0.1:{port}{route}",
         "model_id": model_id,
     }

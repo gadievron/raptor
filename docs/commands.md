@@ -114,6 +114,7 @@ patches.
 | `--openant-core-unpinned` | Consent to run a `--openant-core` checkout that is not a clean pinned checkout this run (the project `config` trust marker grants the same, standing) |
 | `--openant-model <name>` | OpenAnt LLM model: `sonnet` (default) or `opus` |
 | `--openant-level <depth>` | OpenAnt analysis depth: `all`, `reachable` (default), `codeql`, `exploitable` |
+| `--openant-gateway-budget <usd>` | Per-run raise of the OpenAnt dispatcher-gateway spend cap on gateway-minted runs (default $25; any positive finite USD, no uncapped spelling; the anti-runaway request cap scales with it). No effect on direct-credential runs (noted loudly) |
 
 **Output control**
 
@@ -459,6 +460,7 @@ non-zero and the run is marked failed.
 | `--verify` | Enable the OpenAnt stage-2 verification pass |
 | `--workers <n>` | Parallel analysis workers (default 4) |
 | `--max-findings <n>` | Maximum findings to include in the report (default 50) |
+| `--gateway-budget <usd>` | Per-run raise of the dispatcher-gateway spend cap on gateway-minted runs (default $25; any positive finite USD, no uncapped spelling — dispatcher child tokens carry a finite budget by contract; the anti-runaway request cap scales with it, never below 10k). Argv-only; no effect on direct-credential runs (noted loudly) |
 | `--openant-core <path>` | Path to the `openant-core` directory (default `$OPENANT_CORE`). The flag surface is consent-gated: a core that is not a clean checkout of the pinned commit refuses at startup unless `--openant-core-unpinned` or the project `config` trust marker consents |
 | `--out <dir>` | Output directory override |
 
