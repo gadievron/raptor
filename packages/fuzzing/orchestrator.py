@@ -27,7 +27,16 @@ _BINARY_UNDERSTAND_KINDS = frozenset({"elf-linux", "elf-kmod", "macho", "pe-exe"
 
 logger = get_logger()
 
-_EXECUTABLE_FUZZERS = {"afl", "libfuzzer"}
+_EXECUTABLE_FUZZERS = {"afl", "libfuzzer", "atheris"}
+
+# Which target kinds each explicitly requested engine can drive.
+# Engine override is a redirect within a kind's viable engines, never
+# a way to point an engine at a target it cannot execute.
+_ENGINE_KINDS = {
+    "afl": frozenset({"elf-linux", "macho"}),
+    "libfuzzer": frozenset({"elf-linux", "macho"}),
+    "atheris": frozenset({"python-pkg"}),
+}
 
 
 @dataclass
@@ -48,6 +57,12 @@ class CampaignPlan:
     #: the caller's explicit consent flag (None = project marker),
     #: re-used by execute() so plan and build see the same decision.
     env_build_consent: bool | None = None
+    #: atheris (python-pkg) harness resolution — an operator-supplied
+    #: TestOneInput harness file, or a module:function entry point the
+    #: template scaffolder turns into one at execute() time.
+    atheris_harness: Path | None = None
+    atheris_entry: str | None = None
+    atheris_payload: str = "bytes"
 
     def summary(self) -> str:
         lines = [
@@ -83,8 +98,19 @@ class CampaignPlan:
             lines.append(
                 "Env build: AFL-instrumented build in the pinned AFL++ "
                 "image; campaign runs from its rootfs under the sandbox")
+        if self.atheris_harness:
+            lines.append(f"Atheris harness: {self.atheris_harness}")
+        elif self.atheris_entry:
+            lines.append(
+                f"Atheris harness: scaffold from {self.atheris_entry} "
+                f"({self.atheris_payload} payload)")
         if self.needs_harness:
-            lines.append("Action required: generate libFuzzer harness")
+            if self.fuzzer == "atheris":
+                lines.append(
+                    "Action required: pass --py-harness <file> or "
+                    "--py-entry module:function")
+            else:
+                lines.append("Action required: generate libFuzzer harness")
         if self.blockers:
             lines.append("")
             lines.append("Blockers:")
@@ -112,6 +138,10 @@ class FuzzingOrchestrator:
         *,
         env_build: bool | None = None,
         run_dir: Path | None = None,
+        engine: str | None = None,
+        py_harness: Path | None = None,
+        py_entry: str | None = None,
+        py_payload: str = "bytes",
     ) -> CampaignPlan:
         """Inspect the target, pick a fuzzer, return a campaign plan.
 
@@ -121,6 +151,17 @@ class FuzzingOrchestrator:
         ``env_build``: explicit consent for building a source tree in
         the AFL++ image (None = defer to the project ``build`` trust
         marker). The build itself runs in execute().
+
+        ``engine``: explicit engine override (``afl`` / ``libfuzzer``
+        / ``atheris``). Honoured only when the detected target kind is
+        one that engine can drive; otherwise the plan blocks.
+
+        ``py_harness`` / ``py_entry`` / ``py_payload``: atheris harness
+        resolution for python-pkg targets — an operator-written
+        TestOneInput harness file, or a ``module:function`` entry the
+        template scaffolder wraps (``py_payload`` selects bytes or
+        text). Without either, a python-pkg plan blocks on the missing
+        harness.
         """
         target = detect_target(Path(target_path))
         plan = CampaignPlan(target=target, capabilities=self.capabilities,
@@ -208,15 +249,28 @@ class FuzzingOrchestrator:
         elif kind == "python-pkg":
             plan.fuzzer = "atheris" if not target.blockers else None
             if plan.fuzzer:
-                plan.blockers.append(
-                    "Atheris target detection is available, but RAPTOR does "
-                    "not orchestrate Atheris campaigns yet."
+                self._plan_atheris_harness(
+                    plan, py_harness, py_entry, py_payload,
                 )
         else:
             plan.blockers.append(
                 "Could not identify target type. Pass an executable binary, a "
                 "C/C++ header, or a Cargo/Python project root."
             )
+
+        if engine:
+            supported = _ENGINE_KINDS.get(engine, frozenset())
+            if kind not in supported:
+                plan.fuzzer = None
+                plan.blockers.append(
+                    f"--engine {engine} cannot drive a {kind} target "
+                    f"(supported kinds: {', '.join(sorted(supported)) or 'none'})."
+                )
+            elif plan.fuzzer and plan.fuzzer != engine:
+                plan.hints.append(
+                    f"engine override: {engine} requested over the "
+                    f"auto-selected {plan.fuzzer}")
+                plan.fuzzer = engine
 
         if plan.fuzzer is None and not plan.blockers:
             if kind in ("elf-linux", "macho"):
@@ -252,6 +306,53 @@ class FuzzingOrchestrator:
             )
 
         return plan
+
+    @staticmethod
+    def _plan_atheris_harness(
+        plan: "CampaignPlan",
+        py_harness: Path | None,
+        py_entry: str | None,
+        py_payload: str,
+    ) -> None:
+        """Resolve the atheris harness question at plan time.
+
+        Operator harness file wins; a ``module:function`` entry point
+        gets the template scaffold (generated in execute(), validated
+        here so a bad entry fails before any work); neither means the
+        plan blocks on the missing harness.
+        """
+        if py_harness is not None:
+            harness = Path(py_harness).resolve()
+            if not harness.is_file() or harness.suffix != ".py":
+                plan.blockers.append(
+                    f"--py-harness must name an existing .py atheris "
+                    f"harness (got {harness})")
+                return
+            plan.atheris_harness = harness
+            return
+        if py_entry:
+            from packages.fuzzing.atheris_harness import AtherisHarnessSpec
+            try:
+                spec = AtherisHarnessSpec(entry=py_entry, payload=py_payload)
+            except ValueError as e:
+                plan.blockers.append(f"--py-entry rejected: {e}")
+                return
+            plan.atheris_entry = spec.entry
+            plan.atheris_payload = spec.payload
+            plan.hints.append(
+                "A template harness will be generated for "
+                f"{spec.module}.{spec.function} (simple bytes/str case "
+                "only; every uncaught exception counts as a crash — "
+                "review the generated file for expected-exception "
+                "filtering).")
+            return
+        plan.needs_harness = True
+        plan.blockers.append(
+            "Atheris needs a Python TestOneInput harness. Pass "
+            "--py-harness <file> for an operator-written harness, or "
+            "--py-entry module:function to scaffold the simple case "
+            "(target function taking bytes/str)."
+        )
 
     def _pick_for_unix_binary(self, caps: CapabilityReport, target_path: Path | None = None) -> str | None:
         """Pick AFL++ or libFuzzer for a Unix binary target.
@@ -381,6 +482,17 @@ class FuzzingOrchestrator:
                 },
                 "fuzzer": plan.fuzzer,
                 "needs_harness": plan.needs_harness,
+                **(
+                    {
+                        "atheris_harness": (
+                            str(plan.atheris_harness)
+                            if plan.atheris_harness else None
+                        ),
+                        "atheris_entry": plan.atheris_entry,
+                        "atheris_payload": plan.atheris_payload,
+                    }
+                    if plan.fuzzer == "atheris" else {}
+                ),
             },
         )
         save_json(out_dir / "capability_report.json", plan.capabilities.to_dict())
@@ -489,6 +601,8 @@ class FuzzingOrchestrator:
                 }
         elif plan.fuzzer == "libfuzzer":
             result = self._run_libfuzzer(plan, out_dir, duration_seconds, corpus_dir, dict_path)
+        elif plan.fuzzer == "atheris":
+            result = self._run_atheris(plan, out_dir, duration_seconds, corpus_dir, dict_path)
         else:
             msg = f"Fuzzer '{plan.fuzzer}' not yet wired into orchestrator."
             raise RuntimeError(msg)
@@ -514,6 +628,10 @@ class FuzzingOrchestrator:
         # instrumentation, replay the corpus and emit per-function
         # coverage-fuzz.json for /audit's priority scorer and review
         # context. Degrades silently on uninstrumented targets.
+        # atheris campaigns skip it: the bridge replays a native
+        # binary; a Python coverage lane is a later phase.
+        if plan.fuzzer == "atheris":
+            return result
         try:
             from packages.fuzzing.coverage_bridge import emit_fuzz_coverage
 
@@ -785,3 +903,129 @@ class FuzzingOrchestrator:
             "telemetry": str(out_dir / "fuzz-summary.json"),
             "events": str(out_dir / "fuzz-events.jsonl"),
         }
+
+    def _run_atheris(
+        self,
+        plan: CampaignPlan,
+        out_dir: Path,
+        duration_seconds: int,
+        corpus_dir: Path | None,
+        dict_path: Path | None,
+    ) -> dict[str, Any]:
+        from packages.fuzzing.atheris_runner import AtherisRunner
+        from packages.fuzzing.telemetry import FuzzingTelemetry
+
+        harness = plan.atheris_harness
+        if harness is None:
+            if not plan.atheris_entry:
+                msg = ("atheris plan carries neither a harness nor an "
+                       "entry point — plan() should have blocked")
+                raise RuntimeError(msg)
+            from packages.fuzzing.atheris_harness import (
+                AtherisHarnessSpec,
+                write_atheris_harness,
+            )
+            spec = AtherisHarnessSpec(
+                entry=plan.atheris_entry, payload=plan.atheris_payload,
+            )
+            harness = write_atheris_harness(spec, out_dir / "atheris-harness")
+
+        target_dir = (
+            plan.target.path if plan.target.path.is_dir()
+            else plan.target.path.parent
+        )
+        runner = AtherisRunner(
+            harness,
+            target_dir=target_dir,
+            corpus_dir=corpus_dir,
+            output_dir=out_dir / "atheris",
+            dict_path=dict_path,
+            max_total_time=duration_seconds,
+        )
+        telemetry = FuzzingTelemetry(
+            out_dir=out_dir,
+            fuzzer="atheris",
+            target=str(plan.target.path),
+        )
+        telemetry.start()
+        try:
+            result = runner.run(telemetry=telemetry)
+            telemetry.update_stats(
+                total_executions=result.stats.total_executions,
+                executions_per_second=result.stats.executions_per_second,
+                coverage_features=result.stats.coverage_features,
+                corpus_size=result.stats.corpus_size,
+            )
+        finally:
+            telemetry.stop()
+
+        recorded = self._record_atheris_witnesses(out_dir, harness, result)
+
+        return {
+            "fuzzer": "atheris",
+            "campaign_failed": result.campaign_failed,
+            "crashes": len(result.crashes),
+            "timeouts": len(result.timeouts),
+            "oom_events": len(result.oom_inputs),
+            "leaks": len(result.leak_inputs),
+            "crashes_dir": str(runner.crashes_dir),
+            "harness": str(harness),
+            "python_exception": (
+                result.python_exception.to_dict()
+                if result.python_exception else None
+            ),
+            "crash_records": (
+                str(runner.output_dir / "atheris-crashes.json")
+                if result.crash_records else None
+            ),
+            "witnesses_recorded": recorded,
+            "stats": result.stats.__dict__,
+            "telemetry": str(out_dir / "fuzz-summary.json"),
+            "events": str(out_dir / "fuzz-events.jsonl"),
+        }
+
+    @staticmethod
+    def _record_atheris_witnesses(out_dir: Path, harness: Path,
+                                  result) -> int:
+        """Record each atheris crash artifact as a canonical Witness.
+
+        Same store path (``<out>/witnesses``) and best-effort posture
+        as the AFL path in raptor_fuzzing: the crashes stay on disk in
+        their artifact form even when the canonical write fails, and
+        ``raptor-verified-outcomes`` picks the records up from here.
+        """
+        if not result.crashes:
+            return 0
+        try:
+            from core.witness import WitnessStore
+            from packages.fuzzing.witness_adapter import (
+                witness_from_atheris_artifact,
+            )
+            store = WitnessStore(out_dir / "witnesses")
+        except Exception as e:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "Witness-store setup failed: %s: %s; continuing without "
+                "canonical Witness records", type(e).__name__, e,
+            )
+            return 0
+        recorded = 0
+        for artifact in result.crashes:
+            try:
+                witness, data = witness_from_atheris_artifact(
+                    artifact,
+                    exception=result.python_exception,
+                    harness_path=harness,
+                )
+                store.put(witness, data)
+                recorded += 1
+            except Exception as e:  # noqa: BLE001 — best-effort
+                logger.warning(
+                    "failed to record witness for crash %s: %s: %s",
+                    artifact.name, type(e).__name__, e,
+                )
+        if recorded:
+            logger.info(
+                "Recorded %d/%d atheris crashes as Witnesses → %s",
+                recorded, len(result.crashes), out_dir / "witnesses",
+            )
+        return recorded
