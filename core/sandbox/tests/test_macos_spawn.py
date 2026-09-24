@@ -12,11 +12,15 @@ breakage at every PR even before the macOS runner is wired up.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
+import signal
+import subprocess
 import sys
 import time
+import uuid
 
 import pytest
 
@@ -26,6 +30,72 @@ from core.sandbox import _macos_spawn
 # the darwin_native marker (pytest.ini) instead of an ad hoc skipif, so
 # the darwin-emulation gate deselects them and native non-darwin hosts
 # skip them.
+
+
+def _unique_sleep_marker(prefix: str) -> str:
+    """Per-invocation-unique sleep duration for target discovery.
+
+    A FIXED marker collides across concurrent pytest sessions on one
+    host: session A's live in-test target matched session B's probe
+    (false-failing B's no-survivors assertion) and B's cleanup killed
+    A's target mid-test. The random suffix makes the target's full
+    argv unique to this invocation, so an exact-argv match is an
+    identity proof (same defence as the sandbox teardown's random
+    ``_SBX_RUN_ID`` environ token). coreutils and BSD ``sleep`` both
+    accept arbitrarily large integer durations.
+    """
+    return f"{prefix}{uuid.uuid4().int % 10**12:012d}"
+
+
+def _exact_sleep_pids(marker: str) -> list[int]:
+    """PIDs whose FULL argv is exactly ``/bin/sleep <marker>``.
+
+    Never widen this to a substring/regex probe (the old ``pgrep -f
+    "sleep <marker>"``): ``-f`` matches anywhere in ANY process's
+    cmdline, and agent-harness wrapper shells carry their whole
+    eval'd command text in argv — a foreign wrapper that merely
+    MENTIONED the marker matched (and the old ``pkill -9 -f`` cleanup
+    killed it), unrelated sleeps with superstring durations
+    (``sleep <marker>2``) matched too, and any foreign match
+    false-failed the no-survivors assertion. The narrow match cannot
+    miss the real target: the trampoline ``exec``s
+    ``/bin/sleep <marker>`` verbatim, so the survivor these tests
+    hunt always has exactly this argv.
+    """
+    # check=True: a broken/unspawnable ps must fail the test loudly —
+    # a silently-empty probe would let the no-survivors assertion (and
+    # the decoy directions) pass vacuously.
+    out = subprocess.run(
+        ["ps", "-axwwo", "pid=,args="],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    want = f"/bin/sleep {marker}"
+    pids = []
+    for line in out.splitlines():
+        pid_s, _, args = line.strip().partition(" ")
+        if args.strip() == want:
+            with contextlib.suppress(ValueError):
+                pids.append(int(pid_s))
+    return pids
+
+
+def _kill_exact_sleepers(marker: str) -> None:
+    """Cleanup: SIGKILL only identity-verified targets of THIS run.
+
+    Kills by verified pid, never by pattern: each pid's argv is
+    re-read immediately before signalling, so the signal is anchored
+    to current evidence rather than a stale integer (the pid can exit
+    between discovery and kill; the re-check plus the per-run random
+    marker closes the wrong-process window).
+    """
+    for pid in _exact_sleep_pids(marker):
+        args = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "args="],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()
+        if args == f"/bin/sleep {marker}":
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
 
 
 # --- Cross-platform sanity tests (signature parity, no exec) ----------
@@ -77,17 +147,7 @@ def test_timeout_kills_whole_sandbox_tree(tmp_path, monkeypatch):
     the layering (shim → fake sandbox-exec → /bin/sh trampoline →
     target) matches production, including the separate process group.
     """
-    import subprocess as _subprocess
-    import time as _time
-
-    marker = "424271"  # unique sleep duration for pgrep
-
-    def sleepers():
-        out = _subprocess.run(
-            ["pgrep", "-f", f"sleep {marker}"],
-            capture_output=True, text=True, check=False,
-        ).stdout
-        return [ln for ln in out.split() if ln.strip()]
+    marker = _unique_sleep_marker("424271")
 
     fake = tmp_path / "fake-sandbox-exec"
     fake.write_text('#!/bin/sh\nshift 3\nexec "$@"\n')  # drop -p <profile> --
@@ -96,25 +156,73 @@ def test_timeout_kills_whole_sandbox_tree(tmp_path, monkeypatch):
     out_dir = tmp_path / "out"
     out_dir.mkdir()
 
+    # Foreign-process decoys (own children, own session so the group
+    # is ours to sweep): a sleep whose duration merely CONTAINS the
+    # marker as a prefix, and a wrapper shell whose argv TEXT mentions
+    # the marker while it waits on an unrelated child — exactly the
+    # agent-harness ``bash -c ... eval`` shape the old ``pkill -f``
+    # killed. The trailing ``:`` no-op is load-bearing: without it,
+    # bash-as-/bin/sh (macOS, Fedora) tail-execs the final command
+    # and the wrapper's argv — marker text included — is replaced by
+    # ``/bin/sleep``'s within milliseconds, leaving the survival
+    # assertion vacuously green. Direction two of the kill
+    # discipline: the teardown under test and this test's own cleanup
+    # must leave both decoys alone.
+    decoys: list[subprocess.Popen] = []
     try:
-        with pytest.raises(_subprocess.TimeoutExpired):
-            _macos_spawn.run_sandboxed(
-                ["/bin/sleep", marker],
-                output=str(out_dir),
-                capture_output=True, text=True, timeout=1.5,
+        decoys.append(subprocess.Popen(
+            ["/bin/sleep", marker + "2"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ))
+        decoys.append(subprocess.Popen(
+            ["/bin/sh", "-c", f"true sleep {marker}; /bin/sleep 3600; :"],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ))
+        try:
+            with pytest.raises(subprocess.TimeoutExpired):
+                _macos_spawn.run_sandboxed(
+                    ["/bin/sleep", marker],
+                    output=str(out_dir),
+                    capture_output=True, text=True, timeout=1.5,
+                )
+            # Teardown runs synchronously before the raise; poll
+            # briefly for the process table to reflect it.
+            deadline = time.monotonic() + 5
+            while (time.monotonic() < deadline
+                   and _exact_sleep_pids(marker)):
+                time.sleep(0.1)
+            assert _exact_sleep_pids(marker) == [], (
+                "sandboxed target survived run_sandboxed timeout — "
+                "the shim tree was not torn down"
             )
-        # Teardown runs synchronously before the raise; poll briefly
-        # for the process table to reflect it.
-        deadline = _time.monotonic() + 5
-        while _time.monotonic() < deadline and sleepers():
-            _time.sleep(0.1)
-        assert sleepers() == [], (
-            "sandboxed target survived run_sandboxed timeout — the "
-            "shim tree was not torn down"
-        )
+        finally:
+            _kill_exact_sleepers(marker)
+            # Liveness sampled AFTER the cleanup above (so the
+            # asserts below cover it too) but BEFORE reaping.
+            survived = [d.poll() is None for d in decoys]
     finally:
-        _subprocess.run(["pkill", "-9", "-f", f"sleep {marker}"],
-                        capture_output=True, check=False)
+        for decoy in decoys:
+            # Own child + own session: group-kill by direct-child pid
+            # is identity-safe (unreaped children cannot be
+            # pid-recycled), and it takes the text decoy's sleep
+            # child down with its shell.
+            with contextlib.suppress(OSError):
+                os.killpg(decoy.pid, signal.SIGKILL)
+            decoy.wait(timeout=10)
+    # Decoys must have survived BOTH the teardown under test and the
+    # cleanup above (a pattern-shaped kill would have taken either).
+    assert survived[0], (
+        "teardown/cleanup killed an unrelated sleep whose duration "
+        "merely starts with the marker — kill went by pattern, not "
+        "verified identity"
+    )
+    assert survived[1], (
+        "teardown/cleanup killed an unrelated wrapper shell whose "
+        "argv text merely mentions the marker — kill went by "
+        "pattern, not verified identity"
+    )
 
 
 def test_is_available_false_on_non_darwin():
@@ -743,16 +851,14 @@ def test_fail_loud_via_context_when_profile_cannot_apply(tmp_path):
 def test_orphan_teardown_on_orchestrator_kill():
     """Integration: an orchestrator running a long target via the seatbelt
     backend, SIGKILLed mid-run, must leave NO lingering sandbox process —
-    the outer shim reads death-pipe EOF and SIGKILLs the sandbox group."""
-    import signal
-    import subprocess
-    marker = "417239"  # unique sleep duration; cmdline = "sleep 417239"
+    the outer shim reads death-pipe EOF and SIGKILLs the sandbox group.
 
-    def sleepers():
-        out = subprocess.run(["pgrep", "-f", f"sleep {marker}"],
-                             capture_output=True, text=True,
-                             check=False).stdout
-        return [ln for ln in out.split() if ln.strip()]
+    Target discovery and cleanup go through the exact-argv helpers
+    (per-run unique marker, identity-verified kill) — the fixed-marker
+    ``pgrep -f``/``pkill -9 -f`` this replaces matched (and killed)
+    unrelated processes whose cmdline merely contained the pattern.
+    """
+    marker = _unique_sleep_marker("417239")
 
     orch_code = (
         "from core.sandbox import sandbox\n"
@@ -767,7 +873,7 @@ def test_orphan_teardown_on_orchestrator_kill():
     try:
         for _ in range(150):
             time.sleep(0.1)
-            if sleepers():
+            if _exact_sleep_pids(marker):
                 break
         else:
             pytest.skip("seatbelt sandbox did not start the target here")
@@ -775,12 +881,13 @@ def test_orphan_teardown_on_orchestrator_kill():
         orch.wait()
         for _ in range(50):
             time.sleep(0.1)
-            if not sleepers():
+            if not _exact_sleep_pids(marker):
                 break
-        assert sleepers() == [], "sandbox target leaked after orchestrator kill"
+        assert _exact_sleep_pids(marker) == [], (
+            "sandbox target leaked after orchestrator kill"
+        )
     finally:
         if orch.poll() is None:
             orch.kill()
             orch.wait()
-        subprocess.run(["pkill", "-9", "-f", f"sleep {marker}"],
-                       capture_output=True, check=False)
+        _kill_exact_sleepers(marker)
