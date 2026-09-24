@@ -16,7 +16,8 @@ This command is mode-routed — there is no single CLI to call blindly:
 | Case | Route |
 |------|-------|
 | `<target>` is a compiled artefact (ELF/Mach-O/PE/JAR/APK/...) with `--map` | `libexec/raptor-understand --map --target <t> --out "$OUTPUT_DIR"` (mechanical, no LLM) |
-| `<target>` is a compiled artefact (or `.gpr` / `re-database.json` / a binary run dir) with `--study` | `libexec/raptor-binary-study <t> "$OUTPUT_DIR" [--identifier ...] [--concept ...] [--model M \| --prep-only]` (decomp-tree + standard study pipeline) |
+| `<target>` is a `.gpr` / `re-database.json` / a binary run dir (or a binary whose RE database already exists) with `--study` | `libexec/raptor-binary-study <t> "$OUTPUT_DIR" [--identifier ...] [--concept ...] [--model M \| --prep-only]` (decomp-tree + standard study pipeline) |
+| `<target>` is a RAW BINARY with `--study` and NO RE database exists yet | `libexec/raptor-binary-study-oneshot <t> "$OUTPUT_DIR" [same flags]` (one lifecycle: onramp/import → deep study — see Binary `--study` below) |
 | `--model` passed with `--hunt` or `--trace` | `libexec/raptor-understand` (multi-model substrate) |
 | Everything else — source-tree `--map`, `--trace`, `--hunt`, `--teach`, `--study` | **In-session workflow below** (you are the LLM); `libexec/raptor-understand` rejects source-tree `--map` by design |
 
@@ -65,6 +66,41 @@ file per call-graph community, a synthesized `types.h`, and a
 `function@address`), then drives the STANDARD study pipeline over
 it. `domain-model.json` comes out schema-identical, so /audit's
 vocabulary, IRIS, and every other consumer work unchanged.
+
+**One-shot raw-binary route.** When the input is a RAW BINARY and no
+RE database resolves for it yet, do NOT run `raptor-binary-study`
+directly (it refuses by design — it never imports the hostile bundle
+itself). Dispatch the one-shot orchestrator instead, under the same
+single run lifecycle you already started:
+
+```bash
+libexec/raptor-binary-study-oneshot <resolved_target> "$OUTPUT_DIR" \
+    [--identifier ...] [--concept ...] [--model M] [--max-cost USD]
+```
+
+It sequences the EXISTING tools: `raptor-ghidra import <binary>
+--decompile-all` (the landed raw-binary onramp — creates the Ghidra
+project via analyzeHeadless, or degrades to the r2/objdump fallback
+importers when no Ghidra install exists) into
+`$OUTPUT_DIR/ghidra-import/`, then `raptor-binary-study` over the
+produced database, passing the created `.gpr` for between-pass
+incremental decompilation. A cached database (a prior import of the
+same binary) is reused without re-importing. Failure modes: an
+OCCUPIED import destination is terminal per the landed semantics —
+the error names the operator's two options (pass the existing `.gpr`
+to `raptor-binary-study` directly, or remove the directory); a
+degraded (Ghidra-less) import produces a symbols-only database and
+the study warns it sees call structure and types only.
+
+**Map→study bridge.** Pass 1 of every binary study is mechanically
+seeded from a prior binary `--map` run (and `binary-hunt-*.json`
+artifacts) when one is discoverable — co-located `--out`, project
+sibling, or global `out/`, identity-gated by the binary's content
+anchor. Seeds enter at the distinct `bridge_seed` tier BELOW
+operator identifiers, are jointly budget-capped with SAGE prior
+recall, and are listed (with why + the "seed selection is
+target-influenced" honesty line) in the study report's Seed
+Provenance table. `--no-bridge-seeds` opts out.
 
 Running phase 2:
 - default (no flag): the full study loop runs mechanically via the
