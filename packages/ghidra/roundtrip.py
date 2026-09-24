@@ -159,12 +159,42 @@ def _apply_findings(
 
     @contextlib.contextmanager
     def _slot_lock():
+        # O_NOFOLLOW / O_NONBLOCK / fstat S_ISREG: the export dir is
+        # a reused run-output location — a planted symlink at the
+        # predictable .lock name must not steer the flock to an
+        # attacker-chosen path, and a planted reader-less FIFO must
+        # not wedge the export on the open. Refusals degrade to the
+        # pre-existing unlocked path, loudly.
+        import stat as _stat
+        fd = None
         try:
             import fcntl
             import os as _os
-            fd = _os.open(str(export_dir / ".lock"),
-                          _os.O_WRONLY | _os.O_CREAT, 0o600)
-        except (ImportError, OSError):
+            fd = _os.open(
+                str(export_dir / ".lock"),
+                _os.O_WRONLY | _os.O_CREAT
+                | getattr(_os, "O_NOFOLLOW", 0)
+                | getattr(_os, "O_CLOEXEC", 0)
+                | getattr(_os, "O_NONBLOCK", 0),
+                0o600,
+            )
+            if not _stat.S_ISREG(_os.fstat(fd).st_mode):
+                raise OSError(
+                    f"lock path {export_dir / '.lock'} is not a "
+                    "regular file")
+        except ImportError:
+            yield
+            return
+        except OSError as exc:
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    _os.close(fd)
+            logger.warning(
+                "ghidra export slot lock %s: refusing to open (%s); "
+                "proceeding WITHOUT cross-process lock — investigate "
+                "a planted symlink or FIFO at that path",
+                export_dir / ".lock", exc,
+            )
             yield
             return
         try:

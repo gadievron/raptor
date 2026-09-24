@@ -308,20 +308,43 @@ class TestInferiorAsanCapture(unittest.TestCase):
         self.assertFalse(err_stub.exists())
 
     def test_inferior_read_is_size_capped(self):
+        import os
         import tempfile
 
         with tempfile.TemporaryDirectory() as td:
             stub = Path(td) / "stub"
             stub.write_text("x" * (CrashAnalyser._INFERIOR_OUTPUT_CAP + 500))
-            text = CrashAnalyser._read_inferior_capped(
-                stub, CrashAnalyser._INFERIOR_OUTPUT_CAP)
+            fd = os.open(str(stub), os.O_RDONLY)
+            try:
+                text = CrashAnalyser._read_inferior_capped(
+                    fd, CrashAnalyser._INFERIOR_OUTPUT_CAP)
+            finally:
+                os.close(fd)
             self.assertEqual(len(text), CrashAnalyser._INFERIOR_OUTPUT_CAP)
-        # Missing stub degrades to empty, never raises.
-        self.assertEqual(
-            CrashAnalyser._read_inferior_capped(
-                Path("/nonexistent/stub"), 10),
-            "",
-        )
+        # Unset stub fd degrades to empty, never raises.
+        self.assertEqual(CrashAnalyser._read_inferior_capped(None, 10), "")
+
+    def test_inferior_read_ignores_swapped_stub_path(self):
+        """The attacker binary runs between stub creation and the
+        read-back: a symlink swapped in at the stub name must never
+        route the read — the kept fd stays bound to the original
+        inode, so a swap yields the original (empty) content."""
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            stub = Path(td) / "stub"
+            stub.write_text("")
+            fd = os.open(str(stub), os.O_RDONLY)
+            try:
+                secret = Path(td) / "host-secret"
+                secret.write_text("root:hash:0:0\n")
+                stub.unlink()
+                stub.symlink_to(secret)
+                text = CrashAnalyser._read_inferior_capped(fd, 4096)
+            finally:
+                os.close(fd)
+            self.assertEqual(text, "")
 
     def _wired_analyser(self, debugger_output: str) -> CrashAnalyser:
         analyser = _bare_analyser()

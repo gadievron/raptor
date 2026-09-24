@@ -1415,9 +1415,17 @@ class WebScanner:
             if raw is None:
                 continue
             request_file = self.out_dir / f"api-sweep-{index:02d}.request"
+            # out_dir is the sandbox's WRITABLE scope, so a hostile
+            # child from a previous run could have left this
+            # predictable path behind as a symlink aimed anywhere on
+            # disk; O_EXCL after the unlink refuses to follow
+            # anything and guarantees a fresh 0600 inode (same
+            # threat + flags as the ffuf config-file writer one
+            # module over).
+            request_file.unlink(missing_ok=True)
             fd = os.open(
                 request_file,
-                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                 0o600,
             )
             with os.fdopen(fd, "w", encoding="utf-8") as fh:

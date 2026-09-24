@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import logging
 import os
+import stat as _stat
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, TypeVar
@@ -35,6 +37,8 @@ try:
     _HAS_FCNTL = True
 except ImportError:                                    # pragma: no cover
     _HAS_FCNTL = False
+
+logger = logging.getLogger(__name__)
 
 _LOCK_NAME = ".binary-artifacts.lock"
 
@@ -52,9 +56,36 @@ def run_artifacts_lock(run_dir: Path) -> Iterator[None]:
         yield
         return
     lock_path = Path(run_dir) / _LOCK_NAME
+    # The run dir is (or was) inside a sandboxed child's write grant,
+    # so the open must not trust what it finds at the lock name:
+    # O_NOFOLLOW keeps a planted symlink from making this process
+    # create and flock an attacker-chosen path; O_NONBLOCK plus the
+    # fstat S_ISREG refusal keeps a planted reader-less FIFO from
+    # wedging every artifact append forever. Same flag shape as
+    # core.fs_lock / core.run.metadata's locks.
+    fd = None
     try:
-        fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
-    except OSError:
+        fd = os.open(
+            str(lock_path),
+            os.O_WRONLY | os.O_CREAT
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            0o600,
+        )
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(
+                f"lock path {lock_path} is not a regular file")
+    except OSError as exc:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        logger.warning(
+            "binary artifact lock %s: refusing to open (%s); "
+            "proceeding WITHOUT cross-process lock — concurrent "
+            "appends may drop each other's records; investigate a "
+            "planted symlink or FIFO at that path", lock_path, exc,
+        )
         yield
         return
     try:
