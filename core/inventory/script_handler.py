@@ -82,6 +82,16 @@ def php_interstitial_is_handler(source: str | None) -> bool:
     as does a ``;`` inside a string literal splitting a wiring
     statement apart. The cost of a false positive is one review slot;
     a false negative writes off a request handler.
+
+    Close tags terminate too: PHP ends the current statement AND any
+    ``//`` / ``#`` line comment at ``?>``, resuming markup (and code
+    again after the next open tag). Lines are therefore scanned per
+    ``?>``-delimited segment — a prefix-anchored wiring keyword or a
+    comment opener before a close tag cannot swallow what runs after
+    it (``global $x ?><?php f($_GET['c']);`` and
+    ``include 'a.php'; // x ?><?php f($_GET['c']);`` are handler
+    code). ``/* */`` block comments deliberately keep swallowing
+    ``?>`` — PHP does not close them at a close tag.
     """
     if not source:
         return False
@@ -98,17 +108,13 @@ def php_interstitial_is_handler(source: str | None) -> bool:
             line = line[end + 2:].strip()
             if not line:
                 continue
-        # Peel tag markers so ``<?php status_handler();`` classifies
-        # its statement (and ``<?= $x ?>`` its expression).
+        # Peel a line-leading tag marker so ``<?php status_handler();``
+        # classifies its statement (and ``<?= $x ?>`` its expression).
         for marker in ("<?php", "<?=", "<?"):
             if line.startswith(marker):
                 line = line[len(marker):].strip()
                 break
-        if line.endswith("?>"):
-            line = line[:-2].strip()
         if not line:
-            continue
-        if line.startswith(("//", "#")):
             continue
         if line.startswith("/*"):
             end = line.find("*/", 2)
@@ -120,14 +126,34 @@ def php_interstitial_is_handler(source: str | None) -> bool:
                 continue
         if line.startswith("*"):
             continue  # docblock body
-        for stmt in line.split(";"):
-            stmt = stmt.strip()
-            if not stmt:
+        for seg_index, segment in enumerate(line.split("?>")):
+            segment = segment.strip()
+            if not segment:
                 continue
-            if stmt.startswith(("//", "#")):
-                break  # trailing comment: rest of the line is prose
-            if not _php_wiring_statement(stmt):
-                return True
+            if seg_index:
+                # Text after a close tag is raw markup until an open
+                # tag re-enters PHP. Markup is output surface —
+                # handler code by the inclusion bias above.
+                reentered = False
+                for marker in ("<?php", "<?=", "<?"):
+                    if segment.startswith(marker):
+                        segment = segment[len(marker):].strip()
+                        reentered = True
+                        break
+                if not reentered:
+                    return True
+                if not segment:
+                    continue
+            for stmt in segment.split(";"):
+                stmt = stmt.strip()
+                if not stmt:
+                    continue
+                if stmt.startswith(("//", "#")):
+                    break  # comment: prose to the segment's end (the
+                    #        close tag already ended it — PHP line
+                    #        comments never cross ``?>``)
+                if not _php_wiring_statement(stmt):
+                    return True
     return False
 
 
