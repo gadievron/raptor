@@ -919,3 +919,70 @@ class TestLoadGoPackage:
             files[f"gen_{i:03d}.go"] = f"package store\n\nvar g{i} int\n"
         self._write(tmp_path, files)
         assert load_go_package(tmp_path, "pkg/store/record.go") is None
+
+
+class TestPackageLoadContainment:
+    """rel_file arrives on outcome records (LLM-writable): the anchor
+    join is confined — a traversal, absolute, or symlink-escaping
+    path must not sweep an arbitrary host directory into the witness
+    (rejection returns None: no adjudication, never a verdict)."""
+
+    def _outside(self, tmp_path):
+        (tmp_path / "evil.go").write_text(
+            "package evil\n\nfunc f() {\n}\n"
+        )
+        target = tmp_path / "repo"
+        target.mkdir()
+        return target
+
+    def test_traversal_anchor_returns_none(self, tmp_path):
+        target = self._outside(tmp_path)
+        assert load_go_package(target, "../evil.go") is None
+
+    def test_absolute_anchor_returns_none(self, tmp_path):
+        target = self._outside(tmp_path)
+        assert load_go_package(target, str(tmp_path / "evil.go")) is None
+
+    def test_symlink_escape_anchor_returns_none(self, tmp_path):
+        target = self._outside(tmp_path)
+        (target / "link.go").symlink_to(tmp_path / "evil.go")
+        assert load_go_package(target, "link.go") is None
+
+    def test_in_tree_anchor_still_loads(self, tmp_path):
+        target = self._outside(tmp_path)
+        (target / "ok.go").write_text("package ok\n\nvar x int\n")
+        got = load_go_package(target, "ok.go")
+        assert got is not None and "ok.go" in got
+
+    def test_over_budget_sibling_refuses_without_buffering(
+            self, tmp_path, monkeypatch):
+        # The sibling reads are capped at the package byte budget: a
+        # single over-budget planted .go refuses the witness without
+        # ever buffering the file whole.
+        import core.audit.goconc as gc
+
+        real = gc.read_text_capped
+        seen: dict = {}
+
+        def spy(path, max_chars, **kw):
+            seen["max_chars"] = max_chars
+            return real(path, 64, **kw)
+
+        monkeypatch.setattr(gc, "read_text_capped", spy)
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "ok.go").write_text("package ok\n\nvar x int\n")
+        (target / "big.go").write_text("// pad\n" * 100)
+        assert load_go_package(target, "ok.go") is None
+        assert seen["max_chars"] == 4 * 1024 * 1024
+
+    def test_sibling_fifo_refuses_instead_of_blocking(self, tmp_path):
+        # A repo-planted FIFO named *.go must refuse (fd-gated
+        # regular-file check), never block the analyser on open.
+        import os
+
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "ok.go").write_text("package ok\n\nvar x int\n")
+        os.mkfifo(target / "trap.go")
+        assert load_go_package(target, "ok.go") is None
