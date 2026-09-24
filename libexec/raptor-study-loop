@@ -1026,10 +1026,77 @@ def _render_study_report(output_dir: Path) -> None:
                 f"- **Key trust boundary:** {_line(sc['trust_summary'])}")
         parts.append("")
 
+    seed_section = _render_seed_table(output_dir)
+    if seed_section:
+        parts.extend(seed_section)
+
     report_path = output_dir / "study-report.md"
     report_path.write_text("\n".join(parts) + "\n", encoding="utf-8")
     print(f"\nstudy-loop: report written to {report_path}",
           file=sys.stderr)
+
+
+def _render_seed_table(output_dir: Path) -> list[str]:
+    """The report's seed-provenance table: every seeded item with
+    its source and why. Honesty first — seed selection is
+    target-influenced (bridge seeds derive from attacker-controlled
+    bytes; even operator seeds steer attention), so the table opens
+    with that line rather than presenting seeded focus as neutral.
+    Why-texts come from bridge-seeds.json (escaped at capture) and
+    are re-escaped here for the markdown surface anyway.
+    """
+    sl_path = output_dir / "study-list.json"
+    if not sl_path.is_file():
+        return []
+    sl = load_json(sl_path, max_bytes=_MAX_STUDY_ARTIFACT_BYTES)
+    if not isinstance(sl, dict):
+        return []
+    seeded = [
+        item for item in sl.get("items") or []
+        if isinstance(item, dict) and item.get("seed_source")
+    ]
+    if not seeded:
+        return []
+
+    whys: dict[str, str] = {}
+    bridge_path = output_dir / "bridge-seeds.json"
+    if bridge_path.is_file():
+        bridge = load_json(bridge_path, max_bytes=4 * 1024 * 1024)
+        if isinstance(bridge, dict):
+            for seed in bridge.get("seeds") or []:
+                if isinstance(seed, dict) and seed.get("name"):
+                    whys[str(seed["name"])] = str(seed.get("why") or "")
+
+    # The honesty line is the bridge's CONSTANT (capitalised
+    # mechanically) — a re-typed copy here would let the contract
+    # string and the report drift apart.
+    from core.orchestration.binary_study_bridge import HONESTY_LINE
+    honesty = HONESTY_LINE[:1].upper() + HONESTY_LINE[1:]
+    parts = [
+        "## Seed Provenance\n",
+        f"{honesty}. Seeds steer study "
+        "attention only — they are hints, never verdicts.\n",
+        "| Item | Source | Why |",
+        "|------|--------|-----|",
+    ]
+    order = {"operator": 0, "bridge_seed": 1,
+             "bridge_seed_overflow": 2, "bridge_corroborated": 3}
+    seeded.sort(key=lambda i: order.get(str(i.get("seed_source")), 9))
+    for item in seeded:
+        name = str(item.get("name") or "")
+        source = str(item.get("seed_source") or "")
+        if source == "operator":
+            why = "operator-asked identifier"
+        elif source == "bridge_seed_overflow":
+            why = whys.get(name, "bridge-derived lead") + (
+                " — beyond the derived-attention cap; baseline "
+                "treatment")
+        else:
+            why = whys.get(name, "bridge-derived lead")
+        parts.append(f"| `{_cell(name)}` | {_cell(source)} "
+                     f"| {_cell(why)} |")
+    parts.append("")
+    return parts
 
 
 # ------------------------------------------------------------------
@@ -1085,6 +1152,12 @@ def main() -> int:
     ap.add_argument("--redb-map", default=None, metavar="PATH",
                     help="Passed through to raptor-study-prep "
                          "(decomp-map.json sidecar).")
+    ap.add_argument("--bridge-seed-file", default=None, metavar="PATH",
+                    help="Passed through to raptor-study-prep "
+                         "(bridge-seeds.json from the map→study "
+                         "bridge). Also counts as an initial scope: "
+                         "a run with bridge seeds proceeds to study "
+                         "instead of the overview-only shortcut.")
     ap.add_argument("--max-cost", type=float, default=None,
                     metavar="USD",
                     help="Maximum LLM cost in USD before stopping — "
@@ -1124,9 +1197,18 @@ def main() -> int:
 
     rl_path = output_dir / "reading-list.json"
     has_reading_list = rl_path.is_file()
+    bridge_seed_file = (Path(parsed.bridge_seed_file)
+                        if parsed.bridge_seed_file else None)
+    has_bridge_seeds = (bridge_seed_file is not None
+                        and bridge_seed_file.is_file())
 
     # --- Overview mode ---
-    if not identifiers and not concepts and not has_reading_list:
+    # Bridge seeds are an initial scope like operator identifiers
+    # (one tier down): with them present the run studies instead of
+    # stopping at the overview shortcut — the one-shot binary flow
+    # depends on this.
+    if (not identifiers and not concepts and not has_reading_list
+            and not has_bridge_seeds):
         print("study-loop: no identifier/concept given — running overview",
               file=sys.stderr)
         overview_idents, overview_concepts, overview_summary, overview_title = (
@@ -1187,6 +1269,8 @@ def main() -> int:
         prep_cmd.extend(["--redb", parsed.redb])
     if parsed.redb_map:
         prep_cmd.extend(["--redb-map", parsed.redb_map])
+    if has_bridge_seeds:
+        prep_cmd.extend(["--bridge-seed-file", str(bridge_seed_file)])
 
     rc = _run(prep_cmd, verbose=parsed.verbose)
     if rc != 0:
@@ -1357,6 +1441,19 @@ def main() -> int:
 
     # --- Render human-readable report ---
     _render_study_report(output_dir)
+
+    # study-questions.md is a RENDERING of reading-list.json (the
+    # one store) — derived, regenerable, never a place questions
+    # live. Best-effort: the renderer never fails the run.
+    try:
+        from core.concepts.reading_list import write_study_questions
+        questions_path = write_study_questions(output_dir)
+    except Exception:  # noqa: BLE001 — render is a convenience
+        questions_path = None
+    if questions_path:
+        print(f"study-loop: study questions rendered to "
+              f"{questions_path} (from reading-list.json)",
+              file=sys.stderr)
 
     # --- Summary ---
     if dm_path.is_file():

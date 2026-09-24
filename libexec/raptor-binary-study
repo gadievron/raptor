@@ -511,6 +511,10 @@ def main() -> int:
                     help="Outer prep+study passes (default 3).")
     ap.add_argument("--decompile-batch", type=int, default=12,
                     help="Max functions decompiled between passes.")
+    ap.add_argument("--no-bridge-seeds", action="store_true",
+                    help="Skip the map→study bridge (binary --map / "
+                         "hunt artifacts seeding pass 1 at the "
+                         "bridge_seed tier).")
     ap.add_argument("--max-cost", type=float, default=None,
                     metavar="USD",
                     help="Total LLM budget in USD across ALL study "
@@ -595,6 +599,26 @@ def main() -> int:
     common = ["--redb", str(redb_path),
               "--redb-map", str(tree.sidecar_path)]
 
+    # Map→study bridge: mechanically seed pass 1 from a prior binary
+    # --map (and hunt artifacts) at the distinct bridge_seed tier.
+    # Enrichment only — a broken/missing artifact never blocks the
+    # study, and later passes stay reading-list-driven (the bridge
+    # never bypasses the pass loop).
+    bridge_file = None
+    if not parsed.no_bridge_seeds:
+        try:
+            from core.orchestration.binary_study_bridge import (
+                build_bridge_seeds,
+            )
+            bridge_file = build_bridge_seeds(
+                output_dir, db, item_budget=parsed.batch_target)
+        except Exception as exc:  # noqa: BLE001 — bridge is enrichment
+            print(f"binary-study: map→study bridge skipped: "
+                  f"{_sft(str(exc), max_len=200)}", file=sys.stderr)
+        if bridge_file is not None:
+            print(f"binary-study: bridge seeds written to "
+                  f"{bridge_file}", file=sys.stderr)
+
     if parsed.prep_only:
         cmd = [sys.executable, str(libexec / "raptor-study-prep"),
                str(tree_root), str(output_dir),
@@ -603,6 +627,8 @@ def main() -> int:
             cmd.extend(["--identifier", parsed.identifier])
         if parsed.concept:
             cmd.extend(["--concept", parsed.concept])
+        if bridge_file is not None:
+            cmd.extend(["--bridge-seed-file", str(bridge_file)])
         rc = _run(cmd, parsed.verbose, gap_dir=output_dir)
         if rc == 0:
             print(
@@ -633,6 +659,11 @@ def main() -> int:
                "--batch-target", str(parsed.batch_target)]
         if identifiers:
             cmd.extend(["--identifier", identifiers])
+        if bridge_file is not None and pass_no == 1:
+            # Pass 1 only — later passes are reading-list-driven and
+            # must stay narrowed; re-seeding them would re-widen the
+            # scope and re-spend the study.
+            cmd.extend(["--bridge-seed-file", str(bridge_file)])
         if parsed.concept and pass_no == 1:
             cmd.extend(["--concept", parsed.concept])
         if parsed.model:
