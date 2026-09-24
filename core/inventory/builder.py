@@ -1830,12 +1830,46 @@ def _process_single_file(
                 # would carry the gap forward run after run (the SHA
                 # match skips the parse indefinitely). Content is
                 # byte-identical to what the old parse saw, so
-                # backfilling only the missing stamps is exact.
+                # backfilling only the missing stamps is exact. Same
+                # for the span hashes of stamped handler spans (the
+                # pre-stamp hasher skipped every interstitial): the
+                # function-level diff needs them, and hashing the
+                # identical content now equals hashing it at the
+                # original parse. Best-effort like the fresh-parse
+                # hasher below.
                 items_list = old_entry.get('items')
                 if isinstance(items_list, list):
                     stamp_script_handler_items(
                         items_list, language, content, only_missing=True,
                     )
+                    try:
+                        from core.staleness import hash_spans_text
+                        unhashed = [
+                            it for it in items_list
+                            if isinstance(it, dict)
+                            and it.get('kind') == 'interstitial'
+                            and it.get('script_handler') is True
+                            and not it.get('span_hash')
+                            and isinstance(it.get('line_start'), int)
+                            and not isinstance(it.get('line_start'), bool)
+                            and isinstance(it.get('line_end'), int)
+                            and not isinstance(it.get('line_end'), bool)
+                            and 0 < it['line_start'] <= it['line_end']
+                        ]
+                        if unhashed:
+                            hashes = hash_spans_text(
+                                content,
+                                [(it['line_start'], it['line_end'])
+                                 for it in unhashed],
+                            )
+                            for it, h in zip(unhashed, hashes):
+                                if h:
+                                    it['span_hash'] = h
+                    except Exception:
+                        logger.debug(
+                            "handler span-hash backfill failed for %s",
+                            rel_path, exc_info=True,
+                        )
                 return old_entry
 
         # The parser reads a TranslationView (its parse_text), not raw
@@ -1887,7 +1921,10 @@ def _process_single_file(
         # the raw span lines). The function-level inventory diff
         # compares these across runs to find added/changed functions
         # without needing the previous run's source. Interstitial
-        # residue is skipped (synthetic, not a reviewable unit).
+        # residue is skipped (synthetic, not a reviewable unit) —
+        # EXCEPT spans stamped script_handler above: those are the
+        # reviewable units of script-per-file files, and without a
+        # hash the diff can only over-report them as changed forever.
         # Best-effort — a hash failure just leaves the field absent.
         try:
             from core.staleness import hash_spans_text
@@ -1899,7 +1936,8 @@ def _process_single_file(
                 if (isinstance(ls, int) and not isinstance(ls, bool)
                         and isinstance(le, int) and not isinstance(le, bool)
                         and 0 < ls <= le
-                        and item_dict.get('kind') != 'interstitial'):
+                        and (item_dict.get('kind') != 'interstitial'
+                             or item_dict.get('script_handler') is True)):
                     span_items.append(item_dict)
                     spans.append((ls, le))
             if spans:
