@@ -206,6 +206,25 @@ class TestAtherisRunnerContract(unittest.TestCase):
                 AtherisRunner(tmp / "missing.py", target_dir=target,
                               output_dir=tmp / "out")
 
+    def test_relative_or_missing_interpreter_is_refused(self):
+        # The interpreter path feeds the sandbox read-ALLOWLIST
+        # derivation: a relative "python3" would make the tool/readable
+        # roots derive from whatever CWD the runner was constructed in.
+        tmp = _tmpdir(self)
+        harness, target = _make_target(tmp)
+        with patch("packages.fuzzing.atheris_runner.atheris_available",
+                   return_value=True):
+            with self.assertRaises(ValueError) as ctx:
+                AtherisRunner(harness, target_dir=target,
+                              output_dir=tmp / "out",
+                              python_executable="python3")
+            self.assertIn("absolute", str(ctx.exception))
+            with self.assertRaises(ValueError) as ctx:
+                AtherisRunner(harness, target_dir=target,
+                              output_dir=tmp / "out",
+                              python_executable=str(tmp / "no-python"))
+            self.assertIn("not found", str(ctx.exception))
+
     def test_custom_interpreter_venv_root_joins_tool_paths(self):
         # python_runtime_tool_paths() inspects the RUNNING interpreter;
         # a campaign pointed at a different venv's python must get that
