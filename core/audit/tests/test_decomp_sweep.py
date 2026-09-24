@@ -666,3 +666,100 @@ class TestJournal:
         assert out["journal_rows_capped"] is True
         assert out["mapped"] == 2  # artifact keeps every record
         assert MAX_JOURNAL_ROWS >= 1  # module default stays positive
+
+
+class TestReportSection:
+    def _render(self, tmp_path, report_extra):
+        from core.audit.report import write_markdown_report
+        report = {"stats": {}, "findings": [], **report_extra}
+        path = write_markdown_report(report, tmp_path)
+        return path.read_text(encoding="utf-8")
+
+    def _load(self, tmp_path):
+        from core.audit.report import _load_decomp_sweep
+        return _load_decomp_sweep(tmp_path)
+
+    def test_coverage_line_cites_conformance_denominator(self, tmp_path):
+        tree = tmp_path / "decomp-tree"
+        tree.mkdir()
+        save_json(tree / "decomp-tree-conformance.json", {
+            "parsed_rate": 0.8, "files_total": 5, "quarantine_total": 1,
+        })
+        save_json(tmp_path / SWEEP_RECORD_NAME, {
+            "schema": 1, "skipped": False, "tree_root": str(tree),
+            "rules_run": ["a.yaml", "b.yaml"], "rules_errored": {},
+            "findings_total": 7, "mapped": 4, "unmapped": 3,
+            "journal_rows": 4,
+        })
+        ds = self._load(tmp_path)
+        assert ds["conformance"]["parsed_rate"] == 0.8
+        text = self._render(tmp_path, {"decomp_sweep": ds})
+        assert "## Decomp-tree sweep" in text
+        assert "80% of 5 decomp-tree file(s) parsed" in text
+        assert "2 rule file(s) run" in text
+        assert "4 mapped to functions" in text
+        assert "3 unmapped" in text
+        assert "never dropped" in text
+        assert "1 tree file(s) quarantined" in text
+
+    def test_missing_conformance_renders_unavailable_never_hundred(
+            self, tmp_path):
+        save_json(tmp_path / SWEEP_RECORD_NAME, {
+            "schema": 1, "skipped": False,
+            "tree_root": str(tmp_path / "decomp-tree"),
+            "rules_run": ["a.yaml"], "rules_errored": {"a.yaml": "boom"},
+            "findings_total": 0, "mapped": 0, "unmapped": 0,
+            "journal_rows": 0,
+        })
+        text = self._render(
+            tmp_path, {"decomp_sweep": self._load(tmp_path)})
+        assert "parse rate unavailable" in text
+        assert "no conformance metric recorded" in text
+        assert "100%" not in text
+        assert "1 rule file(s) errored" in text
+
+    def test_metric_present_but_unmeasurable_is_distinguished(
+            self, tmp_path):
+        """parsed_rate null with the metric PRESENT (no tool leg
+        could measure) renders its own wording — never conflated
+        with a missing metric, never an assumed 100%."""
+        tree = tmp_path / "decomp-tree"
+        tree.mkdir()
+        save_json(tree / "decomp-tree-conformance.json", {
+            "parsed_rate": None, "files_total": 3,
+            "quarantine_total": 0,
+        })
+        save_json(tmp_path / SWEEP_RECORD_NAME, {
+            "schema": 1, "skipped": False, "tree_root": str(tree),
+            "rules_run": ["a.yaml"], "rules_errored": {},
+            "findings_total": 0, "mapped": 0, "unmapped": 0,
+            "journal_rows": 0,
+        })
+        text = self._render(
+            tmp_path, {"decomp_sweep": self._load(tmp_path)})
+        assert "conformance metric present but no tool leg" in text
+        assert "no conformance metric recorded" not in text
+        assert "100%" not in text
+
+    def test_skip_reason_rendered_escaped(self, tmp_path):
+        save_json(tmp_path / SWEEP_RECORD_NAME, {
+            "schema": 1, "skipped": True,
+            "skip_reason": "no re-database \x1b]0;evil\x07 here",
+        })
+        text = self._render(
+            tmp_path, {"decomp_sweep": self._load(tmp_path)})
+        assert "Skipped" in text
+        assert "no re-database" in text
+        assert "\x1b" not in text and "\x07" not in text
+
+    def test_generate_report_picks_up_sweep_record(self, tmp_path):
+        from core.audit.report import generate_report
+        save_json(tmp_path / SWEEP_RECORD_NAME, {
+            "schema": 1, "skipped": True, "skip_reason": "no tree",
+        })
+        report = generate_report(tmp_path)
+        assert report["decomp_sweep"]["skipped"] is True
+
+    def test_source_run_report_has_no_section(self, tmp_path):
+        text = self._render(tmp_path, {})
+        assert "Decomp-tree sweep" not in text
