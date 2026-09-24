@@ -1,0 +1,11 @@
+# Decomp-tree conformance probe. A never-matching C rule whose only
+# job is to make semgrep PARSE every file in the tree: the scan's
+# paths.scanned / per-file error sidecars become the semgrep leg of
+# the parse-rate denominator in decomp-tree-conformance.json. Any
+# findings are ignored by the consumer.
+rules:
+  - id: decomp-conformance-probe
+    pattern: raptor_decomp_conformance_probe_never_defined_(...)
+    message: "conformance probe (never expected to match)"
+    languages: [c]
+    severity: INFO

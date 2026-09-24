@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Re-measure decomp-tree conformance on demand.
+
+Recomputes ``decomp-tree-conformance.json`` for an existing
+decomp-tree (sandboxed tree-sitter + semgrep probe legs) and prints
+the summary. Placement rationale: the metric is written automatically
+at tree build time (the ``write_decomp_tree`` seam) and consumed by
+the audit report — this hook exists for re-measurement after manual
+tree edits, toolchain changes, or diagnosis, which is dev-time
+measurement work, so it lives in the subsystem ``scripts/`` dir
+(never on the ``libexec/`` LLM dispatch surface).
+
+Usage:
+
+    packages/ghidra/scripts/decomp-tree-conformance <tree-root>
+        [--no-write] [--json]
+
+Exit codes: 0 measured (rates may still be None when no tool leg is
+available — read the legs); 2 usage / not a decomp-tree.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_REPO_ROOT))
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="Re-measure decomp-tree parse conformance.")
+    ap.add_argument("tree_root", help="Decomp-tree directory "
+                    "(contains decomp-map.json)")
+    ap.add_argument("--no-write", action="store_true",
+                    help="Print only; do not rewrite "
+                         "decomp-tree-conformance.json")
+    ap.add_argument("--json", action="store_true",
+                    help="Print the full record as JSON")
+    args = ap.parse_args()
+
+    root = Path(args.tree_root)
+    from packages.ghidra.decomp_tree import SIDECAR_NAME
+    if not (root / SIDECAR_NAME).is_file():
+        print(f"error: {root} has no {SIDECAR_NAME} — not a decomp-tree",
+              file=sys.stderr)
+        return 2
+
+    from packages.ghidra.decomp_conformance import (
+        CONFORMANCE_NAME,
+        measure_conformance,
+    )
+    record = measure_conformance(root, write=not args.no_write)
+    if args.json:
+        print(json.dumps(record, indent=2))
+        return 0
+    rate = record.get("parsed_rate")
+    rate_s = f"{rate:.1%}" if isinstance(rate, float) else "unavailable"
+    print(f"files: {record['files_total']}  parsed rate: {rate_s}")
+    for leg in ("tree_sitter", "semgrep"):
+        block = record.get(leg) or {}
+        if block.get("available"):
+            leg_rate = block.get("rate")
+            leg_s = f"{leg_rate:.1%}" if isinstance(leg_rate, float) \
+                else "n/a"
+            print(f"  {leg}: parsed {block.get('parsed', 0)}, "
+                  f"failed {block.get('failed', 0)} ({leg_s})")
+        else:
+            print(f"  {leg}: unavailable — "
+                  f"{block.get('reason', 'unknown')}")
+    q = record.get("quarantine_total", 0)
+    if q:
+        print(f"  quarantined: {q} file(s) — see "
+              f"{CONFORMANCE_NAME if args.no_write else root / CONFORMANCE_NAME}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
