@@ -1641,34 +1641,35 @@ class BinaryUnderstand:
             if hit:
                 ctx.dangerous_sinks.append(fn)
 
-    def _tag_transitive_callers(self, r2, ctx: BinaryContextMap) -> None:
-        """Walk the call graph backwards from each dangerous sink up to
-        `_TRANSITIVE_MAX_DEPTH` hops and flag every function that can
-        reach a sink within that depth.
+    def _fetch_call_adjacency(
+        self,
+        r2,
+        ctx: BinaryContextMap,
+    ) -> tuple[dict[str, set[str]], dict[str, int]]:
+        """One-shot whole-binary call adjacency (the aflcj graph).
 
-        Why: _tag_dangerous_callers above only tags DIRECT callers. The
-        real-world CVE pattern is a parser routine that builds a struct,
-        passes it through 2-3 internal helpers, and only THEN reaches
-        strcpy / memcpy / etc. Those intermediate parsers are exactly
-        what the fuzzer should hammer — but they don't directly call
-        any dangerous import so calls_dangerous wouldn't flag them.
+        Shared machinery: the transitive-caller tagging below and the
+        operator-steered hunt's ``--calls`` substrate both consume it
+        — one graph builder, two askers, instead of a second aflcj
+        implementation.
 
-        Approach: single `aflcj` call gets the whole call graph as JSON
-        (one r2 cmd, not 100s of per-function axt calls). BFS backwards
-        from each sink name through the inverted adjacency list. The
-        FunctionInfo records gain transitively_reaches_dangerous (list
-        of sink names) and transitive_distance (min hops to any sink).
+        1. Pull the whole call graph in one shot. ``aflcj`` returns
+           per-function call-ref data on some r2 builds but a bare
+           integer count on others; fall back to ``afllj`` (which
+           includes callrefs in its richer per-function record) when
+           aflcj doesn't give us a usable list.
+        2. Build forward adjacency by function name. aflcj's
+           per-function record exposes callees under multiple field
+           names depending on r2 version: ``callrefs`` (5.x),
+           ``imports`` (some older builds), ``calls`` (variant) —
+           union them defensively. Some builds emit callrefs with
+           addresses only (no name field); an addr→name index
+           resolves those (seeded from ctx's recovered functions when
+           the caller has them).
 
-        Per-function transitive flag composes additively with
-        calls_dangerous: a function that DIRECTLY calls strcpy AND
-        transitively reaches gets will surface in both lists, with
-        transitive_distance=1.
+        Returns ``(callees_by_name, addr_by_name)``; both empty when
+        the graph could not be fetched.
         """
-        # 1. Pull the whole call graph in one shot.
-        #    aflcj returns per-function call-ref data on some r2 builds
-        #    but returns a bare integer count on others. Fall back to
-        #    afllj (which includes callrefs in its richer per-function
-        #    record) when aflcj doesn't give us a usable list.
         callgraph = None
         for cmd in ("aflcj", "afllj"):
             try:
@@ -1691,21 +1692,11 @@ class BinaryUnderstand:
                 break
 
         if not callgraph:
-            logger.debug("call-graph fetch failed (aflcj/afllj); "
-                         "skipping transitive analysis")
-            return
+            logger.debug("call-graph fetch failed (aflcj/afllj)")
+            return {}, {}
 
-        # 2. Build forward + reverse adjacency by function name.
-        #    aflcj's per-function record exposes callees under multiple
-        #    field names depending on r2 version: `callrefs` (5.x),
-        #    `imports` (some older builds), `calls` (variant). Union
-        #    them defensively so the analysis works across versions.
-        #
-        #    Some r2 builds emit callrefs with addresses only (no name
-        #    field). Build an addr→name index so we can resolve those
-        #    to function names; without this the reverse BFS never
-        #    matches named sinks and transitive reachability is zero.
         addr_to_name: dict[str, str] = {}
+        addr_by_name: dict[str, int] = {}
         for entry in callgraph:
             if not isinstance(entry, dict):
                 continue  # r2 output is hostile; skip malformed elements
@@ -1715,19 +1706,21 @@ class BinaryUnderstand:
                 eaddr = entry.get("offset")
             if ename and eaddr is not None:
                 addr_to_name[str(eaddr)] = ename
+                if isinstance(eaddr, int) and not isinstance(eaddr, bool):
+                    addr_by_name.setdefault(ename, eaddr)
         for fn in ctx.imported_functions:
             addr_to_name[str(fn.address)] = fn.name
         for fn in ctx.interesting_functions:
             addr_to_name[str(fn.address)] = fn.name
 
-        callees: dict[str, set] = {}
+        callees: dict[str, set[str]] = {}
         for entry in callgraph:
             if not isinstance(entry, dict):
                 continue  # r2 output is hostile; skip malformed elements
             name = str(entry.get("name", ""))
             if not name:
                 continue
-            this_callees = set()
+            this_callees: set[str] = set()
             for ref_field in ("callrefs", "imports", "calls"):
                 refs = entry.get(ref_field) or []
                 if not isinstance(refs, list):
@@ -1744,6 +1737,67 @@ class BinaryUnderstand:
                     if target:
                         this_callees.add(str(target))
             callees[name] = this_callees
+        return callees, addr_by_name
+
+    def call_adjacency_scan(
+        self,
+    ) -> tuple[dict[str, set[str]], dict[str, int], list[str]]:
+        """Standalone whole-binary call-adjacency fetch.
+
+        The hunt's ``--calls`` substrate when no Ghidra re-database is
+        available: its own sandboxed session runs ``aaa`` plus the
+        shared one-shot graph fetch — no decompilation, no inventory
+        pass. Returns ``(callees_by_name, addr_by_name, notes)``;
+        notes carry recorded degradation so an empty graph is
+        distinguishable from "binary has no calls".
+        """
+        ctx = BinaryContextMap(binary_path=self.binary)
+        callees: dict[str, set[str]] = {}
+        addr_by_name: dict[str, int] = {}
+        with self._sandboxed_session() as session:
+            self._cmd_t(session, "aaa", self._T_AAA)
+            session.analysed = True
+            try:
+                callees, addr_by_name = self._fetch_call_adjacency(
+                    session, ctx,
+                )
+            except R2SessionLost as e:
+                note = (
+                    f"WARNING: radare2 session lost mid-scan ({e}); "
+                    "the call graph is missing — an empty caller set "
+                    "may reflect the dead session, not the binary."
+                )
+                ctx.notes.append(note)
+                logger.warning("%s", note)
+        return callees, addr_by_name, list(ctx.notes)
+
+    def _tag_transitive_callers(self, r2, ctx: BinaryContextMap) -> None:
+        """Walk the call graph backwards from each dangerous sink up to
+        `_TRANSITIVE_MAX_DEPTH` hops and flag every function that can
+        reach a sink within that depth.
+
+        Why: _tag_dangerous_callers above only tags DIRECT callers. The
+        real-world CVE pattern is a parser routine that builds a struct,
+        passes it through 2-3 internal helpers, and only THEN reaches
+        strcpy / memcpy / etc. Those intermediate parsers are exactly
+        what the fuzzer should hammer — but they don't directly call
+        any dangerous import so calls_dangerous wouldn't flag them.
+
+        Approach: the shared one-shot adjacency fetch above, then BFS
+        backwards from each sink name through the inverted adjacency
+        list. The FunctionInfo records gain
+        transitively_reaches_dangerous (list of sink names) and
+        transitive_distance (min hops to any sink).
+
+        Per-function transitive flag composes additively with
+        calls_dangerous: a function that DIRECTLY calls strcpy AND
+        transitively reaches gets will surface in both lists, with
+        transitive_distance=1.
+        """
+        callees, _addr_by_name = self._fetch_call_adjacency(r2, ctx)
+        if not callees:
+            logger.debug("skipping transitive analysis (no call graph)")
+            return
 
         # Keep the direct adjacency on the function records. The higher-level
         # binary pipeline uses this to recover bounded ingress -> parser paths.
