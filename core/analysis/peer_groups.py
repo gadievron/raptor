@@ -1,16 +1,20 @@
 """Layered peer group resolver for /audit sibling analysis.
 
-Replaces the global verb-prefix grouping in ``sibling_analysis.py`` with
-a seven-layer resolver that uses progressively weaker signals.  Higher-
-confidence layers (Joern call graph, binary edges, dispatch tables) claim
-functions first; the definitive layers L0-L3 group only what remains
-unclaimed, while L4-L6 run independently over the full input (see the
-hierarchy below).
+Replaces the global verb-prefix grouping in ``sibling_analysis.py``
+with a layered resolver that uses progressively weaker signals.
+Higher-confidence layers (Joern call graph, binary edges, anchor
+families, dispatch tables) claim functions first; the exclusive
+layers group only what remains unclaimed, while the independent
+layers run over the full input (see the hierarchy below).
 
 Layer hierarchy:
 
   L0  Joern co-callee groups     — CPG call graph (definitive)
   L1  r2 binary co-callee groups — binary call edges (definitive)
+      Binary anchor families     — hunt string-xref co-occurrence
+                                    (definitive, join-only)
+      Binary shared-callee sigs  — >=K distinctive callees shared
+                                    (definitive)
   L2  Dispatch-site groups       — tree-sitter extraction (definitive)
   L3  Domain model groups        — study-run concepts (high)
 
@@ -19,9 +23,13 @@ Layer hierarchy:
                                     verb-prefix + sig shape on what
                                     remains, per-directory (medium)
   L6  Paired operations          — stem + verb match, global (medium)
+      Binary decomp similarity   — normalized-hash / shingle-Jaccard
+                                    via the ghidra similarity seam
+                                    (decompiler-inferred, lower
+                                    confidence, tier-labelled)
 
-L0–L3 claim exclusively (a function in a higher layer is removed from
-lower layers' input).  L4–L6 run independently.
+Exclusive layers claim (a function in a higher layer is removed from
+lower exclusive layers' input); the independent layers never claim.
 """
 
 from __future__ import annotations
@@ -46,6 +54,61 @@ logger = logging.getLogger(__name__)
 _CO_CALLEE = "co_callee"
 _DISPATCH_SITE = "dispatch_site"
 _TYPE_COHORT = "type_cohort"
+_ANCHOR_FAMILY = "binary_anchor_family"
+_CALLEE_SIGNATURE = "shared_callee_signature"
+_DECOMP_SIMILARITY = "decomp_similarity"
+
+# ── Binary-layer bounds ───────────────────────────────────────────────
+#
+# Every binary layer is fed attacker-shaped data (names, call edges,
+# decompilation recovered from a hostile binary), so each is bounded
+# in group count and group size, deterministic under shuffled input,
+# and surfaces nothing as a verdict — groups are review structure.
+
+#: Groups emitted per binary layer. Both directions: more groups let a
+#: decoy-flooded binary (thousands of planted look-alike clusters)
+#: drown the reviewer and multiply the downstream vector-extraction
+#: work; fewer hides real structure in large dispatch-heavy targets.
+#: 32 mirrors the hunt's family cap ceiling class.
+MAX_BINARY_PEER_GROUPS = 32
+
+#: Members per binary-layer group. Both directions: larger groups turn
+#: one hub into a whole-binary blob (and the N-vs-K comparison
+#: downstream degrades — one outlier in 200 members is noise);
+#: smaller splits real wide handler families. 24 mirrors the L4
+#: type-cohort ceiling (a cohort half the binary touches is not
+#: distinctive).
+MAX_BINARY_PEER_GROUP_SIZE = 24
+
+#: K — distinct DISTINCTIVE callees two functions must share to join
+#: one shared-callee-signature group. Both directions: K=1 merges
+#: everything touching one common helper (the same one-string glue
+#: failure the hunt's co-occurrence threshold refuses); K=3+ splits
+#: real sibling handlers that share only a validator and an emitter.
+#: K=2 is the smallest value that requires corroboration — the same
+#: rationale as the hunt's MIN_SHARED_ANCHOR_STRINGS.
+MIN_SHARED_DISTINCTIVE_CALLEES = 2
+
+#: Distinctiveness ceiling: a callee with more callers than this is a
+#: hub (libc wrapper, logging shim, allocator) and joins nothing —
+#: shared vocabulary, not family evidence. Both directions: higher
+#: lets memcpy-class hubs glue the whole binary into one group; lower
+#: refuses genuinely shared family helpers in wide dispatch families.
+#: 16 keeps signatures to helpers a bounded slice of the binary uses.
+CALLEE_HUB_MAX_CALLERS = 16
+
+#: Shingle-Jaccard threshold for the decomp-similarity join — the
+#: matcher's tier-5 absolute floor (packages.ghidra.match._SIM_ABS),
+#: kept equal so "similar" means the same thing in both consumers.
+DECOMP_SIMILARITY_THRESHOLD = 0.7
+
+#: Pairwise-comparison budget for the decomp-similarity join. Both
+#: directions: a larger budget lets a decompilation-rich hostile
+#: binary turn peer formation into a CPU sink (the work is quadratic
+#: in candidates); smaller degrades the layer to exact-hash groups on
+#: large targets — which is the documented degradation, surfaced in
+#: the layer report, never silent.
+MAX_DECOMP_PAIRWISE = 10_000
 
 
 # ── Top-level resolver ────────────────────────────────────────────────
@@ -60,11 +123,39 @@ def resolve_peer_groups(
     domain_model: dict[str, Any] | None = None,
     type_ref_index: dict[str, list[tuple[str, str]]] | None = None,
     checklist: dict[str, Any] | None = None,
+    anchor_families: list[dict[str, Any]] | None = None,
+    binary_callees: dict[str, set[str]] | None = None,
+    decomp_texts: dict[str, str] | None = None,
+    notes: list[str] | None = None,
 ) -> list[SiblingGroup]:
     """Build peer groups from all available signals.
 
+    ``notes`` is a caller-owned collector (the hunt's rejection-notes
+    pattern): operator-facing degradation facts — a layer silently
+    doing LESS than asked, like the decomp-similarity pairwise budget
+    reducing to hash-only groups — are appended so interactive
+    consumers can surface them in-band, not just in debug logs.
+
     Parameters mirror the data available in the orchestrator prep phase.
     Everything is optional — missing inputs simply skip that layer.
+
+    The binary-native inputs follow the same contract:
+
+    * ``anchor_families`` — hunt anchor-family payload dicts
+      (``binary-hunt-*.json`` ``families`` entries: members with
+      escaped names and optional fids). Exclusive layer — string
+      co-occurrence backed by xrefs is family evidence of the same
+      grade as call-graph position.
+    * ``binary_callees`` — caller name → callee-name set from a
+      persisted call substrate (re-database xrefs, map call subgraph,
+      or the binary-oracle edge cache — the caller picks; this
+      resolver never touches r2). Exclusive layer: functions sharing
+      ≥ :data:`MIN_SHARED_DISTINCTIVE_CALLEES` distinctive callees.
+    * ``decomp_texts`` — function name → raw decompiled text from a
+      re-database that carries decompilation. Independent layer,
+      tier-labelled decompiler-inferred (pseudo-code is approximate
+      — lower confidence than the xref-backed layers above), via the
+      similarity seam (``packages.ghidra.similarity``).
 
     When ``checklist`` is supplied, every layer sees the functions
     enriched with the checklist items' ``metadata`` (parameters,
@@ -117,6 +208,26 @@ def resolve_peer_groups(
     else:
         layer_report.append("binary co-callee skipped (no edge index)")
 
+    # Binary anchor families (exclusive): xref-backed string
+    # co-occurrence structure from /binary hunt artifacts.
+    if anchor_families:
+        la = _anchor_family_groups(anchor_families, _remaining())
+        _claim(la)
+        groups.extend(la)
+        layer_report.append(f"binary anchor-family {len(la)}")
+    else:
+        layer_report.append("binary anchor-family skipped (no families)")
+
+    # Binary shared-callee signatures (exclusive): functions calling
+    # the same distinctive helpers.
+    if binary_callees:
+        lc = _shared_callee_signature_groups(binary_callees, _remaining())
+        _claim(lc)
+        groups.extend(lc)
+        layer_report.append(f"binary shared-callee {len(lc)}")
+    else:
+        layer_report.append("binary shared-callee skipped (no callees)")
+
     # L2: Dispatch-site (exclusive)
     if dispatch_tables:
         l2 = _dispatch_site_groups(dispatch_tables, _remaining())
@@ -148,6 +259,20 @@ def resolve_peer_groups(
     l6 = _paired_operation_groups(functions)
     groups.extend(l6)
     layer_report.append(f"paired-op {len(l6)}")
+    # Binary decomp-similarity (independent): decompiler-inferred —
+    # pseudo-code is approximate, so this layer never claims
+    # exclusively and its groups carry the lower-confidence label.
+    if decomp_texts:
+        ld, ld_note = _decomp_similarity_groups(decomp_texts, functions)
+        groups.extend(ld)
+        layer_report.append(
+            f"binary decomp-similarity {len(ld)}"
+            + (f" ({ld_note})" if ld_note else ""))
+        if ld_note and notes is not None:
+            notes.append(f"binary decomp-similarity: {ld_note}")
+    else:
+        layer_report.append(
+            "binary decomp-similarity skipped (no decompilation)")
 
     logger.info(
         "peer group resolver: %d groups from %d functions, %d claimed "
@@ -642,6 +767,402 @@ def _binary_co_callee_groups(
 
     logger.info("L1 binary co-callee: %d groups", len(groups))
     return groups
+
+
+# ── Binary anchor-family groups ──────────────────────────────────────
+
+
+def _member_record(
+    member: Any,
+    func_by_name: dict[str, dict[str, Any]],
+    func_by_fid: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Resolve one anchor-family member to a function record.
+
+    fid first (exact identity across producers), bare name second —
+    the same precedence FidIndex documents; ambiguous names were
+    already excluded by :func:`_name_index`.
+    """
+    if not isinstance(member, dict):
+        return None
+    fid = member.get("fid")
+    if isinstance(fid, str) and fid in func_by_fid:
+        return func_by_fid[fid]
+    name = member.get("name")
+    if isinstance(name, str) and name:
+        return func_by_name.get(name)
+    return None
+
+
+def _fid_index(
+    functions: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Strict-parsed fid → record. Junk fids collapse to absent and
+    duplicate fids (two records claiming one identity — corrupt or
+    hostile input) are excluded like ambiguous names."""
+    from core.binary.addrmap import normalise_fid
+
+    by_fid: dict[str, dict[str, Any]] = {}
+    ambiguous: set[str] = set()
+    for f in functions:
+        fid = normalise_fid(f.get("fid"))
+        if fid is None:
+            continue
+        if fid in by_fid:
+            ambiguous.add(fid)
+        else:
+            by_fid[fid] = f
+    for fid in ambiguous:
+        del by_fid[fid]
+    return by_fid
+
+
+def _anchor_family_groups(
+    anchor_families: list[dict[str, Any]],
+    functions: list[dict[str, Any]],
+) -> list[SiblingGroup]:
+    """Anchor-family layer: hunt families joined to the gap queue.
+
+    Families arrive pre-clustered (and pre-escaped) from the hunt's
+    bounded string-xref pass; this layer only JOINS them to the
+    resolver's function records — it never re-clusters, so the hunt's
+    caps and determinism carry through.
+    """
+    if not anchor_families or not functions:
+        return []
+
+    func_by_name = _name_index(functions)
+    func_by_fid = _fid_index(functions)
+
+    groups: list[SiblingGroup] = []
+    for family in anchor_families:
+        if len(groups) >= MAX_BINARY_PEER_GROUPS:
+            logger.info(
+                "binary anchor-family layer capped at %d groups",
+                MAX_BINARY_PEER_GROUPS,
+            )
+            break
+        if not isinstance(family, dict):
+            continue
+        matched: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        truncated = False
+        for member in family.get("members") or []:
+            record = _member_record(member, func_by_name, func_by_fid)
+            if record is None:
+                continue
+            key = (record.get("file", ""), record.get("name", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            if len(matched) >= MAX_BINARY_PEER_GROUP_SIZE:
+                truncated = True
+                break
+            matched.append(record)
+        if len(matched) < 2:
+            continue
+        family_id = str(family.get("id") or "")
+        samples = [
+            str(s) for s in (family.get("sample_strings") or [])[:3]
+        ]
+        siblings = [
+            SiblingPath(
+                label=r.get("name", ""),
+                file=r.get("file", ""),
+                function=r.get("name", ""),
+                line=r.get("line", 0),
+            )
+            for r in matched
+        ]
+        context = (
+            "Shared anchor strings: " + "; ".join(samples)
+            if samples else "Shared anchor strings"
+        )
+        if truncated:
+            # In-band, like the callee layer's cap label — a silently
+            # shrunk family misreads as the whole family.
+            context += (
+                f" [group capped at {MAX_BINARY_PEER_GROUP_SIZE} "
+                f"members, kept family order]"
+            )
+        groups.append(SiblingGroup(
+            group_id=f"binary_anchor:{family_id or siblings[0].function}",
+            sibling_type=_ANCHOR_FAMILY,
+            description=(
+                f"Anchor family {family_id or '(unnamed)'} "
+                f"(string-xref co-occurrence)"
+            ),
+            siblings=siblings,
+            shared_context=context,
+        ))
+
+    logger.info("binary anchor-family: %d groups", len(groups))
+    return groups
+
+
+# ── Binary shared-callee-signature groups ────────────────────────────
+
+
+def _shared_callee_signature_groups(
+    binary_callees: dict[str, set[str]],
+    functions: list[dict[str, Any]],
+) -> list[SiblingGroup]:
+    """Functions calling the same distinctive helpers.
+
+    ``binary_callees`` is caller name → callee-name set from a
+    persisted substrate. Distinctive callee = called by 2..
+    :data:`CALLEE_HUB_MAX_CALLERS` of the map's functions — hubs
+    (allocators, logging shims, libc wrappers) join nothing. Two
+    functions sharing ≥ :data:`MIN_SHARED_DISTINCTIVE_CALLEES`
+    distinctive callees union into one group. Deterministic under
+    shuffled input: callers, callees, and union roots iterate sorted.
+    """
+    if not binary_callees or not functions:
+        return []
+
+    func_by_name = _name_index(functions)
+
+    # Caller counts over the WHOLE substrate (not just the resolver's
+    # input) — distinctiveness is a property of the binary.
+    caller_count: dict[str, int] = defaultdict(int)
+    for caller in sorted(binary_callees):
+        for callee in binary_callees[caller]:
+            caller_count[callee] += 1
+    distinctive = {
+        callee for callee, count in caller_count.items()
+        if 2 <= count <= CALLEE_HUB_MAX_CALLERS
+    }
+    if not distinctive:
+        return []
+
+    signatures: dict[str, frozenset[str]] = {}
+    for name in sorted(func_by_name):
+        callees = binary_callees.get(name)
+        if not callees:
+            continue
+        sig = frozenset(callees & distinctive)
+        if sig:
+            signatures[name] = sig
+
+    names = sorted(signatures)
+    # Pairwise join via the shared-callee inverted index — pair work
+    # is bounded by the hub ceiling (each distinctive callee has at
+    # most CALLEE_HUB_MAX_CALLERS callers).
+    by_callee: dict[str, list[str]] = defaultdict(list)
+    for name in names:
+        for callee in sorted(signatures[name]):
+            by_callee[callee].append(name)
+
+    parent: dict[str, str] = {name: name for name in names}
+
+    def _find(name: str) -> str:
+        while parent[name] != name:
+            parent[name] = parent[parent[name]]
+            name = parent[name]
+        return name
+
+    pair_shared: dict[tuple[str, str], int] = {}
+    for callee in sorted(by_callee):
+        members = by_callee[callee]
+        for i, a in enumerate(members):
+            for b in members[i + 1:]:
+                pair_shared[(a, b)] = pair_shared.get((a, b), 0) + 1
+    for (a, b), shared in sorted(pair_shared.items()):
+        if shared >= MIN_SHARED_DISTINCTIVE_CALLEES:
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                # Deterministic root: lexicographic min wins.
+                lo, hi = sorted((ra, rb))
+                parent[hi] = lo
+
+    components: dict[str, list[str]] = defaultdict(list)
+    for name in names:
+        components[_find(name)].append(name)
+
+    groups: list[SiblingGroup] = []
+    for root in sorted(components):
+        members = sorted(components[root])
+        if len(members) < 2:
+            continue
+        if len(groups) >= MAX_BINARY_PEER_GROUPS:
+            logger.info(
+                "binary shared-callee layer capped at %d groups",
+                MAX_BINARY_PEER_GROUPS,
+            )
+            break
+        truncated = len(members) > MAX_BINARY_PEER_GROUP_SIZE
+        kept = members[:MAX_BINARY_PEER_GROUP_SIZE]
+        shared_all = sorted(
+            frozenset.intersection(*(signatures[m] for m in kept)),
+        )
+        siblings = [
+            SiblingPath(
+                label=name,
+                file=func_by_name[name].get("file", ""),
+                function=name,
+                line=func_by_name[name].get("line", 0),
+            )
+            for name in kept
+        ]
+        context = (
+            "Shared distinctive callees: " + ", ".join(shared_all[:6])
+            if shared_all else
+            "Chained shared-callee overlaps (no single callee spans "
+            "the whole group)"
+        )
+        if truncated:
+            context += (
+                f" [group capped at {MAX_BINARY_PEER_GROUP_SIZE} of "
+                f"{len(members)} members, kept name-ordered]"
+            )
+        groups.append(SiblingGroup(
+            group_id=f"binary_callee_sig:{kept[0]}",
+            sibling_type=_CALLEE_SIGNATURE,
+            description=(
+                f"Functions sharing ≥{MIN_SHARED_DISTINCTIVE_CALLEES} "
+                f"distinctive callees"
+            ),
+            siblings=siblings,
+            shared_context=context,
+        ))
+
+    logger.info("binary shared-callee: %d groups", len(groups))
+    return groups
+
+
+# ── Binary decomp-similarity groups (independent, lower confidence) ──
+
+
+_DECOMP_TIER_NOTE = (
+    "decompiler-inferred similarity (approximate pseudo-code — lower "
+    "confidence than xref-backed layers)"
+)
+
+
+def _decomp_similarity_groups(
+    decomp_texts: dict[str, str],
+    functions: list[dict[str, Any]],
+) -> tuple[list[SiblingGroup], str]:
+    """Decompilation-hash/shingle similarity via the similarity seam.
+
+    Two stages, both deterministic: exact normalized-hash equality
+    (clones), then bounded pairwise shingle-Jaccard at the matcher's
+    absolute floor. Returns ``(groups, note)`` — the note reports the
+    pairwise stage being skipped over budget (degradation is said,
+    never silent). Requires ``packages.ghidra.similarity``; when the
+    packages tree is absent the layer stays empty.
+    """
+    if not decomp_texts or not functions:
+        return [], ""
+    try:
+        from packages.ghidra.similarity import (
+            decomp_hash_text,
+            jaccard,
+            shingles_text,
+        )
+    except ImportError:  # pragma: no cover - packages tree absent
+        return [], "similarity seam unavailable"
+
+    func_by_name = _name_index(functions)
+
+    # Own-name masking rides INSIDE the seam's single
+    # strip→mask→normalize pipeline (own=): two clones of one body
+    # differ only in their own identifier — the matcher's
+    # rename-aware diff normalization, applied per member. Masking
+    # outside the seam and re-stripping inside would dissolve the
+    # NUL-delimited sentinel (forgeable by a literal identifier).
+    hashed: dict[str, str] = {}
+    for name in sorted(func_by_name):
+        text = decomp_texts.get(name)
+        if not text:
+            continue
+        digest = decomp_hash_text(text, own=name)
+        if digest:
+            hashed[name] = digest
+
+    names = sorted(hashed)
+    parent: dict[str, str] = {name: name for name in names}
+
+    def _find(name: str) -> str:
+        while parent[name] != name:
+            parent[name] = parent[parent[name]]
+            name = parent[name]
+        return name
+
+    def _union(a: str, b: str) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            lo, hi = sorted((ra, rb))
+            parent[hi] = lo
+
+    # Stage 1: exact normalized-hash equality.
+    by_hash: dict[str, list[str]] = defaultdict(list)
+    for name in names:
+        by_hash[hashed[name]].append(name)
+    for members in by_hash.values():
+        for other in members[1:]:
+            _union(members[0], other)
+
+    # Stage 2: bounded pairwise shingle similarity.
+    note = ""
+    pair_budget = len(names) * (len(names) - 1) // 2
+    if pair_budget > MAX_DECOMP_PAIRWISE:
+        note = (
+            f"pairwise similarity skipped: {pair_budget} pairs exceed "
+            f"the {MAX_DECOMP_PAIRWISE} budget; exact-hash groups only"
+        )
+    else:
+        shingle_sets = {
+            name: shingles_text(decomp_texts[name], own=name)
+            for name in names
+        }
+        for i, a in enumerate(names):
+            sa = shingle_sets[a]
+            if not sa:
+                continue
+            for b in names[i + 1:]:
+                sb = shingle_sets[b]
+                if not sb:
+                    continue
+                sim = jaccard(sa, sb)
+                if sim is not None and sim >= DECOMP_SIMILARITY_THRESHOLD:
+                    _union(a, b)
+
+    components: dict[str, list[str]] = defaultdict(list)
+    for name in names:
+        components[_find(name)].append(name)
+
+    groups: list[SiblingGroup] = []
+    for root in sorted(components):
+        members = sorted(components[root])
+        if len(members) < 2:
+            continue
+        if len(groups) >= MAX_BINARY_PEER_GROUPS:
+            logger.info(
+                "binary decomp-similarity layer capped at %d groups",
+                MAX_BINARY_PEER_GROUPS,
+            )
+            break
+        kept = members[:MAX_BINARY_PEER_GROUP_SIZE]
+        siblings = [
+            SiblingPath(
+                label=name,
+                file=func_by_name[name].get("file", ""),
+                function=name,
+                line=func_by_name[name].get("line", 0),
+            )
+            for name in kept
+        ]
+        groups.append(SiblingGroup(
+            group_id=f"binary_decomp:{kept[0]}",
+            sibling_type=_DECOMP_SIMILARITY,
+            description=f"Similar decompilations ({_DECOMP_TIER_NOTE})",
+            siblings=siblings,
+            shared_context=_DECOMP_TIER_NOTE,
+        ))
+
+    logger.info("binary decomp-similarity: %d groups", len(groups))
+    return groups, note
 
 
 # ── L2: Dispatch-site groups ─────────────────────────────────────────
