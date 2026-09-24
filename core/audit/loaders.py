@@ -188,6 +188,102 @@ def fuzz_coverage_for(
     return None
 
 
+def _coerce_flow_index_keys(flows: Any) -> dict[int, list[Any]]:
+    """Coerce one flow map's parameter-index keys to int and validate
+    the flow shapes.
+
+    A key is accepted only as a non-negative integer in canonical
+    decimal form (``key == str(int(key))``, or an int already) — the
+    producer enumerates parameter positions through exactly that
+    spelling, so sign prefixes, whitespace, underscores, and non-ASCII
+    digits name no real position and are dropped, failing toward
+    claiming no flow. Values are filtered to ``(callee, arg_index)``
+    pairs of ``(str, int)``: consumers unpack, slice, and render these
+    pairs, so a malformed value must not reach them either.
+    """
+    coerced: dict[int, list[Any]] = {}
+    if not isinstance(flows, dict):
+        return coerced
+    for key, flow_list in flows.items():
+        if isinstance(key, int) and not isinstance(key, bool):
+            idx = key
+        else:
+            try:
+                idx = int(key)
+            except (TypeError, ValueError):
+                idx = -1
+            if key != str(idx):
+                idx = -1
+        if idx < 0:
+            logger.debug(
+                "taint_approx: dropped flow with non-canonical "
+                "parameter index %r", key,
+            )
+            continue
+        if not isinstance(flow_list, list):
+            logger.debug(
+                "taint_approx: dropped non-list flow value for "
+                "parameter %d: %r", idx, flow_list,
+            )
+            continue
+        kept = [
+            pair for pair in flow_list
+            if isinstance(pair, (list, tuple))
+            and len(pair) == 2
+            and isinstance(pair[0], str)
+            and isinstance(pair[1], int)
+            and not isinstance(pair[1], bool)
+        ]
+        if len(kept) != len(flow_list):
+            logger.debug(
+                "taint_approx: dropped %d malformed flow pair(s) for "
+                "parameter %d", len(flow_list) - len(kept), idx,
+            )
+        coerced[idx] = kept
+    return coerced
+
+
+def _rekey_cached_taint_approx(cached: dict[str, Any]) -> dict[str, Any]:
+    """Re-key cached flow maps to integer parameter indices and
+    shape-validate the fields consumers operate on.
+
+    The cache round-trips through JSON, whose object keys are always
+    strings, so ``direct_flows`` / ``dangerous_flows`` come back
+    str-keyed while consumers index ``params`` with the key and
+    compare it against ``len(params)`` — int operations. The typing
+    is in-band (index and shapes ride inside disk-sourced data), so
+    everything is normalised once here, where the cached shape enters
+    the run, instead of at every consumer: flow maps through
+    :func:`_coerce_flow_index_keys`, and a ``params`` that is not a
+    list of str is replaced with ``[]`` (consumers then fall back to
+    their legible ``arg<N>`` naming instead of ``len()``/indexing a
+    non-list).
+    """
+    for approx in cached.values():
+        if not isinstance(approx, dict):
+            continue
+        for flow_field in ("direct_flows", "dangerous_flows"):
+            if flow_field in approx:
+                approx[flow_field] = _coerce_flow_index_keys(
+                    approx[flow_field],
+                )
+        # Keyed on presence, not truthiness/None: an explicit null
+        # must be replaced like any other malformed shape (consumers
+        # iterate params without a None guard); only an absent key
+        # stays absent.
+        params = approx.get("params")
+        if "params" in approx and not (
+            isinstance(params, list)
+            and all(isinstance(p, str) for p in params)
+        ):
+            logger.debug(
+                "taint_approx: replaced malformed params with []: %r",
+                params,
+            )
+            approx["params"] = []
+    return cached
+
+
 def load_or_build_taint_approx(
     target_path: Path | None,
     out_dir: Path | None,
@@ -202,11 +298,11 @@ def load_or_build_taint_approx(
             with contextlib.suppress(OSError):
                 from core.json import load_json
                 cached = load_json(cache_path)
-                if cached:
+                if isinstance(cached, dict) and cached:
                     logger.info(
                         "taint_approx: loaded %d cached results", len(cached),
                     )
-                    return cached
+                    return _rekey_cached_taint_approx(cached)
     results = _build_taint_approx(target_path, scope=scope)
     if results and out_dir:
         # Cache write is best-effort: IO failures and non-finite
