@@ -932,3 +932,64 @@ class TestRefusesUndecidable:
         r = _run(tmp_path, tu)
         assert not r.held
         assert "line-splice" in r.reasoning
+
+
+class TestDefiningFileContainment:
+    """The witness's defining-file read is contained: rel_file
+    arrives from finding records, so absolute and ../ values must
+    refuse instead of joining out of the target root."""
+
+    def test_escaping_rel_file_refuses_without_reading(self, tmp_path):
+        import sys
+
+        target = tmp_path / "target"
+        target.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "evil.c"
+        secret.write_text(
+            "static void locked_cb(void) { }\n"
+            "void call(void) { locked_cb(); }\n",
+        )
+        opened: list = []
+
+        def hook(event, args):
+            if event == "open" and args and str(secret) in str(args[0]):
+                opened.append(args)
+
+        sys.addaudithook(hook)
+        for rel in (str(secret), "../outside/evil.c"):
+            res = check_caller_lock_serialization(
+                "static void locked_cb(void) { }\n",
+                "locked_cb",
+                rel_file=rel,
+                target_path=target,
+            )
+            assert res.held is False
+            assert "not found" in res.reasoning
+        assert opened == [], (
+            "out-of-root defining file was opened by the caller-lock "
+            "witness"
+        )
+
+    def test_in_tree_fifo_refuses_instead_of_wedging(self, tmp_path):
+        import multiprocessing
+        import os
+
+        os.mkfifo(tmp_path / "wedge.c")
+        child = multiprocessing.Process(
+            target=check_caller_lock_serialization,
+            args=("static void f(void) { }\n", "f"),
+            kwargs={"rel_file": "wedge.c", "target_path": tmp_path},
+        )
+        child.start()
+        child.join(timeout=20)
+        try:
+            assert not child.is_alive(), (
+                "check_caller_lock_serialization blocked on an "
+                "in-tree FIFO"
+            )
+        finally:
+            if child.is_alive():
+                child.kill()
+                child.join()

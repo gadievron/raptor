@@ -45,6 +45,8 @@ from ._util import (
     find_function_lines,
     safe_join,
 )
+from core.source import read_text_capped
+
 from .run_memo import BoundedMemo
 
 if TYPE_CHECKING:
@@ -204,16 +206,36 @@ def score_caller(
             try:
                 st = source_file.stat()
                 if st.st_size <= _MAX_SOURCE_BYTES:
+                    # The stat feeds only the memo key; the read is
+                    # capped on the fd, so a file that grows past
+                    # the by-name gate cannot be buffered unbounded
+                    # and a FIFO plant refuses instead of blocking.
+                    # A refused read RAISES (caught by the enclosing
+                    # OSError handler, like the raw read it replaced)
+                    # so a transient failure is never memoised as ""
+                    # for the file's whole (mtime, size) lifetime.
+                    def _read_capped() -> str:
+                        got = read_text_capped(
+                            source_file, _MAX_SOURCE_BYTES,
+                        )
+                        if got is None:
+                            msg = (
+                                "unreadable or non-regular: "
+                                f"{source_file}"
+                            )
+                            raise OSError(msg)
+                        return got[0]
+
                     if source_memo is not None:
                         # (mtime, size)-stamped key: a file edited
                         # mid-run re-reads rather than serving stale
                         # text.
                         source, _ = source_memo.get_or_compute(
                             (str(source_file), st.st_mtime_ns, st.st_size),
-                            lambda: source_file.read_text(errors="replace"),
+                            _read_capped,
                         )
                     else:
-                        source = source_file.read_text(errors="replace")
+                        source = _read_capped()
                     # Scope to the caller function body so we don't
                     # attribute evidence from unrelated functions in the
                     # same file.
@@ -555,10 +577,10 @@ def try_coccinelle_resolve(
     parametric: list[Path] = []
     batchable: list[Path] = []
     for rp in rule_paths:
-        try:
-            head = rp.read_text()[:4096]
-        except OSError:
+        got = read_text_capped(rp, 4096)
+        if got is None:
             continue
+        head = got[0]
         if _PARAMETRIC_RE.search(head):
             parametric.append(rp)
         else:

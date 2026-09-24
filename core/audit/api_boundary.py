@@ -54,6 +54,8 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from core.paths import confine
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -778,12 +780,18 @@ def _scan_file_for_calls(
         "definitions": [],
         "alias_attr": False,
     }
-    try:
-        if path.stat().st_size > _MAX_FILE_BYTES:
-            freport["size_skipped"] = True
-            return [], freport
-        text = path.read_text(errors="replace")
-    except OSError:
+    # Capped read on the fd, not stat-then-read: the file is
+    # target-writable, so a size check by name followed by an
+    # unbounded read races a growing plant; a FIFO plant would block
+    # a raw read forever. Over-cap keeps the honest size_skipped fact.
+    from core.source import read_text_capped
+
+    got = read_text_capped(path, _MAX_FILE_BYTES)
+    if got is None:
+        return [], freport
+    text, truncated = got
+    if truncated:
+        freport["size_skipped"] = True
         return [], freport
     if function_name not in text:
         return [], freport
@@ -958,7 +966,12 @@ def enumerate_call_sites_with_report(
             if not rel or rel in seen_files:
                 continue
             seen_files.add(rel)
-            path = target_path / rel
+            # rel comes from inventory caller records: confine the
+            # join (absolute/../ escapes refuse) and resolve benign
+            # in-root symlinks so the capped reader accepts them.
+            path = confine(target_path, rel)
+            if path is None:
+                continue
             skip = def_span if rel == def_file else None
             budget = _MAX_SITES_ENUMERATED - len(sites)
             if budget <= 0:
@@ -990,13 +1003,19 @@ def enumerate_call_sites_with_report(
             rel = str(path.relative_to(target_path))
         except ValueError:
             continue
+        # Resolve through confine: in-tree symlinked sources (bazel-
+        # style link forests) keep contributing sites, while a link
+        # escaping the root refuses instead of being read.
+        resolved = confine(target_path, path)
+        if resolved is None:
+            continue
         skip = def_span if rel == def_file else None
         budget = _MAX_SITES_ENUMERATED - len(sites)
         if budget <= 0:
             report["site_capped"] = True
             break
         found, freport = _scan_file_for_calls(
-            path, rel, function_name, skip_span=skip, max_sites=budget,
+            resolved, rel, function_name, skip_span=skip, max_sites=budget,
         )
         _fold(rel, freport)
         sites.extend(found)
@@ -1468,6 +1487,8 @@ def address_taken_occurrences(
     scanned = 0
     capped = False
     size_skipped = 0
+    from core.source import read_text_capped
+
     from .source_view import sanitized_view
     for path in _walk_tree_entries(target_path):
         if scanned >= _MAX_SCAN_FILES:
@@ -1476,12 +1497,18 @@ def address_taken_occurrences(
         if not path.is_file() or path.suffix.lower() not in _SOURCE_SUFFIXES:
             continue
         scanned += 1
-        try:
-            if path.stat().st_size > _MAX_FILE_BYTES:
-                size_skipped += 1
-                continue
-            text = path.read_text(errors="replace")
-        except OSError:
+        # Capped fd read (not stat-then-read) — same discipline as
+        # the call-site scan above; confine-resolve first so in-tree
+        # symlinked sources keep counting and escaping links refuse.
+        resolved = confine(target_path, path)
+        if resolved is None:
+            continue
+        got = read_text_capped(resolved, _MAX_FILE_BYTES)
+        if got is None:
+            continue
+        text, truncated = got
+        if truncated:
+            size_skipped += 1
             continue
         if function_name not in text:
             continue
@@ -1519,13 +1546,12 @@ def run_api_boundary_check(
     """Adjudicate one caller-contract hypothesis at the API boundary.
     See module docstring for verdict semantics."""
     target_path = Path(target_path)
-    defining_source = ""
-    try:
-        p = target_path / file_path
-        if p.is_file():
-            defining_source = p.read_text(errors="replace")
-    except OSError:
-        pass
+    # ``file_path`` arrives from finding/gap records (LLM-writable):
+    # contained + capped + fd-checked regular, never a bare join —
+    # same class as the smt_promotion_gate caller-gate read.
+    from core.source import read_contained
+
+    defining_source = read_contained(target_path, file_path) or ""
 
     # Wrong-target defence: a hypothesis that names its
     # invoked-twice/called-again target explicitly must name the

@@ -12,6 +12,8 @@ import contextlib
 import logging
 import os
 from pathlib import Path
+
+from core.paths import confine
 from typing import Any
 
 from core.json import load_json
@@ -241,6 +243,7 @@ def _build_taint_approx(
     # generated/vendored source file costs seconds of parse time for
     # approximations nobody reads.
     from core.inventory.builder import MAX_FILE_BYTES
+    from core.source import read_text_capped
 
     results: dict[str, Any] = {}
     c_exts = {".c", ".h"}
@@ -256,12 +259,19 @@ def _build_taint_approx(
         if suffix not in c_exts and suffix not in cpp_exts:
             continue
 
-        try:
-            if path.stat().st_size > MAX_FILE_BYTES:
-                skipped_large += 1
-                continue
-            content = path.read_text(errors="replace")
-        except OSError:
+        # Capped fd read, not stat-then-read (target-writable files
+        # race a by-name size gate; FIFO plants block raw reads).
+        # Confine-resolve keeps in-tree symlinked sources readable
+        # and refuses links escaping the root.
+        resolved = confine(target_path, path)
+        if resolved is None:
+            continue
+        got = read_text_capped(resolved, MAX_FILE_BYTES)
+        if got is None:
+            continue
+        content, truncated = got
+        if truncated:
+            skipped_large += 1
             continue
 
         rel = str(path.relative_to(target_path))

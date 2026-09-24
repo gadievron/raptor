@@ -936,3 +936,93 @@ class TestTreeWalk:
         assert [p.name for p in _walk_tree_entries(tmp_path)] == [
             "a.c", "b.c", "c.c",
         ]
+
+
+class TestDefiningSourceContainment:
+    """run_api_boundary_check's defining-source read is contained:
+    file_path arrives from finding/gap records (LLM-writable)."""
+
+    def test_escaping_file_path_never_read(self, tmp_path):
+        import sys
+
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "use.c").write_text(
+            "int use_a(void) { return bio_lookup_ex(0, 80, 0); }\n",
+        )
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "lookup.c"
+        secret.write_text(
+            "int bio_lookup_ex(const char *name, int port, int f)"
+            " { return f; }\n",
+        )
+        opened: list = []
+
+        def hook(event, args):
+            if event == "open" and args and str(secret) in str(args[0]):
+                opened.append(args)
+
+        sys.addaudithook(hook)
+        for fp in (str(secret), "../outside/lookup.c"):
+            run_api_boundary_check(
+                target, fp, "bio_lookup_ex", HYP_NULL,
+            )
+        assert opened == [], (
+            "out-of-root defining file was opened by the api_boundary "
+            "check"
+        )
+
+
+class TestSymlinkedSourceParity:
+    """In-tree symlinked sources (bazel-style link forests) keep
+    contributing call sites — the walk confine-resolves them — while
+    a link escaping the root refuses instead of being read."""
+
+    def test_in_tree_symlinked_caller_still_enumerated(self, tmp_path):
+        target = tmp_path / "target"
+        (target / "real").mkdir(parents=True)
+        # The caller exists ONLY behind the symlink: the real copy
+        # carries a non-source suffix the walk filters out, so the
+        # sites can come solely from reading through linked.c.
+        (target / "real" / "use.c.real").write_text(
+            "int use_a(const char *host)"
+            " { return bio_lookup_ex(host, 80, 0); }\n",
+        )
+        (target / "lookup.c").write_text(
+            "int bio_lookup_ex(const char *host, int p, int f)"
+            " { return host[0] + f; }\n",
+        )
+        (target / "linked.c").symlink_to(
+            target / "real" / "use.c.real")
+        res = run_api_boundary_check(
+            target, "lookup.c", "bio_lookup_ex", HYP_NULL,
+        )
+        files = {s.file for s in res.sites}
+        assert any("linked.c" in f for f in files), res.to_dict()
+
+    def test_escaping_symlink_not_read(self, tmp_path):
+        import sys
+
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "lookup.c").write_text(
+            "int bio_lookup_ex(const char *n, int p, int f)"
+            " { return f; }\n",
+        )
+        outside = tmp_path / "outside.c"
+        outside.write_text(
+            "int esc(void) { return bio_lookup_ex(0, 80, 0); }\n",
+        )
+        (target / "esc.c").symlink_to(outside)
+        opened: list = []
+
+        def hook(event, args):
+            if event == "open" and args and str(outside) in str(args[0]):
+                opened.append(args)
+
+        sys.addaudithook(hook)
+        run_api_boundary_check(
+            target, "lookup.c", "bio_lookup_ex", HYP_NULL,
+        )
+        assert opened == []
