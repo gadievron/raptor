@@ -1,8 +1,8 @@
 """gap_for_site binds mechanical hits inside stamped handler spans.
 
-The sweeplang change made script-per-file handler interstitials
-schedulable as COLD gaps, but a mechanical tool HIT landing inside
-one still could not bind to a reviewable gap — confirmed signal was
+The script-handler gap-selection change made script-per-file handler
+interstitials schedulable as COLD gaps, but a mechanical tool HIT
+landing inside one still could not bind to a reviewable gap — confirmed signal was
 dropped at the exact spans the run itself decided were reviewable.
 Binding is stamp-gated: ``script_handler: true`` admits the span,
 ``false`` and compiled-language residue stay refused, an enclosing
