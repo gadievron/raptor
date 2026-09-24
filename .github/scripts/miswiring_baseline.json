@@ -460,6 +460,9 @@
     "artifacts:write_only_artifact::stderr.log": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:write_only_artifact::study-questions.md": {
+      "note": "operator-facing RENDERING of reading-list.json (the one store) written at study completion; derived and regenerable by design — production code must keep reading the JSON store, never this file"
+    },
     "artifacts:write_only_artifact::study-report.md": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },

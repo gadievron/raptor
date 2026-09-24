@@ -312,6 +312,16 @@ class StudyItem:
     validation_bounds: list[str] = field(default_factory=list)
     relevance_tier: int | None = None
     usage_class: str | None = None  # writer | reader | passthru
+    # Why this item holds a seed/focus slot — "" (autonomous
+    # selection), "operator" (operator-asked identifier),
+    # "bridge_seed" (map→study bridge granted focus; counts against
+    # the joint derived-attention cap), "bridge_seed_overflow" (a
+    # bridge lead the cap reverted to baseline treatment — tier
+    # cleared, annotation only, never sunk below the bridge-less
+    # default), or "bridge_corroborated" (operator-scoped item the
+    # bridge also flagged; annotation only, never counted or
+    # reverted). Surfaced in the study report's seed table.
+    seed_source: str = ""
     # Mechanically detected doc/code disagreement (code wins) — see
     # core.concepts.receipts.detect_stale_doc.
     stale_doc: str = ""

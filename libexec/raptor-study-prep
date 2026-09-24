@@ -1843,8 +1843,35 @@ def _scope_fingerprint(parsed: argparse.Namespace) -> dict:
         "correlate": parsed.correlate or "",
         "narrow": bool(parsed.narrow),
         "redb": str(parsed.redb or ""),
+        # Bridge seeds change item tiers/ordering, so a cached list
+        # from a bridged run must not serve an unbridged one (or
+        # vice versa). CONTENT hash, not just the path: the bridge
+        # regenerates the file at the same path per run, and a
+        # path-only stamp let a direct prep re-user serve a stale
+        # cached list against fresh seeds.
+        "bridge_seed_file": _bridge_seed_fingerprint(
+            parsed.bridge_seed_file),
         "reading_list_pending": pending,
     }
+
+
+def _bridge_seed_fingerprint(path_arg: "str | None") -> str:
+    """``<path>:<sha256>`` stamp for the bridge-seeds scope key.
+
+    Bounded read (the prep loader rejects >4MiB files anyway);
+    unreadable content stamps as such rather than aliasing an empty
+    file.
+    """
+    if not path_arg:
+        return ""
+    import hashlib
+    try:
+        with open(path_arg, "rb") as fh:
+            digest = hashlib.sha256(
+                fh.read(4 * 1024 * 1024 + 1)).hexdigest()
+    except OSError:
+        digest = "unreadable"
+    return f"{path_arg}:{digest}"
 
 
 def _load_reading_list(path: Path) -> tuple[list[str], list[str]]:
@@ -1890,6 +1917,60 @@ def _load_reading_list(path: Path) -> tuple[list[str], list[str]]:
                 seen.add(name)
                 identifiers.append(name)
     return identifiers, concepts
+
+
+def _load_bridge_seeds(path: Path) -> tuple[list[str], list[str]]:
+    """Seed names + concept hints from a bridge-seeds.json.
+
+    Returns (names, concepts) in the bridge's priority order. The
+    file lives in a run directory — a surface a hostile process
+    could pre-stage — so prep re-validates independently of the
+    bridge's own bounds (shared constants, no drift): name charset
+    and count caps are re-enforced here. Concept strings are
+    target-derived by definition (anchor stems), so they are routed
+    through the prompt envelope (neutralize_tag_forgery) at THIS
+    load — the single point where they enter prompt-bound lists —
+    matching the interpolation discipline the study prompts apply
+    to every other target-derived string.
+    """
+    from core.orchestration.binary_study_bridge import (
+        BRIDGE_SEED_NAME_RE,
+        MAX_BRIDGE_CONCEPTS,
+        MAX_BRIDGE_SEEDS,
+    )
+    from core.security.log_sanitisation import escape_nonprintable
+    from core.security.prompt_envelope import neutralize_tag_forgery
+
+    try:
+        data = load_json(path, max_bytes=4 * 1024 * 1024)
+    except (OSError, ValueError):
+        data = None
+    if not isinstance(data, dict) or data.get("schema_version") != 1:
+        print(f"study-prep: bridge seed file unreadable or "
+              f"wrong-shape — ignored: {path}", file=sys.stderr)
+        return [], []
+    names: list[str] = []
+    for seed in data.get("seeds") or []:
+        if len(names) >= MAX_BRIDGE_SEEDS:
+            break
+        if not isinstance(seed, dict):
+            continue
+        name = str(seed.get("name") or "")
+        if BRIDGE_SEED_NAME_RE.fullmatch(name) and name not in names:
+            names.append(name)
+    concepts: list[str] = []
+    for concept in data.get("concepts") or []:
+        if len(concepts) >= MAX_BRIDGE_CONCEPTS:
+            break
+        text = concept.get("text") if isinstance(concept, dict) else concept
+        if isinstance(text, str) and text.strip():
+            # escape_nonprintable first (control bytes AND embedded
+            # newlines — a raw newline would forge extra list lines
+            # in the concept-seeding prompt), then tag-forgery
+            # neutralisation, then the length clip.
+            concepts.append(neutralize_tag_forgery(
+                escape_nonprintable(text.strip()))[:64])
+    return names, concepts
 
 
 def _multilang_pass(
@@ -2700,6 +2781,14 @@ def main() -> None:
     ap.add_argument("--redb-map", default=None, metavar="PATH",
                     help="decomp-map.json sidecar for --redb (default: "
                          "<target>/decomp-map.json).")
+    ap.add_argument("--bridge-seed-file", default=None, metavar="PATH",
+                    help="bridge-seeds.json from the map→study bridge "
+                         "(core.orchestration.binary_study_bridge). "
+                         "Seed names get a distinct bridge_seed focus "
+                         "tier BELOW operator identifiers; with "
+                         "--identifier present they only annotate — "
+                         "the bridge never widens an operator-scoped "
+                         "study.")
     ap.add_argument("--force", action="store_true",
                     help="Re-run even if study-list.json already exists.")
     # Strict parsing: a typo'd scoping flag (e.g. a misspelled
@@ -2981,6 +3070,17 @@ def main() -> None:
     concept_arg = parsed.concept
     semantic_concepts = [c.strip() for c in concept_arg.split(",") if c.strip()] if concept_arg else []
 
+    # Operator-asked names, captured BEFORE any extension of the
+    # list: only these earn the "operator" seed_source stamp in the
+    # report's seed table. Captured-late once meant reading-list
+    # names (LLM-authored free text) laundered into operator rows —
+    # exempt from the joint derived-attention accounting AND
+    # rendered as the operator's own asks. --correlate names join
+    # below at their parse site: the flag's whole argument is
+    # literal operator-typed names, so leaving them unstamped
+    # under-reported the operator's asks.
+    cli_ident_names = {i.lower() for i in identifiers}
+
     if parsed.reading_list:
         rl_idents, rl_concepts = _load_reading_list(Path(parsed.reading_list))
         if rl_idents:
@@ -2994,6 +3094,22 @@ def main() -> None:
         if rl_concepts:
             semantic_concepts.extend(rl_concepts)
             print(f"study-prep: reading list added {len(rl_concepts)} semantic concepts",
+                  file=sys.stderr)
+
+    # Map→study bridge seeds: a distinct derived-attention channel.
+    # Loaded here (validation + prompt-enveloping happen at load),
+    # consumed after item assembly — deliberately NOT merged into
+    # `identifiers`, which would grant target-derived names the
+    # operator's tier-0 focus and scope-narrowing authority.
+    bridge_names: list[str] = []
+    bridge_concepts: list[str] = []
+    if parsed.bridge_seed_file:
+        bridge_names, bridge_concepts = _load_bridge_seeds(
+            Path(parsed.bridge_seed_file))
+        if bridge_names or bridge_concepts:
+            print(f"study-prep: bridge seeds: {len(bridge_names)} "
+                  f"name(s), {len(bridge_concepts)} concept hint(s) "
+                  f"(bridge_seed tier — below operator identifiers)",
                   file=sys.stderr)
 
     _deferred_concepts = semantic_concepts if semantic_concepts else []
@@ -3033,6 +3149,10 @@ def main() -> None:
                 for ci in correlate_identifiers:
                     if ci not in identifiers:
                         identifiers.append(ci)
+            # Operator-typed like --identifier (see the capture
+            # above) — stamp-eligible.
+            cli_ident_names.update(
+                ci.lower() for ci in correlate_identifiers)
 
     cf: frozenset[str] | None = None
     if identifiers and c_files:
@@ -3310,6 +3430,12 @@ def main() -> None:
         items = [it for it in items if _relevance(it) <= 2]
         for it in items:
             it.relevance_tier = _relevance(it)
+            # Seed provenance for the report's seed table: only the
+            # names the operator actually typed — reading-list and
+            # concept-seeded extensions of `identifiers` are the
+            # study's own attention, not an operator ask.
+            if it.name.lower() in cli_ident_names:
+                it.seed_source = "operator"
         items.sort(key=_relevance)
 
         # Types referenced by surviving items may have been dropped
@@ -3446,6 +3572,56 @@ def main() -> None:
             print(f"study-prep: merged {len(redb_items)} mechanical "
                   f"item(s) from {redb_path.name}", file=sys.stderr)
 
+    # Bridge concept hints seed identifiers at BRIDGE tier: the
+    # resulting names join bridge_names, never `identifiers` (which
+    # would grant them operator tier-0). Skipped when the operator
+    # scoped the study — bridge material must not widen that scope,
+    # so the LLM call would buy nothing.
+    if bridge_concepts and items and not identifiers:
+        all_item_names = sorted({it.name for it in items})
+        seeded = _llm_seed_concepts_from_names(
+            bridge_concepts, all_item_names, model=parsed.model)
+        if seeded:
+            for name in seeded:
+                if name not in bridge_names:
+                    bridge_names.append(name)
+            print(f"study-prep: bridge concepts seeded {len(seeded)} "
+                  f"identifiers (bridge_seed tier)", file=sys.stderr)
+
+    # Bridge seed stamping (after every item source has merged, so
+    # redb-derived items can match too). With operator identifiers
+    # present the operator's scoping wins: bridge matches are only
+    # ANNOTATED (bridge_corroborated) — never promoted, never
+    # widening. Without them, matched items get focus tier 1 (below
+    # the operator's tier 0) with seed_source "bridge_seed" and rise
+    # to the front in bridge-priority order; every OTHER item keeps
+    # its default treatment — the bridge prioritizes, it never
+    # filters (anti-monopoly: the study's autonomous selection keeps
+    # the remainder of the batch budget).
+    if bridge_names and items:
+        bridge_rank = {n.lower(): i for i, n in enumerate(bridge_names)}
+        unranked = len(bridge_rank)
+        matched = 0
+        for it in items:
+            rank = bridge_rank.get(it.name.lower())
+            if rank is None:
+                continue
+            matched += 1
+            if identifiers:
+                if not it.seed_source:
+                    it.seed_source = "bridge_corroborated"
+            else:
+                it.seed_source = "bridge_seed"
+                if it.relevance_tier is None or it.relevance_tier > 1:
+                    it.relevance_tier = 1
+        if matched and not identifiers:
+            items.sort(key=lambda it: (
+                bridge_rank.get(it.name.lower(), unranked)
+                if it.seed_source == "bridge_seed" else unranked
+            ))
+        print(f"study-prep: bridge seeds matched {matched}/"
+              f"{len(bridge_names)} name(s)", file=sys.stderr)
+
     out_path = output_dir / "study-list.json"
     out_data = {
         "target": str(target),
@@ -3456,6 +3632,7 @@ def main() -> None:
         "identifiers": ",".join(identifiers) if identifiers else None,
         "semantic_concepts": ",".join(semantic_concepts) if semantic_concepts else None,
         "correlate_identifiers": correlate_identifiers,
+        "bridge_seed_file": parsed.bridge_seed_file or None,
         "related_docs": related_docs,
         "unresolved_identifiers": ml_unresolved,
         "items": [asdict(item) for item in items],

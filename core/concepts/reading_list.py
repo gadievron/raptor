@@ -238,6 +238,70 @@ class ReadingList:
                     )
                 self.save(p)
 
+    # ----- rendering ----------------------------------------------
+
+    def render_questions_markdown(self, *, max_items: int = 200) -> str:
+        """Human-readable markdown RENDERING of this list.
+
+        The reading list persists in ``reading-list.json`` — the ONE
+        store. This rendering is derived and regenerable; it must
+        never become a second (or third) place the questions live,
+        so the header says exactly that. Question/context/reason
+        text is LLM-authored or target-derived free text: every
+        field is escaped and bounded before it reaches the markdown
+        surface.
+        """
+        from core.security.prompt_output_sanitise import sanitise_string
+
+        def _line(text: object, max_chars: int = 300) -> str:
+            return sanitise_string(
+                str(text), max_chars=max_chars,
+            ).replace("\n", " ")
+
+        def _entry(item: ReadingListItem) -> str:
+            where = ""
+            if item.source_function:
+                where = f" — `{_line(item.source_function, 120)}`"
+            elif item.source_file:
+                where = f" — `{_line(item.source_file, 200)}`"
+            return (f"- [{_line(item.priority, 16)}] "
+                    f"{_line(item.question)}"
+                    f"{where} (from {_line(item.source_command, 40)})")
+
+        pending = self.drain()
+        resolved = self.resolved()
+        unresolvable = self.unresolvable_items()
+        parts = [
+            "# Study questions",
+            "",
+            "Derived rendering of `reading-list.json` — regenerated "
+            "at study completion. Do not edit: this file is not a "
+            "store; changes here are lost on the next render.",
+            "",
+        ]
+
+        def _section(title: str, entries: list[ReadingListItem],
+                     extra: str = "") -> None:
+            parts.append(f"## {title} ({len(entries)})")
+            parts.append("")
+            for item in entries[:max_items]:
+                line = _entry(item)
+                if extra == "reason" and item.unresolvable_reason:
+                    line += (f" — reason: "
+                             f"{_line(item.unresolvable_reason)}")
+                parts.append(line)
+            if len(entries) > max_items:
+                parts.append(
+                    f"- … {len(entries) - max_items} more "
+                    f"(see reading-list.json)")
+            parts.append("")
+
+        _section("Pending", pending)
+        _section("Resolved", resolved)
+        _section("Unresolvable (assumption stays unverified)",
+                 unresolvable, extra="reason")
+        return "\n".join(parts)
+
     @classmethod
     def load(cls, path: Path) -> ReadingList:
         if not path.exists():
@@ -280,3 +344,27 @@ class ReadingList:
                 "%d loaded", path, skipped, len(items),
             )
         return cls(items=items, _path=path)
+
+
+def write_study_questions(output_dir: Path) -> Path | None:
+    """Render ``study-questions.md`` from a run's reading list.
+
+    A completion-time convenience for operators: the questions
+    already persist in ``reading-list.json`` (the store); this file
+    is a bounded, escaped rendering of it. Returns the written path,
+    or ``None`` when the run has no reading list (nothing invented).
+    Never raises — a failed render must not fail the study run that
+    asked for it.
+    """
+    rl_path = Path(output_dir) / "reading-list.json"
+    if not rl_path.is_file():
+        return None
+    try:
+        rendered = ReadingList.load(rl_path).render_questions_markdown()
+        out_path = Path(output_dir) / "study-questions.md"
+        out_path.write_text(rendered + "\n", encoding="utf-8")
+    except (OSError, ValueError):
+        logger.warning("could not render study-questions.md",
+                       exc_info=True)
+        return None
+    return out_path

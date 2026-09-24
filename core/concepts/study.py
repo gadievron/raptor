@@ -4469,6 +4469,18 @@ def run_study(
     except Exception:
         logger.debug("SAGE concept recall skipped", exc_info=True)
 
+    # Joint derived-attention accounting: bridge seeds (map→study)
+    # and SAGE prior-concept seed blocks are BOTH derived attention —
+    # one shares the budget of the other, and operator-asked
+    # identifiers outrank both and never count. The bridge half is
+    # counted on the pre-SAGE item set (an upper bound: SAGE skips
+    # can only shrink it, so the SAGE half is allocated at worst
+    # slightly conservatively — never over the joint cap).
+    derived_cap = _derived_attention_cap(batch_target)
+    n_bridge = _enforce_bridge_seed_cap(
+        items, derived_cap, on_progress=on_progress,
+    )
+
     # Apply skip/seed from SAGE prior
     skipped_concepts: list[Concept] = []
     skipped_invariants: list[Invariant] = []
@@ -4481,6 +4493,7 @@ def run_study(
                 items, sage_prior, output_dir,
                 source_root=Path(source_root) if source_root else None,
                 on_progress=on_progress,
+                seed_block_cap=max(0, derived_cap - n_bridge),
             )
 
     if on_progress:
@@ -4988,6 +5001,76 @@ def _reconstruct_from_sage(
     return [concept], invariants, contracts
 
 
+def _derived_attention_cap(batch_target: int) -> int:
+    """Joint ceiling on derived-attention entries for one study run.
+
+    Bridge seeds and SAGE seed blocks share this budget (the
+    fraction constant — with its trade-off note — lives with the
+    bridge: ``core.orchestration.binary_study_bridge``). The
+    denominator is the EFFECTIVE per-batch item budget: the caller's
+    ``batch_target`` clamped to the phase-2 output-budget ceiling,
+    exactly as ``run_phase2`` clamps its batches — computed on the
+    raw batch_target (default 80 against a 32-item ceiling) the
+    "fraction of a batch" was a fraction of a batch that never runs,
+    and derived attention could own an entire PAID batch outright.
+    Floor of 1 so a tiny operator batch target degrades to "one
+    derived entry", never to a silent all-or-nothing.
+    """
+    from core.orchestration.binary_study_bridge import (
+        DERIVED_ATTENTION_MAX_FRACTION,
+    )
+    effective = min(max(1, batch_target), _phase2_batch_ceiling())
+    return max(1, int(effective * DERIVED_ATTENTION_MAX_FRACTION))
+
+
+def _enforce_bridge_seed_cap(
+    items: list[StudyItem],
+    cap: int,
+    *,
+    on_progress: Any = None,
+) -> int:
+    """Strip the bridge's grant from bridge focus items beyond *cap*.
+
+    Only ``seed_source == "bridge_seed"`` items count and revert —
+    that stamp marks focus GRANTED by the bridge; operator-scoped
+    items the bridge merely corroborated carry
+    ``bridge_corroborated`` and are never touched (reverting them
+    would fight the operator's own scoping). Prep emits bridge items
+    in bridge-priority order, so trimming from the tail drops the
+    lowest-priority seeds first.
+
+    Overflow reverts to the PRE-STAMP default — tier ``None`` (still
+    focus under the default classification) with an annotation-grade
+    ``bridge_seed_overflow`` stamp — and NEVER sinks below that
+    baseline: demoting overflow to the context tier would let an
+    attacker make a function studied LESS than if the map had never
+    mentioned it, just by naming it in the map's tail. Returns the
+    number of bridge focus items kept (the bridge half of the joint
+    accounting).
+    """
+    bridge_focus = [
+        it for it in items
+        if getattr(it, "seed_source", "") == "bridge_seed"
+        and (it.relevance_tier or 0) <= 1
+    ]
+    overflow = bridge_focus[cap:]
+    for item in overflow:
+        item.relevance_tier = None
+        item.seed_source = "bridge_seed_overflow"
+    if overflow:
+        logger.info(
+            "derived-attention cap: reverted %d bridge seed(s) to "
+            "baseline treatment (cap %d)", len(overflow), cap,
+        )
+        if on_progress:
+            on_progress(
+                "bridge",
+                f"Reverted {len(overflow)} bridge seed(s) to baseline "
+                f"treatment (derived-attention cap {cap})",
+            )
+    return min(len(bridge_focus), cap)
+
+
 def _apply_sage_prior(
     items: list[StudyItem],
     sage_prior: dict[str, list],
@@ -4995,12 +5078,18 @@ def _apply_sage_prior(
     *,
     source_root: Path | None = None,
     on_progress: Any = None,
+    seed_block_cap: int | None = None,
 ) -> tuple[
     list[StudyItem],
     list[Concept], list[Invariant], list[Contract],
     str,
 ]:
     """Apply SAGE prior knowledge to filter and seed study items.
+
+    *seed_block_cap* bounds how many prior-context seed blocks are
+    emitted (the SAGE half of the joint derived-attention budget it
+    shares with the bridge's seeds); ``None`` means uncapped (legacy
+    callers/tests). Skips are never capped — they save attention.
 
     Returns:
         (remaining_items, skipped_concepts, skipped_invariants,
@@ -5024,6 +5113,7 @@ def _apply_sage_prior(
     seed_parts: list[str] = []
     skip_count = 0
     seed_count = 0
+    seed_trimmed = 0
 
     for item in items:
         rows = sage_prior.get(item.name)
@@ -5100,12 +5190,20 @@ def _apply_sage_prior(
                 skip_count += 1
                 continue
 
-        # Seed: include prior knowledge as context for the LLM
-        seed_parts.append(
-            f"## Prior study knowledge for `{item.name}` "
-            f"(verify against current source)\n{content}"
-        )
-        seed_count += 1
+        # Seed: include prior knowledge as context for the LLM —
+        # unless the joint derived-attention budget (shared with the
+        # bridge's seeds; see _derived_attention_cap) is spent. A
+        # trimmed item is still studied; it just arrives without the
+        # prior block. Skips above are unaffected: a hash-verified
+        # skip SAVES attention rather than spending it.
+        if seed_block_cap is None or seed_count < seed_block_cap:
+            seed_parts.append(
+                f"## Prior study knowledge for `{item.name}` "
+                f"(verify against current source)\n{content}"
+            )
+            seed_count += 1
+        else:
+            seed_trimmed += 1
         remaining.append(item)
 
     if on_progress:
@@ -5119,6 +5217,12 @@ def _apply_sage_prior(
             on_progress(
                 "sage",
                 f"Seeding {seed_count} items with prior study context",
+            )
+        if seed_trimmed:
+            on_progress(
+                "sage",
+                f"Trimmed {seed_trimmed} prior-context block(s) — "
+                f"joint derived-attention cap reached",
             )
 
     seed_context = ""
