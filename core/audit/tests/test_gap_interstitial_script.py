@@ -345,3 +345,50 @@ def test_compiled_languages_never_lift(language: str, tmp_path: Path):
         }],
     }
     assert compute_gaps(checklist, []) == []
+
+
+class TestCloseTagTermination:
+    """PHP ends the current statement AND any // / # line comment at
+    ``?>`` and resumes markup (code again after the next open tag).
+    A prefix-anchored wiring keyword or a comment opener must not
+    swallow what runs after a close tag — both shapes execute request
+    input on a stock interpreter."""
+
+    def test_wiring_keyword_cannot_swallow_past_close_tag(self):
+        for kw in ("global $x", "use App\\Thing", "namespace App",
+                   "declare(strict_types=1)"):
+            assert _php_interstitial_is_handler(
+                kw + " ?><?php system($_GET['c']);\n"), kw
+
+    def test_line_comment_ends_at_close_tag(self):
+        assert _php_interstitial_is_handler(
+            "include 'a.php'; // x ?><?php system($_GET['c']);\n")
+        assert _php_interstitial_is_handler(
+            "# note ?><?php system($_GET['c']);\n")
+        assert _php_interstitial_is_handler(
+            "<?php // x ?><?= $_GET['c'] ?>\n")
+
+    def test_markup_after_close_tag_is_handler_surface(self):
+        assert _php_interstitial_is_handler(
+            "include 'a.php'; // x ?><b>output</b>\n")
+        assert _php_interstitial_is_handler(
+            "global $x ?>text\n")
+
+    def test_wiring_after_reentry_stays_wiring(self):
+        # Two-direction: close-tag awareness must not promote content
+        # that is genuinely all wiring.
+        assert not _php_interstitial_is_handler(
+            "include 'a.php' ?><?php global $x;\n")
+        assert not _php_interstitial_is_handler(
+            "global $x; // note ?>\n")
+        assert not _php_interstitial_is_handler(
+            "include('a.php'); ?>\n")
+        assert not _php_interstitial_is_handler("?>\n")
+
+    def test_block_comment_still_swallows_close_tag(self):
+        # /* */ does NOT terminate at ?> in PHP — commented-out code
+        # stays comment, single-line and spanning forms alike.
+        assert not _php_interstitial_is_handler(
+            "/* x ?><?php system($_GET['c']); */\ninclude('a.php');\n")
+        assert not _php_interstitial_is_handler(
+            "/* x ?>\nsystem($_GET['c']);\n*/\nrequire 'b.php';\n")
