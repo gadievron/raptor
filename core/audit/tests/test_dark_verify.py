@@ -2459,6 +2459,45 @@ class TestRealExecutionC:
         assert "7" in r.actual_return
 
 
+class TestTargetCopyReadRefusal:
+    """The Go/Rust executors copy the finding's source into the
+    compile sandbox through _read_splice_source, which REFUSES on
+    truncation — a silently cut-off copy would compile a DIFFERENT
+    target than the finding names. The refusal must land in the
+    executors' broad handler as verdict=error (inconclusive
+    direction), never a verdict from altered source."""
+
+    def test_go_truncated_copy_maps_to_error_verdict(
+            self, tmp_path, monkeypatch):
+        # No toolchain needed: the refusal fires before any compile.
+        import core.source
+
+        monkeypatch.setattr(
+            ex.shutil, "which",
+            lambda name: "/nonexistent/go" if name == "go" else None,
+        )
+        monkeypatch.setattr(
+            core.source, "read_text_capped",
+            lambda *a, **kw: ("package main\n", True),
+        )
+        src = tmp_path / "main.go"
+        src.write_text("package main\n\nfunc Add(a int) int { return a }\n",
+                       encoding="utf-8")
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="main.go", function="Add",
+            language="go",
+            expected_return="1",
+            lang_config={
+                "package": "main",
+                "arg_expressions": ["1"],
+                "return_type": "int",
+            },
+        )
+        r = ex._execute_go(spec, tmp_path, timeout_s=5)
+        assert r.verdict == "error"
+        assert "read cap" in r.match_detail
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(not shutil.which("go"), reason="Go not available")
 class TestRealExecutionGo:
