@@ -1192,6 +1192,21 @@
     "count": 11,
     "kind": "literal"
   },
+  "core/inventory/call_graph.py::_CONDITIONAL_NODES": {
+    "count": 16,
+    "kind": "literal",
+    "note": "closed tree-sitter-php grammar node-type taxonomy: the branch/loop/try/ternary constructs whose enclosure marks a PHP include/define edge conditional (conservative in the guarantee direction) — grammar node names, not a learned name vocabulary"
+  },
+  "core/inventory/call_graph.py::_SIDE_EFFECT_NODES": {
+    "count": 14,
+    "kind": "literal",
+    "note": "closed tree-sitter-php grammar node-type taxonomy: the expression kinds that EXECUTE when their statement runs (calls, assignments, nested includes, backticks, parse errors) — a prologue-inert wrapper carrying one is not inert; grammar node names, not a learned name vocabulary"
+  },
+  "core/inventory/call_graph.py::_PROLOGUE_INERT_STMTS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "closed tree-sitter-php grammar node-type taxonomy: the declaration/definition statement kinds that keep the direct-access-guard prologue open (anything executable closes guard eligibility, defeating planted dead/bottom-of-file guards) — grammar node names, not a learned name vocabulary"
+  },
   "core/inventory/dead_scope.py::_C_NOT_FUNC_NAMES": {
     "count": 37,
     "kind": "literal"
