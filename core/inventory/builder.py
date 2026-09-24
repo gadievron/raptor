@@ -1826,21 +1826,24 @@ def _process_single_file(
             old_entry = old_files[rel_path]
             if old_entry.get('sha256') == sha256:
                 old_entry['_stat'] = file_stat
-                # Reused records predating the script_handler stamp
-                # would carry the gap forward run after run (the SHA
-                # match skips the parse indefinitely). Content is
-                # byte-identical to what the old parse saw, so
-                # backfilling only the missing stamps is exact. Same
-                # for the span hashes of stamped handler spans (the
-                # pre-stamp hasher skipped every interstitial): the
-                # function-level diff needs them, and hashing the
-                # identical content now equals hashing it at the
-                # original parse. Best-effort like the fresh-parse
-                # hasher below.
+                # Reused records get their script_handler stamps
+                # RE-DERIVED, not trusted: content is byte-identical
+                # to what the old parse saw, so re-deriving equals the
+                # original stamping — and it self-heals. The checklist
+                # sits in a writable run/cache directory, and the SHA
+                # match would otherwise skip the parse indefinitely:
+                # a pre-stamp entry, a tampered stamp on an unchanged
+                # file, and a stale verdict from an older classifier
+                # would all persist forever. Same for the span hashes
+                # of stamped handler spans (the pre-stamp hasher
+                # skipped every interstitial): the function-level diff
+                # needs them, and hashing the identical content now
+                # equals hashing it at the original parse. Best-effort
+                # like the fresh-parse hasher below.
                 items_list = old_entry.get('items')
                 if isinstance(items_list, list):
                     stamp_script_handler_items(
-                        items_list, language, content, only_missing=True,
+                        items_list, language, content,
                     )
                     try:
                         from core.staleness import hash_spans_text
