@@ -41,6 +41,12 @@ class TestAtherisHarnessSpec(unittest.TestCase):
             "mod:__import__('os');x",
             "mod:func\nimport os",
             "a" * 300 + ":func",
+            # `$` would match just before a trailing newline — the
+            # grammar must anchor at end-of-string (\Z), or these
+            # produce a newline-embedded filename and a call line
+            # that NameErrors at import.
+            "mod:func\n",
+            "mod\n:func",
         ]
         for entry in bad:
             with self.subTest(entry=entry), self.assertRaises(ValueError):

@@ -31,7 +31,11 @@ logger = get_logger()
 #: Payload shapes the scaffold knows how to feed the target function.
 PAYLOAD_MODES = ("bytes", "text")
 
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# \Z, not $: `$` also matches just before a trailing newline, so an
+# entry like "mod:func\n" would pass the grammar and embed the newline
+# in the generated filename and call line — the segment must end the
+# STRING, not the line.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 _MAX_ENTRY_LEN = 256
 
 
