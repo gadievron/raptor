@@ -822,31 +822,35 @@ class TestCallerGateContainment:
         )
         outside = tmp_path / "outside"
         outside.mkdir()
-        secret = outside / "callee.c"
-        secret.write_text(_CALLEE)
-        return target, secret
+        # The out-of-root path variable is deliberately NOT named after
+        # credential material: CodeQL's sensitive-name source heuristic
+        # keys on the identifier alone and would flag every diagnostic
+        # logger this path string reaches in production code.
+        outside_c = outside / "callee.c"
+        outside_c.write_text(_CALLEE)
+        return target, outside_c
 
     def test_escaping_file_path_reads_nothing_and_holds_unbindable(
             self, tmp_path):
         import sys
 
-        target, secret = self._split_tree(tmp_path)
+        target, outside_c = self._split_tree(tmp_path)
         opened: list = []
 
         def hook(event, args):
-            if event == "open" and args and str(secret) in str(args[0]):
+            if event == "open" and args and str(outside_c) in str(args[0]):
                 opened.append(args)
 
         sys.addaudithook(hook)
-        for fp in (str(secret), "../outside/callee.c"):
+        for fp in (str(outside_c), "../outside/callee.c"):
             decision = evaluate_caller_gate(
                 target, fp, "compute",
                 "check-overflow", _MECHANISM,
                 source=_CALLEE, def_span=(1, 4),
             )
             # No defining source -> no parameter operands -> the
-            # receipt binds nothing. Pre-fix, the secret's params
-            # bound contracts and the gate adjudicated on them.
+            # receipt binds nothing. Pre-fix, the out-of-root callee's
+            # params bound contracts and the gate adjudicated on them.
             assert decision.action == "hold"
             assert decision.channel_outcome == "unbindable"
         assert opened == [], (
