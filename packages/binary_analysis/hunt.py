@@ -11,6 +11,12 @@ answers the operator's directed questions about it:
   .string_xref_scan` — same session sandbox, same scan bounds, same
   escape-at-capture discipline).
 
+- ``--calls X [--and-not-calls Y]``: set algebra over a real call
+  graph — callers(X), or the chokepoint residual callers(X) minus
+  callers(Y). Substrate precedence: a co-located Ghidra re-database's
+  call xrefs, else the map pass's whole-binary aflcj graph (via the
+  shared adjacency fetch), else the binary-oracle cached edge index.
+
 Claims discipline: everything here is xref-backed STRUCTURE. A shared
 string or call edge is a review lead, never a finding and never taint
 proof — every artifact, graph record and report line says so.
@@ -28,12 +34,19 @@ import hashlib
 import logging
 import re
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.artifacts.context_map_budget import CONTEXT_MAP_CONSUMER_MAX_BYTES
 from core.artifacts.provenance import stamp_provenance
-from core.binary.addrmap import make_fid, module_anchor, record_fid_misses
+from core.binary.addrmap import (
+    FidIndex,
+    from_fid,
+    make_fid,
+    module_anchor,
+    record_fid_misses,
+)
 from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 from core.json import load_json, save_json
 from core.security.log_sanitisation import escape_nonprintable
@@ -899,17 +912,13 @@ def _family_id(family: dict[str, Any], anchors: list[str]) -> str:
 # Orchestration
 # --------------------------------------------------------------------
 
-def _default_scanner(
-    manifest: BinaryManifest,
-    select_fn: "Callable[[str], bool]",
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Live bounded r2 scan against the run's mapped binary.
+def _verified_binary(manifest: BinaryManifest) -> Path:
+    """Content-identity gate before any live scan.
 
-    Content-identity gate first: the hunt joins its results onto the
-    run's fids and inventory, so a swapped binary at the manifest path
-    must refuse rather than mint joins against the wrong module. (r2
-    only reads the file — the gate protects evidence integrity, not
-    execution safety.)
+    The hunt joins its results onto the run's fids and inventory, so
+    a swapped binary at the manifest path must refuse rather than mint
+    joins against the wrong module. (r2 only reads the file — the
+    gate protects evidence integrity, not execution safety.)
     """
     from core.hash import sha256_file
     binary = Path(manifest.binary_path)
@@ -928,7 +937,15 @@ def _default_scanner(
             f"re-run the map on the current binary"
         )
         raise HuntError(msg)
-    understand = BinaryUnderstand(binary)
+    return binary
+
+
+def _default_scanner(
+    manifest: BinaryManifest,
+    select_fn: "Callable[[str], bool]",
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Live bounded r2 string scan against the run's mapped binary."""
+    understand = BinaryUnderstand(_verified_binary(manifest))
     return understand.string_xref_scan(select_fn)
 
 
@@ -1149,10 +1166,14 @@ def _render_report(payload: dict[str, Any]) -> str:
     lines.append("")
     lines.append(f"Target: `{_md_escape(payload.get('binary'))}`")
     lines.append("")
-    lines.append(
-        "**Not findings.** " + _md_escape(payload.get("evidence_note")),
-    )
-    lines.append("")
+    if payload.get("evidence_note"):
+        lines.append(
+            "**Not findings.** " + _md_escape(payload.get("evidence_note")),
+        )
+        lines.append("")
+    for honesty in payload.get("honesty") or []:
+        lines.append(f"**Honesty.** {_md_escape(honesty)}")
+        lines.append("")
     if payload.get("anchors"):
         anchors = ", ".join(
             f"`{_md_escape(anchor)}`" for anchor in payload["anchors"]
@@ -1226,6 +1247,61 @@ def _render_report(payload: dict[str, Any]) -> str:
                 lines.append("")
             if family.get("call_structure_note"):
                 lines.append(f"_{_md_escape(family['call_structure_note'])}_")
+                lines.append("")
+    if payload.get("mode") == "calls":
+        query = payload.get("query") or {}
+        lines.append(
+            f"Substrate: {_md_escape(payload.get('substrate'))}",
+        )
+        lines.append("")
+        for note in payload.get("substrate_notes") or []:
+            lines.append(f"- ⚠️ {_md_escape(note)}")
+        if payload.get("substrate_notes"):
+            lines.append("")
+        scope = ("transitive, depth "
+                 f"{int(query.get('max_depth') or 1)}"
+                 if query.get("transitive") else "direct")
+        lines.append(
+            f"## Callers of `{_md_escape(query.get('resolved_calls'))}` "
+            f"({scope}) — {int(payload.get('caller_count') or 0)}",
+        )
+        lines.append("")
+        lines.append("| # | Caller | Depth | Address | fid |")
+        lines.append("|---|--------|-------|---------|-----|")
+        for index, entry in enumerate(
+            payload.get("callers") or [], start=1,
+        ):
+            lines.append(
+                f"| {index} | `{_md_escape(entry.get('name'))}` | "
+                f"{int(entry.get('depth') or 0)} | "
+                f"`{_md_escape(entry.get('address') or '-')}` | "
+                f"`{_md_escape(entry.get('fid') or '-')}` |"
+            )
+        lines.append("")
+        residual = payload.get("residual")
+        if isinstance(residual, dict):
+            lines.append(
+                f"## Chokepoint residual — callers with no edge to "
+                f"`{_md_escape(query.get('resolved_and_not_calls'))}` "
+                f"({int(residual.get('count') or 0)})",
+            )
+            lines.append("")
+            lines.append(
+                "**Hypothesis tier.** "
+                + _md_escape(residual.get("evidence_note")),
+            )
+            lines.append("")
+            if residual.get("empty_note"):
+                lines.append(_md_escape(residual["empty_note"]))
+                lines.append("")
+            for entry in residual.get("entries") or []:
+                fid = entry.get("fid")
+                fid_part = f" (fid `{_md_escape(fid)}`)" if fid else ""
+                lines.append(
+                    f"- `{_md_escape(entry.get('name'))}`{fid_part} — "
+                    f"depth {int(entry.get('depth') or 0)}"
+                )
+            if residual.get("entries"):
                 lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -1303,3 +1379,591 @@ def _ingest_anchor_graph(
                     confidence="candidate",
                     evidence_ids=family.get("evidence_ids") or [],
                 )
+
+
+# --------------------------------------------------------------------
+# --calls / --and-not-calls: set algebra over a real call graph
+# --------------------------------------------------------------------
+
+# Transitive-caller BFS depth for the calls algebra. Mirrors the map
+# pass's transitive rationale: real CVE chains commonly span 4-5 hops.
+# Both directions: deeper walks explode on dense/cyclic call graphs
+# and drown the residual in far-away callers; shallower ones miss the
+# parse → helpers → chokepoint chains the question exists to find.
+# --max-depth may move it, but never past the hard cap — past ~12
+# hops the answer is the whole binary, which is noise wearing a
+# number.
+CALLS_MAX_DEPTH_DEFAULT = 5
+CALLS_MAX_DEPTH_CAP = 12
+
+# Callers reported per query. Both directions: uncapped, a dispatch
+# hub's caller set turns the artifact into a whole-program listing;
+# too tight hides real review queues. Truncation is surfaced in-band
+# and keeps depth order (nearest callers are the actionable ones).
+MAX_CALLERS_REPORTED = 200
+
+_CALLS_ABSENCE_NOTE = (
+    "Absence of a call edge is not dataflow proof: residual entries "
+    "are a review queue, not findings — the target may be reached "
+    "through function pointers, wrappers, edges outside this "
+    "substrate, or call chains deeper than the transitive depth "
+    "bound."
+)
+_CALLS_PRESENCE_NOTE = (
+    "Presence of a call edge is not protection: a planted or "
+    "dominated call empties this residual without sanitising "
+    "anything. An empty residual list is never reported as coverage."
+)
+
+
+@dataclass
+class CallGraph:
+    """One substrate's caller→callee adjacency plus node metadata."""
+
+    substrate: str
+    callees: dict[str, set[str]] = field(default_factory=dict)
+    # name -> {"address": int | None, "fid": str | None, "size": int}
+    meta: dict[str, dict[str, Any]] = field(default_factory=dict)
+    notes: list[str] = field(default_factory=list)
+
+
+def _graph_from_redb(
+    run_dir: Path,
+    manifest: BinaryManifest,
+    notes: list[str] | None = None,
+) -> CallGraph | None:
+    """Substrate 1: a co-located Ghidra re-database's call xrefs.
+
+    ``notes`` (caller-owned) collects the honesty trail: a REJECTED
+    higher-precedence substrate must be visible to artifact consumers,
+    not just stderr — a later reader cannot otherwise tell that better
+    evidence existed and was refused.
+    """
+    if notes is None:
+        notes = []
+    redb_path = run_dir / "re-database.json"
+    if not redb_path.is_file():
+        return None
+    try:
+        from core.json.utils import RE_DATABASE_MAX_BYTES
+        from packages.ghidra.model import REDatabase
+    except ImportError:  # pragma: no cover - ghidra package absent
+        return None
+    payload = load_json(redb_path, max_bytes=RE_DATABASE_MAX_BYTES)
+    if not isinstance(payload, dict):
+        note = (
+            "re-database.json is present but unreadable (malformed or "
+            "over the read bound) — its call xrefs were not used"
+        )
+        logger.warning("hunt: %s (%s)", note, run_dir)
+        notes.append(note)
+        return None
+    db = REDatabase.from_dict(payload)
+    # Wrong-binary evidence must not drive the algebra: the database
+    # stamps the analysed binary's content hash; when both sides carry
+    # one and they disagree, skip this substrate loudly AND on the
+    # record.
+    db_sha = db.metadata.get("binary_sha256")
+    if (isinstance(db_sha, str) and db_sha and manifest.binary_sha256
+            and db_sha != manifest.binary_sha256):
+        note = (
+            "re-database.json is present but stamped for a DIFFERENT "
+            "binary (sha mismatch) — its call xrefs were rejected; "
+            "results come from a lower-precedence substrate"
+        )
+        logger.warning("hunt: %s", note)
+        notes.append(note)
+        return None
+    callees: dict[str, set[str]] = {}
+    for xref in db.xrefs:
+        if xref.kind != "call":
+            continue
+        caller = db.function_containing_address(xref.from_addr)
+        callee = (db.function_by_address(xref.to_addr)
+                  or db.function_containing_address(xref.to_addr))
+        if caller is None or callee is None or not caller.name \
+                or not callee.name:
+            continue
+        callees.setdefault(caller.name, set()).add(callee.name)
+    if not callees:
+        return None
+    graph_notes: list[str] = []
+    if not (isinstance(db_sha, str) and db_sha):
+        # Legacy artifact: usable, but the identity check could not
+        # run — say so instead of implying a verified join.
+        graph_notes.append(
+            "re-database.json carries no binary_sha256 stamp (legacy "
+            "artifact) — its identity against the mapped binary was "
+            "not verified"
+        )
+    meta = {
+        fn.name: {
+            "address": fn.address,
+            "fid": fn.fid,
+            "size": fn.size,
+        }
+        for fn in db.functions
+        if fn.name
+    }
+    return CallGraph(
+        substrate="ghidra re-database call xrefs",
+        callees=callees,
+        meta=meta,
+        notes=graph_notes,
+    )
+
+
+def _graph_from_map_scan(manifest: BinaryManifest) -> CallGraph | None:
+    """Substrate 2: the map pass's whole-binary aflcj graph, fetched
+    live through the parameterized machinery (one graph builder —
+    ``BinaryUnderstand._fetch_call_adjacency`` — shared with the
+    map's transitive-caller tagging)."""
+    try:
+        binary = _verified_binary(manifest)
+        understand = BinaryUnderstand(binary)
+    except (HuntError, RuntimeError, FileNotFoundError, ValueError) as exc:
+        logger.info("hunt: aflcj substrate unavailable: %s", exc)
+        return None
+    callees, addr_by_name, notes = understand.call_adjacency_scan()
+    if not callees:
+        return None
+    meta = {
+        name: {
+            "address": addr,
+            "fid": _fid_for(manifest, addr),
+            "size": 0,
+        }
+        for name, addr in addr_by_name.items()
+    }
+    return CallGraph(
+        substrate="radare2 whole-binary call graph (aflcj)",
+        callees=callees,
+        meta=meta,
+        notes=notes,
+    )
+
+
+def _graph_from_edge_cache(manifest: BinaryManifest) -> CallGraph | None:
+    """Substrate 3: the binary-oracle cached call-edge index."""
+    try:
+        binary = _verified_binary(manifest)
+    except HuntError as exc:
+        logger.info("hunt: edge-cache substrate unavailable: %s", exc)
+        return None
+    try:
+        from core.analysis.binary_oracle_edges import (
+            extract_direct_call_edges,
+        )
+    except ImportError:  # pragma: no cover - analysis package absent
+        return None
+    index = extract_direct_call_edges(binary, use_cache=True)
+    if not index.edges:
+        return None
+    callees: dict[str, set[str]] = {}
+    for edge in index.edges:
+        if edge.caller and edge.callee:
+            callees.setdefault(edge.caller, set()).add(edge.callee)
+    if not callees:
+        return None
+    # Name-only substrate: the edge index carries no addresses, so
+    # entries stay fid-less (name fallback — honest, never minted).
+    return CallGraph(
+        substrate="binary-oracle call-edge index",
+        callees=callees,
+        meta={},
+    )
+
+
+def load_call_graph(run_dir: Path, manifest: BinaryManifest) -> CallGraph:
+    """Best available call substrate, in documented precedence order:
+    re-database xrefs → live aflcj graph → binary-oracle edge cache.
+
+    Rejection notes from skipped higher-precedence substrates ride on
+    the returned graph (and thence into the artifact) — a consumer
+    must be able to tell "no better evidence existed" from "better
+    evidence existed and was rejected". Raises :class:`HuntError` when
+    none is usable — "no substrate" must be a refusal (naming what was
+    rejected, e.g. a present-but-mismatched re-database), never an
+    empty caller list wearing a verdict.
+    """
+    rejection_notes: list[str] = []
+    for builder in (
+        lambda: _graph_from_redb(run_dir, manifest, rejection_notes),
+        lambda: _graph_from_map_scan(manifest),
+        lambda: _graph_from_edge_cache(manifest),
+    ):
+        graph = builder()
+        if graph is not None:
+            graph.notes = [*rejection_notes, *graph.notes]
+            return graph
+    detail = ("; ".join(rejection_notes) if rejection_notes else
+              "no re-database.json in the run dir")
+    msg = (
+        f"no usable call-graph substrate: {detail}; no scannable "
+        f"binary for the whole-binary call graph, and no cached edge "
+        f"index"
+    )
+    raise HuntError(msg)
+
+
+def _resolve_call_query(
+    query: str,
+    graph: CallGraph,
+    misses: list[dict[str, Any]],
+) -> str | None:
+    """Resolve one operator <fid|name> to a graph node name.
+
+    fid resolution goes through the FidIndex join policy (exact →
+    bounded fuzzy → unique name); plain names also match graph nodes
+    directly, full or base form. A miss is RECORDED (the caller
+    persists via record_fid_misses) and returns None.
+    """
+    index = FidIndex()
+    for name, info in graph.meta.items():
+        index.add(name, fid=info.get("fid"), name=name)
+    if from_fid(query) is not None:
+        match = index.resolve(fid=query)
+        if match is not None:
+            return str(match.payload)
+        misses.append({
+            "operation_detail": "calls_query",
+            "query": query,
+            "reason": "fid_not_resolved",
+        })
+        return None
+    # Name path: graph node names first (full, then base-name match
+    # when unambiguous), then the FidIndex name fallback.
+    names = set(graph.callees)
+    for callee_set in graph.callees.values():
+        names.update(callee_set)
+    names.update(graph.meta)
+    if query in names:
+        return query
+    base_matches = sorted(
+        name for name in names if symbol_base_name(name) == query
+    )
+    if len(base_matches) == 1:
+        return base_matches[0]
+    match = index.resolve(name=query)
+    if match is not None:
+        return str(match.payload)
+    misses.append({
+        "operation_detail": "calls_query",
+        "query": query,
+        "reason": ("ambiguous_base_name" if len(base_matches) > 1
+                   else "name_not_in_graph"),
+    })
+    return None
+
+
+def callers_of(
+    graph: CallGraph,
+    target: str,
+    *,
+    transitive: bool = False,
+    max_depth: int = CALLS_MAX_DEPTH_DEFAULT,
+) -> dict[str, int]:
+    """caller name -> min hop distance to ``target``.
+
+    Reverse BFS with the same full-plus-base-name indexing the map's
+    transitive tagging uses (a call site recorded as ``strcpy`` must
+    match a node stored as ``sym.imp.strcpy``). Cycle-safe: min-depth
+    per node, each node expanded once. ``transitive=False`` stops at
+    depth 1 (direct callers).
+    """
+    depth_cap = 1 if not transitive else max(1, min(
+        max_depth, CALLS_MAX_DEPTH_CAP,
+    ))
+    reverse: dict[str, set[str]] = {}
+    for caller, callee_set in graph.callees.items():
+        for callee in callee_set:
+            reverse.setdefault(callee, set()).add(caller)
+            base = symbol_base_name(callee)
+            if base != callee:
+                reverse.setdefault(base, set()).add(caller)
+    result: dict[str, int] = {}
+    skip = {target, symbol_base_name(target)}
+    frontier = [target]
+    depth = 0
+    while frontier and depth < depth_cap:
+        depth += 1
+        next_frontier: list[str] = []
+        for current in frontier:
+            for cand in {current, symbol_base_name(current)}:
+                for caller in reverse.get(cand, ()):
+                    if caller in skip or caller in result:
+                        continue
+                    result[caller] = depth
+                    next_frontier.append(caller)
+        frontier = next_frontier
+    return result
+
+
+def run_calls_hunt(
+    run_dir: Path,
+    calls: str,
+    *,
+    and_not_calls: str | None = None,
+    transitive: bool = False,
+    max_depth: int | None = None,
+    graph_loader: "Callable[[Path, BinaryManifest], CallGraph] | None" = None,
+) -> dict[str, Any]:
+    """callers(X), optionally minus callers(Y), over the best
+    available substrate.
+
+    ``--calls X --and-not-calls Y`` answers the chokepoint question:
+    which callers of X never (transitively) reach Y — e.g. which
+    parser entry points skip the shared validator. The residual is a
+    HYPOTHESIS-tier review queue; honesty lines ride both directions
+    (see _CALLS_ABSENCE_NOTE / _CALLS_PRESENCE_NOTE).
+    """
+    run_dir = Path(run_dir)
+    manifest = _load_manifest(run_dir)
+    loader = graph_loader or load_call_graph
+    graph = loader(run_dir, manifest)
+
+    depth = (CALLS_MAX_DEPTH_DEFAULT if max_depth is None
+             else max(1, min(max_depth, CALLS_MAX_DEPTH_CAP)))
+    depth_clamped = max_depth is not None and max_depth != depth
+    misses: list[dict[str, Any]] = []
+    target = _resolve_call_query(calls, graph, misses)
+    exclude_target: str | None = None
+    if target is not None and and_not_calls is not None:
+        exclude_target = _resolve_call_query(and_not_calls, graph, misses)
+    if misses:
+        record_fid_misses(run_dir, "binary-hunt-calls", misses)
+    if target is None:
+        msg = (
+            f"--calls target not found in the "
+            f"{graph.substrate}: {escape_nonprintable(calls)}"
+        )
+        raise HuntError(msg)
+    if and_not_calls is not None and exclude_target is None:
+        msg = (
+            f"--and-not-calls target not found in the "
+            f"{graph.substrate}: {escape_nonprintable(and_not_calls)}"
+        )
+        raise HuntError(msg)
+
+    callers_x = callers_of(
+        graph, target, transitive=transitive, max_depth=depth,
+    )
+    residual: dict[str, int] | None = None
+    degenerate_note: str | None = None
+    if exclude_target is not None:
+        if exclude_target == target:
+            residual = {}
+            degenerate_note = (
+                "--calls and --and-not-calls resolve to the same "
+                "function; the residual is empty by construction and "
+                "says nothing about the binary."
+            )
+        else:
+            callers_y = callers_of(
+                graph, exclude_target,
+                transitive=transitive, max_depth=depth,
+            )
+            residual = {
+                name: hops for name, hops in callers_x.items()
+                if name not in callers_y
+            }
+
+    def _entries(caller_map: dict[str, int]) -> list[dict[str, Any]]:
+        ordered = sorted(
+            caller_map.items(), key=lambda item: (item[1], item[0]),
+        )
+        entries: list[dict[str, Any]] = []
+        for name, hops in ordered[:MAX_CALLERS_REPORTED]:
+            info = graph.meta.get(name) or {}
+            entry: dict[str, Any] = {
+                "name": escape_nonprintable(name),
+                "depth": hops,
+            }
+            address = info.get("address")
+            if isinstance(address, int):
+                entry["address"] = hex(address)
+            if info.get("fid"):
+                entry["fid"] = info["fid"]
+            if info.get("size"):
+                entry["size"] = int(info["size"])
+            entries.append(entry)
+        return entries
+
+    evidence: list[BinaryEvidenceRecord] = []
+    callers_record = make_evidence(
+        manifest.binary_sha256,
+        kind="hunt_callers",
+        source=graph.substrate,
+        summary=(
+            f"{len(callers_x)} caller(s) of "
+            f"{escape_nonprintable(target)} within {depth} hop(s)"
+            if transitive else
+            f"{len(callers_x)} direct caller(s) of "
+            f"{escape_nonprintable(target)}"
+        ),
+        tier=EvidenceTier.XREF_BACKED,
+        confidence="candidate",
+        reproducible=True,
+        tool="binary-hunt",
+        location=manifest.binary_path,
+        data={"target": escape_nonprintable(target)},
+    )
+    evidence.append(callers_record)
+
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "mode": "calls",
+        "binary": manifest.binary_path,
+        "binary_sha256": manifest.binary_sha256,
+        "query": {
+            # Operator-typed, echoed escaped — the echo convention
+            # must not depend on who typed the value.
+            "calls": escape_nonprintable(calls),
+            "and_not_calls": (escape_nonprintable(and_not_calls)
+                              if and_not_calls is not None else None),
+            "resolved_calls": escape_nonprintable(target),
+            "resolved_and_not_calls": (
+                escape_nonprintable(exclude_target)
+                if exclude_target is not None else None
+            ),
+            "transitive": bool(transitive),
+            "max_depth": depth if transitive else 1,
+        },
+        "substrate": graph.substrate,
+        # Substrate notes quote tool/degradation text — escaped like
+        # every externally-influenced string in this artifact.
+        "substrate_notes": [
+            escape_nonprintable(str(note)) for note in graph.notes
+        ],
+        "callers": _entries(callers_x),
+        "caller_count": len(callers_x),
+        "claim": "structural_lead_only",
+        "honesty": [_CALLS_ABSENCE_NOTE, _CALLS_PRESENCE_NOTE],
+        "evidence": [],
+    }
+    truncation_lines: list[str] = []
+    if depth_clamped:
+        truncation_lines.append(
+            f"--max-depth {max_depth} clamped to the transitive depth "
+            f"bound ({depth})",
+        )
+    if len(callers_x) > MAX_CALLERS_REPORTED:
+        truncation_lines.append(
+            f"callers capped at {MAX_CALLERS_REPORTED} of "
+            f"{len(callers_x)}; kept nearest-first",
+        )
+    if residual is not None:
+        residual_record = make_evidence(
+            manifest.binary_sha256,
+            kind="hunt_chokepoint_residual",
+            source=graph.substrate,
+            summary=(
+                f"{len(residual)} caller(s) of "
+                f"{escape_nonprintable(target)} with no "
+                f"{'transitive ' if transitive else ''}call edge to "
+                f"{escape_nonprintable(exclude_target or '')}"
+            ),
+            # Hypothesis tier: the residual CLAIM rests on edge
+            # absence, which the substrate cannot prove.
+            tier=EvidenceTier.HEURISTIC,
+            confidence="hypothesis",
+            reproducible=True,
+            tool="binary-hunt",
+            location=manifest.binary_path,
+            data={
+                "target": escape_nonprintable(target),
+                "exclude": escape_nonprintable(exclude_target or ""),
+            },
+        )
+        evidence.append(residual_record)
+        payload["residual"] = {
+            "kind": "HUNT_CHOKEPOINT_RESIDUAL",
+            "entries": _entries(residual),
+            "count": len(residual),
+            "confidence": "hypothesis",
+            "evidence_tier": EvidenceTier.HEURISTIC.value,
+            "evidence_note": _CALLS_ABSENCE_NOTE,
+            "evidence_ids": [residual_record.id],
+        }
+        if len(residual) > MAX_CALLERS_REPORTED:
+            truncation_lines.append(
+                f"residual capped at {MAX_CALLERS_REPORTED} of "
+                f"{len(residual)}; kept nearest-first",
+            )
+        if not residual:
+            payload["residual"]["empty_note"] = (
+                ("Empty residual: " + degenerate_note)
+                if degenerate_note else
+                "Empty residual: every observed caller has an edge "
+                "to the excluded function. " + _CALLS_PRESENCE_NOTE
+            )
+    payload["truncation_lines"] = truncation_lines
+    payload["evidence"] = [record.to_dict() for record in evidence]
+
+    slug_target = symbol_base_name(target)
+    slug = f"calls-{_slug(slug_target)}"
+    if exclude_target is not None:
+        slug += f"-not-{_slug(symbol_base_name(exclude_target))}"
+    artifact = _write_hunt_artifacts(run_dir, payload, slug_hint=slug)
+    _ingest_calls_graph(run_dir, manifest, payload, evidence)
+    payload["artifacts"] = artifact
+    return payload
+
+
+def _ingest_calls_graph(
+    run_dir: Path,
+    manifest: BinaryManifest,
+    payload: dict[str, Any],
+    evidence: list[BinaryEvidenceRecord],
+) -> None:
+    residual = payload.get("residual")
+    if not isinstance(residual, dict):
+        return
+    graph_path = graph_path_for_run(run_dir)
+    with BinaryGraphStore(graph_path) as store, store.batch():
+        snapshot_id = _hunt_snapshot(store, manifest, run_dir)
+        for record in evidence:
+            store.add_evidence(snapshot_id, record)
+        query = payload.get("query") or {}
+        key = (
+            f"{query.get('resolved_calls')}::"
+            f"{query.get('resolved_and_not_calls')}::"
+            f"{query.get('max_depth')}"
+        )
+        residual_node = store.add_node(
+            snapshot_id,
+            manifest.binary_sha256,
+            "hunt_chokepoint_residual",
+            key,
+            name=(
+                f"callers({query.get('resolved_calls')}) minus "
+                f"callers({query.get('resolved_and_not_calls')})"
+            ),
+            props={k: v for k, v in residual.items() if k != "entries"},
+            evidence_ids=residual.get("evidence_ids") or [],
+        )
+        for entry in residual.get("entries") or []:
+            addr = _parse_addr(entry.get("address"))
+            node_key = (f"BFN-{addr:x}" if addr is not None
+                        else str(entry.get("name") or ""))
+            # add-if-absent: the residual references the MAP's
+            # function nodes in the map's snapshot — a REPLACE here
+            # wiped their map-owned props (see the anchor ingest).
+            fn_node = store.add_node_if_absent(
+                snapshot_id,
+                manifest.binary_sha256,
+                "function",
+                node_key,
+                name=str(entry.get("name") or ""),
+                address=str(entry.get("address") or ""),
+                props=entry,
+            )
+            store.add_edge(
+                snapshot_id,
+                manifest.binary_sha256,
+                "HUNT_CHOKEPOINT_RESIDUAL",
+                residual_node,
+                fn_node,
+                confidence="hypothesis",
+                evidence_ids=residual.get("evidence_ids") or [],
+            )
