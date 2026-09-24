@@ -40,6 +40,7 @@ _VALID_KEYS = frozenset({
     "max_fuzz_parallel",
     "max_inventory_workers",
     "max_llm_workers",
+    "llm_account_posture",
     "max_json_memo_mb",
     "throttle_cooldown_s",
 })
@@ -53,6 +54,7 @@ _DEPRECATED_KEYS = frozenset({
 # resolved Tuning dataclass. Excluded from _resolve() / Tuning.
 _PASSTHROUGH_KEYS = frozenset({
     "max_llm_workers",
+    "llm_account_posture",
     "throttle_cooldown_s",
 })
 
@@ -73,6 +75,7 @@ _KEY_COMMENTS = {
     "max_inventory_workers": "per-file extractor pool for tree-sitter parse (auto = half CPUs, capped at 8)",
     "max_json_memo_mb": "MB budget for JsonCache in-process memo; oldest entries evicted past this",
     "max_llm_workers": "parallel LLM API calls (consumed by core/llm/concurrency.py)",
+    "llm_account_posture": "shared = LLM account has other consumers, fair-share ceilings; solo = account belongs to this host's runs",
     "throttle_cooldown_s": "seconds to wait between LLM batches when rate-limited",
 }
 

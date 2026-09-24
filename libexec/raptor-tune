@@ -66,6 +66,9 @@ def _max_values() -> dict:
         "max_semgrep_workers": max(2, cpus),
         "max_codeql_workers": max(1, min(cpus // 2, 8, codeql_worker_ram_cap)),
         "max_fuzz_parallel": max(1, cpus // 2),
+        # "use all available resources" extends to the LLM account:
+        # max asserts the account's quota belongs to this host's runs.
+        "llm_account_posture": "solo",
     }
 
 
@@ -81,11 +84,20 @@ def _balanced_values() -> dict:
         "max_semgrep_workers": max(1, cpus // 4),
         "max_codeql_workers": 1,
         "max_fuzz_parallel": 1,
+        "llm_account_posture": "shared",
     }
 
 
 def _default_values() -> dict:
-    return dict(_DEFAULTS)
+    out = dict(_DEFAULTS)
+    # Profiles OWN the posture (each profile IS a sharing stance:
+    # balanced/default leave headroom, max claims everything), so a
+    # retune resets a hand-edited posture rather than preserving it
+    # like the operator-only passthrough keys. The preserved
+    # max_llm_workers override still beats posture at read time, so
+    # an operator's explicit worker count survives any retune.
+    out["llm_account_posture"] = "shared"
+    return out
 
 
 def _with_defaults(producer):
@@ -173,6 +185,17 @@ def _show() -> None:
             display = f"{value}{' ' + unit if unit else ''}"
         print(f"  {name:25s} {display}")
 
+    # Passthrough keys are consumed raw by core/llm/concurrency.py —
+    # show the file values (or their documented defaults) so the
+    # operator can see what a profile set without opening the file.
+    passthrough = [
+        ("max_llm_workers", raw.get("max_llm_workers", "auto"), ""),
+        ("llm_account_posture", raw.get("llm_account_posture", "shared"), ""),
+        ("throttle_cooldown_s", raw.get("throttle_cooldown_s", 30), "s"),
+    ]
+    for name, value, unit in passthrough:
+        print(f"  {name:25s} {value}{' ' + unit if unit else ''}")
+
 
 def main() -> int:
     args = sys.argv[1:]
@@ -198,8 +221,11 @@ def main() -> int:
     print()
 
     # _DEFAULTS iterates in its declaration order — the same order the
-    # canonical writer emits, so the echo matches the file.
-    for key in _DEFAULTS:
+    # canonical writer emits (profile-set extra keys such as
+    # llm_account_posture follow, matching the writer's key order).
+    echo_keys = list(_DEFAULTS) + [
+        k for k in values if k not in _DEFAULTS]
+    for key in echo_keys:
         val = values[key]
         print(f"  {key:25s} {val}")
 
