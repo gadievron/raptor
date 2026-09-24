@@ -114,7 +114,7 @@ def test_success_path_still_works_and_cleans_up(run_env, monkeypatch):
     seen: dict[str, str] = {}
 
     def fake_semgrep(*, target_path, file_path, function_name,
-                     rule_config, line_start, line_end):
+                     rule_config, line_start, line_end, language=None):
         # The rule tempfile must still exist while the tool runs.
         seen["rule_exists"] = str(Path(rule_config).exists())
         return SimpleNamespace(

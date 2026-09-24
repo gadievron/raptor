@@ -196,6 +196,13 @@ def semgrep_probed_language(
     return lang if lang in _SEMGREP_PROBEABLE_LANGS else None
 
 
+def semgrep_extension_mapped(file_path: str) -> bool:
+    """True when semgrep's own extension-based target selection maps
+    this file — i.e. the ordinary scan path applies and no probe /
+    ``--scan-unknown-extensions`` licensing is involved."""
+    return Path(file_path).suffix.lower() in _SEMGREP_LANG_BY_EXT
+
+
 def hypothesis_to_semgrep_rule(hypothesis: str, file_path: str) -> str | None:
     """Generate a Semgrep YAML rule from a hypothesis string.
 
