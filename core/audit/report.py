@@ -351,8 +351,65 @@ def generate_report(
     if phase_aborts:
         report["phase_aborts"] = phase_aborts
 
+    # Decomp-tree sweep (binary targets): the tree-wide decompiler
+    # Semgrep pass writes decomp-sweep.json — including its loud-skip
+    # records, which must reach the operator — and the tree's
+    # conformance metric is the honest denominator for the coverage
+    # line (never "files emitted", which over-counts unparseable
+    # pseudo-C the sweep could not actually read).
+    decomp_sweep = _load_decomp_sweep(out_dir)
+    if decomp_sweep:
+        report["decomp_sweep"] = decomp_sweep
+
     report["summary"] = _format_summary(report)
     return report
+
+
+def _load_decomp_sweep(out_dir: Path) -> dict[str, Any] | None:
+    """Summary view of ``decomp-sweep.json`` (+ its conformance
+    denominator) for the report — counts and skip reasons only; the
+    per-finding records stay in the artifact.
+    """
+    path = Path(out_dir) / "decomp-sweep.json"
+    if not path.is_file():
+        return None
+    try:
+        data = load_json(path, max_bytes=_MAX_FINDINGS_BYTES)
+    except Exception:  # noqa: BLE001 — reporting must not fail the run
+        logger.debug("decomp-sweep record load failed", exc_info=True)
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("skipped"):
+        return {"skipped": True,
+                "skip_reason": str(data.get("skip_reason", ""))}
+    out: dict[str, Any] = {
+        "skipped": False,
+        "rules_run": len(data.get("rules_run") or []),
+        "rules_errored": len(data.get("rules_errored") or {}),
+        "findings_total": int(data.get("findings_total", 0) or 0),
+        "mapped": int(data.get("mapped", 0) or 0),
+        "unmapped": int(data.get("unmapped", 0) or 0),
+        "journal_rows": int(data.get("journal_rows", 0) or 0),
+    }
+    tree_root = data.get("tree_root")
+    if tree_root:
+        conf_path = Path(str(tree_root)) / "decomp-tree-conformance.json"
+        try:
+            if conf_path.is_file():
+                conf = load_json(conf_path, max_bytes=_MAX_STATE_BYTES)
+                if isinstance(conf, dict):
+                    out["conformance"] = {
+                        "parsed_rate": conf.get("parsed_rate"),
+                        "files_total": int(
+                            conf.get("files_total", 0) or 0),
+                        "quarantine_total": int(
+                            conf.get("quarantine_total", 0) or 0),
+                    }
+        except Exception:  # noqa: BLE001 — reporting must not fail the run
+            logger.debug("decomp-tree conformance load failed",
+                         exc_info=True)
+    return out
 
 
 def load_phase_aborts(out_dir: Path) -> list[dict[str, Any]]:
@@ -644,6 +701,66 @@ def write_markdown_report(
             f"(function absent from binary)."
         )
         lines.append("See suppressions.jsonl for details.")
+        lines.append("")
+
+    # Decomp-tree sweep (binary targets): the coverage line cites the
+    # conformance metric's parsed fraction as its denominator — a
+    # missing metric renders "parse rate unavailable", never an
+    # assumed 100% — and states the mapped/unmapped split (unmapped
+    # matches are recorded in decomp-sweep.json, never dropped).
+    ds = report.get("decomp_sweep")
+    if ds:
+        lines.append("## Decomp-tree sweep")
+        lines.append("")
+        if ds.get("skipped"):
+            lines.append(
+                "Skipped — "
+                f"{_line(ds.get('skip_reason') or 'unknown reason', max_chars=500)}"
+            )
+        else:
+            conf = ds.get("conformance") or {}
+            rate = conf.get("parsed_rate")
+            if isinstance(rate, (int, float)):
+                cov = (
+                    f"{rate:.0%} of "
+                    f"{int(conf.get('files_total', 0) or 0)} decomp-tree "
+                    "file(s) parsed"
+                )
+            elif conf:
+                # Metric exists but no tool leg could measure
+                # (parsed_rate null) — distinct from a missing metric.
+                cov = (
+                    "parse rate unavailable (conformance metric "
+                    "present but no tool leg could measure — see "
+                    "decomp-tree-conformance.json)"
+                )
+            else:
+                cov = (
+                    "parse rate unavailable (no conformance metric "
+                    "recorded for the swept tree)"
+                )
+            lines.append(
+                f"Sweep coverage: {cov}; "
+                f"{ds.get('rules_run', 0)} rule file(s) run; "
+                f"{ds.get('findings_total', 0)} match(es) — "
+                f"{ds.get('mapped', 0)} mapped to functions "
+                f"({ds.get('journal_rows', 0)} journal row(s)), "
+                f"{ds.get('unmapped', 0)} unmapped (recorded in "
+                "decomp-sweep.json, never dropped)."
+            )
+            quarantined = int(conf.get("quarantine_total", 0) or 0)
+            if quarantined:
+                lines.append(
+                    f"{quarantined} tree file(s) quarantined as "
+                    "unparseable — see decomp-tree-conformance.json."
+                )
+            errored = int(ds.get("rules_errored", 0) or 0)
+            if errored:
+                lines.append(
+                    f"{errored} rule file(s) errored (recorded in "
+                    "decomp-sweep.json) — their silence is not "
+                    "coverage."
+                )
         lines.append("")
 
     # Analysis gaps

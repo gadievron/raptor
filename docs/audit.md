@@ -143,6 +143,25 @@ Binary checklist items additionally journal which refutation gates
 could not run on them, so "no refutation" is distinguishable from
 "gate never ran".
 
+Binary targets get two decompiler Semgrep passes.  Per hypothesis,
+the tool chain runs curated decompiler-tolerant rules
+(`core/audit/rules/decompiler/`) over the reviewed function's
+decompilation.  Post-loop, the same corpus -- plus any curated rule
+opted in with a `# raptor: decomp-safe` header marker -- runs over
+the WHOLE decomp-tree (built from the run's RE database when absent;
+a binary run that cannot sweep records a loud skip in
+`decomp-sweep.json`, never a silent no-sweep).  Decomp-trees are
+attacker-shaped pseudo-C regardless of living in the run directory,
+so these scans run sandboxed like every other parser of
+target-derived bytes.  Matches map back through the tree's
+`decomp-map.json` sidecar to `function @ address` (+ normalized fid)
+and land in the journal as `[mechanical]` rows at `suspicious` --
+detection-tier leads capped at the decompiled-evidence confidence
+ceiling (`traced`), never promotions.  The report's sweep-coverage
+line cites the tree's parse-conformance metric
+(`decomp-tree-conformance.json`) as its denominator; unmapped
+matches are counted and recorded.
+
 
 ## Strategies
 
@@ -426,6 +445,8 @@ Query audit state across all four layers:
 | `prefilter-kills.jsonl` | One record per prefilter/triage kill (summary row first, then `file`, `function`, `gate`, `reason`, plus spot-audit corroboration fields on sampled rows) |
 | `suppressions.jsonl` | Decision audit trail: oracle-earned skips, vendored/generated skip/glance routings, plus the refutation lattice's record-or-refuse rows — witness discharges, proof-grade receipt-floor overrides, and merge-fence holds, all `dropped: false` (same record shape as `/agentic`/`/codeql`) |
 | `tier-diagnostics.json` | Per-channel outcome counters (prefilter, semgrep, smt, fail_open, consistency, ...) |
+| `decomp-sweep.json` | Binary targets: tree-wide decompiler Semgrep sweep record — rules run/errored, per-finding records (fid + address join, `traced`-capped, `decompiled-evidence`-tagged), unmapped matches, or the loud-skip reason |
+| `decomp-tree/decomp-tree-conformance.json` | Binary targets: per-tool parse conformance of the decomp-tree (sandboxed tree-sitter + semgrep probe legs, conservative `parsed_rate`, quarantine list) — the sweep-coverage denominator |
 | `fuzz-dict.json` / `fuzz.dict` | Fuzz handoff: dictionary tokens mined from constants, parse-shape literals, and dispatch keys; `fuzz.dict` is AFL format and is auto-discovered by [/fuzz](fuzzing.md#dictionary-auto-discovery) |
 | `cost-breakdown.json` | Per-phase cost ledger reconciliation (completed + failed-attempt + unattributed spend always sum to the authoritative total; the pre-loop summary pass books as the `summary` phase) |
 | `llm-telemetry.jsonl` | Per-call LLM telemetry |
