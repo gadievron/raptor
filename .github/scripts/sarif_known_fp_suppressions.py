@@ -145,6 +145,42 @@ KNOWN_FP_RULES: tuple[KnownFP, ...] = (
             "material. Triaged FP."
         ),
     ),
+    KnownFP(
+        rule_id="py/redos",
+        sink_file_prefixes=(
+            "packages/sca/tests/test_refresh_typosquat_lists.py",
+            "packages/sca/supply_chain/tests/test_name_grammar.py",
+        ),
+        justification=(
+            "Deliberately-superlinear regexes retained verbatim as "
+            "equivalence fixtures: these tests prove the production "
+            "linear-time Packagist grammar accepts exactly the same "
+            "language as the ambiguous legacy/published original, so "
+            "the vulnerable spelling must stay in the test text — "
+            "deleting it deletes the proof. The fixtures run only "
+            "against bounded, self-generated corpora (exhaustive "
+            "strings to length 6 plus structured strings with short "
+            "alnum runs), never attacker-controlled input, and each "
+            "site's comment forbids promoting the pattern into "
+            "production code. Intended fixture."
+        ),
+    ),
+    KnownFP(
+        rule_id="py/overly-large-range",
+        sink_file_prefixes=(
+            "core/annotations/storage.py",
+        ),
+        justification=(
+            "The flagged character range is a deliberate C0/C1 "
+            "control-character REJECT class in a write-time validator "
+            "(_CONTROL_CHARS_RE): matching text is refused with a "
+            "ValueError, never interpreted or rendered. Breadth is "
+            "the defence — over-rejecting is the safe direction for "
+            "terminal-control bytes in persisted annotations — and "
+            "the range's composition is documented in the comment at "
+            "the pattern. Intended behavior."
+        ),
+    ),
 )
 
 # Sanitiser-aware suppressions: any flow whose codeFlows pass through the
