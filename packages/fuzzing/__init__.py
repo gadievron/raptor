@@ -18,6 +18,8 @@ from .capability import CapabilityReport, probe as probe_capabilities, select_fu
 from .target_detector import TargetInfo, detect as detect_target
 from .orchestrator import FuzzingOrchestrator, CampaignPlan
 from .libfuzzer_runner import LibFuzzerRunner, LibFuzzerResult, LibFuzzerStats
+from .atheris_runner import AtherisRunner, AtherisResult
+from .atheris_harness import AtherisHarnessSpec, write_atheris_harness
 from .harness_generator import HarnessGenerator, HarnessSpec, GeneratedHarness
 from .telemetry import FuzzingTelemetry, CampaignStats, FuzzEvent
 from packages.binary_analysis import (
@@ -30,6 +32,9 @@ from packages.binary_analysis import (
 __all__ = [
     "DEFAULT_MAX_FILE_SIZE",
     "AFLRunner",
+    "AtherisHarnessSpec",
+    "AtherisResult",
+    "AtherisRunner",
     "BinaryContextMap",
     "BinaryFunctionInfo",
     "BinaryUnderstand",
@@ -56,4 +61,5 @@ __all__ = [
     "prepare_seed_corpus",
     "probe_capabilities",
     "select_fuzzer",
+    "write_atheris_harness",
 ]

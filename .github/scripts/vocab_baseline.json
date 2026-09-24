@@ -2290,6 +2290,11 @@
     "kind": "literal",
     "note": "env-build.json provenance record field names (serialization schema, not name vocabulary \u2014 same class as the enforcement-stats field-names entry)"
   },
+  "packages/fuzzing/orchestrator.py::_run_atheris": {
+    "count": 14,
+    "kind": "literal",
+    "note": "atheris campaign result-dict schema keys (mirrors the libFuzzer path's report shape plus the harness path and python-exception triage fields), not a learned name vocabulary"
+  },
   "packages/fuzzing/orchestrator.py::_run_libfuzzer": {
     "count": 10,
     "kind": "literal",
