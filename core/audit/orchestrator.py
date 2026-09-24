@@ -8033,13 +8033,22 @@ def _run_audit_body(
 
     resolved_workers = _resolve_max_workers(config)
     if config.max_workers == 0:
-        from core.llm.concurrency import read_tuning_llm_account_posture
+        from core.llm.concurrency import (
+            emit_llm_sibling_banner,
+            read_tuning_llm_account_posture,
+        )
+        _posture = read_tuning_llm_account_posture()
         logger.info(
             "auto workers: model=%s posture=%s → max_workers=%d",
             config.models[0] if config.models else "default",
-            read_tuning_llm_account_posture(),
+            _posture,
             resolved_workers,
         )
+        # Sibling observation: an honest banner about who else is on
+        # the account right now — a heuristic, never a gate, and
+        # contained (a poisoned sibling must not abort startup).
+        emit_llm_sibling_banner(_posture, resolved_workers,
+                                self_run_dir=config.out_dir, log=logger)
     executor_config = ExecutorConfig(max_workers=resolved_workers)
 
     layer_disagreements: list[Any] = []

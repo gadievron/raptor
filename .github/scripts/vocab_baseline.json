@@ -1320,6 +1320,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "core/llm/concurrency.py::LLM_RUN_COMMANDS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "allowlist of RAPTOR's own run-lifecycle command names that hold LLM quota mid-run (the sibling-observation classifier; includes forward-compat members that cannot occur on the ledger yet — rationale inline), not a learned name vocabulary; same class as core/run/provenance.py::_DETERMINISTIC_COMMANDS"
+  },
   "core/llm/coerce.py::_KNOWN_LANG_TAGS": {
     "count": 38,
     "kind": "literal",

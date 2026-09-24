@@ -441,3 +441,160 @@ def run_parallel(
         final_effective,
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Sibling-run observation (account-contention startup heuristic)
+# ---------------------------------------------------------------------------
+
+#: Command names (as recorded in run metadata by ``start_run``) that
+#: hold LLM quota while running — an ALLOWLIST, not a closed census of
+#: everything on the ledger. ``scan`` (pattern scanners) and ``fuzz``
+#: (AFL) dispatch no LLM calls mid-run and would only inflate the
+#: count. ``analyze``/``exploit``/``patch``/``crash-analysis`` cannot
+#: appear on the ledger today (they run under other commands' records
+#: or agent pipelines with no lifecycle record of their own) — kept as
+#: forward-compat so future lifecycle wiring is observed without
+#: touching this classifier; a name that never occurs can never
+#: miscount. Unknown command names are NOT counted: the observation
+#: feeds a banner heuristic, and undercounting merely forgoes a hint
+#: while overcounting cries wolf on every co-located non-LLM run.
+LLM_RUN_COMMANDS = frozenset({
+    "agentic", "analyze", "audit", "codeql", "crash-analysis",
+    "exploit", "openant", "patch",
+    # /sca records command "sca" (libexec/raptor-sca-run start_run)
+    # and runs LLM review/triage of dependency findings by default.
+    "sca",
+    "understand", "validate", "web",
+})
+
+
+class LLMSiblingObservation:
+    """Box-wide LLM-consuming sibling runs observed at startup.
+
+    ``count is None`` means the session run ledger could not be read
+    (fail-open: callers keep current behavior and note the blind
+    spot). ``commands`` holds one entry per counted sibling — always
+    drawn from :data:`LLM_RUN_COMMANDS`, never raw metadata text.
+    """
+
+    __slots__ = ("count", "commands")
+
+    def __init__(self, count: int | None,
+                 commands: tuple[str, ...] = ()) -> None:
+        self.count = count
+        self.commands = tuple(commands)
+
+
+def observe_llm_sibling_runs(
+        self_run_dir: str | Path | None = None) -> LLMSiblingObservation:
+    """Count LIVE LLM-consuming runs on this box via the session run
+    ledger (``~/.local/share/raptor/sessions.d/<pid>.run`` — the one
+    ledger the coverage hook and project discovery already read).
+
+    A HEURISTIC for a startup banner and default selection only —
+    never a gate, and never blocks a run. A record counts only while
+    (a) its session entry verifies live (identity stamp / kill-0 —
+    see ``ledger_running_runs_all_sessions``), (b) the run dir's own
+    ``.raptor-run.json`` still says ``running``, and (c) the recorded
+    command is in :data:`LLM_RUN_COMMANDS`. Staleness tolerance: the
+    metadata re-vet in (b) filters runs that finalised without a
+    ledger finish, but a run that crashed leaving ``status=running``
+    IN ITS METADATA is over-counted until its owning session exits
+    (the ledger's session-liveness gate) or the project's
+    ``_cleanup_abandoned`` sweep corrects the metadata — bounded, and
+    the cost is one conservative banner line, not a blocked run.
+    Fail-open: any read failure returns ``count=None``.
+
+    ``self_run_dir`` excludes the calling run's own ledger record.
+    """
+    try:
+        from core.project.sessions import ledger_running_runs_all_sessions
+        records = ledger_running_runs_all_sessions()
+    except Exception:  # noqa: BLE001 — observation is best-effort
+        logger.debug("llm sibling observation unavailable", exc_info=True)
+        return LLMSiblingObservation(count=None)
+    self_resolved = None
+    if self_run_dir is not None:
+        try:
+            self_resolved = str(Path(self_run_dir).resolve())
+        except OSError:
+            self_resolved = str(self_run_dir)
+    seen: set[str] = set()
+    commands: list[str] = []
+    for rec in records:
+        run_dir = rec.get("run_dir")
+        if not isinstance(run_dir, str) or run_dir in seen:
+            continue  # dedup: a resume can leave one run in two ledgers
+        seen.add(run_dir)
+        if self_resolved is not None and run_dir == self_resolved:
+            continue
+        try:
+            from core.run.metadata import load_run_metadata
+            meta = load_run_metadata(Path(run_dir))
+        except Exception:  # noqa: BLE001 — sibling dirs may be hostile
+            continue
+        if not isinstance(meta, dict) or meta.get("status") != "running":
+            continue  # ledger line outlived the run — stale, not counted
+        command = meta.get("command")
+        # isinstance BEFORE the frozenset probe: the metadata file is
+        # sandbox-writable, and hashing a planted list/dict command
+        # raises TypeError (same reason sessions.py keeps
+        # _RUN_STATUSES a tuple — tuple membership compares, set
+        # membership hashes).
+        if isinstance(command, str) and command in LLM_RUN_COMMANDS:
+            commands.append(command)
+    commands.sort()
+    return LLMSiblingObservation(count=len(commands),
+                                 commands=tuple(commands))
+
+
+def format_llm_sibling_banner(obs: LLMSiblingObservation, posture: str,
+                              workers: int) -> str:
+    """One startup banner line naming what the ledger observation saw
+    and which auto ceiling this run holds. Counted command names are
+    frozenset constants, but they originated in sibling run metadata
+    (a file other workspace users can write) — terminal-sanitised
+    anyway as belt-and-braces before they reach the operator's
+    terminal.
+    """
+    hold = ("using solo ceiling" if posture == "solo"
+            else "holding fair-share concurrency")
+    if obs.count is None:
+        return ("llm siblings: run ledger unreadable — assuming none; "
+                f"posture={posture}, {hold} {workers}")
+    if obs.count == 0:
+        return (f"llm siblings: none observed — posture={posture}, "
+                f"{hold} {workers}")
+    from collections import Counter
+
+    from core.security.log_sanitisation import sanitise_for_terminal
+    parts = ", ".join(
+        f"{name} x{n}" if n > 1 else name
+        for name, n in sorted(Counter(obs.commands).items()))
+    parts = sanitise_for_terminal(parts, max_len=128)
+    plural = "s" if obs.count != 1 else ""
+    return (f"llm siblings: {obs.count} live LLM run{plural} ({parts}) "
+            f"share this account — posture={posture}, {hold} {workers}")
+
+
+def emit_llm_sibling_banner(posture: str, workers: int,
+                            self_run_dir: str | Path | None = None,
+                            log: logging.Logger | None = None) -> None:
+    """Observe siblings and log the banner — CONTAINED end to end.
+
+    The single consumer chokepoint for the observation: both banner
+    sites (audit orchestrator, agentic analysis fan-out) call this
+    instead of wiring observe/format themselves, so the fail-open
+    contract holds at the consumers too — a poisoned sibling run dir
+    or any unexpected observation failure degrades to a quiet debug
+    note, never an aborted LLM startup. The banner is a heuristic;
+    nothing downstream depends on it.
+    """
+    target = log or logger
+    try:
+        target.info("%s", format_llm_sibling_banner(
+            observe_llm_sibling_runs(self_run_dir=self_run_dir),
+            posture, workers))
+    except Exception:  # noqa: BLE001 — banner must never break startup
+        target.debug("llm sibling banner suppressed", exc_info=True)

@@ -1627,6 +1627,55 @@ def ledger_runs_pinned_to(project: str) -> list[dict]:
     return out
 
 
+def ledger_running_runs_all_sessions() -> list[dict]:
+    """Every ``running`` run record across ALL registered live
+    sessions — the box-wide observation surface for "what else is
+    running right now" heuristics (the LLM sibling-contention banner).
+
+    Liveness gate mirrors the ledger writers' registered-session
+    doctrine — and is STRICTER than ``ledger_runs_pinned_to``'s
+    entry-existence check: a ledger only counts while its session
+    entry still exists AND its pid verifies — the identity stamp for
+    v2 entries (a recycled pid's leftover reads as dead), plain
+    kill-0 for pre-stamp entries. Staleness: records are returned as
+    recorded; callers needing run-level truth must vet the run dir's
+    own metadata (``_zombie_correct`` fixes a running line only when
+    that metadata already went terminal — a crash that leaves
+    ``status=running`` in the metadata is corrected by
+    ``core.run.metadata._cleanup_abandoned`` or bounded by this gate
+    when the owning session dies). Best-effort: unreadable ledgers
+    are skipped, never raised. Each dict carries ``session_pid`` plus
+    the record fields.
+    """
+    out: list[dict] = []
+    try:
+        children = list(SESSIONS_DIR.iterdir())
+    except OSError:
+        return out
+    for f in children:
+        if not f.name.endswith(".run"):
+            continue
+        stem = f.name[:-len(".run")]
+        pid = _pid_from_name(stem)
+        if pid is None:
+            continue
+        entry = _parse_entry(SESSIONS_DIR / stem)
+        if not entry:
+            continue  # orphan ledger — never steers observation
+        if entry.get("v") == ENTRY_VERSION:
+            if not _identity_matches(pid, entry):
+                continue  # recycled pid / dead session — records stale
+        elif not _pid_running(pid):
+            continue
+        try:
+            records, _pins, _unknown = _read_ledger_full(pid)
+        except Exception:  # noqa: BLE001 — observation is best-effort
+            continue
+        out.extend(dict(r, session_pid=pid) for r in records
+                   if r["status"] == "running")
+    return out
+
+
 def ledger_runs(pid: int | None = None,
                 status: str | None = None) -> list[dict]:
     """This session's run records, newest-first; optionally filtered."""
