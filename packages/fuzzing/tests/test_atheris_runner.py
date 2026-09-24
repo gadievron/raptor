@@ -196,6 +196,25 @@ class TestAtherisRunnerContract(unittest.TestCase):
                 AtherisRunner(tmp / "missing.py", target_dir=target,
                               output_dir=tmp / "out")
 
+    def test_custom_interpreter_venv_root_joins_tool_paths(self):
+        # python_runtime_tool_paths() inspects the RUNNING interpreter;
+        # a campaign pointed at a different venv's python must get that
+        # venv's prefix (site-packages with atheris) into the sandbox
+        # read allowlist as well.
+        tmp = _tmpdir(self)
+        harness, target = _make_target(tmp)
+        venv_python = tmp / "venv" / "bin" / "python3"
+        venv_python.parent.mkdir(parents=True)
+        venv_python.write_text("#!/bin/sh\n")
+        with patch("packages.fuzzing.atheris_runner.atheris_available",
+                   return_value=True):
+            runner = AtherisRunner(
+                harness, target_dir=target, output_dir=tmp / "out",
+                python_executable=str(venv_python),
+            )
+        self.assertIn(str((tmp / "venv").resolve()),
+                      runner._sandbox_tool_paths())
+
     def test_harness_needs_no_executable_bit(self):
         tmp = _tmpdir(self)
         harness, target = _make_target(tmp)
