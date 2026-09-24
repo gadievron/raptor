@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, TypeVar
@@ -236,6 +237,29 @@ def read_tuning_max_llm_workers() -> int | None:
         return int(val)
     except (ValueError, TypeError):
         return None
+
+
+def read_default_max_cost_usd() -> float | None:
+    """Read ``default_max_cost_usd`` from tuning.json — the standing
+    per-run LLM cost ceiling applied when a run configures no cap at
+    all (see ``LLMClient._ensure_cost_ceiling``). A CLI/programmatic
+    cap always wins; this only fills the documented-uncapped case.
+
+    Returns ``None`` (no default ceiling) when the key is absent,
+    ``"auto"``, non-numeric, non-finite, or not positive — a typo in
+    tuning.json must surface as "still uncapped" (with the loud
+    banner), never as a surprise cap of 0 that refuses every call.
+    """
+    val = _read_tuning().get("default_max_cost_usd", "auto")
+    if val == "auto" or isinstance(val, bool):
+        return None
+    try:
+        cap = float(val)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(cap) or cap <= 0:
+        return None
+    return cap
 
 
 def read_throttle_cooldown_s() -> float:

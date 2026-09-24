@@ -76,6 +76,35 @@ def _transport_banner_shown() -> bool:
     return False
 
 
+_UNCAPPED_BANNER_SHOWN = False
+
+
+def _uncapped_banner_shown() -> bool:
+    """Return True (and set flag) if the uncapped-run banner was
+    already logged. Once per PROCESS, like the transport banner —
+    per-call-client transports (claude CLI) would otherwise repeat
+    it on every worker call."""
+    global _UNCAPPED_BANNER_SHOWN
+    if _UNCAPPED_BANNER_SHOWN:
+        return True
+    _UNCAPPED_BANNER_SHOWN = True
+    return False
+
+
+_DEFAULT_CEILING_LOG_SHOWN = False
+
+
+def _default_ceiling_log_shown() -> bool:
+    """Return True (and set flag) if the applied-default-ceiling line
+    was already logged (the ceiling itself is applied per client;
+    only the log line is deduplicated)."""
+    global _DEFAULT_CEILING_LOG_SHOWN
+    if _DEFAULT_CEILING_LOG_SHOWN:
+        return True
+    _DEFAULT_CEILING_LOG_SHOWN = True
+    return False
+
+
 # After this many consecutive cache write failures, auto-disable
 # caching for the rest of the run. Tuned for "transient blip vs
 # durable problem" — three retries lets a momentary EBUSY recover,
@@ -1523,6 +1552,9 @@ class LLMClient:
         # the discovery loop cannot exhaust first. Guarded by
         # _stats_lock.
         self._budget_reserve = 0.0
+        # First-dispatch cost-ceiling resolution latch — see
+        # _ensure_cost_ceiling. Guarded by _stats_lock.
+        self._cost_ceiling_checked = False
         self._stats_lock = threading.RLock()
         # Per-cache-key locks. Two threads issuing the same cache key
         # serialise on its lock so only one calls the provider; the
@@ -2596,6 +2628,74 @@ class LLMClient:
                 self._budget_exceeded_logged = False
             return held
 
+    def _ensure_cost_ceiling(self) -> None:
+        """First-dispatch cost-ceiling resolution for uncapped runs.
+
+        "Uncapped" means cost tracking is ON but ``max_cost_per_scan``
+        is non-finite — consumers express "no cap" as ``float('inf')``
+        (the audit pipeline without ``--max-cost``, /agentic's audit
+        post-pass when no ``--max-cost-usd`` was given).
+        ``enable_cost_tracking=False`` is a deliberate programmatic
+        opt-out of ALL spend accounting (fakes, wired test clients)
+        and is left untouched.
+
+        Resolution:
+
+        1. tuning.json's ``default_max_cost_usd``, when set, applies
+           exactly as if the operator had passed it on the CLI — and
+           only because nothing else set a cap, so a CLI/programmatic
+           cap always wins (it is finite, so this path never runs).
+        2. No knob → the run STAYS uncapped (imposing a hard default
+           here would change documented behaviour for unattended
+           runs); instead one prominent process-wide banner names the
+           flags and the knob so the exposure is a choice, not an
+           accident.
+
+        Runs once per client at first dispatch rather than at
+        construction: several entry points construct the client first
+        and assign the operator's cap right after.
+        """
+        if getattr(self, "_cost_ceiling_checked", False):
+            return
+        with self._stats_lock:
+            if getattr(self, "_cost_ceiling_checked", False):
+                return
+            self._cost_ceiling_checked = True
+            if not self.config.enable_cost_tracking:
+                return
+            cap = self.config.max_cost_per_scan
+            try:
+                if math.isfinite(float(cap)):
+                    return  # a real cap is configured — nothing to do
+            except (TypeError, ValueError):
+                pass  # a junk cap is as uncapped as inf
+            try:
+                from core.llm.concurrency import read_default_max_cost_usd
+                default_cap = read_default_max_cost_usd()
+            except Exception:  # noqa: BLE001 — tuning.json is optional
+                logger.debug(
+                    "default_max_cost_usd probe failed", exc_info=True,
+                )
+                default_cap = None
+            if default_cap is not None:
+                self.config.max_cost_per_scan = default_cap
+                if not _default_ceiling_log_shown():
+                    logger.info(
+                        "No per-run LLM cost cap configured — applying "
+                        "tuning.json default_max_cost_usd=$%.2f (a CLI "
+                        "cap — --max-cost-usd / --max-cost — always "
+                        "overrides this default)", default_cap,
+                    )
+                return
+            if not _uncapped_banner_shown():
+                logger.warning(
+                    "LLM spend is UNCAPPED for this run — no cost "
+                    "ceiling is configured anywhere. Set --max-cost-usd "
+                    "(raptor.py pipelines) / --max-cost (/audit) for a "
+                    "per-run cap, or set \"default_max_cost_usd\" in "
+                    "tuning.json for a standing default ceiling.",
+                )
+
     def _check_budget(self, estimated_cost: float = 0.1) -> bool:
         """Read-only budget check (thread-safe). Returns whether ``estimated_cost``
         would fit under the cap RIGHT NOW. Does not reserve — concurrent callers
@@ -2754,6 +2854,10 @@ class LLMClient:
 
         Thread-safe: stats tracking uses _stats_lock for concurrent access.
         """
+        # Resolve the run's cost ceiling once, at first dispatch: an
+        # uncapped config picks up tuning.json's default_max_cost_usd,
+        # or warns (once per process) that spend is uncapped.
+        self._ensure_cost_ceiling()
         # Check budget BEFORE the cache lookup — deliberately. A cache
         # replay is free, but serving it from an exhausted client
         # would make post-exhaustion behaviour depend on what happens
@@ -3350,6 +3454,9 @@ class LLMClient:
 
         Thread-safe: stats tracking uses _stats_lock for concurrent access.
         """
+        # Cost-ceiling resolution — same first-dispatch seam as
+        # ``generate`` above.
+        self._ensure_cost_ceiling()
         # Check budget BEFORE the cache lookup — deliberately. A cache
         # replay is free, but serving it from an exhausted client
         # would make post-exhaustion behaviour depend on what happens
