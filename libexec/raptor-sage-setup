@@ -1055,7 +1055,7 @@ sys.path.insert(0, os.environ["RAPTOR_DIR"])
 from core.security.log_sanitisation import escape_nonprintable
 
 data = sys.stdin.buffer.read().decode("utf-8", errors="replace")
-lines = data.split("\n")
+lines = data.split("\n")  # line-model: deliberate byte-decode display; escape_nonprintable renders \r visible
 if len(lines) > 4000:
     sys.stderr.write(
         f"payload has {len(lines)} lines — refusing to render an "
