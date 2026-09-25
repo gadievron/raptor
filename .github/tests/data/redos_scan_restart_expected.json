@@ -1272,6 +1272,13 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "core/audit/sanwit/_extract.py\u001ftransform_feed_re": {
+   "digests": [
+    "793f920636e5"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "core/audit/sentinel_collapse.py\u001f\\b(?P<var>\\w+)\\s+if\\s+(?P=var)\\s+else\\s+": {
    "digests": [
     "1a750940c888"
