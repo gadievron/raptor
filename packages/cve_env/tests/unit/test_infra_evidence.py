@@ -7,6 +7,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from importlib.machinery import SourceFileLoader
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -134,7 +135,21 @@ def _load_shim():
     loader = SourceFileLoader("raptor_cve_env_evidence", str(LIBEXEC))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    # The shim's import-time path setup (sys.path.insert of the repo
+    # root / its package dir) must not leak process-wide: a leaked
+    # packages/<pkg> prepend shadows the sibling package's bare
+    # 'tests' test-package for every LATER fresh import in this
+    # process — including multiprocessing forkserver children, which
+    # freeze sys.path at first pool use (an unpickle in the child then
+    # fails with ModuleNotFoundError on the victim's test module).
+    # The shim's own imports resolve during exec; nothing needs the
+    # leaked entries afterwards (pytest.ini pythonpath + the root
+    # conftest already pin the canonical entries).
+    path_before = list(sys.path)
+    try:
+        loader.exec_module(mod)
+    finally:
+        sys.path[:] = path_before
     return mod
 
 
