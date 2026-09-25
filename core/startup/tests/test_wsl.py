@@ -25,8 +25,10 @@ def reset_wsl_cache():
     mock different kernel identities, so the cache is cleared around
     each test to keep them independent."""
     wsl._is_wsl_cache = None
+    wsl._is_wsl2_cache = None
     yield
     wsl._is_wsl_cache = None
+    wsl._is_wsl2_cache = None
 
 
 class TestIsWsl:
@@ -98,6 +100,102 @@ class TestIsWsl:
             wsl, "_KERNEL_ID_PATHS", (str(tmp_path / "gone"),),
         ):
             assert wsl._read_kernel_id() == ""
+
+
+_WSL2_ID = "5.15.167.4-microsoft-standard-WSL2\n"
+_WSL2_EARLY_ID = "4.19.84-microsoft-standard\n"
+_WSL1_ID = "4.4.0-19041-Microsoft\n"
+_MAINLINE_ID = "6.8.0-generic\n"
+
+
+class TestWslFlavourDiscriminators:
+    """is_wsl2()/is_wsl1(): the flavour split is_wsl() cannot make.
+
+    Contract pins: is_wsl stays True for both flavours (its semantics
+    are preserved); the three predicates never disagree (wsl1 ==
+    wsl and not wsl2); an unrecognised WSL spelling classifies WSL1
+    (the refusal direction — see the _WSL2_TOKEN comment)."""
+
+    def test_wsl2_release_is_wsl2_not_wsl1(self):
+        assert wsl.is_wsl2(_WSL2_ID) is True
+        assert wsl.is_wsl1(_WSL2_ID) is False
+        assert wsl.is_wsl(_WSL2_ID) is True
+
+    def test_early_wsl2_spelling_is_wsl2(self):
+        # Early WSL2 previews ended at "-microsoft-standard" without
+        # the "-WSL2" suffix; the token match covers both.
+        assert wsl.is_wsl2(_WSL2_EARLY_ID) is True
+        assert wsl.is_wsl1(_WSL2_EARLY_ID) is False
+
+    def test_wsl1_release_is_wsl1_not_wsl2(self):
+        assert wsl.is_wsl2(_WSL1_ID) is False
+        assert wsl.is_wsl1(_WSL1_ID) is True
+        assert wsl.is_wsl(_WSL1_ID) is True
+
+    def test_mainline_kernel_is_neither(self):
+        assert wsl.is_wsl2(_MAINLINE_ID) is False
+        assert wsl.is_wsl1(_MAINLINE_ID) is False
+
+    def test_case_insensitive_token_match(self):
+        assert wsl.is_wsl2("5.15-Microsoft-Standard-WSL2\n") is True
+
+    def test_unrecognised_wsl_flavour_fails_toward_wsl1(self):
+        # A "microsoft" identity with no "microsoft-standard" token:
+        # WSL per is_wsl, flavour unknown — classified WSL1 so the
+        # sandbox consumer refuses loudly rather than assuming a
+        # real kernel exists.
+        odd = "5.0.0-microsoft-custom\n"
+        assert wsl.is_wsl(odd) is True
+        assert wsl.is_wsl2(odd) is False
+        assert wsl.is_wsl1(odd) is True
+
+    def test_filesystem_answer_cached(self):
+        calls: list[int] = []
+
+        def fake_read() -> str:
+            calls.append(1)
+            return _WSL2_ID
+
+        with mock.patch.object(sys, "platform", "linux"), \
+             mock.patch.object(wsl, "_read_kernel_id", fake_read):
+            assert wsl.is_wsl2() is True
+            assert wsl.is_wsl2() is True
+        # One read for the is_wsl cache fill + one for the wsl2
+        # flavour probe — then both answers come from the caches.
+        assert len(calls) == 2
+
+    def test_injected_identity_bypasses_cache(self):
+        wsl._is_wsl_cache = False
+        wsl._is_wsl2_cache = False
+        assert wsl.is_wsl2(_WSL2_ID) is True
+        assert wsl.is_wsl1(_WSL1_ID) is True
+
+    def test_probe_failure_reads_false(self):
+        wsl._is_wsl_cache = True  # WSL established, flavour probe fails
+        with mock.patch.object(sys, "platform", "linux"), \
+             mock.patch.object(wsl, "_read_kernel_id",
+                               side_effect=OSError("masked /proc")):
+            assert wsl.is_wsl2() is False
+            # Derived predicate keeps the refusal direction.
+            assert wsl.is_wsl1() is True
+
+    def test_off_wsl_filesystem_answers(self):
+        with mock.patch.object(sys, "platform", "linux"), \
+             mock.patch.object(wsl, "_read_kernel_id",
+                               return_value=_MAINLINE_ID):
+            assert wsl.is_wsl2() is False
+            assert wsl.is_wsl1() is False
+
+    def test_module_attribute_mocking_reaches_is_wsl1(self):
+        # Consumer contract: sandbox tests mock the module attributes
+        # (core.startup.wsl.is_wsl / is_wsl2); the derived is_wsl1
+        # must follow those mocks, not stale bindings.
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True):
+            assert wsl.is_wsl1() is False
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=False):
+            assert wsl.is_wsl1() is True
 
 
 class TestFsIsDrvfsOr9p:
