@@ -246,6 +246,61 @@ class TestValidatePriorRun(unittest.TestCase):
         self.assertEqual(result.repository, self.repo.resolve())
 
 
+@unittest.skipUnless(Path("/proc/self/stat").exists(),
+                     "needs /proc starttime records")
+class TestInFlightPriorRunRefuses(unittest.TestCase):
+    """Both directions of the liveness gate: a prior run whose
+    recorded worker is still alive refuses (resuming would seed from a
+    scan dir mid-write and double-pay), while a dead/interrupted
+    worker keeps the run eligible."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.base = Path(self._td.name)
+        self.repo = self.base / "repo"
+        self.repo.mkdir()
+        self.addCleanup(self._td.cleanup)
+
+    @staticmethod
+    def _own_starttime() -> str:
+        stat = Path("/proc/self/stat").read_text()
+        return stat.rsplit(")", 1)[1].split()[19]
+
+    def _stamp_meta(self, prior: Path, *, status: str,
+                    starttime: str) -> None:
+        _write(prior / ".raptor-run.json", {
+            "version": 2, "command": "openant", "status": status,
+            "tool_pid": os.getpid(), "tool_pid_start": starttime,
+        })
+
+    def test_live_worker_refuses(self):
+        prior = _mk_prior(self.base, self.repo)
+        self._stamp_meta(prior, status="running",
+                         starttime=self._own_starttime())
+        with self.assertRaisesRegex(OpenAntResumeError, "in flight"):
+            _validate(prior, self.repo)
+
+    def test_dead_worker_validates(self):
+        # Still status=running (a SIGKILL never gets a terminal
+        # transition) but the starttime does not match: the identity
+        # check reads the worker as dead (a recycled pid is not the
+        # worker) — the run stays resumable.
+        prior = _mk_prior(self.base, self.repo)
+        self._stamp_meta(prior, status="running", starttime="1")
+        result = _validate(prior, self.repo)
+        self.assertTrue(result.remaining["resumable"])
+
+    def test_interrupted_status_carries_no_inflight_claim(self):
+        # A run marked interrupted is terminal even when the recorded
+        # worker pid (the launching tool shell on session-bound runs)
+        # is an alive process — no refusal.
+        prior = _mk_prior(self.base, self.repo)
+        self._stamp_meta(prior, status="interrupted",
+                         starttime=self._own_starttime())
+        result = _validate(prior, self.repo)
+        self.assertTrue(result.remaining["resumable"])
+
+
 class TestScanFailedReportResumesLikeSuccess(unittest.TestCase):
     """A hard-failed scan's report — written by the REAL scan_failed
     writer (``raptor_openant._write_skip_report``) — must feed the

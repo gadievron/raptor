@@ -290,6 +290,35 @@ def validate_prior_run(
         raise OpenAntResumeError(
             f"--resume: {prior_dir} has no readable "
             f"raptor_openant_report.json — not an /openant run directory")
+
+    # In-flight guard: a prior run whose lifecycle still reads
+    # ``running`` with its recorded worker alive is not truncated, it
+    # is IN FLIGHT — seeding from its scan dir would copy checkpoints
+    # mid-write and the resumed run would double-pay work the live run
+    # is about to finish. Interrupted runs write their report from the
+    # signal handler, so a report's presence no longer implies the
+    # worker exited; this liveness verdict is the explicit gate. Same
+    # status-scoped semantics as the substrate chokepoint
+    # (``core.run.resume.resume_ineligibility``), through the same
+    # full-identity liveness check (pid alive AND starttime matching;
+    # for session-bound runs the recorded worker is the launching tool
+    # shell, whose lifetime tracks the run) — terminal statuses carry
+    # no in-flight claim, and absent/unreadable metadata carries no
+    # worker claim to check (pre-lifecycle dirs, bare --out runs).
+    from core.run.metadata import (
+        STATUS_RUNNING,
+        load_run_metadata,
+        worker_liveness_for_meta,
+    )
+    meta = load_run_metadata(prior_dir)
+    if isinstance(meta, dict) and meta.get("status") == STATUS_RUNNING:
+        alive, detail = worker_liveness_for_meta(meta)
+        if alive:
+            raise OpenAntResumeError(
+                f"--resume: the prior run at {prior_dir} is still in "
+                f"flight ({detail}) — resuming now would seed from a "
+                f"scan dir its worker is still writing and double-pay "
+                f"the remainder. Wait for it to stop, or kill it first")
     if report.get("outcome") == "not_configured":
         raise OpenAntResumeError(
             "--resume: the prior run never scanned (outcome "

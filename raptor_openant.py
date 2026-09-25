@@ -22,6 +22,9 @@ Exit codes:
     3  OpenAnt is not configured — the target was NOT scanned (report
        outcome=not_configured; the lifecycle records a failed run so
        the empty run cannot masquerade as a clean completed scan)
+  130  interrupted (SIGINT/SIGTERM): the report records
+       outcome=interrupted with the resume-gate fields and the run is
+       marked interrupted — a later --resume completes it
 """
 
 import argparse
@@ -260,10 +263,115 @@ def _forecast_for_scan_dir(
     )
 
 
+def _sigterm_as_interrupt() -> tuple | None:
+    """Route SIGTERM through the KeyboardInterrupt path so a
+    supervisor stop leaves the same resumable interrupted report a
+    Ctrl-C does, instead of killing the process reportless. Main-thread
+    only (in-process test callers included); returns a restore token
+    or None."""
+    import signal
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        return None
+
+    def _raise(_signum: int, _frame) -> None:
+        raise KeyboardInterrupt
+
+    try:
+        return (signal.SIGTERM, signal.signal(signal.SIGTERM, _raise))
+    except (ValueError, OSError):
+        return None
+
+
+def _restore_sigterm(token: tuple | None) -> None:
+    if token is None:
+        return
+    import signal
+    signum, prior = token
+    try:
+        signal.signal(signum, prior if prior is not None
+                      else signal.SIG_DFL)
+    except (ValueError, OSError, TypeError):
+        pass
+
+
+def _interrupted_exit(ctx: dict) -> int:
+    """Terminal handling for an interrupted run (SIGINT/SIGTERM).
+
+    Writes an ``outcome=interrupted`` report carrying the resume-gate
+    fields (target fingerprint, scan-shape config with core
+    provenance, best-known cost) so the run joins the resumable
+    population — an interrupted run used to leave NO report at all,
+    and --resume refused it as "not an /openant run directory". Also
+    marks the lifecycle run interrupted (ownership-gated) so the
+    in-flight resume guard reads a dead, resumable run. Every step is
+    best-effort: nothing here may mask the exit."""
+    out_dir = ctx.get("out_dir")
+    repo_path = ctx.get("repo_path")
+    if out_dir is None or repo_path is None:
+        return 130
+    report_path = out_dir / "raptor_openant_report.json"
+    if not report_path.exists():
+        config_block = None
+        oa_config = ctx.get("oa_config")
+        if oa_config is not None:
+            prov = ctx.get("core_provenance")
+            if prov is None:
+                try:
+                    from packages.openant.scanner import checkout_provenance
+                    prov = checkout_provenance(
+                        Path(oa_config.core_path).resolve())
+                except Exception:  # noqa: BLE001 — best-effort record
+                    prov = {}
+            config_block = _scan_shape_config(oa_config, prov or {})
+        try:
+            from packages.openant.resume import target_fingerprint
+            target_fp = target_fingerprint(repo_path)
+        except Exception:  # noqa: BLE001 — best-effort record
+            target_fp = None
+        try:
+            _write_skip_report(
+                out_dir, repo_path,
+                "interrupted before the scan completed (SIGINT/SIGTERM)",
+                outcome="interrupted",
+                target_fp=target_fp,
+                config=config_block,
+                cost=_reconcile_run_cost(out_dir / "openant_scan", {}),
+            )
+        except OSError:
+            return 130
+    try:
+        from core.run.metadata import interrupt_run
+        interrupt_run(out_dir, "raptor_openant interrupted",
+                      expected_command="openant")
+    except Exception:  # noqa: BLE001 — marking must never mask the exit
+        return 130
+    print(f"Run marked interrupted: {out_dir}", file=sys.stderr)
+    print(f"Resume with: /openant --resume {out_dir}", file=sys.stderr)
+    return 130
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
+    # Interruption context: _main_body stamps its resolved state here
+    # (out_dir, repo_path, config) so the handler can write an honest
+    # interrupted report for whatever had been decided by the time the
+    # signal landed. Before the output dir exists there is nothing to
+    # report on and the handler just exits.
+    ctx: dict = {}
+    sigterm_token = _sigterm_as_interrupt()
+    try:
+        return _main_body(parser, args, ctx)
+    except KeyboardInterrupt:
+        print("\n\nInterrupted", file=sys.stderr)
+        return _interrupted_exit(ctx)
+    finally:
+        _restore_sigterm(sigterm_token)
 
+
+def _main_body(parser: argparse.ArgumentParser, args: argparse.Namespace,
+               ctx: dict) -> int:
     if args.resume and not args.repo:
         # A resume completes the prior run's scan: when no --repo was
         # given (standalone invocation with no project back-fill),
@@ -315,6 +423,8 @@ def main() -> int:
         except OpenAntCoreConsentError as e:
             print(f"\n✗ {e}", file=sys.stderr)
             return 2
+        if gate_provenance is not None:
+            ctx["core_provenance"] = gate_provenance
 
     # ------------------------------------------------------------------
     # Output directory: injected by raptor.py lifecycle; fall back to our
@@ -326,6 +436,8 @@ def main() -> int:
         from core.run.output import get_output_dir
         out_dir = get_output_dir("openant", target_path=str(repo_path))
     out_dir.mkdir(parents=True, exist_ok=True)
+    ctx["out_dir"] = out_dir
+    ctx["repo_path"] = repo_path
 
     # Lifecycle (best-effort; raptor.py manages the outer lifecycle).
     # The run-mode stamp keeps cross-run views honest without a new
@@ -401,6 +513,7 @@ def main() -> int:
         oa_config.gateway_budget_usd = args.gateway_budget
         if args.timeout_seconds is not None:
             oa_config.timeout_seconds = args.timeout_seconds
+        ctx["oa_config"] = oa_config
 
     except RuntimeError as e:
         # Not configured: no openant-core checkout is discoverable, so
@@ -857,8 +970,10 @@ def _write_skip_report(out_dir: Path, repo_path: Path, error: str,
     ``outcome`` (snake_case, machine-readable): ``not_configured`` (no
     usable openant-core — nothing was attempted), ``scan_failed``
     (the scan ran and hard-failed), ``resume_refused`` (--resume
-    validation refused: drift or nothing to resume), or
-    ``forecast_failed`` (a --forecast run's free parse phase failed).
+    validation refused: drift or nothing to resume),
+    ``forecast_failed`` (a --forecast run's free parse phase failed),
+    or ``interrupted`` (SIGINT/SIGTERM — resumable when scan state
+    exists).
     Deliberately writes NO
     ``openant_findings.json``: cross-run findings views load that file
     from every run directory, so an empty list here reads as "OpenAnt
