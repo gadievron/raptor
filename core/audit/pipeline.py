@@ -86,6 +86,14 @@ class AuditPipelineOpts:
     validate: bool = True
     no_binary_oracle: bool = False
     binary_verdicts: dict[str, str] | None = None
+    # Auto-siblings composition (--no-auto-siblings to disable):
+    # binary targets only (``inventory['target_kind'] == 'binary'``;
+    # source targets never enter the pass). When a mapped sibling
+    # run exists for the audited binary, the sibling-consistency
+    # engine runs and its sibling-hypotheses.json is captured into
+    # the run dir for the normal hypothesis-seed intake. Failure
+    # degrades loudly to an unseeded audit (core.audit.auto_siblings).
+    auto_siblings: bool = True
     inventory: dict[str, Any] | None = None
     annotations_dir: Path | None = None
     codeql_db_path: str | None = None
@@ -442,6 +450,8 @@ def run_audit_pipeline(opts: AuditPipelineOpts, *, prep_cache=None):
     from core.audit.llm_review import make_review_fn
     from core.audit.orchestrator import run_orchestrator
 
+    _maybe_auto_siblings(opts)
+
     client, models, primary_model = _make_llm_client(opts)
 
     review_fn = make_review_fn(
@@ -467,6 +477,33 @@ def run_audit_pipeline(opts: AuditPipelineOpts, *, prep_cache=None):
     return run_orchestrator(
         config, review_fn, on_progress=opts.on_progress, prep_cache=prep_cache,
     )
+
+
+def _maybe_auto_siblings(opts: AuditPipelineOpts) -> None:
+    """Auto-siblings pass for binary targets, before the review loop.
+
+    Gate: the flag (``--no-auto-siblings`` clears it) AND a binary
+    inventory (``target_kind == 'binary'`` — the checklist builder's
+    stamp). Source targets never reach the pass: no discovery, no
+    receipt, byte-identical behaviour. Callers that pass no inventory
+    (the corpus runner) are likewise untouched. Both ``run`` and
+    ``resume`` flow through here — a segment whose predecessor
+    already captured seeds reuses them (the pass is idempotent).
+    Best-effort belt: the pass never blocks the audit.
+    """
+    if not opts.auto_siblings:
+        return
+    inv = opts.inventory
+    if not (isinstance(inv, dict) and inv.get("target_kind") == "binary"):
+        return
+    try:
+        from core.audit.auto_siblings import run_auto_siblings
+        run_auto_siblings(opts.out_dir, opts.target_path)
+    except Exception:  # noqa: BLE001 — enrichment, never a gate
+        logger.warning(
+            "auto-siblings pass failed — the audit proceeds unseeded",
+            exc_info=True,
+        )
 
 
 # Max-alarm merge order. "dark" (claims present, no tool channel could
