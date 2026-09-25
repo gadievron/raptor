@@ -99,11 +99,18 @@ def joern_session(
         # joern_heap_mb matters; omitting it left big builds
         # GC-thrashing at the JVM default while the setting silently
         # applied only to the server.
+        # A derived ("auto") CPG timeout resolves HERE, where the
+        # target is known — from_tuning only holds the unknown-scope
+        # fallback.
+        from .tunables import resolve_cpg_timeout_s
+        build_timeout = resolve_cpg_timeout_s(
+            tunables, target_path, exclude_dirs=exclude_dirs,
+        )
         if cache_dir is not None:
             cpg = build_cpg_cached(
                 target_path, cache_dir,
                 languages=parse_langs,
-                timeout=tunables.cpg_timeout_s,
+                timeout=build_timeout,
                 heap_mb=tunables.heap_mb,
                 exclude_dirs=exclude_dirs,
             )
@@ -111,7 +118,7 @@ def joern_session(
             cpg = build_cpg(
                 target_path,
                 languages=parse_langs,
-                timeout=tunables.cpg_timeout_s,
+                timeout=build_timeout,
                 heap_mb=tunables.heap_mb,
                 exclude_dirs=exclude_dirs,
             )

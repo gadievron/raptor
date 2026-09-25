@@ -1256,6 +1256,58 @@ def run_output_exclude_dirs(
     return (str(out),)
 
 
+#: Source extensions the content key hashes — the same set the SLOC
+#: estimator measures, so estimate and key describe one file set.
+_CONTENT_KEY_SOURCE_EXTS = frozenset({
+    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp",
+    ".py", ".java", ".js", ".ts", ".go", ".rs",
+})
+
+# Stat-only SLOC estimate density: source bytes per line. Measured
+# large C trees run ~30-34 bytes/line, so 32 is the midpoint. A
+# smaller divisor overestimates SLOC — derived CPG walls grow and a
+# hung frontend costs more before the kill; a larger one
+# underestimates — the derived wall can kill a legitimate build on
+# dense code. The 2x slack in the timeout curve absorbs the residual
+# density error either way.
+_EST_SOURCE_BYTES_PER_LINE = 32
+
+
+def estimate_in_scope_sloc(target: Path, *, exclude_dirs=()) -> int:
+    """Cheap (stat-only, no reads) SLOC estimate of the in-scope tree.
+
+    Walks with exactly the pruning rules of
+    :func:`_target_content_hash` (shared directory-name rule plus the
+    caller-declared ``exclude_dirs``), sums the sizes of files with a
+    content-key source extension, and converts bytes to lines via
+    :data:`_EST_SOURCE_BYTES_PER_LINE`. Feeds
+    :func:`core.tuning.derive_joern_cpg_timeout_s`; 0 means "no
+    measurable source" and reads as scope-size-unknown there.
+    """
+    excluded_roots = _resolved_exclude_dirs(exclude_dirs)
+    total_bytes = 0
+    for root, dirs, files in os.walk(target):
+        root_path = Path(root)
+        dirs[:] = [
+            d for d in dirs
+            if not _dir_name_excluded(d)
+            and (not excluded_roots
+                 or (root_path / d).resolve() not in excluded_roots)
+        ]
+        for name in files:
+            p = root_path / name
+            if p.suffix.lower() not in _CONTENT_KEY_SOURCE_EXTS:
+                continue
+            try:
+                st = os.stat(p)  # follows symlinks
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            total_bytes += st.st_size
+    return total_bytes // _EST_SOURCE_BYTES_PER_LINE
+
+
 def _target_content_hash(target: Path, *, exclude_dirs=()) -> str:
     """Content-only cache key for the target tree.
 
@@ -1283,10 +1335,7 @@ def _target_content_hash(target: Path, *, exclude_dirs=()) -> str:
     skipped, not opened — reading either blocks the orchestrator
     indefinitely.
     """
-    source_exts = {
-        ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp",
-        ".py", ".java", ".js", ".ts", ".go", ".rs",
-    }
+    source_exts = _CONTENT_KEY_SOURCE_EXTS
     excluded_roots = _resolved_exclude_dirs(exclude_dirs)
     entries = []
     for root, dirs, files in os.walk(target):
