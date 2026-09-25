@@ -79,9 +79,11 @@ Two consumer caveats:
     recorded entry wraps the registered callable.
   * **Class-based-view records always carry an EMPTY
     middleware_chain** (CBV method decorators are not walked) —
-    peer-census consumers must exclude or special-case CBV handlers
-    (fallback-form ``handler`` ids), never count them as
-    unprotected peers.
+    peer-census consumers must exclude or special-case CBV handlers,
+    never count them as unprotected peers. CBV records are marked
+    ``handler_kind: "class"`` (their fallback ``handler`` ids are
+    byte-shaped like function ids, so the field — not the id shape —
+    is the mechanical exclusion hook).
 
 ## Consuming doctrine — originate and prioritize, never refute
 
@@ -187,6 +189,18 @@ FRAMEWORK_FASTAPI = "fastapi"
 STYLE_DECORATOR = "decorator"
 STYLE_METHOD_CALL = "method_call"
 STYLE_URLCONF = "urlconf"
+
+# --- handler kinds -----------------------------------------------------------
+# What the ``handler`` id points at. ``class`` marks class-based-view
+# registrations (``Class.as_view()``) — their fallback handler ids are
+# byte-shaped like function ids, so without this field a consumer
+# cannot mechanically apply the CBV special-case the middleware-chain
+# contract requires (CBV chains are always empty because the method
+# decorator stacks are unwalked; counting one as an unprotected peer
+# would be a false signal).
+
+HANDLER_KIND_FUNCTION = "function"
+HANDLER_KIND_CLASS = "class"
 
 # --- param sources -----------------------------------------------------------
 # The enum a consumer may see: path | query | body | header. Only
@@ -355,11 +369,15 @@ class RouteRecord:
     ``handler`` is a package-callgraph node id where resolvable,
     else the ``<file_path>::<name>@<line>`` fallback form (class-
     based views always use the fallback form — classes are not graph
-    nodes). ``http_methods`` empty means "not constrained at
-    registration" (Django function views), never "no methods".
-    ``derived_from_target`` covers ``route_pattern``, ``handler``,
-    ``params[].name``, ``middleware_chain[].name`` and the
-    registration file path — escape before rendering.
+    nodes). ``handler_kind`` says what the id points at:
+    ``function`` (default) or ``class`` for class-based views — the
+    mechanical hook for the CBV special-case (empty chains, see the
+    module docstring's consumer caveats). ``http_methods`` empty
+    means "not constrained at registration" (Django function views),
+    never "no methods". ``derived_from_target`` covers
+    ``route_pattern``, ``handler``, ``params[].name``,
+    ``middleware_chain[].name`` and the registration file path —
+    escape before rendering.
     """
     framework: str
     route_pattern: str
@@ -371,6 +389,7 @@ class RouteRecord:
     line: int
     style: str
     middleware_truncated: bool = False
+    handler_kind: str = HANDLER_KIND_FUNCTION
     derived_from_target: bool = True
 
 
@@ -447,6 +466,9 @@ class RouteModels:
                     },
                     **({"middleware_truncated": True}
                        if r.middleware_truncated else {}),
+                    **({"handler_kind": r.handler_kind}
+                       if r.handler_kind != HANDLER_KIND_FUNCTION
+                       else {}),
                     "derived_from_target": r.derived_from_target,
                 }
                 for r in self.routes
@@ -510,6 +532,14 @@ class RouteModels:
                 style=str(reg.get("style", "")),
                 middleware_truncated=bool(
                     r.get("middleware_truncated", False)),
+                # Garbage degrades to the default — only the one
+                # value consumers key their special-case on survives
+                # the load (same tolerance as the other scalars).
+                handler_kind=(
+                    HANDLER_KIND_CLASS
+                    if r.get("handler_kind") == HANDLER_KIND_CLASS
+                    else HANDLER_KIND_FUNCTION
+                ),
             ))
         return cls(
             routes=tuple(routes),
@@ -1025,6 +1055,7 @@ def _emit_route(
     http_methods: tuple[str, ...], handler: str,
     middleware: tuple[MiddlewareEntry, ...], truncated: bool,
     file_path: str, line: int, style: str,
+    handler_kind: str = HANDLER_KIND_FUNCTION,
 ) -> None:
     if len(pattern) > _MAX_PATTERN_LENGTH:
         # A pattern this long is generated or hostile; a truncated
@@ -1043,6 +1074,7 @@ def _emit_route(
         file_path=file_path,
         line=line,
         style=style,
+        handler_kind=handler_kind,
     ))
 
 
@@ -1235,6 +1267,7 @@ def _call_routes(
                         handler=handler_id, middleware=(),
                         truncated=False, file_path=facts.path,
                         line=site.line, style=STYLE_METHOD_CALL,
+                        handler_kind=HANDLER_KIND_CLASS,
                     )
                     continue
             asm.add_unresolved(
@@ -1315,6 +1348,7 @@ def _urlconf_route(
             http_methods=verbs,
             handler=handler_id, middleware=(), truncated=False,
             file_path=facts.path, line=site.line, style=STYLE_URLCONF,
+            handler_kind=HANDLER_KIND_CLASS,
         )
         return
 
@@ -1419,6 +1453,8 @@ __all__ = [
     "FRAMEWORK_DJANGO",
     "FRAMEWORK_FASTAPI",
     "FRAMEWORK_FLASK",
+    "HANDLER_KIND_CLASS",
+    "HANDLER_KIND_FUNCTION",
     "REASON_DYNAMIC_PATTERN",
     "REASON_HANDLER_UNRESOLVED",
     "REASON_INCLUDE_NOT_FOLLOWED",

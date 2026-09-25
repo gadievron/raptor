@@ -186,6 +186,32 @@ class TestDjango:
         assert r.handler.startswith("minidjango/views.py::ItemView@")
         assert r.http_methods == ("GET", "POST")
 
+    def test_class_view_marked_handler_kind_class(self, models):
+        """The fallback id is byte-shaped like a function id, so the
+        CBV special-case (empty chains are unwalked, not
+        unprotected) keys on ``handler_kind`` — both styles."""
+        from core.analysis.route_models import (
+            HANDLER_KIND_CLASS,
+            HANDLER_KIND_FUNCTION,
+        )
+        assert _route(models, "cls/").handler_kind == HANDLER_KIND_CLASS
+        assert _route(models, "items/<int:pk>/").handler_kind \
+            == HANDLER_KIND_FUNCTION
+
+    def test_method_call_class_view_marked(self):
+        from core.analysis.route_models import HANDLER_KIND_CLASS
+        rm = build_route_models(_inventory_from_sources({
+            "mv/app.py": (
+                "from flask import Flask\n"
+                "app = Flask(__name__)\n"
+                "class MV:\n"
+                "    def get(self, r):\n"
+                "        return r\n"
+                "app.add_url_rule('/mv', view_func=MV.as_view('mv'))\n"
+            ),
+        }))
+        assert [r.handler_kind for r in rm.routes] == [HANDLER_KIND_CLASS]
+
     def test_include_marker(self, models):
         marks = _markers(models, REASON_INCLUDE_NOT_FOLLOWED)
         assert len(marks) == 1
@@ -272,6 +298,27 @@ class TestSerialisation:
         for r in d["routes"]:
             assert set(r["registration"]) == {"file", "line", "style"}
             assert r["derived_from_target"] is True
+
+    def test_handler_kind_serialised_only_for_classes(self, models):
+        """Additive field: absent on function records (old consumers
+        see the exact pre-field shape), present on CBV records."""
+        d = models.to_dict()
+        kinds = {r["route_pattern"]: r.get("handler_kind")
+                 for r in d["routes"]}
+        assert kinds["cls/"] == "class"
+        assert kinds["items/<int:pk>/"] is None
+
+    def test_handler_kind_garbage_degrades_to_function(self):
+        from core.analysis.route_models import HANDLER_KIND_FUNCTION
+        rm = RouteModels.from_dict({
+            "routes": [
+                {"registration": {}, "handler_kind": 42},
+                {"registration": {}, "handler_kind": "CLASS"},
+                {"registration": {}},
+            ],
+        })
+        assert [r.handler_kind for r in rm.routes] \
+            == [HANDLER_KIND_FUNCTION] * 3
 
     def test_from_dict_tolerates_garbage(self):
         rm = RouteModels.from_dict({
