@@ -132,9 +132,19 @@ _SECURITY_CALLEE_RE = re.compile(
 # located with str.find below. The previous single-regex spelling
 # (`/\*.*?\*/` in the alternation) re-scanned the rest of the file
 # from every ``/*`` that never closes — quadratic on hostile source.
+# The string openers are pinned to UNESCAPED delimiters ((?<!\\)):
+# an unterminated literal whose interior repeats escaped delimiters
+# (`"` + `\"`*n) otherwise makes every embedded delimiter a fresh
+# match attempt that re-scans to end-of-file — quadratic on hostile
+# source (measured exp 2.0; pinned, exp 1.0). Both directions: on a
+# well-formed token stream no string opens at an escaped delimiter,
+# so matches are unchanged (repo-corpus differential: divergences
+# only where the old scan opened a string at a `\"`/`\'` pair, a
+# tokenization no real lexer produces); dropping the pin re-opens
+# the quadratic.
 _STRING_OR_COMMENT_OPEN_RE = re.compile(
-    r'"(?:[^"\\]|\\.)*"'
-    r"|'(?:[^'\\]|\\.)*'"
+    r'(?<!\\)"(?:[^"\\]|\\.)*"'
+    r"|(?<!\\)'(?:[^'\\]|\\.)*'"
     r"|/\*",
     re.DOTALL,  # an escape may consume a newline (line continuation)
 )
