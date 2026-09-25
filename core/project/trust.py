@@ -128,7 +128,9 @@ def active_project_target(run_dir: str | Path | None = None) -> str | None:
 def run_target_matches_project(target_path: str | Path | None,
                                run_dir: str | Path | None = None) -> bool:
     """True when the run's target IS the governing project's target or
-    lives inside it (resolved-path comparison).
+    lives inside it (resolved-path comparison), or — for a project
+    whose target is an ARCHIVE — when the run's target is that
+    archive's extraction (see :func:`_archive_target_equivalent`).
 
     Fail-closed: an unknown run target, an unknown project target, or
     an unresolvable path all return ``False`` — a trust marker is an
@@ -156,7 +158,146 @@ def run_target_matches_project(target_path: str | Path | None,
         proj_res = Path(project_target).resolve()
     except OSError:
         return False
-    return run_res == proj_res or proj_res in run_res.parents
+    if run_res == proj_res or proj_res in run_res.parents:
+        return True
+    return _archive_target_equivalent(run_res, proj_res, run_dir)
+
+
+#: Content-identity memo for project ARCHIVE targets: resolved path ->
+#: ((st_mtime_ns, st_ctime_ns, st_size), snapshot). The one-target
+#: gate fires on every pin-keyed privileged write (findings merge,
+#: coverage snapshot, journal-index merge — several per run
+#: completion) and each check would otherwise re-hash the whole
+#: archive — that cost is why the memo exists. The validity key is why
+#: it is safe ENOUGH, not absolutely safe: an ordinary replacement
+#: (new bytes written to the path) changes mtime/ctime/size and
+#: re-hashes; a deliberate same-size content swap with a forged
+#: utime() mtime still misses because unprivileged utime() cannot set
+#: ctime. An actor who controls the clock or rewrites filesystem
+#: metadata outright can still serve a stale identity — the memo
+#: accepts that residual in exchange for not re-hashing per
+#: privileged write (tests clear the dict for forced re-reads).
+_ARCHIVE_SNAP_MEMO: dict[str, tuple[tuple[int, int, int], dict]] = {}
+
+
+def _archive_snapshot_memoised(archive_path: Path) -> dict | None:
+    """``core.run.provenance.archive_snapshot`` behind the
+    mtime/ctime/size memo above. None when the file is not a
+    recognised archive or is unreadable (callers fail closed on
+    None)."""
+    from core.run.provenance import archive_snapshot
+    key = str(archive_path)
+    try:
+        st = archive_path.stat()
+        validity = (st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+    except OSError:
+        return None
+    cached = _ARCHIVE_SNAP_MEMO.get(key)
+    if cached is not None and cached[0] == validity:
+        return cached[1]
+    snap = archive_snapshot(archive_path)
+    if snap is not None:
+        _ARCHIVE_SNAP_MEMO[key] = (validity, snap)
+    return snap
+
+
+def _run_archive_identity(
+    run_dir: str | Path,
+) -> tuple[dict | None, str | None]:
+    """The run's sealed acquisition stamp (``manifest.target`` from the
+    run marker the pin resolver answers with) plus the marker's
+    recorded ``target_path``, when the stamp records an archive
+    acquisition. ``(None, None)`` otherwise — absence fails closed."""
+    from core.run.metadata import load_run_metadata
+    from core.run.pin import resolve_run_pin
+    from core.run.provenance import run_target
+    marker_dir = resolve_run_pin(run_dir).run_dir
+    if marker_dir is None:
+        return None, None
+    meta = load_run_metadata(Path(marker_dir))
+    stamp = run_target(meta)
+    if isinstance(stamp, dict) and stamp.get("source") == "archive":
+        recorded = meta.get("target_path") if isinstance(meta, dict) else None
+        if isinstance(recorded, str) and recorded:
+            return stamp, recorded
+        return stamp, None
+    return None, None
+
+
+def _archive_target_equivalent(run_res: Path, proj_res: Path,
+                               run_dir: str | Path | None) -> bool:
+    """Archive equivalence for the one-target gate: a project whose
+    target is an archive is an assertion about the archive's CONTENT,
+    and runs against it record — and scan — the content-addressed
+    extraction (``_sources/<name>-<sha>/``), never the archive file
+    itself. A pure resolved-path compare therefore mismatched every
+    such run, silently suppressing all its project-store writes and
+    dropping its trust markers.
+
+    Two witnesses, both bound to the archive's CURRENT bytes (sha256),
+    both fail-closed on any missing/unreadable identity:
+
+    1. The run's sealed acquisition stamp: ``manifest.target`` in the
+       run marker records ``{source: "archive", archive_sha256}`` at
+       start — equal shas mean the run extracted exactly the bytes the
+       project target holds now, AND the vetted target must be (or
+       live inside) the marker's recorded ``target_path``, so the
+       predicate answers the caller's question about THIS path rather
+       than "this run had a matching stamp". (A replaced archive
+       yields a different sha and the gate stays closed — as it must:
+       the run's verdicts describe the OLD bytes.)
+    2. The project's own extraction cache: the run target is (or lives
+       inside) ``<project output dir>/_sources/<name>-<sha>/`` for the
+       archive's current sha — the dir name is content-addressed by
+       construction (``core.archive.safe_cache_name``), covering runs
+       whose marker is unavailable to the caller.
+    """
+    try:
+        from core.archive import is_archive, safe_cache_name
+        if not proj_res.is_file() or not is_archive(proj_res):
+            return False
+        snap = _archive_snapshot_memoised(proj_res)
+        if snap is None:
+            return False
+        sha = snap["archive_sha256"]
+        if run_dir is not None:
+            stamp, recorded = _run_archive_identity(run_dir)
+            if stamp is not None and stamp.get("archive_sha256") == sha:
+                # The stamp witnesses the RUN; bind the answer to the
+                # CALLER's question too: the target being vetted must
+                # be (or live inside) the marker's recorded
+                # target_path. Without this the arm answered True for
+                # ANY path once the run carried a matching stamp — a
+                # silent contract broadening no current caller relied
+                # on. No/unresolvable recorded target: this witness
+                # abstains (fall through to the cache-dir witness).
+                if recorded is not None:
+                    try:
+                        rec_res = Path(recorded).resolve()
+                        if run_res == rec_res or rec_res in run_res.parents:
+                            return True
+                    except OSError:
+                        pass
+        from core.project.project import ProjectManager
+        active = _context_project_name(run_dir)
+        if not active:
+            return False
+        proj = ProjectManager().load(active)
+        out_dir = getattr(proj, "output_dir", None) if proj else None
+        if not out_dir:
+            return False
+        canonical = (Path(out_dir) / "_sources"
+                     / safe_cache_name(snap["archive_name"], sha)).resolve()
+        return run_res == canonical or canonical in run_res.parents
+    except Exception as exc:  # noqa: BLE001 — equivalence is a widening; fail closed
+        # The argv hard-error contract still propagates (same posture
+        # as active_project_trust).
+        from core.run.pin import ProjectArgvError
+        if isinstance(exc, ProjectArgvError):
+            raise
+        logger.debug("trust: archive equivalence probe failed",
+                     exc_info=True)
+        return False
 
 
 def _derive_run_target(args) -> str | None:
