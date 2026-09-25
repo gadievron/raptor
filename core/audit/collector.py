@@ -449,6 +449,12 @@ def append_journal_for_outcome(
         reused=reused,
         reused_from_run=reused_from_run,
         seed_provenance=seed_provenance,
+        # Seed-forced re-review marker (--seed-rereview): this row is
+        # a FRESH review of an already-covered function, scheduled by
+        # the hypothesis-seed intake. Provenance only, mirroring
+        # seed_provenance — no verdict weight; absent on ordinary
+        # rows.
+        seed_rereview=(True if gap.get("seed_rereview") else None),
         provisional=provisional,
         producer=producer,
         # Machine-readable failure class on error verdicts only:
