@@ -3434,31 +3434,21 @@ class AutonomousSecurityAgentV2:
                         and not sage_fp_skipped_this):
                     try:
                         from core.sage.hooks import (
-                            compute_finding_source_hash,
+                            finding_verdict_source_hash,
                             store_finding_verdict,
                         )
                         _rel, _fn, _line = _finding_coords(finding)
                         _rule = (finding.get("rule_id")
                                  or finding.get("check_id") or "")
                         if _rel and _fn and _rule and _line >= 0:
-                            _fpath = Path(self.repo_path) / _rel
-                            if _line > 0:
-                                _src_hash = compute_finding_source_hash(
-                                    _fpath, _line)
-                            else:
-                                from core.hash import sha256_string
-                                # Capped read: this hashes a target-repo
-                                # file (the same hostile-giant-file class
-                                # the windowed _line>0 branch avoids by
-                                # construction). Hashing the capped
-                                # prefix is a stable identity for the
-                                # verdict store — a >10 MB file changes
-                                # hash iff its first 10 MB change.
-                                _got = read_text_capped(_fpath)
-                                if _got is None:
-                                    _src_hash = ""
-                                else:
-                                    _src_hash = sha256_string(_got[0])[:12]
+                            # Shared writer formula (windowed hash for
+                            # line>0, capped file-prefix hash for
+                            # line-less findings) — the operator
+                            # verdict CLI stores rows through the same
+                            # helper, so both writers stay
+                            # recall-compatible by construction.
+                            _src_hash = finding_verdict_source_hash(
+                                Path(self.repo_path), _rel, _line)
                             if _src_hash:
                                 is_tp = vuln.analysis.get(
                                     "is_true_positive")

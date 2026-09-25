@@ -766,6 +766,38 @@ def compute_finding_source_hash(
     return sha256_string(f"{span_hash}:{file_hash}")[:12]
 
 
+def finding_verdict_source_hash(
+    repo_root: Path,
+    rel_path: str,
+    line: int,
+) -> str:
+    """Source-identity hash for a finding-verdict store row.
+
+    One formula shared by every verdict WRITER (the /agentic analysis
+    loop and the operator verdict CLI): a finding with a known line
+    (``line > 0``) hashes the window around it via
+    :func:`compute_finding_source_hash` — the exact hash the recall
+    side recomputes before suppressing. A line-less finding
+    (``line == 0``) hashes the capped file prefix instead: recall
+    gates on ``line > 0``, so such a row never mechanically
+    suppresses, but the stored identity stays stable for the
+    knowledge base. The capped read matters — the path points into a
+    scanned repo, so an uncapped read of a hostile giant file is an
+    OOM lever; a >cap file changes hash iff its capped prefix does.
+
+    Returns ``""`` when the file is unreadable (callers must not
+    store a verdict row without a source identity).
+    """
+    fpath = Path(repo_root) / rel_path
+    if line > 0:
+        return compute_finding_source_hash(fpath, line)
+    from core.source import read_text_capped
+    got = read_text_capped(fpath)
+    if got is None:
+        return ""
+    return sha256_string(got[0])[:12]
+
+
 def finding_source_hashes(
     file_path: Path,
     line_start: int,
