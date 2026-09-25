@@ -2682,6 +2682,11 @@ def review_one_function(
     if gap.get("consistency_leads"):
         ctx["consistency_leads"] = list(gap["consistency_leads"])
 
+    # Uniform-absence hint records (same pattern; the renderer frames
+    # them as review context that must never classify alone).
+    if gap.get("uniform_absence"):
+        ctx["uniform_absence"] = list(gap["uniform_absence"])
+
     # Fail-open census leads (same pattern): the renderer turns each
     # into a hypothesize-or-discharge obligation.
     if gap.get("fail_open_leads"):
@@ -6348,6 +6353,24 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
                     "consistency prepass: %d leads seeded, %d "
                     "fail-open handoff hypotheses injected",
                     n_leads, n_handoffs,
+                )
+            # Uniformly-weak family records (hint tier — review
+            # context on the member gaps, no priority movement).
+            try:
+                from .uniform_absence import seed_uniform_absence
+
+                n_ua = seed_uniform_absence(
+                    gaps,
+                    consistency_prepass.get("uniform_absence", []),
+                )
+                if n_ua:
+                    logger.info(
+                        "uniform-absence: %d hint record(s) attached "
+                        "to member gaps", n_ua,
+                    )
+            except Exception:
+                logger.debug(
+                    "uniform-absence seeding failed", exc_info=True,
                 )
             if config.out_dir:
                 with contextlib.suppress(OSError, ValueError):

@@ -143,6 +143,11 @@ CALLEE_SNIPPET_TOTAL_LINES: int = 150
 # function the span spills into the file's NEXT functions, which the
 # reviewer may misattribute to the one under review.
 SOURCE_SPAN_FALLBACK_LINES: int = 50
+# Bound on the uniform-absence prompt section: a whole-family record
+# is heavier than a per-function lead, and a function rarely sits in
+# more than a couple of certain-membership families — the full record
+# set is in the prepass audit-log entry.
+UNIFORM_ABSENCE_PROMPT_CAP = 3
 
 
 def _safe_path(target_path: Path, file_path: str) -> Path | None:
@@ -1675,6 +1680,42 @@ def format_context_for_prompt(
         )
         sections.append(PromptSection(
             "consistency_leads", "\n".join(lines_cl), 1,
+        ))
+
+    if ctx.get("uniform_absence"):
+        ua_records = ctx["uniform_absence"][:UNIFORM_ABSENCE_PROMPT_CAP]
+        # Group ids and descriptions are target-derived (family keys
+        # quote struct/route names) — envelope like every other
+        # untrusted section.
+        body_ua = []
+        for rec in ua_records:
+            prop = str(rec.get("property", "?"))
+            gid = str(rec.get("group_id", ""))
+            n = rec.get("n")
+            body_ua.append(
+                f"- `{prop}` absent in all {n} members of {gid}"
+            )
+            body_ua.extend(
+                f"  member: {m.get('file', '')}:"
+                f"{m.get('function', '')}"
+                for m in (rec.get("members") or [])[:3]
+            )
+        lines_ua = [
+            "\n### Uniformly-absent family properties (hint only)",
+            wrap_untrusted(
+                "\n".join(body_ua),
+                kind="uniform-absence",
+                origin="audit-uniform-absence",
+            ),
+            "\nEvery member of this mechanically-certain family lacks "
+            "the property — there is no deviant to flag, and a "
+            "syntactic scan proves nothing by itself. Treat as review "
+            "context only: check whether the protection lives at a "
+            "shared chokepoint before assuming the family is weak. "
+            "Never classify on this record alone.",
+        ]
+        sections.append(PromptSection(
+            "uniform_absence", "\n".join(lines_ua), 1,
         ))
 
     if ctx.get("fail_open_leads"):

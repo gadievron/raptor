@@ -348,6 +348,7 @@ def run_consistency_prepass(
           "leads": [...],           # capped checklist leads
           "mechanical": [...],      # detector-shaped prompt entries
           "handoffs": [...],        # fail-open hypothesis seeds
+          "uniform_absence": [...], # hint-tier all-members-weak records
           "telemetry": {...},
         }
     """
@@ -1356,6 +1357,27 @@ def run_consistency_prepass(
                     security_relevant=True,
                 ))
 
+    # ── uniformly-weak families — hint-tier records, never leads ────
+    # The all-members-weak case produces no deviant for any majority
+    # comparator; the record rides BESIDE the lead flow (its own key,
+    # its own cap) so a hostile repo cannot spend the 40-lead budget
+    # by minting uniform families.
+    uniform_absence: list[dict[str, Any]] = []
+    if not _over_budget() and peer_groups:
+        try:
+            from .uniform_absence import uniform_absence_records
+
+            uniform_absence = uniform_absence_records(
+                source_texts, peer_groups,
+                min_group=int(floors.value("interface.min_group")),
+            )
+        except Exception:
+            _dim_failed("uniform-absence")
+            logger.debug("consistency prepass: uniform-absence scan "
+                         "failed", exc_info=True)
+        if uniform_absence:
+            telemetry["uniform_absence_records"] = len(uniform_absence)
+
     capped_leads = _rank_leads(leads)
     telemetry["leads_seeded"] = len(capped_leads)
     telemetry["wall_time_s"] = round(time.monotonic() - t0, 3)
@@ -1385,6 +1407,11 @@ def run_consistency_prepass(
         "leads": capped_leads,
         "mechanical": mechanical,
         "handoffs": handoffs,
+        # Hint-tier uniform-absence records (uniformly-weak families;
+        # certain-membership groups only). Beside the leads by
+        # design: never ranked, never budgeted against them, never a
+        # finding.
+        "uniform_absence": uniform_absence,
         # Contract witnesses harvested once here (source texts + target
         # headers). Travels with the census to the in-chain dispatch —
         # a chain-side re-check that reuses the census sees only its
