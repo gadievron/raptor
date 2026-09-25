@@ -14,7 +14,9 @@ mounts (`/mnt/c` and friends), and a couple of tools that need
 hardware or Windows-side services. WSL1 is not a supported target —
 it emulates Linux syscalls rather than running a Linux kernel, and
 the sandbox layers RAPTOR's untrusted-exec contract requires are not
-available there.
+available there. On a detected WSL1 host, sandboxed execution
+refuses outright with the upgrade remedy (see
+[WSL1: refusal, not degradation](#wsl1-refusal-not-degradation)).
 
 The startup banner and `raptor doctor` print a WSL section on WSL
 hosts covering the points below for your specific machine.
@@ -47,8 +49,12 @@ closed) with a message naming the remedies. There are three:
 WSL2 lets you boot your own kernel via `.wslconfig`. Build (or
 obtain) a WSL2 kernel with `CONFIG_SECURITY_LANDLOCK=y` (Landlock is
 upstream since 5.13; Microsoft's kernel source is at
-`microsoft/WSL2-Linux-Kernel`), then in
-`%UserProfile%\.wslconfig` on the Windows side:
+`microsoft/WSL2-Linux-Kernel`). Keep `-microsoft-standard` in the
+kernel release string (`CONFIG_LOCALVERSION` — Microsoft's tree
+keeps it by default): RAPTOR's WSL detection keys on it, and a
+custom kernel without it reads as plain Linux — the WSL-gated
+sandbox hardening and the banner/doctor advisories no longer engage.
+Then in `%UserProfile%\.wslconfig` on the Windows side:
 
 ```ini
 [wsl2]
@@ -269,6 +275,87 @@ default drvfs automount and could shadow `python3`/`claude`); on WSL
 this collapses multiple drops to one summary line (a single drop
 keeps its per-entry line). `RAPTOR_ALLOW_UNSAFE_PATH=1` keeps them
 if you accept the risk.
+
+
+## Sandbox hardening on WSL
+
+All of the following engages only when the running kernel identifies
+as WSL; on any other Linux host the sandbox profile is unchanged.
+
+### Windows-interop and driver masking (mount-ns tier)
+
+WSL's Windows-interop lets a Linux process launch WINDOWS-side
+executables — a channel that no Linux containment layer (namespaces,
+Landlock, seccomp) governs. Inside the mount-ns sandbox view on a
+WSL host:
+
+* `/run/WSL` (the interop socket directory) is never visible — the
+  per-sandbox `/run` tmpfs replaces it, and the environment scrub
+  drops `WSL_INTEROP`/`WSLENV`, so the interop server is unreachable
+  even though binfmt dispatch happens in the kernel regardless of
+  the mount view.
+* `/proc/sys/fs/binfmt_misc` (the interop exec registration view)
+  and `/usr/lib/wsl` (Windows driver/GPU library mounts) are masked
+  with empty read-only views.
+* `/dev/dxg` (GPU paravirtualisation) is never created — the
+  sandbox builds a minimal `/dev`.
+* Caller-supplied readable/tool-path grants at or below any of
+  these are refused loudly; the mask stays authoritative.
+
+Tiers below mount-ns (`ns-only`, `mountless-ns`, `landlock`) have no
+private mount view, so these surfaces retain their normal
+allowlist-driven visibility there — one more reason the untrusted
+floor defaults to `mount-ns`, and to prefer the host-level interop
+switch below when analysing hostile code on WSL.
+
+### `/mnt` is not ambiently readable to untrusted work
+
+Under the restricted-read posture (`restrict_reads=True` — the
+untrusted contract), read grants at or below `/mnt` are dropped from
+the composed allowlist with a warning: the Windows filesystem must
+not become a readable exfil surface through an ambient grant (a
+derived readable path, a tool resolved through the interop PATH).
+Explicit grants stay:
+
+* **The run's target and output trees.** A target on `/mnt/c` is
+  analysed exactly as before — point the run at it and the grant
+  (and anything within its tree) is untouched.
+* **Operator CLI grants** — `--sandbox-readable-path` /
+  `--sandbox-tool-path` entries are exempt; they are also the
+  per-run override the drop warning names.
+
+The deny keys on the default automount root (`/mnt`); a non-default
+`/etc/wsl.conf` `[automount] root` falls outside it.
+
+### WSL1: refusal, not degradation
+
+On a detected WSL1 host every sandboxed-execution path refuses with
+a clear message: WSL1 has no Linux kernel, so no containment layer
+can engage and there is nothing to degrade to. Upgrade the distro
+(`wsl --set-version <distro> 2` from Windows, then
+`wsl --shutdown`). The operator-explicit global disable
+(`--sandbox none` / `--no-sandbox`) remains authoritative for runs
+that genuinely want no sandbox. Kernels whose identity matches WSL
+but not the WSL2 release token are treated as WSL1 — the refusal
+direction — rather than assumed to be real kernels.
+
+### Outer containment (host-level, recommended for hostile targets)
+
+The in-sandbox masks reduce what sandboxed code can see; the
+host-level switches remove the interop machinery itself and bound
+the VM. In the distro's `/etc/wsl.conf`:
+
+```ini
+[interop]
+enabled = false            # no Windows-process launch from the distro
+appendWindowsPath = false  # no /mnt/c/... entries on PATH
+```
+
+and in `%UserProfile%\.wslconfig` on the Windows side, cap the VM
+(`memory=`, `processors=`) and consider Hyper-V firewall rules for
+egress control. Apply with `wsl --shutdown` and relaunch. These are
+operator choices, not RAPTOR defaults — they affect the whole
+distro, not just RAPTOR runs.
 
 
 ## Tool notes
