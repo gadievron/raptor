@@ -424,7 +424,14 @@ def _unpack_archive_target(target: str, args: list, out_dir: Path):
             os.replace(tmp, canonical)
         except OSError:
             shutil.rmtree(tmp, ignore_errors=True)  # lost the race; canonical is there
-        print(f"[*] Unpacked {stats['format']} archive: {stats['files']} files (cache {sha[:12]})")
+        # Hostile/unsafe members (zip-slip paths, links, specials the
+        # safety filter rejected) must not vanish silently — the
+        # operator is scanning a semi-trusted input and a nonzero drop
+        # count is signal about it.
+        dropped = stats.get("dropped", 0)
+        drop_note = f" ({dropped} unsafe members dropped)" if dropped else ""
+        print(f"[*] Unpacked {stats['format']} archive: {stats['files']} "
+              f"files{drop_note} (cache {sha[:12]})")
 
     # Acquisition stamp only — {source, archive_sha256, archive_name, format}.
     # The extracted tree's content-equivalence id is the coverage store's to
