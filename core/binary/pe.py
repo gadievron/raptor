@@ -13,7 +13,7 @@ One entry point:
   machine / arch / bits, subsystem, characteristics and
   DLL-characteristics mitigation bits as named booleans, the
   section table, ``SizeOfHeaders``, the entrypoint RVA, and the
-  import / delay-import tables.
+  import / delay-import / export tables.
 
 Scope
 - PE32 + PE32+ images (little-endian by format definition)
@@ -24,9 +24,11 @@ Scope
 - Import + delay-import tables: per-DLL name and function list
   (hint/name or ordinal), thunk width and ordinal-flag bit
   selected PER FORMAT from the optional-header magic.
+- Export table: declared name, ordinal base, declared-vs-walked
+  counts, named + ordinal-only entries, forwarders as capped
+  literal strings (never resolved — invariant g below).
 
 Out of scope
-- The export table (the next extension of this module)
 - The bound-import table (a pre-Vista binding optimisation; its
   facts duplicate the import table's DLL list)
 - The resource tree INCLUDING version-info (canonical PE
@@ -64,7 +66,10 @@ Its named invariants:
       thunk arrays, export slots, name strings) runs under a NAMED
       cap with a ``caps_hit`` marker on breach — declared counts
       are attacker u32s and terminators are attacker-optional, so
-      no walk trusts either for its budget.
+      no walk trusts either for its budget;
+  (g) forwarded exports are retained as capped LITERAL STRINGS,
+      never resolved or chased — a forwarder is text data, so no
+      forwarder cycle can exist by construction.
 """
 
 from __future__ import annotations
@@ -298,16 +303,34 @@ _MAX_TABLE_NAME_BYTES = 4_096
 # one U+FFFD (3 UTF-8 bytes) — a bounded x3 constant factor on
 # top of the budget, not a bypass.
 _MAX_TABLE_NAME_TOTAL_BYTES = 8 * 1024 * 1024
+# ---- Export walk caps (invariant e).
+#
+# Export function slots / name entries walked. NumberOfFunctions
+# and NumberOfNames are attacker u32s driving bulk array reads,
+# per-name string reads, and record rows; the largest real export
+# tables (mega C++ / system DLLs) stay around ~20k entries. 32768
+# truncates nothing real; higher re-opens the read-and-record
+# amplification the caps close (each name entry prices a
+# name-window read, each function slot a record row).
+_MAX_EXPORT_FUNCTIONS = 32_768
+_MAX_EXPORT_NAMES = 32_768
 
 # Data-directory indices consumed (spec order). The security entry
 # holds a FILE OFFSET (not an RVA) to the certificate table; only
 # its PRESENCE is read here — certificate parsing is a separate,
 # deliberately-unimplemented surface.
+_DIR_EXPORT = 0
 _DIR_IMPORT = 1
 _DIR_SECURITY = 4
 _DIR_DEBUG = 6
 _DIR_DELAY_IMPORT = 13
 _DIR_CLR = 14
+
+# The export directory: Characteristics(I) TimeDateStamp(I)
+# MajorVersion(H) MinorVersion(H) Name(I) Base(I)
+# NumberOfFunctions(I) NumberOfNames(I) AddressOfFunctions(I)
+# AddressOfNames(I) AddressOfNameOrdinals(I)
+_EXPORT_DIRECTORY = struct.Struct("<IIHHIIIIIII")
 
 # One import descriptor: OriginalFirstThunk(I) TimeDateStamp(I)
 # ForwarderChain(I) Name(I) FirstThunk(I)
@@ -432,6 +455,60 @@ class PeDelayImportedDll:
     caps_hit: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class PeExportedSymbol:
+    """One export-table entry.
+
+    ``ordinal`` is biased (``ordinal_base + function index``);
+    ``name`` is present for named exports (hostile text — capped
+    at capture, escape at render) and ``None`` for ordinal-only
+    entries. ``rva`` is the raw AddressOfFunctions slot value;
+    ``None`` only when the name's ordinal points outside the
+    walked function array (table marker says so).
+
+    ``forwarder`` holds the forwarder string as a CAPPED LITERAL
+    (invariant g): a function slot whose value lands inside the
+    export directory's extent is, by format definition, an RVA of
+    "DLL.Symbol" text — that text is captured as data and NEVER
+    resolved or chased, so no forwarder cycle can exist by
+    construction. It is attacker-authored steering text like every
+    other name here — escape at render.
+    """
+
+    ordinal: int
+    rva: int | None
+    name: str | None = None
+    forwarder: str | None = None
+
+
+@dataclass
+class PeExports:
+    """Export-table facts.
+
+    ``declared_*`` counts are the directory's raw u32 claims
+    (attacker-priced — recorded, never trusted); ``walked_*`` are
+    what the capped walk actually recorded (invariant e), so a
+    consumer always sees claim and truth side by side. ``named``
+    and ``ordinal_only`` partition the walked entries; unused
+    (zero) function slots are absent by design — real tables carry
+    ordinal gaps and a zero slot exports nothing. ``caps_hit``
+    carries the table's walk markers, mirrored into
+    ``PeFacts.caps_hit``.
+    """
+
+    dll_name: str | None = None
+    ordinal_base: int = 0
+    declared_function_count: int = 0
+    declared_name_count: int = 0
+    walked_function_count: int = 0
+    walked_name_count: int = 0
+    forwarder_count: int = 0
+    named: list[PeExportedSymbol] = field(default_factory=list)
+    ordinal_only: list[PeExportedSymbol] = field(
+        default_factory=list)
+    caps_hit: list[str] = field(default_factory=list)
+
+
 @dataclass
 class PeFacts:
     """Shallow header / layout facts for one PE image.
@@ -505,13 +582,14 @@ class PeFacts:
     debug_age: int | None = None
     pdb_basename: str | None = None
     debug_identity: str | None = None
-    # Import / delay-import table facts. Empty lists mean the
-    # corresponding directory is absent or empty; an unreadable
-    # directory leaves a marker, so absence and degradation stay
-    # distinguishable.
+    # Import / delay-import / export table facts. Empty lists (or
+    # ``exports is None``) mean the corresponding directory is
+    # absent or empty; an unreadable directory leaves a marker, so
+    # absence and degradation stay distinguishable.
     imports: list[PeImportedDll] = field(default_factory=list)
     delay_imports: list[PeDelayImportedDll] = field(
         default_factory=list)
+    exports: PeExports | None = None
     caps_hit: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -923,6 +1001,10 @@ def _extract_facts_stream(f: BinaryIO, file_size: int) -> PeFacts | None:
         if delay_va and delay_size:
             _read_delay_imports(f, resolver, delay_va, facts, caps,
                                 name_budget, thunk_budget)
+    export_va, export_size = data_dirs.get(_DIR_EXPORT, (0, 0))
+    if export_va and export_size:
+        _read_exports(f, resolver, export_va, export_size, facts,
+                      caps, name_budget)
 
     _compute_overlay(facts, file_size)
 
@@ -1312,6 +1394,163 @@ def _read_delay_imports(
         caps |= dll_caps
 
 
+# ---------------------------------------------------------------------------
+# Export table
+# ---------------------------------------------------------------------------
+
+
+def _read_slot_array(
+    f: BinaryIO, resolver: _RvaResolver, rva: int, count: int,
+    width: int, caps: set[str], marker: str,
+) -> list[int]:
+    """Bulk-read ``count`` little-endian slots of ``width`` bytes
+    through the chokepoint — ONE bounded read (``count`` is already
+    capped by the caller, invariant e). A short or refused read
+    keeps the parsed PREFIX and marks ``<marker>_unreadable``: the
+    walk degrades to what the section really holds, never invents
+    slots."""
+    if count <= 0:
+        return []
+    raw = resolver.read(f, rva, count * width)
+    if raw is None:
+        caps.add(marker + "_unreadable")
+        return []
+    n = len(raw) // width
+    if n < count:
+        caps.add(marker + "_unreadable")
+    fmt = "<%d%s" % (n, "I" if width == 4 else "H")
+    return list(struct.unpack(fmt, raw[:n * width]))
+
+
+def _read_exports(
+    f: BinaryIO, resolver: _RvaResolver, export_va: int,
+    export_size: int, facts: PeFacts, caps: set[str],
+    name_budget: _Budget,
+) -> None:
+    """Walk the export directory into a :class:`PeExports` record.
+
+    Declared counts are recorded verbatim and walked only up to
+    the named caps (invariant e). A function slot whose value
+    lands inside the export directory's claimed extent
+    ``[export_va, export_va + export_size)`` is a FORWARDER by
+    format definition — captured as a capped literal string,
+    never resolved (invariant g); the extent test uses the
+    directory's own claimed size because that is exactly the rule
+    the loader applies, and both operands are recorded facts.
+
+    Table oddities stay record-visible, never fatal:
+    ``export_names_exceed_functions`` (NumberOfNames > Number-
+    OfFunctions — an OBSERVATION, not a proven malformation: name
+    aliasing onto shared ordinals keeps such a table loadable, but
+    no standard linker emits the shape), ``export_ordinal_out_of_
+    range`` (an ordinal-table index past the walked function array
+    — the name is recorded address-less), ``export_name_rva_zero``
+    (a zero AddressOfNames slot names nothing; reading RVA 0
+    through the header-region rule would fabricate DOS-stub text
+    as a "name"), ``export_ordinal_overflow`` (``ordinal_base +
+    index`` past the u32 range consumers may assume — masked into
+    range, marker keeps it honest), and per-array ``*_unreadable``
+    markers. Zero function slots are unused ordinals (real tables
+    carry gaps) — skipped as absence, not marked.
+    """
+    raw = resolver.read(f, export_va, _EXPORT_DIRECTORY.size)
+    if raw is None or len(raw) < _EXPORT_DIRECTORY.size:
+        caps.add("export_directory_unreadable")
+        return
+    (_chars, _ts, _major, _minor, name_rva, base, n_funcs,
+     n_names, funcs_rva, names_rva,
+     ords_rva) = _EXPORT_DIRECTORY.unpack(raw)
+    ecaps: set[str] = set()
+    exp = PeExports(
+        ordinal_base=base,
+        declared_function_count=n_funcs,
+        declared_name_count=n_names,
+    )
+    if name_rva:
+        exp.dll_name = _read_table_string(
+            f, resolver, name_rva, name_budget, ecaps,
+            "export_dll_name")
+    if n_names > n_funcs:
+        ecaps.add("export_names_exceed_functions")
+    walk_funcs = n_funcs
+    if walk_funcs > _MAX_EXPORT_FUNCTIONS:
+        walk_funcs = _MAX_EXPORT_FUNCTIONS
+        ecaps.add("export_functions_capped")
+    walk_names = n_names
+    if walk_names > _MAX_EXPORT_NAMES:
+        walk_names = _MAX_EXPORT_NAMES
+        ecaps.add("export_names_capped")
+
+    funcs = _read_slot_array(f, resolver, funcs_rva, walk_funcs, 4,
+                             ecaps, "export_functions")
+    names = _read_slot_array(f, resolver, names_rva, walk_names, 4,
+                             ecaps, "export_names_table")
+    ords = _read_slot_array(f, resolver, ords_rva, walk_names, 2,
+                            ecaps, "export_ordinals")
+
+    def _forwarder_text(rva: int) -> str | None:
+        if not export_va <= rva < export_va + export_size:
+            return None
+        text = _read_table_string(f, resolver, rva, name_budget,
+                                  ecaps, "export_forwarder")
+        if text is not None:
+            # forwarder_count counts CAPTURED forwarder literals —
+            # strings actually on the record — so the count can
+            # never disagree with the record's contents. A
+            # forwarder-SHAPED slot whose string was unreadable or
+            # budget-dropped leaves its marker instead (and its
+            # directory-extent classification stays recomputable
+            # from the recorded rva + the directory facts).
+            exp.forwarder_count += 1
+        return text
+
+    def _biased_ordinal(idx: int) -> int:
+        # ordinal_base is an attacker u32; base + index can leave
+        # the u32 range consumers may assume for an export
+        # ordinal. Masked into range + marked — in-range field,
+        # honest record.
+        value = base + idx
+        if value > 0xFFFF_FFFF:
+            ecaps.add("export_ordinal_overflow")
+            value &= 0xFFFF_FFFF
+        return value
+
+    consumed: set[int] = set()
+    for i in range(min(len(names), len(ords))):
+        if names[i] == 0:
+            # A zero AddressOfNames slot names nothing; resolving
+            # RVA 0 through the header-region rule would fabricate
+            # DOS-stub bytes as a "name" — marked absence instead.
+            ecaps.add("export_name_rva_zero")
+            sym_name = None
+        else:
+            sym_name = _read_table_string(f, resolver, names[i],
+                                          name_budget, ecaps,
+                                          "export_name")
+        idx = ords[i]
+        if idx >= len(funcs):
+            ecaps.add("export_ordinal_out_of_range")
+            exp.named.append(PeExportedSymbol(
+                ordinal=_biased_ordinal(idx), rva=None,
+                name=sym_name))
+            continue
+        consumed.add(idx)
+        exp.named.append(PeExportedSymbol(
+            ordinal=_biased_ordinal(idx), rva=funcs[idx],
+            name=sym_name, forwarder=_forwarder_text(funcs[idx])))
+    for idx, slot in enumerate(funcs):
+        if idx in consumed or slot == 0:
+            continue
+        exp.ordinal_only.append(PeExportedSymbol(
+            ordinal=_biased_ordinal(idx), rva=slot,
+            forwarder=_forwarder_text(slot)))
+    exp.walked_function_count = len(funcs)
+    exp.walked_name_count = min(len(names), len(ords))
+    exp.caps_hit = sorted(ecaps)
+    caps |= ecaps
+    facts.exports = exp
+
+
 def pe_facts_evidence(
     binary_sha256: str, path: Path, facts: PeFacts,
 ) -> BinaryEvidenceRecord:
@@ -1532,6 +1771,8 @@ def _read_section_table(
 
 __all__ = [
     "PeDelayImportedDll",
+    "PeExportedSymbol",
+    "PeExports",
     "PeFacts",
     "PeImportedDll",
     "PeImportedFunction",
