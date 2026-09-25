@@ -804,3 +804,728 @@ class TestCensusCompliance:
         assert "open_graph" not in names
         assert "graph_connection" not in names
         assert not any("understand_graph" in n for n in names)
+
+
+# ── --seed-rereview: seed-forced fresh review of covered functions ──
+#
+# Against a fully-covered target every seed used to record as a
+# no_matching_gap miss (the join succeeded; the gap queue was simply
+# empty) and the run reviewed nothing. Under the opt-in flag a seed
+# that resolves to a COVERED checklist function is scheduled for a
+# fresh review: un-suppressed in compute_gaps (verdict-reuse import
+# refused), hoisted through the --pin mechanism, accounted in a third
+# intake bucket, and journal-marked. Flag off = byte-identical to the
+# two-bucket intake. Doctrine unchanged: seeds never mint findings,
+# never change verdicts, never bypass --max-cost/--budget, and a seed
+# for a function absent from the checklist stays a miss.
+
+
+def _rereview_checklist():
+    return {
+        "target_path": "/raptor-nonexistent-test-target",
+        "files": [
+            {
+                "path": "binary:acmed",
+                "items": [
+                    {"name": "parse_channel", "address": 0x161DA0,
+                     "kind": "function",
+                     "metadata": {"address": 0x161DA0}},
+                    {"name": "validate_sig", "address": 0x162000,
+                     "kind": "function",
+                     "metadata": {"address": 0x162000}},
+                ],
+            },
+            {
+                "path": "src/auth.c",
+                "items": [
+                    {"name": "check_pw", "kind": "function",
+                     "line_start": 5, "line_end": 30},
+                ],
+            },
+        ],
+    }
+
+
+def _covering_records():
+    """LLM-analysed coverage over every checklist function — the
+    fully-covered-target shape that made seeds a structured no-op."""
+    return [{
+        "tool": "semgrep",
+        "files": {
+            "binary:acmed": {"functions": {
+                "parse_channel": {"status": "clean"},
+                "validate_sig": {"status": "clean"},
+            }},
+            "src/auth.c": {"functions": {
+                "check_pw": {"status": "clean"},
+            }},
+        },
+    }]
+
+
+class TestRereviewResolution:
+    """rereview_candidate_keys: seeds resolve against the FULL
+    checklist inventory with the exact _match_gap join semantics."""
+
+    def _keys(self, tmp_path, records, checklist=None):
+        from core.audit.hypothesis_intake import rereview_candidate_keys
+        _write_seeds(tmp_path / SEEDS_FILENAME, records)
+        return rereview_candidate_keys(
+            checklist or _rereview_checklist(), tmp_path,
+        )
+
+    def test_binary_seed_resolves_by_address(self, tmp_path):
+        from core.coverage.journal import make_function_key
+        keys = self._keys(tmp_path, [_seed()])
+        assert keys == {make_function_key("binary:acmed", "parse_channel")}
+
+    def test_source_seed_resolves_by_name(self, tmp_path):
+        from core.coverage.journal import make_function_key
+        keys = self._keys(tmp_path, [
+            _seed(file="src/auth.c", function="check_pw",
+                  address=None, fid=None),
+        ])
+        assert keys == {make_function_key("src/auth.c", "check_pw")}
+
+    def test_absent_function_resolves_to_nothing(self, tmp_path):
+        assert self._keys(tmp_path, [
+            _seed(function="no_such_fn", address=0xDEAD0, fid=None),
+        ]) == set()
+
+    def test_placeholder_name_refused_as_join_key(self, tmp_path):
+        checklist = {"files": [{"path": "binary:acmed", "items": [
+            {"name": "FUN_00161da0", "address": 0x161DA0,
+             "metadata": {"address": 0x161DA0}},
+        ]}]}
+        assert self._keys(tmp_path, [
+            _seed(function="FUN_00161da0", address=None, fid=None),
+        ], checklist=checklist) == set()
+
+    def test_address_name_conflict_refused(self, tmp_path):
+        # Address resolves to parse_channel, name to validate_sig:
+        # the cross-base misdirection refusal applies here too.
+        assert self._keys(tmp_path, [
+            _seed(function="validate_sig"),
+        ]) == set()
+
+    def test_cross_file_name_is_no_join(self, tmp_path):
+        assert self._keys(tmp_path, [
+            _seed(file="src/other.c", function="check_pw",
+                  address=None, fid=None),
+        ]) == set()
+
+    def test_no_seed_sources_empty(self, tmp_path):
+        from core.audit.hypothesis_intake import rereview_candidate_keys
+        assert rereview_candidate_keys(
+            _rereview_checklist(), tmp_path,
+        ) == set()
+
+
+class TestRereviewGapSeam:
+    """compute_gaps(seed_rereview_keys=...): covered seeded keys are
+    un-suppressed and marked; everything else byte-identical."""
+
+    def test_covered_function_unsuppressed_and_marked(self):
+        from core.audit.gaps import compute_gaps
+        from core.coverage.journal import make_function_key
+        key = make_function_key("src/auth.c", "check_pw")
+        gaps = compute_gaps(
+            _rereview_checklist(), _covering_records(),
+            seed_rereview_keys={key},
+        )
+        scheduled = [g for g in gaps if g.get("seed_rereview")]
+        (gap,) = scheduled
+        assert gap["file"] == "src/auth.c"
+        assert gap["name"] == "check_pw"
+        # Full-fidelity gap from the normal construction path, not a
+        # hand-synthesized twin.
+        assert gap["strategies"]
+        assert "priority" in gap
+
+    def test_other_covered_functions_stay_suppressed(self):
+        from core.audit.gaps import compute_gaps
+        from core.coverage.journal import make_function_key
+        key = make_function_key("src/auth.c", "check_pw")
+        gaps = compute_gaps(
+            _rereview_checklist(), _covering_records(),
+            seed_rereview_keys={key},
+        )
+        names = {g["name"] for g in gaps}
+        assert "parse_channel" not in names
+        assert "validate_sig" not in names
+
+    def test_uncovered_key_is_an_ordinary_gap_without_marker(self):
+        from core.audit.gaps import compute_gaps
+        from core.coverage.journal import make_function_key
+        key = make_function_key("src/auth.c", "check_pw")
+        gaps = compute_gaps(
+            _rereview_checklist(), [], seed_rereview_keys={key},
+        )
+        gap = next(g for g in gaps if g["name"] == "check_pw")
+        assert "seed_rereview" not in gap
+
+    def test_flag_off_covered_stays_suppressed_regression_pin(self):
+        # Today's behaviour, pinned: without the flag a fully-covered
+        # checklist computes zero gaps — the structured no-op the
+        # flag exists to fix must STAY the default.
+        from core.audit.gaps import compute_gaps
+        assert compute_gaps(
+            _rereview_checklist(), _covering_records(),
+        ) == []
+
+    def test_reuse_import_refused_for_scheduled_key(self, monkeypatch):
+        # The fresh-review guarantee: an entry the journal fold placed
+        # in the reuse sink (a $0 verdict import) is POPPED for a
+        # scheduled key — the seam sits after every fold.
+        import core.audit.gaps as gaps_mod
+        from core.coverage.journal import make_function_key
+        key = make_function_key("src/auth.c", "check_pw")
+
+        def _fake_fold(covered, out_dir, project_dir, *, reuse_sink=None,
+                       credits=None, **kwargs):
+            covered.add(key)
+            if reuse_sink is not None:
+                reuse_sink[key] = object()
+
+        monkeypatch.setattr(
+            gaps_mod, "_fold_journal_into_covered", _fake_fold,
+        )
+        sink: dict = {}
+        gaps = gaps_mod.compute_gaps(
+            _rereview_checklist(), [], reuse_sink=sink,
+            seed_rereview_keys={key},
+        )
+        assert key not in sink
+        gap = next(g for g in gaps if g["name"] == "check_pw")
+        assert gap["seed_rereview"] is True
+
+    def test_reuse_import_kept_without_the_flag(self, monkeypatch):
+        import core.audit.gaps as gaps_mod
+        from core.coverage.journal import make_function_key
+        key = make_function_key("src/auth.c", "check_pw")
+
+        def _fake_fold(covered, out_dir, project_dir, *, reuse_sink=None,
+                       credits=None, **kwargs):
+            covered.add(key)
+            if reuse_sink is not None:
+                reuse_sink[key] = object()
+
+        monkeypatch.setattr(
+            gaps_mod, "_fold_journal_into_covered", _fake_fold,
+        )
+        sink: dict = {}
+        gaps = gaps_mod.compute_gaps(
+            _rereview_checklist(), [], reuse_sink=sink,
+        )
+        assert key in sink
+        assert not any(g["name"] == "check_pw" for g in gaps)
+
+
+class TestRereviewAccounting:
+    """apply_hypothesis_seeds(rereview=True): third bucket in the
+    receipt + INFO line, rereview_scheduled ledger rows carrying the
+    resolved address, context stamp identical to matched gaps."""
+
+    def _scheduled_gaps(self):
+        # What compute_gaps hands the intake for a fully-covered
+        # target under the flag: only the seed-forced gap survives.
+        return [{
+            "file": "binary:acmed", "name": "parse_channel",
+            "priority": 1, "priority_score": 5,
+            "metadata": {"address": 0x161DA0},
+            "seed_rereview": True,
+        }]
+
+    def test_scheduled_bucket_receipt_and_ledger(self, tmp_path):
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        gaps = self._scheduled_gaps()
+        summary = apply_hypothesis_seeds(gaps, tmp_path, rereview=True)
+        assert summary["rereview_scheduled"] == 1
+        assert summary["matched"] == 0
+        assert summary["missed"] == 0
+        # The join SUCCEEDED — the ledger row is the audit trail, not
+        # a miss: reason rereview_scheduled, resolved address kept.
+        assert summary["misses_ledger"] == "fid-misses.json"
+        misses_doc = json.loads((tmp_path / "fid-misses.json").read_text())
+        (op,) = misses_doc["operations"]
+        (row,) = op["misses"]
+        assert row["reason"] == "rereview_scheduled"
+        assert row["address"] == "0x161da0"
+        assert row["fid"] == _VALID_FID
+
+    def test_scheduled_seed_still_stamped_and_boosted(self, tmp_path):
+        # Requirement: claim/evidence context injects at the review
+        # seam EXACTLY as matched-gap seeds do — same stamp, same
+        # bounded boost.
+        from core.audit.hypothesis_intake import (
+            SEED_PRIORITY_BOOST,
+            apply_hypothesis_seeds,
+        )
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        gaps = self._scheduled_gaps()
+        apply_hypothesis_seeds(gaps, tmp_path, rereview=True)
+        (stamp,) = gaps[0]["seed_hypotheses"]
+        assert stamp["claim"].startswith("length field")
+        assert gaps[0]["priority_score"] == 5 + SEED_PRIORITY_BOOST
+
+    def test_three_bucket_info_line(self, tmp_path, caplog):
+        import logging
+
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        with caplog.at_level(logging.INFO,
+                             logger="core.audit.hypothesis_intake"):
+            apply_hypothesis_seeds(
+                self._scheduled_gaps(), tmp_path, rereview=True,
+            )
+        assert any(
+            "1 scheduled for re-review" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_flag_off_receipt_and_line_shape_unchanged(
+        self, tmp_path, caplog,
+    ):
+        # Byte-identical without the flag: no rereview_scheduled key,
+        # today's two-bucket line. (The marker cannot exist flag-off;
+        # this pins the receipt/log surface itself.)
+        import logging
+
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        gaps = [{
+            "file": "binary:acmed", "name": "parse_channel",
+            "priority": 1, "metadata": {"address": 0x161DA0},
+        }]
+        with caplog.at_level(logging.INFO,
+                             logger="core.audit.hypothesis_intake"):
+            summary = apply_hypothesis_seeds(gaps, tmp_path)
+        assert "rereview_scheduled" not in summary
+        assert not any(
+            "scheduled for re-review" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_absent_function_stays_a_miss_under_the_flag(self, tmp_path):
+        # Doctrine: the flag re-opens COVERED functions only. A seed
+        # for a function the checklist never had remains a
+        # no_matching_gap miss.
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        _write_seeds(tmp_path / SEEDS_FILENAME, [
+            _seed(function="no_such_fn", address=0xDEAD0, fid=None),
+        ])
+        summary = apply_hypothesis_seeds(
+            self._scheduled_gaps(), tmp_path, rereview=True,
+        )
+        assert summary["rereview_scheduled"] == 0
+        assert summary["missed"] == 1
+        misses_doc = json.loads((tmp_path / "fid-misses.json").read_text())
+        (op,) = misses_doc["operations"]
+        (row,) = op["misses"]
+        assert row["reason"] == "no_matching_gap"
+
+    def test_source_row_address_resolved_from_gap(self, tmp_path):
+        # A name-joined seed with no address of its own still gets
+        # the RESOLVED address on its ledger row (from the matched
+        # gap's metadata) — the fid-join audit trail stays complete.
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        _write_seeds(tmp_path / SEEDS_FILENAME, [
+            _seed(function="parse_channel", address=None, fid=None),
+        ])
+        apply_hypothesis_seeds(
+            self._scheduled_gaps(), tmp_path, rereview=True,
+        )
+        misses_doc = json.loads((tmp_path / "fid-misses.json").read_text())
+        (op,) = misses_doc["operations"]
+        (row,) = op["misses"]
+        assert row["reason"] == "rereview_scheduled"
+        assert row["address"] == "0x161da0"
+
+
+class TestRereviewScheduling:
+    """Orchestrator wiring: resolution before compute_gaps, hoist via
+    the --pin mechanism between the intake and the budget cut."""
+
+    def test_resolution_flag_gated_before_compute_gaps(self):
+        import core.audit.orchestrator as orch
+        src = Path(orch.__file__).read_text(encoding="utf-8")
+        i_res = src.index("rereview_candidate_keys")
+        i_compute = src.index("gaps = compute_gaps(")
+        assert i_res < i_compute
+        assert "seed_rereview_keys=_seed_rereview_keys" in src
+        # The resolution pass runs only under the operator's flag.
+        assert "getattr(config," in src[i_res - 600:i_res]
+
+    def test_hoist_rides_the_pin_mechanism_before_budget(self):
+        import core.audit.orchestrator as orch
+        src = Path(orch.__file__).read_text(encoding="utf-8")
+        i_intake = src.index("apply_hypothesis_seeds(")
+        i_merge = src.index("merge_rereview_pins(getattr(config,")
+        i_budget = src.index("truncate_gaps_to_budget(", i_merge)
+        assert i_intake < i_merge < i_budget
+        # The merged list feeds hoist_pins DIRECTLY — no second
+        # scheduling path.
+        assert "merge_rereview_pins(getattr(config, \"pins\", None), gaps)" in src
+
+    def test_merge_rereview_pins_joins_marked_gap_keys(self):
+        from core.audit.gaps import merge_rereview_pins
+        gaps = [
+            {"file": "src/a.c", "name": "fn0"},
+            {"file": "binary:acmed", "name": "parse_channel",
+             "seed_rereview": True},
+            {"file": "src/b.c", "name": "fn1", "seed_rereview": True},
+        ]
+        merged = merge_rereview_pins(["src/a.c:fn0"], gaps)
+        assert merged == [
+            "src/a.c:fn0", "binary:acmed:parse_channel", "src/b.c:fn1",
+        ]
+        # Dedup against an operator pin naming the same function.
+        merged = merge_rereview_pins(["src/b.c:fn1"], gaps)
+        assert merged == ["src/b.c:fn1", "binary:acmed:parse_channel"]
+
+    def test_merge_rereview_pins_flag_off_returns_pins_unchanged(self):
+        from core.audit.gaps import merge_rereview_pins
+        pins = ["src/a.c:fn0"]
+        gaps = [{"file": "src/a.c", "name": "fn0"}]
+        # No marked gaps → the operator's list back, SAME object —
+        # the flag-off hoist path stays byte-identical.
+        assert merge_rereview_pins(pins, gaps) is pins
+        assert merge_rereview_pins(None, gaps) is None
+
+    def test_triage_override_banner_attribution_and_escaping(self):
+        # The triage-skip override banner must not mis-attribute a
+        # seed-scheduled re-review as an operator pin, and both
+        # branches escape+bound the target-derived file/name at site.
+        import core.audit.orchestrator as orch
+        src = Path(orch.__file__).read_text(encoding="utf-8")
+        i_seed = src.index("seed re-review override: %s:%s was triage-SKIP")
+        i_pin = src.index("--pin override: %s:%s was triage-SKIP")
+        block = src[min(i_seed, i_pin) - 2000:max(i_seed, i_pin) + 2000]
+        assert 'if gap.get("seed_rereview"):' in block
+        assert block.count('_pin_st(gap["file"], max_len=256)') == 2
+        assert block.count('_pin_st(gap["name"], max_len=256)') == 2
+
+    def test_pin_hoist_guarantees_budget_slot_and_fresh_dispatch(self):
+        # Mechanism guarantee, composed the way the orchestrator
+        # composes it: the scheduled gap's key rides hoist_pins via
+        # merge_rereview_pins, so the budget cut cannot drop it and
+        # the pinned triage-skip override applies.
+        from core.audit.gaps import (
+            hoist_pins,
+            merge_rereview_pins,
+            truncate_gaps_to_budget,
+        )
+        gaps = [
+            {"file": "src/a.c", "name": f"fn{i}", "priority": 1,
+             "sloc": 100 - i}
+            for i in range(3)
+        ] + [{
+            "file": "binary:acmed", "name": "parse_channel",
+            "priority": 9, "metadata": {"address": 0x161DA0},
+            "seed_rereview": True,
+        }]
+        hoisted = hoist_pins(gaps, merge_rereview_pins(None, gaps))
+        assert hoisted[0]["name"] == "parse_channel"
+        assert hoisted[0]["pinned"] is True
+        cut = truncate_gaps_to_budget(hoisted, 1)
+        assert [g["name"] for g in cut] == ["parse_channel"]
+
+
+class TestRereviewFlagPlumbing:
+    def test_run_config_persists_flag(self, tmp_path):
+        mod = _load_cli()
+        cfg = mod._run_config_from_args(
+            _run_args(seed_rereview=True), tmp_path,
+        )
+        assert cfg["seed_rereview"] is True
+
+    def test_flag_defaults_off_and_tolerates_absent_attr(self, tmp_path):
+        # Default OFF: a seed file must never silently re-open a
+        # completed audit's spend.
+        mod = _load_cli()
+        cfg = mod._run_config_from_args(_run_args(), tmp_path)
+        assert cfg["seed_rereview"] is False
+
+    def test_opts_field_reaches_orchestrator_config(self, tmp_path):
+        from core.audit.pipeline import (
+            AuditPipelineOpts,
+            _build_orchestrator_config,
+        )
+        opts = AuditPipelineOpts(
+            target_path=tmp_path, out_dir=tmp_path, seed_rereview=True,
+        )
+        config = _build_orchestrator_config(opts, object(), ["m"], opts.mode)
+        assert config.seed_rereview is True
+        off = _build_orchestrator_config(
+            AuditPipelineOpts(target_path=tmp_path, out_dir=tmp_path),
+            object(), ["m"], opts.mode,
+        )
+        assert off.seed_rereview is False
+
+    def test_resume_honours_persisted_flag_and_segment_flag(self):
+        # Persisted-config key contract (same discipline as the
+        # hypothesis_seeds passthrough pin above): resume reads the
+        # exact key cmd_run persists, and the segment flag can turn
+        # the consent ON, never off.
+        mod = _load_cli()
+        cfg = mod._run_config_from_args(
+            _run_args(seed_rereview=True), Path("/tmp/x"),
+        )
+        assert cfg.get("seed_rereview") is True
+        import inspect
+        src = inspect.getsource(mod.cmd_resume)
+        assert 'run_cfg.get("seed_rereview")' in src
+        assert "seed_rereview=" in src
+
+    def test_both_parsers_register_the_flag(self):
+        src = _SCRIPT.read_text(encoding="utf-8")
+        assert src.count('"--seed-rereview"') == 2
+
+
+class TestRereviewSatisfaction:
+    """One fresh review per consent: a completed seed_rereview
+    journal row satisfies the seed — resume segments must not re-buy
+    the review (N seeds x M segments of repeated full-price reviews
+    under one consent), must not re-occupy the schedule head, and
+    must not accumulate a fid-misses operation per segment."""
+
+    def _outcome(self, status="clean"):
+        from dataclasses import dataclass, field as dc_field
+
+        @dataclass
+        class _Outcome:
+            file: str = "binary:acmed"
+            function: str = "parse_channel"
+            status: str = "clean"
+            body: str = "fresh seed-forced review done in segment 1"
+            model: str = "m"
+            cost_usd: float = 1.0
+            duration_s: float = 1.0
+            hypothesis: str = ""
+            hypotheses: list = dc_field(default_factory=list)
+            evidence_tool: str = ""
+            review_result: dict | None = None
+
+        out = _Outcome()
+        out.status = status
+        return out
+
+    def _journal_seed_forced_row(self, out_dir, status="clean"):
+        from core.audit.collector import append_journal_for_outcome
+        append_journal_for_outcome(
+            out_dir=out_dir, target_path=out_dir, run_id="r1",
+            outcome=self._outcome(status),
+            gap={"file": "binary:acmed", "name": "parse_channel",
+                 "line_start": 0, "seed_rereview": True},
+        )
+
+    def test_segment2_probe_no_rebuy(self, tmp_path):
+        # The segment-2 probe shape: journal holds a completed
+        # seed_rereview row, the seed file is still present.
+        from core.audit.hypothesis_intake import (
+            apply_hypothesis_seeds,
+            rereview_candidate_keys,
+        )
+        self._journal_seed_forced_row(tmp_path)
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        # Resolution excludes the satisfied key → nothing scheduled,
+        # the schedule head is free for residual progress.
+        assert rereview_candidate_keys(
+            _rereview_checklist(), tmp_path,
+        ) == set()
+        # Accounting: 0 scheduled, receipt says already-satisfied,
+        # and fid-misses does NOT accumulate another operation.
+        summary = apply_hypothesis_seeds(
+            [], tmp_path, rereview=True,
+            checklist=_rereview_checklist(),
+        )
+        assert summary["rereview_scheduled"] == 0
+        assert summary["rereview_already_satisfied"] == 1
+        assert summary["missed"] == 0
+        assert "misses_ledger" not in summary
+        assert not (tmp_path / "fid-misses.json").exists()
+
+    def test_satisfied_info_line_reports_bucket(self, tmp_path, caplog):
+        import logging
+
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        self._journal_seed_forced_row(tmp_path)
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        with caplog.at_level(logging.INFO,
+                             logger="core.audit.hypothesis_intake"):
+            apply_hypothesis_seeds(
+                [], tmp_path, rereview=True,
+                checklist=_rereview_checklist(),
+            )
+        assert any(
+            "1 already satisfied" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_error_row_does_not_satisfy(self, tmp_path):
+        # Same retry discipline as the coverage fold: a seed-forced
+        # review that ERRORED is not a settled verdict.
+        from core.audit.hypothesis_intake import rereview_candidate_keys
+        from core.coverage.journal import make_function_key
+        self._journal_seed_forced_row(tmp_path, status="error")
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        assert rereview_candidate_keys(
+            _rereview_checklist(), tmp_path,
+        ) == {make_function_key("binary:acmed", "parse_channel")}
+
+    def test_ordinary_row_does_not_satisfy(self, tmp_path):
+        # A plain (non-seed-forced) review row never consumes the
+        # consent — only the marker row does.
+        from core.audit.collector import append_journal_for_outcome
+        from core.audit.hypothesis_intake import rereview_candidate_keys
+        from core.coverage.journal import make_function_key
+        append_journal_for_outcome(
+            out_dir=tmp_path, target_path=tmp_path, run_id="r1",
+            outcome=self._outcome(),
+            gap={"file": "binary:acmed", "name": "parse_channel",
+                 "line_start": 0},
+        )
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        assert rereview_candidate_keys(
+            _rereview_checklist(), tmp_path,
+        ) == {make_function_key("binary:acmed", "parse_channel")}
+
+    def test_satisfied_key_back_to_normal_covered_semantics(
+        self, tmp_path,
+    ):
+        # After the forced review completed, the excluded key flows
+        # through compute_gaps as ordinary covered state — no gap.
+        from core.audit.gaps import compute_gaps
+        from core.audit.hypothesis_intake import rereview_candidate_keys
+        self._journal_seed_forced_row(tmp_path)
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        keys = rereview_candidate_keys(_rereview_checklist(), tmp_path)
+        gaps = compute_gaps(
+            _rereview_checklist(), _covering_records(),
+            seed_rereview_keys=keys,
+        )
+        assert not any(g["name"] == "parse_channel" for g in gaps)
+
+    def test_unsatisfied_unknown_seed_still_a_miss(self, tmp_path):
+        # The satisfaction classifier must not launder genuinely
+        # unknown functions: absent-from-checklist stays a recorded
+        # no_matching_gap miss even when OTHER seeds are satisfied.
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        self._journal_seed_forced_row(tmp_path)
+        _write_seeds(tmp_path / SEEDS_FILENAME, [
+            _seed(),
+            _seed(function="no_such_fn", address=0xDEAD0, fid=None),
+        ])
+        summary = apply_hypothesis_seeds(
+            [], tmp_path, rereview=True,
+            checklist=_rereview_checklist(),
+        )
+        assert summary["rereview_already_satisfied"] == 1
+        assert summary["missed"] == 1
+        misses_doc = json.loads((tmp_path / "fid-misses.json").read_text())
+        (op,) = misses_doc["operations"]
+        (row,) = op["misses"]
+        assert row["reason"] == "no_matching_gap"
+
+
+class TestHoistBannerBounds:
+    def test_hostile_pin_names_escaped_and_bounded(self, tmp_path, caplog):
+        # --seed-rereview routes target-controlled function names
+        # through the hoist banner: escaping alone left printable
+        # length unbounded (a 1MB name produced a 1MB INFO line).
+        import logging
+
+        from core.audit.gaps import hoist_pins
+        hostile = "\x1b]0;owned\x07" + "A" * 1_000_000
+        gaps = [{"file": "src/a.c", "name": hostile, "priority": 1}]
+        with caplog.at_level(logging.INFO, logger="core.audit.gaps"):
+            hoist_pins(gaps, [f"src/a.c:{hostile}"])
+        lines = [
+            r.getMessage() for r in caplog.records
+            if "hoisted to the front" in r.getMessage()
+        ]
+        (line,) = lines
+        assert "\x1b" not in line
+        assert "...[+" in line  # explicit elision marker
+        assert len(line) < 2_000
+
+    def test_pin_list_capped_in_banner(self, caplog):
+        import logging
+
+        from core.audit.gaps import hoist_pins
+        gaps = [
+            {"file": "src/a.c", "name": f"fn{i:03d}", "priority": 1}
+            for i in range(30)
+        ]
+        with caplog.at_level(logging.INFO, logger="core.audit.gaps"):
+            hoist_pins(gaps, [f"src/a.c:fn{i:03d}" for i in range(30)])
+        (line,) = [
+            r.getMessage() for r in caplog.records
+            if "hoisted to the front" in r.getMessage()
+        ]
+        assert "… (+10 more)" in line
+
+    def test_short_operator_pins_render_verbatim(self, caplog):
+        # Bounding must not disturb the ordinary operator banner.
+        import logging
+
+        from core.audit.gaps import hoist_pins
+        gaps = [{"file": "src/a.c", "name": "check_pw", "priority": 1}]
+        with caplog.at_level(logging.INFO, logger="core.audit.gaps"):
+            hoist_pins(gaps, ["src/a.c:check_pw"])
+        (line,) = [
+            r.getMessage() for r in caplog.records
+            if "hoisted to the front" in r.getMessage()
+        ]
+        assert "src/a.c:check_pw" in line
+        assert "...[+" not in line
+
+
+class TestRereviewJournalMarker:
+    def _outcome(self):
+        from dataclasses import dataclass, field as dc_field
+
+        @dataclass
+        class _Outcome:
+            file: str = "binary:acmed"
+            function: str = "parse_channel"
+            status: str = "suspicious"
+            body: str = "b"
+            model: str = "test-model"
+            cost_usd: float = 0.01
+            duration_s: float = 1.0
+            hypothesis: str = ""
+            hypotheses: list = dc_field(default_factory=list)
+            evidence_tool: str = ""
+            review_result: dict | None = None
+
+        return _Outcome()
+
+    def test_marker_recorded_on_seed_forced_row(self, tmp_path):
+        from core.audit.collector import append_journal_for_outcome
+        from core.coverage.journal import load_entries
+        append_journal_for_outcome(
+            out_dir=tmp_path, target_path=tmp_path, run_id="r1",
+            outcome=self._outcome(),
+            gap={"file": "binary:acmed", "name": "parse_channel",
+                 "line_start": 0, "seed_rereview": True},
+        )
+        (entry,) = load_entries(tmp_path)
+        assert entry.seed_rereview is True
+
+    def test_ordinary_row_carries_no_marker(self, tmp_path):
+        from core.audit.collector import append_journal_for_outcome
+        from core.coverage.journal import load_entries
+        append_journal_for_outcome(
+            out_dir=tmp_path, target_path=tmp_path, run_id="r1",
+            outcome=self._outcome(),
+            gap={"file": "binary:acmed", "name": "parse_channel",
+                 "line_start": 0},
+        )
+        (entry,) = load_entries(tmp_path)
+        assert entry.seed_rereview is None
+        raw = json.loads(
+            (tmp_path / "review-journal.jsonl").read_text().strip(),
+        )
+        assert "seed_rereview" not in raw
