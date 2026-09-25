@@ -153,6 +153,28 @@ def _address(value: Any) -> str:
         return ""
 
 
+def _align_context_anchor(context: Any, manifest: BinaryManifest) -> None:
+    """One module, one anchor: overwrite the context's path-probed
+    anchor with the manifest's kind-aware identity anchor.
+
+    The context probes its anchor from the bare binary path, which
+    cannot see the analysed-slice selection — on a fat Mach-O the
+    path probe is the whole-file hash while the manifest carries the
+    analysed slice's LC_UUID. Left unaligned, the map records and
+    fid stamps (context anchor) and the manifest-minted fids (kind-
+    aware anchor) would disagree and every fid join for that module
+    would miss. For ELF and the hash fallback the two derivations
+    are byte-identical, so this is a no-op there. Best-effort: a
+    manifest without identity leaves the probe result alone.
+    """
+    if not manifest.identity_kind or not manifest.build_id:
+        return
+    from core.binary.identity import identity_anchor
+    aligned = identity_anchor(manifest.identity_kind, manifest.build_id)
+    if aligned and hasattr(context, "content_anchor"):
+        context.content_anchor = aligned
+
+
 def _fid_fragment(manifest: BinaryManifest, address: Any) -> dict[str, str]:
     """Additive ``{"fid": ...}`` fragment for a function record.
 
@@ -163,11 +185,12 @@ def _fid_fragment(manifest: BinaryManifest, address: Any) -> dict[str, str]:
     """
     if manifest.image_base is None:
         return {}
-    from core.binary.addrmap import make_fid, module_anchor
-    anchor = module_anchor(
-        build_id=manifest.build_id or None,
-        binary_sha256=manifest.binary_sha256,
-    )
+    from core.binary.addrmap import make_fid
+    from core.binary.identity import manifest_anchor
+    # Kind-aware anchor: a PE manifest's build_id carries the
+    # canonical GUID+age, which anchors HASHED — a raw value-prefix
+    # would mint identities no other consumer mints.
+    anchor = manifest_anchor(manifest)
     fid = make_fid(anchor, address, manifest.image_base)
     return {"fid": fid} if fid else {}
 
@@ -2005,6 +2028,7 @@ def analyse_blackbox_binary(
         context.notes.append(f"radare2 analysis unavailable: {exc}")
 
     manifest = build_manifest(binary, context, requested_slice_arch=slice_arch)
+    _align_context_anchor(context, manifest)
     evidence = list(manifest.evidence)
     static_records = _static_evidence(manifest, context)
     evidence.extend(static_records)

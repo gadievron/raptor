@@ -639,8 +639,7 @@ def test_extract_script_appends_av_to_single_session(monkeypatch, tmp_path):
     monkeypatch.setattr(edges_mod.shutil, "which",
                         lambda t: f"/usr/bin/{t}")
     monkeypatch.setattr(edges_mod, "_try_graph_store", lambda p: None)
-    monkeypatch.setattr(edges_mod, "read_build_id", lambda p: None)
-    monkeypatch.setattr(edges_mod, "_content_hash", lambda p: None)
+    monkeypatch.setattr(edges_mod, "_identity_cache_key", lambda p: None)
 
     calls: list[list[str]] = []
 
@@ -700,7 +699,7 @@ def _rc_extract_setup(monkeypatch, tmp_path, rc):
     monkeypatch.setattr(edges_mod.shutil, "which",
                         lambda t: f"/usr/bin/{t}")
     monkeypatch.setattr(edges_mod, "_try_graph_store", lambda p: None)
-    monkeypatch.setattr(edges_mod, "read_build_id",
+    monkeypatch.setattr(edges_mod, "_identity_cache_key",
                         lambda p: "feedface" * 5)
 
     binary = tmp_path / "demo"

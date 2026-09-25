@@ -69,28 +69,39 @@ class TestManifestIdentityLegs:
         assert manifest.image_base == 0x400000
 
     def test_unrecorded_base_stays_none(self, tmp_path, monkeypatch):
+        import hashlib
+
         import core.analysis.binary_oracle as oracle
         monkeypatch.setattr(oracle, "read_build_id", lambda _p: None)
-        binary = _write_binary(tmp_path / "t", b"\x7fELF" + b"\x00" * 64)
+        data = b"\x7fELF" + b"\x00" * 64
+        binary = _write_binary(tmp_path / "t", data)
         ctx = BinaryContextMap(binary_path=binary, binary_format="elf")
         manifest = build_manifest(binary, ctx)
-        assert manifest.build_id == ""
+        # No build-id note: the identity falls to the content hash
+        # (build_id populated for every format via the front door).
+        assert manifest.build_id == hashlib.sha256(data).hexdigest()
+        assert manifest.identity_kind == "sha256"
         # image_base defaults to 0 on the context but was never
         # RECORDED — the manifest must not launder the default.
         assert manifest.image_base is None
 
     def test_non_elf_never_probes_build_id(self, tmp_path, monkeypatch):
+        import hashlib
+
         import core.analysis.binary_oracle as oracle
 
         def explode(_p):
             raise AssertionError("readelf probe on a non-ELF target")
 
         monkeypatch.setattr(oracle, "read_build_id", explode)
-        binary = _write_binary(tmp_path / "t.exe",
-                               b"MZ" + b"\x00" * 64)
+        data = b"MZ" + b"\x00" * 64
+        binary = _write_binary(tmp_path / "t.exe", data)
         ctx = BinaryContextMap(binary_path=binary, binary_format="pe")
         manifest = build_manifest(binary, ctx)
-        assert manifest.build_id == ""
+        # No readelf spawn — but the manifest still identifies the
+        # module (an MZ stub with no RSDS record hashes).
+        assert manifest.build_id == hashlib.sha256(data).hexdigest()
+        assert manifest.identity_kind == "sha256"
 
     def test_roundtrip(self):
         manifest = BinaryManifest(
@@ -147,7 +158,9 @@ class TestPipelineFids:
     def test_context_map_records_carry_fid(self, tmp_path, monkeypatch):
         result, out = self._run(tmp_path, monkeypatch)
         cm = result.context_map
-        assert cm["content_anchor"] == ""  # anchor lives on the manifest legs
+        # Aligned with the manifest identity even when the r2 probe
+        # layer never set it — one module, one anchor.
+        assert cm["content_anchor"] == ANCHOR16
         assert cm["image_base_recorded"] is True
         fns = {f["name"]: f for f in cm["interesting_functions"]}
         assert fns["main"]["fid"] == f"{ANCHOR16}:0x1000"
@@ -300,3 +313,59 @@ class TestSavedContextRestore:
         })
         assert ctx.image_base_recorded is False
         assert ctx.content_anchor == ""
+
+
+class TestContextAnchorAlignment:
+    """The context's path-probed anchor must agree with the
+    manifest's kind-aware identity anchor — one module, one anchor."""
+
+    def _manifest(self, *, build_id, identity_kind):
+        return BinaryManifest(
+            schema_version=1, binary_path="/bin/t",
+            binary_sha256="ab" * 32, size_bytes=1, executable=True,
+            target_kind="macho", arch="arm64", bits=64,
+            binary_format="macho", build_id=build_id,
+            identity_kind=identity_kind, image_base=0x100000,
+        )
+
+    def test_slice_identity_overrides_path_probe(self):
+        # Fat Mach-O shape: the path probe saw the whole-file hash;
+        # the manifest carries the analysed slice's LC_UUID. Records
+        # and manifest-minted fids must share the slice anchor.
+        from packages.binary_analysis.pipeline import (
+            _align_context_anchor,
+            _fid_fragment,
+        )
+        uuid_hex = bytes(range(16)).hex()
+        manifest = self._manifest(
+            build_id=uuid_hex, identity_kind="macho_uuid")
+        ctx = BinaryContextMap(
+            binary_path=Path("/bin/t"),
+            image_base=0x100000, image_base_recorded=True,
+        )
+        ctx.content_anchor = "cd" * 8            # whole-file probe
+        _align_context_anchor(ctx, manifest)
+        assert ctx.content_anchor == uuid_hex[:16]
+        assert _fid_fragment(manifest, 0x100010) == {
+            "fid": f"{uuid_hex[:16]}:0x10"}
+
+    def test_no_identity_leaves_probe_alone(self):
+        from packages.binary_analysis.pipeline import (
+            _align_context_anchor,
+        )
+        manifest = self._manifest(build_id="", identity_kind="")
+        ctx = BinaryContextMap(binary_path=Path("/bin/t"))
+        ctx.content_anchor = "cd" * 8
+        _align_context_anchor(ctx, manifest)
+        assert ctx.content_anchor == "cd" * 8
+
+    def test_elf_alignment_is_a_no_op(self):
+        from packages.binary_analysis.pipeline import (
+            _align_context_anchor,
+        )
+        manifest = self._manifest(
+            build_id=BUILD_ID, identity_kind="elf_build_id")
+        ctx = BinaryContextMap(binary_path=Path("/bin/t"))
+        ctx.content_anchor = ANCHOR16       # the same probe result
+        _align_context_anchor(ctx, manifest)
+        assert ctx.content_anchor == ANCHOR16

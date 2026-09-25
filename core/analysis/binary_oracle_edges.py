@@ -41,7 +41,6 @@ from core.atomic_fs import write_text_atomically
 from core.hash import sha256_file as _sha256_file
 from core.json import JsonBudgetExceededError, dumps_artifact, load_json_bounded
 
-from .binary_oracle import read_build_id
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +87,26 @@ def _content_hash(binary_path: Path) -> str | None:
         return None
 
 
+def _identity_cache_key(binary_path: Path) -> str | None:
+    """Edge-cache key: the module's content-identity VALUE via the
+    kind-aware front door (build-id for ELF, LC_UUID for the thin
+    Mach-O slice, canonical GUID+age for PE, whole-file sha256
+    otherwise).  Every kind's value is a lowercase hex run, so
+    ``_cache_path_for``'s validator applies unchanged; ELF and
+    hash-fallback keys are byte-identical to the historical
+    build-id-or-hash scheme, keeping existing cache entries valid.
+    The format sniff means no readelf spawn ever runs on non-ELF
+    bytes."""
+    try:
+        from core.binary.identity import content_identity
+        ident = content_identity(binary_path)
+    except Exception:  # noqa: BLE001 — cache keying is an optimisation; the hash fallback still keys
+        ident = None
+    if ident is not None:
+        return ident.value
+    return _content_hash(binary_path)
+
+
 def _fn_addr(f: dict) -> int | None:
     """Function entry address from an ``aflj`` record. r2 6.x keys this
     as ``addr``; r2 5.x (the version Ubuntu/Debian apt ships, used by the
@@ -116,9 +135,9 @@ _BUILD_ID_RE = re.compile(r"^[0-9a-f]{8,128}$")
 def _cache_path_for(build_id: str) -> Path | None:
     """Cache path for a given build_id, or ``None`` when the build_id
     isn't a safely-embeddable hex string. Belt-and-braces against any
-    future regression in the upstream ``read_build_id`` helper: a
-    hostile binary defining its build_id note (e.g. arbitrary bytes in
-    ``.note.gnu.build-id``) could otherwise drive cache-file path
+    future regression in the upstream identity helpers: a hostile
+    binary defines its own identity bytes (``.note.gnu.build-id``,
+    LC_UUID, RSDS record) and could otherwise drive cache-file path
     composition. Validate at use-site, not just at production."""
     if not isinstance(build_id, str) or not _BUILD_ID_RE.match(build_id):
         return None
@@ -355,16 +374,14 @@ def extract_direct_call_edges(
     if not binary_path.is_file():
         return BinaryEdgeIndex(binary_path=str(binary_path))
 
-    # Cache lookup keyed by build_id (mechanically-derived from
-    # ``.note.gnu.build-id`` — changes whenever the binary's code does).
-    # Stripped binaries (Go without -trimpath, PGO-stripped vendor
-    # binaries, custom-link binaries that drop .note.gnu.build-id) may
-    # have no build_id; fall back to a content sha256 so the cache
-    # still works (slower than a 40-char hex constant but bounded —
-    # one full-file digest per extraction).
-    cache_key = read_build_id(binary_path) if use_cache else None
-    if use_cache and not cache_key:
-        cache_key = _content_hash(binary_path)
+    # Cache lookup keyed by the module's content identity
+    # (mechanically-derived; changes whenever the binary's code
+    # does): GNU build-id for ELF, per-format identity for PE /
+    # Mach-O, and a content sha256 for everything without one
+    # (stripped Go, PGO-stripped vendor binaries, custom-link
+    # binaries that drop .note.gnu.build-id — slower than a 40-char
+    # hex constant but bounded: one full-file digest per extraction).
+    cache_key = _identity_cache_key(binary_path) if use_cache else None
     cache_file = _cache_path_for(cache_key) if cache_key else None
     build_id = cache_key  # alias for the log message + cache payload
     if cache_file is not None:
@@ -723,7 +740,7 @@ def load_cached_edge_index(binary_path: Path) -> BinaryEdgeIndex | None:
 
     Returns ``None`` on any miss. Consumers that must stay fast (audit
     prep) use this instead of ``extract_direct_call_edges`` so a cold
-    cache costs one build-id read, not a 10-30s r2 ``aaa`` run.
+    cache costs one identity read, not a 10-30s r2 ``aaa`` run.
     """
     binary_path = Path(binary_path)
     if not binary_path.is_file():
@@ -731,7 +748,7 @@ def load_cached_edge_index(binary_path: Path) -> BinaryEdgeIndex | None:
     from_graph = _try_graph_store(binary_path)
     if from_graph is not None:
         return from_graph
-    cache_key = read_build_id(binary_path) or _content_hash(binary_path)
+    cache_key = _identity_cache_key(binary_path)
     cache_file = _cache_path_for(cache_key) if cache_key else None
     if cache_file is None:
         return None

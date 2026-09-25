@@ -195,17 +195,26 @@ def _cache_dir() -> Path:
 
 
 def _cache_key(binary_path: Path) -> str | None:
-    """Build-id (preferred) or ``sha256:<hex>`` content fallback. ``None``
-    when neither can be derived."""
+    """Content-identity value (build-id / LC_UUID / PE GUID+age) via
+    the kind-aware front door, or ``sha256:<hex>`` for the content
+    fallback. ``None`` when neither can be derived.
+
+    The front door sniffs the format itself, so the sandboxed
+    build-id probe never spawns over non-ELF bytes; ELF keys and the
+    ``sha256:`` fallback keys are byte-identical to the historical
+    build-id-or-hash scheme, so existing cache entries stay valid.
+    """
     try:
-        from core.analysis.binary_oracle import read_build_id
-        bid = read_build_id(binary_path)
-    except Exception:  # noqa: BLE001 — build-id is an optimisation; fall back to content hash on any extraction failure
-        bid = None
-    if isinstance(bid, str) and re.fullmatch(r"[0-9a-fA-F]{8,128}", bid):
-        return bid.lower()
-    sha = _content_sha(binary_path)
-    return f"sha256:{sha}" if sha else None
+        from core.binary.identity import KIND_SHA256, content_identity
+        ident = content_identity(binary_path)
+    except Exception:  # noqa: BLE001 — identity is an optimisation; fall back to content hash on any extraction failure
+        ident = None
+    if ident is None:
+        sha = _content_sha(binary_path)
+        return f"sha256:{sha}" if sha else None
+    if ident.kind == KIND_SHA256:
+        return f"sha256:{ident.value}"
+    return ident.value
 
 
 def _content_sha(binary_path: Path) -> str | None:
