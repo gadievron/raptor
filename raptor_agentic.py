@@ -3915,6 +3915,11 @@ def main() -> int:
                     # key below (never blended; the artifact total is
                     # the sum of the two).
                     "total_findings": openant_findings_count - _oa_recovered,
+                    # The row count of openant_findings.json as written
+                    # for this run (scanner findings + recovered
+                    # verdicts, post-dedup) — for consumers reconciling
+                    # the metrics against the artifact file.
+                    "artifact_findings_total": openant_findings_count,
                     "model": oa_config.model,
                     "level": oa_config.level,
                     # Present-only: zero recovered adds no key (no noise

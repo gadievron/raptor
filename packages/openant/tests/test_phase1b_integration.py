@@ -211,6 +211,15 @@ class TestAgenticPipelineStaticChecks(unittest.TestCase):
     def test_openant_findings_count_in_metrics(self):
         self.assertIn("openant_findings_count", self.src)
 
+    def test_artifact_total_rides_beside_scanner_total(self):
+        """total_findings is scanner-only (recovered verdicts
+        subtracted); the artifact row count must ride its own additive
+        key so consumers can reconcile against openant_findings.json."""
+        self.assertIn(
+            '"artifact_findings_total": openant_findings_count',
+            self.src,
+        )
+
     def test_openant_in_scan_metrics(self):
         self.assertIn("'openant': openant_metrics", self.src)
 
