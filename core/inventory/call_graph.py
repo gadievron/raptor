@@ -52,12 +52,15 @@ from __future__ import annotations
 import ast
 import hashlib
 import logging
+import sys
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from tree_sitter import Node
 
 from core.inventory import _ts_cache
@@ -7891,6 +7894,184 @@ def _extractor_for_language(language: str | None,
 #: input fingerprint so both sides agree on which bytes can matter.
 CALL_GRAPH_MAX_FILE_BYTES = 1_500_000
 
+#: Default cumulative retained-byte budget for
+#: :func:`load_call_graphs` — bounds the ESTIMATED in-memory size of
+#: the whole returned mapping (:func:`estimate_call_graph_bytes`),
+#: which the orchestrator caches for the entire run. ``max_bytes``
+#: gates INPUT per file only; retained OUTPUT is what this bounds — a
+#: call-dense file at the input gate measures ~53 MiB retained alone
+#: (a denser shape was measured retaining ~71 MB), so density, not
+#: file count, is the exhaustion vector. Both directions, in the
+#: units the budget actually meters (estimated bytes): LOWER drops
+#: cross-function context on honestly dense trees — a kernel-scale
+#: 20,000-file checklist at the measured kernel average (~15 KiB
+#: retained/file) needs ~300 MiB, and a python-heavy tree at this
+#: repo's own measured density (~40 KiB/file estimated over core/,
+#: deep ~36 KiB) needs ~800 MiB at the checklist ceiling; both must
+#: fit. HIGHER only admits degenerate density (1 GiB already
+#: tolerates ~18 input-cap call-dense monsters at ~57 MiB estimated
+#: each before stopping) while the mapping sits in the orchestrator's
+#: module-level cache for the whole run beside everything else it
+#: holds.
+CALL_GRAPH_MAX_TOTAL_BYTES = 1024 * 1024 * 1024
+
+
+# Retained-size estimation constants, measured on 64-bit CPython
+# (3.14) by comparing the estimate against a dedup-aware deep
+# ``sys.getsizeof`` walk of extracted graphs. Fixture ratios
+# (estimate / measured): minimal-call pathological 1.03, kernel-shaped
+# C 0.87, ordinary python 1.01, chain-dense 1.21, PHP include-heavy
+# 1.25, long-caller-name shapes (380/1000/4000 chars) 1.00, astral
+# (UCS-4) caller 1.00, astral chain 1.86, this repo's own core/ tree
+# 1.11 — a budget gate needs "right order of magnitude, cheap, mildly
+# conservative", not pympler. String charges go through
+# ``sys.getsizeof`` so wide (UCS-2/UCS-4) identifiers are charged
+# their real bytes, with a small share discount because extracted
+# names repeat heavily within a file (dedup in the measured
+# baseline); container/instance costs fold the slots object, list
+# headers, and the per-entry int objects together.
+_EST_STR_SHARE_DISCOUNT = 21   # portion of the str header assumed shared
+_EST_STR_FLOOR = 8             # never below one pointer per reference
+_EST_CALL_SITE_BYTES = 230     # CallSite + two list headers + line int
+_EST_ENTRY_BYTES = 130         # small tuple/dict-entry shaped records
+_EST_RECORD_BYTES = 190        # slots record instances (ClassDef, ...)
+_EST_GRAPH_BASE_BYTES = 700    # empty FileCallGraph + field containers
+
+
+def _est_strs(seq: "Iterable[str]") -> int:
+    getsizeof = sys.getsizeof
+    return sum(
+        max(getsizeof(s) - _EST_STR_SHARE_DISCOUNT, _EST_STR_FLOOR)
+        for s in seq
+    )
+
+
+def _est_arg_facts(a: CallArgumentFacts) -> int:
+    getsizeof = sys.getsizeof
+    total = 200
+    total += sum(30 + getsizeof(s) for _, s in a.string_args)
+    for _, ch in a.ref_args:
+        total += 60 + _est_strs(ch)
+    for _, ch in a.call_ref_args:
+        total += 60 + _est_strs(ch)
+    for k, v in a.kw_strings.items():
+        total += 60 + getsizeof(k) + getsizeof(v)
+    for k, vs in a.kw_string_lists.items():
+        total += 60 + getsizeof(k) + 64 + _est_strs(vs)
+    for k, ch in a.kw_refs.items():
+        total += 60 + getsizeof(k) + 64 + _est_strs(ch)
+    for k, ch in a.kw_call_refs.items():
+        total += 60 + getsizeof(k) + 64 + _est_strs(ch)
+    return total
+
+
+def _est_call_sites(sites: "Iterable[CallSite]") -> int:
+    """Charge one run of :class:`CallSite` records.
+
+    ``caller`` / ``receiver_class`` / ``receiver_type`` are charged
+    byte-aware (``sys.getsizeof`` — UCS-kind aware): the caller is
+    the enclosing function name, arbitrarily long and distinct per
+    function, so leaving it uncharged lets a long-name shape defeat
+    the budget. Extractors bind the SAME string object to every site
+    of one function and sites arrive in file order, so an
+    adjacent-identity check amortizes the shared object to one
+    charge per run — matching the dedup-aware measurement baseline;
+    non-adjacent repeats over-charge, the conservative direction.
+    """
+    getsizeof = sys.getsizeof
+    total = 0
+    prev_caller = None
+    prev_recv_class = None
+    prev_recv_type = None
+    for c in sites:
+        total += (_EST_CALL_SITE_BYTES + _est_strs(c.chain)
+                  + _est_strs(c.argument_identifiers))
+        caller = c.caller
+        if caller is not None and caller is not prev_caller:
+            total += getsizeof(caller)
+        prev_caller = caller
+        rc = c.receiver_class
+        if rc is not None and rc is not prev_recv_class:
+            total += getsizeof(rc)
+        prev_recv_class = rc
+        rt = c.receiver_type
+        if rt is not None and rt is not prev_recv_type:
+            total += getsizeof(rt)
+        prev_recv_type = rt
+    return total
+
+
+def estimate_call_graph_bytes(graph: FileCallGraph) -> int:
+    """Cheap retained-size estimate for one :class:`FileCallGraph`.
+
+    Structural walk over the dataclass fields with measured per-object
+    constants (see above) — O(graph), no allocation, no reflection.
+    Every string is charged byte-aware through ``sys.getsizeof``
+    (wide-build/UCS-4 identifiers cost their real bytes), and the
+    per-site name fields (``caller``/``receiver_class``/
+    ``receiver_type``) are charged with adjacent-share amortization
+    (see :func:`_est_call_sites`). Validated within 2x of a
+    dedup-aware deep ``sys.getsizeof`` on pathological, normal,
+    long-caller-name, and astral-identifier fixtures; the deliberate
+    bias is mildly conservative (overestimate trips the budget early,
+    the safe direction for a memory guard).
+    """
+    getsizeof = sys.getsizeof
+    total = _EST_GRAPH_BASE_BYTES
+    for k, v in graph.imports.items():
+        total += 60 + getsizeof(k) + getsizeof(v)
+    total += _est_call_sites(graph.calls)
+    total += _est_call_sites(graph.subscript_calls)
+    for s in graph.indirection:
+        total += 20 + getsizeof(s)
+    for s in graph.getattr_targets:
+        total += 20 + getsizeof(s)
+    for cls_def in graph.classes:
+        total += (_EST_RECORD_BYTES + getsizeof(cls_def.name)
+                  + _est_strs(cls_def.bases)
+                  + sum(80 + getsizeof(m[0]) for m in cls_def.methods))
+    for d in graph.decorated_functions:
+        total += _EST_RECORD_BYTES + getsizeof(d.name)
+        total += sum(64 + _est_strs(ch) for ch in d.decorators)
+        total += sum(8 if a is None else _est_arg_facts(a)
+                     for a in d.decorator_args)
+    for ri in graph.relative_imports:
+        total += (_EST_ENTRY_BYTES + getsizeof(ri[1])
+                  + getsizeof(ri[2])
+                  + (getsizeof(ri[3]) if ri[3] else 0))
+    for name, chains in graph.dispatch_tables.items():
+        total += (_EST_ENTRY_BYTES + getsizeof(name)
+                  + sum(64 + _est_strs(ch) for ch in chains))
+    for t in graph.getattr_calls:
+        total += (_EST_ENTRY_BYTES
+                  + (getsizeof(t[1]) if t[1] else 0)
+                  + (getsizeof(t[2]) if t[2] else 0))
+    for name, co in graph.constructed_objects.items():
+        total += (_EST_RECORD_BYTES + getsizeof(name)
+                  + _est_strs(co.chain) + _est_arg_facts(co.args))
+    for src in graph.string_ref_calls:
+        total += (_EST_RECORD_BYTES + _est_strs(src.chain)
+                  + _est_arg_facts(src.args))
+        if src.caller is not None:
+            total += getsizeof(src.caller)
+    for e in graph.includes:
+        total += (_EST_RECORD_BYTES + 70 + getsizeof(e.keyword)
+                  + getsizeof(e.raw) + getsizeof(e.shape)
+                  + getsizeof(e.span_hash)
+                  + _est_strs(e.candidates)
+                  + sum(getsizeof(x) for x in (
+                      e.const_name, e.literal_tail, e.literal_stem,
+                      e.target, e.enclosing_function) if x))
+    for de in graph.defines:
+        total += (_EST_RECORD_BYTES + getsizeof(de.name)
+                  + (getsizeof(de.value) if de.value else 0)
+                  + (getsizeof(de.raw_value) if de.raw_value else 0))
+    if graph.package_name:
+        total += 20 + getsizeof(graph.package_name)
+    if graph.direct_access_guard:
+        total += 300
+    return total
+
 
 def iter_call_graph_candidates(
     target_path: Any,
@@ -7980,6 +8161,7 @@ def load_call_graphs(
     *,
     max_files: int | None = None,
     max_bytes: int = CALL_GRAPH_MAX_FILE_BYTES,
+    max_total_bytes: int = CALL_GRAPH_MAX_TOTAL_BYTES,
 ) -> dict[str, FileCallGraph]:
     """Extract per-file call graphs for a target tree.
 
@@ -8002,6 +8184,17 @@ def load_call_graphs(
             ``_CHECKLIST_MAX_FILES`` when a checklist bounds the
             candidates. An explicit int is honoured verbatim.
         max_bytes: Per-file size cap — larger sources are skipped.
+        max_total_bytes: Cumulative retained-byte budget over the
+            ESTIMATED in-memory size of the returned mapping
+            (:func:`estimate_call_graph_bytes`). ``max_bytes`` gates
+            input per file only; this bounds the retained output.
+            On exceed, retention stops (already-retained graphs are
+            never dropped; later candidates are skipped and counted)
+            and one warning names the top-offender file. A single
+            graph estimated larger than the whole budget is refused
+            and extraction continues — dropping only the monster
+            keeps cross-function context alive for the small files
+            behind it. An explicit int is honoured verbatim.
 
     Returns:
         Mapping of file path → :class:`FileCallGraph`.  Files that
@@ -8015,9 +8208,20 @@ def load_call_graphs(
 
     graphs: dict[str, FileCallGraph] = {}
     skipped = 0
+    retained_bytes = 0
+    budget_exhausted = False
+    budget_skipped = 0
+    top_offender: tuple[str, int] | None = None
     for rel, path, decl_language in candidates:
         if len(graphs) >= max_files:
             skipped += 1
+            continue
+        if budget_exhausted:
+            # Sticky stop: once the cumulative budget is hit, later
+            # candidates are counted without being parsed — retention
+            # order stays checklist/walk order (predictable), and the
+            # parse work for graphs we would discard is not spent.
+            budget_skipped += 1
             continue
         # The checklist's language field is content-refined by the
         # inventory builder (a C++-marker .h routes to cpp, .inc
@@ -8046,10 +8250,30 @@ def load_call_graphs(
         if extractor is None:
             continue
         try:
-            graphs[rel] = extractor(content)
+            graph = extractor(content)
         except Exception:
             logger.debug("call-graph extraction failed for %s", rel,
                          exc_info=True)
+            continue
+        estimated = estimate_call_graph_bytes(graph)
+        if top_offender is None or estimated > top_offender[1]:
+            top_offender = (rel, estimated)
+        if estimated > max_total_bytes:
+            # A single graph larger than the WHOLE budget can never
+            # fit: refuse it and keep extracting — dropping only the
+            # monster preserves cross-function context for every
+            # small file behind it (measured: an input-cap call-dense
+            # file retains ~53 MiB while a normal file retains
+            # ~15-36 KiB, so the trade is one degenerate file's
+            # context against thousands of ordinary files').
+            budget_skipped += 1
+            continue
+        if retained_bytes + estimated > max_total_bytes:
+            budget_exhausted = True
+            budget_skipped += 1
+            continue
+        graphs[rel] = graph
+        retained_bytes += estimated
     if skipped:
         # Hitting the cap means cross-function context is INCOMPLETE
         # for every consumer of this mapping — loud, not info-level.
@@ -8068,6 +8292,22 @@ def load_call_graphs(
             "pass the run checklist to bound extraction to in-scope "
             "files",
         )
+    if budget_skipped:
+        # Hitting the budget means cross-function context is
+        # INCOMPLETE for every consumer of this mapping — loud, not
+        # info-level, and it names the pathological file: max_bytes
+        # already gated input size, so the offender is call-DENSE and
+        # the operator cannot find it by looking at file sizes.
+        top_rel, top_est = top_offender if top_offender else ("?", 0)
+        logger.warning(
+            "load_call_graphs: retained-byte budget (%d bytes) "
+            "reached — %d candidate(s) not retained; cross-function "
+            "detectors run with partial call-graph context "
+            "(retained ~%d bytes across %d graphs; top offender "
+            "%r ~%d bytes)",
+            max_total_bytes, budget_skipped, retained_bytes,
+            len(graphs), top_rel, top_est,
+        )
     return graphs
 
 
@@ -8085,8 +8325,10 @@ __all__ = [
     "INDIRECTION_IMPORTLIB",
     "INDIRECTION_REFLECT",
     "INDIRECTION_WILDCARD_IMPORT",
+    "CALL_GRAPH_MAX_TOTAL_BYTES",
     "CallSite",
     "FileCallGraph",
+    "estimate_call_graph_bytes",
     "extract_call_graph_c",
     "extract_call_graph_cpp",
     "extract_call_graph_csharp",
