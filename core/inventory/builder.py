@@ -24,7 +24,7 @@ from core.build.macro_config import extract_build_tus, extract_macro_config
 from core.build.rust_modules import extract_rust_crate_modules
 from core.config import RaptorConfig
 from core.hash import sha256_bytes, sha256_string
-from core.json import load_json, save_json
+from core.json import save_json
 
 from .build_membership import (
     crate_module_excluded,
@@ -818,7 +818,13 @@ def build_inventory(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     checklist_file = output_path / 'checklist.json'
-    old_inventory = load_json(checklist_file)
+    # Accessor read (not a raw load_json): the prior inventory may be
+    # stored in the sharded checklist/ layout, and the stat/sha
+    # carry-forward below must keep working against it. read_checklist
+    # returns {} for absent — normalise to None so the "no previous
+    # inventory" arms below stay on their historical path.
+    from core.inventory import read_checklist
+    old_inventory = read_checklist(output_path) or None
 
     # Parse-affecting configuration fingerprint. The default cache dir
     # folds this into its KEY, but an explicit ``output_dir`` (project
