@@ -4576,6 +4576,24 @@ def _reviewable_item_count(
     return count
 
 
+def _call_edges_need_bootstrap(context_map: dict[str, Any]) -> bool:
+    """True when the audit should build call edges in memory.
+
+    Two shapes qualify: the map was never enriched (``call_edges``
+    absent) OR the size-budget degradation shed the array (empty list
+    plus the ``call_edges_shed`` marker — exactly the very-large
+    targets where reachability needs the edges most). An empty list
+    WITHOUT the marker means the enricher ran and genuinely found no
+    edges — re-running would find none again. The bootstrap is
+    in-memory only: the on-disk map is not re-saved, so an over-budget
+    artifact is not re-inflated.
+    """
+    if "call_edges" not in context_map:
+        return True
+    return (context_map.get("call_edges") == []
+            and "call_edges_shed" in context_map)
+
+
 def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
                         presweep_future=None, presweep_activity=None,
                         presweep_abort=None, cost_ledger=None):
@@ -4697,7 +4715,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         context_map = _try_understand_bridge(config)
     if context_map is None:
         context_map = {}
-    if "call_edges" not in context_map and not binary_mode:
+    if _call_edges_need_bootstrap(context_map) and not binary_mode:
         from core.orchestration.context_map_callgraph import enrich_with_call_edges
 
         edge_count = enrich_with_call_edges(

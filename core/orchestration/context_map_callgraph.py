@@ -235,8 +235,14 @@ def enrich_with_call_edges(
     # precondition reachability walk) degrade to inconclusive rather
     # than reading a capped edge list as proof of unreachability.
     # Cleared on rebuild (idempotent overwrite) so a stale flag never
-    # outlives the edge set it described.
+    # outlives the edge set it described. Same for the size-budget
+    # shed marker (`call_edges_shed`, core.artifacts.context_map_budget):
+    # a rebuild replaces the shed payload, so a stale marker must not
+    # describe edges that are present again. Note the rebuild is only
+    # durable if the map now fits its size budget — a re-save of a
+    # still-over-budget map re-sheds.
     context_map.pop("call_edges_truncated", None)
+    context_map.pop("call_edges_shed", None)
     if truncated:
         context_map["call_edges_truncated"] = True
         logger.warning(

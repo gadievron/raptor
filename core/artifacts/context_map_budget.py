@@ -10,13 +10,16 @@ keep the serialized artifact under ``CONTEXT_MAP_PRODUCER_BUDGET_BYTES``
 enricher pass, provenance stamping, re-serialisation differences between
 encoders) cannot push a budget-conformant map over the read cap.
 
-Mechanically synthesized inventory entries are the dominant growth term
-on large targets: library-surface backfill emits one entry point per
-exported function, and the ast-view / forward-reachable enrichers then
-attach per-entry payloads to each. Degradation therefore sheds the
-machine-recoverable synthesized payloads first and never touches
-LLM-authored (narrative) entries — those cannot be regenerated from the
-inventory.
+Mechanically synthesized content is the dominant growth term on large
+targets, in two shapes: per-entry payloads (library-surface backfill
+emits one entry point per exported function, and the ast-view /
+forward-reachable enrichers attach payloads to each) and whole enricher
+indexes (the call-edge array and the sink-discovery transitive-reach
+list run to hundreds of thousands of records on very large targets).
+Degradation therefore sheds the machine-recoverable payloads first —
+per-entry trims, then whole regenerable indexes, then machine-stamped
+records — and never touches LLM-authored (narrative) entries: those
+cannot be regenerated from the inventory.
 
 Compact serialization is the FIRST budget lever, and it is lossless:
 indented serialization of a large map can exceed both the producer
@@ -62,6 +65,22 @@ _MACHINE_SINK_SOURCES = frozenset({"mechanical", "heuristic"})
 
 # Sink-carrying arrays the machine-sink cap may shrink.
 _SINK_KEYS = ("sinks", "sink_details")
+
+# Whole-payload enricher outputs that are fully machine-regenerable:
+# (key path within the map) -> the command that rebuilds the payload.
+# Unlike the stamped per-entry classes above, each of these is a single
+# mechanical index written wholesale by exactly one enricher (nothing
+# else produces these keys), so key-based shedding is provenance-exact
+# and per-entry stamping would only inflate the very payload being
+# shed. On large targets these indexes dominate map size (hundreds of
+# thousands of records), so they are the first lossy-but-regenerable
+# bulk to go. Each shed leaves a ``<key>_shed`` marker naming the
+# regeneration command, mirroring how the other steps communicate loss
+# in-band (``truncated`` flags).
+_REGENERABLE_PAYLOADS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("call_edges",), "raptor-enrich-context-map-callgraph"),
+    (("sink_discovery", "transitive_reach"), "raptor-enrich-context-map-sinks"),
+)
 
 
 def _is_synthesized(entry: Any) -> bool:
@@ -146,6 +165,62 @@ def _cap_list_entries(
     return len(removed)
 
 
+def _shed_regenerable_payloads(context_map: dict[str, Any],
+                               budget_bytes: int) -> list[str]:
+    """Shed whole machine-regenerable enricher payloads, largest first.
+
+    For each :data:`_REGENERABLE_PAYLOADS` entry present as a non-empty
+    list, replaces the list with ``[]``, leaves a ``<key>_shed`` marker
+    string beside it naming the regeneration command, and — for
+    ``call_edges`` — also sets the existing ``call_edges_truncated``
+    flag so negative-reachability consumers degrade to inconclusive
+    instead of reading the emptied edge list as unreachability.
+    Payloads shed one at a time in descending serialized size; stops
+    as soon as the map fits. Returns the applied step descriptions.
+    """
+    holders: list[tuple[dict[str, Any], str, str, int]] = []
+    for key_path, regen_cmd in _REGENERABLE_PAYLOADS:
+        holder: Any = context_map
+        for part in key_path[:-1]:
+            holder = holder.get(part) if isinstance(holder, dict) else None
+        leaf = key_path[-1]
+        if not isinstance(holder, dict):
+            continue
+        payload = holder.get(leaf)
+        if not isinstance(payload, list) or not payload:
+            continue
+        holders.append((holder, leaf, regen_cmd, _serialized_size(payload)))
+    if not holders:
+        return []
+
+    applied: list[str] = []
+    # Largest first: each shed is all-or-nothing, so taking the biggest
+    # payload minimises how many regenerable indexes are lost before
+    # the map fits.
+    holders.sort(key=lambda h: h[3], reverse=True)
+    for holder, leaf, regen_cmd, payload_size in holders:
+        if _serialized_size(context_map) <= budget_bytes:
+            break
+        n = len(holder[leaf])
+        holder[leaf] = []
+        holder[f"{leaf}_shed"] = (
+            "shed by the context-map size budget — regenerate with "
+            f"{regen_cmd} (regeneration is non-durable while the map "
+            "still exceeds its size budget: a re-save re-sheds; the "
+            "durable path is shrinking the map)"
+        )
+        if leaf == "call_edges":
+            # Same in-band loss marker the producer's own cap uses: an
+            # emptied edge list must never read as proof of
+            # unreachability.
+            holder["call_edges_truncated"] = True
+        applied.append(
+            f"shed {leaf} ({n} record(s), ~{payload_size} bytes — "
+            f"regenerate with {regen_cmd})"
+        )
+    return applied
+
+
 def _cap_machine_sinks(context_map: dict[str, Any],
                        budget_bytes: int) -> int:
     """Drop machine-generated sink entries until the map fits.
@@ -206,9 +281,16 @@ def enforce_context_map_budget(
        recoverable by re-running the ast-view enricher).
     2. Drop ``forward_reachable`` name lists on synthesized entry points
        (counts survive; ``truncated`` flags the loss).
-    3. Cap machine-generated sink entries (``source`` mechanical /
+    3. Shed whole machine-regenerable enricher payloads
+       (:data:`_REGENERABLE_PAYLOADS`: ``call_edges``,
+       ``sink_discovery.transitive_reach``), largest first — each
+       leaves a ``<key>_shed`` marker naming the regeneration command.
+       These bulk indexes go before any sink / entry RECORDS are
+       dropped: losing an index degrades enrichment (and flags itself
+       in-band), while dropping records deletes review targets.
+    4. Cap machine-generated sink entries (``source`` mechanical /
        heuristic — regenerable by re-running the sink enricher).
-    4. Cap the number of synthesized entry points themselves.
+    5. Cap the number of synthesized entry points themselves.
 
     LLM-authored entries are untouched at every step. Returns the list
     of applied degradation descriptions (empty when the map already
@@ -236,6 +318,12 @@ def enforce_context_map_budget(
             size = _serialized_size(context_map)
 
     if size > budget_bytes:
+        shed = _shed_regenerable_payloads(context_map, budget_bytes)
+        if shed:
+            applied.extend(shed)
+            size = _serialized_size(context_map)
+
+    if size > budget_bytes:
         n = _cap_machine_sinks(context_map, budget_bytes)
         if n:
             applied.append(
@@ -258,15 +346,19 @@ def enforce_context_map_budget(
         )
     if size > budget_bytes:
         # Every degradable class (synthesized entry-point payloads and
-        # entries, machine-stamped sinks) has been exhausted; whatever
-        # remains carries no machine provenance stamp and is never
-        # dropped here. Consumers bounded at the read cap may refuse
-        # the artifact; say so rather than silently shipping it.
+        # entries, machine-stamped sinks, whole regenerable enricher
+        # payloads) has been exhausted; whatever remains carries no
+        # machine provenance and is never dropped here. State the
+        # consumer consequence plainly — this is a lost-artifact
+        # condition, not an informational size note.
         logger.warning(
             "context-map size budget: still %d compact-encoded bytes "
-            "after degradation (budget %d) — remaining content carries "
-            "no machine provenance stamp (treated as LLM-authored) and "
-            "is never dropped here", size, budget_bytes,
+            "after degradation (producer budget %d) — the remaining "
+            "content is treated as LLM-authored and is never dropped "
+            "here. Past the %d-byte consumer read cap, readers refuse "
+            "the WHOLE artifact: downstream stages lose the entire map "
+            "and the audit orchestrator silently proceeds mapless.",
+            size, budget_bytes, CONTEXT_MAP_CONSUMER_MAX_BYTES,
         )
     return applied
 
