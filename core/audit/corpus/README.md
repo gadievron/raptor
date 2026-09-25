@@ -265,6 +265,39 @@ Run tokens accept any unique substring of a run id (`v4` matches
 `corpus-full-v4`). Corrupt store lines are skipped with a warning —
 one bad line never kills reads over the rest of the store.
 
+## Baseline runs before detection-affecting changes
+
+Before landing a change that can move detection results (rules,
+gates, thresholds, prompts, channel logic), freeze a baseline so the
+after-the-change delta is attributable to the change:
+
+1. **Pick the milestone measurement set** — the calibration corpus
+   (`run_corpus`, cold profile is the default) and/or the relevant
+   recall manifests (`core/recall/scripts/recall-measure run`). Use
+   the same pinned fixtures and manifests on both sides. Held-out
+   manifests keep their doctrine: a baseline run there is a
+   first-contact datapoint, never a tuning input.
+2. **Record the run's LLM traffic with the transcript recorder** —
+   `RAPTOR_LLM_TRANSCRIPT=record:<out>/llm-transcript.jsonl` (see
+   docs/llm.md) — so the run's model behaviour is frozen alongside
+   its results and pipeline-side changes can later be re-run against
+   it hermetically (`replay:` mode). Scan-profile recall runs are
+   LLM-free and need no transcript.
+3. **Freeze the artifacts**: `results.json` / `report.json`, the
+   transcript, and the run-history record, together with the
+   identity stamps that make them comparable — the pipeline tree
+   sha, `label_files_sha256`, and the profile/selection stamps in
+   the history header. Archive to a durable location (never a
+   scratch dir).
+4. **After the change lands**, re-run the same set at the same pins
+   and read the deltas through the comparison tools:
+   `recall-measure compare <base-report> <new-report>` and
+   `python3 -m core.audit.corpus.history compare <base> <new>`.
+
+The baseline is an operator action at a run boundary — record it
+before the first detection-affecting change of a series, not
+mid-series.
+
 ## Rule verification (mechanical, no LLM)
 
 `rule_eval` runs the deterministic rule inventories — the shipped
