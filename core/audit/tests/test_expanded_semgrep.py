@@ -41,6 +41,43 @@ needs_semgrep = pytest.mark.skipif(
     not HAVE_SEMGREP, reason="semgrep not installed",
 )
 
+# Lazy (probe only when a real-semgrep test actually runs — the
+# ~1s child spawn is not paid at collection) and cached (one probe
+# per session).
+_SEMGREP_RUNNABLE: bool | None = None
+
+
+def _skip_unless_semgrep_runnable() -> None:
+    """Skip unless ``semgrep`` actually RUNS in this test environment.
+
+    ``shutil.which`` only proves the entry point exists. semgrep is a
+    Python program: an environment whose ``PYTHONPATH`` shadows its
+    libraries — the CI preflight's hidden-optional-deps simulation
+    stubs ``jsonschema``, which semgrep imports at startup — crashes
+    it on launch while the PATH probe still passes, turning the E2E
+    into an environment failure instead of a skip. The E2E child
+    inherits this process's environment (``sandbox_spy`` executes the
+    tool directly), so probe by running the binary the same way; a
+    runner that cannot execute semgrep skips, never errors.
+    """
+    global _SEMGREP_RUNNABLE
+    if _SEMGREP_RUNNABLE is None:
+        try:
+            _SEMGREP_RUNNABLE = subprocess.run(
+                ["semgrep", "--version"],
+                capture_output=True,
+                timeout=120,
+                check=False,
+            ).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            _SEMGREP_RUNNABLE = False
+    if not _SEMGREP_RUNNABLE:
+        pytest.skip(
+            "semgrep is on PATH but not runnable in this environment "
+            "(its own imports fail under the active PYTHONPATH, or "
+            "the version probe crashed/timed out)",
+        )
+
 
 @pytest.fixture(autouse=True)
 def _fresh_probe_cache():
@@ -514,6 +551,7 @@ rules:
 @needs_cpp
 @needs_semgrep
 def test_e2e_real_semgrep_finds_macro_hidden_strcpy(tmp_path, sandbox_spy):
+    _skip_unless_semgrep_runnable()
     target = _write_fixture(tmp_path)
     rule = tmp_path / "rule.yaml"
     rule.write_text(_RULE_YAML)
