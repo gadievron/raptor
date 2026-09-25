@@ -1777,6 +1777,11 @@
     "kind": "literal",
     "note": "closed language-grammar keyword set (C/C++/Python/JS/Java/Go/PHP/Ruby/Rust reserved words) that must stay concrete during metavariable-ization - grammar constants, not a learned API/sink vocabulary; over-inclusion only keeps a token concrete (tighter candidate), never looser"
   },
+  "core/tp_harvest/labels.py::backlog_pointer": {
+    "count": 12,
+    "kind": "literal",
+    "note": "persistence schema keys of one disclosure-backlog pointer record - a JSON record shape, not a function-name vocabulary"
+  },
   "core/trajectories/test_store.py::base": {
     "count": 10,
     "kind": "literal"
