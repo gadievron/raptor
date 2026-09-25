@@ -230,7 +230,7 @@ def _tuning_path() -> Path:
 def _strip_json_line_comments(text: str) -> str:
     """Strip ``//`` line comments while respecting double-quoted strings."""
     lines = []
-    for line in text.split("\n"):
+    for line in text.split("\n"):  # line-model: RAPTOR-owned tuning.json, universal-newline read
         in_str = False
         i = 0
         while i < len(line):

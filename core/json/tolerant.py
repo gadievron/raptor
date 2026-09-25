@@ -341,7 +341,7 @@ def _extract_fence(text: str) -> tuple[str | None, str | None]:
     kind (a later same-delim opener line would have closed it) — so
     the whole scan is O(len(text)).
     """
-    lines = text.split("\n")
+    lines = text.split("\n")  # line-model: LLM response text; fence scan is \n-model
     n = len(lines)
     first_open: tuple[int, str] | None = None  # (line_idx, lang)
 

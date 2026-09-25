@@ -642,6 +642,8 @@ _MARKDOWN_HEADING_RE = re.compile(r'(?m)^( {0,3})(#+)')
 # preserves them byte-for-byte.
 _SETEXT_UNDERLINE_RE = re.compile(
     r'(?m)(?<=\S)([ \t]*\n {0,3})(=+|-+)([ \t]*)$'
+    # line-model: _escape_for_envelope runs first on the wrap path,
+    # so a raw \r is already the visible text \x0d before this scan
 )
 
 

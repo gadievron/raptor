@@ -314,7 +314,7 @@ def build_finding_detail(finding: dict[str, Any], index: int) -> ReportSection:
     code = finding.get("proof", {}).get("vulnerable_code") if isinstance(finding.get("proof"), dict) else None
     code = code or finding.get("code") or ""
     if code:
-        code_line = code.strip().split("\n")[0][:100]
+        code_line = code.strip().split("\n")[0][:100]  # line-model: report display slice; a snippet \r is cosmetic
         lines.append(f"| Code | `{_md_table_cell(code_line)}` |")
 
     lines.append(f"| Final Status | {_md_table_cell(get_display_status(finding))} |")

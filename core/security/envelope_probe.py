@@ -108,7 +108,7 @@ def evaluate_probe_response(raw_response: str, nonce: str) -> ProbeResult:
     if "```" in text:
         last_candidate = None
         for part in text.split("```")[1::2]:
-            lines = part.strip().split("\n", 1)
+            lines = part.strip().split("\n", 1)  # line-model: LLM response fence parsing
             candidate = lines[1].strip() if len(lines) > 1 else lines[0].strip()
             try:
                 json.loads(candidate)

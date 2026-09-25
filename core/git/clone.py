@@ -588,7 +588,7 @@ def _foreign_local_config_keys(listing_nul: str) -> list:
     for entry in listing_nul.split("\0"):
         if not entry:
             continue
-        key = entry.split("\n", 1)[0].strip().lower()
+        key = entry.split("\n", 1)[0].strip().lower()  # line-model: git -z config listing; key strip()-normalised
         if not key or key in _FETCH_LOCAL_CONFIG_BENIGN:
             continue
         parts = key.split(".")

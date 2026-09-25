@@ -732,7 +732,7 @@ def _sage_recall_for_context(
     for r in results:
         conf = r.get("confidence") or 0.0
         content = r.get("content") or ""
-        first_line = content.split("\n", 1)[0][:200]
+        first_line = content.split("\n", 1)[0][:200]  # line-model: SAGE memory content, display slice
         try:
             parts.append(f"- [{conf:.0%}] {first_line}")
         except (TypeError, ValueError):
