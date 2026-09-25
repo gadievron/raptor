@@ -14,7 +14,11 @@ import sys
 from contextlib import ExitStack
 from unittest import mock
 
+import pytest
+
 from core.startup import init as startup_init
+
+pytestmark = pytest.mark.wsl
 
 
 def _linux_sandbox_mocks(stack: ExitStack, *, landlock_ok: bool) -> None:

@@ -16,6 +16,8 @@ import pytest
 from core.project.project import ProjectManager
 from core.startup import wsl
 
+pytestmark = pytest.mark.wsl
+
 
 @pytest.fixture
 def on_interop_mount():
