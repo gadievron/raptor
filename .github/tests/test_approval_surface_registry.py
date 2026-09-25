@@ -195,6 +195,13 @@ class Entry:
     note: str
     members: tuple[str, ...] = ()   # display-integrity member ids
     wire_tokens: tuple[str, ...] = field(default=())
+    # Code lane only: pinned number of prompt call sites in the file.
+    # The file-keyed adjudication alone let a SECOND input() added to
+    # an already-registered file inherit the file's adjudication
+    # unreviewed (probe-proven on the fp-ceremony surface); the count
+    # pin makes any new prompt in a registered file fail closure
+    # until the entry is re-adjudicated with the new count.
+    prompts: int | None = None
 
 
 # The 14 approval surfaces adjudicated as rendering external
@@ -220,13 +227,14 @@ MEMBER_IDS = (
     "M16-crash-fetch-host-consent",
     "M17-wsl-consent-grant-ceremony",
     "M18-wsl-floor-refusal-offer",
+    "M19-review-fp-ceremony",
 )
 
 
 REGISTRY: dict[str, Entry] = {
     # ── code lane ────────────────────────────────────────────────
     "libexec/raptor-sage-setup": Entry(
-        lane="code", status="sanitised",
+        lane="code", status="sanitised", prompts=3,
         members=("M01-sage-setup-authorize-displays",),
         note="boot-payload authorize y/N + review a/r prompts; both "
              "payload displays route through the nested "
@@ -251,7 +259,7 @@ REGISTRY: dict[str, Entry] = {
                      ".sanitise_for_terminal(s, max_len=2000)"),
     ),
     "libexec/raptor-startup-check": Entry(
-        lane="code", status="sanitised",
+        lane="code", status="sanitised", prompts=1,
         members=("M12-startup-check-mismatch-menu",),
         note="project-mismatch menu before input(); target paths are "
              "unconstrained external input, rendered escaped",
@@ -260,13 +268,13 @@ REGISTRY: dict[str, Entry] = {
                      "({shown_target})", "({shown_caller})"),
     ),
     "core/project/cli.py": Entry(
-        lane="code", status="clean",
+        lane="code", status="clean", prompts=1,
         note="destructive-command _confirm prompts render "
              "operator/machine-named content only (project names are "
              "_validate_name-constrained)",
     ),
     "libexec/raptor-wsl-consent": Entry(
-        lane="code", status="sanitised",
+        lane="code", status="sanitised", prompts=1,
         members=("M17-wsl-consent-grant-ceremony",),
         note="host-consent grant ceremony: the typed-confirmation "
              "prompt follows a display of file-derived evidence "
@@ -278,8 +286,23 @@ REGISTRY: dict[str, Entry] = {
                      "{_esc(evidence['kernel_family'])}",
                      "sanitise_for_terminal(str(text), max_len=256)"),
     ),
+    "libexec/raptor-review": Entry(
+        lane="code", status="sanitised", prompts=1,
+        members=("M19-review-fp-ceremony",),
+        note="fp --ceremony typed-consent prompt: the evidence "
+             "display renders finding-derived text (title, recorded "
+             "provenance stamp fields) through the _line sanitiser, "
+             "and the finding id joins the typed phrase only when it "
+             "matches the conservative ceremony charset (ASCII "
+             "subset, bounded — confusables refuse); the prompt "
+             "string itself is RAPTOR-authored",
+        wire_tokens=("_CEREMONY_ID_RE.fullmatch(fid)",
+                     "{_line(title, max_chars=200)}",
+                     "parents={_line(str(ctx.get(PARENTS_KEY) or ''), "
+                     "max_chars=120)}"),
+    ),
     "packages/cve_diff/cve_diff/cli/main.py": Entry(
-        lane="code", status="clean",
+        lane="code", status="clean", prompts=1,
         note="budget-extension typer.confirm; the rendered reason is "
              "an anchored-alternation regex extraction "
              "(_BUDGET_REASON_RE), never free error text",
@@ -549,18 +572,37 @@ def _may_carry_python_prompt(text: str) -> bool:
     return _PY_PROMPT_MENTION.search(text) is not None
 
 
-def _python_prompts(tree: ast.AST) -> bool:
+def _python_prompt_count(tree: ast.AST) -> int:
+    count = 0
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         fn = node.func
         if isinstance(fn, ast.Name) and fn.id in ("input", "confirm"):
-            return True
-        if (isinstance(fn, ast.Attribute) and fn.attr == "confirm"
+            count += 1
+        elif (isinstance(fn, ast.Attribute) and fn.attr == "confirm"
                 and isinstance(fn.value, ast.Name)
                 and fn.value.id in _CONFIRM_OWNERS):
-            return True
-    return False
+            count += 1
+    return count
+
+
+def _python_prompts(tree: ast.AST) -> bool:
+    return _python_prompt_count(tree) > 0
+
+
+def _prompt_call_count(path: Path) -> int:
+    """Prompt call sites in *path*, per the enumeration's own
+    detectors: AST ``input()``/``confirm()`` calls for Python,
+    prompting ``read`` lines for bash (the ``SyntaxError`` branch —
+    same convention as :func:`enumerate_surfaces`)."""
+    text = path.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return sum(
+            1 for ln in text.splitlines() if _bash_read_has_prompt(ln))
+    return _python_prompt_count(tree)
 
 
 def enumerate_surfaces(full: bool = False) -> set[str]:
@@ -769,6 +811,30 @@ class TestApprovalSurfaceRegistry(unittest.TestCase):
                     f"{token!r} is gone — the sanitiser call was "
                     "removed or renamed; re-adjudicate",
                 )
+
+    def test_code_lane_prompt_counts_pinned(self):
+        """File-keyed adjudication alone lets a SECOND prompt added to
+        an already-registered file inherit the file's adjudication
+        unreviewed (probe-proven on the fp-ceremony surface). Every
+        code-lane entry pins its prompt-site count, so a new consent
+        surface in a registered file fails closure until the entry is
+        re-adjudicated with the new count (update ``prompts=`` and the
+        note in the same reviewed change)."""
+        problems = []
+        for rel, entry in REGISTRY.items():
+            if entry.lane != "code":
+                continue
+            if entry.prompts is None:
+                problems.append(
+                    f"{rel}: code-lane entry without a prompts= pin")
+                continue
+            actual = _prompt_call_count(REPO_ROOT / rel)
+            if actual != entry.prompts:
+                problems.append(
+                    f"{rel}: {actual} prompt site(s) found, "
+                    f"{entry.prompts} adjudicated — re-adjudicate the "
+                    "entry for the new/removed surface")
+        self.assertEqual(problems, [], "\n".join(problems))
 
     def test_instruction_member_rows_pin_doctrine_wording(self):
         """Mirror of the sanitised-lane tripwire for the instruction
