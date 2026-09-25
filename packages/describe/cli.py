@@ -173,33 +173,56 @@ def _resolve_archive(
 def _find_cached_extraction(
     archive_path: Path, safe_cache_name_fn,
 ) -> Path | None:
-    """Return the cached extraction dir for ``archive_path``
-    under the active project's ``_sources/<name>-<sha>/``, or
-    None on no active project / no cache hit / snapshot
-    failure.
+    """Return a cached extraction dir for ``archive_path``, or None
+    on no cache hit / snapshot failure.
 
-    Mirrors ``raptor.py:_unpack_archive_target``'s cache
-    layout: ``<project_output_dir>/_sources/<safe-name>-<sha>``.
+    Mirrors ``raptor.py:_unpack_archive_target``'s cache layout —
+    ``<out_dir.parent>/_sources/<safe-name>-<sha>`` — which lands in
+    two places depending on how the producing run was placed:
+
+    * ``<project_output_dir>/_sources/`` for project runs (probed
+      when a project is active), and
+    * ``<out root>/_sources/`` for standalone runs (``out/`` under
+      the RAPTOR dir, or RAPTOR_OUT_DIR). Pre-fix only the project
+      location was probed, so with no active project — or when the
+      extraction was produced by a projectless run — the cache was
+      re-extracted every time despite the content-addressed hit
+      sitting on disk.
+
+    The dir name embeds the archive's sha256, so a hit from either
+    location is content-bound to exactly these archive bytes.
     """
     try:
+        from core.config import RaptorConfig
         from core.run.output import _resolve_active_project
         from core.run.provenance import archive_snapshot
     except Exception:  # noqa: BLE001
         return None
 
-    active = _resolve_active_project()
-    if active is None:
-        return None
-    project_output_dir = active[0]
-
     snap = archive_snapshot(archive_path)
     if snap is None:
         return None
-
     cache_name = safe_cache_name_fn(snap["archive_name"], snap["archive_sha256"])
-    candidate = Path(project_output_dir) / "_sources" / cache_name
-    if candidate.is_dir():
-        return candidate
+
+    roots: list = []
+    try:
+        active = _resolve_active_project()
+    except Exception:  # noqa: BLE001 — cache probe is best-effort
+        active = None
+    if active is not None:
+        roots.append(Path(active[0]))
+    try:
+        roots.append(RaptorConfig.get_out_dir())
+    except Exception:  # noqa: BLE001 — cache probe is best-effort
+        pass
+
+    for root in roots:
+        candidate = root / "_sources" / cache_name
+        try:
+            if candidate.is_dir():
+                return candidate
+        except OSError:
+            continue
     return None
 
 
