@@ -44,6 +44,7 @@ class EvidenceSource(str, enum.Enum):
     DYNAMIC_FRIDA = "dynamic:frida"
     DYNAMIC_CRASH = "dynamic:crash"
     DARK_VERIFY = "mechanical:dark_verify"
+    SANWIT = "mechanical:sanwit"
     COMPILATION = "mechanical:compilation"
     COMPILER_ANALYZER = "mechanical:compiler_analyzer"
     PRECONDITION = "mechanical:precondition"
@@ -78,6 +79,10 @@ _SOURCE_CONFIDENCE: dict[EvidenceSource, Confidence] = {
     EvidenceSource.DYNAMIC_FRIDA: Confidence.HIGH,
     EvidenceSource.DYNAMIC_CRASH: Confidence.MEDIUM,
     EvidenceSource.DARK_VERIFY: Confidence.HIGH,
+    # Sanitizer-sufficiency witness receipts are executed evidence,
+    # but detection-grade by the channel's discipline (they speak to
+    # the defense, not the attack path): MEDIUM, never HIGH.
+    EvidenceSource.SANWIT: Confidence.MEDIUM,
     EvidenceSource.COMPILATION: Confidence.MEDIUM,
     EvidenceSource.COMPILER_ANALYZER: Confidence.HIGH,
     # Precondition checks are regex + context-map reachability — real
@@ -114,6 +119,12 @@ _TOOL_NAMESPACES = frozenset(VALID_EVIDENCE_TOOLS | {
     "dynamic", "frida", "dark_verify", "precondition",
     "fail_open", "consistency", "ptr_lifecycle", "lock_region",
     "resource_bounds", "release_order", "protocol_state",
+    # Sanitizer-sufficiency witness (core.audit.sanwit): every stamp
+    # it mints is detection-grade by the channel's own classifier
+    # below — the namespace is registered so its receipts are
+    # recognized pipeline stamps (aggregation-eligible), never
+    # promoted alone.
+    "sanwit",
     # Z3 path-infeasibility proof from the decorative-guard detector —
     # a real solver run, previously graded tool_backed only through
     # compute_tier's dispatched-name loophole (invisible to this
@@ -167,6 +178,11 @@ _DETECTION_CLASSIFIER_MODULES: dict[str, str] = {
     "release_order": "core.audit.release_order",
     "resource_bounds": "core.audit.resource_bounds",
     "protocol_state": "core.audit.protocol_state",
+    # Sanitizer-sufficiency witness: EVERY sanwit stamp is
+    # detection-grade (an executed breakout adjudicates the
+    # defense-insufficiency premise, not the attack path), so the
+    # channel classifier answers True for the whole namespace.
+    "sanwit": "core.audit.sanwit",
     # Bare joern reachability (joern:live / joern:pre_sweep) is
     # guard-blind and detection-role at the promotion sites — grading
     # it as sustain-capable tool evidence here let the same receipt
@@ -225,6 +241,10 @@ def _is_detection_variant(part: str) -> bool:
     # unavailable — mirrors each channel's DETECTION_VARIANT_SUFFIX
     # contract.
     if part in ("joern:live", "joern:pre_sweep", "joern:flow-encoding"):
+        return True
+    if part.startswith("sanwit:"):
+        # The whole sanwit namespace is detection-grade (mirrors
+        # core.audit.sanwit.is_detection_rule_id).
         return True
     if part.startswith("consistency:") and part.endswith("-majority"):
         return True
@@ -433,6 +453,19 @@ _RECEIPT_MAP: dict[str, tuple] = {
     "dark_verify:confirmed": (EvidenceSource.DARK_VERIFY, "confirmed by executed dark witness"),
     "dark_verify:refuted": (EvidenceSource.DARK_VERIFY, "refuted by executed dark witness"),
     "dark_verify": (EvidenceSource.DARK_VERIFY, "dark verification witness"),
+    # Sanitizer-sufficiency witness. Stamps are three-segment
+    # (``sanwit:insufficient:<context>``) and the lookup consults the
+    # exact part then the bare NAMESPACE — so the bare row below is
+    # the one that renders (two-segment rows would be dead keys).
+    "sanwit": (
+        EvidenceSource.SANWIT,
+        (
+            "sanitizer-sufficiency witness: the extracted chain was "
+            "executed against the sink context's breakout corpus "
+            "(rule id carries the verdict and context; receipts are "
+            "corpus- and context-scoped)"
+        ),
+    ),
     "compilation": (EvidenceSource.COMPILATION, "confirmed by compilation and execution"),
     "compiler": (EvidenceSource.COMPILER_ANALYZER, "confirmed by compiler static-analyzer diagnostic"),
     "critique": (EvidenceSource.PREFILTER, "confirmed by critique prefilter"),

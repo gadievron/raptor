@@ -358,6 +358,39 @@ def _coccinelle_tree_predicate(
     )
 
 
+def _sanwit_file_predicate(
+    *, language: str | None, file_path: str,
+) -> Coverage:
+    """PHP is the sanitizer witness's only modeled substrate: the
+    chain extractor and probe are PHP-specific, so dispatching against
+    any other detected language could only mint not-executable noise.
+    Unknown language fails OPEN (the channel's own extractor refuses
+    non-chains with a reasoned receipt, and the channel emits no
+    refutations for the license to matter)."""
+    if language is None:
+        return Coverage(
+            covered=None,
+            tier="language",
+            reason=(
+                "sanwit: file language undetectable for "
+                f"'{file_path}' — dispatch kept (fail-open)"
+            ),
+        )
+    if language == "php":
+        return Coverage(
+            covered=True,
+            tier="language",
+            reason="sanwit: file language 'php' is the modeled substrate",
+            evidence={"language": language},
+        )
+    return Coverage(
+        covered=False,
+        tier="language",
+        reason=f"sanwit: file language '{language}' is not php",
+        evidence={"language": language},
+    )
+
+
 # Registry of tiers the seam adjudicates. A tier absent here is
 # UNREGISTERED: the seam answers covered=None/fail-open for it — no
 # behavior change until the tier migrates with its own predicate,
@@ -385,6 +418,15 @@ _REGISTRY: dict[str, TierEntry] = {
     "coccinelle_consistency": TierEntry(
         scope=SCOPE_TREE,
         predicate=_coccinelle_tree_predicate,
+        unknown_policy=UNKNOWN_FAIL_OPEN,
+    ),
+    # Sanitizer-sufficiency witness: PHP-only substrate. The channel
+    # never emits ``refuted``, so the unknown policy is moot for
+    # licensing — registration exists for the pre-dispatch skip on
+    # provably non-PHP files (and the registration tripwire).
+    "sanwit": TierEntry(
+        scope=SCOPE_FILE,
+        predicate=_sanwit_file_predicate,
         unknown_policy=UNKNOWN_FAIL_OPEN,
     ),
 }

@@ -18242,6 +18242,29 @@ def _hypothesis_to_tool_chain(
                 chain.append({"type": "struct_field", "config": {}})
                 seen_types.add("struct_field")
 
+    # Sanitizer-sufficiency hypotheses ("escapeshellcmd does not quote
+    # argument boundaries", "htmlspecialchars without ENT_QUOTES
+    # leaves the attribute breakable"): the sanwit channel executes
+    # the extracted chain against the sink context's breakout corpus
+    # in a sandboxed interpreter. Appended — pre-existing chain order
+    # is unchanged. Language-gated at BUILD time (not just at the
+    # substrate seam): the leg's existence feeds the empty-dispatch
+    # synthesis routing, which must not change for non-PHP files.
+    if "sanwit" not in seen_types:
+        try:
+            from .sanwit import (
+                is_sanwit_hypothesis,
+                sanwit_language_permitted,
+            )
+        except ImportError:
+            pass
+        else:
+            if is_sanwit_hypothesis(hypothesis) and (
+                sanwit_language_permitted(file_path, language)
+            ):
+                chain.append({"type": "sanwit", "config": {}})
+                seen_types.add("sanwit")
+
     return chain
 
 
@@ -18994,6 +19017,26 @@ def _cwe_fallback_chain(
     else:
         if struct_field_applicable(cwe):
             chain.append({"type": "struct_field", "config": {}})
+
+    try:
+        from .sanwit import (
+            sanwit_cwe_applicable,
+            sanwit_language_permitted,
+        )
+    except ImportError:
+        pass
+    else:
+        # Sanitizer-sufficiency families (SANWIT_CWES — CWE-78/77/88
+        # shell, CWE-79/116 html): the witness executes the extracted
+        # chain against the context's breakout corpus. Gated on a
+        # NAMED family sanitizer in the hypothesis (extraction cannot
+        # anchor otherwise) AND on the file's language at build time
+        # (the leg's existence feeds empty-dispatch synthesis
+        # routing); the substrate seam re-gates at dispatch.
+        if sanwit_cwe_applicable(cwe, hypothesis) and (
+            sanwit_language_permitted(file_path, language)
+        ):
+            chain.append({"type": "sanwit", "config": {}})
 
     if cwe and not chain:
         _warn_unmapped_cwe(cwe)
@@ -21217,6 +21260,73 @@ def _run_tool_chain(
                         tier_counters, tool_type, "refuted",
                     )
 
+            elif tool_type == "sanwit":
+                from .sanwit import run_sanwit_check
+
+                sw_res = run_sanwit_check(
+                    effective_target,
+                    file_path,
+                    function_name,
+                    hypothesis,
+                    source=source or "",
+                    cwe=cwe,
+                    audit_run_dir=config.out_dir,
+                )
+                _record_channel_receipt(
+                    config, "sanwit_check", file_path, function_name,
+                    sw_res,
+                )
+                _sw_oc = _classify_sweep_outcome(sw_res)
+                if _sw_oc == "confirmed":
+                    confirmed.append(sw_res.rule_id)
+                    logger.info(
+                        "sanwit insufficient %s:%s — %s",
+                        file_path, function_name, sw_res.reason,
+                    )
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "sanwit", "confirmed",
+                        )
+                elif _sw_oc == "skipped":
+                    # Did not look (extraction refused / context not
+                    # determinable / interpreter absent): out of the
+                    # dispatch record, never the refuted counter. The
+                    # receipt above records the reason.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "sanwit", "skipped",
+                        )
+                elif _sw_oc == "error":
+                    logger.debug(
+                        "sanwit error %s:%s: %s",
+                        file_path, function_name, sw_res.reason,
+                    )
+                    if errored_types is not None:
+                        errored_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "sanwit", "errors",
+                        )
+                elif _sw_oc == "refuted" and tier_counters:
+                    # Unreachable by module contract (sanwit emits no
+                    # refutations); booked defensively so a future
+                    # variant cannot be miscounted.
+                    _increment_tier_dict(
+                        tier_counters, "sanwit", "refuted",
+                    )
+                else:
+                    # "sufficient" lands here: steer-tier receipt,
+                    # never a clean resolution.
+                    logger.info(
+                        "sanwit inconclusive %s:%s — %s",
+                        file_path, function_name, sw_res.reason,
+                    )
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "sanwit", "inconclusive",
+                        )
 
         except Exception as exc:  # noqa: BLE001
             logger.debug(
@@ -24616,10 +24726,30 @@ def _promote_suspicious_one(
     cwe = _effective_cwe(outcome, result.tier_counters)
 
     if refuting_counter:
-        if _hypothesis_to_tool_chain(
+        _rc_chain = _hypothesis_to_tool_chain(
             hypothesis, outcome.file, cwe=cwe,
             language=_inventory_language_hint(config, outcome.file),
+        )
+        if _rc_chain and all(
+            entry.get("type") == "sanwit" for entry in _rc_chain
         ):
+            # A leg counts as dispatch only when it can actually
+            # run: sanwit refuses statically (context/extraction/
+            # binding/interpreter) far more often than the other
+            # channels, and a sanwit-only chain whose prechecks fail
+            # would otherwise swallow the empty-dispatch synthesis
+            # routing this family relied on.
+            try:
+                from .sanwit import sanwit_can_adjudicate
+            except ImportError:
+                _rc_chain = []
+            else:
+                if not sanwit_can_adjudicate(
+                    config.target_path, outcome.file, hypothesis,
+                    source=source or "", cwe=cwe,
+                ):
+                    _rc_chain = []
+        if _rc_chain:
             logger.debug(
                 "sweep skipped %s:%s — LLM counter-hypothesis present",
                 outcome.file,
@@ -24748,16 +24878,12 @@ def _promote_suspicious_one(
                 ",".join(h.rule_id for h in pf.hits[:3]),
             )
 
-    chain = _hypothesis_to_tool_chain(
-        hypothesis, outcome.file, cwe=cwe,
-        language=_inventory_language_hint(config, outcome.file),
-    )
-    if not chain:
-        # No CWE dispatch entry and no cheap channel binds this
-        # hypothesis — the static dispatch table has nothing to
-        # test it with. On-demand Mode-2 synthesis generates a
-        # one-off, negatively-controlled rule instead of letting
-        # the hypothesis die untested.
+    def _route_to_synthesis() -> None:
+        # No adjudication-capable static channel binds this
+        # hypothesis — the dispatch table has nothing to test it
+        # with. On-demand Mode-2 synthesis generates a one-off,
+        # negatively-controlled rule instead of letting the
+        # hypothesis die untested.
         synth_hyp = _synthesis_hypothesis_for_cwe(outcome, cwe, hypothesis)
         if synthesis_queue is not None:
             synthesis_queue.append((i, outcome, synth_hyp, cwe, source))
@@ -24768,7 +24894,16 @@ def _promote_suspicious_one(
                 cwe, source,
                 joern_server=joern_server,
             )
+
+    chain = _hypothesis_to_tool_chain(
+        hypothesis, outcome.file, cwe=cwe,
+        language=_inventory_language_hint(config, outcome.file),
+    )
+    if not chain:
+        _route_to_synthesis()
         return None
+    _sweep_skipped: set = set()
+    _sweep_errored: set = set()
     confirmed = _run_tool_chain(
         chain,
         config=config,
@@ -24792,7 +24927,25 @@ def _promote_suspicious_one(
             )
             and not _premise_blocks_confirm(premise_h, [c])
         ),
+        skipped_types=_sweep_skipped,
+        errored_types=_sweep_errored,
     )
+    if not confirmed:
+        _chain_types = {entry.get("type") for entry in chain}
+        if _chain_types and _chain_types <= (
+            _sweep_skipped | _sweep_errored
+        ):
+            # Every leg either declined to look (substrate skip /
+            # channel not-executable) or malfunctioned — and no
+            # other leg adjudicated. An error adjudicated nothing,
+            # so a skip-or-error-only chain is the empty-dispatch
+            # case: the routing must not be swallowed by legs that
+            # never produced evidence (the channel-refusal and
+            # planted-runtime-error shapes alike). A chain where
+            # any leg actually RAN (dispatched and stayed silent)
+            # does not re-route — that silence is an adjudication.
+            _route_to_synthesis()
+            return None
 
     if confirmed:
         _synth_blocked = {

@@ -473,7 +473,7 @@
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::study-questions.md": {
-      "note": "operator-facing RENDERING of reading-list.json (the one store) written at study completion; derived and regenerable by design — production code must keep reading the JSON store, never this file"
+      "note": "operator-facing RENDERING of reading-list.json (the one store) written at study completion; derived and regenerable by design \u2014 production code must keep reading the JSON store, never this file"
     },
     "artifacts:write_only_artifact::study-report.md": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -729,6 +729,9 @@
     },
     "artifacts:orphan_reader::_summary.json": {
       "note": "written by the pinned OpenAnt child subprocess into each {step}_checkpoints dir (upstream StepCheckpoint.write_summary); RAPTOR only reads it (resume remainder assessment)"
+    },
+    "artifacts:write_only_artifact::payloads.json": {
+      "note": "sanwit witness data file: written by core/audit/sanwit and read by the generated PHP probe inside the sandbox - the reader is not Python, so the census cannot see it"
     }
   },
   "version": 1
