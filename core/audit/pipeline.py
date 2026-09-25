@@ -267,19 +267,21 @@ def _make_llm_client(opts: AuditPipelineOpts):
 
     Returns ``(client, models, primary_model)``.
     """
-    from core.llm.client import LLMClient
     from core.llm.config import LLMConfig
+    # Transcript seam: identical to LLMClient(...) with no session
+    # active.
+    from core.llm.transcript import build_llm_client
 
     models = opts.models or ["default"]
     primary_model = models[0] if models[0] != "default" else None
     max_cost = opts.max_cost_usd if opts.max_cost_usd is not None else float("inf")
 
     if primary_model:
-        client = LLMClient(pinned_model=primary_model)
+        client = build_llm_client(pinned_model=primary_model)
         client.config.max_cost_per_scan = max_cost
     else:
         llm_cfg = LLMConfig(max_cost_per_scan=max_cost)
-        client = LLMClient(config=llm_cfg)
+        client = build_llm_client(config=llm_cfg)
     _ensure_dispatcher_route(client, models, run_dir=opts.out_dir)
     return client, models, primary_model
 

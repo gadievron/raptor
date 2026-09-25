@@ -1726,7 +1726,8 @@ class TestPhase2Calibration:
                 return _Resp()
 
         monkeypatch.setattr(
-            "core.llm.client.LLMClient", lambda *a, **kw: _Client(),
+            "core.llm.transcript.build_llm_client",
+            lambda *a, **kw: _Client(),
         )
         monkeypatch.setattr(
             run_corpus, "structured_result",

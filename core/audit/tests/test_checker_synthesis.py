@@ -128,7 +128,7 @@ class _BareClient:
 class TestBuildLLMCallable:
     @pytest.mark.slow
     def test_returns_none_without_generate_structured(self):
-        with patch("core.llm.client.LLMClient", return_value=_BareClient()):
+        with patch("core.llm.transcript.build_llm_client", return_value=_BareClient()):
             assert _build_llm_callable(_StubConfig()) is None
 
     def test_returns_callable_with_generate_structured(self):
@@ -138,7 +138,7 @@ class TestBuildLLMCallable:
             def generate_structured(self, **kw):
                 return {"result": True}, {}
 
-        with patch("core.llm.client.LLMClient", return_value=_FullClient()):
+        with patch("core.llm.transcript.build_llm_client", return_value=_FullClient()):
             result = _build_llm_callable(_StubConfig())
             assert result is not None
             fn, _client = result
@@ -158,7 +158,7 @@ class TestBuildLLMCallable:
                 _CapturingClient.captured = kw
                 return {"result": True}, {}
 
-        with patch("core.llm.client.LLMClient",
+        with patch("core.llm.transcript.build_llm_client",
                    return_value=_CapturingClient()):
             fn, _client = _build_llm_callable(_StubConfig())
             out = fn("prompt", {"type": "object"}, "system")

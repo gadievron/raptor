@@ -1074,8 +1074,10 @@ def infer_spec_with_llm_sync(
 
     try:
         if client is None:
-            from core.llm.client import LLMClient
-            client = LLMClient()
+            # Transcript seam: identical to LLMClient() with no
+            # session active.
+            from core.llm.transcript import build_llm_client
+            client = build_llm_client()
         prompt, system_prompt = build_spec_prompt(
             function_name, file_path, source,
             model_id=getattr(client, "model_name", "") or "",

@@ -1826,13 +1826,16 @@ def _run_probe(
     from core.audit.context import format_context_for_prompt
     from core.audit.llm_review import _DEFAULT_SYSTEM_PROMPT, REVIEW_SCHEMA
     from core.audit.strategy import infer_strategies, primers_for_strategies
-    from core.llm.client import LLMClient
     from core.llm.concurrency import derive_max_workers, run_parallel
     from core.llm.log_quiet import quiet_noisy_loggers
+    from core.llm.transcript import build_llm_client, transcript_subject
 
     quiet_noisy_loggers()
 
-    client = LLMClient()
+    # Constructed through the transcript seam so RAPTOR_LLM_TRANSCRIPT
+    # record/replay covers the probe's calls; identical to LLMClient()
+    # when no transcript session is active.
+    client = build_llm_client()
     client.config.max_cost_per_scan = 100.0
     model_config = None
     if model:
@@ -1980,12 +1983,17 @@ def _run_probe(
         t0 = time.monotonic()
         error_reason = ""
         try:
-            response = client.generate_structured(
-                item["prompt"],
-                probe_schema,
-                system_prompt=item["system_prompt"],
-                **kwargs,
-            )
+            # transcript_subject keys the transcript record/replay
+            # entry to this label so replay matching survives the
+            # parallel workers' nondeterministic dispatch order.
+            # No-op-cheap when no transcript is active.
+            with transcript_subject(label.function_id):
+                response = client.generate_structured(
+                    item["prompt"],
+                    probe_schema,
+                    system_prompt=item["system_prompt"],
+                    **kwargs,
+                )
             result = structured_result(response, default={})
             cost = response.cost if hasattr(response, "cost") else 0.0
             cached = getattr(response, "cached", False)
@@ -3239,9 +3247,10 @@ def _run_phase2_classify(
         CALIBRATION_RULES,
         CLASSIFICATION_SCHEMA,
     )
-    from core.llm.client import LLMClient
+    from core.llm.transcript import build_llm_client, transcript_subject
 
-    client = LLMClient()
+    # Transcript seam: identical to LLMClient() with no session active.
+    client = build_llm_client()
     kwargs: dict[str, Any] = {"task_type": "audit"}
     if model:
         try:
@@ -3284,21 +3293,25 @@ def _run_phase2_classify(
             r["phase2_error"] = True
             continue
         try:
-            response = client.generate_structured(
-                prompt,
-                CLASSIFICATION_SCHEMA,
-                # Same calibrated ruleset as the in-run classifier
-                # (security_classifier._CLASSIFICATION_SYSTEM): the
-                # suppression decision this pass feeds must not be
-                # made by an uncalibrated twin of that prompt.
-                system_prompt=(
-                    "You are a security impact classifier. Given a "
-                    "verified code defect, decide whether it has security "
-                    "implications or is purely a quality issue.\n\n"
-                    + CALIBRATION_RULES
-                ),
-                **kwargs,
-            )
+            # transcript_subject keys the record/replay entry to this
+            # finding; no-op-cheap when no transcript is active.
+            with transcript_subject(fid):
+                response = client.generate_structured(
+                    prompt,
+                    CLASSIFICATION_SCHEMA,
+                    # Same calibrated ruleset as the in-run classifier
+                    # (security_classifier._CLASSIFICATION_SYSTEM): the
+                    # suppression decision this pass feeds must not be
+                    # made by an uncalibrated twin of that prompt.
+                    system_prompt=(
+                        "You are a security impact classifier. Given a "
+                        "verified code defect, decide whether it has "
+                        "security implications or is purely a quality "
+                        "issue.\n\n"
+                        + CALIBRATION_RULES
+                    ),
+                    **kwargs,
+                )
             result = structured_result(response, default={})
             cost = response.cost if hasattr(response, "cost") else 0.0
             total_cost += cost
@@ -3344,9 +3357,10 @@ def _run_phase2b_chains(
     connected quality-bug pairs.
     """
     from core.audit.chain_detector import CHAIN_SCHEMA
-    from core.llm.client import LLMClient
+    from core.llm.transcript import build_llm_client, transcript_subject
 
-    client = LLMClient()
+    # Transcript seam: identical to LLMClient() with no session active.
+    client = build_llm_client()
     kwargs: dict[str, Any] = {"task_type": "audit"}
     if model:
         try:
@@ -3401,16 +3415,21 @@ def _run_phase2b_chains(
             f"neither bug represents alone?"
         )
         try:
-            response = client.generate_structured(
-                prompt,
-                CHAIN_SCHEMA,
-                system_prompt=(
-                    "You are a security analyst. Given two verified code "
-                    "defects on the same call path, decide whether they "
-                    "compose into a security vulnerability."
-                ),
-                **kwargs,
-            )
+            # transcript_subject keys the record/replay entry to this
+            # candidate pair; no-op-cheap when no transcript is active.
+            pair_id = "+".join(sorted([a["function_id"], b["function_id"]]))
+            with transcript_subject(pair_id):
+                response = client.generate_structured(
+                    prompt,
+                    CHAIN_SCHEMA,
+                    system_prompt=(
+                        "You are a security analyst. Given two verified "
+                        "code defects on the same call path, decide "
+                        "whether they compose into a security "
+                        "vulnerability."
+                    ),
+                    **kwargs,
+                )
             result = structured_result(response, default={})
         except Exception:
             logger.warning("Chain eval failed for %s + %s",

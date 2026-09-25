@@ -129,8 +129,11 @@ def rank_gap_queue(
         from core.llm.ranking import rank_items
 
         if client is None:
-            from core.llm.client import LLMClient
-            client = LLMClient(pinned_model=model) if model else LLMClient()
+            # Transcript seam: identical to LLMClient(...) with no
+            # session active.
+            from core.llm.transcript import build_llm_client
+            client = (build_llm_client(pinned_model=model) if model
+                      else build_llm_client())
 
         out: list[dict[str, Any]] = []
         budget = head
