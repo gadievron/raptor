@@ -143,8 +143,23 @@ class RunLockHandle:
 
 #: Handles acquired by this process — referenced here so the fd (and
 #: with it the flock) provably lives exactly as long as the process,
-#: whatever the caller does with the return value.
+#: whatever the caller does with the return value. Also the authority
+#: for self-held detection (`_held_by_this_process`): process-local
+#: state a run-dir writer cannot forge, unlike the holder stamp.
 _HELD: list[RunLockHandle] = []
+
+
+def _held_by_this_process(lock_path: Path) -> bool:
+    """True when a handle registered by THIS process still holds the
+    lock at *lock_path*. Resolved-path comparison, so re-entry through
+    a different spelling of the run dir still matches (the lock file
+    itself is never a symlink — planted symlinks refuse before any
+    handle is registered)."""
+    wanted = os.path.realpath(lock_path)
+    return any(
+        handle.held and os.path.realpath(handle.lock_path) == wanted
+        for handle in _HELD
+    )
 
 
 def run_lock_path(out_dir: Path) -> Path:
@@ -378,12 +393,15 @@ def acquire_run_lock(out_dir: Path, operation: str) -> RunLockHandle:
 
     Decision table:
 
-    * flock refused → a live process holds it. If the stamp is this
-      very process (pid + starttime match ours), the lock is already
-      held here — return a no-op handle, so in-process flows (ensemble
-      passes, the validate post-pass) can never deadlock or refuse
-      against their own orchestrator. Otherwise refuse, naming the
-      holder.
+    * already held by this process (the ``_HELD`` handle registry —
+      process-local state, unlike the stamp, which is file content any
+      run-dir writer can forge) → return a no-op handle, so in-process
+      flows (ensemble passes, the validate post-pass) can never
+      deadlock or refuse against their own orchestrator — even when
+      the first acquisition's stamp write failed.
+    * flock refused → a live foreign process holds it: refuse, naming
+      the stamped holder (the stamp is diagnostics for the refusal
+      text only — it never decides self-held).
     * flock acquired, prior stamp provably dead → reclaim (one stderr
       notice): a crashed run must not brick ``resume``.
     * flock acquired, prior stamp alive → refuse: a live holder that
@@ -450,6 +468,18 @@ def acquire_run_lock(out_dir: Path, operation: str) -> RunLockHandle:
         os.close(fd)
         raise AuditRunLocked(
             _planted_artifact_message(lock_path, "not a regular file"))
+    # Self-held detection BEFORE any stamp bytes are read, from the
+    # process-local handle registry only: the stamp is forgeable file
+    # content, so "pid + starttime match ours" proves nothing — a
+    # hostile run-dir writer copying this process's identity into the
+    # stamp while a foreign process holds the flock must earn that
+    # holder's refusal, never a proceed. Covers the no-fcntl platforms
+    # and the re-entry whose first acquisition's stamp write failed.
+    if _held_by_this_process(lock_path):
+        # First acquisition's fd keeps the flock — in-process re-entry
+        # (ensemble passes, the validate post-pass) is a no-op.
+        os.close(fd)
+        return RunLockHandle(-1, lock_path)
     # O_CLOEXEC matters: the orchestrator execs tool children (semgrep,
     # codeql, the lifecycle stubs). An inherited lock fd would keep the
     # flock alive in a child after the orchestrator died — a dead
@@ -460,15 +490,6 @@ def acquire_run_lock(out_dir: Path, operation: str) -> RunLockHandle:
         except OSError:
             holder = read_holder(lock_path)
             os.close(fd)
-            own_pid = _holder_pid(holder) == os.getpid()
-            if own_pid:
-                from core.project import sessions as _sessions
-                own_start = _sessions.proc_starttime(os.getpid())
-                if (own_start is None
-                        or str(holder.get("starttime")) == own_start):
-                    # Already held by this process (first acquisition's
-                    # fd keeps the flock) — in-process re-entry is fine.
-                    return RunLockHandle(-1, lock_path)
             raise AuditRunLocked(
                 _live_holder_message(out_dir, holder), holder) from None
     # flock held (or no fcntl): adjudicate whatever stamp is behind it.
@@ -481,13 +502,10 @@ def acquire_run_lock(out_dir: Path, operation: str) -> RunLockHandle:
     if prior or stale_bytes:
         verdict, reason = holder_liveness(prior)
         if verdict == "alive":
-            if _holder_pid(prior) == os.getpid():
-                # No-fcntl in-process re-entry: the stamp is ours (the
-                # liveness check just proved pid + starttime match this
-                # very process). Same no-op-handle contract as the
-                # flock-refused self-held branch.
-                _release_fd(fd)
-                return RunLockHandle(-1, lock_path)
+            # Self-held was already ruled out from the handle registry
+            # above, so an alive stamp here — even one naming this very
+            # process — is a foreign live holder or a forged identity:
+            # the documented alive-stamp fail direction (refuse).
             _release_fd(fd)
             raise AuditRunLocked(
                 _live_holder_message(out_dir, prior), prior)
@@ -516,9 +534,13 @@ def acquire_run_lock(out_dir: Path, operation: str) -> RunLockHandle:
                 f"({describe_holder(prior)}; {reason})",
                 file=sys.stderr,
             )
-    _stamp(fd, operation)
+    # Register BEFORE stamping: the registry is the self-held
+    # authority, so it must hold the handle even when the stamp write
+    # fails (logged, not raised) — otherwise a later in-process
+    # re-entry would refuse against its own orchestrator.
     handle = RunLockHandle(fd, lock_path)
     _HELD.append(handle)
+    _stamp(fd, operation)
     return handle
 
 

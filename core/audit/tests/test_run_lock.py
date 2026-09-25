@@ -416,6 +416,102 @@ def test_in_process_reacquisition_is_a_noop(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# self-held is decided by the process-local registry, never the stamp
+# ---------------------------------------------------------------------------
+
+_FLOCK_HOLDER_SCRIPT = textwrap.dedent("""\
+    import fcntl, os, sys
+    fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    print("READY", os.getpid(), flush=True)
+    sys.stdin.read()          # exit (and release) when stdin closes
+""")
+
+
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="starttime identity needs /proc")
+def test_forged_own_identity_stamp_under_foreign_flock_refuses(tmp_path):
+    """The stamp-forgery attack: a run-dir writer copies THIS
+    process's identity (pid + starttime are world-readable) into the
+    lock file while a FOREIGN process holds the flock. Self-held must
+    come from the process-local handle registry, so the forged stamp
+    earns the foreign holder's refusal — never a proceed (two live
+    orchestrators)."""
+    from core.project import sessions
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    proc = _spawn(_FLOCK_HOLDER_SCRIPT, str(run_lock_path(run_dir)))
+    try:
+        own_start = sessions.proc_starttime(os.getpid())
+        assert own_start is not None
+        _write_stamp(
+            run_dir, pid=os.getpid(), starttime=own_start,
+            since="2026-01-01T00:00:00+00:00", **_own_identity(),
+        )
+        with pytest.raises(AuditRunLocked) as exc:
+            acquire_run_lock(run_dir, "resume")
+        assert "live audit orchestrator" in str(exc.value)
+    finally:
+        _finish(proc)
+
+
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="starttime identity needs /proc")
+def test_forged_own_identity_stamp_without_holder_fails_closed(tmp_path):
+    """A planted stamp naming this very process, with no handle
+    registered here, is a forged identity, not a self-hold: the
+    alive-stamp fail direction (refuse) applies even to 'ourselves'."""
+    from core.project import sessions
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    own_start = sessions.proc_starttime(os.getpid())
+    assert own_start is not None
+    _write_stamp(
+        run_dir, pid=os.getpid(), starttime=own_start,
+        since="2026-01-01T00:00:00+00:00", **_own_identity(),
+    )
+    with pytest.raises(AuditRunLocked) as exc:
+        acquire_run_lock(run_dir, "run")
+    assert "live audit orchestrator" in str(exc.value)
+
+
+def test_reentry_with_failed_stamp_is_a_selfheld_noop(tmp_path):
+    """In-process re-acquisition must be a no-op even when the first
+    acquisition's stamp write failed (holder reads {}) or the stamp
+    was corrupted after the fact — the registry, not the stamp,
+    carries the self-held fact."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    handle = acquire_run_lock(run_dir, "run")
+    assert handle.held
+    try:
+        for content in (b"", b"\x00 not json {"):
+            run_lock_path(run_dir).write_bytes(content)
+            again = acquire_run_lock(run_dir, "run")
+            assert not again.held              # no-op, never a refusal
+    finally:
+        handle.release()
+
+
+def test_no_fcntl_reentry_with_corrupt_stamp_is_a_selfheld_noop(
+        tmp_path, monkeypatch):
+    """The no-fcntl branch reaches the same registry-decided no-op —
+    its pre-fix spelling consulted the (forgeable) stamp too."""
+    from core.audit import run_lock as rl
+    monkeypatch.setattr(rl, "_HAS_FCNTL", False)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    handle = acquire_run_lock(run_dir, "run")
+    assert handle.held
+    try:
+        run_lock_path(run_dir).write_bytes(b"\x00 not json {")
+        again = acquire_run_lock(run_dir, "run")
+        assert not again.held
+    finally:
+        handle.release()
+
+
+# ---------------------------------------------------------------------------
 # stubs and readers never take the lock
 # ---------------------------------------------------------------------------
 
