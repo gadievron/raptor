@@ -88,9 +88,6 @@
     "artifacts:orphan_reader::graph-diff.json": {
       "note": "runtime pipeline artifact: produced by raptor-graph-query --diff CLI (stdout JSON piped to file), consumed by diagram renderer (renderer.py:292) for diff visualisation"
     },
-    "artifacts:orphan_reader::hunt-result.json": {
-      "note": "runtime pipeline artifact: produced by /understand --hunt (libexec/raptor-understand save_json), consumed by graph ingest (ingest.py:37) to seed hypothesis nodes"
-    },
     "artifacts:orphan_reader::joern-flows.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -135,9 +132,6 @@
     },
     "artifacts:orphan_reader::study-discards.json": {
       "note": "writer exists (core/concepts/study.py writes it via save_json; core/audit/orchestrator.py reads) \u2014 the artifact indexer does not resolve the substrate writer call through the path variable, so the read looks orphaned"
-    },
-    "artifacts:orphan_reader::trace-result.json": {
-      "note": "runtime pipeline artifact: produced by /understand --trace (libexec/raptor-understand save_json), consumed by graph ingest (ingest.py:37) to seed flow-trace nodes"
     },
     "artifacts:orphan_reader::trajectory-*.json": {
       "note": "salvage-file reader: the writer emits trajectory-<hex>.json via a computed name on run_id collision (_write_atomic fallback), so the literal glob has no textual writer; reader and writer are pinned together by the store round-trip tests"

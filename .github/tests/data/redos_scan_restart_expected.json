@@ -2122,7 +2122,7 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/security/report_writer_audit.py\u001f_ALLOWLIST[409]": {
+  "core/security/report_writer_audit.py\u001f_ALLOWLIST[404]": {
    "digests": [
     "c315f8693625"
    ],
@@ -2130,13 +2130,6 @@
    "verdict": "linear"
   },
   "core/security/report_writer_audit.py\u001f_ALLOWLIST[4]": {
-   "digests": [
-    "fa23f107fb50"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/security/report_writer_audit.py\u001f_ALLOWLIST[9]": {
    "digests": [
     "f382aedfd40d"
    ],
