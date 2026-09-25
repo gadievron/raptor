@@ -124,6 +124,10 @@ def target_fingerprint(repo_path: Path) -> dict[str, Any]:
     re-hashes worktree content through ``filter.<name>.clean`` commands
     configured by the (attacker-controlled) repo config — executing
     hostile code to compute a fingerprint inverts the trust boundary.
+    The fingerprint (and therefore the refusal gate) covers the HEAD
+    commit ONLY; uncommitted worktree changes are undetectable here.
+    :func:`_dirty_worktree_warning` layers a stat-only, warn-only
+    probe on top at validate time without touching this rationale.
     Non-git targets record ``{"kind": "non-git"}`` — drift there is
     UNVERIFIABLE and compares as a loud warning, never a match.
     """
@@ -142,6 +146,44 @@ def target_fingerprint(repo_path: Path) -> dict[str, Any]:
     if proc.returncode != 0 or not head:
         return {"kind": "non-git"}
     return {"kind": "git", "head": head}
+
+
+def _dirty_worktree_warning(repo_path: Path) -> str | None:
+    """Warn-only probe for uncommitted changes on a git target, or
+    ``None`` when clean/unknowable.
+
+    The refusal gate is HEAD-only by design (see
+    :func:`target_fingerprint` — plumbing that re-hashes worktree
+    content executes repo-configured clean filters, which inverts the
+    trust boundary on a hostile repo). ``ls-files -m`` compares lstat
+    data against the index without ever reading file content, so it is
+    safe here; it can over-report (a touched mtime with identical
+    content lists), which is the right failure direction for a
+    warn-only probe. Never refuses, never raises: no git, a non-git
+    target, or any probe failure returns ``None`` silently — the probe
+    only ever ADDS a warning.
+    """
+    try:
+        from core.git import get_safe_git_env, safe_git_readonly_command
+        proc = subprocess.run(
+            safe_git_readonly_command(
+                "-C", str(repo_path), "ls-files", "-m"),
+            capture_output=True, text=True, timeout=30, check=False,
+            env=get_safe_git_env(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    n = sum(1 for line in proc.stdout.splitlines() if line.strip())
+    if not n:
+        return None
+    return (
+        f"the target worktree carries uncommitted changes ({n} tracked "
+        f"file(s) differ from the index by stat) — the drift gate "
+        f"verifies the HEAD commit only, so an edited unit would adopt "
+        f"its stale prior verdict (path-keyed checkpoints). Commit (or "
+        f"stash) the changes and re-run if any modified unit matters")
 
 
 def _phase_status(ckpt_dir: Path) -> dict[str, Any]:
@@ -377,6 +419,11 @@ def validate_prior_run(
                 f"{str(current.get('head') or 'a non-git state')[:12]}. "
                 f"Resuming would adopt per-unit verdicts from a "
                 f"different tree; run a fresh scan of the current tree")
+        # HEAD matches — but the gate cannot see uncommitted edits;
+        # surface those as a warning (stat-only probe, never refuses).
+        dirty = _dirty_worktree_warning(repository)
+        if dirty:
+            warnings.append(dirty)
     else:
         warnings.append(
             "target drift is UNVERIFIABLE for this resume (the prior "

@@ -132,11 +132,16 @@ applies unchanged.
   `--max-findings`) stay per-run.
 - Detected drift REFUSES loudly (exit 2, report
   `outcome=resume_refused`): a different target path, a git target
-  whose tree changed since the prior run, or an openant-core / pin
-  change. Upstream checkpoints are path-keyed and content-blind, so
-  this validation is the only target/core drift gate a resume has;
+  whose HEAD commit changed since the prior run, or an openant-core /
+  pin change. Upstream checkpoints are path-keyed and content-blind,
+  so this validation is the only target/core drift gate a resume has;
   undetectable drift (non-git target, prior run predating fingerprint
   recording) warns loudly instead.
+- Uncommitted worktree changes are NOT detected by the refusal gate —
+  the fingerprint is HEAD-only by design (content-hashing a hostile
+  worktree would execute repo-configured filter commands). A dirty
+  worktree is surfaced as a warning at validation (stat-only probe,
+  never refuses): an edited unit would adopt its stale prior verdict.
 - **Trust:** the prior run dir is trusted as THIS installation's own
   output. Its checkpoint contents shape the resumed run's verdicts —
   upstream adopts completed checkpoints without content
