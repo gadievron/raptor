@@ -541,9 +541,18 @@ def check_sibling_negative_space(
 
     findings: list[NegativeSpaceFinding] = []
 
+    from core.audit.consistency_dimensions import _intake_capped
+
     for pg in peer_groups:
+        # Family-size ceiling at comparator intake (the
+        # consistency_dimensions.MAX_FAMILY_MEMBERS backstop): an
+        # uncapped producer must not turn one hub group into a
+        # whole-tree vote blob here either.
+        capped_siblings, intake_capped = _intake_capped(
+            list(pg.siblings),
+        )
         enriched_siblings = []
-        for sibling in pg.siblings:
+        for sibling in capped_siblings:
             sib_copy = SiblingPath(
                 label=sibling.label,
                 file=sibling.file,
@@ -603,6 +612,16 @@ def check_sibling_negative_space(
                     expected=(
                         f"{asym.majority_count}/{asym.majority_count + asym.minority_count} "
                         f"peer functions follow this convention"
+                        + (
+                            # In-band sampling marker (the intake
+                            # ceiling): the vote ran over a seeded
+                            # sample, and the receipt must never
+                            # read as the whole family.
+                            f" [vote over a seeded sample of "
+                            f"{len(capped_siblings)} of the "
+                            f"group's {len(pg.siblings)} siblings]"
+                            if intake_capped else ""
+                        )
                     ),
                     evidence=(
                         f"{sib_label} lacks {concern} check that "

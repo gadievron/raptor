@@ -112,6 +112,15 @@ def uniform_absence_records(
         siblings = list(getattr(group, "siblings", []) or [])
         if len(siblings) < min_group:
             continue
+        # Family-size ceiling: unlike the majority comparators (which
+        # vote over an unchoosable SAMPLE of an oversized family —
+        # consistency_dimensions.MAX_FAMILY_MEMBERS), an absence
+        # claim quantifies over the WHOLE family, so sampling would
+        # lie. The certain-membership layers cap at formation; a
+        # larger group here means an unbounded producer — refuse it.
+        from .consistency_dimensions import MAX_FAMILY_MEMBERS
+        if len(siblings) > MAX_FAMILY_MEMBERS:
+            continue
 
         resolved: list[tuple[Any, int, str]] = []
         unresolved = 0
