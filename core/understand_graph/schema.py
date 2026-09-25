@@ -8,7 +8,24 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+# Edge provenance tiers (the ``edges.provenance`` column). The tier is
+# attribution, not authority: a verdict-feeding consumer requires BOTH
+# ``provenance == mechanical`` AND a verifying run-bound integrity
+# token (``core.understand_graph.integrity``) before a row may feed a
+# suppression/demotion decision. ``llm`` and ``imported`` are equally
+# hint-tier; the split records who authored the claim (an LLM's stated
+# understanding vs. an unauthenticated run artifact of unknown origin,
+# which is also what pre-tier rows migrate to).
+EDGE_PROVENANCE_MECHANICAL = "mechanical"
+EDGE_PROVENANCE_LLM = "llm"
+EDGE_PROVENANCE_IMPORTED = "imported"
+EDGE_PROVENANCES = {
+    EDGE_PROVENANCE_MECHANICAL,
+    EDGE_PROVENANCE_LLM,
+    EDGE_PROVENANCE_IMPORTED,
+}
 
 NODE_KINDS = {
     "file",

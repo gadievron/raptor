@@ -6,7 +6,11 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from .schema import _like_escape, json_loads
+from .schema import (
+    EDGE_PROVENANCE_MECHANICAL,
+    _like_escape,
+    json_loads,
+)
 from .store import query_graph
 
 
@@ -694,6 +698,166 @@ def fuzz_targets(
 
     result = query_graph(db_path, _do, target_path, limit)
     return result if result is not None else []
+
+
+def verified_mechanical_call_edges(
+    db_path: Path,
+    snapshot_id: str,
+    target_path: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Verdict-feeding view of one callgraph snapshot's call edges.
+
+    THE suppression-capable read of the store's call-edge substrate:
+    only ``provenance='mechanical'`` rows whose run-bound integrity
+    token verifies (:mod:`core.understand_graph.integrity`) are
+    returned — llm/imported-tier and unverifiable rows are hint tier
+    and never appear in this view. Returns::
+
+        {"edges": [{"caller", "caller_file", "callee", "callee_file"},
+                   ...],
+         "complete": bool,      # verified rows == the snapshot's
+                                # MAC-pinned minted count
+         "total": int,          # the pinned count
+         "unverified": int}     # mechanical rows whose token failed
+
+    or ``None`` when there is NO verified lane at all: store absent,
+    snapshot missing, snapshot not a callgraph snapshot, snapshot for
+    another target (when *target_path* is given), snapshot not the
+    LATEST callgraph generation for its target (a superseded-but-
+    retained generation is forensic, never verdict-grade — a consumer
+    steered at it via an artifact-writable marker must fall to the
+    floor, and the acceptance order cannot be gamed by rewriting
+    timestamps: ``created_at`` is covered by the snapshot token, so a
+    forged-newer sibling only DROPS the lane), or the snapshot's own
+    token unverifiable. ``None`` is the caller's
+    store-absent → inconclusive floor — the store's absence asserts
+    nothing. ``complete=False`` means rows were deleted or tampered
+    (or minted under a key this install no longer holds): the edge
+    set is the same epistemic state as a truncated walk, so negative
+    conclusions must degrade to inconclusive, never to
+    false-unreachable.
+
+    Cost note: verification re-derives one HMAC per row; at the
+    10^5-10^6-row scale this lane exists for, call it once per run
+    stage and reuse the returned list.
+    """
+    from . import integrity
+
+    if not snapshot_id:
+        return None
+    if not Path(db_path).exists():
+        # query_graph degrades the same way below, but the stampers
+        # lazily create the MAC key file — a pure read of an absent
+        # store must have no side effects.
+        return None
+
+    snap_stamper = integrity.snapshot_stamper(db_path)
+    stamper = integrity.edge_stamper(db_path)
+
+    def _do(conn):
+        snap = conn.execute(
+            "SELECT * FROM snapshots WHERE id=?", (snapshot_id,),
+        ).fetchone()
+        if snap is None:
+            return None
+        keys = snap.keys()
+        if "producer" not in keys or "integrity" not in keys:
+            return None
+        if snap["producer"] != "callgraph":
+            return None
+        if target_path:
+            wanted = {str(target_path)}
+            try:
+                wanted.add(str(Path(target_path).resolve()))
+            except OSError:
+                pass
+            if snap["target_path"] not in wanted:
+                return None
+        props = json_loads(snap["props_json"])
+        edge_count = props.get("edge_count") if isinstance(props, dict) else None
+        if not isinstance(edge_count, int) or isinstance(edge_count, bool) or edge_count < 0:
+            return None
+        snap_ok = snap_stamper.verify(
+            integrity.snapshot_payload(
+                snap["id"], snap["target_path"], snap["checklist_hash"],
+                snap["producer"], edge_count, snap["created_at"],
+            ),
+            snap["integrity"],
+        )
+        if not snap_ok:
+            return None
+        # Latest-generation acceptance: only the newest callgraph
+        # snapshot for this snapshot's target is verdict-grade (same
+        # ordering the retention GC uses). A forged sibling row can
+        # displace the genuine latest, but that only drops the lane —
+        # the floor, never a verdict.
+        latest = conn.execute(
+            """
+            SELECT id FROM snapshots
+            WHERE producer='callgraph' AND target_path=?
+            ORDER BY created_at DESC, id LIMIT 1
+            """,
+            (snap["target_path"],),
+        ).fetchone()
+        if latest is None or latest["id"] != snapshot_id:
+            return None
+
+        # Distinct-payload accounting: an edge token verifies for any
+        # byte-identical payload, so a duplicated verified row must
+        # never stand in for a deleted one — completeness compares the
+        # DISTINCT verified edge set against the pinned count (the
+        # ingest dedupes, so minted count == distinct count, and a
+        # verified payload is necessarily one of the minted set: same
+        # key, domain, binding, snapshot — cardinality equality is set
+        # equality).
+        seen: set[tuple[str, str, str, str]] = set()
+        edges: list[dict[str, Any]] = []
+        unverified = 0
+        rows = conn.execute(
+            """
+            SELECT e.integrity,
+                   s.name AS caller, s.file AS caller_file,
+                   d.name AS callee, d.file AS callee_file
+            FROM edges e
+            JOIN nodes s ON s.id = e.src_id
+            JOIN nodes d ON d.id = e.dst_id
+            WHERE e.snapshot_id=? AND e.kind='CALLS' AND e.stale=0
+              AND e.provenance=?
+            """,
+            (snapshot_id, EDGE_PROVENANCE_MECHANICAL),
+        )
+        for row in rows:
+            payload = integrity.edge_payload(
+                snapshot_id,
+                row["caller_file"], row["caller"],
+                row["callee_file"], row["callee"],
+            )
+            if stamper.verify(payload, row["integrity"]):
+                key = (
+                    row["caller_file"], row["caller"],
+                    row["callee_file"], row["callee"],
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                edges.append({
+                    "caller": row["caller"],
+                    "caller_file": row["caller_file"],
+                    "callee": row["callee"],
+                    "callee_file": row["callee_file"],
+                })
+            else:
+                unverified += 1
+        return {
+            "edges": edges,
+            # A distinct-verified surplus (> pinned count) is as
+            # suspect as a shortfall — equality, not >=.
+            "complete": len(edges) == edge_count,
+            "total": edge_count,
+            "unverified": unverified,
+        }
+
+    return query_graph(db_path, _do)
 
 
 def propagate_binary_verdicts(
