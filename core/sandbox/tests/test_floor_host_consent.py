@@ -192,13 +192,19 @@ class TestChainReaderHostLeg:
     """context.resolve_untrusted_floor: flag > project > env >
     host-consent > default."""
 
+    @pytest.mark.skipif(
+        sys.platform != "linux",
+        reason="the marker is a WSL(Linux) consent surface — "
+               "context._host_consented_floor platform-gates it off "
+               "elsewhere, so the chain correctly falls to the class "
+               "default there",
+    )
     def test_host_only(self, no_env_waiver, host_consent_active):
         assert _ctx.resolve_untrusted_floor() == (
             ContainmentTier.NS_NOMOUNT, "host-consent")
         # ns-only still demands the fresh pid-ns procfs — the derived
         # contract stays armed under the marker.
-        if sys.platform == "linux":
-            assert _ctx.untrusted_fresh_procfs_required() is True
+        assert _ctx.untrusted_fresh_procfs_required() is True
 
     def test_env_beats_host(self, monkeypatch, host_consent_active):
         monkeypatch.setenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "1")
@@ -242,6 +248,14 @@ class TestChainReaderHostLeg:
 
 # ─── inertness transitions through the real marker store ─────────────
 
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="transitions through the real marker store — a WSL(Linux) "
+           "surface; off-Linux the context chain never consults the "
+           "marker (context._host_consented_floor platform gate), so "
+           "every arm here would collapse to the platform default and "
+           "prove nothing",
+)
 class TestInertnessTransitions:
     @pytest.fixture()
     def granted_wsl_host(self, tmp_path, monkeypatch, no_env_waiver):
