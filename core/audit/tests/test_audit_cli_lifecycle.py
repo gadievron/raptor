@@ -234,3 +234,40 @@ def test_surface_run_project_reaches_lifecycle_child_argv(
     ]
     assert lifecycle_starts, "cmd_run never spawned lifecycle start"
     assert _project_argv_pair(lifecycle_starts[0]) == "audit-pin-fwd-proj"
+
+
+def test_surface_invalid_project_is_one_line_error(
+    tmp_path, monkeypatch, capsys,
+):
+    # An invalid --project is a hard error by contract — and it must
+    # surface as the lifecycle stub's one-line "ERROR: ..." form with
+    # exit 1, never an uncaught ProjectArgvError traceback out of
+    # main() (the parent's sandbox-floor consent read revalidates the
+    # argv project before cmd_run runs). '../evil' fails the project
+    # name charset, so no registry is ever consulted — hermetic.
+    mod = _load_cli()
+    target = tmp_path / "target"
+    target.mkdir()
+    calls = _lifecycle_spy(monkeypatch, mod, tmp_path / "never-created")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["raptor-audit", "run", str(target), "--project", "../evil"],
+    )
+
+    from core.run.pin import set_process_project
+    try:
+        rc = mod.main()
+    finally:
+        set_process_project(None)
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    error_lines = [
+        line for line in err.splitlines() if line.startswith("ERROR:")
+    ]
+    assert len(error_lines) == 1
+    assert "--project" in error_lines[0]
+    assert "Traceback" not in err
+    # The refusal happens before any run is started: no lifecycle
+    # child may have been spawned for a run that can never be pinned.
+    assert not any("raptor-run-lifecycle" in c[0] for c in calls if c)
