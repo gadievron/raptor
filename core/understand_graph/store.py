@@ -331,6 +331,8 @@ def migrate(conn: sqlite3.Connection) -> None:
                     _migrate_2(conn)
                 if current < 3:
                     _migrate_3(conn)
+                if current < 4:
+                    _migrate_4(conn)
                 conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 conn.execute(
                     "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
@@ -602,4 +604,38 @@ def _migrate_3(conn: sqlite3.Connection) -> None:
     if "producer" not in cols:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN producer TEXT NOT NULL DEFAULT 'understand'"
+        )
+
+
+def _migrate_4(conn: sqlite3.Connection) -> None:
+    """Trust-posture columns for verdict-feeding rows.
+
+    ``edges.provenance`` records who authored the edge claim
+    (mechanical / llm / imported — vocabulary in
+    :mod:`core.understand_graph.schema`); ``edges.integrity`` and
+    ``snapshots.integrity`` hold run-bound HMAC tokens
+    (:mod:`core.understand_graph.integrity`). Rows minted before the
+    tier existed default to ``imported``: their origin is unknowable
+    after the fact, and the unknown tier must never read as
+    suppression-grade — consumers that suppress or demote require
+    ``mechanical`` provenance AND a verifying token, so legacy rows
+    land in the hint tier (the safe direction, mirroring the journal
+    MAC's unstamped-tier compromise).
+    """
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(edges)").fetchall()}
+    if "provenance" not in cols:
+        conn.execute(
+            "ALTER TABLE edges ADD COLUMN provenance TEXT NOT NULL DEFAULT 'imported'"
+        )
+    if "integrity" not in cols:
+        conn.execute(
+            "ALTER TABLE edges ADD COLUMN integrity TEXT NOT NULL DEFAULT ''"
+        )
+    snap_cols = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()
+    }
+    if "integrity" not in snap_cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN integrity TEXT NOT NULL DEFAULT ''"
         )

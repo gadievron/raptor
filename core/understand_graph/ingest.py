@@ -27,6 +27,7 @@ def load_json(path, **kwargs):
 
 
 from .schema import (
+    EDGE_PROVENANCE_LLM,
     content_hash,
     function_ref,
     json_dumps,
@@ -189,20 +190,30 @@ def _upsert_node(conn, snapshot_id: str, kind: str, key: str, props: dict[str, A
     return node_id
 
 
-def _upsert_edge(conn, snapshot_id: str, kind: str, src_id: str, dst_id: str, *, confidence: str = "", evidence: Any = None, props: Any = None) -> str:
+def _upsert_edge(conn, snapshot_id: str, kind: str, src_id: str, dst_id: str, *, confidence: str = "", evidence: Any = None, props: Any = None, provenance: str = EDGE_PROVENANCE_LLM) -> str:
+    """Upsert one edge row.
+
+    ``provenance`` defaults to ``llm``: the in-place upsert lanes
+    ingest run artifacts whose reachability claims are LLM-authored
+    (/understand output and its derivatives). Mechanical provenance is
+    opt-in per call site and grants nothing by itself — verdict-feeding
+    consumers additionally require a verifying integrity token, which
+    only the batched call-edge lane mints.
+    """
     edge_id = stable_edge_id(kind, src_id, dst_id, evidence or props or "")
     conn.execute(
         """
-        INSERT INTO edges (id, src_id, dst_id, kind, confidence, snapshot_id, evidence_json, props_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO edges (id, src_id, dst_id, kind, confidence, snapshot_id, evidence_json, props_json, provenance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             confidence=excluded.confidence,
             snapshot_id=excluded.snapshot_id,
             stale=0,
             evidence_json=excluded.evidence_json,
-            props_json=excluded.props_json
+            props_json=excluded.props_json,
+            provenance=excluded.provenance
         """,
-        (edge_id, src_id, dst_id, kind, confidence, snapshot_id, json_dumps(evidence), json_dumps(props)),
+        (edge_id, src_id, dst_id, kind, confidence, snapshot_id, json_dumps(evidence), json_dumps(props), provenance),
     )
     return edge_id
 

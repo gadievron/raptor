@@ -175,8 +175,8 @@ def _write_audit_journal(run_dir: Path) -> None:
 # Schema
 # ---------------------------------------------------------------------------
 
-def test_schema_version_is_3():
-    assert SCHEMA_VERSION == 3
+def test_schema_version_is_4():
+    assert SCHEMA_VERSION == 4
 
 
 def test_content_hash_stable():
@@ -204,7 +204,7 @@ def test_v3_migration_creates_composite_index_and_producer(tmp_path):
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
     assert "producer" in cols
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 3
+    assert version == SCHEMA_VERSION
     conn.close()
 
 
