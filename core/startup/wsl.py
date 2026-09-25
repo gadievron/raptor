@@ -157,19 +157,46 @@ def wsl_advisories(landlock_ok: bool) -> list[str]:
 
     out: list[str] = []
     if not landlock_ok:
-        # Mirrors the per-spawn fail-closed message in
-        # core/sandbox/landlock.py: name BOTH remedies — a kernel
-        # with Landlock, or explicit consent to a containment floor
-        # that admits the ns-only tier.
-        out.append(
-            "WSL: stock WSL2 kernels ship without Landlock, so runs "
-            "whose containment floor requires the Landlock layer "
-            "fail closed. Use a custom kernel with Landlock enabled "
-            "(.wslconfig `kernel=` — recipe in docs/wsl.md), or "
-            "consent to a containment floor that admits the ns-only "
-            "tier (`--sandbox-floor ns-only` per run, "
-            "`/project set sandbox-floor ns-only` standing)."
-        )
+        # Host-consent posture: when the operator's standing marker
+        # (core/sandbox/host_consent.py) currently APPLIES, the
+        # refusal advisory below would be stale — runs proceed at the
+        # consented ns-only tier — so the section states the posture
+        # instead: the tier, the grant date, and the revoke/override
+        # surfaces. Never raises; a probe failure falls back to the
+        # refusal advisory (the fail-closed story stays accurate).
+        consent = None
+        try:
+            from core.sandbox.host_consent import applied_consent
+            consent = applied_consent()
+        except Exception:  # noqa: BLE001 — advisory must never break startup
+            logger.debug("host-consent posture probe failed",
+                         exc_info=True)
+        if consent is not None:
+            out.append(
+                f"WSL: untrusted floor ns-only by host consent, "
+                f"granted {consent.granted_at[:10]} — Landlock "
+                f"unavailable on this kernel. Revoke: `bin/raptor "
+                f"wsl-consent revoke`; a per-run --sandbox-floor or "
+                f"the project sandbox-floor setting overrides "
+                f"(see docs/wsl.md)."
+            )
+        else:
+            # Mirrors the per-spawn fail-closed message in
+            # core/sandbox/landlock.py: name the remedies — a kernel
+            # with Landlock, explicit consent to a containment floor
+            # that admits the ns-only tier, or the standing
+            # host-scoped consent ceremony.
+            out.append(
+                "WSL: stock WSL2 kernels ship without Landlock, so runs "
+                "whose containment floor requires the Landlock layer "
+                "fail closed. Use a custom kernel with Landlock enabled "
+                "(.wslconfig `kernel=` — recipe in docs/wsl.md), "
+                "consent to a containment floor that admits the ns-only "
+                "tier (`--sandbox-floor ns-only` per run, "
+                "`/project set sandbox-floor ns-only` standing), or "
+                "grant the standing host-scoped consent at your "
+                "terminal (`bin/raptor wsl-consent grant`, TTY-gated)."
+            )
     if shutil.which("rr"):
         out.append(
             "rr requires CPU perf counters, typically unavailable "

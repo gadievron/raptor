@@ -861,6 +861,28 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
     # operator toward a kernel anomaly when the real story is
     # "kernel lacks Landlock + the policy refuses to run without it".
     _kernel_probe_ok = check_landlock_available()
+    # WSL remedy hint, resolved in the PARENT for the same fork-safety
+    # reason as everything above (is_wsl caches a /proc read; the
+    # child must not do fresh imports or I/O). On a WSL host the
+    # fail-closed message below additionally names the standing
+    # host-scoped consent ceremony — stock WSL2 kernels are the
+    # common Landlock-less shape, and the generic remedies alone send
+    # WSL operators kernel-building when a documented consent path
+    # exists (docs/wsl.md covers both).
+    _wsl_consent_hint = ""
+    if not _kernel_probe_ok:
+        try:
+            from core.startup.wsl import is_wsl as _is_wsl
+            if _is_wsl():
+                _wsl_consent_hint = (
+                    " This looks like a WSL host: stock WSL2 kernels "
+                    "ship without Landlock — see docs/wsl.md for the "
+                    "kernel recipe, or grant the standing host-scoped "
+                    "ns-only consent at your terminal: "
+                    "`bin/raptor wsl-consent grant` (TTY-gated)."
+                )
+        except Exception:  # noqa: BLE001 — a hint probe must never break the builder
+            logger.debug("WSL consent-hint probe failed", exc_info=True)
 
     def _apply_landlock():
         try:
@@ -900,7 +922,7 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
                                "the requested policy. Use a kernel "
                                ">= 5.13 with Landlock enabled, or a "
                                "containment floor that admits the "
-                               "ns-only tier.")
+                               "ns-only tier." + _wsl_consent_hint)
                     raise LandlockInstallError(msg)
                 os._exit(SANDBOX_EXIT_LANDLOCK_DOWNGRADE)
 

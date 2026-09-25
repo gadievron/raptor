@@ -155,15 +155,68 @@ class TestWslAdvisories:
         with mock.patch.object(wsl, "is_wsl", return_value=False):
             assert wsl.wsl_advisories(landlock_ok=False) == []
 
-    def test_landlock_missing_names_both_remedies(self):
+    def test_landlock_missing_names_the_remedies(self):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
-             mock.patch("shutil.which", return_value=None):
+             mock.patch("shutil.which", return_value=None), \
+             mock.patch("core.sandbox.host_consent.applied_consent",
+                        return_value=None):
             lines = wsl.wsl_advisories(landlock_ok=False)
         landlock_lines = [ln for ln in lines if "Landlock" in ln]
         assert len(landlock_lines) == 1
         assert "--sandbox-floor ns-only" in landlock_lines[0]
         assert ".wslconfig" in landlock_lines[0]
         assert "docs/wsl.md" in landlock_lines[0]
+        # Third remedy: the standing host-scoped ceremony, named with
+        # its TTY gate so nobody scripts it.
+        assert "bin/raptor wsl-consent grant" in landlock_lines[0]
+        assert "TTY-gated" in landlock_lines[0]
+
+    def test_host_consent_applied_replaces_refusal_with_posture(self):
+        from core.sandbox.host_consent import HostConsent
+        consent = HostConsent(
+            floor="ns-only", granted_at="2026-09-24T10:00:00+00:00",
+            kernel_identity="5.15.167.4-microsoft-standard-WSL2")
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch("shutil.which", return_value=None), \
+             mock.patch("core.sandbox.host_consent.applied_consent",
+                        return_value=consent):
+            lines = wsl.wsl_advisories(landlock_ok=False)
+        landlock_lines = [ln for ln in lines if "Landlock" in ln]
+        assert len(landlock_lines) == 1
+        posture = landlock_lines[0]
+        assert "untrusted floor ns-only by host consent" in posture
+        assert "granted 2026-09-24" in posture
+        assert "Landlock unavailable on this kernel" in posture
+        assert "wsl-consent revoke" in posture
+        assert "--sandbox-floor" in posture
+        # The refusal advisory is REPLACED, not duplicated.
+        assert "fail closed" not in posture
+
+    def test_host_consent_probe_failure_keeps_the_refusal_advisory(
+            self):
+        def _boom():
+            raise RuntimeError("marker store exploded")
+
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch("shutil.which", return_value=None), \
+             mock.patch("core.sandbox.host_consent.applied_consent",
+                        _boom):
+            lines = wsl.wsl_advisories(landlock_ok=False)
+        landlock_lines = [ln for ln in lines if "Landlock" in ln]
+        assert len(landlock_lines) == 1
+        assert "fail closed" in landlock_lines[0]
+
+    def test_host_consent_marker_ignored_when_landlock_present(self):
+        from core.sandbox.host_consent import HostConsent
+        consent = HostConsent(
+            floor="ns-only", granted_at="2026-09-24T10:00:00+00:00",
+            kernel_identity="5.15.167.4-microsoft-standard-WSL2")
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch("shutil.which", return_value="/usr/bin/tool"), \
+             mock.patch("core.sandbox.host_consent.applied_consent",
+                        return_value=consent):
+            lines = wsl.wsl_advisories(landlock_ok=True)
+        assert not any("host consent" in ln for ln in lines)
 
     def test_landlock_present_no_landlock_line(self):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
