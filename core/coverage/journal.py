@@ -585,10 +585,20 @@ class JournalLoad:
 
 
 def compact_hint(out_dir: Path | str) -> str:
-    """The operator remedy line for an over-budget journal."""
+    """The operator remedy line for an over-budget journal.
+
+    Names BOTH compaction tiers unconditionally: whether the lossless
+    duplicate prune can free enough is not knowable at message-render
+    time (it needs the same two-pass census the compactor runs), and a
+    wedged operator whose journal holds no prunable duplicates must
+    still be told the actionable remedy.
+    """
     return (
         "compact it first: libexec/raptor-audit journal compact "
-        f"{out_dir}"
+        f"{out_dir} — and if that frees too little (no duplicate "
+        "rows to drop), add --supersede to keep only the newest "
+        "verdict per identity (the full journal is archived as "
+        "review-journal.jsonl.pre-supersede*, spend floor preserved)"
     )
 
 
