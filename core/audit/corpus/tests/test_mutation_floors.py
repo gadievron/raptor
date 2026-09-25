@@ -68,6 +68,9 @@ BASELINE_FLOORS = [
     ("cleanup.c", "job_d", "remove-pair-release",
      {"callee": "dev_close"}, True, True),
     ("flip_bound.c", "sum_d", "flip-bound", {}, False, False),
+    ("iface.c", "raw_send", "drop-slot-guard", {}, False, True),
+    ("enum_switch.c", "handle_d", "drop-case-arm",
+     {"callee": "PKT_RESET"}, False, True),
 ]
 
 

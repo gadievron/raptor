@@ -72,6 +72,8 @@ MUTATION_OPERATORS = (
     "flip-bound",
     "remove-pair-release",
     "drop-return-check",
+    "drop-slot-guard",
+    "drop-case-arm",
 )
 
 # operator -> (consistency dimension exercised, default CWE).  The
@@ -79,13 +81,18 @@ MUTATION_OPERATORS = (
 # a dropped null guard dereferences NULL (CWE-476), a swapped call
 # order is an incorrect behavior order (CWE-696), a flipped bound is
 # an off-by-one (CWE-193), a removed release leaks the resource
-# (CWE-401), a dropped return check is an unchecked return (CWE-252).
+# (CWE-401), a dropped return check is an unchecked return (CWE-252),
+# a guard dropped from one interface-slot implementation is the same
+# NULL dereference exercised through the interface parity dimension
+# (CWE-476), and a removed case arm is a missing enum case (CWE-478).
 OPERATOR_INFO: dict[str, tuple[str, str]] = {
     "drop-guard": ("guard-presence", "CWE-476"),
     "swap-order": ("ordering", "CWE-696"),
     "flip-bound": ("guard-predicate", "CWE-193"),
     "remove-pair-release": ("cleanup", "CWE-401"),
     "drop-return-check": ("return-check", "CWE-252"),
+    "drop-slot-guard": ("interface", "CWE-476"),
+    "drop-case-arm": ("enum-switch", "CWE-478"),
 }
 
 # Spec size caps: a mutation is ONE small mechanical edit; anything

@@ -426,8 +426,11 @@ ONE mechanical mutation to ONE member of a peer family the
 consistency census scores consistent at a pinned clean upstream ref.
 Operators, each mapped to a census dimension: `drop-guard`
 (guard-presence), `swap-order` (ordering), `remove-pair-release`
-(cleanup), `drop-return-check` (return-usage census), and
-`flip-bound` (guard-predicate).
+(cleanup), `drop-return-check` (return-usage census), `flip-bound`
+(guard-predicate), `drop-slot-guard` (interface — the guard drop
+exercised through an interface-slot peer family), and
+`drop-case-arm` (enum-switch completeness; `--callee` names the case
+label).
 
 **Honesty framing (binding).** Mutant numbers are mutation-operator
 regression floors conditioned on family-found — an end-to-end
