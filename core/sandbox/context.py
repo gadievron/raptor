@@ -35,6 +35,7 @@ from . import probes as _probes
 from . import errors as _errors
 from . import tiers as _tiers
 from ._env_quarantine import ENV_RESTORE_KEY as _ENV_RESTORE_KEY
+from ._pathpin import canonical_bind_path
 from . import seccomp as _seccomp
 from . import state
 
@@ -890,6 +891,80 @@ _ETC_MINIMAL_READS: tuple[str, ...] = (
     "/etc/crypto-policies",
     "/etc/localtime",
 )
+
+#: The WSL Windows-drive automount root. WSL2 serves every Windows
+#: drive under here (drvfs/9p — /mnt/c and friends), so an ambient
+#: read grant below it hands the untrusted child the whole Windows
+#: filesystem as a readable exfil surface. Constant by the same
+#: decision as the launcher's PATH-scrub classifier: a non-default
+#: ``/etc/wsl.conf`` ``[automount] root`` falls outside the deny
+#: (documented residual — nothing else keys on the root).
+_WSL_AUTOMOUNT_ROOT = "/mnt"
+
+
+def _startup_wsl():
+    """``core.startup.wsl``, or None when unimportable.
+
+    Lazy by the module's cross-package import convention; a failure
+    reads as plain Linux — the detection contract every
+    core.startup.wsl consumer keeps (its own probes already fail
+    toward False)."""
+    try:
+        from core.startup import wsl as _wsl_mod
+        return _wsl_mod
+    except Exception:  # noqa: BLE001 — detection must never break a run
+        return None
+
+
+def _under(spelling: str, root: str) -> bool:
+    """Exact-or-descendant path containment on one spelling."""
+    return spelling == root or spelling.startswith(root + "/")
+
+
+def _split_wsl_ambient_mnt_reads(
+    paths: list, exempt_roots: list,
+) -> "tuple[list, list]":
+    """``(kept, dropped)`` split for the WSL /mnt ambient-read deny.
+
+    A path is dropped when it lies at or below the Windows automount
+    root on EITHER spelling — its ``canonical_bind_path`` (the
+    lexical policy spelling: abspath + two-slash collapse, so
+    ``//mnt/c`` and ``/mnt/c/../c`` cannot walk around the deny) or
+    its ``os.path.realpath`` (the DESTINATION spelling: the bind
+    machinery inode-pins and mounts the RESOLVED source, so a symlink
+    whose destination is under /mnt would otherwise bind Windows
+    content at an off-/mnt spelling with no warning).
+
+    Exemption is destination-true and symmetric: a to-be-dropped
+    entry is kept only when its realpath lies at/below the realpath
+    of an *exempt_roots* entry (the run's target/output, the
+    operator's ``--sandbox-readable-path`` / ``--sandbox-tool-path``
+    CLI entries). Realpath BOTH sides so a symlink-spelled target
+    (``~/repo`` → ``/mnt/c/repo``) keeps its tree exempt; realpath
+    ONLY (never the entry's lexical spelling) so a symlink parked
+    inside an exempt tree cannot smuggle an out-of-tree /mnt
+    destination through its parent's exemption. Entries are returned
+    in their ORIGINAL spelling (downstream consumers normalise for
+    themselves); ``os.path.realpath`` never raises and normalises
+    nonexistent tails component-wise.
+    """
+    exempt_real = [os.path.realpath(r) for r in exempt_roots if r]
+    kept: list = []
+    dropped: list = []
+    for p in paths:
+        if not p:
+            kept.append(p)
+            continue
+        spellings = {canonical_bind_path(p), os.path.realpath(p)}
+        under_mnt = any(_under(s, _WSL_AUTOMOUNT_ROOT)
+                        for s in spellings)
+        if not under_mnt:
+            kept.append(p)
+            continue
+        real = os.path.realpath(p)
+        exempted = any(_under(real, r) for r in exempt_real)
+        (kept if exempted else dropped).append(p)
+    return kept, dropped
 
 
 @contextmanager
@@ -2736,6 +2811,64 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     effective_read_paths: list | None = None
     if restrict_reads:
         effective_read_paths = _restricted_read_allowlist()
+        # WSL /mnt default-deny (profile-assembly chokepoint). On a
+        # WSL host the automount family under /mnt IS the Windows
+        # filesystem; an AMBIENT entry there (a derived readable_paths
+        # value, a tool resolved through the Windows-interop PATH)
+        # would hand the restricted child the whole Windows drive as
+        # a readable exfil surface. Semantics, exactly:
+        #   * scope — restrict_reads=True on a detected-WSL host;
+        #     inert everywhere else (the composed list is untouched
+        #     off-WSL, and restrict_reads=False has no allowlist to
+        #     filter — its mount-ns tool binds are the trusted
+        #     posture, out of this deny's contract).
+        #   * denied — any composed read-allowlist or tool_paths
+        #     entry at/below /mnt on EITHER spelling: lexical
+        #     (canonical_bind_path) or destination (realpath — the
+        #     bind machinery mounts the resolved source, so a
+        #     symlink to /mnt is a /mnt grant). The static
+        #     system-dir defaults never name /mnt, so in practice
+        #     this catches readable_paths/tool_paths arrivals.
+        #   * exempt (explicit grants stay) — the run's target and
+        #     output trees (an operator whose TARGET lives on /mnt/c
+        #     analyses it exactly as before: the target grant, and
+        #     entries within it, are untouched; realpath both sides,
+        #     so a symlink-spelled target keeps its tree) and the
+        #     operator's --sandbox-readable-path /
+        #     --sandbox-tool-path CLI entries (already the
+        #     loudly-logged loosening surface — and the per-run
+        #     override this deny names).
+        # Both consumers of the composed grants inherit one filter
+        # result: the Landlock read allowlist below and the mount-ns
+        # extra_ro binds (built later from effective_read_paths +
+        # tool_paths) see the same post-deny lists.
+        _wsl = _startup_wsl()
+        if _wsl is not None and _wsl.is_wsl():
+            _mnt_exempt = [
+                *(p for p in (target, output) if p),
+                *(state._cli_sandbox_readable_paths or []),
+                *(state._cli_sandbox_tool_paths or []),
+            ]
+            effective_read_paths, _mnt_dropped = (
+                _split_wsl_ambient_mnt_reads(
+                    effective_read_paths, _mnt_exempt))
+            _kept_tools, _mnt_dropped_tools = (
+                _split_wsl_ambient_mnt_reads(
+                    list(tool_paths or []), _mnt_exempt))
+            if _mnt_dropped_tools:
+                tool_paths = _kept_tools
+            _mnt_dropped += _mnt_dropped_tools
+            if _mnt_dropped:
+                logger.warning(
+                    "Sandbox: WSL host — dropping ambient read "
+                    "grant(s) under %s from the restricted read "
+                    "allowlist: %s. The Windows filesystem is not "
+                    "ambiently readable to untrusted work; explicit "
+                    "grants stay (the run's target/output trees, and "
+                    "--sandbox-readable-path/--sandbox-tool-path for "
+                    "a per-run operator override). See docs/wsl.md.",
+                    _WSL_AUTOMOUNT_ROOT, _mnt_dropped,
+                )
     elif readable_paths:
         logger.warning(
             "Sandbox: readable_paths=%s ignored because restrict_reads=False "
