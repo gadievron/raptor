@@ -702,3 +702,32 @@ class TestMakefileAssignmentGrammar:
             "CFLAGS = -fstack-protector\n",
         )
         assert extract_flags(tmp_path).stack_protector_level == "weak"
+
+    def test_crlf_continuation_folds_like_lf(self, tmp_path):
+        """A CRLF checkout of a continued assignment harvests the
+        same flags as its LF twin.
+
+        The direction matters: the extractors are last-wins, so an
+        UN-folded continuation truncates the flag stream at the
+        first physical line — this twin puts the hardening flag
+        first and its disablement on the continued line, so a fold
+        failure would report STRONGER hardening than the real build
+        (suppression-grade evidence on the trust-gated lane)."""
+        body_lf = (
+            "CFLAGS = -fstack-protector-strong \\\n"
+            "\t-fno-stack-protector -D_FORTIFY_SOURCE=0\n"
+        )
+        ctxs = {}
+        for name, data in (
+            ("lf", body_lf.encode()),
+            ("crlf", body_lf.replace("\n", "\r\n").encode()),
+        ):
+            root = tmp_path / name
+            root.mkdir()
+            (root / "Makefile").write_bytes(data)
+            ctxs[name] = extract_flags(root)
+        assert ctxs["lf"] == ctxs["crlf"]
+        # Non-vacuous, in the load-bearing direction: the disabling
+        # flags on the continued line win on BOTH twins.
+        assert ctxs["crlf"].stack_protector_level == "none"
+        assert ctxs["crlf"].fortify_source_level == 0
