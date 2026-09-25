@@ -220,6 +220,59 @@ class TestValidateSpec:
         assert any("line_start" in e for e in errors)
 
 
+class TestNoOpRefusal:
+    """Laundering tripwire: a spec whose applied result hashes
+    identical to the parent pin changed nothing — a no-op label could
+    declare pristine upstream code carrying a REAL bug as synthetic.
+    Refused at all three chokepoints: generation, schema, apply."""
+
+    def _noop_spec(self):
+        # Shape-valid, delta 0, replacement identical to the original
+        # guard lines — mutated span == parent span byte-for-byte.
+        lines = CLEAN_TEXT.split("\n")
+        return {
+            "operator": "drop-guard",
+            "site_line": 5,
+            "edits": [{
+                "line_start": 5, "line_end": 6,
+                "replacement": [lines[4], lines[5]],
+            }],
+            "mutated_line_end": SPAN[1],
+            "mutated_span_sha": compute_span_sha(CLEAN_TEXT, *SPAN),
+        }
+
+    def test_builder_refuses_noop(self):
+        lines = CLEAN_TEXT.split("\n")
+        with pytest.raises(MutationError, match="no-op mutation"):
+            build_mutation_spec(
+                CLEAN_TEXT,
+                line_start=SPAN[0], line_end=SPAN[1],
+                operator="drop-guard", site_line=5,
+                edits=[(5, 6, [lines[4], lines[5]])],
+            )
+
+    def test_schema_refuses_noop(self):
+        with pytest.raises(ValueError, match="no-op mutation"):
+            _label(mutation=self._noop_spec())
+
+    def test_apply_refuses_noop(self):
+        # Apply-level belt-and-braces: a label-shaped object that
+        # bypassed schema validation still refuses at application.
+        from types import SimpleNamespace
+
+        label = SimpleNamespace(
+            function_id="src/buf.c:use_buf",
+            source=SourcePin(
+                repo="demo-repo", sha="abc123", file="src/buf.c",
+                line_start=SPAN[0], line_end=SPAN[1],
+                span_sha=compute_span_sha(CLEAN_TEXT, *SPAN),
+            ),
+            mutation=self._noop_spec(),
+        )
+        with pytest.raises(MutationError, match="no-op mutation"):
+            apply_mutation_to_text(CLEAN_TEXT, label)
+
+
 class TestApply:
     def test_apply_matches_spec(self):
         mutated = apply_mutation_to_text(CLEAN_TEXT, _label())

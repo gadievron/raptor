@@ -28,7 +28,8 @@ Spec shape (JSON object on the label)::
     }
 
 Honesty contract (binding; mirrored in the corpus README): mutant
-labels measure mutation-operator recall conditioned on family-found —
+labels are mutation-operator regression floors conditioned on
+family-found —
 an end-to-end plumbing/regression harness (family formation → census
 → thresholds → lead), NOT a real-bug recall estimate.  Dimension
 gates on mutants alone certify self-consistency only.  Mutant labels
@@ -311,6 +312,17 @@ def build_mutation_spec(
             f"mutated span {line_start}..{mutated_end} is not "
             f"hashable (empty or out of range after the edits)"
         )
+    if mutated_end == line_end \
+            and sha == compute_span_sha(text, line_start, line_end):
+        # Laundering tripwire: edits are span-contained, so an equal
+        # span hash over the unchanged range means the "mutation"
+        # changed nothing — a no-op spec could declare pristine
+        # upstream code that carries a REAL bug as synthetic.
+        raise MutationError(
+            "no-op mutation: the edits leave the pinned span "
+            "byte-identical — a synthetic label must introduce its "
+            "own defect, never re-declare upstream code"
+        )
     spec: dict[str, Any] = {
         "operator": operator,
         "site_line": site_line,
@@ -379,6 +391,17 @@ def apply_mutation_to_text(text: str, label: FunctionLabel) -> str:
             f"{label.function_id}: parent span verification failed "
             f"(pinned {pin.span_sha}, file has {parent_sha or 'none'}) "
             f"— the clean upstream span drifted; regenerate the mutant"
+        )
+    if spec["mutated_span_sha"] == pin.span_sha \
+            and spec["mutated_line_end"] == pin.line_end:
+        # Belt-and-braces twin of the label-schema no-op refusal
+        # (edits are span-contained, so equal hashes over the same
+        # range = the spec changed nothing): a no-op "mutation" would
+        # declare pristine upstream code as synthetic.
+        raise MutationError(
+            f"{label.function_id}: no-op mutation spec (mutated span "
+            f"hash equals the parent pin) — refusing to declare "
+            f"unchanged upstream code as synthetic"
         )
 
     lines = text.split("\n")  # line-model: read-modify-write — the joined result is written back to the run tree, so the split must be the byte-exact inverse of the "\n".join (split_lines trims \r / drops the trailing element and would rewrite untouched lines); span-sha checks bracket both ends
