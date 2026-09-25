@@ -224,6 +224,10 @@ class TestPostpassRecord:
             dark_count=3,
         )
         assert '3 of the findings carry audit_status "dark"' in prompt
+        # The selection deliberately carries dark rows — the child is
+        # told to opt in if it stages them via a --findings import
+        # (which otherwise routes dark rows to the witness backlog).
+        assert "--include-dark" in prompt
 
     def test_prompt_omits_dark_block_when_none(self, tmp_path):
         from core.audit.validate import _build_audit_validate_prompt
@@ -238,9 +242,12 @@ class TestPostpassRecord:
         validate_findings(result, target_path=Path("/target"),
                           out_dir=tmp_path)
         record = _postpass_record(tmp_path)
+        # --include-dark rides the follow-up: the import chokepoint
+        # routes dark rows to the witness backlog by default, and this
+        # command exists to adjudicate exactly those rows.
         assert record["followup_command"] == (
             f"/validate /target --findings "
-            f"{tmp_path / 'findings-graded.json'}"
+            f"{tmp_path / 'findings-graded.json'} --include-dark"
         )
 
 
@@ -293,7 +300,7 @@ class TestReportCompleteness:
         assert completeness["dark_awaiting"] == 4
         assert completeness["dark_followup"] == (
             f"/validate /target --findings "
-            f"{tmp_path / 'findings-graded.json'}"
+            f"{tmp_path / 'findings-graded.json'} --include-dark"
         )
         lines = "\n".join(_completeness_lines(report))
         assert "4 dark finding(s) awaiting validation" in lines
@@ -361,7 +368,7 @@ class TestReportCompleteness:
         report = generate_report(tmp_path, target_path=Path("/target"))
         assert report["completeness"]["dark_followup"] == (
             f"/validate /target --findings "
-            f"{tmp_path / 'findings-graded.json'}"
+            f"{tmp_path / 'findings-graded.json'} --include-dark"
         )
 
     def test_followup_target_from_run_metadata(self, tmp_path):
@@ -377,7 +384,7 @@ class TestReportCompleteness:
         report = generate_report(tmp_path)
         assert report["completeness"]["dark_followup"] == (
             f"/validate /home/op/targets/proj --findings "
-            f"{tmp_path / 'findings-graded.json'}"
+            f"{tmp_path / 'findings-graded.json'} --include-dark"
         )
 
     def test_no_dark_rows_no_completeness_keys(self, tmp_path):

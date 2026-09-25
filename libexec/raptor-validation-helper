@@ -468,6 +468,106 @@ def _coerce_findings_container(
     return None, None
 
 
+def _is_dark_row(finding: dict) -> bool:
+    """True when a finding row carries the audit "dark" grade — no
+    mechanical tool had a channel to adjudicate it.
+
+    Three shapes, one meaning: findings-graded.json rows carry
+    ``status="dark"``; the audit post-pass selection rows carry
+    ``audit_status="dark"`` (their ``status`` is the /validate entry
+    state); a re-import of an already-mapped container carries the
+    original grade as ``source_status="dark"``.
+    """
+    return "dark" in (
+        finding.get("audit_status"),
+        finding.get("status"),
+        finding.get("source_status"),
+    )
+
+
+#: Sites listed per witness-backlog cluster. Counts stay exact — the
+#: cap bounds only the per-site listing (imports can be arbitrarily
+#: large and the backlog is a routing artifact, not a findings store).
+_BACKLOG_SITES_PER_CLUSTER = 50
+
+
+def _route_dark_to_witness_backlog(
+    container: dict, dest_dir: Path, source_name: str,
+) -> int:
+    """Split dark rows out of stage-A candidacy into the witness backlog.
+
+    Dark items are a WITNESS-ACQUISITION backlog, not validate
+    candidates: no tool could adjudicate them during the audit, so a
+    /validate pass has nothing mechanical to stand on either — running
+    them by default spends the budget re-hypothesising (sampling them
+    is calibration, opted into with ``--include-dark``). The backlog
+    artifact clusters the routed rows per CWE class / vuln_type so the
+    operator sees WHICH classes need new witnesses. Rows keep their
+    original ids and statuses — nothing here changes a verdict, and
+    already-written artifacts are never touched (this runs only on a
+    fresh ``--findings`` import).
+
+    Returns the number of rows routed (0 = no artifact written).
+    """
+    findings = container.get("findings", [])
+    dark = [f for f in findings if isinstance(f, dict) and _is_dark_row(f)]
+    if not dark:
+        return 0
+    container["findings"] = [
+        f for f in findings
+        if not (isinstance(f, dict) and _is_dark_row(f))
+    ]
+
+    def _cluster_class(finding: dict) -> str:
+        for key in ("cwe_id", "cwe"):
+            cwe = finding.get(key)
+            if isinstance(cwe, str) and cwe.strip():
+                return cwe.strip().upper()
+        vt = finding.get("vuln_type")
+        if isinstance(vt, str) and vt.strip():
+            return vt.strip().lower()
+        return "unclassified"
+
+    def _site(finding: dict) -> dict:
+        return {
+            "id": str(finding.get("id") or "")[:120],
+            "file": str(finding.get("file")
+                        or finding.get("file_path") or "")[:300],
+            "function": str(finding.get("function") or "")[:200],
+            "line": finding.get("line"),
+            "title": str(finding.get("title")
+                         or finding.get("hypothesis") or "")[:300],
+        }
+
+    grouped: dict[str, list[dict]] = {}
+    for f in dark:
+        grouped.setdefault(_cluster_class(f), []).append(f)
+    clusters = []
+    for cls, rows in sorted(
+            grouped.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        cluster = {
+            "class": cls,
+            "count": len(rows),
+            "sites": [_site(f) for f in rows[:_BACKLOG_SITES_PER_CLUSTER]],
+        }
+        if len(rows) > _BACKLOG_SITES_PER_CLUSTER:
+            cluster["sites_truncated"] = True
+        clusters.append(cluster)
+
+    _save_artifact(dest_dir / "witness-backlog.json", {
+        "source_file": source_name,
+        "total": len(dark),
+        "note": (
+            "dark items (no tool could adjudicate) routed to the "
+            "witness-acquisition backlog — excluded from stage-A "
+            "candidacy by default; re-import with --include-dark to "
+            "validate them"
+        ),
+        "clusters": clusters,
+    })
+    return len(dark)
+
+
 def _queue_import_readjudication(
     container: dict, dest: Path, source_name: str,
 ) -> None:
@@ -527,6 +627,7 @@ def _queue_import_readjudication(
 
 def _import_findings_file(
     findings_path: str | Path, dest: Path, target: str | None = None,
+    include_dark: bool = False,
 ) -> None:
     """Import a ``--findings`` file as *dest* (findings.json).
 
@@ -534,26 +635,29 @@ def _import_findings_file(
     canonical container (see :func:`_coerce_findings_container`),
     cross-checks the incoming rows against disproofs already recorded
     in the run dir (re-adjudication queue — additive, never a verdict
-    change), normalises foreign finding ids, and persists via the
-    provenance-stamping artifact writer. An unrecognisable payload
-    preserves the legacy behaviour: the file is copied verbatim (so
-    the operator can inspect exactly what was imported) and the count
-    reports 0.
+    change), routes audit dark-grade rows to the witness backlog
+    (unless ``include_dark``), normalises foreign finding ids, and
+    persists via the provenance-stamping artifact writer. An
+    unrecognisable payload preserves the legacy behaviour: the file is
+    copied verbatim (so the operator can inspect exactly what was
+    imported) and the count reports 0.
     """
     import shutil
 
     src = Path(findings_path)
 
-    def _write_import_marker(count: int) -> None:
+    def _write_import_marker(count: int, dark_routed: int = 0) -> None:
         # Durable findings-driven marker: the container itself is
         # rebuilt by the stage-A merge, so mode detection cannot ride
         # a top-level container key. The report generator reads this
         # to suppress sweep-shaped coverage stats ("Functions checked
         # 0/N") that are meaningless for a findings-driven run.
+        # ``dark_routed`` is additive (readers tolerate extra keys).
         save_json(dest.parent / "findings-import.json", {
             "mode": "findings",
             "source_file": src.name,
             "imported": count,
+            "dark_routed": dark_routed,
         })
 
     container, shape_note = _coerce_findings_container(
@@ -572,6 +676,25 @@ def _import_findings_file(
     # normalisation rewrites ids/statuses.
     _queue_import_readjudication(container, dest, src.name)
 
+    # Dark-import policy: witness backlog by default, candidacy only
+    # on explicit opt-in. Runs before id normalisation so backlog rows
+    # keep the producer's own ids. Suspicious rows are untouched —
+    # they stay eligible under the same contract as scanner findings.
+    dark_routed = 0
+    if include_dark:
+        n_dark = sum(1 for f in container.get("findings", [])
+                     if isinstance(f, dict) and _is_dark_row(f))
+        if n_dark:
+            print(f"  {n_dark} dark item(s) included in stage-A "
+                  f"candidacy (--include-dark)")
+    else:
+        dark_routed = _route_dark_to_witness_backlog(
+            container, dest.parent, src.name)
+        if dark_routed:
+            print(f"  {dark_routed} dark item(s) routed to the witness "
+                  f"backlog — not validated; --include-dark to override "
+                  f"(witness-backlog.json)")
+
     # Normalise foreign ids at the import chokepoint so the container
     # satisfies its own schema before any stage prep validates it.
     renamed = _normalise_finding_ids(container)
@@ -584,7 +707,7 @@ def _import_findings_file(
         summary = ", ".join(f"{k}: {v}" for k, v in sorted(mapped.items()))
         print(f"  Mapped import fields — {summary}")
     _save_artifact(dest, container)
-    _write_import_marker(len(container["findings"]))
+    _write_import_marker(len(container["findings"]), dark_routed)
     print(f"Pre-existing findings: {len(container['findings'])} "
           f"from {src.name}")
 
@@ -3233,7 +3356,7 @@ def _rank_priority_targets(checklist: dict, out_dir) -> None:
 
 def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
               sanitizer_cut_mode=None, sanitizer_cut_parity_log=None,
-              findings_path=None, rank=False):
+              findings_path=None, rank=False, include_dark=False):
     """Stage 0: start lifecycle, build checklist, bridge understand output."""
     if not target:
         print("ERROR: --target is required for stage 0", file=sys.stderr)
@@ -3334,7 +3457,7 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
 
         if findings_path:
             _import_findings_file(findings_path, out_dir / "findings.json",
-                                  target=target)
+                                  target=target, include_dark=include_dark)
 
         # Durable bridge opt-out marker, rewritten to THIS
         # invocation's truth BOTH ways: later stage boundaries re-run
@@ -3565,7 +3688,7 @@ def _flag_value(args, flag):
 def main():
     args = sys.argv[1:]
     if not args or args[0] not in STAGES:
-        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--findings <file>] [--model <id>] [--no-bridge] [--rank] [--dynamic|--no-dynamic] [--build|--no-build] [--mitigation-matrix] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>] [--project <name|->]", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--findings <file>] [--include-dark] [--model <id>] [--no-bridge] [--rank] [--dynamic|--no-dynamic] [--build|--no-build] [--mitigation-matrix] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>] [--project <name|->]", file=sys.stderr)
         sys.exit(1)
 
     stage = args[0]
@@ -3614,6 +3737,9 @@ def main():
         print(f"ERROR: findings file not found: {findings_path}",
               file=sys.stderr)
         sys.exit(1)
+    # Dark-import opt-in: audit dark-grade rows in a --findings import
+    # enter stage-A candidacy instead of the witness backlog.
+    include_dark = "--include-dark" in args
 
     # Sanitizer-cut mode (review #4, PR #794). Stage 0 resolves +
     # persists it; later stages reload it. None means "not passed".
@@ -3625,7 +3751,8 @@ def main():
         prepare_0(None, target, explicit_out=explicit_out, no_bridge=no_bridge,
                   sanitizer_cut_mode=sanitizer_cut_mode,
                   sanitizer_cut_parity_log=sanitizer_cut_parity_log,
-                  findings_path=findings_path, rank=rank)
+                  findings_path=findings_path, rank=rank,
+                  include_dark=include_dark)
         return
 
     # All other stages need a workdir

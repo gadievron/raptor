@@ -38,8 +38,15 @@ any failure keeps the bridge order.
 
 This starts the run lifecycle, builds the checklist, and imports any /understand output. The last line of output is `OUTPUT_DIR=<path>` — use that path for all subsequent stages.
 
-`--findings <file>` imports pre-existing findings. Import-time behaviour to know:
+`--findings <file>` imports pre-existing findings. Two import-time behaviours to know:
 
+- **Dark rows** (audit's "no tool could adjudicate" grade) are routed to a
+  witness-acquisition backlog (`witness-backlog.json`, clustered per CWE class)
+  instead of stage-A candidacy — the import prints the honest count
+  ("N dark items routed to the witness backlog — not validated"). Pass
+  `--include-dark` to validate them anyway (calibration sampling, or an audit
+  follow-up that deliberately selected them). Suspicious rows stay eligible
+  like any scanner finding.
 - **Re-adjudication queue**: when an incoming finding matches a site this run
   dir already recorded as disproven/ruled out, the import additionally writes a
   `readjudication-queue.jsonl` record (site, new claim, matched disproof and its
@@ -196,6 +203,10 @@ stop (option 4).
 
 # Validate pre-existing scanner findings (skips Stage A discovery)
 /validate ./src --findings scanner-results.json
+
+# Include audit dark-grade rows in candidacy (default routes them to
+# the witness backlog)
+/validate ./src --findings findings-graded.json --include-dark
 
 # Validate memory corruption with binary path for Stage E
 /validate ./vuln_app --vuln-type format_string --binary ./build/vuln
