@@ -443,8 +443,9 @@ class TestFilterBuildEnvVars:
         assert admitted == {}
 
     def test_admits_detector_benign_knobs(self):
-        # The detector's own benign build knobs keep flowing (the
-        # refusal above must not widen into these).
+        # The detector's own benign build knobs keep flowing — both
+        # are declared BUILD_SYSTEMS (name, value) pairs, the only
+        # currency the deny-unknown gate accepts.
         admitted = self._filter({
             "CGO_ENABLED": "0",
             "NODE_ENV": "development",
@@ -485,37 +486,91 @@ class TestFilterBuildEnvVars:
         })
         assert admitted == {}
 
-    def test_admits_benign_build_vars(self):
-        # CFLAGS and GOFLAGS are NOT in this set: both are flags-
-        # injection members of the ecosystem env family (GOFLAGS can
-        # carry -toolexec=<cmd>, CFLAGS -fplugin=<so>), and repo build
-        # metadata is attacker-authored — the gate fails closed on
-        # them even though most repos use them benignly. The cost is
-        # a default-flags build; the alternative is exec on the
-        # traced-build lane.
-        env_vars = {
+    def test_refuses_undeclared_names_deny_unknown(self):
+        # DENY-UNKNOWN posture: names that are benign in most repos
+        # but not RAPTOR-declared constants are refused too — the gate
+        # admits declared (name, value) pairs, not reputations. Each
+        # of these was admitted by the old admit-by-default tail:
+        # NODE_ENV=production is a declared NAME with an undeclared
+        # value (pair match, not name match); JAVA_HOME and
+        # cflags_extra are undeclared names outright. The cost is nil
+        # for current producers (BUILD_SYSTEMS rows are the field's
+        # only non-empty producer); a legitimate new knob joins the
+        # table, and operator build configuration travels via the
+        # build-command setting, never env_vars.
+        assert self._filter({
             "NODE_ENV": "production",
-            # JAVA_HOME admission is sound HERE because the traced
-            # build runs inside the sandbox (repo-code exec is already
-            # assumed on that lane, and env_detect injects toolchain
-            # homes deliberately). The settings-scan lane blocks the
-            # same name via TOOLCHAIN_HOME_ENV_VARS — a future
-            # consumer of this filter OUTSIDE the sandbox must not
-            # inherit this admission silently.
             "JAVA_HOME": "/usr/lib/jvm/java-17",
-            # Case-folding must not widen the refusal into benign
-            # lookalike build knobs (CFLAGS_EXTRA is not CFLAGS).
             "cflags_extra": "-fno-omit-frame-pointer",
-        }
-        assert self._filter(env_vars) == env_vars
+        }) == {}
 
     def test_refuses_flag_injection_spellings(self):
-        # The flags-injection members, in the exact spellings the
-        # admit-direction pin above used to carry.
+        # The flags-injection members (GOFLAGS can carry
+        # -toolexec=<cmd>, CFLAGS -fplugin=<so>), in the exact
+        # spellings the pre-deny-unknown admit-direction pin used to
+        # carry.
         assert self._filter({
             "CFLAGS": "-O2",
             "GOFLAGS": "-mod=vendor",
         }) == {}
+
+    def test_declared_table_and_gate_closure(self):
+        """Table↔gate closure, the heap-constants direction: every
+        (name, value) pair declared in BUILD_SYSTEMS must pass the
+        gate — individually and jointly. Declared pairs win over the
+        blocklists BY DESIGN (a blocklist widening over a declared
+        name must not silently re-run that ecosystem's traced builds
+        on default settings — the incident this gate once caused).
+        Non-vacuous: the declared universe must stay populated."""
+        from core.build.build_detector import declared_env_constants
+
+        declared = declared_env_constants()
+        assert len(declared) >= 3, "declared universe collapsed"
+        joint = dict(declared)
+        assert self._filter(joint) == joint
+        for name, value in declared:
+            assert self._filter({name: value}) == {name: value}, (
+                f"declared constant refused: {name}={value}")
+
+    def test_declared_blocklist_intersection_is_grandfathered(self):
+        """The other direction of the closure: because declared pairs
+        WIN over the blocklists, a hostile-shaped name added to the
+        BUILD_SYSTEMS table would ride straight into traced-build
+        env. This pin freezes the declared-name/blocklist
+        intersection at its adjudicated members (the JVM heap
+        constants — ecosystem-family names whose declared VALUES are
+        benign heap bumps), so a NEW collision fails here the day it
+        lands and must be deliberately grandfathered in the same
+        reviewed change that adjudicates its value. Shrinking is
+        fine; growing is the reviewed event."""
+        from core.build.build_detector import declared_env_constants
+        from core.config import RaptorConfig
+        from core.security.credential_env import (
+            CREDENTIAL_ENV_FAMILY,
+            is_credential_redirect_shaped,
+        )
+
+        blocked_upper = {
+            name.upper()
+            for name in (
+                set(RaptorConfig.DANGEROUS_ENV_VARS)
+                | set(RaptorConfig.PROXY_ENV_VARS)
+                | CREDENTIAL_ENV_FAMILY
+            )
+        }
+        colliding = {
+            name for name, _value in declared_env_constants()
+            if (name.upper() in blocked_upper
+                or name.upper().startswith(("RAPTOR_", "_RAPTOR"))
+                or is_credential_redirect_shaped(name))
+        }
+        grandfathered = {"MAVEN_OPTS", "GRADLE_OPTS", "ANT_OPTS"}
+        assert colliding <= grandfathered, (
+            f"new declared/blocklist collision(s) {sorted(colliding - grandfathered)} "
+            "— a declared pair bypasses every blocklist tier by design, "
+            "so this name's value rides into traced-build env. "
+            "Adjudicate the value and grandfather the name here in the "
+            "same change, or pick an unblocked name.")
 
 
 class TestStagingPromote:

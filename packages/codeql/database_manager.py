@@ -49,36 +49,48 @@ logger = get_logger()
 
 
 def _filter_build_env_vars(env_vars: dict) -> dict:
-    """Admit build-system env vars past the hostile-input gate.
+    """Admit build-system env vars past the hostile-input gate:
+    DENY-UNKNOWN — exactly the (name, value) pairs RAPTOR itself
+    declares in the static ``BUILD_SYSTEMS`` table pass; every other
+    entry is refused, loudly.
 
     ``build_system.env_vars`` carries RAPTOR-CHOSEN CONSTANTS by
-    contract (the static ``BUILD_SYSTEMS`` table is the only producer
-    — this docstring previously claimed the dict was repo-authored,
-    and the gate built on that premise refused RAPTOR's own JVM heap
-    constants as hostile, so every traced maven/gradle/ant build ran
-    on the default heap). Exactly the DECLARED (name, value) pairs
-    pass; everything else is treated as hostile input, because the
-    dict is layered on top of ``get_safe_env()`` where an unblocked
-    name OVERRIDES the baseline (including the ``GIT_ENV_VARS`` pins)
-    — the gate stays load-bearing against any future producer that
-    routes repo metadata into the field. Refused:
+    contract (the static table is the only producer — this docstring
+    previously claimed the dict was repo-authored, and the gate built
+    on that premise refused RAPTOR's own JVM heap constants as
+    hostile, so every traced maven/gradle/ant build ran on the
+    default heap). The dict is layered on top of ``get_safe_env()``
+    where an unblocked name OVERRIDES the baseline (including the
+    ``GIT_ENV_VARS`` pins), so an admit-by-default tail meant any
+    future producer routing repo metadata into the field inherited a
+    per-name arms race against the blocklists; pair-exact
+    deny-unknown ends it — only the literal benign pair RAPTOR would
+    have set anyway can pass. Exotic build environments are not this
+    field's job: operator-declared build configuration travels via
+    the ``build-command`` project setting and the ``build`` trust
+    marker, never through ``env_vars``.
+
+    Declared pairs WIN over the blocklist tiers below by design —
+    that IS the heap-constants fix (three of the five declared names,
+    MAVEN_OPTS/GRADLE_OPTS/ANT_OPTS, sit in the credential-env
+    ecosystem family today; refusing them re-runs every traced JVM
+    build on the default heap). The tiers are retained purely as
+    refusal CATEGORISATION for the warning below; they cannot widen
+    admission. The guard against the table becoming a blocklist
+    bypass is review-side plus the grandfathered-intersection pin in
+    the gate's tests: a NEW declared name landing inside a blocklist
+    fails there until deliberately grandfathered.
 
     * the DANGEROUS_ENV_VARS + PROXY_ENV_VARS blocklists (LD_PRELOAD /
       BASH_ENV re-injection, proxy redirect);
     * the full credential-env family plus credential-redirect SHAPED
-      names (core/security/credential_env.py) — a repo's build
-      metadata has no legitimate reason to set a credential, a
-      credential-config pointer (``AWS_CONFIG_FILE`` →
-      ``credential_process`` exec), or an askpass-style helper;
-    * RAPTOR_*-prefixed names wholesale: repo content must never set
-      the session credential, the out-dir override, or any other
-      RAPTOR control var.
+      names (core/security/credential_env.py);
+    * RAPTOR_*-prefixed names wholesale.
 
     Membership is CASE-FOLDED: several tools that read these names
     honour lowercase spellings (npm's canonical form is
     ``npm_config_userconfig``; the proxy family has lowercase-
-    canonical variants), so an exact-case check admits the working
-    lowercase alias of a blocked name.
+    canonical variants).
     """
     blocked_upper = {
         name.upper()
@@ -91,7 +103,8 @@ def _filter_build_env_vars(env_vars: dict) -> dict:
     from core.build.build_detector import declared_env_constants
     raptor_constants = declared_env_constants()
     admitted = {}
-    refused = []
+    refused_hostile = []
+    refused_undeclared = []
     for k, v in env_vars.items():
         if (k, v) in raptor_constants:
             # RAPTOR's own declared constant — exact pair match, so a
@@ -103,14 +116,19 @@ def _filter_build_env_vars(env_vars: dict) -> dict:
         if (k_upper in blocked_upper
                 or k_upper.startswith(("RAPTOR_", "_RAPTOR"))
                 or is_credential_redirect_shaped(k)):
-            refused.append(k)
+            refused_hostile.append(k)
             continue
-        admitted[k] = v
-    if refused:
-        logger.info(
-            "build env filter: refused env vars (not RAPTOR-declared "
-            "constants): %s",
-            sorted(refused),
+        refused_undeclared.append(k)
+    if refused_hostile or refused_undeclared:
+        logger.warning(
+            "build env filter (deny-unknown): refused %d env var(s) — "
+            "hostile-shaped: %s; not a RAPTOR-declared BUILD_SYSTEMS "
+            "constant: %s. A legitimate build knob belongs in the "
+            "BUILD_SYSTEMS table (RAPTOR-chosen constants) or in the "
+            "operator's build-command setting, never in env_vars.",
+            len(refused_hostile) + len(refused_undeclared),
+            sorted(refused_hostile) or "-",
+            sorted(refused_undeclared) or "-",
         )
     return admitted
 
