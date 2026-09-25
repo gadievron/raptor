@@ -507,6 +507,20 @@ def _defend_identifier(value: Any, max_length: int = 200) -> str:
     return text
 
 
+def _defend_line(value: Any) -> str:
+    """Render a target/artifact-derived LINE NUMBER for a trusted
+    prompt region. Line numbers are the one identifier class with a
+    grammar strict enough for rejection over escaping: a genuine value
+    coerces to int and renders bare; anything else (a "line" carrying
+    prose or forged headings from a hostile artifact) renders as the
+    existing unknown-value convention ``?`` — escaping it would keep
+    hostile text in a slot every reader treats as a number."""
+    try:
+        return str(int(str(value).strip()))
+    except (TypeError, ValueError):
+        return "?"
+
+
 _BACKTICK_RUN_RE = re.compile(r"`+")
 
 
@@ -981,12 +995,22 @@ def format_context_for_prompt(
              "assumes about its inputs. Return one edge_verdicts "
              "entry per edge (clean / suspicious / finding)."),
         ]
+        # Edge records are propagation-derived (callee names and files
+        # from the target's call graph, contracts from earlier LLM
+        # reviews) — render through the identifier defence like every
+        # sibling section; call_line is a number or it is nothing.
         for e in ctx["edge_contracts"][:20]:
-            line = e.get("call_line", "?")
-            row = (f"- `{e.get('callee')}` "
-                   f"({e.get('callee_file')}) called at line {line}")
+            line = _defend_line(e.get("call_line", "?"))
+            callee = _defend_identifier(str(e.get("callee")),
+                                        max_length=256)
+            callee_file = _defend_identifier(str(e.get("callee_file")),
+                                             max_length=512)
+            row = (f"- `{callee}` "
+                   f"({callee_file}) called at line {line}")
             if e.get("contract"):
-                row += f"\n  contract: {e['contract']}"
+                contract = _defend_identifier(str(e["contract"]),
+                                              max_length=300)
+                row += f"\n  contract: {contract}"
             ec.append(row)
         extra = len(ctx["edge_contracts"]) - 20
         if extra > 0:
