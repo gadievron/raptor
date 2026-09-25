@@ -218,6 +218,7 @@ MEMBER_IDS = (
     "M14-openant-core-consent",
     "M15-validation-recovery-fork",
     "M16-crash-fetch-host-consent",
+    "M17-wsl-consent-grant-ceremony",
 )
 
 
@@ -262,6 +263,19 @@ REGISTRY: dict[str, Entry] = {
         note="destructive-command _confirm prompts render "
              "operator/machine-named content only (project names are "
              "_validate_name-constrained)",
+    ),
+    "libexec/raptor-wsl-consent": Entry(
+        lane="code", status="sanitised",
+        members=("M17-wsl-consent-grant-ceremony",),
+        note="host-consent grant ceremony: the typed-confirmation "
+             "prompt follows a display of file-derived evidence "
+             "(kernel identity and family from /proc, marker paths, "
+             "record fields), all routed through the _esc helper "
+             "(sanitise_for_terminal); the prompt string itself is a "
+             "RAPTOR-authored constant",
+        wire_tokens=("{_esc(evidence['kernel_identity'])}",
+                     "{_esc(evidence['kernel_family'])}",
+                     "sanitise_for_terminal(str(text), max_len=256)"),
     ),
     "packages/cve_diff/cve_diff/cli/main.py": Entry(
         lane="code", status="clean",

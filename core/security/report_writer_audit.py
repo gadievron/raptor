@@ -642,6 +642,11 @@ _REPORT_WRITER_FILES = (
     "libexec/raptor-validation-helper",
     "libexec/raptor-annotate",
     "libexec/raptor-coverage-summary",
+    # WSL host-consent ceremony: status/grant/revoke render marker
+    # paths and file-derived record fields (kernel identity, granted
+    # timestamp) to the operator terminal. Terminal writer —
+    # sanitise_for_terminal grade via its _esc helper.
+    "libexec/raptor-wsl-consent",
     # Whole-payload JSON verdict lanes (ensure_ascii json.dumps) plus
     # per-field terminal lanes. Terminal writers —
     # sanitise_for_terminal grade.

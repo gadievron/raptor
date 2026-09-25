@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""WSL host-consent ceremony for the ns-only untrusted floor.
+
+Usage:
+  raptor-wsl-consent status    show the marker and whether it applies
+  raptor-wsl-consent grant     record the host-scoped consent (TTY only)
+  raptor-wsl-consent revoke    remove the marker
+
+`grant` is the operator ceremony: it displays what will change (the
+untrusted containment floor on THIS machine becomes ns-only WHERE
+Landlock is unavailable on THIS WSL kernel family), requires the tier
+label typed back, and HARD-REFUSES a non-TTY stdin — an agent, script,
+or injected instruction can never self-grant (the same gate as
+`raptor-sage-setup review --approve`). `revoke` is deliberately NOT
+TTY-gated: removing consent only raises the floor (fail-safe), so
+unattended sessions may always revoke. `status` is read-only.
+
+Marker semantics, conditional-inertness rules, and precedence live in
+core/sandbox/host_consent.py and docs/wsl.md.
+"""
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+
+def _esc(text: object) -> str:
+    """Escape display text that originates in files (kernel identity,
+    marker record fields) before it reaches the terminal."""
+    from core.security.log_sanitisation import sanitise_for_terminal
+    return sanitise_for_terminal(str(text), max_len=256)
+
+
+def cmd_status() -> int:
+    from core.sandbox import host_consent
+    status = host_consent.marker_status()
+    print(f"marker:  {_esc(status['path'])}")
+    print(f"present: {'yes' if status['present'] else 'no'}")
+    if status["applies"]:
+        print("applies: yes — untrusted containment floor 'ns-only' "
+              "by host consent")
+    else:
+        print(f"applies: no ({_esc(status['reason'])})")
+    record = status.get("record")
+    if isinstance(record, dict):
+        for key in ("granted_at", "kernel_identity", "kernel_family"):
+            value = record.get(key)
+            if isinstance(value, str) and value:
+                print(f"{key}: {_esc(value)}")
+    return 0
+
+
+def cmd_grant() -> int:
+    # The gate, before anything else: consent must come from the
+    # operator at their own terminal. Agents run this script with a
+    # pipe/devnull stdin and stop here.
+    if not sys.stdin.isatty():
+        sys.stderr.write(
+            "grant requires an interactive terminal (stdin is not a "
+            "TTY).\n"
+            "The host consent must come from the operator directly — "
+            "an agent or\n"
+            "script cannot self-grant a standing containment-floor "
+            "reduction.\n"
+            "Run at your terminal:\n"
+            "  bin/raptor wsl-consent grant\n")
+        return 3
+    from core.sandbox import host_consent
+    try:
+        evidence = host_consent.grant_preflight()
+    except host_consent.HostConsentError as exc:
+        sys.stderr.write(f"grant refused: {exc}\n")
+        return 3
+    print("WSL host consent — untrusted containment floor 'ns-only'")
+    print()
+    print("This records a STANDING, host-scoped consent at")
+    print(f"  {_esc(host_consent.marker_path())}")
+    print()
+    print("What changes:")
+    print("  * Untrusted-execution runs on THIS machine may run at the")
+    print("    ns-only containment tier (namespaces + fresh pid-ns")
+    print("    procfs + seccomp; NO Landlock filesystem/TCP policy")
+    print("    layer) instead of refusing.")
+    print()
+    print("The consent is conditional — it applies only while ALL hold:")
+    print("  * this kernel identifies as WSL")
+    print(f"      now: {_esc(evidence['kernel_identity'])}")
+    print("  * Landlock is unavailable on the running kernel")
+    print("      now: unavailable (a kernel that gains Landlock makes")
+    print("      the marker inert; the floor rises automatically)")
+    print("  * the kernel stays in the granted identity family")
+    print(f"      granted against: {_esc(evidence['kernel_family'])}")
+    print("      (a kernel-flavour change makes the marker inert until")
+    print("      re-granted; version updates within the family keep it)")
+    print("  On any other machine the marker is inert (machine-bound).")
+    print()
+    print("Precedence: a per-run --sandbox-floor or a project")
+    print("sandbox-floor setting always overrides this marker; a")
+    print("project-set higher floor is never lowered by it.")
+    print()
+    print("Revoke anytime: bin/raptor wsl-consent revoke")
+    print()
+    try:
+        answer = input("Type the tier label to consent (ns-only), or "
+                       "anything else to abort: ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        print("Aborted — nothing written.")
+        return 3
+    if answer.strip() != "ns-only":
+        print("Aborted — nothing written.")
+        return 3
+    path = host_consent.write_marker()
+    print(f"Granted. Marker written to {_esc(path)}")
+    print("Runs it affects print a posture line naming the grant date;")
+    print("check with: bin/raptor wsl-consent status")
+    return 0
+
+
+def cmd_revoke() -> int:
+    from core.sandbox import host_consent
+    if host_consent.remove_marker():
+        print(f"Revoked — marker removed "
+              f"({_esc(host_consent.marker_path())}).")
+        print("The untrusted containment floor returns to the "
+              "fail-closed default.")
+    else:
+        print("No marker present — nothing to revoke.")
+    return 0
+
+
+def main(argv: "list[str]") -> int:
+    if len(argv) != 1 or argv[0] in ("-h", "--help"):
+        print(__doc__.strip(),
+              file=sys.stdout if argv and argv[0] in ("-h", "--help")
+              else sys.stderr)
+        return 0 if argv and argv[0] in ("-h", "--help") else 1
+    command = argv[0]
+    if command == "status":
+        return cmd_status()
+    if command == "grant":
+        return cmd_grant()
+    if command == "revoke":
+        return cmd_revoke()
+    sys.stderr.write(
+        f"raptor-wsl-consent: unknown subcommand {command!r} "
+        f"(expected status | grant | revoke)\n")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
