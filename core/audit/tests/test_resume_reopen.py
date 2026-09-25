@@ -54,6 +54,33 @@ def test_reopen_flips_contradicted_completion(tmp_path):
     assert "audit-report.json" in reopens[0]["note"]
 
 
+def test_reopen_with_live_worker_refused_through_audit_binding(
+        tmp_path):
+    """A contradicted completion whose recorded worker is still alive
+    (a non-owning lifecycle complete never clears the worker stamp)
+    must refuse --reopen through the audit binding too — flipping it
+    would double-drive the in-flight run. Nothing is mutated."""
+    import os
+
+    from core.project.sessions import proc_starttime
+
+    out = _mk_run(tmp_path)
+    meta_path = out / RUN_METADATA_FILE
+    meta = json.loads(meta_path.read_text())
+    meta["tool_pid"] = os.getpid()  # demonstrably alive
+    start = proc_starttime(os.getpid())
+    if start is not None:
+        meta["tool_pid_start"] = start
+    meta_path.write_text(json.dumps(meta))
+    err = resume_ineligibility(out, reopen=True)
+    assert err is not None
+    assert "still alive" in err
+    assert str(os.getpid()) in err
+    meta = json.loads(meta_path.read_text())
+    assert meta["status"] == "completed"
+    assert "reopens" not in (meta.get("extra") or {})
+
+
 def test_genuine_completion_stays_final_even_with_reopen(tmp_path):
     out = _mk_run(tmp_path, with_report=True)
     err = resume_ineligibility(out, reopen=True)
