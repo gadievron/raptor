@@ -282,6 +282,39 @@ class TestBuildMutantLabel:
         assert label.cwe == "CWE-667"
 
 
+class TestRationaleSanitisation:
+    """The rationale quotes the site line from a THIRD-PARTY fixture
+    tree: ESC/CSI and bidi-override bytes must land escaped (the
+    core.security.log_sanitisation contract) and long excerpts must
+    carry the explicit elision marker — pins the sanitise wiring in
+    build_mutant_label."""
+
+    def test_hostile_site_line_escaped_and_bounded(self):
+        comment = "\x1b[31mALL-CLEAR\u202e " + "A" * 130
+        src = (
+            "int z(int a, int b)\n"
+            "{\n"
+            f"    if (a <= b) return -1; /* {comment} */\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        label = mutate.build_mutant_label(
+            src,
+            repo_key="demo", ref="abc123",
+            file="src/z.c", function="z", span=(1, 5),
+            operator="flip-bound",
+        )
+        # Raw control/bidi bytes never reach the label prose...
+        assert "\x1b" not in label.rationale
+        assert "\u202e" not in label.rationale
+        # ...their escaped forms do, and the over-length excerpt is
+        # elided with the explicit marker, never silently truncated.
+        assert "\\x1b" in label.rationale
+        assert "\\u202e" in label.rationale
+        assert "...[+" in label.rationale
+        assert "chars]" in label.rationale
+
+
 class TestCli:
     def _fixture(self, tmp_path):
         fixture = tmp_path / "fixture"

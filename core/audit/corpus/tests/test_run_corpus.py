@@ -3667,6 +3667,67 @@ class TestSyntheticMutantRuns:
         assert "ran" not in called
         assert not out.exists()
 
+    def test_checkpoint_kind_fence_two_direction(
+        self, tmp_path, monkeypatch,
+    ):
+        # A mutant refire can share every other stamp axis AND the
+        # function_id set with a real run at the same --out: the kind
+        # must fence checkpoint reuse in BOTH directions (real rows
+        # never resume into a mutant run's results, and vice versa),
+        # while a matching kind still resumes.
+        (tmp_path / "r1").mkdir(exist_ok=True)
+        labels = [_mk_label("a.c:f", repo="r1")]
+        row = dict(_result_row("a.c:f"), model="", cost_usd=2.0)
+
+        def fake_target_run(target_dir, repo_labels, **kw):
+            ran.append(repo_labels[0].source.repo)
+            return (
+                {
+                    lb.function_id: {
+                        "status": "clean", "cost_usd": 0.5,
+                        "duration_s": 0.1,
+                    }
+                    for lb in repo_labels
+                },
+                {}, None,
+            )
+
+        monkeypatch.setattr(
+            run_corpus, "_run_audit_on_target", fake_target_run,
+        )
+        for ckpt_kind, run_kind in (
+            ("real", "synthetic_mutant"),
+            ("synthetic_mutant", "real"),
+        ):
+            ran = []
+            ckpt = tmp_path / f"ckpt-{run_kind}.json"
+            ckpt.write_text(json.dumps(
+                _stamped_ckpt(
+                    {"r1": [row]}, label_kind=ckpt_kind,
+                ),
+            ))
+            run_corpus._run_audit(
+                labels, {"r1": tmp_path / "r1"},
+                joern_server=object(), checkpoint=ckpt,
+                checkpoint_stamp={"label_kind": run_kind},
+            )
+            assert ran == ["r1"], (
+                f"{ckpt_kind} checkpoint adopted by a "
+                f"{run_kind} run"
+            )
+        # Same kind: the checkpoint resumes as before.
+        ran = []
+        ckpt = tmp_path / "ckpt-same.json"
+        ckpt.write_text(json.dumps(
+            _stamped_ckpt({"r1": [row]}, label_kind="real"),
+        ))
+        run_corpus._run_audit(
+            labels, {"r1": tmp_path / "r1"},
+            joern_server=object(), checkpoint=ckpt,
+            checkpoint_stamp={"label_kind": "real"},
+        )
+        assert ran == []
+
     def test_real_run_meta_stamped_real(self, tmp_path, monkeypatch):
         rc, out, hist = _stub_main_run(
             tmp_path, monkeypatch,
