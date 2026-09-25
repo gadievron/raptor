@@ -16,6 +16,7 @@ from core.recall.manifest import PROFILES, ManifestError, load_manifest
 from core.recall.matcher import clean_region_hits, match_findings
 from core.recall.cvefix_manifest import main as cvefix_manifest_main
 from core.recall.juliet_manifest import main as juliet_manifest_main
+from core.recall.nodegoat_manifest import main as nodegoat_manifest_main
 from core.recall.owasp_manifest import main as owasp_manifest_main
 from core.recall.runner import (
     RunnerError,
@@ -415,6 +416,12 @@ def main(argv: list[str] | None = None) -> int:
              "fp-only post-fix twin (candidate labels — hand-verify)")
     cf_p.set_defaults(func=None)
 
+    ng_p = sub.add_parser(
+        "nodegoat-manifest",
+        help="wrap a local NodeGoat labels overlay into a recall "
+             "manifest (pin + structure; labels stay local)")
+    ng_p.set_defaults(func=None)
+
     args, rest = p.parse_known_args(argv)
     if args.cmd == "owasp-manifest":
         return owasp_manifest_main(rest)
@@ -422,6 +429,8 @@ def main(argv: list[str] | None = None) -> int:
         return juliet_manifest_main(rest)
     if args.cmd == "cvefix-manifest":
         return cvefix_manifest_main(rest)
+    if args.cmd == "nodegoat-manifest":
+        return nodegoat_manifest_main(rest)
     if rest:
         p.error(f"unrecognized arguments: {' '.join(rest)}")
     return args.func(args)
