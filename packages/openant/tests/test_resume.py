@@ -644,15 +644,20 @@ class TestSeedScanDir(unittest.TestCase):
         return d
 
     def test_seed_refuses_pathological_nesting_without_residue(self):
-        self._nest(SEED_MAX_DEPTH + 5)
-        self._assert_refuses_and_leaves_nothing("deeper than")
+        # Exact boundary: SEED_MAX_DEPTH nested levels is one past the
+        # admitted maximum — refuse, and say so accurately.
+        self._nest(SEED_MAX_DEPTH)
+        self._assert_refuses_and_leaves_nothing(
+            f"more than {SEED_MAX_DEPTH - 1} levels")
 
     def test_seed_copies_deep_but_legal_nesting(self):
-        leaf_dir = self._nest(SEED_MAX_DEPTH - 2)
+        # Exact boundary: SEED_MAX_DEPTH - 1 nested levels is the
+        # admitted maximum — seeds.
+        leaf_dir = self._nest(SEED_MAX_DEPTH - 1)
         (leaf_dir / "leaf.json").write_text("{}")
         new = self.base / "new_scan"
         seed_scan_dir(self.prior, new)
-        rel = Path(*(["d"] * (SEED_MAX_DEPTH - 2))) / "leaf.json"
+        rel = Path(*(["d"] * (SEED_MAX_DEPTH - 1))) / "leaf.json"
         self.assertTrue((new / rel).is_file())
 
     def test_walk_never_consumes_a_stack_frame_per_level(self):

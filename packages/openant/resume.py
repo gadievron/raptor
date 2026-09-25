@@ -78,14 +78,16 @@ SEED_EXCLUDES = frozenset({
     "final-reports",
 })
 
-# Directory nesting cap for the seeding walk. Both-direction contract:
-# a genuine pinned-CLI scan dir is a few levels deep (checkpoint dirs,
-# staged-config residue), so the cap must stay far above that — and the
-# prior scan dir was CHILD-WRITABLE during the original run, so nesting
-# depth is child-authored and the walk must refuse pathological depth
-# loudly (residue-free) rather than chase it. Raising the cap needs a
-# real scan shape that exceeds it; lowering it toward real scan depths
-# would refuse legitimate resumes.
+# Directory nesting cap for the seeding walk: at most
+# ``SEED_MAX_DEPTH - 1`` nested directory levels below the scan dir
+# are admitted (the scan dir itself counts as depth 1). Both-direction
+# contract: a genuine pinned-CLI scan dir is a few levels deep
+# (checkpoint dirs, staged-config residue), so the cap must stay far
+# above that — and the prior scan dir was CHILD-WRITABLE during the
+# original run, so nesting depth is child-authored and the walk must
+# refuse pathological depth loudly (residue-free) rather than chase
+# it. Raising the cap needs a real scan shape that exceeds it;
+# lowering it toward real scan depths would refuse legitimate resumes.
 SEED_MAX_DEPTH = 64
 
 # Upstream fingerprint sidecar name + the scheme version whose digest
@@ -565,11 +567,15 @@ def _seed_one_dir(dir_fd: int, dst_dir: Path, depth: int,
             _refuse_entry("symlink", name)
         if entry.is_dir(follow_symlinks=False):
             if depth >= SEED_MAX_DEPTH:
+                # This subdirectory sits at nesting level
+                # SEED_MAX_DEPTH below the scan dir; the admitted
+                # maximum is SEED_MAX_DEPTH - 1 levels.
                 raise OpenAntResumeError(
-                    f"--resume: prior scan dir nests directories deeper "
-                    f"than {SEED_MAX_DEPTH} levels — a legitimate scan "
-                    f"leaves a few levels of checkpoint state behind; "
-                    f"refusing to seed from it (nothing was kept)")
+                    f"--resume: prior scan dir nests directories more "
+                    f"than {SEED_MAX_DEPTH - 1} levels deep — a "
+                    f"legitimate scan leaves a few levels of checkpoint "
+                    f"state behind; refusing to seed from it (nothing "
+                    f"was kept)")
             (dst_dir / name).mkdir()
             stack.append((
                 os.open(name,
