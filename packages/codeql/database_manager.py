@@ -1509,15 +1509,33 @@ class DatabaseManager:
                 # atomically here: clean up our own mess if any of the three
                 # raises, then re-raise so the caller still sees the error.
                 #
-                # `dir=` is `self.db_root / "tmp"`, NOT `working_dir`. Pre-fix
-                # the build script was written into the operator's REPO
-                # directory (`dir=working_dir`). On cleanup-failure paths
-                # (cleanup at line ~831 unlinks but only if exists; sandbox
-                # crashes mid-build skip it) the user found
-                # `.raptor_codeql_build_*.sh` files in their git checkout —
-                # `git status` noise, accidental `git add -A` commits,
-                # confused operators. Keep our scratch under our managed
-                # area where we control cleanup.
+                # `dir=` is `self.db_root / "tmp"`, NOT `working_dir` and
+                # NOT anywhere the traced build can write. Three
+                # properties pick this location:
+                #  - non-polluting: pre-fix the build script was written
+                #    into the operator's REPO directory
+                #    (`dir=working_dir`). On cleanup-failure paths
+                #    (sandbox crashes mid-build skip the unlink) the user
+                #    found `.raptor_codeql_build_*.sh` files in their git
+                #    checkout — `git status` noise, accidental
+                #    `git add -A` commits, confused operators.
+                #  - namespace-visible: the sandbox_run call below engages
+                #    the mount namespace, where only the mounted host
+                #    trees exist. db_root/tmp is outside target= and
+                #    output=, so the wrapper dir is passed via tool_paths
+                #    (see the sandbox call) — a READ-ONLY, exec-capable
+                #    bind. Without that bind CodeQL's tracer fails to
+                #    exec the wrapper ("Runner failed to start ... No
+                #    such file or directory") and the traced build dies
+                #    before running a single build command.
+                #  - immutable to the target: the ro bind means the
+                #    traced build (repo-controlled code) cannot rewrite
+                #    the wrapper or plant symlinks in its directory. A
+                #    scratch dir under the sandbox's rw output mount
+                #    would hand the build a persistence surface AND a
+                #    cross-run symlink-plant window against this parent-
+                #    side mkdir/mkstemp/write (the parent runs
+                #    unsandboxed and follows symlinks).
                 tmp_dir = self.db_root / "tmp"
                 tmp_dir.mkdir(parents=True, exist_ok=True)
                 fd, script_name = tempfile.mkstemp(
@@ -1549,6 +1567,20 @@ class DatabaseManager:
         logger.info("Executing: %s", ' '.join(cmd))
         logger.info("Timeout: %ss", RaptorConfig.CODEQL_TIMEOUT)
 
+        # Toolchain binds for the mount namespace. The build wrapper's
+        # directory rides along when a wrapper was written: it lives
+        # outside both mount trees (target=, output=) by design — see
+        # the placement rationale above — and tool_paths binds it
+        # READ-ONLY and exec-capable into the namespace (tool_paths is
+        # unioned into the mount-ns extra_ro_paths; Landlock directory
+        # read grants carry EXECUTE), so the tracer can exec the
+        # wrapper while the traced build cannot modify it.
+        sandbox_tool_paths = self._sandbox_tool_paths()
+        if build_script is not None:
+            sandbox_tool_paths = list(sandbox_tool_paths) + [
+                str(build_script.parent),
+            ]
+
         # Execute database creation in sandbox (network blocked — packs pre-fetched)
         try:
             from core.sandbox import run as sandbox_run
@@ -1569,7 +1601,7 @@ class DatabaseManager:
                 # next to the staging dir stay writable.
                 target=str(repo_path),
                 output=str(staging_path.parent),
-                tool_paths=self._sandbox_tool_paths(),
+                tool_paths=sandbox_tool_paths,
                 # Audit JSONL home (only used when --audit is engaged).
                 # Decoupled from output= because the build subprocess
                 # writes to working_dir / db_path / ~/.codeql, none of
