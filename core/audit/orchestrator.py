@@ -6153,6 +6153,22 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             exc_info=True,
         )
 
+    # L9: standing clone-family index — cached in the run directory
+    # keyed on source fingerprint + index version, so re-runs and
+    # resumes reload instead of re-winnowing. No family → None →
+    # the layer stays empty (equivalence pin).
+    prep_clone_index = None
+    try:
+        from core.analysis.clone_index import load_or_build_clone_index
+
+        prep_clone_index = load_or_build_clone_index(
+            _gap_source_texts(), out_dir=config.out_dir,
+        )
+    except Exception:
+        logger.debug(
+            "clone index build for peer groups failed", exc_info=True,
+        )
+
     # Fail-soft like the sibling prep blocks above: the resolver
     # consumes producer-controlled inputs (checklist metadata is
     # LLM-enrichable), and peer groups are an enrichment layer — one
@@ -6169,6 +6185,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             route_models=prep_route_models,
             interface_slots=prep_interface_slots,
             enum_cohorts=prep_enum_cohorts,
+            clone_index=prep_clone_index,
         )
     except Exception:
         peer_groups = []

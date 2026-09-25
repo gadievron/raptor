@@ -32,6 +32,9 @@ Layer hierarchy:
                                     enum (mechanical join;
                                     non-exclusive: switch co-location
                                     is review structure, not identity)
+  L9  Clone families             — standing token-shingle similarity
+                                    index (similarity-inferred, lower
+                                    confidence, tier-labelled)
       Binary decomp similarity   — normalized-hash / shingle-Jaccard
                                     via the ghidra similarity seam
                                     (decompiler-inferred, lower
@@ -60,6 +63,10 @@ from collections import defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from core.analysis.clone_index import (
+    # L9 group-type string is owned by the index module, like L7's.
+    GROUP_TYPE_CLONE_FAMILY,
+)
 from core.analysis.interface_slots import (
     # L7 group-type string is owned by the census module (the
     # producer and the layer must agree by construction); imported
@@ -232,6 +239,7 @@ def resolve_peer_groups(
     route_models: Any | None = None,
     interface_slots: list[Any] | None = None,
     enum_cohorts: list[tuple[str, list[str]]] | None = None,
+    clone_index: Any | None = None,
     notes: list[str] | None = None,
 ) -> list[SiblingGroup]:
     """Build peer groups from all available signals.
@@ -283,6 +291,13 @@ def resolve_peer_groups(
       claims — and its group type is deliberately NOT admitted by
       the interface parity dimension (the completeness census owns
       the enum comparison).
+    * ``clone_index`` — a ``core.analysis.clone_index.CloneIndex``
+      (the :func:`core.analysis.clone_index.load_or_build_clone_index`
+      producer builds/caches one). Independent L9 layer,
+      similarity-inferred and tier-labelled like the decomp layer —
+      never exclusive, never admitted by the interface dimension.
+      The index's ``caps_hit`` surfaces as a layer note so a
+      degraded build is never read as full clone coverage.
 
     When ``checklist`` is supplied, every layer sees the functions
     enriched with the checklist items' ``metadata`` (parameters,
@@ -429,6 +444,22 @@ def resolve_peer_groups(
         layer_report.append(f"enum-switch {len(l8)}")
     else:
         layer_report.append("enum-switch skipped (no cohorts)")
+    # L9: clone families (independent, similarity-inferred — never
+    # claims; tier-labelled like the decomp layer below).
+    if clone_index is not None:
+        l9 = _clone_family_groups(clone_index, functions)
+        groups.extend(l9)
+        idx_caps = bool(getattr(clone_index, "caps_hit", False))
+        layer_report.append(
+            f"clone-family {len(l9)}"
+            + (" (index capped)" if idx_caps else ""))
+        if idx_caps and notes is not None:
+            notes.append(
+                "clone-family: index build hit a cap — families are "
+                "a subset; absence of a clone match is NOT evidence "
+                "of no clone")
+    else:
+        layer_report.append("clone-family skipped (no index)")
     # Binary decomp-similarity (independent): decompiler-inferred —
     # pseudo-code is approximate, so this layer never claims
     # exclusively and its groups carry the lower-confidence label.
@@ -1684,6 +1715,83 @@ def _shared_callee_signature_groups(
         ))
 
     logger.info("binary shared-callee: %d groups", len(groups))
+    return groups
+
+
+# ── L9: Clone-family groups (independent, lower confidence) ─────────
+
+
+_CLONE_TIER_NOTE = (
+    "token-shingle similarity (similarity-inferred review structure "
+    "— lower confidence than the mechanical layers)"
+)
+
+
+def _clone_family_groups(
+    clone_index: Any,
+    functions: list[dict[str, Any]],
+) -> list[SiblingGroup]:
+    """L9: members of one verified clone family, from the index.
+
+    Families arrive verified and capped from the index build
+    (``core.analysis.clone_index``); this layer only joins them to
+    the resolver's records — (file, name) exact first, then the
+    ambiguity-excluding name index. Never claims: similarity is not
+    identity, and a clone group must not strip functions out of the
+    mechanical layers.
+    """
+    families = getattr(clone_index, "families", None) or []
+    if not families or not functions:
+        return []
+    from core.security.log_sanitisation import escape_nonprintable
+
+    func_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for f in functions:
+        key = (f.get("file", ""), f.get("name", ""))
+        if key[1]:
+            func_by_key.setdefault(key, f)
+    func_by_name = _name_index(functions)
+
+    groups: list[SiblingGroup] = []
+    for fam in families:
+        if not isinstance(fam, dict):
+            continue
+        matched: dict[tuple[str, str], dict[str, Any]] = {}
+        for m in fam.get("members") or []:
+            if not isinstance(m, dict):
+                continue
+            record = func_by_key.get(
+                (m.get("file", ""), m.get("function", "")),
+            ) or func_by_name.get(m.get("function", ""))
+            if record is None:
+                continue
+            rkey = (record.get("file", ""), record.get("name", ""))
+            matched.setdefault(rkey, record)
+        if len(matched) < 2:
+            continue
+        keys = sorted(matched)
+        siblings = [
+            SiblingPath(
+                label=matched[k].get("name", ""),
+                file=matched[k].get("file", ""),
+                function=matched[k].get("name", ""),
+                line=matched[k].get("line", 0),
+            )
+            for k in keys
+        ]
+        # File/function names are target-derived — escaped like the
+        # L7/L8 group ids.
+        key_esc = escape_nonprintable(f"{keys[0][0]}:{keys[0][1]}")
+        groups.append(SiblingGroup(
+            group_id=f"clone_family:{key_esc}",
+            # Plain string by the module-header convention.
+            sibling_type=GROUP_TYPE_CLONE_FAMILY,  # type: ignore[arg-type]
+            description=f"Clone family ({_CLONE_TIER_NOTE})",
+            siblings=siblings,
+            shared_context=_CLONE_TIER_NOTE,
+        ))
+
+    logger.info("L9 clone-family: %d groups", len(groups))
     return groups
 
 
