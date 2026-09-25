@@ -114,6 +114,17 @@ jobs:
             -q --durations=25 --tb=short \
             --junitxml="$RUNNER_TEMP/fast-iter-${{ matrix.iteration }}.xml"
 
+      # The full default-tier collection in one invocation — the
+      # authoritative skip census for the default markers (the PR
+      # tiers dispatch dynamic subsets, so their per-batch counts are
+      # not stable keys). Every iteration checks: the collection is
+      # identical across seeds, so the counts must be too.
+      - name: Check default-tier skip count against its recorded budget
+        run: |
+          python3 .github/scripts/check_skip_budget.py \
+            --lane nightly-default --full \
+            --junit-xml "$RUNNER_TEMP/fast-iter-${{ matrix.iteration }}.xml"
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

@@ -142,7 +142,16 @@ jobs:
           # .github test dirs included for their slow-marked
           # whole-repo import-graph classes (excluded from ci-lint's
           # bounded PR job by the default addopts marker filter).
-          python -m pytest -m slow core packages engine .github/tests .github/scripts/tests -q --durations=25
+          python -m pytest -m slow core packages engine .github/tests .github/scripts/tests -q --durations=25 \
+            --junitxml="$RUNNER_TEMP/slow.xml"
+
+      # Full-collection lane, so --full: a count below the recorded
+      # one is stale headroom worth a warning, not a filtered subset.
+      - name: Check slow-lane skip count against its recorded budget
+        run: |
+          python3 .github/scripts/check_skip_budget.py \
+            --lane nightly-slow --full \
+            --junit-xml "$RUNNER_TEMP/slow.xml"
 
       - name: Run integration tests (retry once on external outage)
         env:
@@ -162,6 +171,16 @@ jobs:
           sleep 60
           python -m pytest -m integration core packages engine --durations=25 \
             --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-2.xml"
+
+      # Budget over the attempt that produced the green: attempt 2
+      # exists only when attempt 1 failed and was retried.
+      - name: Check integration skip count against its recorded budget
+        run: |
+          xml="$RUNNER_TEMP/integration-attempt-2.xml"
+          [ -f "$xml" ] || xml="$RUNNER_TEMP/integration-attempt-1.xml"
+          python3 .github/scripts/check_skip_budget.py \
+            --lane nightly-integration --full \
+            --junit-xml "$xml"
 
       # Backstop for the continue-on-error toolchain install above: the
       # r2 / llvm-cov test families skip-with-reason when their binaries
