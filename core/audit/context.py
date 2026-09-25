@@ -919,10 +919,16 @@ def format_context_for_prompt(
     # cap) at render time; a repo path of `x.c\n## INJECTED` would
     # otherwise forge a peer heading. Bodies render through _fenced so
     # a ``` line inside repo text cannot escape its code fence.
-    safe_file = _defend_identifier(ctx.get("file", ""), max_length=512)
-    safe_function = _defend_identifier(ctx.get("function", ""),
-                                       max_length=256)
-    header_parts = [f"## {safe_file}:{safe_function}"]
+    # Join-then-defend (the callers-section precedent): when multiple
+    # target-derived fragments compose into ONE text run, the defence
+    # runs on the JOINED text — separately-defended halves of a
+    # boundary-tag shape are individually invisible to the neutraliser
+    # and reassemble live across the join.
+    safe_heading = _defend_identifier(
+        f"{ctx.get('file', '')}:{ctx.get('function', '')}",
+        max_length=768,
+    )
+    header_parts = [f"## {safe_heading}"]
     if ctx.get("metadata"):
         meta = ctx["metadata"]
         if meta.get("signature"):
@@ -934,9 +940,9 @@ def format_context_for_prompt(
                 f"**Visibility:** "
                 f"{_defend_identifier(meta['visibility'], max_length=64)}")
         if meta.get("attributes"):
-            attrs = ", ".join(
-                _defend_identifier(a, max_length=128)
-                for a in meta["attributes"]
+            attrs = _defend_identifier(
+                ", ".join(str(a) for a in meta["attributes"]),
+                max_length=512,
             )
             header_parts.append(f"**Attributes:** {attrs}")
 
@@ -1679,9 +1685,14 @@ def format_context_for_prompt(
                 max_length=300,
             )
             row = f"- `{ident}` (line {hop.get('line', 0)})"
-            tainted = ", ".join(
-                _defend_identifier(str(v), max_length=80)
-                for v in (hop.get("tainted_vars") or [])[:5]
+            # Join-then-defend: this list renders as one bare-joined
+            # text run (no per-item wrapping), so the defence must see
+            # the joined text — see the heading-composition note above.
+            tainted = _defend_identifier(
+                ", ".join(
+                    str(v) for v in (hop.get("tainted_vars") or [])[:5]
+                ),
+                max_length=400,
             )
             if tainted:
                 row += f" — tainted: {tainted}"
@@ -2634,9 +2645,16 @@ def _format_glance_prompt(ctx: dict[str, Any]) -> str:
             "vulnerability (memory safety, injection, auth bypass, "
             "information disclosure, logic flaw)? Answer in one sentence."
         )
+    # Join-then-defend: file and function compose one heading —
+    # defending the halves separately lets a boundary-tag shape split
+    # across them reassemble live (see the main prompt's
+    # heading-composition note).
+    safe_heading = _defend_identifier(
+        f"{ctx.get('file', '')}:{ctx.get('function', '')}",
+        max_length=768,
+    )
     parts = [
-        f"## {_defend_identifier(ctx.get('file', ''), max_length=512)}:"
-        f"{_defend_identifier(ctx.get('function', ''), max_length=256)}",
+        f"## {safe_heading}",
         _source_heading(ctx),
         _fenced(ctx.get("source", "(not available)")),
     ]
