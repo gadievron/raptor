@@ -72,6 +72,16 @@ except ImportError:
 # Data model
 # ---------------------------------------------------------------------------
 
+# Lead-path floors (registered in core.audit.consistency_stats —
+# the enumerable floors table references these constants; per-run
+# overrides never reach this legacy deviation-lead path).
+# Trade-off, both directions: LOWER min sites / threshold surfaces
+# deviants from tiny families whose "majority" is two or three
+# accidental agreements (lead noise the 40-lead cap then spends on);
+# HIGHER hides real deviants in mid-size families — a 3-site family
+# with 2 checks is exactly the smallest census Engler-style inference
+# can speak about, and 0.75 keeps a single dissenting site from
+# dissolving a 3/4 convention.
 MIN_CALL_SITES = 3
 MAJORITY_THRESHOLD = 0.75
 
@@ -96,7 +106,16 @@ ALL_USAGES = (
 DEVIANT_USAGES = frozenset({USAGE_DISCARDED, USAGE_CAPTURED_UNUSED})
 
 # Contract-source "majority" thresholds (§2.2.5 — the exact
-# spec_inference._infer_from_caller_usage floor).
+# spec_inference._infer_from_caller_usage floor). Registered in
+# core.audit.consistency_stats; a run-config override reaches them
+# through the per-census fields below.
+# Trade-off, both directions: LOWER lets small/weak majorities mint
+# contract-grade premises (majority_says_check) AND definitive
+# discard-ok refutations (majority_says_discard_ok) — the refutation
+# direction is suppression-adjacent, a stuffed discard-majority
+# clears real deviants; HIGHER withholds the discard-ok refutation
+# from honest printf-class callees, flooding leads with noise the
+# convention already answers.
 MAJORITY_CONTRACT_MIN_SITES = 4
 MAJORITY_CONTRACT_RATIO = 0.8
 
@@ -275,6 +294,15 @@ class CalleeCensus:
     # majority statistics are computed over PARTIAL data and must not
     # mint definitive verdicts (census_verdict gates on this).
     truncated: bool = False
+    #: Effective contract-majority floors for THIS census. Default to
+    #: the module constants (identical behaviour); the prepass stamps
+    #: run-config overrides here so majority_says_check /
+    #: majority_says_discard_ok and every consumer taking a census
+    #: entry (return-contract binding included) read one value.
+    #: Deliberately not serialised: floors are per-run, and a
+    #: cache-reloaded census is re-stamped by the run that loads it.
+    contract_min_sites: int = MAJORITY_CONTRACT_MIN_SITES
+    contract_ratio: float = MAJORITY_CONTRACT_RATIO
 
     def __post_init__(self) -> None:
         if not self.security_relevant:
@@ -340,8 +368,8 @@ class CalleeCensus:
     def majority_says_check(self) -> bool:
         """§2.2.5 majority evidence: the project's own convention."""
         return (
-            self.considered >= MAJORITY_CONTRACT_MIN_SITES
-            and self.check_ratio >= MAJORITY_CONTRACT_RATIO
+            self.considered >= self.contract_min_sites
+            and self.check_ratio >= self.contract_ratio
         )
 
     @property
@@ -350,8 +378,8 @@ class CalleeCensus:
         discard-ok — printf-class noise suppressed without any
         hardcoded ignore list."""
         return (
-            self.considered >= MAJORITY_CONTRACT_MIN_SITES
-            and self.discard_ratio >= MAJORITY_CONTRACT_RATIO
+            self.considered >= self.contract_min_sites
+            and self.discard_ratio >= self.contract_ratio
         )
 
     @property

@@ -35,7 +35,10 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .consistency_stats import Floors
 
 from .callsite_consistency import (
     USAGE_ACKNOWLEDGED,
@@ -67,6 +70,16 @@ RULE_SANITIZE_SINK = rule_id(DIMENSION_SANITIZE_SINK, detection=False)
 RULE_GUARD_PRESENCE = rule_id(DIMENSION_GUARD_PRESENCE, detection=False)
 
 # Mechanical-path thresholds (§2.3 — stricter than the lead path).
+# Registered in core.audit.consistency_stats (run-config overrides
+# arrive via census_verdict's ``floors``).
+# Trade-off, both directions: LOWER (ratio) mints detection-grade
+# confirmations from small dissent — the deviant itself counts in
+# ``considered``, so 0.9 already demands ≥ 9 checking sites per
+# deviant, and each confirmation is a prompt-injected claim the LLM
+# anchors on; HIGHER starves the majority leg entirely and the
+# census degrades to registry-witness dimensions only. The min-sites
+# floor below is the cheap early refusal for micro-families the
+# ratio test would reject anyway.
 VERDICT_MIN_SITES = 4
 VERDICT_MAJORITY_RATIO = 0.9
 
@@ -453,9 +466,25 @@ def census_verdict(
     inventory: dict[str, Any] | None = None,
     source_texts: dict[str, str] | None = None,
     joern_server: Any = None,
+    floors: Floors | None = None,
 ) -> ConsistencyResult:
-    """Adjudicate one deviant site against its callee census (§2.3)."""
+    """Adjudicate one deviant site against its callee census (§2.3).
+
+    *floors* (a :class:`core.audit.consistency_stats.Floors`) carries
+    the run's effective majority-leg thresholds; ``None`` means the
+    module defaults — identical arithmetic.
+    """
     ctx = context or RoleContext()
+    if floors is not None:
+        verdict_min_sites = int(
+            floors.value("return-check.verdict_min_sites"),
+        )
+        verdict_majority_ratio = float(
+            floors.value("return-check.verdict_majority_ratio"),
+        )
+    else:
+        verdict_min_sites = VERDICT_MIN_SITES
+        verdict_majority_ratio = VERDICT_MAJORITY_RATIO
     callee = entry.callee
     language = _language_of(deviant.file)
 
@@ -583,14 +612,14 @@ def census_verdict(
             "statistics computed over partial data",
             callee=callee,
         )
-    if entry.considered < VERDICT_MIN_SITES:
+    if entry.considered < verdict_min_sites:
         return _inconclusive(
             REASON_GROUP_TOO_SMALL,
             f"{entry.considered} considered site(s) < "
-            f"{VERDICT_MIN_SITES}",
+            f"{verdict_min_sites}",
             callee=callee,
         )
-    if entry.check_ratio < VERDICT_MAJORITY_RATIO:
+    if entry.check_ratio < verdict_majority_ratio:
         if contract is None and entry.all_python:
             return _inconclusive(
                 REASON_PYTHON_EXCEPTION_SEMANTICS,
@@ -602,13 +631,13 @@ def census_verdict(
             return _inconclusive(
                 REASON_CONTRACT_UNRESOLVED,
                 f"no contract source for {callee} and check ratio "
-                f"{entry.check_ratio:.2f} < {VERDICT_MAJORITY_RATIO}",
+                f"{entry.check_ratio:.2f} < {verdict_majority_ratio}",
                 callee=callee,
             )
         return _inconclusive(
             REASON_RATIO_BELOW_THRESHOLD,
             f"check ratio {entry.check_ratio:.2f} < "
-            f"{VERDICT_MAJORITY_RATIO}",
+            f"{verdict_majority_ratio}",
             callee=callee,
         )
 
@@ -983,6 +1012,7 @@ def guard_presence_verdict(
     source_texts: dict[str, str] | None = None,
     joern_server: Any = None,
     smt_check: Any = None,
+    floors: Floors | None = None,
 ) -> ConsistencyResult:
     """Adjudicate one bounds/null-guard presence deviation (§3.4).
 
@@ -1053,7 +1083,11 @@ def guard_presence_verdict(
         else ""
     )
     from .consistency_dimensions import RATIO_PROMOTE
-    if feasible is True and deviation.ratio >= RATIO_PROMOTE:
+    promote_ratio = (
+        float(floors.value("guard-presence.promote_ratio"))
+        if floors is not None else RATIO_PROMOTE
+    )
+    if feasible is True and deviation.ratio >= promote_ratio:
         pe = deviation.peer_evidence
         if pe is not None:
             pe.contract_source = "smt_witness"
@@ -1094,7 +1128,7 @@ def guard_presence_verdict(
             f"majority evidence only (detection grade"
             + (
                 f"; SMT feasible but ratio "
-                f"{deviation.ratio:.2f} < {RATIO_PROMOTE}"
+                f"{deviation.ratio:.2f} < {promote_ratio}"
                 if feasible is True else "; no SMT witness"
             )
             + ")"
