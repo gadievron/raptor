@@ -333,6 +333,71 @@ class TestDeepChainScriptDetection:
         assert not is_human_grade(_human_interactive(parents=chain))
 
 
+class TestDeepChainAgentDetection:
+    """The deep ancestry scan covers every verdict-bearing name, not
+    only ``script``: an agent comm pushed past the 4-name recorded
+    window by fork intermediaries must still reach the recorded
+    chain, or the operator-grant ancestry rule reads a clean-looking
+    window while the agent sits at depth 5."""
+
+    def _chain_under_wrapper(self, tmp_path, wrapper_name, hops=5):
+        import stat
+        import subprocess
+        import sys as _sys
+        code = (
+            "import sys; sys.path.insert(0, %r); "
+            "from core.annotations.provenance import _detect_parent_chain; "
+            "print(_detect_parent_chain())" % str(pathlib_root)
+        )
+        pyfile = tmp_path / "leaf.py"
+        pyfile.write_text(code + "\n")
+        nxt = f"{_sys.executable} {pyfile}"
+        for i in range(hops):
+            hop = tmp_path / f"hop{i}.sh"
+            hop.write_text(f"#!/bin/sh\nsh {nxt}\n"
+                           if nxt.endswith(".sh") else
+                           f"#!/bin/sh\n{nxt}\n")
+            hop.chmod(hop.stat().st_mode | stat.S_IXUSR)
+            nxt = str(hop)
+        wrapper = tmp_path / wrapper_name
+        wrapper.write_text(f"#!/bin/sh\nsh {nxt}\n")
+        wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+        out = subprocess.run(
+            [str(wrapper)], capture_output=True, text=True, check=True,
+        )
+        return out.stdout.strip()
+
+    def test_agent_comm_beyond_recorded_window_is_still_recorded(
+        self, tmp_path,
+    ):
+        # Version-named wrapper (the comm shape the agent launcher
+        # execs) behind 5 fork intermediaries: past the recorded
+        # window, inside the scan — appended, inside the stamp
+        # grammar, and demoting at the operator-grant rule.
+        from core.annotations.provenance import (
+            live_context_grants_operator,
+        )
+        chain = self._chain_under_wrapper(tmp_path, "2.1.252")
+        assert "2.1.252" in chain.split(","), chain
+        assert valid_parents_value(chain)
+        base = {
+            "tty": "stdin", "provenance": "interactive-tty",
+            "sid": "inherited", "envm": "none",
+        }
+        assert not live_context_grants_operator(
+            dict(base, parents=f"bash,{chain}"))
+
+    def test_benign_comm_beyond_recorded_window_is_not_appended(
+        self, tmp_path,
+    ):
+        # Control: the deep scan appends only the verdict-bearing
+        # names — an unrecognised comm past the window stays off the
+        # recorded chain (the bounded stamp is not a full ancestry
+        # dump).
+        chain = self._chain_under_wrapper(tmp_path, "widgetd")
+        assert "widgetd" not in chain.split(","), chain
+
+
 class TestAncestryTruncation:
     """The bounded ancestor scan is fail-open by design (a deep shell
     stack alone proves nothing), but an exhausted window must be
@@ -807,6 +872,26 @@ class TestLiveContextGrantsOperator:
             dict(self._BASE, parents="bash,python3,bash,2.1.252"))
         assert not live_context_grants_operator(
             dict(self._BASE, parents="bash,claude"))
+
+    def test_agent_runtime_comm_in_parents_demotes(self):
+        # The agent CLI's stock JavaScript-entry shape leaves the
+        # runtime interpreter's comm in the ancestry, not an
+        # agent-named binary. The rule demotes, so recognising the
+        # runtime fails toward the safe direction; the legitimate
+        # node-hosted terminal shapes it could wrongly demote all
+        # carry a dispatch environment marker, which refuses the
+        # grant on its own leg anyway.
+        from core.annotations.provenance import live_context_grants_operator
+        assert not live_context_grants_operator(
+            dict(self._BASE, parents="bash,node,sshd"))
+
+    def test_runtime_comm_demotion_is_scoped_to_the_live_grant(self):
+        # Direction pin for the scoping: the annotation READER keys
+        # only on the stock ``script`` wrapper (module doctrine —
+        # the rest of the chain is recorded audit trail), so a human
+        # note written from a node-hosted terminal keeps its grade.
+        assert is_human_grade(
+            _human_interactive(parents="bash,node,sshd"))
 
     def test_broken_ancestry_demotes(self):
         # An interactive operator's chain is readable end to end;
