@@ -214,6 +214,15 @@ def _detect_target_type(target_path: str):
     try:
         from core.run.target_types import binary_dominant, load, load_by_name
         target = Path(target_path)
+        if target.is_file():
+            from core.archive import is_archive
+            if is_archive(target):
+                # Archive target: detect on the EXTRACTED tree, the
+                # way /describe does — the extension/glob catalog run
+                # against the archive file itself classified every
+                # zip-target project as ``generic`` and printed
+                # generic-wrong /scan pack baselines at create time.
+                return _detect_archive_target_type(target)
         if binary_dominant(target):
             entry = load_by_name("binary")
             if entry is not None:
@@ -221,6 +230,43 @@ def _detect_target_type(target_path: str):
             # Missing catalog entry — degrade to the catalog match
             # (substrate stays best-effort, create never refuses).
         return load(target)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _detect_archive_target_type(archive: Path):
+    """Catalog detection for an ARCHIVE project target: reuse the
+    /describe resolver (cached extraction when a prior run populated
+    ``_sources/``, else a one-shot tmp extract with the shared safe
+    extractor, single-subdir descent either way) and run the same
+    binary-dominant + catalog classification on the resulting tree.
+
+    One-time cost at create, proportional to the archive (a cache hit
+    is free); tmp extractions are removed before returning. Same
+    best-effort posture as :func:`_detect_target_type` — any failure
+    collapses to None and create proceeds without a tuning block.
+    """
+    import shutil
+    try:
+        from packages.describe.cli import resolve_archive_target
+        resolved = resolve_archive_target(archive, sys.stderr)
+        if resolved is None:
+            return None
+        tree, tmp_root, _label = resolved
+        try:
+            from core.run.target_types import (
+                binary_dominant,
+                load,
+                load_by_name,
+            )
+            if binary_dominant(tree):
+                entry = load_by_name("binary")
+                if entry is not None:
+                    return entry
+            return load(tree)
+        finally:
+            if tmp_root is not None:
+                shutil.rmtree(tmp_root, ignore_errors=True)
     except Exception:  # noqa: BLE001
         return None
 
