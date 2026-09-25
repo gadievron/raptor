@@ -147,6 +147,26 @@ no sandbox, that is the authoritative `--sandbox none` /
 
 ---
 
+### Diagnosing a stuck, slow, or opaque run
+
+`libexec/raptor-run-status <run-dir>` (or `--project [name]` for every
+run of a project) is the read-only live view of a run's state:
+status, heartbeat age (mtime freshness — a stale heartbeat on a
+`running` run means it stopped making progress), booked spend vs the
+run's cap, LLM call / failed-attempt / timeout counts, breaker trips,
+and the newest call class as a phase hint. It never modifies run
+state — safe to point at an in-flight run.
+
+Use it BEFORE restarting or killing anything:
+- Heartbeat fresh + spend advancing → the run is working; leave it.
+- Heartbeat stale + breaker trips or climbing failed attempts → check
+  provider health (docs/llm.md), then the run's `llm-telemetry.jsonl`.
+- Terminal `failed` status → the error line quotes the recorded
+  failure; `raptor-review digest <run-dir>` summarises what the run
+  produced anyway.
+
+---
+
 ## Always Offer Alternatives
 
 When Python fails, always present user with:

@@ -334,6 +334,13 @@ the run in bounded time (in-flight completions harvested, everything
 flushed, report written, lifecycle `interrupted` with a resume hint,
 exit 130); a second TERM exits immediately after a best-effort flush.
 
+**Watching a run:** `libexec/raptor-run-status <run-dir>` is the
+read-only live view — status, heartbeat age, booked spend vs the
+run's cap, LLM call / failed-attempt / breaker counts, and the newest
+call class as a phase hint.  `--project [name]` shows every run of a
+project at once.  It only reads existing artifacts, so it is safe
+against an in-flight run.
+
 ### Resuming an interrupted run
 
 An audit stopped by an external supervisor (harness shell cap, SIGTERM,

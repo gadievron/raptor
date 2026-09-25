@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Read-only live introspection of a RAPTOR run.
+
+Usage:
+  raptor-run-status <run-dir>          Status of one run (phase hint,
+                                       heartbeat age, spend vs cap,
+                                       breaker/retry counts, findings)
+  raptor-run-status --project [NAME]   All runs of a project (active
+                                       project when NAME is omitted),
+                                       one line each, plus the full
+                                       status of running runs (or the
+                                       latest when none is running)
+  raptor-run-status                    Same as bare --project
+
+Options:
+  --raw    JSON output (ensure_ascii — terminal-safe)
+
+Purely a reader over existing run artifacts (.raptor-run.json,
+llm-telemetry.jsonl, cost/spend records, findings, suppressions,
+coverage store) via the shared digest reader — it never touches a
+run's state.
+"""
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+import argparse  # noqa: E402
+import json  # noqa: E402
+
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
+
+
+def _resolve_project_dir(name: str | None) -> Path | None:
+    """Project output dir for NAME, or the active project's when NAME
+    is empty (shared discovery: core/run/locate.py). Explicit-but-
+    invalid names are a hard error (project doctrine: never a silent
+    fallback)."""
+    from core.run.locate import project_output_dir
+    resolved = project_output_dir(name)
+    if name and resolved is None:
+        print(f"raptor-run-status: --project {_sft(name, max_len=80)!r} "
+              "is not a registered project with an output directory",
+              file=sys.stderr)
+        sys.exit(2)
+    return resolved
+
+
+def _show_run(run_dir: Path, raw: bool) -> None:
+    from core.run.digest import read_run_digest, render_run_status
+    digest = read_run_digest(run_dir)
+    if raw:
+        # ensure_ascii: JSON escapes C0 but passes single-byte C1
+        # terminal controls raw when off, and every value here is
+        # run-artifact bytes.
+        print(json.dumps(digest.to_dict(), indent=2, ensure_ascii=True,
+                         default=str))
+        return
+    print(render_run_status(digest))
+
+
+def _show_project(project_dir: Path, raw: bool) -> None:
+    from core.run.digest import read_run_digest, render_run_status
+    from core.run.locate import run_dirs_newest_first
+    runs = run_dirs_newest_first(project_dir)
+    if not runs:
+        print("  No runs in this project yet.")
+        return
+    digests = [read_run_digest(d) for d in runs]
+    if raw:
+        print(json.dumps([d.to_dict() for d in digests], indent=2,
+                         ensure_ascii=True, default=str))
+        return
+    print(f"  {len(runs)} run(s) in {_sft(str(project_dir), max_len=200)}")
+    print()
+    for d in digests:
+        spend = f"${d.spend_usd:.2f}" if d.spend_usd is not None else "-"
+        status = " ".join(
+            w.capitalize() for w in str(d.status).split("_"))
+        line = (f"  {_sft(d.run_dir.name, max_len=60):<40} "
+                f"{_sft(d.command, max_len=20):<10} "
+                f"{_sft(status, max_len=20):<12} {spend}")
+        if d.status == "running" and d.heartbeat_age_s is not None:
+            line += f"  heartbeat {int(d.heartbeat_age_s)}s ago"
+        print(line)
+    detail = [d for d in digests if d.status == "running"] or digests[:1]
+    for d in detail:
+        print()
+        print(render_run_status(d))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="raptor-run-status",
+        description="Read-only live introspection of a RAPTOR run.",
+    )
+    parser.add_argument("run_dir", nargs="?", default=None,
+                        help="run output directory")
+    parser.add_argument("--project", nargs="?", const="", default=None,
+                        metavar="NAME",
+                        help="show all runs of a project (default: the "
+                             "active project)")
+    parser.add_argument("--raw", action="store_true",
+                        help="JSON output")
+    args = parser.parse_args()
+
+    if args.run_dir and args.project is not None:
+        print("raptor-run-status: pass a run dir OR --project, not both",
+              file=sys.stderr)
+        sys.exit(2)
+
+    if args.run_dir:
+        run = Path(args.run_dir)
+        if not (run / ".raptor-run.json").is_file():
+            print(f"raptor-run-status: {_sft(args.run_dir, max_len=200)} "
+                  "is not a run directory (no .raptor-run.json)",
+                  file=sys.stderr)
+            sys.exit(2)
+        _show_run(run, args.raw)
+        return
+
+    project_dir = _resolve_project_dir(args.project or None)
+    if not project_dir:
+        print("raptor-run-status: no active project — pass a run dir or "
+              "--project <name>", file=sys.stderr)
+        sys.exit(1)
+    _show_project(project_dir, args.raw)
+
+
+if __name__ == "__main__":
+    main()
