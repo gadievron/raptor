@@ -1509,9 +1509,19 @@ def _oracle_probe_lines(pattern: str, flags: int, mode: str,
         if text is None:
             print("NOATTACK")
             return
-        start = time.perf_counter()
+        # CPU time, not wall: regex matching is pure CPU, and the
+        # exponent is a log-ratio of exactly TWO single samples — on a
+        # contended runner (this oracle fans out 8 subprocess lanes,
+        # nightly runners have fewer cores) wall-clock scheduling
+        # noise routinely pushes a linear member's last probe over the
+        # trust floor and then synthesizes exp~2-3 from the noisy
+        # ratio, mass-failing the agrees-with-pins re-checks. The
+        # process CPU clock counts only this child's own execution, so
+        # co-runner load cannot inflate it; the lane's hard-kill
+        # deadline stays wall-based in the parent.
+        start = time.process_time()
         run(text)
-        elapsed = time.perf_counter() - start
+        elapsed = time.process_time() - start
         print(n, f"{elapsed:.6f}", flush=True)
         if elapsed > 1.0:
             break
@@ -1555,7 +1565,7 @@ def _oracle_lane(pattern: str, flags: int, mode: str, kind: str,
     if status in ("NOATTACK", "NOPARSE", "NOLANE"):
         return (None, status)
     if len(probes) == 1 and probes[0][1] > 1.0:
-        return (99.0, "wall")  # first probe already over the wall
+        return (99.0, "wall")  # first probe already over the CPU budget
     if len(probes) < 2:
         return (None, "short")
     (n1, t1), (n2, t2) = probes[-2], probes[-1]
@@ -2059,9 +2069,12 @@ def _scan_oracle_probe_lines(pattern: str, flags: int,
         if text is None:
             print("NOATTACK")
             return
-        start = time.perf_counter()
+        # CPU time, not wall — same contention rationale as
+        # _oracle_probe_lines: two single wall samples on a loaded
+        # runner synthesize false superlinear exponents.
+        start = time.process_time()
         rx.search(text)
-        elapsed = time.perf_counter() - start
+        elapsed = time.process_time() - start
         print(n, f"{elapsed:.6f}", flush=True)
         if elapsed > 1.0:
             break
