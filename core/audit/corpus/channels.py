@@ -99,10 +99,15 @@ def load_channel_labels(
     """
     labels_dir = channel_labels_dir(channel, base)
     if not labels_dir.is_dir():
-        available = list_channels(base)
+        # A malformed SIBLING dir must not mask this error with its
+        # own — the listing is best-effort context here.
+        try:
+            available: str = ", ".join(list_channels(base)) or "none"
+        except ChannelCorpusError:
+            available = "unlistable (malformed sibling channel dir)"
         msg = (
             f"no micro-corpus dir for channel {channel!r} at "
-            f"{labels_dir} (available: {available or 'none'})"
+            f"{labels_dir} (available: {available})"
         )
         raise ChannelCorpusError(msg)
     labels = load_all_labels(corpus_dir=labels_dir, bug_class=bug_class)

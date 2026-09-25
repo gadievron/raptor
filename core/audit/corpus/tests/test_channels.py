@@ -101,6 +101,15 @@ class TestLoadChannelLabels:
         with pytest.raises(ChannelCorpusError, match="available"):
             load_channel_labels("api_boundary", base=tmp_path)
 
+    def test_missing_channel_error_survives_malformed_sibling(
+            self, tmp_path):
+        # a malformed sibling dir must not mask the missing-channel
+        # message with the listing's own validation error
+        (tmp_path / "Bad-Name").mkdir()
+        with pytest.raises(ChannelCorpusError,
+                           match="no micro-corpus dir"):
+            load_channel_labels("api_boundary", base=tmp_path)
+
     def test_field_dir_mismatch_refused(self, tmp_path):
         _write_label(tmp_path, "smt", "a",
                      _label_dict("src/demo.c:fn_a",
