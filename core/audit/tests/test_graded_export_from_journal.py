@@ -24,9 +24,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 HELPER_PATH = REPO_ROOT / "libexec" / "raptor-validation-helper"
 
 
-def _entry(file: str, function: str, verdict: str, **kw) -> ReviewJournalEntry:
+def _entry(file: str, function: str, verdict: str,
+           run_id: str = "run1", **kw) -> ReviewJournalEntry:
     return ReviewJournalEntry(
-        ts=now_iso(), run_id="run1", file=file, function=function,
+        ts=now_iso(), run_id=run_id, file=file, function=function,
         verdict=verdict, source_hash="", **kw,
     )
 
@@ -138,18 +139,127 @@ def test_unstamped_row_exports_without_tool_receipts(tmp_path):
 
 
 def test_stamped_row_keeps_tool_receipts(tmp_path):
-    # Control: a row the journal writer recorded (MAC verifies) keeps
-    # its journaled evidence stamp — the receipts were correlated at
-    # record time.
+    # Control: a row the journal writer recorded IN THIS RUN (MAC
+    # verifies and the MAC-covered run_id names the exporting run
+    # dir) keeps its journaled evidence stamp — the receipts were
+    # correlated at record time.
     _journal(tmp_path, [
-        _entry("a.c", "f", "suspicious", line_start=5,
-               body="executed rule confirms flow",
+        _entry("a.c", "f", "suspicious", run_id=tmp_path.name,
+               line_start=5, body="executed rule confirms flow",
                evidence_tools=["semgrep"], cwe="CWE-79"),
     ])
     graded = export_graded_from_journal(tmp_path)
     assert graded["derivation"]["unverified_rows"] == 0
+    assert graded["derivation"]["foreign_run_rows"] == 0
     rec = graded["findings"][0]
     assert rec["discovery"]["evidence_tool"] == "semgrep"
+    assert "receipt_scope" not in rec["provenance"]
+
+
+def test_replayed_row_from_sibling_run_exports_without_receipts(tmp_path):
+    # A writer-minted row byte-copied across run dirs still verifies
+    # under the install-scoped MAC, but its MAC-covered run_id names
+    # the ORIGIN run — the receipt run-scope gate strips its tool
+    # receipts (and the high confidence they mint) in the destination.
+    run_a = tmp_path / "runA"
+    run_b = tmp_path / "runB"
+    run_a.mkdir()
+    run_b.mkdir()
+    _journal(run_a, [
+        _entry("a.c", "target", "suspicious", run_id="runA",
+               line_start=5, body="genuine sweep-backed suspicion",
+               evidence_tools=["semgrep"], cwe="CWE-89"),
+    ])
+    line = (run_a / "review-journal.jsonl").read_text()
+    (run_b / "review-journal.jsonl").write_text(line)
+    graded = export_graded_from_journal(run_b)
+    assert graded["derivation"]["unverified_rows"] == 0
+    assert graded["derivation"]["foreign_run_rows"] == 1
+    rec = graded["findings"][0]
+    assert rec["discovery"]["confirmed_by"] == []
+    assert rec["discovery"]["evidence_tool"] == "none"
+    assert rec["confidence"] != "high"
+    # The origin run still exports its own row with full receipts.
+    graded_a = export_graded_from_journal(run_a)
+    assert graded_a["findings"][0]["discovery"]["evidence_tool"] \
+        == "semgrep"
+
+
+def test_replayed_tampered_row_still_detected(tmp_path):
+    # Field-tamper detection is unchanged by the run-scope gate: an
+    # edited replay demotes to the unverified tier, not the foreign
+    # tier.
+    import json as _json
+    run_a = tmp_path / "runA"
+    run_b = tmp_path / "runB"
+    run_a.mkdir()
+    run_b.mkdir()
+    _journal(run_a, [
+        _entry("a.c", "target", "finding", run_id="runB",
+               line_start=5, evidence_tools=["codeql"]),
+    ])
+    row = _json.loads((run_a / "review-journal.jsonl").read_text())
+    row["line_start"] = 999   # edit AFTER stamping; run_id even matches
+    (run_b / "review-journal.jsonl").write_text(_json.dumps(row) + "\n")
+    graded = export_graded_from_journal(run_b)
+    assert graded["derivation"]["unverified_rows"] == 1
+    assert graded["derivation"]["foreign_run_rows"] == 0
+    rec = graded["findings"][0]
+    assert rec["discovery"]["evidence_tool"] == "none"
+
+
+def test_relative_out_dir_keeps_same_run_receipts(tmp_path, monkeypatch):
+    # Fail-direction pin: a relative out_dir spelling ("." from
+    # --out .) has Path(".").name == "" — unresolved, that identity
+    # demoted every SAME-RUN row to the foreign tier. The identity is
+    # resolved first.
+    run = tmp_path / "runX"
+    run.mkdir()
+    _journal(run, [
+        _entry("a.c", "f", "suspicious", run_id="runX",
+               line_start=5, evidence_tools=["semgrep"]),
+    ])
+    monkeypatch.chdir(run)
+    graded = export_graded_from_journal(Path("."))
+    assert graded["derivation"]["foreign_run_rows"] == 0
+    rec = graded["findings"][0]
+    assert rec["discovery"]["evidence_tool"] == "semgrep"
+    assert "receipt_scope" not in rec["provenance"]
+
+
+def test_relative_out_dir_never_run_scopes_unattributed_rows(
+        tmp_path, monkeypatch):
+    # The other inverted direction: with an empty identity, a
+    # run_id="" row compared EQUAL and graded run-scoped — receipts
+    # with no marker. It must stay in the marked grandfather tier.
+    run = tmp_path / "runY"
+    run.mkdir()
+    _journal(run, [
+        _entry("a.c", "f", "suspicious", run_id="",
+               line_start=5, evidence_tools=["semgrep"]),
+    ])
+    monkeypatch.chdir(run)
+    graded = export_graded_from_journal(Path("."))
+    assert graded["derivation"]["unscoped_run_rows"] == 1
+    rec = graded["findings"][0]
+    assert rec["provenance"]["receipt_scope"] == "install"
+
+
+def test_unattributed_verified_row_grandfathers_with_marker(tmp_path):
+    # A verified row with NO run attribution (legacy writer stamped
+    # run_id="") keeps its receipts — stripping every legacy receipt
+    # would regress honest old exports — but the grandfather is
+    # marked per record and counted per container so downstream can
+    # weigh it.
+    _journal(tmp_path, [
+        _entry("a.c", "f", "suspicious", run_id="",
+               line_start=5, evidence_tools=["semgrep"]),
+    ])
+    graded = export_graded_from_journal(tmp_path)
+    assert graded["derivation"]["unscoped_run_rows"] == 1
+    rec = graded["findings"][0]
+    assert rec["discovery"]["evidence_tool"] == "semgrep"
+    assert rec["provenance"]["receipt_scope"] == "install"
 
 
 @pytest.fixture(scope="module")
