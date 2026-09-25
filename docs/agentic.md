@@ -302,11 +302,18 @@ with a verdict naming the check, and per-check counters join the report:
   re-analysis (`sage_<verdict>`).  Set `manual_override` on a finding to
   force it through to fresh review.  The operator surface for both is
   `raptor-review verdict <finding-id> fp|tp|retest` -- `fp` records a
-  suppressing verdict (interactive terminal required -- the row
-  carries pipeline-grade suppression authority), `tp` clears prior
-  suppression and sets `manual_override` on the stored records,
-  `retest` clears the stored verdict so the next run re-analyzes
-  (both work non-interactively; they only cause re-analysis).
+  suppressing verdict, gated on the live-context operator grant (its
+  row carries pipeline-grade suppression authority). In practice the
+  grant refuses the dispatch trust markers every shipped launcher
+  route carries (`bin/raptor` exports `_RAPTOR_TRUSTED=1`; the
+  libexec preamble requires a marker), so `fp` does not mint in
+  production: the CLI standing-suppression mint is retired pending
+  an operator decision on a sanctioned terminal ceremony. Record
+  operator FP assertions with `/annotate` (human grade,
+  production-reachable); `tp` clears prior suppression and sets
+  `manual_override` on the stored records, `retest` clears the
+  stored verdict so the next run re-analyzes (both work
+  non-interactively; they only cause re-analysis).
 
 
 ## Output
