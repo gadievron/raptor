@@ -1449,12 +1449,81 @@ def _reject_empty_cpg(cpg_path: Path, languages: set[str] | None) -> bool:
     return False
 
 
+#: Unscoped CPG slot name — also the pre-slotting legacy layout, so
+#: existing single-slot caches keep loading (migration: the legacy
+#: slot IS the unscoped key).
+_CPG_SLOT_UNSCOPED = "joern-cpg"
+_CPG_SLOT_SCOPED_PREFIX = "joern-cpg-scope-"
+
+# Retained scoped-slot bound (keep-N by slot mtime; the unscoped slot
+# is never pruned — it holds the whole-tree graph, the costliest
+# rebuild, and its lifecycle predates slotting). Lower re-creates the
+# single-slot thrash slotting exists to fix: two alternating scoped
+# runs each re-buy a full CPG build per run. Higher lets multi-GB CPG
+# slots accumulate on the project disk with no consumer.
+_CPG_SCOPED_SLOTS_KEEP = 4
+
+
+def _normalised_scope_excludes(scope_exclude_dirs) -> list[str]:
+    """Canonical (resolved, sorted, stringified) scope-exclusion set."""
+    return sorted(str(p) for p in _resolved_exclude_dirs(scope_exclude_dirs))
+
+
+def cpg_cache_slot_name(scope_exclude_dirs=()) -> str:
+    """Cache slot for a scope-exclusion set.
+
+    Consumers key on their OWN scope: the unscoped set maps to the
+    legacy slot, every distinct scoped set to its own hash-suffixed
+    slot — a scoped build can never evict (or be served to) a
+    consumer with a different scope.
+    """
+    norm = _normalised_scope_excludes(scope_exclude_dirs)
+    if not norm:
+        return _CPG_SLOT_UNSCOPED
+    digest = hashlib.sha256("\n".join(norm).encode()).hexdigest()[:12]
+    return f"{_CPG_SLOT_SCOPED_PREFIX}{digest}"
+
+
+def _prune_scoped_cpg_slots(cache_dir: Path, *, active_slot: str) -> None:
+    """Bound retained scoped CPG slots to :data:`_CPG_SCOPED_SLOTS_KEEP`.
+
+    Keep-N by slot mtime, newest first; the just-written slot is
+    always kept. Only ``joern-cpg-scope-*`` directories are
+    candidates — the unscoped legacy slot is exempt (see the keep
+    constant). rmtree only a real directory, never a planted symlink.
+    """
+    try:
+        slots = [
+            d for d in cache_dir.iterdir()
+            if d.name.startswith(_CPG_SLOT_SCOPED_PREFIX)
+            and d.is_dir() and not d.is_symlink()
+        ]
+    except OSError:
+        return
+    if len(slots) <= _CPG_SCOPED_SLOTS_KEEP:
+        return
+
+    def _mtime(d: Path) -> float:
+        try:
+            return d.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    slots.sort(key=_mtime, reverse=True)
+    for stale in slots[_CPG_SCOPED_SLOTS_KEEP:]:
+        if stale.name == active_slot:
+            continue
+        shutil.rmtree(stale, ignore_errors=True)
+        logger.info("pruned stale scoped CPG cache slot %s", stale)
+
+
 def _write_cpg_manifest(
     cpg_dir: Path, target: Path, content_hash: str,
     languages: set[str] | None = None, build_time_ms: int = 0,
     frontend_args_fingerprint: str = "",
     method_count: int | None = None,
     exclude_dirs=(),
+    scope_exclude_dirs=(),
 ) -> None:
     """Write manifest.json alongside the cached CPG."""
     manifest = {
@@ -1470,6 +1539,9 @@ def _write_cpg_manifest(
         # key/analysis parity.
         "exclude_regex": CPG_EXCLUDE_REGEX,
         "exclude_dirs": sorted(str(d) for d in exclude_dirs or ()),
+        # The scope contract: consumers refuse a slot whose recorded
+        # scope differs from their own (see load_cached_cpg).
+        "scope_exclude_dirs": _normalised_scope_excludes(scope_exclude_dirs),
     }
     manifest_path = cpg_dir / "manifest.json"
     from core.json import save_json
@@ -1492,6 +1564,7 @@ def load_cached_cpg(
     expected_frontend_fingerprint: str | None = None,
     current_content_hash: str | None = None,
     exclude_dirs=(),
+    scope_exclude_dirs=(),
 ) -> JoernCPG | None:
     """Return a cached CPG if fresh, None if stale or missing.
 
@@ -1502,24 +1575,51 @@ def load_cached_cpg(
 
     ``current_content_hash``: precomputed :func:`_target_content_hash`
     of the target tree; ``None`` computes it here (with
-    ``exclude_dirs``). Callers that go on to rebuild pass it so the
-    freshness check and the rebuilt cache's manifest describe the
-    SAME tree state.
+    ``exclude_dirs`` plus ``scope_exclude_dirs``). Callers that go on
+    to rebuild pass it so the freshness check and the rebuilt cache's
+    manifest describe the SAME tree state.
+
+    ``scope_exclude_dirs`` (the run's scope COMPLEMENT — semantic
+    coverage exclusions, unlike the freshness-neutral run-artifact
+    ``exclude_dirs``) selects the cache slot: consumers key on their
+    OWN scope (:func:`cpg_cache_slot_name`), and the manifest's
+    recorded scope must match it exactly — an unscoped consumer
+    refuses a scoped graph and vice versa, whatever slot the file
+    sits in (covers legacy single-slot layouts and slot-name
+    collisions).
 
     Read-only consumers that pass neither hash nor ``exclude_dirs``
     reproduce the manifest's recorded exclusion contract: a graph
     built under caller-declared exclusions would otherwise hash the
     excluded run artifacts back into the key and read as permanently
     stale. Trusting the recorded list adds nothing an attacker did not
-    already have — the manifest carries ``content_hash`` itself.
+    already have — the manifest carries ``content_hash`` itself. The
+    recorded SCOPE list is never trusted that way: it must equal the
+    consumer's own scope, so the hash always reproduces exactly that
+    set.
     """
-    cpg_dir = cache_dir / "joern-cpg"
+    cpg_dir = cache_dir / cpg_cache_slot_name(scope_exclude_dirs)
     cpg_path = cpg_dir / "cpg.bin"
     if not cpg_path.exists():
         return None
 
     manifest = _read_cpg_manifest(cpg_dir)
     if manifest is None:
+        return None
+
+    own_scope = _normalised_scope_excludes(scope_exclude_dirs)
+    recorded_scope = manifest.get("scope_exclude_dirs") or []
+    if recorded_scope != own_scope:
+        # Scope mismatch is a REFUSAL, not staleness: the graph's
+        # coverage was carved for a different scope, and serving it
+        # would let a scoped CPG answer an unscoped consumer's
+        # queries (or the reverse) as silent false negatives.
+        logger.info(
+            "CPG cache at %s refused (scope contract mismatch: "
+            "recorded %d scope exclusion(s), consumer has %d) — this "
+            "consumer will rebuild in its own slot",
+            cpg_dir, len(recorded_scope), len(own_scope),
+        )
         return None
 
     recorded_regex = manifest.get("exclude_regex")
@@ -1547,9 +1647,13 @@ def load_cached_cpg(
     if current_content_hash:
         current_hash = current_content_hash
     else:
-        effective_exclude = (
+        # The scope set joins the key unconditionally: it was
+        # verified equal to the consumer's own scope above, so this
+        # never trusts the manifest for anything the caller did not
+        # assert itself.
+        effective_exclude = tuple(
             exclude_dirs or manifest.get("exclude_dirs") or ()
-        )
+        ) + tuple(own_scope)
         current_hash = _target_content_hash(
             target, exclude_dirs=effective_exclude)
     if manifest.get("content_hash") != current_hash:
@@ -1584,6 +1688,11 @@ def load_cached_cpg(
         return None
 
     langs = set(manifest.get("languages", []))
+    # Recency bump: the scoped-slot prune orders by slot mtime, which
+    # otherwise only moves at build time — a frequently-HIT old slot
+    # would evict before a never-read newer one. Best-effort.
+    with contextlib.suppress(OSError):
+        os.utime(cpg_dir)
     logger.info("CPG cache hit for %s (cache: %s)", target, cpg_dir)
     return JoernCPG(
         path=cpg_path,
@@ -1603,23 +1712,36 @@ def build_cpg_cached(
     on_progress: Callable | None = None,
     heap_mb: int | None = None,
     exclude_dirs=(),
+    scope_exclude_dirs=(),
 ) -> JoernCPG:
     """Build or reuse a cached CPG for the target.
 
     cache_dir is typically the project directory. The CPG is stored
-    in cache_dir/joern-cpg/cpg.bin with a manifest for freshness.
-    Frontend args discovered from compile_commands.json join the
-    freshness contract: a flags change rebuilds even when source
-    contents are unchanged.
+    in ``cache_dir/<slot>/cpg.bin`` with a manifest for freshness,
+    where the slot is keyed by ``scope_exclude_dirs``
+    (:func:`cpg_cache_slot_name` — unscoped builds keep the legacy
+    ``joern-cpg`` slot). Frontend args discovered from
+    compile_commands.json join the freshness contract: a flags change
+    rebuilds even when source contents are unchanged.
 
     ``exclude_dirs``: caller-declared exclusion roots (a run's
     configured output directory inside the target). They are pruned
     from the content key AND passed to the build as ``--exclude`` —
     the two must always travel together (key/analysis parity).
+
+    ``scope_exclude_dirs``: the run's scope COMPLEMENT — directories
+    deliberately outside the analysed scope. Same key/analysis parity
+    as ``exclude_dirs``, PLUS slot selection and the manifest scope
+    contract (see :func:`load_cached_cpg`): they carve the graph's
+    coverage, so they must never share a cache slot with a
+    differently-scoped build.
     """
     frontend_args = _EMPTY_FRONTEND_ARGS
     if languages and "c" in languages:
         frontend_args = discover_frontend_args(Path(target))
+
+    combined_excludes = tuple(exclude_dirs or ()) + tuple(
+        scope_exclude_dirs or ())
 
     # Hash the tree ONCE, before the (potentially minutes-long) build.
     # The manifest then records the tree state the CPG was built FROM;
@@ -1627,17 +1749,19 @@ def build_cpg_cached(
     # written while it ran, producing a recorded hash that never
     # matched the at-rest tree — a guaranteed rebuild at the next
     # consumer.
-    content_hash = _target_content_hash(target, exclude_dirs=exclude_dirs)
+    content_hash = _target_content_hash(
+        target, exclude_dirs=combined_excludes)
 
     cached = load_cached_cpg(
         target, cache_dir,
         expected_frontend_fingerprint=frontend_args.fingerprint(),
         current_content_hash=content_hash,
+        scope_exclude_dirs=scope_exclude_dirs,
     )
     if cached is not None:
         return cached
 
-    cpg_dir = cache_dir / "joern-cpg"
+    cpg_dir = cache_dir / cpg_cache_slot_name(scope_exclude_dirs)
     cpg = build_cpg(
         target,
         languages=languages,
@@ -1647,7 +1771,7 @@ def build_cpg_cached(
         on_progress=on_progress,
         heap_mb=heap_mb,
         frontend_args=frontend_args,
-        exclude_dirs=exclude_dirs,
+        exclude_dirs=combined_excludes,
     )
 
     # Cache admission gates. A manifest is a promise that cpg.bin is a
@@ -1675,7 +1799,9 @@ def build_cpg_cached(
                 frontend_args_fingerprint=frontend_args.fingerprint(),
                 method_count=method_count,
                 exclude_dirs=exclude_dirs,
+                scope_exclude_dirs=scope_exclude_dirs,
             )
+            _prune_scoped_cpg_slots(cache_dir, active_slot=cpg_dir.name)
 
     return cpg
 
