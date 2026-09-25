@@ -234,6 +234,10 @@ class TestFamilies:
         manifest, _ = self._generate(tmp_path, monkeypatch, "injection")
         assert manifest["name"] == "juliet-java-holdout"
         assert [e["cwe"] for e in manifest["expected"]] == ["CWE-89"]
+        # byte-identity contract: the default slice's manifest layout
+        # predates the family field, so it must carry NO family stamp
+        # (downstream identity stamps hash regenerated manifests)
+        assert "family" not in manifest["notes"]
 
     def test_unknown_family_refused(self, tmp_path):
         clone = _make_family_clone(tmp_path)
@@ -407,6 +411,8 @@ class TestGenerateB:
         manifest, head = self._manifest(tmp_path, monkeypatch)
         assert "LEDGER-FRESH" in manifest["notes"]["ledger"]
         assert manifest["profile"] == "scan-codeql"
+        # default slice carries no family stamp (byte-identity rule)
+        assert "family" not in manifest["notes"]
         manifest["target"]["pinned_sha"] = head
         parsed = parse_manifest(json.loads(json.dumps(manifest)))
         assert parsed.name == "juliet-b-multifile"

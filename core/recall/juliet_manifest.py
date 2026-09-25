@@ -238,6 +238,20 @@ def generate_manifest(clone_dir: Path, *, cwes: list[int] | None = None,
         msg = "no expected entries survived the filters"
         raise JulietManifestError(msg)
 
+    # The default (injection) manifest's byte layout predates the
+    # family field, and downstream identity stamps hash regenerated
+    # manifests — so the default stays stamp-free (byte-identical
+    # output) and only the newer families carry the marker.
+    notes: dict = {
+        "holdout_doctrine": (
+            "Generalization check ONLY: mechanisms are tuned on "
+            "the OWASP corpus; Juliet runs are reported at first "
+            "contact and never used to tune."),
+        "skipped_multi_file_variants": skipped_multi,
+        "skipped_no_bad_good_split": skipped_unsplit,
+    }
+    if family != "injection":
+        notes = {"family": family, **notes}
     return {
         "schema_version": SCHEMA_VERSION,
         "name": _FAMILY_NAMES[family],
@@ -256,15 +270,7 @@ def generate_manifest(clone_dir: Path, *, cwes: list[int] | None = None,
         "clean_regions": clean,
         # Coverage honesty: what the generator dropped, and why this
         # corpus exists.
-        "notes": {
-            "family": family,
-            "holdout_doctrine": (
-                "Generalization check ONLY: mechanisms are tuned on "
-                "the OWASP corpus; Juliet runs are reported at first "
-                "contact and never used to tune."),
-            "skipped_multi_file_variants": skipped_multi,
-            "skipped_no_bad_good_split": skipped_unsplit,
-        },
+        "notes": notes,
     }
 
 
@@ -503,6 +509,11 @@ def generate_manifest_b(clone_dir: Path, *, cwes: list[int] | None = None,
         msg = "no Juliet-B expected entries survived the filters"
         raise JulietManifestError(msg)
 
+    # Same stamp rule as generate_manifest: the default slice's byte
+    # layout is preserved; only the newer families carry the marker.
+    notes: dict = {}
+    if family != "injection":
+        notes["family"] = family
     return {
         "schema_version": SCHEMA_VERSION,
         "name": _FAMILY_NAMES_B[family],
@@ -517,7 +528,7 @@ def generate_manifest_b(clone_dir: Path, *, cwes: list[int] | None = None,
         "expected": expected,
         "clean_regions": clean,
         "notes": {
-            "family": family,
+            **notes,
             "ledger": (
                 "LEDGER-FRESH first-contact corpus: no mechanism has "
                 "been tuned against multi-file Juliet cases. Record "
