@@ -20,6 +20,7 @@ Two invocation shapes are used:
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import subprocess
@@ -36,14 +37,46 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@functools.lru_cache(maxsize=1)
+def _safe_python_shim_dir() -> str:
+    """A private 0755 dir exposing this interpreter as ``python3``.
+
+    Substitutes for the interpreter's own bin dir when THAT dir is
+    world-writable and would therefore trip the very hardening under
+    test (GitHub-hosted runners chmod the whole Python toolcache
+    install 0777): the tests must see drop/keep lines only for the
+    entries they planted."""
+    import atexit
+    import shutil
+    import tempfile
+    # raptor-pytest- prefix: already on the tmp reaper's
+    # cleanup-intended list, so a SIGKILL'd session's leftover is
+    # reaped like any other pytest scratch.
+    shim = Path(tempfile.mkdtemp(prefix="raptor-pytest-pybin-"))
+    atexit.register(shutil.rmtree, shim, True)
+    shim.chmod(0o755)
+    (shim / "python3").symlink_to(sys.executable)
+    return str(shim)
+
+
 def _system_path_dirs() -> list[str]:
     """Real dirs the launcher needs: python3's home plus the usual
-    system bins (bash utilities: stat, dirname, du, find, clear)."""
+    system bins (bash utilities: stat, dirname, du, find, clear).
+
+    Every candidate is screened against the launcher's own
+    world-writable test (o+w, sticky or not): an ambient unsafe dir
+    would add drop/keep stderr lines the assertions never planted —
+    on GitHub-hosted runners the Python toolcache bin dir is 0777 and
+    did exactly that. A screened-out python dir is replaced by a safe
+    shim so the interpreter stays reachable."""
     dirs = []
-    py_dir = str(Path(sys.executable).resolve().parent)
-    dirs.append(py_dir)
+    py_dir = Path(sys.executable).resolve().parent
+    if py_dir.stat().st_mode & 0o002:
+        dirs.append(_safe_python_shim_dir())
+    else:
+        dirs.append(str(py_dir))
     for d in ("/usr/bin", "/bin", "/usr/sbin", "/sbin"):
-        if os.path.isdir(d):
+        if os.path.isdir(d) and not os.stat(d).st_mode & 0o002:
             dirs.append(d)
     return dirs
 
