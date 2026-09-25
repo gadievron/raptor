@@ -1673,6 +1673,11 @@
     "count": 27,
     "kind": "literal"
   },
+  "core/security/prompt_envelope_audit.py::_is_sanitised": {
+    "count": 11,
+    "kind": "literal",
+    "note": "recognised-sanitiser registry for the envelope audit, not a learned name set: each name is a canonical defence entry point (envelope wrap, tag defang, identifier defence); the compose-then-defend ancestor exemption keys off this same set"
+  },
   "core/security/redaction.py::_SECRET_QUERY_KEYS": {
     "count": 30,
     "kind": "literal"

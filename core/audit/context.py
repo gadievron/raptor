@@ -957,7 +957,16 @@ def format_context_for_prompt(
     # target-derived fragments compose into ONE text run, the defence
     # runs on the JOINED text — separately-defended halves of a
     # boundary-tag shape are individually invisible to the neutraliser
-    # and reassemble live across the join.
+    # and reassemble live across the join. This is load-bearing for
+    # ANY separator, including pure whitespace: the neutraliser's
+    # arms tolerate whitespace inside a tag (`[ name`), so a bare
+    # whitespace join can itself supply the gap two clean halves
+    # need. The same seam exists when the TEMPLATE authors brackets
+    # around a fragment (`[{fragment}]`): a fragment that is a bare
+    # registered tag name carries no hostile character at all —
+    # those sites defend the composed bracketed text (see the
+    # constraints cwe / prior-attempts tier / session-observation
+    # label rows).
     safe_heading = _defend_identifier(
         f"{ctx.get('file', '')}:{ctx.get('function', '')}",
         max_length=768,
@@ -1625,14 +1634,20 @@ def format_context_for_prompt(
             rule = _defend_identifier(ac.get("rule", "?"), max_length=300)
             violation = _defend_identifier(ac.get("violation", ""),
                                            max_length=300)
-            cwe = _defend_identifier(ac.get("cwe", ""), max_length=32)
+            cwe = str(ac.get("cwe", "") or "")
             status = _defend_identifier(ac.get("status", "open"),
                                         max_length=32)
             line = f"- **{kind}** `{target}`: {rule}"
             if violation:
                 line += f" (violation: {violation})"
             if cwe:
-                line += f" [{cwe}]"
+                # Compose-then-defend: this template authors the
+                # brackets, so a fragment that IS a registered
+                # boundary-tag name would reassemble a live tag with
+                # zero hostile characters of its own — the defence
+                # must see the composed [cwe].
+                line += " " + _defend_identifier(f"[{cwe}]",
+                                                 max_length=48)
             line += f" — from {src}, status: {status}"
             cp.append(line)
         sections.append(PromptSection("constraints", "\n".join(cp), 1))
@@ -1664,8 +1679,15 @@ def format_context_for_prompt(
         # neutralisation — the summary's newlines stayed live and the
         # evidence field rendered raw.
         for ex in ctx["prior_attempts"]["exemplars"]:
-            tier = _defend_identifier(ex.get("tier", ""), max_length=32)
-            tier_label = f" [{tier}]" if tier else ""
+            tier = str(ex.get("tier", "") or "")
+            # Compose-then-defend: the brackets are template-authored,
+            # so tier values spelling the boundary-tag vocabulary
+            # (an opener/closer PAIR across two exemplars) would
+            # reassemble live tags — defend the composed [tier].
+            tier_label = (
+                " " + _defend_identifier(f"[{tier}]", max_length=48)
+                if tier else ""
+            )
             cwe = _defend_identifier(ex.get("cwe", "?"), max_length=32)
             summary = _defend_identifier(ex.get("summary", ""),
                                          max_length=400)
@@ -2035,11 +2057,17 @@ def format_context_for_prompt(
             # otherwise forge a trusted-shaped line for every LATER
             # review in the run. The text half is defended at the
             # producer (_sanitise_observation).
-            source = _defend_identifier(
-                obs.get("source", "?"), max_length=512,
+            # Compose-then-defend (this is the most directly
+            # reachable of the bracket-template sites: the label is a
+            # repo-derived file:function name): the template authors
+            # the brackets, so a name that IS a registered
+            # boundary-tag name reassembles a live tag unless the
+            # defence sees the composed [source].
+            source_label = _defend_identifier(
+                f"[{obs.get('source', '?')}]", max_length=514,
             )
             text = obs.get("text", "")
-            obs_parts.append(f"- [{source}] {text}")
+            obs_parts.append(f"- {source_label} {text}")
         sections.append(PromptSection(
             "session_observations", "\n".join(obs_parts), 4))
 
@@ -2475,7 +2503,14 @@ def _format_study_answers(study_answers: list[dict]) -> str:
             r"[^a-z0-9_-]", "", str(a.get("status", "")).lower(),
         )[:20]
         receipt = a.get("receipt") or {}
-        label = f"[{tier or 'unverified'}]"
+        # The alphabet filter above is not sufficient here: the
+        # boundary-tag vocabulary itself fits [a-z0-9_-] (and the
+        # neutraliser matches it case-insensitively), so a tier that
+        # IS a registered name passes the filter whole and this
+        # template's own brackets complete the tag. Compose, then
+        # defend the composed [tier].
+        label = _defend_identifier(f"[{tier or 'unverified'}]",
+                                   max_length=48)
         if tier not in _ACTIONABLE_STUDY_TIERS:
             label += " UNVERIFIED HINT"
         elif status == "inconclusive":
