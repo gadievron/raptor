@@ -1216,7 +1216,14 @@ class CExtractor:
                 func.line_end = events[end_idx][0] + 1  # 1-based
 
 
-_JAVA_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+# Opener pinned to an UNESCAPED delimiter ((?<!\\)): an unterminated
+# literal whose interior repeats escaped delimiters (`"` + `\"`*n)
+# otherwise makes every embedded delimiter a fresh match attempt that
+# re-scans to the end of the line — quadratic on a hostile planted
+# line (measured exp 2.26; pinned, exp 1.0). On a well-formed token
+# stream no string opens at an escaped delimiter, so the strip is
+# unchanged; dropping the pin re-opens the quadratic.
+_JAVA_STRING_RE = re.compile(r'(?<!\\)"(?:[^"\\]|\\.)*"')
 _JAVA_CHAR_RE = re.compile(r"'(?:[^'\\]|\\.)'")
 
 

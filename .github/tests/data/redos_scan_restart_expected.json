@@ -1688,7 +1688,7 @@
   },
   "core/inventory/extractors.py\u001f_JAVA_STRING_RE": {
    "digests": [
-    "00e2d789000f"
+    "b2149534ae6d"
    ],
    "exp": 1.0,
    "verdict": "linear"
