@@ -97,6 +97,15 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         effective_schema = _normalize_schema(effective_schema)
     config = CCDispatchConfig(
         claude_bin=claude_bin,
+        # Read-only tool allowlist — LOAD-BEARING beyond least
+        # privilege: this child receives the agent's out_dir
+        # (autonomous/) as its OS-level write grant below, and
+        # autonomous/ is a trusted review-record home at the coverage
+        # load chokepoint (core/coverage/record.py,
+        # _REVIEW_RECORD_SUBDIRS). No Write/Edit/Bash means the child
+        # cannot mint coverage records there; widening this allowlist
+        # requires moving that entry behind the refusal first. Pinned
+        # by core/coverage/tests/test_record_subdir_policy.py.
         tools="Read,Grep,Glob",
         add_dirs=(str(repo_path),),
         budget_usd=CC_BUDGET_PER_FINDING,

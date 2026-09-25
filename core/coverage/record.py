@@ -13,6 +13,90 @@ from core.json import DEFAULT_JSON_MAX_BYTES, load_json, save_json
 
 COVERAGE_RECORD_FILE = "coverage-record.json"  # legacy single-file name
 
+# ─── Subdir record trust policy (load chokepoint) ───────────────────
+# load_records() also globs coverage-*.json one level down because
+# some producers write records into their own run-dir subdir. But
+# several of those subdirs are SANDBOX WRITE GRANTS handed to child
+# processes that execute over (or ARE) untrusted input — the external
+# OpenAnt scanner owns openant_scan/, the pattern scanners' children
+# write into scan/ and codeql/. A child that can drop
+# ``coverage-llm.json`` (or any review-capable label — the label
+# space is unlimited, so top-level-name dedup is no defense) into its
+# grant would mint FULL review credit in every consumer of this
+# loader: store_view/--fail-under, the --residual view, the /audit
+# and --gap-audit covered-set fold. The load is therefore the one
+# chokepoint where subdir trust is enforced, so every consumer
+# inherits it:
+#
+#   * _REVIEW_RECORD_SUBDIRS — review-record producer homes whose
+#     records load unrestricted (autonomous/: the llm_analysis agent
+#     writes its journal-derived review record there). NOTE the true
+#     guard for autonomous/: the agent's per-finding `claude -p`
+#     sub-agent DOES receive autonomous/ as its OS-level write grant
+#     (packages/llm_analysis/cc_dispatch.py) — what keeps it from
+#     minting records there is that child's CLI tool allowlist
+#     (Read,Grep,Glob: no Write/Edit/Bash), structurally tied to this
+#     entry by core/coverage/tests/test_record_subdir_policy.py.
+#     Widening that allowlist without moving this entry behind the
+#     refusal trips the tie test.
+#   * _SCANNER_RECORD_SUBDIRS — established scanner homes (scan/,
+#     codeql/, sca/). Their legitimate records are scanner-grade
+#     only, so records that would carry review credit — a label
+#     classifying (llm, analysed), or the legacy nested ``files{}``
+#     shape (which the audit fold credits for any non-runtime
+#     category) — are REFUSED from these dirs.
+#   * anything else (openant_scan/ and unknown subdirs): refused
+#     outright. Review-capable coverage only ever loads from the
+#     run-dir TOP LEVEL, which the parent writes outside any child
+#     grant.
+#
+# Both directions: a forged openant_scan/coverage-llm.json earns
+# nothing anywhere; legitimate scan/coverage-semgrep.json,
+# codeql/coverage-codeql.json, autonomous/coverage-journal.json and
+# every top-level record load exactly as before
+# (core/coverage/tests/test_record_subdir_policy.py).
+_REVIEW_RECORD_SUBDIRS = frozenset({"autonomous"})
+_SCANNER_RECORD_SUBDIRS = frozenset({"scan", "codeql", "sca"})
+
+# Bound on individually-named refusals per load (a hostile child can
+# plant thousands of records to spam the log; the tail is counted).
+_SUBDIR_REFUSAL_LOG_CAP = 5
+
+# Nested-candidate intake bounds. Path-tier refusal is free (no read),
+# but candidates in TRUSTED subdirs must be READ to shape-check — and
+# scanner homes are child write grants, so both the candidate COUNT
+# and the cumulative BYTES of that read class are child-inflatable
+# (near-budget sparse plants otherwise cost a full artifact read
+# each, on EVERY render/store build/audit load). Legit populations
+# are a handful of KB-scale records per home; the caps only exist so
+# a plant campaign degrades to counted refusals instead of a
+# parent stall.
+_NESTED_CANDIDATE_CAP = 64
+# One run-artifact budget for the whole class (the value
+# RUN_ARTIFACT_MAX_BYTES re-exports below).
+_NESTED_READ_MAX_BYTES = DEFAULT_JSON_MAX_BYTES
+
+
+def _subdir_record_refusal(subdir: str, data: dict[str, Any]) -> str | None:
+    """SHAPE-tier refusal reason for a record loaded from
+    ``run_dir/<subdir>/``, or ``None`` when it may load. Only reached
+    for candidates that survived the PATH tier (trusted subdirs) —
+    the unknown-subdir arm stays as a belt for direct callers."""
+    if subdir in _REVIEW_RECORD_SUBDIRS:
+        return None
+    from .registry import CATEGORY_LLM, DEPTH_ANALYSED, classify
+    review_shaped = (
+        classify(str(data.get("tool") or "")) == (CATEGORY_LLM, DEPTH_ANALYSED)
+        # The legacy nested shape earns covered keys in the audit fold
+        # regardless of the label's grade — review-capable by shape.
+        or isinstance(data.get("files"), dict)
+    )
+    if subdir in _SCANNER_RECORD_SUBDIRS:
+        if review_shaped:
+            return "review-capable record in a scanner subdir"
+        return None
+    return "record outside the trusted-subdir set"
+
 #: Read budget for run-dir JSON artifacts (coverage records, findings,
 #: /understand outputs). Run dirs sit inside the sandbox write grant,
 #: so artifact SIZE is attacker-writable like every other property —
@@ -730,14 +814,54 @@ def load_records(run_dir: Path) -> list[dict[str, Any] | list[Any]]:
     # Per-tool files at the run-dir top level AND in immediate tool subdirs.
     # Producers write coverage records into their own subdir (agentic's scanner
     # -> scan/, codeql -> codeql/), while a standalone /scan writes them at the
-    # top level. coverage-*.json only appears in those tool dirs, so the
-    # one-level subdir glob picks up nothing unrelated. Top level is listed
-    # first so it wins the per-tool de-dup if a tool's record is in both places.
-    candidates = (sorted(run_dir.glob("coverage-*.json"))
-                  + sorted(run_dir.glob("*/coverage-*.json")))
-    for p in candidates:
+    # top level. Subdir candidates pay the trust policy above (several
+    # subdirs are child sandbox write grants — a forged review-grade
+    # record there minted review credit in every consumer). Top level is
+    # listed first so it wins the per-tool de-dup if a tool's record is
+    # in both places.
+    top = sorted(run_dir.glob("coverage-*.json"))
+    nested = sorted(run_dir.glob("*/coverage-*.json"))
+    refused: list[str] = []
+    # PATH tier — decided from the path alone, BEFORE any byte is
+    # read: a candidate outside the trusted subdirs refuses on its
+    # parent's name (reading first handed a hostile child a
+    # 256MiB-per-plant read on every render — the refusal needs only
+    # p.parent.name). Survivors are then count-capped: only trusted
+    # (but still child-writable) scanner homes remain, where a plant
+    # campaign could otherwise stack thousands of shape-check reads.
+    trusted = _REVIEW_RECORD_SUBDIRS | _SCANNER_RECORD_SUBDIRS
+    kept_nested: list[Path] = []
+    for p in nested:
+        if p.parent.name not in trusted:
+            refused.append(
+                f"{p.parent.name}/{p.name} "
+                f"(record outside the trusted-subdir set)")
+        else:
+            kept_nested.append(p)
+    if len(kept_nested) > _NESTED_CANDIDATE_CAP:
+        refused.extend(
+            f"{p.parent.name}/{p.name} (nested candidate cap)"
+            for p in kept_nested[_NESTED_CANDIDATE_CAP:])
+        kept_nested = kept_nested[:_NESTED_CANDIDATE_CAP]
+    # Cumulative byte budget for the nested READ class (stat-gated
+    # per candidate, before its read): one artifact budget for the
+    # whole class, the running-budget idiom of the sibling readers.
+    # Refuse-and-continue, not stop: a small legit record after a
+    # near-budget plant still loads.
+    nested_budget = _NESTED_READ_MAX_BYTES
+    for p in top + kept_nested:
         if p.name == COVERAGE_RECORD_FILE:
             continue
+        if p.parent != run_dir:
+            try:
+                size = p.stat().st_size
+            except OSError:
+                continue
+            if size > nested_budget:
+                refused.append(
+                    f"{p.parent.name}/{p.name} (nested read budget)")
+                continue
+            nested_budget -= size
         data = load_json(p, max_bytes=RUN_ARTIFACT_MAX_BYTES)
         if isinstance(data, dict) and "tool" in data:
             tool = data.get("tool")
@@ -747,10 +871,32 @@ def load_records(run_dir: Path) -> list[dict[str, Any] | list[Any]]:
                 # dicts, sorted views) and an unhashable one crashed
                 # the de-dup below. Skip the record, keep the rest.
                 continue
+            if p.parent != run_dir:
+                # SHAPE tier — needs the parsed record (trusted
+                # scanner homes may not carry review-capable shapes).
+                reason = _subdir_record_refusal(p.parent.name, data)
+                if reason is not None:
+                    refused.append(f"{p.parent.name}/{p.name} ({reason})")
+                    continue
             if tool in seen_tools:
                 continue
             seen_tools.add(tool)
             records.append(data)
+    if refused:
+        # Refused names are child-chosen bytes — escape before logging.
+        import logging
+
+        from core.security.log_sanitisation import escape_nonprintable
+        shown = [escape_nonprintable(r)[:300]
+                 for r in refused[:_SUBDIR_REFUSAL_LOG_CAP]]
+        extra = len(refused) - len(shown)
+        logging.getLogger(__name__).warning(
+            "coverage load: refused %d subdir record(s) in %s: %s%s — "
+            "review-capable coverage loads from the run-dir top level "
+            "or a trusted producer subdir only (see the subdir trust "
+            "policy in core/coverage/record.py)",
+            len(refused), run_dir, "; ".join(shown),
+            f"; +{extra} more" if extra > 0 else "")
     # Legacy single file (if no per-tool files found). Historical
     # shapes are a record OBJECT or a LIST of records (downstream,
     # core.audit.loaders.load_coverage_records splices the list flat)
