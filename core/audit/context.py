@@ -553,7 +553,14 @@ def _defend_line(value: Any) -> str:
     Only integral values pass: a float-typed value (``5.0`` from a
     JSON artifact) or float-shaped text (``"3.5"``) degrades to ``?``
     too — line provenance is integral, and widening the grammar for
-    a value no in-tree producer emits would loosen the rejection."""
+    a value no in-tree producer emits would loosen the rejection.
+
+    Known limitation (by design): routing a PROSE field through this
+    helper silently collapses it to ``?`` — fail-closed, never
+    fail-open (the value was hostile or mis-plumbed either way, and
+    a reader must not see it in a numeric slot), but the rejected
+    content is not surfaced. Prose-bearing fields belong with
+    :func:`_defend_identifier`, which keeps them renderable."""
     try:
         return str(int(str(value).strip()))
     except (TypeError, ValueError):
