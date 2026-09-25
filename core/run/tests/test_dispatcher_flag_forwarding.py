@@ -6,10 +6,14 @@ Covers:
      agentic still receives it; scan/codeql/fuzz/web never do), plus
      a drift guard that the allowlist matches what the child scripts
      actually define.
-  2. ``_resolve_estimate_model`` — the pre-flight cost gate prices
+  2. ``_forward_project_args`` — --project is re-injected only for
+     children whose argparse defines the flag (two-direction: the
+     flagged five still receive it; openant never does), plus the
+     matching drift guard.
+  3. ``_resolve_estimate_model`` — the pre-flight cost gate prices
      the estimate with the run's own --model selection or the
      configured primary, not a fixed provider default.
-  3. fuzz standalone corpus modes — --export-seed-corpus /
+  4. fuzz standalone corpus modes — --export-seed-corpus /
      --prepare-corpus bypass the run lifecycle entirely (two-direction:
      a normal fuzz argv still goes through the lifecycle wrapper).
 """
@@ -71,6 +75,57 @@ class TestForwardMaxCost:
         for command, script in child_scripts.items():
             defines = '"--max-cost-usd"' in script.read_text(encoding="utf-8")
             in_allowlist = command in raptor._MAX_COST_FORWARD_COMMANDS
+            assert defines == in_allowlist, (
+                f"{command}: child defines flag={defines}, "
+                f"allowlisted={in_allowlist}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# _forward_project_args
+# ---------------------------------------------------------------------------
+
+
+class TestForwardProject:
+    def test_flagged_children_receive_the_flag(self):
+        raptor = _import_raptor()
+        for command in ("scan", "agentic", "codeql", "fuzz", "web"):
+            out = raptor._forward_project_args(
+                command, ["--repo", "/x"], "myproj",
+            )
+            assert out == ["--repo", "/x", "--project", "myproj"], command
+
+    def test_openant_child_never_receives_the_flag(self):
+        # The defect shape: raptor_openant.py has no --project, so the
+        # unconditional re-inject exited 2 AFTER extraction + run-dir
+        # seal.
+        raptor = _import_raptor()
+        out = raptor._forward_project_args(
+            "openant", ["--repo", "/x"], "myproj",
+        )
+        assert "--project" not in out
+
+    def test_no_project_leaves_args_untouched(self):
+        raptor = _import_raptor()
+        args = ["--repo", "/x"]
+        assert raptor._forward_project_args("scan", args, None) == args
+
+    def test_allowlist_matches_child_parsers(self):
+        """Drift guard: a lifecycle mode belongs in
+        _PROJECT_FORWARD_COMMANDS exactly when its child script
+        defines --project."""
+        raptor = _import_raptor()
+        child_scripts = {
+            "scan": _RAPTOR_ROOT / "packages/static-analysis/scanner.py",
+            "agentic": _RAPTOR_ROOT / "raptor_agentic.py",
+            "codeql": _RAPTOR_ROOT / "raptor_codeql.py",
+            "fuzz": _RAPTOR_ROOT / "raptor_fuzzing.py",
+            "web": _RAPTOR_ROOT / "packages/web/scanner.py",
+            "openant": _RAPTOR_ROOT / "raptor_openant.py",
+        }
+        for command, script in child_scripts.items():
+            defines = '"--project"' in script.read_text(encoding="utf-8")
+            in_allowlist = command in raptor._PROJECT_FORWARD_COMMANDS
             assert defines == in_allowlist, (
                 f"{command}: child defines flag={defines}, "
                 f"allowlisted={in_allowlist}"
