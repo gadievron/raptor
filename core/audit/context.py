@@ -548,7 +548,12 @@ def _defend_line(value: Any) -> str:
     coerces to int and renders bare; anything else (a "line" carrying
     prose or forged headings from a hostile artifact) renders as the
     existing unknown-value convention ``?`` — escaping it would keep
-    hostile text in a slot every reader treats as a number."""
+    hostile text in a slot every reader treats as a number.
+
+    Only integral values pass: a float-typed value (``5.0`` from a
+    JSON artifact) or float-shaped text (``"3.5"``) degrades to ``?``
+    too — line provenance is integral, and widening the grammar for
+    a value no in-tree producer emits would loosen the rejection."""
     try:
         return str(int(str(value).strip()))
     except (TypeError, ValueError):
@@ -1803,7 +1808,7 @@ def format_context_for_prompt(
             source = trace.get("source", {})
             sink = trace.get("sink", {})
             pos = trace.get("position")
-            total = trace.get("total_hops", "?")
+            total = _defend_line(trace.get("total_hops", "?"))
             role = _defend_identifier(trace.get("role", "intermediate"),
                                       max_length=32)
 
