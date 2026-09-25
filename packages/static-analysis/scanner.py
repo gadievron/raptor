@@ -903,7 +903,7 @@ def _compute_python_tool_paths(cmd) -> list:
         # A venv interpreter needs its pyvenv.cfg (at the venv root)
         # visible, or Python won't activate venv mode and the venv's
         # site-packages is dropped from sys.path — ModuleNotFoundError
-        # under mount-ns for pipx / `pip --user` installs. bin/ and
+        # under mount-ns for pipx / venv installs. bin/ and
         # lib/pythonX.Y/ are already bound above, but pyvenv.cfg lives
         # one level up at the venv root and was never in the bind set.
         venv_root = Path(interp).parent.parent
