@@ -2049,6 +2049,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             [Path(p) for p in getattr(args, "hypothesis_seeds", None) or []]
             or None
         ),
+        seed_rereview=bool(getattr(args, "seed_rereview", False)),
         max_workers=args.max_workers,
     )
 
@@ -2883,6 +2884,13 @@ def cmd_resume(args: argparse.Namespace) -> int:
             [Path(p) for p in run_cfg["hypothesis_seeds"]]
             if run_cfg.get("hypothesis_seeds") else None
         ),
+        # A run started with --seed-rereview keeps it on resume; the
+        # resume flag can also turn it ON for this segment (never
+        # off — the persisted consent stands for the run).
+        seed_rereview=(
+            bool(run_cfg.get("seed_rereview"))
+            or bool(getattr(args, "seed_rereview", False))
+        ),
         max_workers=_resume_max_workers(args.max_workers, run_cfg),
     )
 
@@ -3070,6 +3078,7 @@ def _run_config_from_args(
         "prior_journal_dirs": args.prior_journal,
         "prior_claims_per_function": args.prior_claims,
         "hypothesis_seeds": getattr(args, "hypothesis_seeds", None),
+        "seed_rereview": bool(getattr(args, "seed_rereview", False)),
         "max_workers": getattr(args, "max_workers", 0),
         # Informational: the self-bound applied to segment 1 (the
         # operator's explicit max_seconds above stays authoritative
@@ -3533,6 +3542,23 @@ def main() -> int:
                             "is picked up automatically. Seeds never "
                             "mint findings — the LLM still reviews and "
                             "tools still render verdicts")
+    p_run.add_argument("--seed-rereview", action="store_true",
+                       help="Schedule a fresh review for hypothesis "
+                            "seeds that resolve to ALREADY-COVERED "
+                            "checklist functions (default: such seeds "
+                            "record as no_matching_gap misses). "
+                            "Scheduled functions ride the --pin "
+                            "mechanism: hoisted ahead of the --budget "
+                            "cut (on a bounded run they claim slots "
+                            "first and can displace never-reviewed "
+                            "gaps into not-attempted.json; excess "
+                            "beyond the budget is still cut and "
+                            "recorded) and are never satisfied by "
+                            "verdict reuse; prior verdicts stay in "
+                            "the journal history and each seed forces "
+                            "at most ONE fresh review per run. "
+                            "Opt-in: consents to re-opening spend on "
+                            "covered code")
     p_run.add_argument("--prior-journal", action="append", default=None,
                        metavar="RUN_DIR",
                        help="Run directory whose review-journal.jsonl "
@@ -3596,6 +3622,17 @@ def main() -> int:
         "--no-supervisor-bound", action="store_true",
         help="Do not default a per-segment wall budget under a Claude "
              "subagent background shell (see `run --help`)",
+    )
+    p_resume.add_argument(
+        "--seed-rereview", action="store_true",
+        help="Enable seed-forced re-review of covered functions for "
+             "THIS segment only (the persisted run config is "
+             "unchanged — a later resume defaults back to the "
+             "original run's choice; see `run --help`). A run "
+             "started with the flag keeps it across resume segments; "
+             "this turns it ON for a run that started without it. "
+             "Seeds already satisfied by a completed seed-forced "
+             "review in this run's journal are not re-scheduled",
     )
 
     p_journal = sub.add_parser(
