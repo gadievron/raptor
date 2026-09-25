@@ -30,6 +30,7 @@ def _entry(
     strategies=None,
     edge_callee=None,
     body=None,
+    model=None,
 ) -> ReviewJournalEntry:
     return ReviewJournalEntry(
         ts=ts or now_iso(),
@@ -42,6 +43,7 @@ def _entry(
         strategies=strategies or [],
         edge_callee=edge_callee,
         body=body,
+        model=model,
     )
 
 
@@ -252,6 +254,34 @@ class TestEntryEarnsFunctionCoverage:
         assert not entry_earns_function_coverage(_entry(
             verdict="suspicious",
             body="[mechanical] pattern match in f",
+        ))
+
+    def test_agent_mark_rows_never_earn(self):
+        # Review-grade marks are operator-tier: a --mark row whose
+        # invocation-context stamp is not "operator" is an agent
+        # self-assertion with no evidence gate — it must not retire
+        # the function from review in any store-derived view.
+        from core.coverage.journal import entry_earns_function_coverage
+        assert not entry_earns_function_coverage(_entry(
+            producer="mark", model="agent-mark",
+        ))
+        # A mark row with NO stamp at all demotes too — absence of
+        # the operator stamp is absence of the authority (fail-low).
+        # (Hardcoded-era rows stamped "operator" unconditionally and
+        # grandfather at operator tier; only the stamp decides.)
+        assert not entry_earns_function_coverage(_entry(
+            producer="mark", model=None,
+        ))
+
+    def test_operator_mark_rows_still_earn(self):
+        from core.coverage.journal import entry_earns_function_coverage
+        assert entry_earns_function_coverage(_entry(
+            producer="mark", model="operator",
+        ))
+        # Ordinary review rows with a real model name are untouched
+        # (the screen keys on producer="mark", never on model alone).
+        assert entry_earns_function_coverage(_entry(
+            producer="audit", model="model-a",
         ))
 
     def test_consistency_census_rows_never_earn(self):

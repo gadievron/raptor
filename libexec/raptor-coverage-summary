@@ -16,8 +16,16 @@ Usage:
       suppress review gaps and are never journaled as review
       assertions — reading a function while building a context map is
       not a security review of it. Use from /understand --map and any
-      other mapping/context phase; plain --mark stays the operator's
-      review assertion.
+      other mapping/context phase. Enforced mechanically: unless the
+      invocation context earns the strict operator grant (interactive
+      terminal, inherited session, NO dispatch environment marker,
+      shell-rooted ancestry), a plain --mark demotes to map-grade
+      with a notice — review-grade marks are operator-tier, and
+      readers grant journaled marks review weight only under the
+      operator stamp. Every dispatch route to this CLI carries an
+      environment marker, so no live context reaches the grant:
+      review verdicts belong in libexec/raptor-audit record
+      (evidence-gated), durable operator assertions in /annotate.
   raptor-coverage-summary [<dir>] --unmark <file:item>  Remove item from reviewed
   raptor-coverage-summary [<dir>] --import <path>       Ingest external runtime
       [--format gcov|lcov|coverage.py] [--tool <label>] coverage (gcov/lcov/
@@ -206,21 +214,47 @@ def _cmd_gaps(view):
 def _mark_model() -> str:
     """Provenance value for --mark/--unmark journal rows.
 
-    "operator" only when the invocation context shows an interactive
-    TTY (the /annotate rule) — an agent-minted assertion in the
-    durable project index must stay distinguishable from an
-    operator's, or any future reader granting operator rows extra
-    weight inherits a laundering channel. The coverage registry keeps
-    grading producer="mark" rows at LLM category either way.
+    "operator" only when the invocation context earns operator grade
+    under the mark path's strict discipline
+    (``core.annotations.provenance.live_context_grants_operator`` —
+    interactive TTY, inherited session, NO dispatch environment
+    marker, shell-rooted un-orphaned ancestry free of agent-binary
+    comms). Readers key review-grade weight on this stamp
+    (``is_agent_mark``): an agent-minted assertion in the durable
+    project index must never be indistinguishable from an operator's.
+    See the helper's tier statement: the check is heuristic against a
+    determined same-user process; what it guarantees is that stock
+    laundering shapes demote and every grant is auditable (the full
+    context rides the journaled row body via
+    :func:`_mark_context_note`).
     """
-    from core.annotations.provenance import (
-        INTERACTIVE_TTY,
-        PROVENANCE_KEY,
-        detect_invocation_context,
-    )
+    from core.annotations.provenance import live_context_grants_operator
+    return "operator" if live_context_grants_operator() else "agent-mark"
+
+
+def _mark_context_note() -> str:
+    """The invocation context serialized for the journaled row BODY.
+
+    The /annotate guarantee — no silent forgery, the context is
+    recorded — must hold for marks too. The facts ride an EXISTING
+    MAC-covered free-form field because an ADDITIVE row field breaks
+    at older readers: their dataclass round-trip drops the unknown
+    field before recomputing the MAC, demoting the row to the
+    tampered/unstamped tier (measured, not assumed). Values are
+    locally derived (fd names, sid shape, env markers, /proc comm
+    names) but comm names are process-chosen — non-printables are
+    escaped and each value bounded before persisting.
+    """
+    import re as _re
+
+    from core.annotations.provenance import detect_invocation_context
+
+    def _scrub(v: str) -> str:
+        return _re.sub(r"[^\x20-\x7e]", "?", str(v))[:120]
+
     ctx = detect_invocation_context()
-    return "operator" if ctx.get(PROVENANCE_KEY) == INTERACTIVE_TTY \
-        else "agent-mark"
+    facts = " ".join(f"{k}={_scrub(v)}" for k, v in sorted(ctx.items()))
+    return f"[mark-context] {facts}"
 
 
 def _journal_marks(run_dir, marked, verdict_by_key):
@@ -263,6 +297,7 @@ def _journal_marks(run_dir, marked, verdict_by_key):
                     ranges[(f.get("path"), it["name"])] = (
                         it.get("line_start") or 0, it.get("line_end"),
                     )
+        context_note = _mark_context_note()
         for file_path, func_name in marked:
             lo, hi = ranges.get((file_path, func_name), (0, None))
             source_hash = ""
@@ -277,6 +312,7 @@ def _journal_marks(run_dir, marked, verdict_by_key):
                     (file_path, func_name), "clean"),
                 source_hash=source_hash,
                 line_start=lo, line_end=hi,
+                body=context_note,
                 model=_mark_model(), producer="mark",
             ))
         return merge_into_index(project_dir, run_dir)
@@ -367,6 +403,35 @@ def _cmd_mark(mark_targets: list, run_dir: Path | None,
         print("ERROR: cannot determine run directory for --mark.", file=sys.stderr)
         print("Specify a run directory explicitly.", file=sys.stderr)
         sys.exit(1)
+
+    # Dispatch-level grade enforcement: a review-grade mark is an
+    # OPERATOR assertion (the /annotate authority rule — agent
+    # assertions are hint-tier). The instruction files already demand
+    # --map-grade from mapping/context phases, but doctrine alone let
+    # any non-interactive session self-grant review credit through
+    # the plain form — both the journal channel and the run-local
+    # coverage-llm.json record (which carries no provenance the
+    # readers could later demote on). Demote here, at the single
+    # write chokepoint, instead: the marks land as map-grade
+    # examination evidence, visibly.
+    if not map_grade and _mark_model() != "operator":
+        map_grade = True
+        print(
+            "NOTICE: non-interactive invocation context — review-grade "
+            "marks are operator-tier. Recording as map-grade "
+            "examination evidence instead (functions stay in the "
+            "review gap). Reviewed verdicts belong in the "
+            "evidence-gated channel: libexec/raptor-audit record."
+        )
+        if statuses:
+            print(
+                "NOTICE: per-entry statuses dropped with the demotion "
+                "— verdict-bearing review rows come from an evidence-"
+                "gated review (libexec/raptor-audit record) or an "
+                "operator terminal.",
+                file=sys.stderr,
+            )
+            statuses = {}
 
     from core.coverage.store import coverage_store_lock
 
@@ -557,6 +622,7 @@ def _neutralise_journaled_marks(run_dir, keys):
                     (row.get("file"), row.get("function")), set(),
                 ).add(int(row.get("line_start") or 0))
         touched = False
+        context_note = _mark_context_note()
         for file_path, func_name in keys:
             for line_start in sorted(
                     journaled.get((file_path, func_name), ())):
@@ -565,7 +631,8 @@ def _neutralise_journaled_marks(run_dir, keys):
                     file=file_path, function=func_name,
                     verdict="error", source_hash="",
                     line_start=line_start,
-                    lesson="operator unmark — review assertion withdrawn",
+                    body=context_note,
+                    lesson="unmark — review assertion withdrawn",
                     model=_mark_model(), producer="mark",
                 ))
                 touched = True

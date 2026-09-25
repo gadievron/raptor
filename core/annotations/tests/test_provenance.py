@@ -743,3 +743,121 @@ class TestLegacyFilesStayReadable:
         ann = read_annotation(tmp_path, "src/a.py", "f")
         assert ann is not None  # read path stays permissive
         assert not is_human_grade(ann.metadata)
+
+
+class TestLiveContextGrantsOperator:
+    """The live-context sibling of is_human_grade, for writers that
+    persist only a derived tier (coverage marks). Stricter than the
+    stored-metadata reader: every fact must positively support the
+    operator claim (see the helper's tier statement — heuristic
+    against a determined same-user process, stock shapes closed)."""
+
+    _BASE = {
+        "tty": "stdin", "provenance": "interactive-tty",
+        "sid": "inherited", "envm": "none", "parents": "bash,sshd",
+    }
+
+    def test_clean_interactive_shell_context_grants(self):
+        from core.annotations.provenance import live_context_grants_operator
+        assert live_context_grants_operator(dict(self._BASE))
+
+    def test_ssh_marker_still_grants(self):
+        from core.annotations.provenance import live_context_grants_operator
+        assert live_context_grants_operator(dict(self._BASE, envm="ssh"))
+
+    def test_non_tty_context_demotes(self):
+        from core.annotations.provenance import live_context_grants_operator
+        ctx = dict(self._BASE, tty="none", provenance="non-tty")
+        assert not live_context_grants_operator(ctx)
+
+    def test_agent_session_marker_demotes(self):
+        from core.annotations.provenance import live_context_grants_operator
+        ctx = dict(self._BASE, envm="claudecode,trusted")
+        assert not live_context_grants_operator(ctx)
+
+    def test_trusted_dispatch_marker_demotes(self):
+        # _RAPTOR_TRUSTED is the trust gate's documented sandbox
+        # bypass — a dispatch knob any process can export, never an
+        # identity assertion. It must not corroborate operatorhood.
+        from core.annotations.provenance import live_context_grants_operator
+        assert not live_context_grants_operator(
+            dict(self._BASE, envm="trusted"))
+        assert not live_context_grants_operator(
+            dict(self._BASE, envm="trusted,ssh"))
+
+    def test_session_leader_shape_demotes(self):
+        # The ``script -qec`` / direct pty.fork-exec shape: the
+        # process IS its own session leader — a shell never execs a
+        # command that way.
+        from core.annotations.provenance import live_context_grants_operator
+        ctx = dict(self._BASE, sid="self")
+        assert not live_context_grants_operator(ctx)
+
+    def test_script_wrapper_in_parents_demotes(self):
+        from core.annotations.provenance import live_context_grants_operator
+        ctx = dict(self._BASE, parents="script,bash")
+        assert not live_context_grants_operator(ctx)
+
+    def test_agent_binary_comm_in_parents_demotes(self):
+        # The forked-shell-on-a-pty shape keeps sid=inherited, but
+        # the recorded ancestry carries the agent binary — by its CLI
+        # name or the version-named executable its launcher execs.
+        from core.annotations.provenance import live_context_grants_operator
+        assert not live_context_grants_operator(
+            dict(self._BASE, parents="bash,python3,bash,2.1.252"))
+        assert not live_context_grants_operator(
+            dict(self._BASE, parents="bash,claude"))
+
+    def test_broken_ancestry_demotes(self):
+        # An interactive operator's chain is readable end to end;
+        # ``unknown`` entries mean the walk broke.
+        from core.annotations.provenance import live_context_grants_operator
+        assert not live_context_grants_operator(
+            dict(self._BASE, parents="unknown"))
+        assert not live_context_grants_operator(
+            dict(self._BASE, parents="bash,unknown"))
+
+    def test_non_shell_nearest_ancestor_demotes(self):
+        # An operator TYPES the command at a shell; a chain whose
+        # nearest ancestor is another program is a spawned subprocess.
+        from core.annotations.provenance import live_context_grants_operator
+        assert not live_context_grants_operator(
+            dict(self._BASE, parents="python3,bash,sshd"))
+
+    def test_orphaned_shell_chain_demotes(self):
+        # A chain that ENDS at a shell means the shell reparented to
+        # pid 1 — a live interactive shell has a parent (sshd,
+        # terminal, tmux, login). Orphaning is how a launderer
+        # detaches from the agent ancestry while keeping sid.
+        from core.annotations.provenance import live_context_grants_operator
+        assert not live_context_grants_operator(
+            dict(self._BASE, parents="bash"))
+        assert not live_context_grants_operator(
+            dict(self._BASE, parents="bash,bash"))
+
+    def test_truncated_ancestry_stays_fail_open(self):
+        # Module doctrine: deep-but-legitimate shell stacks exist, so
+        # the truncation token is recorded, never demoting by itself —
+        # including when the recorded window ends at a shell (the
+        # orphan rule needs a COMPLETED walk to say the shell had no
+        # parent).
+        from core.annotations.provenance import live_context_grants_operator
+        assert live_context_grants_operator(dict(
+            self._BASE,
+            parents="bash,bash,bash,ancestry-truncated"))
+
+    def test_default_reads_the_live_context(self, monkeypatch):
+        # No ctx argument: the helper detects the CURRENT process
+        # context (monkeypatched here — the runner's own context is
+        # environment-relative). This monkeypatch boundary is the
+        # documented harness seam: production cannot reach a granting
+        # context through any subprocess environment.
+        import core.annotations.provenance as prov
+        monkeypatch.setattr(
+            prov, "detect_invocation_context",
+            lambda: dict(self._BASE))
+        assert prov.live_context_grants_operator()
+        monkeypatch.setattr(
+            prov, "detect_invocation_context",
+            lambda: dict(self._BASE, tty="none", provenance="non-tty"))
+        assert not prov.live_context_grants_operator()

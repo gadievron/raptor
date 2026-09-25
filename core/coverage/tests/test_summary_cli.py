@@ -7,28 +7,17 @@ in test_store_summary.py. Here we only confirm the wiring + trust marker.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
-from pathlib import Path
 
-# parents[3] = core/coverage/tests -> core/coverage -> core -> repo root.
-REPO_ROOT = Path(__file__).resolve().parents[3]
-CLI = REPO_ROOT / "libexec" / "raptor-coverage-summary"
+from core.coverage.tests.summary_cli_support import CLI, run_cli
+
+# Review-grade marks are operator-tier: tests exercising them drive the
+# CLI through the pty operator harness (see summary_cli_support); the
+# plain harness is a non-interactive (agent) context whose plain --mark
+# demotes to map-grade.
 
 
-def _run(*args, marker=True):
-    env = dict(os.environ)
-    if marker:
-        env["_RAPTOR_TRUSTED"] = "1"
-    else:
-        env.pop("_RAPTOR_TRUSTED", None)
-        env.pop("CLAUDECODE", None)
-    env["RAPTOR_DIR"] = str(REPO_ROOT)
-    return subprocess.run(
-        [sys.executable, str(CLI), *args],
-        env=env, capture_output=True, text=True,
-    )
+def _run(*args, marker=True, operator=False):
+    return run_cli(*args, operator=operator, trusted=marker)
 
 
 def _run_dir(tmp_path):
@@ -128,7 +117,7 @@ def _project_fixture(tmp_path):
 
 def test_mark_journals_to_project_index(tmp_path):
     proj, run = _project_fixture(tmp_path)
-    res = _run(str(run), "--mark", "a.c:f1")
+    res = _run(str(run), "--mark", "a.c:f1", operator=True)
     assert "journaled to project index" in res.stdout, res.stderr
     index = json.loads((proj / "review-journal-index.json").read_text())
     rows = list(index["entries"].values())
@@ -136,17 +125,17 @@ def test_mark_journals_to_project_index(tmp_path):
     row = rows[0]
     assert (row["file"], row["function"]) == ("a.c", "f1")
     assert row["producer"] == "mark"
-    # Subprocess test runner has no TTY: the invocation-context stamp
-    # records the agent tier, never a hardcoded "operator".
-    assert row["model"] == "agent-mark"
+    # The operator harness presents a corroborated interactive
+    # context, so the invocation-context stamp records operator tier.
+    assert row["model"] == "operator"
     assert row["verdict"] == "clean"
     assert row["source_hash"]        # target resolvable → hash-aware
 
 
 def test_unmark_neutralises_journaled_mark(tmp_path):
     proj, run = _project_fixture(tmp_path)
-    _run(str(run), "--mark", "a.c:f1")
-    _run(str(run), "--unmark", "a.c:f1")
+    _run(str(run), "--mark", "a.c:f1", operator=True)
+    _run(str(run), "--unmark", "a.c:f1", operator=True)
     index = json.loads((proj / "review-journal-index.json").read_text())
     rows = list(index["entries"].values())
     assert len(rows) == 1              # same key — latest-wins replaced it
@@ -158,7 +147,7 @@ def test_mark_skips_unmatched_and_reports_count(tmp_path):
     # record phantom review credit — and must be reported, not silently
     # counted as marked.
     run = _run_dir(tmp_path)
-    res = _run(str(run), "--mark", "a.c:f1", "a.c:ghost")
+    res = _run(str(run), "--mark", "a.c:f1", "a.c:ghost", operator=True)
     assert res.returncode == 0, res.stderr
     assert "Marked 1 item as reviewed (1 unmatched)" in res.stdout
     assert "a.c:ghost" in res.stderr
@@ -175,7 +164,7 @@ def test_mark_file_skips_unmatched_and_reports_count(tmp_path):
         {"file": "a.c", "item": "no_such_item"},
         {"file": "missing.c", "item": "f1"},
     ]))
-    res = _run(str(run), "--mark-file", str(marks))
+    res = _run(str(run), "--mark-file", str(marks), operator=True)
     assert res.returncode == 0, res.stderr
     assert "Marked 2 items as reviewed (2 unmatched)" in res.stdout
     assert "a.c:no_such_item" in res.stderr
@@ -191,7 +180,8 @@ def test_mark_accepts_tool_spelled_paths(tmp_path):
     # absolute and ./-prefixed spellings must earn credit here too, and
     # must be stored under the inventory key so the fold joins.
     run = _run_dir(tmp_path)
-    res = _run(str(run), "--mark", "/some/build/root/a.c:f1", "./a.c:f2")
+    res = _run(str(run), "--mark", "/some/build/root/a.c:f1", "./a.c:f2",
+               operator=True)
     assert res.returncode == 0, res.stderr
     assert "Marked 2 items as reviewed in" in res.stdout
     assert "unmatched" not in res.stdout
@@ -208,7 +198,7 @@ def test_mark_with_zero_key_inventory_stays_unvalidated(tmp_path):
     (d / ".raptor-run.json").write_text("{}")
     (d / "checklist.json").write_text(json.dumps(
         {"files": [{"path": "a.c", "lines": 100, "items": []}]}))
-    res = _run(str(d), "--mark", "a.c:f1")
+    res = _run(str(d), "--mark", "a.c:f1", operator=True)
     assert res.returncode == 0, res.stderr
     assert "Marked 1 item as reviewed" in res.stdout
     assert "unmatched" not in res.stdout
@@ -229,7 +219,7 @@ def test_mark_items_key_supersedes_legacy_functions(tmp_path):
         {"path": "b.c", "lines": 100, "items": [
             {"name": "g1", "line_start": 1, "line_end": 5}]},
     ]}))
-    res = _run(str(d), "--mark", "b.c:g1", "a.c:legacy_f")
+    res = _run(str(d), "--mark", "b.c:g1", "a.c:legacy_f", operator=True)
     assert res.returncode == 0, res.stderr
     assert "Marked 1 item as reviewed (1 unmatched)" in res.stdout
     assert "a.c:legacy_f" in res.stderr
@@ -241,7 +231,7 @@ def test_mark_without_project_context_stays_record_only(tmp_path):
     d = tmp_path / "standalone-run"
     d.mkdir()
     (d / ".raptor-run.json").write_text("{}")
-    res = _run(str(d), "--mark", "a.c:f1")
+    res = _run(str(d), "--mark", "a.c:f1", operator=True)
     assert "journaled" not in res.stdout
     assert not (tmp_path / "review-journal-index.json").exists()
     rec = json.loads((d / "coverage-llm.json").read_text())
@@ -249,9 +239,9 @@ def test_mark_without_project_context_stays_record_only(tmp_path):
 
 
 def test_journaled_mark_suppresses_audit_gap(tmp_path):
-    # The full loop: --mark → journal index → compute_gaps fold.
+    # The full loop: operator --mark → journal index → compute_gaps fold.
     proj, run = _project_fixture(tmp_path)
-    _run(str(run), "--mark", "a.c:f1")
+    _run(str(run), "--mark", "a.c:f1", operator=True)
 
     from core.audit.gaps import compute_gaps
     checklist = json.loads((proj / "checklist.json").read_text())
@@ -262,7 +252,31 @@ def test_journaled_mark_suppresses_audit_gap(tmp_path):
     )
     assert "f1" not in {g["name"] for g in gaps}
     # And the withdrawal restores the gap.
-    _run(str(run), "--unmark", "a.c:f1")
+    _run(str(run), "--unmark", "a.c:f1", operator=True)
+    gaps = compute_gaps(
+        checklist, [], out_dir=fresh_run, project_dir=proj,
+    )
+    assert "f1" in {g["name"] for g in gaps}
+
+
+def test_agent_context_mark_never_suppresses_audit_gap(tmp_path):
+    # Review-grade marks are operator-tier: the plain (non-interactive)
+    # harness is an agent context, so its plain --mark demotes to
+    # map-grade — a notice is printed, no review journal row exists,
+    # and the function stays in the review gap.
+    proj, run = _project_fixture(tmp_path)
+    res = _run(str(run), "--mark", "a.c:f1")
+    assert res.returncode == 0, res.stderr
+    assert "review-grade marks are operator-tier" in res.stdout
+    assert "examined (map-grade)" in res.stdout
+    assert "journaled to project index" not in res.stdout
+    assert not (proj / "review-journal-index.json").exists()
+    assert not (run / "coverage-llm.json").exists()
+
+    from core.audit.gaps import compute_gaps
+    checklist = json.loads((proj / "checklist.json").read_text())
+    fresh_run = proj / "audit-2"
+    fresh_run.mkdir()
     gaps = compute_gaps(
         checklist, [], out_dir=fresh_run, project_dir=proj,
     )

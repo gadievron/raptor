@@ -10,23 +10,11 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 from pathlib import Path
 
-# parents[3] = core/coverage/tests -> core/coverage -> core -> repo root.
-REPO_ROOT = Path(__file__).resolve().parents[3]
-CLI = REPO_ROOT / "libexec" / "raptor-coverage-summary"
+from core.coverage.tests.summary_cli_support import CLI, run_cli
 
-
-def _run(*args: str) -> subprocess.CompletedProcess:
-    env = dict(os.environ)
-    env["_RAPTOR_TRUSTED"] = "1"
-    env["RAPTOR_DIR"] = str(REPO_ROOT)
-    return subprocess.run(
-        [sys.executable, str(CLI), *args],
-        env=env, capture_output=True, text=True, timeout=60,
-    )
+_run = run_cli
 
 
 def _project(tmp_path: Path, files: list[dict] | None = None) -> tuple[Path, Path]:
@@ -65,14 +53,16 @@ class TestUnmarkNormalisesSpellings:
     def test_unmark_with_equivalent_spelling_removes_entry(self, tmp_path):
         proj, run = _project(tmp_path)
         # Mark with the canonical inventory spelling plus an unrelated item.
-        r = _run(str(run), "--mark", "src/auth.c:check_pw", "src/util.c:helper")
+        r = _run(str(run), "--mark", "src/auth.c:check_pw",
+                 "src/util.c:helper", operator=True)
         assert r.returncode == 0, r.stderr
         assert "Marked 2 items" in r.stdout
         assert set(_llm_functions(run)) == {
             ("src/auth.c", "check_pw"), ("src/util.c", "helper")}
 
         # Unmark with a different-but-equivalent spelling (./-prefixed).
-        r = _run(str(run), "--unmark", "./src/auth.c:check_pw")
+        r = _run(str(run), "--unmark", "./src/auth.c:check_pw",
+                 operator=True)
         assert r.returncode == 0, r.stderr
         assert "Removed 1 item" in r.stdout
         # The unrelated entry is untouched.
@@ -80,7 +70,8 @@ class TestUnmarkNormalisesSpellings:
 
     def test_unmark_withdraws_journaled_mark(self, tmp_path):
         proj, run = _project(tmp_path)
-        r = _run(str(run), "--mark", "./src/auth.c:check_pw")
+        r = _run(str(run), "--mark", "./src/auth.c:check_pw",
+                 operator=True)
         assert r.returncode == 0, r.stderr
         assert "journaled to project index" in r.stdout
         rows = [r_ for r_ in _index_rows(proj)
@@ -88,7 +79,8 @@ class TestUnmarkNormalisesSpellings:
                 and r_.get("function") == "check_pw"]
         assert rows and all(r_.get("verdict") == "clean" for r_ in rows)
 
-        r = _run(str(run), "--unmark", "src/auth.c:check_pw")
+        r = _run(str(run), "--unmark", "src/auth.c:check_pw",
+                 operator=True)
         assert r.returncode == 0, r.stderr
         assert "Removed 1 item" in r.stdout
         rows = [r_ for r_ in _index_rows(proj)
@@ -106,7 +98,7 @@ class TestMarkFileStructuredEntries:
         mark_file.write_text(json.dumps([
             {"file": "src/a.cpp", "item": "ns::fn", "status": "suspicious"},
         ]))
-        r = _run(str(run), "--mark-file", str(mark_file))
+        r = _run(str(run), "--mark-file", str(mark_file), operator=True)
         assert r.returncode == 0, r.stderr
         assert "Marked 1 item" in r.stdout
         assert "unmatched" not in r.stdout
@@ -158,7 +150,7 @@ class TestJournalItemsPrecedence:
              "functions": [{"name": "g", "line_start": 5, "line_end": 9}]},
         ])
         # No keys anywhere -> the gate accepts the mark as-is.
-        r = _run(str(run), "--mark", "src/x.c:g")
+        r = _run(str(run), "--mark", "src/x.c:g", operator=True)
         assert r.returncode == 0, r.stderr
         assert "Marked 1 item" in r.stdout
         entries = [json.loads(line) for line in
@@ -178,7 +170,8 @@ class TestMarkUnmarkLocking:
 
     def test_mark_takes_the_record_lock(self, tmp_path: Path):
         _proj, run = _project(tmp_path)
-        res = _run(str(run), "--mark", "src/auth.c:check_pw")
+        res = _run(str(run), "--mark", "src/auth.c:check_pw",
+                   operator=True)
         assert res.returncode == 0, res.stderr
         assert (run / "coverage-llm.json.lock").exists(), (
             "mark ran without the cross-process record lock"
@@ -186,7 +179,8 @@ class TestMarkUnmarkLocking:
 
     def test_unmark_takes_the_record_lock(self, tmp_path: Path):
         _proj, run = _project(tmp_path)
-        res = _run(str(run), "--mark", "src/auth.c:check_pw")
+        res = _run(str(run), "--mark", "src/auth.c:check_pw",
+                   operator=True)
         assert res.returncode == 0, res.stderr
         (run / "coverage-llm.json.lock").unlink()
         res = _run(str(run), "--unmark", "src/auth.c:check_pw")
@@ -214,34 +208,102 @@ class TestMarkRowProvenance:
         loader.exec_module(mod)
         return mod
 
-    def test_non_tty_mark_journals_agent_mark(self, tmp_path):
+    def test_non_tty_mark_demotes_to_map_grade(self, tmp_path):
+        # A non-operator context cannot journal a review assertion at
+        # all: the CLI demotes the mark to map-grade (understand
+        # record) with a notice — no journal row, no llm record.
         proj, run = _project(tmp_path)
         r = _run(str(run), "--mark", "src/auth.c:check_pw")
         assert r.returncode == 0, r.stderr
-        rows = [row for row in _index_rows(proj)
-                if row.get("function") == "check_pw"]
-        assert rows and all(
-            row.get("model") == "agent-mark" for row in rows)
+        assert "review-grade marks are operator-tier" in r.stdout
+        assert "examined (map-grade)" in r.stdout
+        assert not (proj / "review-journal-index.json").exists()
+        assert not (run / "coverage-llm.json").exists()
+        rec = json.loads((run / "coverage-understand.json").read_text())
+        assert rec["functions_analysed"] == [
+            {"file": "src/auth.c", "function": "check_pw"}]
 
-    def test_non_tty_unmark_journals_agent_mark(self, tmp_path):
+    def test_non_tty_mark_drops_statuses_with_notice(self, tmp_path):
         proj, run = _project(tmp_path)
-        assert _run(str(run), "--mark",
-                    "src/auth.c:check_pw").returncode == 0
+        mark_file = run / "marks.json"
+        mark_file.write_text(json.dumps([
+            {"file": "src/auth.c", "item": "check_pw",
+             "status": "suspicious"},
+        ]))
+        r = _run(str(run), "--mark-file", str(mark_file))
+        assert r.returncode == 0, r.stderr
+        assert "statuses dropped" in r.stderr
+        assert not (proj / "review-journal-index.json").exists()
+
+    def test_non_tty_unmark_journals_agent_mark_withdrawal(self, tmp_path):
+        # Unmark stays available to agent contexts (withdrawing credit
+        # fails toward re-review) — the neutralising error row stamps
+        # the agent tier so the withdrawal's minter is on record.
+        proj, run = _project(tmp_path)
+        assert _run(str(run), "--mark", "src/auth.c:check_pw",
+                    operator=True).returncode == 0
         assert _run(str(run), "--unmark",
                     "src/auth.c:check_pw").returncode == 0
         rows = [row for row in _index_rows(proj)
                 if row.get("function") == "check_pw"]
-        assert rows and all(
-            row.get("model") == "agent-mark" for row in rows)
-        assert all(row.get("verdict") == "error" for row in rows)
+        withdrawals = [row for row in rows
+                       if row.get("verdict") == "error"]
+        assert withdrawals and all(
+            row.get("model") == "agent-mark" for row in withdrawals)
 
-    def test_interactive_tty_stamps_operator(self, monkeypatch):
+    def test_journaled_mark_records_invocation_context(self, tmp_path):
+        # The /annotate guarantee holds for marks: the full context
+        # rides the journaled row BODY (an existing MAC-covered
+        # field — an additive row field demotes at older readers), so
+        # every operator grant is auditable after the fact.
+        proj, run = _project(tmp_path)
+        r = _run(str(run), "--mark", "src/auth.c:check_pw",
+                 operator=True)
+        assert r.returncode == 0, r.stderr
+        rows = [row for row in _index_rows(proj)
+                if row.get("function") == "check_pw"]
+        assert rows
+        body = rows[0].get("body") or ""
+        assert body.startswith("[mark-context] ")
+        for fact in ("tty=", "provenance=", "sid=", "envm=", "parents="):
+            assert fact in body, fact
+
+    def test_unmark_withdrawal_records_invocation_context(self, tmp_path):
+        proj, run = _project(tmp_path)
+        assert _run(str(run), "--mark", "src/auth.c:check_pw",
+                    operator=True).returncode == 0
+        assert _run(str(run), "--unmark",
+                    "src/auth.c:check_pw").returncode == 0
+        rows = [row for row in _index_rows(proj)
+                if row.get("function") == "check_pw"
+                and row.get("verdict") == "error"]
+        assert rows
+        assert (rows[0].get("body") or "").startswith("[mark-context] ")
+
+    _OPERATOR_CTX = {
+        "tty": "stdin", "provenance": "interactive-tty",
+        "sid": "inherited", "envm": "none", "parents": "bash,sshd",
+    }
+
+    def test_interactive_corroborated_context_stamps_operator(
+            self, monkeypatch):
         import core.annotations.provenance as prov
         mod = self._load_module()
         monkeypatch.setattr(
             prov, "detect_invocation_context",
-            lambda: {"tty": "stdin", "provenance": "interactive-tty"})
+            lambda: dict(self._OPERATOR_CTX))
         assert mod._mark_model() == "operator"
+
+    def test_uncorroborated_tty_stamps_agent_mark(self, monkeypatch):
+        # The fd stamp alone is pty-forgeable: an interactive claim
+        # whose corroborating facts contradict it (agent-session
+        # environment marker) demotes — the /annotate layered rule.
+        import core.annotations.provenance as prov
+        mod = self._load_module()
+        laundered = dict(self._OPERATOR_CTX, envm="claudecode,trusted")
+        monkeypatch.setattr(
+            prov, "detect_invocation_context", lambda: laundered)
+        assert mod._mark_model() == "agent-mark"
 
     def test_non_tty_stamps_agent_mark(self, monkeypatch):
         import core.annotations.provenance as prov

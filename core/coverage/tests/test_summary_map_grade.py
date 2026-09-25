@@ -13,24 +13,12 @@ review-marked function leaves it.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
-# parents[3] = core/coverage/tests -> core/coverage -> core -> repo root.
-REPO_ROOT = Path(__file__).resolve().parents[3]
-CLI = REPO_ROOT / "libexec" / "raptor-coverage-summary"
+from core.coverage.tests.summary_cli_support import REPO_ROOT, run_cli
 
-
-def _run(*args: str) -> subprocess.CompletedProcess:
-    env = dict(os.environ)
-    env["_RAPTOR_TRUSTED"] = "1"
-    env["RAPTOR_DIR"] = str(REPO_ROOT)
-    return subprocess.run(
-        [sys.executable, str(CLI), *args],
-        env=env, capture_output=True, text=True, timeout=60,
-    )
+_run = run_cli
 
 
 def _run_dir(tmp_path: Path) -> Path:
@@ -91,7 +79,8 @@ def test_review_mark_still_deduplicates_gap(tmp_path):
     """The other direction: a genuine review assertion (plain --mark)
     keeps suppressing the function from the review plan."""
     run = _run_dir(tmp_path)
-    assert _run(str(run), "--mark", "a.c:f1").returncode == 0
+    assert _run(str(run), "--mark", "a.c:f1",
+                operator=True).returncode == 0
 
     gaps_view = _run(str(run), "--gaps")
     assert "a.c:f1" not in gaps_view.stdout
@@ -135,7 +124,8 @@ def test_map_grade_does_not_leak_into_review_unmark(tmp_path):
     """A plain unmark keeps operating on the review record only."""
     run = _run_dir(tmp_path)
     assert _run(str(run), "--mark", "a.c:f1", "--map-grade").returncode == 0
-    assert _run(str(run), "--mark", "a.c:f1").returncode == 0
+    assert _run(str(run), "--mark", "a.c:f1",
+                operator=True).returncode == 0
     r = _run(str(run), "--unmark", "a.c:f1")
     assert r.returncode == 0, r.stderr
     assert _record(run, "llm")["functions_analysed"] == []

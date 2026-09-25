@@ -348,6 +348,123 @@ def detect_invocation_context() -> dict[str, str]:
     }
 
 
+#: Shell comms an interactive operator types commands at. Small,
+#: stable set (comm names, not paths); a chain whose NEAREST ancestor
+#: is not a shell was not typed by an operator.
+_OPERATOR_SHELL_COMMS = frozenset({
+    "bash", "sh", "zsh", "dash", "fish", "ksh", "tcsh", "csh",
+})
+
+#: Version-string comm shape: agent CLI binaries ship as
+#: version-named executables (a comm like ``2.1.252``); no legitimate
+#: interactive chain contains a bare version number.
+_VERSION_COMM = re.compile(r"[0-9]+(?:\.[0-9]+)+")
+
+
+def _is_agent_comm(comm: str) -> bool:
+    """Whether an ancestor comm names a known agent binary: the agent
+    CLI's own name, or the version-named binary its launcher execs.
+    comm is prctl-settable by the process itself — this catches the
+    STOCK shapes, not a renamed binary (see the tier statement in
+    :func:`live_context_grants_operator`)."""
+    return comm.startswith("claude") or bool(_VERSION_COMM.fullmatch(comm))
+
+
+def live_context_grants_operator(
+    ctx: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether the CURRENT invocation context earns operator grade
+    on the coverage-mark path.
+
+    The live-context sibling of :func:`is_human_grade` for writers
+    that persist only a derived tier (a coverage mark's ``operator``
+    / ``agent-mark`` stamp), and deliberately STRICTER than the
+    stored-metadata reader: annotations record the full context for
+    later audit, while a mark's grant is spent at write time, so
+    every fact must positively support the operator claim here.
+
+    Grant requires ALL of:
+
+    * interactive-TTY stamp (any std fd a TTY — pty-forgeable alone);
+    * ``sid=inherited`` — catches the direct ``script -qec`` /
+      ``pty.fork``-exec shapes, NOT a forked-shell child on the same
+      pty (the shell forks for a compound command and the child
+      inherits the session), which the ancestry rules below exist
+      for;
+    * NO dispatch environment marker. ``claudecode`` is an
+      agent-session marker; ``trusted`` (``_RAPTOR_TRUSTED``) is the
+      trust gate's documented test/power-user SANDBOX bypass — a
+      dispatch knob any process can export, never an identity
+      assertion, so it must not corroborate operatorhood. Since the
+      libexec dispatch gate requires one of the two markers, no
+      production subprocess invocation of the coverage CLI reaches
+      this grant — the mark path's review grade is effectively
+      retired to historical rows, and live operator review
+      assertions belong to /annotate (full recorded context,
+      human-grade readers) or the evidence-gated
+      ``raptor-audit record``;
+    * a well-formed ancestry whose NEAREST ancestor is a shell (an
+      operator types the command), containing no ``unknown`` entry
+      (broken walk), no stock ``script`` wrapper, no known
+      agent-binary comm (the agent CLI name or a version-named
+      binary), and not ENDING at a shell (an interactive shell has a
+      live parent — sshd, a terminal, tmux, login; a chain that
+      stops at the shell is the orphaned/reparented launder shape).
+      A trailing ``ancestry-truncated`` token stays fail-open per
+      the module doctrine (recorded, not demoting).
+
+    TIER STATEMENT (read before granting this any weight): the grant
+    is heuristic against a determined same-user agent — comm names
+    are prctl-settable, environments are the caller's own, and a pty
+    makes ``isatty`` true by design. This is the same bar as
+    /annotate's layered stamp (module docstring: "no silent forgery,
+    not impossibility"): the STOCK laundering shapes demote, every
+    residual forgery must curate sid, environment markers AND a
+    renamed ancestor chain — and the mark writer records the full
+    context into the journaled row body, so a laundered grant leaves
+    an auditable trail instead of silence. It is NOT an
+    unforgeability claim; direct journal writes by a key-holding
+    same-user process bypass this check entirely (that trust tier is
+    bounded by the journal MAC's own documentation).
+
+    *ctx* defaults to :func:`detect_invocation_context`. Passing an
+    explicit context is the DOCUMENTED test seam: production cannot
+    reach a granting context through any subprocess environment, so
+    harnesses inject one at this boundary (monkeypatching
+    ``detect_invocation_context``) instead of sharing a recipe with
+    forgeable production shapes.
+    """
+    if ctx is None:
+        ctx = detect_invocation_context()
+    if ctx.get(PROVENANCE_KEY) != INTERACTIVE_TTY:
+        return False
+    if ctx.get(SID_KEY) != SID_INHERITED:
+        return False
+    envm = ctx.get(ENV_MARKERS_KEY)
+    if envm is None or not valid_env_markers_value(envm):
+        return False
+    markers = set(envm.split(","))
+    if markers & {ENV_MARKER_CLAUDECODE, ENV_MARKER_TRUSTED}:
+        return False
+    parents = ctx.get(PARENTS_KEY)
+    if parents is None or not valid_parents_value(parents):
+        return False
+    chain = parents.split(",")
+    truncated = chain and chain[-1] == PARENTS_TRUNCATED
+    if truncated:
+        chain = chain[:-1]
+    if not chain or _PARENTS_UNKNOWN in chain:
+        return False
+    if "script" in chain or any(_is_agent_comm(c) for c in chain):
+        return False
+    if chain[0] not in _OPERATOR_SHELL_COMMS:
+        return False
+    if not truncated and chain[-1] in _OPERATOR_SHELL_COMMS:
+        # Walk ended (parent reached pid 1) at a shell: orphaned.
+        return False
+    return True
+
+
 def valid_tty_value(value: str) -> bool:
     """Whether *value* is a well-formed ``tty`` metadata value:
     ``none`` or a comma-joined non-empty subset of
