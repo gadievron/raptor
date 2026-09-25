@@ -511,6 +511,42 @@ class TestOpenExclusiveArtifact:
         with pytest.raises(ValueError):
             open_exclusive_artifact(tmp_path / "f", mode=0o4755)
 
+    def test_default_mode_honours_umask(self, tmp_path):
+        # Two-direction pair with test_mode_wins_over_umask: an
+        # EXPLICIT mode beats the umask (0o755 scripts stay
+        # executable), but the unrequested DEFAULT must be masked by
+        # it — fchmod-forcing the default widened 0o600 (umask 077)
+        # artifacts to a world-readable 0o644 on restrictive-umask
+        # multi-user hosts, where the plain open("w") these writers
+        # replaced and the append family in this module both honour
+        # the umask.
+        import os
+        import stat
+
+        from core.atomic_fs import write_new_text
+
+        target = tmp_path / "artifact.txt"
+        old_umask = os.umask(0o077)
+        try:
+            write_new_text(target, "crash bytes\n")
+        finally:
+            os.umask(old_umask)
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+    def test_explicit_mode_wins_over_umask_through_write_new(self, tmp_path):
+        import os
+        import stat
+
+        from core.atomic_fs import write_new_bytes
+
+        target = tmp_path / "script.sh"
+        old_umask = os.umask(0o077)
+        try:
+            write_new_bytes(target, b"#!/bin/sh\n", mode=0o755)
+        finally:
+            os.umask(old_umask)
+        assert stat.S_IMODE(target.stat().st_mode) == 0o755
+
     def test_write_new_text_round_trip(self, tmp_path):
         from core.atomic_fs import write_new_text
 
