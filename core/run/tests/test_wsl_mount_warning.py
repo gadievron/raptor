@@ -19,6 +19,8 @@ import pytest
 from core.run.output import get_output_dir, resolve_default_target
 from core.startup import wsl
 
+pytestmark = pytest.mark.wsl
+
 
 @pytest.fixture
 def on_interop_mount():

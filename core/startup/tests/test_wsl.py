@@ -16,6 +16,8 @@ import pytest
 
 from core.startup import wsl
 
+pytestmark = pytest.mark.wsl
+
 
 @pytest.fixture(autouse=True)
 def reset_wsl_cache():
