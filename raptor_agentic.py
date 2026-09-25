@@ -5272,6 +5272,19 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001
         logger.debug("Run metadata: %s", e)  # Optional — don't fail the pipeline
 
+    # End-of-run digest — the ranked "what matters" view over the
+    # completed run's artifacts (verified first, then
+    # exploitable-unverified, suppressions, coverage, next steps).
+    # One call site; the reader/renderer live in core/run/digest.py
+    # (shared with raptor-run-status and `raptor-review digest`).
+    # Renderer output is already escaped at render.
+    try:
+        from core.run.digest import read_run_digest, render_run_digest
+        print()
+        print(render_run_digest(read_run_digest(out_dir)))
+    except Exception:  # noqa: BLE001 — a digest failure must not fail the pipeline
+        logger.debug("end-of-run digest failed", exc_info=True)
+
     # Clean up temporary git copy (if we created one for a non-git target)
     if _git_temp_dir and _git_temp_dir.exists():
         import shutil

@@ -24,6 +24,7 @@ operator annotations.
 /review stats                       # entry counts, costs, coverage %
 /review compact                     # compact project journal index
 /review verdict <id> fp|tp|retest   # record a human FP/TP/retest verdict on a finding (-m "reason", --target <repo>)
+/review digest [run-dir]            # ranked end-of-run summary (default: latest run)
 ```
 
 `verdict` resolves the finding id against this session's project runs
