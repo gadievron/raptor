@@ -29,15 +29,16 @@ never leak into a full-corpus run implicitly.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
-from core.audit.corpus.label import FunctionLabel, load_all_labels
+from core.audit.corpus.label import (
+    CHANNEL_RE,
+    FunctionLabel,
+    load_all_labels,
+)
 
 CORPUS_DIR = Path(__file__).parent
 CHANNELS_DIR = CORPUS_DIR / "channels"
-
-_CHANNEL_RE = re.compile(r"^[a-z0-9_]+$")
 
 
 class ChannelCorpusError(ValueError):
@@ -45,11 +46,15 @@ class ChannelCorpusError(ValueError):
 
 
 def validate_channel_name(channel: str) -> str:
-    """Return *channel* or raise on a malformed name."""
-    if not _CHANNEL_RE.match(channel or ""):
+    """Return *channel* or raise on a malformed name.
+
+    ``fullmatch`` on the shared label-schema pattern: a ``$``-anchored
+    ``re.match`` would still accept a trailing newline.
+    """
+    if not CHANNEL_RE.fullmatch(channel or ""):
         msg = (
-            f"invalid channel name {channel!r}: must match "
-            f"{_CHANNEL_RE.pattern} (lowercase mechanism-token charset)"
+            f"invalid channel name {channel!r}: must fully match "
+            f"{CHANNEL_RE.pattern} (lowercase mechanism-token charset)"
         )
         raise ChannelCorpusError(msg)
     return channel

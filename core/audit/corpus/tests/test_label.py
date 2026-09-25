@@ -128,6 +128,12 @@ class TestFunctionLabel:
         with pytest.raises(ValueError, match="Invalid channel"):
             _make_label(channel="Api-Boundary")
 
+    def test_channel_trailing_newline_rejected(self):
+        # fullmatch regression: a $-anchored re.match accepts a
+        # trailing newline
+        with pytest.raises(ValueError, match="Invalid channel"):
+            _make_label(channel="smt\n")
+
     def test_expected_rule_hits_default_empty(self):
         assert _make_label().expected_rule_hits == {}
 
