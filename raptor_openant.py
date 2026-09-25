@@ -719,6 +719,22 @@ def _main_body(parser: argparse.ArgumentParser, args: argparse.Namespace,
                 cost=_reconcile_run_cost(
                     oa_out, scan_result.get("token_usage") or {}),
             )
+            # Coverage overlay, best-effort even on the failed scan:
+            # the units analysed BEFORE the failure are paid work
+            # sitting in the scan artifacts (results.json from a
+            # truncated run, or the per-unit checkpoints — the
+            # fallback lane's shipped consumer). A projection failure
+            # never changes how this scan already failed.
+            try:
+                from packages.openant.coverage import project_scan_coverage
+                overlay = project_scan_coverage(
+                    out_dir, oa_out, level=oa_config.level,
+                    repo_path=repo_path)
+                if overlay:
+                    print(f"  Coverage:  {overlay} (partial scan)")
+            except Exception as cov_exc:  # noqa: BLE001 — overlay is additive; the failure outcome stands
+                print(f"⚠️  OpenAnt coverage overlay failed: "
+                      f"{_sft(str(cov_exc), max_len=300)}", file=sys.stderr)
             return 1
         # A skipped-but-not-hard-error result also means the target was
         # NOT scanned — same honesty rule as the not-configured paths.
@@ -851,6 +867,25 @@ def _main_body(parser: argparse.ArgumentParser, args: argparse.Namespace,
               f" (prior ${resume_prior.prior_cost_usd:.4f} + this run)")
     print(f"  Output:    {out_dir}")
     print(f"  Report:    {report_path}")
+
+    # ------------------------------------------------------------------
+    # COVERAGE OVERLAY (best-effort): project the scan's analyzed units
+    # into the run's coverage records (coverage-openant.json, scanner
+    # grade — see packages/openant/coverage.py). The scan above already
+    # succeeded; a projection failure degrades to a loud line and never
+    # changes the exit code.
+    # ------------------------------------------------------------------
+    try:
+        from packages.openant.coverage import project_scan_coverage
+        overlay = project_scan_coverage(out_dir, oa_out,
+                                        level=oa_config.level,
+                                        repo_path=repo_path)
+        if overlay:
+            # Count-only summary (no artifact-derived strings).
+            print(f"  Coverage:  {overlay}")
+    except Exception as e:  # noqa: BLE001 — overlay is additive; the scan result stands
+        print(f"⚠️  OpenAnt coverage overlay failed (scan result "
+              f"unaffected): {_sft(str(e), max_len=300)}", file=sys.stderr)
 
     return 0
 
