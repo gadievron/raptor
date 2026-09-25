@@ -192,7 +192,7 @@ Zig) are auto-detected but cannot be forced — an out-of-set
 
 | File | Description |
 |------|-------------|
-| `openant_findings.json` | Translated findings in Raptor schema |
+| `openant_findings.json` | Translated findings in Raptor schema, plus any recovered checkpoint verdicts (marker-carrying hint-tier records, see Notes) |
 | `openant-report.md` | Human-readable markdown report |
 | `raptor_openant_report.json` | Machine-readable run summary |
 | `openant_scan/pipeline_output.json` | Raw OpenAnt output |
@@ -244,3 +244,16 @@ integration for the full posture rules.
 - `vulnerable` without stage-2 confirmation translates to `warning`.
 - `safe` findings are suppressed.
 - Use `--verify` to get stage-2 confirmation (costs ~2× tokens).
+- **Recovered checkpoint verdicts:** the scanner's report deduplicates
+  caller/callee findings (a same-CWE callee with a single caller
+  collapses into the caller's finding), dropping the callee's verdict
+  from its output. RAPTOR recovers those verdicts from the scan
+  artifacts as hint-tier candidates — `level: note`,
+  `metadata.provenance_tier = "recovered_checkpoint_verdict"`,
+  `metadata.deduplicated_into` naming the surviving finding — counted
+  separately everywhere ("N findings + M recovered checkpoint
+  verdicts"), never blended into the scanner's own count. Best-effort
+  and bounded: missing or drifted artifacts recover nothing, loudly,
+  never failing the run, and record volume is hard-capped per run
+  (500, loud stated truncation — the artifacts are child-written over
+  an untrusted repo, so unbounded candidates read as hostile).
