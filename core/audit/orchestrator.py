@@ -5782,6 +5782,24 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             exc_info=True,
         )
 
+    # L10: route models — a co-located route-models.json from a prior
+    # run wins, else built from the checklist's per-file registration
+    # facts (Python targets only populate them; everything else →
+    # None → the layer stays empty, equivalence pinned).
+    prep_route_models = None
+    try:
+        from core.analysis.peer_groups import route_models_for_prep
+
+        prep_route_models = route_models_for_prep(
+            checklist,
+            config.inventory,
+            out_dir=config.out_dir,
+        )
+    except Exception:
+        logger.debug(
+            "route-model build for peer groups failed", exc_info=True,
+        )
+
     # Fail-soft like the sibling prep blocks above: the resolver
     # consumes producer-controlled inputs (checklist metadata is
     # LLM-enrichable), and peer groups are an enrichment layer — one
@@ -5795,6 +5813,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             domain_model=prep_domain_model,
             type_ref_index=prep_type_ref_index,
             checklist=checklist,
+            route_models=prep_route_models,
         )
     except Exception:
         peer_groups = []
