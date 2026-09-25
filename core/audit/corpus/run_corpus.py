@@ -3883,6 +3883,10 @@ def main(argv: list[str] | None = None) -> int:
         "triage": args.triage,
         "prefilter": args.prefilter,
         "scope": args.scope,
+        # A mutant run and a real run can share every other knob AND
+        # the function_id set (a mutant label reuses the clean
+        # function's id) — the kind must fence wall segments too.
+        "label_kind": run_kind,
     }
     wall_path, wall_segments = _wall_segment_open(
         None if args.probe else args.out, run_stamp,
@@ -3953,11 +3957,15 @@ def main(argv: list[str] | None = None) -> int:
                       f"{n_mutants} label(s)", flush=True)
 
             # Resume-stamp axes only this layer knows: scope changes
-            # the audited tree, and a drifted default-model
-            # resolution is invisible in the requested name.
+            # the audited tree, a drifted default-model resolution is
+            # invisible in the requested name, and the label KIND
+            # fences a mutant run out of a real run's checkpoint (the
+            # function_id sets can be identical — a mutant label
+            # reuses the clean function's id).
             ckpt_stamp_extra = {
                 "scope": args.scope,
                 "model_resolved": model_labels[0],
+                "label_kind": run_kind,
             }
 
             t0 = time.monotonic()
