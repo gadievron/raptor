@@ -655,6 +655,13 @@ def _flatten_spine(
 
 # ── chain assembly ───────────────────────────────────────────────────
 
+# Deterministic on hostile statement text: every adjacent repeat pair
+# is character-disjoint (`\w` never matches whitespace — unlike a raw
+# byte-range identifier class it admits no NEL/NBSP overlap — and `=`
+# is in neither class), so each split point is unique and a failing
+# anchored match backtracks O(n), never O(n^2).  Pinned linear by the
+# redos-idiom census pump oracle; CPU pins in
+# tests/test_sanwit_extract_linear.py.
 _ASSIGN_RE = re.compile(r"^\$([A-Za-z_]\w*)\s*=(?![=>])\s*(.+)$", re.DOTALL)
 
 
@@ -705,6 +712,10 @@ def _divergent_use(old: str, rest: list[_Stmt]) -> _Stmt | None:
 def _body_depth(source: str) -> int:
     """Brace depth of the function body's statements: 1 when the
     source carries the ``function`` header, 0 for a bare body."""
+    # `[A-Za-z_]\w*` and `\s+` are character-disjoint, so the
+    # modifier-word list decomposes uniquely and a headerless source
+    # fails the anchored match in O(n) — census-pinned linear, CPU
+    # pins in tests/test_sanwit_extract_linear.py.
     if re.match(r"\s*(?:[A-Za-z_]\w*\s+)*function\b", source):
         return 1
     return 0
@@ -887,6 +898,11 @@ def extract_chain(
             rf"[^\[\]]{{0,200}}\])\s*=(?![=>])",
             re.IGNORECASE,
         )
+        # Linear under unanchored search despite the unbounded
+        # window: `[^()]*` cannot cross a paren while every other
+        # match start requires its own `\(`, so restart scan regions
+        # never overlap and total work stays O(n) — census-pinned
+        # linear, CPU pins in tests/test_sanwit_extract_linear.py.
         transform_feed_re = re.compile(
             r"\b(?:" + "|".join(sorted(ALLOWED_STEP_CALLABLES))
             + r")\s*\([^()]*\$" + re.escape(current) + r"\b",

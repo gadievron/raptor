@@ -656,6 +656,26 @@
    ],
    "verdict": "linear"
   },
+  "core/audit/sanwit/_extract.py\u001f\\s*(?:[A-Za-z_]\\w*\\s+)*function\\b": {
+   "digests": [
+    "9fb5d5378182"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
+   ],
+   "verdict": "linear"
+  },
+  "core/audit/sanwit/_extract.py\u001f_ASSIGN_RE": {
+   "digests": [
+    "e4a141389e75"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
+   ],
+   "verdict": "linear"
+  },
   "core/audit/struct_field_checker.py\u001f_STRUCT_FIELD_RE": {
    "digests": [
     "8e1c68a0973c"
