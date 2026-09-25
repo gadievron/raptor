@@ -248,7 +248,12 @@ class TestEnsureCpgLoadedRetry:
         assert record["failed"] is True
         assert record["phase"] == "build"
 
-    def test_success_writes_no_artifact(self, monkeypatch, tmp_path):
+    def test_success_writes_truthful_record(self, monkeypatch, tmp_path):
+        # Contract change (stale-record fix): a plain success now
+        # writes a failed=False, retried=False record — the write is
+        # what retires a stale failure record from an earlier segment
+        # sharing the out dir. The report prints nothing for it (the
+        # rescue line keys on retried).
         import packages.joern.runner as runner
         self._isolate_home(monkeypatch, tmp_path)
         out = tmp_path / "run"
@@ -263,7 +268,11 @@ class TestEnsureCpgLoadedRetry:
             import_cpg=lambda path, timeout=None: None,
         )
         assert jb._ensure_cpg_loaded(srv, tmp_path, out_dir=out) is True
-        assert not (out / JOERN_CPG_STATUS_FILENAME).exists()
+        record = load_cpg_build_status(out)
+        assert record is not None
+        assert record["failed"] is False
+        assert record["retried"] is False
+        assert record["phase"] == "complete"
 
 
 class TestReportSurfacing:
@@ -313,3 +322,59 @@ class TestReportSurfacing:
         from core.audit.report import generate_report
         report = generate_report(tmp_path)
         assert "joern_cpg_build" not in report
+
+
+class TestPlainSuccessRetiresStaleRecord:
+    _isolate_home = TestEnsureCpgLoadedRetry._isolate_home
+    _fake_cpg = TestEnsureCpgLoadedRetry._fake_cpg
+
+    def test_plain_success_overwrites_prior_failure(
+        self, monkeypatch, tmp_path,
+    ):
+        # Segment 1 failed and recorded the loss; segment 2's build
+        # succeeds WITHOUT the retry (cache warm / tuning raised). The
+        # success must retire the stale failed record — otherwise the
+        # report claims a channel loss beside real joern receipts.
+        import packages.joern.runner as runner
+        self._isolate_home(monkeypatch, tmp_path)
+        _patch_sizing(monkeypatch, sloc=10_000)
+        out = tmp_path / "run"
+        out.mkdir()
+        from core.json import save_json
+        save_json(out / jb.JOERN_CPG_STATUS_FILENAME, {
+            "target": str(tmp_path), "failed": True, "phase": "build",
+            "retried": False, "ts": "2026-09-25T00:00:00+00:00",
+        })
+
+        monkeypatch.setattr(
+            runner, "build_cpg_cached",
+            lambda target, cache_dir, **kw: self._fake_cpg(
+                tmp_path, failed=False),
+        )
+        srv = SimpleNamespace(
+            _cpg_loaded=False,
+            import_cpg=lambda path, timeout=None: None,
+        )
+        ok = jb._ensure_cpg_loaded(srv, tmp_path, out_dir=out)
+        assert ok is True
+        record = load_cpg_build_status(out)
+        assert record is not None
+        assert record["failed"] is False
+        assert record["retried"] is False
+        assert record["phase"] == "complete"
+
+    def test_plain_success_record_renders_silently(self, tmp_path):
+        # The truthful plain-success record (stale-record fix) must
+        # not borrow the rescue line — nothing to say, say nothing.
+        from core.json import save_json
+        save_json(tmp_path / JOERN_CPG_STATUS_FILENAME, {
+            "target": "/t", "failed": False, "retried": False,
+            "first_heap_mb": 16384, "first_timeout_s": 300,
+            "retry_heap_mb": 65536, "retry_timeout_s": 5700,
+            "estimated_sloc": 10_000, "scope_excluded_dirs": 0,
+        })
+        from core.audit.report import generate_report
+        report = generate_report(tmp_path)
+        assert report["joern_cpg_build"]["failed"] is False
+        assert "derived-max retry" not in report["summary"]
+        assert "Joern channel lost" not in report["summary"]

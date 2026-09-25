@@ -1423,6 +1423,33 @@ def _joern_target(config: OrchestratorConfig) -> Path:
     if not common:
         return config.target_path
 
+    # Dot-arm escape hatch: when some scope entry IS the common prefix,
+    # the narrowed root would BE that scope's leaf — and the gap
+    # selector's `sc + "."` arm still reviews sibling entries named
+    # `<leaf>.<anything>` (the dir ipc.d/, the file ipc.c), which sit
+    # OUTSIDE the narrowed root and so outside the graph entirely; the
+    # scope-complement walk never sees them and cannot keep them. Back
+    # off one level per dot-sibling-bearing leaf so the complement
+    # (which mirrors the arm) owns the decision. Costs one directory
+    # level of complement excludes, never a full-tree build, and only
+    # when a dot-sibling actually exists.
+    def _has_dot_sibling(leaf: Path) -> bool:
+        try:
+            entries = os.listdir(leaf.parent)
+        except OSError:
+            return True  # unreadable parent: fail toward the wider root
+        want = leaf.name + "."
+        return any(e.startswith(want) for e in entries)
+
+    while common:
+        if not any(parts == tuple(common) for parts in parts_list):
+            break
+        if not _has_dot_sibling(config.target_path / Path(*common)):
+            break
+        common.pop()
+    if not common:
+        return config.target_path
+
     candidate = config.target_path / Path(*common)
     if candidate.is_dir():
         return candidate

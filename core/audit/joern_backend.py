@@ -184,17 +184,29 @@ def scope_complement_exclude_dirs(
         # the whole tree, so the graph must cover it too.
         return ()
 
+    # Terminal marker: a scope entry ENDS at the node carrying this
+    # key. Emptiness cannot express terminality — with nested entries
+    # (--scope fs --scope fs/ext4) the outer entry's node is non-empty,
+    # and treating only-empty as terminal over-excluded fs/* siblings
+    # the selector reviews (wrong-direction, against the degrade-to-()
+    # contract). Path.parts segments are never "", so the key cannot
+    # collide with a real directory name.
+    _SCOPE_END = ""
+
     tree: dict[str, dict] = {}
     for parts in norm:
         node = tree
         for seg in parts:
             node = node.setdefault(seg, {})
+        node[_SCOPE_END] = {}
 
     excludes: list[str] = []
 
     def _walk(dir_path: Path, node: dict[str, dict]) -> None:
-        if not node:
-            # A scope entry ends here — everything below is in scope.
+        if not node or _SCOPE_END in node:
+            # A scope entry ends here — everything below is in scope
+            # (also when DEEPER entries nest under it: scope "fs"
+            # admits all of fs/*, so fs/ext4 adds nothing to exclude).
             return
         try:
             children = list(dir_path.iterdir())
@@ -213,6 +225,19 @@ def scope_complement_exclude_dirs(
                 continue
             if child.name in node:
                 _walk(child, node[child.name])
+            elif any(
+                seg and _SCOPE_END in sub
+                and child.name.startswith(seg + ".")
+                for seg, sub in node.items()
+            ):
+                # Mirror the gap selector's `sc + "."` arm
+                # (core/audit/gaps.py _in_scope): scope "ipc" reviews
+                # files under a sibling dir ipc.d/ too, so the graph
+                # must keep that whole subtree. The arm applies only
+                # where a scope entry ENDS (terminal node) — for a
+                # deeper scope like fs/ext4/jbd the selector never
+                # matches fs/ext4.old/, and neither do we.
+                continue
             else:
                 excludes.append(str(child))
 
@@ -593,12 +618,14 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
         _write_cpg_build_status(out_dir, _status(
             failed=True, phase="import"))
         return False
-    if retried:
-        # Success record only AFTER the import: a rescue claim for a
-        # graph that failed to import would report a channel the run
-        # never had.
-        _write_cpg_build_status(out_dir, _status(
-            failed=False, phase="complete"))
+    # Success record on EVERY successful import (only AFTER it: a
+    # rescue claim for a graph that failed to import would report a
+    # channel the run never had). Writing the plain-success case too
+    # is what retires a stale failed=true record from an earlier
+    # segment in the same out dir — otherwise the report claims a
+    # channel loss beside that later segment's real receipts.
+    _write_cpg_build_status(out_dir, _status(
+        failed=False, phase="complete"))
     return True
 
 
