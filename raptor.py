@@ -473,6 +473,45 @@ def _forward_max_cost_args(command: str, args: list,
     return args + ["--max-cost-usd", str(max_cost_usd)]
 
 
+# Name-shaped archive suffixes for the stray-positional gate below —
+# a token like `app.zip` deserves the `--repo` hint even when the path
+# doesn't exist (typo'd path); everything else nonexistent is left to
+# the child parser's own error.
+_ARCHIVE_NAME_SUFFIXES = (
+    ".zip", ".tar", ".tgz", ".tar.gz", ".tar.bz2", ".tar.xz",
+    ".tar.zst", ".gz", ".bz2", ".xz", ".zst",
+)
+
+
+def _stray_target_token(args: list) -> str | None:
+    """First bare (non-flag) token that plausibly names a target: it
+    exists on disk, or is archive-named. None when there is none.
+
+    Conservative flag-value handling: any ``-x``/``--x`` token NOT
+    carrying an inline ``=value`` is assumed to take the NEXT token as
+    its value, which is therefore never treated as a positional. This
+    deliberately trades misses for safety in both directions — a
+    boolean flag followed by a stray positional slips through (child
+    argparse still errors, no worse than pre-fix), but a value flag
+    whose argument happens to exist on disk (``--extra-config
+    rules.yml``) can never be misread as a stray target and break a
+    legitimate run.
+    """
+    expect_value = False
+    for a in args:
+        if expect_value:
+            expect_value = False
+            continue
+        if not isinstance(a, str) or not a:
+            continue
+        if a.startswith("-"):
+            expect_value = "=" not in a
+            continue
+        if Path(a).exists() or a.lower().endswith(_ARCHIVE_NAME_SUFFIXES):
+            return a
+    return None
+
+
 def _is_fuzz_standalone(args: list) -> bool:
     """True when a fuzz argv selects a standalone corpus utility
     (--export-seed-corpus / --prepare-corpus), in either the space or
@@ -498,6 +537,24 @@ def _resolve_target_for_command(command: str, args: list,
     if target is not None:
         return target, args, None
     if command in _REPO_TARGET_COMMANDS:
+        # Stray-positional gate BEFORE any default back-fill: an argv
+        # like `raptor.py scan /path/app.zip` carries its target as a
+        # positional token the child parsers don't define. Pre-fix the
+        # wrapper back-filled the active project's target (or
+        # RAPTOR_CALLER_DIR) as --repo anyway — sealing a failed run
+        # dir inside the WRONG project when the child exited 2, and
+        # one tolerant child away from scanning the wrong codebase
+        # outright. When a bare token names something on disk (or is
+        # archive-named), the operator clearly meant it as the target:
+        # fail fast with the canonical form, NO run dir (mirrors the
+        # fuzz/web required-flag fail-fast below).
+        stray = _stray_target_token(args)
+        if stray is not None:
+            return None, args, (
+                f"{command}: unrecognized positional argument '{stray}' "
+                f"— did you mean --repo {stray}? Refusing to fall back "
+                f"to the project/caller default target."
+            )
         # CLAUDE.md DEFAULT TARGET DIRECTORY: (1) active project,
         # (2) RAPTOR_CALLER_DIR. Explicit --repo always wins (the
         # caller only reaches here when args carry no target).
