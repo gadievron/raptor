@@ -89,8 +89,11 @@ class TestStartServerWiring:
         (tmp_path / "a.c").write_text("int main(void) { return 0; }\n")
         srv = _FakeServer()
         monkeypatch.setattr(jb, "joern_available", lambda overrides=None: True)
-        monkeypatch.setattr(jb, "_ensure_cpg_loaded",
-                            lambda s, t, tun=None, exclude_dirs=(): True)
+        monkeypatch.setattr(
+            jb, "_ensure_cpg_loaded",
+            lambda s, t, tun=None, exclude_dirs=(),
+            scope_exclude_dirs=(): True,
+        )
         import packages.joern.lifecycle as lifecycle
         monkeypatch.setattr(lifecycle, "joern_acquire", lambda tun: srv)
         monkeypatch.setattr(

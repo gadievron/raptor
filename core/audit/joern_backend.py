@@ -99,6 +99,127 @@ def target_has_joern_sources(target_path: Path | None) -> bool:
     return False
 
 
+def scope_complement_exclude_dirs(
+    joern_root: Path,
+    scope: str | list[str] | None,
+    target_path: Path,
+) -> tuple[str, ...]:
+    """Directories under *joern_root* deliberately OUTSIDE the audit
+    scope — the ``--scope`` complement the CPG build excludes.
+
+    Walks the scope entries as a prefix tree: at each level, sibling
+    directories on no scope path are excluded; a level fully covered
+    by a scope entry excludes nothing below it. Coverage is therefore
+    always a SUPERSET of the scope (file-leaf scope entries keep
+    their whole parent directory's files).
+
+    Every anomaly degrades to ``()`` — the full-tree build the audit
+    always did — never to an over-exclusion: an absolute scope
+    outside the target, a ``..`` segment, a whole-tree entry, or a
+    scope inconsistent with the narrowed *joern_root* all mean the
+    complement cannot be derived safely. Scope entries are
+    target-relative (``./`` spellings tolerated, absolute paths
+    rebased under the target, root-alias entries dropped — the same
+    normalisation the gap selector applies), so the graph always
+    covers at least what the gap selector reviews.
+    """
+    if not scope:
+        return ()
+    scopes_raw = [scope] if isinstance(scope, str) else list(scope)
+    if not scopes_raw:
+        return ()
+    try:
+        root = Path(joern_root).resolve()
+        target = Path(target_path).resolve()
+    except OSError:
+        return ()
+    if not root.is_dir():
+        return ()
+    try:
+        root_rel_parts = root.relative_to(target).parts
+    except ValueError:
+        return ()
+
+    norm: list[tuple[str, ...]] = []
+    target_str = str(target).rstrip("/")
+    for raw in scopes_raw:
+        entry = str(raw)
+        while entry.startswith("./"):
+            entry = entry[2:]
+        if entry.startswith("/"):
+            stripped = entry.rstrip("/")
+            if stripped == target_str:
+                entry = ""
+            elif stripped.startswith(target_str + "/"):
+                entry = stripped[len(target_str) + 1:]
+            else:
+                return ()
+        entry = entry.strip("/")
+        if entry in ("", "."):
+            # Whole-tree scope: there is no complement.
+            return ()
+        if target_str == entry or target_str.endswith("/" + entry):
+            # Root-alias entry ("webapp" for a target at .../webapp):
+            # the gap selector DROPS these — its gaps then span the
+            # whole tree — so the complement must not read the alias
+            # as a subdirectory name and exclude every sibling.
+            # Dropping only the alias keeps parity on mixed lists.
+            continue
+        parts = Path(entry).parts
+        if ".." in parts:
+            return ()
+        if root_rel_parts:
+            # joern_root was narrowed to the scopes' common prefix —
+            # re-anchor the entry below it.
+            if parts[: len(root_rel_parts)] != root_rel_parts:
+                return ()
+            parts = parts[len(root_rel_parts):]
+            if not parts:
+                # The scope IS the narrowed root: full subtree.
+                return ()
+        norm.append(parts)
+
+    if not norm:
+        # Every entry was a root alias — the gap selector reviews
+        # the whole tree, so the graph must cover it too.
+        return ()
+
+    tree: dict[str, dict] = {}
+    for parts in norm:
+        node = tree
+        for seg in parts:
+            node = node.setdefault(seg, {})
+
+    excludes: list[str] = []
+
+    def _walk(dir_path: Path, node: dict[str, dict]) -> None:
+        if not node:
+            # A scope entry ends here — everything below is in scope.
+            return
+        try:
+            children = list(dir_path.iterdir())
+        except OSError:
+            return
+        for child in children:
+            try:
+                if not child.is_dir() or child.is_symlink():
+                    continue
+            except OSError:
+                continue
+            # Dot-dirs are already excluded by the shared
+            # directory-name rule on both the key and the build; the
+            # complement stays self-contained without them.
+            if child.name.startswith("."):
+                continue
+            if child.name in node:
+                _walk(child, node[child.name])
+            else:
+                excludes.append(str(child))
+
+    _walk(root, tree)
+    return tuple(sorted(excludes))
+
+
 def joern_available(overrides: dict[str, Any] | None = None) -> bool:
     """Check if Joern is installed, importable, and enabled in tuning."""
     if overrides and overrides.get("enabled") is False:
@@ -133,6 +254,7 @@ def joern_tunables(overrides: dict[str, Any] | None = None):
 
 def start_joern_server(target_path, joern_overrides=None, tunables=None,
                        out_dir=None, exclude_dirs: tuple[str, ...] = (),
+                       scope_exclude_dirs: tuple[str, ...] = (),
                        timings_out: dict[str, float] | None = None):
     """Start or reuse a persistent Joern server if Joern is available.
 
@@ -160,6 +282,11 @@ def start_joern_server(target_path, joern_overrides=None, tunables=None,
     also pins the IRIS store lookup, and the exclusion channel must not
     change store-resolution semantics for callers that only want the
     key stabilised.
+
+    ``scope_exclude_dirs``: the run's ``--scope`` complement
+    (:func:`scope_complement_exclude_dirs`) — semantic coverage
+    exclusions that also key the CPG cache slot, unlike the
+    freshness-neutral ``exclude_dirs``.
     """
     if not joern_available(overrides=joern_overrides):
         return None
@@ -191,7 +318,8 @@ def start_joern_server(target_path, joern_overrides=None, tunables=None,
 
     _cpg_start = time.monotonic()
     _cpg_ok = _ensure_cpg_loaded(srv, target_path, tunables,
-                                 exclude_dirs=exclude_dirs)
+                                 exclude_dirs=exclude_dirs,
+                                 scope_exclude_dirs=scope_exclude_dirs)
     if timings_out is not None:
         timings_out["cpg_build_s"] = time.monotonic() - _cpg_start
     if not _cpg_ok:
@@ -259,12 +387,16 @@ def install_flow_semantics(srv, target_path, out_dir=None) -> int:
 
 
 def _ensure_cpg_loaded(srv, target_path, tunables=None,
-                       exclude_dirs: tuple[str, ...] = ()) -> bool | None:
+                       exclude_dirs: tuple[str, ...] = (),
+                       scope_exclude_dirs: tuple[str, ...] = (),
+                       ) -> bool | None:
     """Build and import the CPG for *target_path* into *srv*.
 
     Returns True if the CPG was loaded (or already was), False on failure.
     ``exclude_dirs`` joins the CPG build's content key and ``--exclude``
-    set (key/analysis parity).
+    set (key/analysis parity). ``scope_exclude_dirs`` (the scope
+    complement) additionally keys the cache slot — see
+    :func:`packages.joern.runner.build_cpg_cached`.
     """
     if getattr(srv, "_cpg_loaded", False):
         return True
@@ -283,7 +415,8 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
     # through unchanged.
     from packages.joern.tunables import resolve_cpg_timeout_s
     cpg_timeout = resolve_cpg_timeout_s(
-        tunables, target_path, exclude_dirs=exclude_dirs,
+        tunables, target_path,
+        exclude_dirs=tuple(exclude_dirs) + tuple(scope_exclude_dirs),
     )
     import_timeout = (
         getattr(tunables, "import_timeout_s", None) if tunables else None
@@ -295,7 +428,8 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
     try:
         cpg = build_cpg_cached(Path(target_path), cache_dir,
                                timeout=cpg_timeout,
-                               exclude_dirs=exclude_dirs)
+                               exclude_dirs=exclude_dirs,
+                               scope_exclude_dirs=scope_exclude_dirs)
         if cpg.exists():
             srv.import_cpg(cpg.path, timeout=import_timeout)
             return True
@@ -811,7 +945,9 @@ _PRESWEEP_FLOWS_CACHE_VERSION = 1
 _PRESWEEP_FLOWS_CACHE_MAX_BYTES = 256 * 1024 * 1024
 
 
-def _presweep_flows_identity(target_path) -> tuple[str, str] | None:
+def _presweep_flows_identity(
+    target_path, scope_exclude_dirs: tuple[str, ...] = (),
+) -> tuple[str, str] | None:
     """(cpg_hash, sink_hash) identity of a pre-sweep result, or None.
 
     ``cpg_hash`` covers every axis the CPG build cache invalidates on
@@ -821,7 +957,10 @@ def _presweep_flows_identity(target_path) -> tuple[str, str] | None:
     fingerprint recovered from compile_commands.json (a regenerated
     build database with different -D/-I flags changes the
     preprocessed code, and thus the flows, without touching the
-    source hash), and the exclusion rule. ``sink_hash`` covers the
+    source hash), the exclusion rule, and the run's scope-complement
+    exclusions (a scope change carves different coverage — flows
+    swept under one scope must not serve a differently-scoped or
+    unscoped segment as the complete sweep). ``sink_hash`` covers the
     query side: the standard_sinks.sc script body plus the rendered
     sink list substituted into it — a query-logic change across a
     framework upgrade must not serve flows computed by the old query.
@@ -833,6 +972,7 @@ def _presweep_flows_identity(target_path) -> tuple[str, str] | None:
         )
         from packages.joern.runner import (
             CPG_EXCLUDE_REGEX,
+            _normalised_scope_excludes,
             _target_content_hash,
             discover_frontend_args,
         )
@@ -840,10 +980,13 @@ def _presweep_flows_identity(target_path) -> tuple[str, str] | None:
         target = Path(target_path)
         if not target.is_dir():
             return None
+        scope_norm = _normalised_scope_excludes(scope_exclude_dirs)
         cpg_hash = hashlib.sha256("\n".join((
-            _target_content_hash(target),
+            _target_content_hash(
+                target, exclude_dirs=tuple(scope_norm)),
             discover_frontend_args(target).fingerprint(),
             CPG_EXCLUDE_REGEX,
+            *scope_norm,
         )).encode("utf-8")).hexdigest()
 
         import packages.joern as _joern_pkg
@@ -996,6 +1139,7 @@ def build_joern_evidence(
     joern_server=None,
     abort_check: Callable[[], bool] | None = None,
     deadline_monotonic: float | None = None,
+    scope_exclude_dirs: tuple[str, ...] = (),
 ) -> dict[str, list] | None:
     """Run Joern pre-sweep (standard_sinks.sc) if available.
 
@@ -1032,7 +1176,8 @@ def build_joern_evidence(
     if tunables is None:
         return None
 
-    identity = _presweep_flows_identity(target_path)
+    identity = _presweep_flows_identity(
+        target_path, scope_exclude_dirs=scope_exclude_dirs)
     if identity is not None:
         cached = load_presweep_flows_cache(out_dir, identity)
         if cached is not None:
@@ -1055,7 +1200,8 @@ def build_joern_evidence(
         # A derived ("auto") CPG timeout resolves against this
         # sweep's own target/exclusion set (non-auto passes through).
         stall_timeout=resolve_cpg_timeout_s(
-            tunables, target_path, exclude_dirs=presweep_excludes,
+            tunables, target_path,
+            exclude_dirs=presweep_excludes + tuple(scope_exclude_dirs),
         ),
         query_timeout=tunables.query_timeout_s,
         heap_mb=tunables.heap_mb,
@@ -1063,6 +1209,7 @@ def build_joern_evidence(
         status_out=status,
         deadline_monotonic=deadline_monotonic,
         exclude_dirs=presweep_excludes,
+        scope_exclude_dirs=scope_exclude_dirs,
         abort_check=abort_check,
     )
     if abort_check is not None and abort_check():
@@ -1196,6 +1343,7 @@ def resolve_joern_evidence(
     out_dir=None,
     abort_event=None,
     deadline_monotonic: float | None = None,
+    scope_exclude_dirs: tuple[str, ...] = (),
 ) -> tuple:
     """Resolve Joern evidence.
 
@@ -1232,6 +1380,7 @@ def resolve_joern_evidence(
         _progress, joern_server,
         abort_check=abort_event.is_set if abort_event is not None else None,
         deadline_monotonic=deadline_monotonic,
+        scope_exclude_dirs=scope_exclude_dirs,
     )
     executor.shutdown(wait=False)
     return (None, future)

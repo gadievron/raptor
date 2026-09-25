@@ -4340,6 +4340,7 @@ def run_joern_pre_sweep(
     server=None,
     status_out: dict | None = None,
     exclude_dirs: tuple[str, ...] = (),
+    scope_exclude_dirs: tuple[str, ...] = (),
     abort_check: Callable[[], bool] | None = None,
     deadline_monotonic: float | None = None,
 ) -> dict[str, list]:
@@ -4352,6 +4353,11 @@ def run_joern_pre_sweep(
     ``exclude_dirs`` are caller-declared exclusion roots (a run's
     output dir inside the target) forwarded to the CPG build so run
     artifacts stay out of both the content key and the graph.
+    ``scope_exclude_dirs`` (the run's scope complement) additionally
+    keys the CPG cache slot — see
+    :func:`packages.joern.runner.build_cpg_cached`. Server mode
+    ignores both: the server's already-imported CPG carries its own
+    exclusion contract.
     ``abort_check`` is polled at step boundaries (before the CPG
     build, before each query, on re-queue): True aborts with ``{}`` —
     the consumer has discarded the result.
@@ -4570,8 +4576,16 @@ def run_joern_pre_sweep(
     if _aborted("CPG build"):
         return {}
     if cache_dir is not None:
+        if scope_exclude_dirs:
+            build_kwargs["scope_exclude_dirs"] = scope_exclude_dirs
         cpg = build_cpg_cached(target_path, cache_dir, **build_kwargs)
     else:
+        if scope_exclude_dirs:
+            # No cache slot to key on the uncached path — the scope
+            # complement still shapes the graph (analysis parity).
+            build_kwargs["exclude_dirs"] = tuple(
+                build_kwargs.get("exclude_dirs", ())
+            ) + tuple(scope_exclude_dirs)
         cpg = build_cpg(target_path, **build_kwargs)
     if not cpg.exists():
         logger.warning("CPG build produced no output")
