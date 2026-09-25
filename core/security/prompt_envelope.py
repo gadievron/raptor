@@ -354,19 +354,32 @@ BLOCK_BOUNDARY_TAG_NAMES: tuple[str, ...] = (
 # closer-required arm left tag HALVES invisible: `[name attrs…`
 # without its `]` matched nothing, so two separately-neutralised
 # fragments could reassemble into a live tag when a rendering site
-# joined them (`fragment-with-opener` + `separator` + `]…`) — the
-# cross-identifier reassembly class. Any live reassembled tag must
-# carry `[` plus the complete registered name inside ONE fragment
-# (the join separator would otherwise land inside the name or the
-# `\s*` gap and kill the match), so neutralising the unclosed opener
-# half closes the class for every consumer. Trade in the benign
-# direction: prose containing an unclosed `[<name>…` run — text
-# already spelling the reserved boundary vocabulary — now gets the
-# same invisible ZWSP defang a complete tag gets; bracketed prose
-# not spelling a registered name is untouched (pinned by
-# test_benign_brackets_untouched).
+# joined them (`fragment-with-opener` + `separator` + `]…`).
+#
+# Whitespace is legal between `[` and `/` for the same
+# parser-tolerance reason the XML arms accept `< /untrusted`; the
+# slash gates its own trailing whitespace ((?:/\s*)?) because the
+# `\s*/?\s*` chain shape is quadratic on a bracket-opening run.
+#
+# What this arm guarantees — exactly, no more: any occurrence of
+# `[` + optional whitespace/slash + a REGISTERED name inside one
+# examined text is matched, and the replacement defangs EVERY `[`
+# in the span, so no live bracket-tag shape survives within text
+# the neutraliser saw whole. It guarantees NOTHING across texts it
+# saw separately: a joining site can itself supply the characters a
+# live shape needs (a bare-whitespace join supplies the gap of a
+# `[ name` opener; a `[{fragment}]` template supplies both brackets
+# around a bare vocabulary-name fragment). Rendering sites own that
+# seam — they defend the JOINED text (join-then-defend) or the
+# COMPOSED bracketed template, never fragments alone.
+#
+# Trade in the benign direction: prose containing an unclosed
+# `[<name>…` run — text already spelling the reserved boundary
+# vocabulary — gets the same invisible ZWSP defang a complete tag
+# gets; bracketed prose not spelling a registered name is untouched
+# (pinned by test_benign_brackets_untouched).
 _BRACKET_BOUNDARY_ARMS = "".join(
-    r"|\[/?\s*" + re.escape(name) + r"\b[^\]]{0,256}\]?"
+    r"|\[\s*(?:/\s*)?" + re.escape(name) + r"\b[^\]]{0,256}\]?"
     for name in BLOCK_BOUNDARY_TAG_NAMES
 )
 
@@ -732,14 +745,23 @@ def neutralize_tag_forgery(content: str) -> str:
         # the result (e.g. _render_slot's _xml_content_escape pass).
         if s.startswith('<'):
             return '<\u200b' + s[1:]
-        # Bracket-style: insert ZWSP after `[` and before `]` so the
-        # model no longer pattern-matches against envelope boundaries.
-        # Same rationale as the XML-style fix above — entity escaping
-        # (&#91;/&#93;) caused double-encoding downstream.
+        # Bracket-style: insert ZWSP after EVERY `[` (and before a
+        # closing `]`) so the model no longer pattern-matches against
+        # envelope boundaries. Entity escaping (&#91;/&#93;) caused
+        # double-encoding downstream, hence ZWSP. Every `[`, not just
+        # the first: the attribute run ([^\]]{0,256}) tolerates a
+        # nested `[<name>` and re.sub never rescans its replacement,
+        # so a first-bracket-only insert left the inner tag live
+        # (`[MARK_INPT[MARK_INPT]`). Same single-pass-complete
+        # discipline as the BEGIN_/END_ branch below (ZWSP after
+        # EVERY underscore): with ZWSP after every `[`, no
+        # bracket-arm shape survives anywhere in the replacement. A
+        # complete tag with no nested `[` produces byte-identical
+        # output to the previous first-bracket-only insert.
         if s.startswith('['):
-            inner = s[1:-1] if s.endswith(']') else s[1:]
+            body = s[:-1] if s.endswith(']') else s
             tail = '\u200b]' if s.endswith(']') else ''
-            return '[\u200b' + inner + tail
+            return body.replace('[', '[\u200b') + tail
         # Line-marker style (BEGIN_X / END_X): break the keyword by
         # inserting a zero-width space after EVERY underscore so the
         # visual match against `BEGIN_<MARKER>` no longer fires. ZWSP
