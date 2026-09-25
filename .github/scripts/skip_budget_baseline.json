@@ -1,1 +1,10 @@
-{}
+{
+  "replay-eval": {
+    "note": "1 = the lane's module-level skip on runners without the local replay-case corpus; a maintainer runner with cases present records its own count",
+    "skips": 1
+  },
+  "replay-public": {
+    "note": "hermetic record/replay suites; any skip means the public runner degraded",
+    "skips": 0
+  }
+}
