@@ -917,6 +917,14 @@ LANE_EXEMPT: dict[str, str] = {
         "dispatch SCRIPT that happens to be test_-named; its suite is "
         ".github/tests/test_test_impact.py (ci_lint lane)."
     ),
+    ".github/evals/": (
+        "replay-determinism eval lanes: run in their own dedicated "
+        "workflow (replay-determinism.yml, replay-determinism and "
+        "replay-eval-private jobs, each with a recorded skip budget) "
+        "rather than the tiered dispatch — the gate is path-filtered "
+        "with a daily full sweep, and the private-case lane's "
+        "skip-with-notice shape carries its own budget key."
+    ),
 }
 
 

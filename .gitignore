@@ -45,3 +45,8 @@ tuning.json
 # Rendered per-checkout AppArmor profile (make apparmor-profile output;
 # the tracked source is the .template)
 core/sandbox/helpers/raptor-coord-launcher.apparmor
+
+# Local-only replay-eval case corpus (transcripts + verdict
+# expectations supplied per-machine; machinery ships in-tree, case
+# content never does — same convention as the corpus labels)
+core/audit/corpus/replay-cases/
