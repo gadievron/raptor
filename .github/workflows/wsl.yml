@@ -1,0 +1,444 @@
+name: Nightly (WSL2 live leg)
+
+# Real-WSL2 verification of the WSL compatibility program: the
+# environment claims the WSL series could only pin with mocked probes
+# run here against an actual WSL kernel, drvfs/9p automount, and the
+# Windows interop plumbing. Four jobs behind one availability probe:
+#
+#   verify-live   — the [verify-live] checklist (facts recorded,
+#                   expectations asserted) via
+#                   .github/scripts/wsl_verify_live.py
+#   wsl-tests     — `pytest -m wsl` plus the CRLF fixture set on an
+#                   ext4 clone, a git-materialized core.autocrlf twin,
+#                   and the drvfs workspace checkout (9p smokes)
+#   sandbox-live  — consent-ceremony and sandbox-profile probes that
+#                   need the real kernel (checklist consent + sandbox
+#                   sections, live suite slices, the consent E2E)
+#   wsl1-capture  — a wsl-version 1 job capturing WSL1 identity facts
+#                   and exercising the refusal + explicit-disable path
+#
+# The runner-image WSL2 claim is itself first-run-verified: the probe
+# job attempts the setup and the leg reports a detected skip in the
+# job summary when the image cannot host WSL2, instead of failing.
+#
+# In-distro steps run through setup-wsl's `wsl-bash` shell as the
+# non-root `raptor` user (the sandbox suites assume an unprivileged
+# caller); root-needed distro setup goes through `wsl.exe -u root`
+# from the host side. Environment variables do not cross wsl.exe
+# without WSLENV plumbing, so in-distro knobs are exported inline.
+#
+# Job summaries and logs state environment facts only.
+
+on:
+  schedule:
+    # 06:45 UTC — after the weekly 05:00/05:30/06:30 jobs, before the
+    # 07:00/07:15/07:30 nightlies. WSL setup keeps this off the PR tier.
+    - cron: '45 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  WSL_DISTRO: Ubuntu-24.04
+  WSL_SECOND_DISTRO: Debian
+
+jobs:
+  probe:
+    # Availability gate: attempt the WSL2 setup once and publish the
+    # verdict; the real jobs run only on a confirmed-WSL2 image.
+    runs-on: windows-2022
+    timeout-minutes: 30
+    outputs:
+      wsl2: ${{ steps.verdict.outputs.wsl2 }}
+    steps:
+      - name: Set up WSL2 (availability probe)
+        id: setup
+        continue-on-error: true
+        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364  # v7.0.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
+
+      - name: Publish availability verdict
+        id: verdict
+        shell: bash
+        run: |
+          set -euo pipefail
+          wsl2=false
+          kernel=""
+          if [ "${{ steps.setup.outcome }}" = "success" ]; then
+            # tr strips everything non-printable-ASCII before the
+            # kernel string reaches the public job summary.
+            kernel="$(wsl.exe -d "$WSL_DISTRO" -- uname -r | tr -cd '\40-\176' || true)"
+            case "$kernel" in
+              *microsoft-standard*) wsl2=true ;;
+            esac
+          fi
+          echo "wsl2=$wsl2" >> "$GITHUB_OUTPUT"
+          {
+            echo "## WSL2 availability probe"
+            echo ""
+            echo "* setup-wsl outcome: ${{ steps.setup.outcome }}"
+            echo "* distro kernel: \`${kernel:-none}\`"
+            echo "* WSL2 available on this runner image: **${wsl2}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  report-unavailable:
+    # Detected-and-reported skip: the leg ran, found no WSL2 on the
+    # image, and says so — a green no-op, not a silent absence.
+    needs: probe
+    if: needs.probe.outputs.wsl2 != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report the detected skip
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## WSL2 live leg skipped"
+            echo ""
+            echo "The windows-2022 runner image did not provide a"
+            echo "working WSL2 environment on this run (see the probe"
+            echo "job summary). All WSL2 jobs were skipped by the"
+            echo "availability gate."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify-live:
+    needs: probe
+    if: needs.probe.outputs.wsl2 == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Set up second distro (cross-client probes)
+        # A second 9p client for the flock-locality and rename-
+        # visibility probes; reached from the primary distro through
+        # wsl.exe interop. Installed FIRST so the primary distro's
+        # setup below is the last action invocation and owns the
+        # wsl-bash shell registration (default distro + shell user).
+        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364  # v7.0.0
+        with:
+          distribution: ${{ env.WSL_SECOND_DISTRO }}
+          wsl-version: 2
+          set-as-default: 'false'
+
+      - name: Set up WSL2 distro
+        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364  # v7.0.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
+          wsl-shell-user: raptor
+          additional-packages: python3 python3-venv python3-pip git util-linux
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Clone to the distro filesystem and install deps
+        # $PWD inside wsl-bash is the workspace mapped through the
+        # automount (the drvfs view of the checkout).
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          git -c core.autocrlf=false clone --quiet "$PWD" "$HOME/raptor"
+          python3 -m venv "$HOME/venv"
+          . "$HOME/venv/bin/activate"
+          python -m pip install --quiet -r "$HOME/raptor/requirements-dev.txt"
+          python --version
+
+      - name: Run the verify-live checklist (facts)
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          export RAPTOR_WSL_SECOND_DISTRO='${{ env.WSL_SECOND_DISTRO }}'
+          . "$HOME/venv/bin/activate"
+          cd "$HOME/raptor"
+          mkdir -p /mnt/c/wsl-verify-scratch
+          python .github/scripts/wsl_verify_live.py \
+            --section facts --strict \
+            --scratch-root /mnt/c/wsl-verify-scratch \
+            --json-out "$HOME/wsl-verify/facts.json"
+
+      - name: Stage artifact on the Windows side
+        if: always()
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          mkdir -p ./wsl-verify-artifact
+          if [ -d "$HOME/wsl-verify" ]; then
+            cp -r "$HOME/wsl-verify/." ./wsl-verify-artifact/
+          fi
+
+      - name: Upload checklist artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: wsl-verify-facts
+          path: wsl-verify-artifact/
+          retention-days: 14
+          if-no-files-found: warn
+
+  wsl-tests:
+    needs: probe
+    if: needs.probe.outputs.wsl2 == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Set up WSL2 distro
+        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364  # v7.0.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
+          wsl-shell-user: raptor
+          additional-packages: python3 python3-venv python3-pip git
+
+      - name: Checkout repository
+        # From inside the distro this working tree is the drvfs (9p,
+        # case-insensitive) view, materialized with whatever line
+        # model the image's git applies — the CRLF work guarantees
+        # the assertions below hold on either model, and the twin
+        # clones pin both models explicitly.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Clone twins to the distro filesystem and install deps
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          git -c core.autocrlf=false clone --quiet "$PWD" "$HOME/raptor"
+          git -c core.autocrlf=true clone --quiet "$PWD" "$HOME/raptor-crlf"
+          python3 -m venv "$HOME/venv"
+          . "$HOME/venv/bin/activate"
+          python -m pip install --quiet -r "$HOME/raptor/requirements-dev.txt"
+
+      - name: Run the wsl-marked tests (ext4 clone)
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          . "$HOME/venv/bin/activate"
+          cd "$HOME/raptor"
+          python -m pytest -m wsl core packages -q
+
+      - name: CRLF fixture set (ext4 LF clone)
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          . "$HOME/venv/bin/activate"
+          cd "$HOME/raptor"
+          python -m pytest -q \
+            .github/tests/test_crlf_line_model_census.py \
+            .github/tests/test_crlf_checkout_pin.py \
+            core/audit/tests/test_crlf_source_equivalence.py \
+            packages/sca/tests/test_hash_pin.py \
+            core/build/tests/test_build_flags.py
+
+      - name: CRLF fixture set (git-materialized core.autocrlf twin)
+        # The real-world CRLF producer: the same fixture set on a
+        # checkout git itself materialized with core.autocrlf=true,
+        # catching .gitattributes/filter interactions the byte-written
+        # twins bypass.
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          . "$HOME/venv/bin/activate"
+          cd "$HOME/raptor-crlf"
+          python -m pytest -q \
+            .github/tests/test_crlf_line_model_census.py \
+            .github/tests/test_crlf_checkout_pin.py \
+            core/audit/tests/test_crlf_source_equivalence.py \
+            packages/sca/tests/test_hash_pin.py \
+            core/build/tests/test_build_flags.py
+
+      - name: Census + class pin + 9p smokes (drvfs checkout)
+        # Same assertions from the /mnt view of the workspace: the
+        # census file walk on a case-insensitive mount, the checkout
+        # pin across mounts, and the two suppression-leg suites whose
+        # reads are most sensitive to 9p attr-cache semantics.
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          . "$HOME/venv/bin/activate"
+          python -m pytest -q \
+            .github/tests/test_crlf_line_model_census.py \
+            .github/tests/test_crlf_checkout_pin.py \
+            packages/semgrep/tests/test_nosemgrep.py \
+            core/inventory/tests/test_dead_scope.py
+
+  sandbox-live:
+    needs: probe
+    if: needs.probe.outputs.wsl2 == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Set up WSL2 distro
+        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364  # v7.0.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
+          wsl-shell-user: raptor
+          additional-packages: python3 python3-venv python3-pip git uidmap util-linux
+
+      - name: Distro namespace prerequisites (root)
+        # Mirrors the Linux CI jobs: allow unprivileged user
+        # namespaces where the distro's policy restricts them.
+        # Best-effort — a WSL kernel without the sysctl simply
+        # doesn't restrict.
+        shell: bash
+        run: |
+          set -euo pipefail
+          wsl.exe -d "$WSL_DISTRO" -u root -- sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Clone to the distro filesystem and install deps
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          git -c core.autocrlf=false clone --quiet "$PWD" "$HOME/raptor"
+          python3 -m venv "$HOME/venv"
+          . "$HOME/venv/bin/activate"
+          python -m pip install --quiet -r "$HOME/raptor/requirements-dev.txt"
+
+      - name: Live WSL sandbox test slices
+        # The WSL-shape suites with the real kernel underneath: the
+        # flavour/mask/read-deny/refusal files plus the consent floor
+        # and CLI suites, then the consent E2E on the live lanes.
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          . "$HOME/venv/bin/activate"
+          cd "$HOME/raptor"
+          python -m pytest -q \
+            core/startup/tests/test_wsl.py \
+            core/sandbox/tests/test_wsl_interop_masks.py \
+            core/sandbox/tests/test_wsl_mnt_read_deny.py \
+            core/sandbox/tests/test_wsl1_refusal.py \
+            core/sandbox/tests/test_host_consent.py \
+            core/sandbox/tests/test_floor_host_consent.py \
+            core/sandbox/tests/test_wsl_consent_cli.py
+          python -m pytest -q -m integration \
+            core/sandbox/tests/test_floor_host_consent.py
+
+      - name: Run the verify-live checklist (consent ceremony)
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          . "$HOME/venv/bin/activate"
+          cd "$HOME/raptor"
+          python .github/scripts/wsl_verify_live.py \
+            --section consent --strict \
+            --json-out "$HOME/wsl-verify/consent.json"
+
+      - name: Run the verify-live checklist (sandbox profile)
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          . "$HOME/venv/bin/activate"
+          cd "$HOME/raptor"
+          mkdir -p /mnt/c/wsl-verify-scratch
+          python .github/scripts/wsl_verify_live.py \
+            --section sandbox --strict \
+            --scratch-root /mnt/c/wsl-verify-scratch \
+            --json-out "$HOME/wsl-verify/sandbox.json"
+
+      - name: Stage artifact on the Windows side
+        if: always()
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          mkdir -p ./wsl-verify-artifact
+          if [ -d "$HOME/wsl-verify" ]; then
+            cp -r "$HOME/wsl-verify/." ./wsl-verify-artifact/
+          fi
+
+      - name: Upload checklist artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: wsl-verify-sandbox
+          path: wsl-verify-artifact/
+          retention-days: 14
+          if-no-files-found: warn
+
+  wsl1-capture:
+    # WSL1 identity capture + the refusal path. WSL1 needs no nested
+    # virtualization, so this job gates on its own setup outcome
+    # rather than the WSL2 probe.
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Set up WSL1 distro
+        id: setup
+        continue-on-error: true
+        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364  # v7.0.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 1
+          wsl-shell-user: raptor
+          additional-packages: python3 python3-venv python3-pip git
+
+      - name: Report WSL1 availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## WSL1 availability"
+            echo ""
+            echo "* setup-wsl (wsl-version 1) outcome: ${{ steps.setup.outcome }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout repository
+        if: steps.setup.outcome == 'success'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Clone to the distro filesystem and install deps
+        if: steps.setup.outcome == 'success'
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          git -c core.autocrlf=false clone --quiet "$PWD" "$HOME/raptor"
+          python3 -m venv "$HOME/venv"
+          . "$HOME/venv/bin/activate"
+          python -m pip install --quiet -r "$HOME/raptor/requirements-dev.txt"
+
+      - name: Run the verify-live checklist (wsl1)
+        if: steps.setup.outcome == 'success'
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          . "$HOME/venv/bin/activate"
+          cd "$HOME/raptor"
+          python .github/scripts/wsl_verify_live.py \
+            --section wsl1 --strict \
+            --json-out "$HOME/wsl-verify/wsl1.json"
+
+      - name: Stage artifact on the Windows side
+        if: always() && steps.setup.outcome == 'success'
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          mkdir -p ./wsl-verify-artifact
+          if [ -d "$HOME/wsl-verify" ]; then
+            cp -r "$HOME/wsl-verify/." ./wsl-verify-artifact/
+          fi
+
+      - name: Upload checklist artifact
+        if: always() && steps.setup.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: wsl-verify-wsl1
+          path: wsl-verify-artifact/
+          retention-days: 14
+          if-no-files-found: warn
