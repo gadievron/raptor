@@ -303,6 +303,13 @@ class ReviewJournalEntry:
     # only: a seed is a hint, never evidence, and this field carries
     # no verdict weight anywhere. Additive; absent on seedless rows.
     seed_provenance: list[dict] | None = None
+    # ``seed_rereview``: this row is a seed-FORCED fresh review of an
+    # already-covered function (``--seed-rereview`` scheduling by
+    # core.audit.hypothesis_intake). Provenance only, like
+    # ``seed_provenance`` — the prior verdicts stay in the history
+    # and this row carries no extra verdict weight. Additive; absent
+    # on ordinary rows.
+    seed_rereview: bool | None = None
     # ``provisional``: this finding-grade row was appended by the
     # mid-loop promotion cadence, BEFORE the post-loop resolution
     # passes (refutation gates, binary-oracle demotion, the
@@ -1280,6 +1287,7 @@ def _entry_from_dict(raw: dict[str, Any]) -> ReviewJournalEntry:
         edge_callee=raw.get("edge_callee"),
         edge_verdicts=raw.get("edge_verdicts"),
         seed_provenance=raw.get("seed_provenance"),
+        seed_rereview=raw.get("seed_rereview"),
         provisional=raw.get("provisional"),
         integrity=raw.get("integrity"),
         schema_version=version,
