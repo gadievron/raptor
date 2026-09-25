@@ -46,6 +46,9 @@
     "artifacts:orphan_reader::c.p.*.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:orphan_reader::call_graph.json": {
+      "note": "external-input pattern: the pinned OpenAnt subprocess writes call_graph.json into the run's openant_scan dir; packages/openant/recovery reads it to re-derive the upstream reporter's caller/callee dedup removal set. RAPTOR never writes it (the only in-repo writes are test fixtures); twin of the baselined languages.json upstream-asset entry"
+    },
     "artifacts:orphan_reader::checkpoint-*-groups.json": {
       "note": "glob-reader/concrete-writer false positive: run_corpus._clear_resume_state sweeps finished-run resume sidecars via glob(\"checkpoint-*-groups.json\"); the writers spell the concrete names (literal checkpoint-sec-groups.json / checkpoint-bf-groups.json paths and f\"checkpoint-{mode}-groups.json\", all written through _checkpoint_write), which the artifact indexer keys separately from the glob pattern, so the reader looks orphaned; twin of the baselined *.osv.json entry"
     },
@@ -126,6 +129,12 @@
     },
     "artifacts:orphan_reader::requirements*.txt": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::results.json": {
+      "note": "external-input pattern: the pinned OpenAnt subprocess writes results.json (the analyze-stage output) into the run's openant_scan dir; packages/openant/recovery reads it as the checkpoint-verdict recovery's confirmed-row population. RAPTOR never writes it"
+    },
+    "artifacts:orphan_reader::results_verified.json": {
+      "note": "external-input pattern: the pinned OpenAnt subprocess writes results_verified.json when its verify stage runs; packages/openant/recovery prefers it over results.json, mirroring the upstream reporter's own active_results_path choice. RAPTOR never writes it"
     },
     "artifacts:orphan_reader::showmap-edges.txt": {
       "note": "written by the external afl-showmap tool, not by repo code (run_showmap builds the -o path and hands it to the sandboxed afl-showmap invocation); _parse_showmap_output reads it back as the banner-format-drift fallback, so the indexer only ever sees the read"

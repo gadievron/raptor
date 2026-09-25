@@ -3855,6 +3855,20 @@ def main() -> int:
                 raw = translate_pipeline_output(
                     oa_result.get("pipeline_output") or {},
                 )
+                # Checkpoint-verdict recovery: hint-tier candidates for
+                # unit verdicts the scanner's own report dropped
+                # (caller/callee dedup — see packages/openant/recovery).
+                # They join the SARIF dedup like any OpenAnt finding
+                # (a SARIF record covering the same file+CWE makes the
+                # recovered candidate redundant) but are counted
+                # separately everywhere — never blended into the
+                # scanner-stood-behind findings count.
+                from packages.openant import (
+                    RECOVERED_TIER,
+                    recover_dropped_verdicts,
+                )
+                raw += recover_dropped_verdicts(
+                    oa_out, oa_result.get("pipeline_output") or {})
                 if raw and not _openant_only and all_sarif_files:
                     from core.sarif.parser import parse_sarif_findings
                     sarif_flist = []
@@ -3869,11 +3883,29 @@ def main() -> int:
                     openant_findings = raw
                 openant_findings_count = len(openant_findings)
                 save_json(out_dir / "openant_findings.json", openant_findings)
-                print(f"✓ OpenAnt: {openant_findings_count} unique finding(s)")
+                _oa_recovered = sum(
+                    1 for f in openant_findings
+                    if (f.get("metadata") or {}).get("provenance_tier")
+                    == RECOVERED_TIER)
+                if _oa_recovered:
+                    print(f"✓ OpenAnt: "
+                          f"{openant_findings_count - _oa_recovered} unique "
+                          f"finding(s) + {_oa_recovered} recovered "
+                          f"checkpoint verdict(s)")
+                else:
+                    print(f"✓ OpenAnt: {openant_findings_count} unique finding(s)")
                 openant_metrics.update({
-                    "total_findings": openant_findings_count,
+                    # Scanner-stood-behind findings ONLY — recovered
+                    # checkpoint verdicts ride their own present-only
+                    # key below (never blended; the artifact total is
+                    # the sum of the two).
+                    "total_findings": openant_findings_count - _oa_recovered,
                     "model": oa_config.model,
                     "level": oa_config.level,
+                    # Present-only: zero recovered adds no key (no noise
+                    # on healthy runs).
+                    **({"recovered_checkpoint_verdicts": _oa_recovered}
+                       if _oa_recovered else {}),
                 })
                 token_usage = oa_result.get("token_usage") or {}
                 if token_usage:

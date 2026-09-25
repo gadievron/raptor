@@ -580,15 +580,31 @@ def main() -> int:
     translated = translate_pipeline_output(pipeline_output)
     print(f"✓ Translated: {len(translated)} finding(s) after suppression")
 
+    # Checkpoint-verdict recovery: the upstream reporter's caller/callee
+    # dedup drops confirmed unit verdicts from pipeline_output.json while
+    # their per-unit records persist in the scan artifacts. Recover them
+    # as hint-tier candidates (marker + level=note; see
+    # packages/openant/recovery.py) — counted SEPARATELY from the
+    # scanner's own findings everywhere below, never blended. Best-effort:
+    # failure degrades to zero recovered records, loudly, and never
+    # blocks the findings path.
+    from packages.openant.recovery import recover_dropped_verdicts
+    recovered = recover_dropped_verdicts(oa_out, pipeline_output)
+    if recovered:
+        print(f"✓ Recovered: {len(recovered)} checkpoint verdict(s) the "
+              f"scanner's report dropped (hint tier)")
+
     # The durable artifact is NEVER capped: openant_findings.json is
     # what /validate, project merged views and cross-run correlation
     # consume, and the /agentic lane saves it uncapped — a capped
     # artifact silently lost findings (severity-blind, in pipeline
     # order) from every downstream view while every count surface
     # claimed the full total. --max-findings caps only the markdown
-    # report below.
+    # report below. Recovered records ride the same artifact — each one
+    # carries its provenance marker, so consumers can weight or filter
+    # them without a second file.
     findings_path = out_dir / "openant_findings.json"
-    save_json(findings_path, translated)
+    save_json(findings_path, translated + recovered)
 
     # ------------------------------------------------------------------
     # FINAL REPORT
@@ -622,6 +638,10 @@ def main() -> int:
                 "translated_findings": len(translated),
                 "report_findings": min(len(translated), args.max_findings),
                 "report_truncated": max(0, len(translated) - args.max_findings),
+                # Present-only: healthy runs (nothing recovered) carry no
+                # key — honest accounting without noise.
+                **({"recovered_checkpoint_verdicts": len(recovered)}
+                   if recovered else {}),
                 "pipeline_output_path": str(scan_result.get("pipeline_output_path") or ""),
             },
         },
@@ -654,11 +674,17 @@ def main() -> int:
     _write_markdown_report(
         out_dir, translated, repo_path, duration,
         max_findings=args.max_findings,
+        recovered=recovered,
     )
 
     print("\n" + "=" * 70)
     print("OPENANT WORKFLOW COMPLETE")
     print("=" * 70)
+    if recovered:
+        # Stated BEFORE the findings count so the two totals are never
+        # read as one blended number; silent when zero.
+        print(f"\n  Recovered: {len(recovered)} checkpoint verdict(s) "
+              f"(hint tier — see report)")
     print(f"\n  Findings:  {len(translated)}")
     print(f"  Duration:  {duration:.1f}s")
     print(f"  Cost:      ${cost['total_usd']:.4f}")
@@ -820,6 +846,7 @@ def _write_markdown_report(
     repo_path: Path,
     duration: float,
     max_findings: int | None = None,
+    recovered: list | None = None,
 ) -> None:
     # Every finding-derived value below is hostile-influenced: snippet
     # is verbatim target code (a repo being scanned is untrusted),
@@ -829,6 +856,7 @@ def _write_markdown_report(
     # ``` cannot terminate the snippet fence and inject live markdown
     # (autofetch links, forged headings, prompt text for a later LLM
     # pass reading the report) into openant-report.md.
+    recovered = recovered or []
     total = len(findings)
     if max_findings is not None and total > max_findings:
         findings = _report_selection(findings, max_findings)
@@ -837,9 +865,14 @@ def _write_markdown_report(
         "",
         f"**Repository:** `{md_inline(repo_path)}`  ",
         f"**Duration:** {duration:.1f}s  ",
-        f"**Findings:** {total}",
-        "",
+        # Recovered verdicts get their own header line, never folded
+        # into the findings count — they are verdicts the scanner's own
+        # report dropped, surfaced at hint tier. Zero renders nothing.
+        f"**Findings:** {total}" + ("  " if recovered else ""),
     ]
+    if recovered:
+        lines.append(f"**Recovered checkpoint verdicts:** {len(recovered)}")
+    lines.append("")
     if len(findings) < total:
         # Fail-toward-visibility: the truncation is stated, the true
         # total stays in the header, and the cut is severity-first.
@@ -901,6 +934,55 @@ def _write_markdown_report(
                     lines.append(md_fence(f.get("snippet", "")))
                     lines.append("```")
                     lines.append("")
+
+    if recovered:
+        # Dedicated section — recovered verdicts never blend into the
+        # level sections above. Same hostile-content posture: every
+        # slot renders through markdown_render. Capped like the main
+        # body (all recovered records share one severity tier, so the
+        # cut is order-preserving) with the truncation stated.
+        shown = recovered
+        if max_findings is not None and len(recovered) > max_findings:
+            shown = recovered[:max_findings]
+        lines.append(f"## Recovered checkpoint verdicts ({len(recovered)})")
+        lines.append("")
+        lines.append(
+            "Per-unit verdicts from the scan's analysis artifacts that "
+            "the scanner's own report dropped (caller/callee "
+            "deduplication collapses a same-CWE callee into its only "
+            "caller's finding). Hint tier: the scanner did not stand "
+            "behind these in its report — validate before trusting."
+        )
+        lines.append("")
+        if len(shown) < len(recovered):
+            lines.append(
+                f"**Section truncated:** showing {len(shown)} of "
+                f"{len(recovered)} recovered verdict(s) (--max-findings "
+                f"{max_findings}); the full set is in "
+                f"openant_findings.json.")
+            lines.append("")
+        for f in shown:
+            meta = f.get("metadata") or {}
+            lines.append(
+                f"### {md_inline(f.get('cwe_id') or 'Unknown')} — "
+                f"{md_inline(meta.get('vuln_name', ''))} "
+                f"[{md_inline(f.get('finding_id', ''))}]"
+            )
+            lines.append("")
+            lines.append(
+                f"**File:** `{md_inline(f.get('file', ''))}` — "
+                f"`{md_inline(meta.get('function', ''))}`  ")
+            lines.append(
+                f"**Verdict:** {md_inline(meta.get('stage1_verdict', ''))} "
+                f"(recovered — hint tier)  ")
+            if meta.get("deduplicated_into"):
+                lines.append(
+                    f"**Deduplicated into:** "
+                    f"`{md_inline(meta.get('deduplicated_into', ''))}`  ")
+            lines.append("")
+            if f.get("message"):
+                lines.append(md_prose(f.get("message", "")))
+                lines.append("")
 
     # Explicit encoding: the fence defang (md_fence) inserts ZWSP, so
     # the report is non-ASCII exactly when hostile content fired the

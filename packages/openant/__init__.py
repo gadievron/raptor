@@ -10,13 +10,16 @@ Usage:
 """
 
 from .config import OpenAntConfig, get_config, is_available
+from .recovery import RECOVERED_TIER, recover_dropped_verdicts
 from .scanner import run_openant_scan
 from .translator import translate_pipeline_output, deduplicate_with_sarif
 
 __all__ = [
     "OpenAntConfig",
+    "RECOVERED_TIER",
     "get_config",
     "is_available",
+    "recover_dropped_verdicts",
     "run_openant_scan",
     "translate_pipeline_output",
     "deduplicate_with_sarif",
