@@ -92,6 +92,31 @@ class TestBuildIncludeContext:
         assert inc["keyword"] == "include"
         assert inc["position"] == "file_scope"
 
+    def test_every_producer_basis_survives_to_block(self, tmp_path):
+        # The block carries the includer refs verbatim from the one
+        # consumer query; every basis the graph build can write must
+        # arrive intact — the grounded/guessed distinction is what
+        # the field exists to carry.
+        from core.inventory.include_graph import REF_BASIS_VALUES
+        graph = {
+            "census": {"unresolved_edge_count": 0,
+                       "unwalked_target_count": 0},
+            "files": {"a.php": {
+                "role": "library",
+                "includer_count": len(REF_BASIS_VALUES),
+                "included_by": [
+                    {"includer": f"e{i}.php", "line": 1 + i,
+                     "keyword": "require_once", "conditional": False,
+                     "position": "file_scope", "basis": basis}
+                    for i, basis in enumerate(REF_BASIS_VALUES)],
+            }},
+            "unresolved_edges": [], "unwalked_targets": [],
+        }
+        (tmp_path / "include-graph.json").write_text(json.dumps(graph))
+        facts = _build_include_context(tmp_path, "a.php")
+        assert [inc["basis"] for inc in facts["includers"]] == list(
+            REF_BASIS_VALUES)
+
 
 class TestRenderer:
     def test_census_qualifier_always_rendered(self, tmp_path):
