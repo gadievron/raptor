@@ -187,10 +187,21 @@ class TestLiveRunExclusion(unittest.TestCase):
     @staticmethod
     def _mark_running(project, name, tool_pid):
         import json
+
+        from core.project.sessions import proc_starttime
         meta_path = project.output_path / name / ".raptor-run.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         meta["status"] = "running"
         meta["tool_pid"] = tool_pid
+        # Keep the (pid, starttime) identity coherent with the
+        # substituted pid — start_run stamped its own worker's
+        # starttime, and a mismatching stamp is the RECYCLED-pid
+        # shape, which is deliberately not live.
+        start = proc_starttime(tool_pid) if tool_pid > 0 else None
+        if start is not None:
+            meta["tool_pid_start"] = start
+        else:
+            meta.pop("tool_pid_start", None)
         meta_path.write_text(json.dumps(meta), encoding="utf-8")
 
     def test_plan_clean_skips_live_run(self):

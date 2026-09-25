@@ -241,7 +241,16 @@ def _get_session_pid() -> int | None:
         return pid
     if not os.environ.get("CLAUDECODE"):
         return None
-    return os.getppid()
+    ppid = os.getppid()
+    if ppid <= 1:
+        # Detached launch (setsid/nohup with CLAUDECODE inherited): the
+        # launcher exited and this process reparented to init, so
+        # getppid() is 1 — a pid that is always alive and never a
+        # claude session. Recording it as the owning session made every
+        # liveness verifier read the run as live-owned forever (and the
+        # resume guard refuse forever). No session is the honest answer.
+        return None
+    return ppid
 
 
 def _session_stamp(pid: int) -> dict[str, str]:
@@ -268,6 +277,58 @@ def _session_stamp(pid: int) -> dict[str, str]:
         # of THIS machine" (provably dead) from "another machine
         # sharing the filesystem" (unverifiable — fail open).
         stamp["session_machine_id"] = machine
+    return stamp
+
+
+def _worker_stamp(session_bound: bool) -> dict[str, Any]:
+    """Identity of the worker process recorded as ``tool_pid`` —
+    ``{}`` when nothing with a run-tracking lifetime is recordable.
+
+    The credential is only useful when the recorded process's lifetime
+    tracks the run, so the policy is per launch shape:
+
+    * Session-bound runs record the parent as before (the harness's
+      transient tool shell — dead seconds later, the safe direction:
+      the session identity carries ownership and the worker's death
+      never blocks anything).
+    * Sessionless runs record a worker ONLY when detached (parent is
+      init): the calling process itself is then the long-lived
+      orchestrator, and its lifetime IS the run's. A sessionless run
+      with a live interactive parent records nothing — that parent
+      shell outlives the run by hours, and recording it would wedge
+      resume/compaction on every crashed bare-shell run until the
+      terminal closed (the pid-1 wedge class with a different
+      always-alive pid).
+    * A detached launch (setsid/nohup, established practice for long
+      orchestrators) reparents to PID 1 before ``start_run`` executes,
+      and PID 1 is always alive — recording it wedged every in-flight
+      guard into refusing forever (observed live on a detached audit
+      run). pid<=1 therefore NEVER lands in the metadata: the calling
+      process is recorded instead, and if the caller itself is pid 1
+      (an orchestrator running as container init) nothing is recorded
+      — legacy pid-less posture rather than a poisoned credential.
+
+    ``tool_pid_start`` binds the identity as (pid, starttime) — the
+    standard PID-reuse discriminator (``/proc/<pid>/stat`` field 22,
+    the same read the session stamps use) — so liveness verifiers can
+    tell "this exact worker" from "some process that recycled the
+    pid". Absent off-Linux or when unreadable; readers then apply the
+    legacy bare-pid semantics (see :func:`_tool_pid_alive`).
+    """
+    pid: int | None = os.getppid()
+    if pid is not None and pid <= 1:
+        pid = os.getpid()
+        if pid <= 1:
+            pid = None  # container-init orchestrator: nothing recordable
+    elif not session_bound:
+        pid = None  # live interactive parent: outlives the run
+    if pid is None:
+        return {}
+    stamp: dict[str, Any] = {"tool_pid": pid}
+    from core.project import sessions as _sessions
+    start = _sessions.proc_starttime(pid)
+    if start is not None:
+        stamp["tool_pid_start"] = start
     return stamp
 
 
@@ -377,7 +438,13 @@ def _pid_alive(pid: int) -> bool:
     accepts the residual PID-reuse risk on macOS/BSD where the
     canonical /proc isn't available.
     """
-    if pid <= 0:
+    if pid <= 1:
+        # PID 1 (init) can never be a claude session, and the EPERM
+        # path below returns alive BEFORE the comm cross-check — a
+        # reparented-to-init record (session_pid=1, written by a
+        # detached launch before the recorder refused such pids) read
+        # as a live owner forever, so its abandoned runs were never
+        # swept.
         return False
     try:
         os.kill(pid, 0)
@@ -443,22 +510,31 @@ def _run_recently_active(run_dir: Path) -> bool:
     return _recent_activity(Path(run_dir), now, _ABANDON_ACTIVITY_GRACE_S)
 
 
-def _tool_pid_alive(pid: Any) -> bool:
+def _tool_pid_alive(pid: Any, starttime: Any = None) -> bool:
     """Liveness check for a run's recorded ``tool_pid`` (the worker
     process that called ``start_run`` — a Bash-tool shell, a Python
     orchestrator, etc.).
 
     Unlike :func:`_pid_alive` there is NO ``comm == claude`` cross-check:
-    the tool process is deliberately NOT a claude binary. Plain
-    ``kill(pid, 0)`` accepts a residual PID-reuse risk, but the failure
-    direction is safe — a reused PID keeps a genuinely abandoned run in
-    ``running`` state until its owning session dies (the dead-session
-    branch then sweeps it), whereas a false "dead" would fail a live run.
+    the tool process is deliberately NOT a claude binary. The identity
+    axis is *starttime*: when the record carries a ``tool_pid_start``
+    stamp, alive requires the live process's ``/proc/<pid>/stat``
+    starttime to MATCH — a recycled pid means the original worker is
+    dead. Legacy records (no stamp) keep the plain ``kill(pid, 0)``
+    probe with its residual pid-reuse risk; that failure direction is
+    safe — a reused PID keeps a genuinely abandoned run in ``running``
+    state until its owning session dies (the dead-session branch then
+    sweeps it), whereas a false "dead" would fail a live run.
+
+    ``pid <= 1`` is NEVER live evidence — PID 1 is always alive, so a
+    reparented-to-init record (detached setsid/nohup launch) wedged the
+    resume/compact guards into refusing forever. This rejection applies
+    to legacy records too: init never called ``start_run``.
 
     Missing / malformed pids return False so legacy metadata (written
     before ``tool_pid`` was recorded) falls back to the old behaviour.
     """
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
         return False
     try:
         os.kill(pid, 0)
@@ -467,8 +543,124 @@ def _tool_pid_alive(pid: Any) -> bool:
     except OverflowError:
         return False  # beyond pid_t — see _pid_alive
     except PermissionError:
-        return True  # alive but owned by another user
+        # Alive but owned by another user — the identity check below
+        # still works: /proc/<pid>/stat is world-readable.
+        pass
+    stamp = _valid_starttime(starttime)
+    if stamp is not None:
+        from core.project import sessions as _sessions
+        live = _sessions.proc_starttime(pid)
+        if live is not None:
+            return live == stamp
+        # Unverifiable (off-Linux reader of a Linux-stamped record, or
+        # the process exited between the kill probe and the /proc
+        # read racing a same-instant pid recycle): keep the bare-alive
+        # verdict — the legacy posture. Fail direction: guards refuse
+        # once and succeed on retry; sweeps skip and re-judge later.
     return True
+
+
+def _valid_starttime(value: Any) -> str | None:
+    """Canonical form of a recorded ``tool_pid_start`` stamp, or
+    ``None`` for anything malformed.
+
+    The stamp lives in sandbox-writable metadata, so its type and
+    content are plantable. A malformed stamp must degrade to the
+    LEGACY (bare-pid) semantics, never to "identity mismatch, worker
+    dead": comparing a stringified non-numeric value against the live
+    starttime always mismatches, which would let a planted stamp
+    defeat the in-flight guards on a genuinely live worker — the
+    fail-open direction. The recorder only ever writes the decimal
+    string from ``/proc/<pid>/stat``; the int form is accepted too (a
+    hand-repaired record survives a JSON round-trip as int), nothing
+    else.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return str(value)
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        return value
+    return None
+
+
+_PID1_NOTE_EMITTED = False
+
+
+def _pid1_noted() -> bool:
+    """True when this process already warned about a pid-1 record
+    (later occurrences demote to debug)."""
+    global _PID1_NOTE_EMITTED
+    was = _PID1_NOTE_EMITTED
+    _PID1_NOTE_EMITTED = True
+    return was
+
+
+def worker_liveness_for_meta(meta: dict) -> tuple[bool, str]:
+    """Liveness verdict for a run's recorded worker, with a detail
+    line naming exactly what was checked — the in-flight guards quote
+    it in their refusals so the operator can see which evidence drove
+    the decision (a bare "worker is alive" was undiagnosable when the
+    evidence was PID 1).
+
+    The meta-level chokepoint for worker liveness: every consumer
+    that judges a recorded WORKER (the resume guard, the
+    journal-compact guard, the abandon sweep, the clean-safety
+    predicate, the lifecycle hook's finalizer) routes here so none
+    re-invents bare-pid semantics. The run-start contention gate is
+    deliberately NOT a consumer — it contends on SESSION identity
+    (see ``_live_conflicting_run``), and a sessionless run holds no
+    contention, before or after worker stamps existed.
+    Rules (see :func:`_tool_pid_alive`):
+
+    * no / malformed recorded pid — not alive (legacy pre-``tool_pid``
+      metadata keeps its old fall-through behaviour);
+    * ``pid <= 1`` — never live evidence (reparented-to-init record);
+      logged once per check so the not-in-flight decision is visible;
+    * stamped record (``tool_pid_start``) — alive requires pid alive
+      AND matching /proc starttime (a recycled pid is the original
+      worker dead);
+    * legacy bare-pid record — plain existence probe (old behaviour,
+      minus the pid<=1 rejection, which is safe to ratchet).
+    """
+    pid = meta.get("tool_pid")
+    if pid is None:
+        return False, "no recorded worker pid (legacy or pid-less record)"
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False, "recorded worker pid is malformed — not a credential"
+    if pid == 1:
+        # One note per process (the sweeps re-evaluate every sibling
+        # run each pass — a lingering legacy record must not turn
+        # every start into a warning storm).
+        note = logger.debug if _pid1_noted() else logger.warning
+        note(
+            "run metadata records worker pid 1 — never a liveness "
+            "credential (PID 1 is always alive; the record was written "
+            "by a process reparented to init). Treating the run as "
+            "not in flight.",
+        )
+        return False, (
+            "recorded worker pid 1 is not a liveness credential "
+            "(reparented-to-init record) — treated as not in flight"
+        )
+    start = _valid_starttime(meta.get("tool_pid_start"))
+    alive = _tool_pid_alive(pid, start)
+    if start:
+        detail = (
+            f"recorded worker pid {pid} is alive and its start time "
+            "matches the record"
+            if alive else
+            f"recorded worker pid {pid} is dead, or a different "
+            "process recycled the pid (start time mismatch)"
+        )
+    else:
+        detail = (
+            f"recorded worker pid {pid} is alive (legacy record "
+            "without a start-time stamp — identity unverified)"
+            if alive else
+            f"recorded worker pid {pid} is dead"
+        )
+    return alive, detail
 
 
 @contextlib.contextmanager
@@ -884,9 +1076,15 @@ def start_run(output_dir: Path, command: str,
             "manifest": build_start_manifest(target=target, target_identity=target_identity),
             "extra": extra or {},
         }
+        # Worker identity: recorded per _worker_stamp's lifetime policy
+        # — session-bound runs keep the parent-shell credential;
+        # sessionless DETACHED runs (whose CLAUDECODE fallback resolved
+        # no session because the parent is init) previously recorded
+        # pid 1 and wedged every in-flight guard; sessionless
+        # interactive runs record nothing, as before.
+        metadata.update(_worker_stamp(session_bound=session_pid is not None))
         if session_pid is not None:
             metadata["session_pid"] = session_pid
-            metadata["tool_pid"] = os.getppid()
             metadata.update(_session_stamp(session_pid))
             sid = _harness_session_id()
             if sid:
@@ -905,13 +1103,25 @@ def start_run(output_dir: Path, command: str,
         # contention identity. resume_run is the sanctioned re-owning
         # path (it refreshes the full stamp).
         _prior_meta = _load_meta(output_dir / RUN_METADATA_FILE)
-        if (isinstance(_prior_meta, dict)
-                and _prior_meta.get("status") == STATUS_RUNNING
-                and _prior_meta.get("session_pid") is not None
-                and _session_alive_for_meta(_prior_meta)):
-            for _k in ("session_pid", "tool_pid", "session_start",
-                       "session_boot_id", "session_pidns",
-                       "session_machine_id", "session_id"):
+        _prior_owner_live = (
+            isinstance(_prior_meta, dict)
+            and _prior_meta.get("status") == STATUS_RUNNING
+            and (
+                (_prior_meta.get("session_pid") is not None
+                 and _session_alive_for_meta(_prior_meta))
+                # A live SESSIONLESS owner (detached orchestrator,
+                # identified by its worker stamp) is just as much a
+                # live owner: a re-entrant start must not clobber the
+                # credential the in-flight guards rely on.
+                or (_prior_meta.get("session_pid") is None
+                    and worker_liveness_for_meta(_prior_meta)[0])
+            )
+        )
+        if _prior_owner_live:
+            for _k in ("session_pid", "tool_pid", "tool_pid_start",
+                       "session_start", "session_boot_id",
+                       "session_pidns", "session_machine_id",
+                       "session_id"):
                 if _k in _prior_meta:
                     metadata[_k] = _prior_meta[_k]
                 else:
@@ -1172,7 +1382,7 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
         same_session_retry = (
             meta.get("command") == command
             and run_session == session_pid
-            and not _tool_pid_alive(meta.get("tool_pid"))
+            and not worker_liveness_for_meta(meta)[0]
             # Stub-driven runs record a transient shell as tool_pid, so
             # a dead worker alone is not abandonment evidence — the run
             # dir must ALSO be write-quiet past the activity grace.
@@ -1182,6 +1392,12 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
             isinstance(run_session, int)
             and run_session != session_pid
             and not _session_alive_for_meta(meta)
+            # A legacy detached record (session_pid<=1, written before
+            # the recorder refused reparented-to-init pids) has no
+            # checkable owner at all — owner-LESS, not owner-dead. Its
+            # orchestrator may still be running, so only a write-quiet
+            # run is an abandon; a live one keeps appending output.
+            and not (run_session <= 1 and _run_recently_active(d))
         )
         if same_session_retry or session_dead:
             # Freshness gate — skip recent siblings (probable
@@ -2183,9 +2399,19 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
         metadata.pop("duration_seconds", None)
         prior_session_pid = metadata.get("session_pid")
         session_pid = _get_session_pid()
+        # Worker identity ALWAYS refreshes to the resuming shape —
+        # segment N's liveness credential must be segment N's worker,
+        # not segment 1's stale one (a stale-dead credential reads the
+        # resumed run as not-in-flight and lets a second resume
+        # double-drive it; a stale-alive one blocks it). The old keys
+        # are popped first so a refresh that records nothing (the
+        # sessionless-interactive shape) leaves the legacy pid-less
+        # posture, never segment 1's stamp paired with segment N's pid.
+        metadata.pop("tool_pid", None)
+        metadata.pop("tool_pid_start", None)
+        metadata.update(_worker_stamp(session_bound=session_pid is not None))
         if session_pid is not None:
             metadata["session_pid"] = session_pid
-            metadata["tool_pid"] = os.getppid()
             # Refresh the FULL identity stamp with the pid — a resumed
             # run owned by a different session must never carry the old
             # session's stamp (the verifiers would judge the live
@@ -2198,6 +2424,18 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
             resumed_sid = _harness_session_id()
             if resumed_sid:
                 metadata["session_id"] = resumed_sid
+        else:
+            # Sessionless resume (detached orchestrator, bare shell):
+            # the prior owner's session identity is stale — keeping a
+            # dead session's stamp would get the resumed run swept as
+            # "owning session terminated" mid-flight. No session is
+            # the honest owner record; the refreshed worker stamp
+            # above carries the in-flight signal instead.
+            metadata.pop("session_pid", None)
+            for key in ("session_start", "session_boot_id",
+                        "session_pidns", "session_machine_id",
+                        "session_id"):
+                metadata.pop(key, None)
         save_json(path, metadata)
     # Re-mark as the active run so sandbox summaries and coverage
     # tracking attach to the resumed segment.

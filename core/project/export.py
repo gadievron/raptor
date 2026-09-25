@@ -535,8 +535,8 @@ def _neutralise_imported_liveness(run_dir: Path) -> None:
         return
     meta["status"] = "interrupted"
     meta["import_liveness_neutralised"] = True
-    for stamp in ("session_pid", "tool_pid", "session_start",
-                  "session_boot_id", "session_pidns",
+    for stamp in ("session_pid", "tool_pid", "tool_pid_start",
+                  "session_start", "session_boot_id", "session_pidns",
                   "session_machine_id", "session_id"):
         meta.pop(stamp, None)
     save_json(marker, meta)

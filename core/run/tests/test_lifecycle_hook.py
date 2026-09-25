@@ -349,7 +349,8 @@ class TestStopHook(unittest.TestCase):
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
-                 patch("core.run.metadata._pid_alive", return_value=True):
+                 patch("core.run.metadata._tool_pid_alive",
+                       return_value=True):
                 sys.argv = ["hook", "stop"]
                 _hook_mod.main()
             self.assertEqual(_status(run), STATUS_RUNNING)

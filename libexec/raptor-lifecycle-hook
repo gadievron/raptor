@@ -202,8 +202,9 @@ def main():
 
     from core.json import load_json
     from core.run.metadata import (
-        _get_session_pid, _pid_alive, _session_alive_for_meta,
+        _get_session_pid, _session_alive_for_meta,
         complete_run, fail_run, RUN_METADATA_FILE, STATUS_RUNNING,
+        worker_liveness_for_meta,
     )
 
     # The ONE shared resolver (env credential first, claude-ancestor
@@ -330,13 +331,20 @@ def main():
                 failure_candidates.append((d, meta))
                 continue
 
-            tool_pid = meta.get("tool_pid")
             command = meta.get("command", "")
 
             if event == "stop":
                 if command in _MULTI_TURN_COMMANDS:
                     continue
-                if tool_pid and _pid_alive(tool_pid):
+                # Worker liveness through the shared chokepoint: full
+                # (pid, starttime) identity for stamped records, so a
+                # recycled pid never blocks the finalize, and a pid-1
+                # legacy record never blocks it forever. (The previous
+                # _pid_alive call was the SESSION checker — its
+                # claude-comm cross-check read every live non-claude
+                # worker as dead, finalizing runs whose worker still
+                # ran.)
+                if worker_liveness_for_meta(meta)[0]:
                     continue
                 try:
                     has_failure = (d / FAILURE_MARKER).exists()

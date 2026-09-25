@@ -41,16 +41,17 @@ def run_is_live(d: Path) -> bool:
     worker AND session are both dead are stale abandons; the sweep
     machinery marks them failed, and clean may reclaim them.
 
-    Runs that recorded NO pids at all (pre-recording legacy metadata)
-    are unjudgeable by liveness: they get a grace-age gate — recent
-    write activity inside the run dir reads as live — instead of
-    falling open to deletable.
+    Runs that recorded no SESSION (bare-shell / detached starts, and
+    pre-recording legacy metadata) are not fully judgeable by worker
+    liveness alone: they get a grace-age gate — recent write activity
+    inside the run dir reads as live — instead of falling open to
+    deletable.
     """
     from core.run.metadata import (
         _run_recently_active,
         _session_alive_for_meta,
-        _tool_pid_alive,
         load_run_metadata,
+        worker_liveness_for_meta,
     )
     try:
         # The budgeted metadata loader — the shared 1 MiB budget stays
@@ -60,10 +61,25 @@ def run_is_live(d: Path) -> bool:
         meta = None
     if not (isinstance(meta, dict) and meta.get("status") == "running"):
         return False
-    if (_tool_pid_alive(meta.get("tool_pid"))
+    if (worker_liveness_for_meta(meta)[0]
             or _session_alive_for_meta(meta)):
         return True
-    if meta.get("session_pid") is None and meta.get("tool_pid") is None:
+    session_pid = meta.get("session_pid")
+    if session_pid is None or (
+        isinstance(session_pid, int)
+        and not isinstance(session_pid, bool)
+        and session_pid <= 1
+    ):
+        # No checkable owner: session-less runs (bare shell, legacy
+        # pid-less metadata) and legacy DETACHED records
+        # (session_pid<=1, written before the recorder refused
+        # reparented-to-init pids — owner-LESS, not owner-dead; the
+        # orchestrator may still be running). The recorded worker may
+        # be a transient stub shell, dead seconds after a healthy
+        # start while the run's work continues, and a pid-1 stamp
+        # proves nothing either way — so neither may read as deletable
+        # on its own. Recent write activity keeps the run live — the
+        # same grace the abandon sweep applies.
         return _run_recently_active(Path(d))
     return False
 
