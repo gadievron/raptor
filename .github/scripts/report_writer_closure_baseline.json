@@ -262,6 +262,12 @@
     "core/coverage/store_summary.py::format_file_level_view::unsanitised_llm_value::status": {
       "note": "coverage summary terminal lanes \u2014 filed upstream as the store_summary member; sanitise + register with that fix"
     },
+    "core/coverage/store_summary.py::format_no_lane_residual::unsanitised_llm_value::line": {
+      "note": "integer line-number field (same class as the format_store_view sibling); every string field on the same rendered line routes through the module's _defang"
+    },
+    "core/coverage/store_summary.py::format_scanner_overlay::unsanitised_llm_value::line": {
+      "note": "integer line-number field (same class as the format_store_view sibling); every string field on the same rendered line routes through the module's _defang"
+    },
     "core/coverage/store_summary.py::format_store_view::unsanitised_llm_value::line": {
       "note": "integer line-number field; every string field on the same rendered line routes through the module's _defang"
     },

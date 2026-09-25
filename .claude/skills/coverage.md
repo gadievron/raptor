@@ -297,3 +297,40 @@ Semgrep policy groups are compared against `RaptorConfig.POLICY_GROUP_TO_SEMGREP
 A function is a gap when it has no entry in either source. The durable
 `coverage.json` store is a query-time projection (summaries, `--gaps`),
 not a `compute_gaps` input.
+
+## External-Scanner Overlay (analyzed units)
+
+External scanners project the units their model ACTUALLY analyzed into the
+coverage store as a scanner-grade record (`coverage-openant.json`,
+`tool="openant"` → llm category, scanned depth). Scanner coverage is
+examination extent only — it never satisfies a review gap, a `--fail-under`
+threshold, or the `/audit` gap fold. Written automatically after `/openant`
+and `/agentic --openant` (best-effort: a projection failure never fails the
+scan).
+
+Views:
+```bash
+libexec/raptor-coverage-summary --scanners    # per-scanner: functions analyzed,
+                                              # intersection with LLM review, and
+                                              # the scanner-only residual
+libexec/raptor-coverage-summary --residual    # items with ZERO coverage of any
+                                              # grade — route to --gap-audit,
+                                              # another lane, or a fuller scan
+libexec/raptor-coverage-summary --project-scan <scan-dir>
+                                              # retroactively project an existing
+                                              # scan dir (pre-overlay or failed
+                                              # runs; record lands in its parent
+                                              # run dir)
+```
+
+The record states WHICH scan produced it (source artifact, model, level,
+analyze fingerprint, target path) and counts unmatched units honestly —
+OpenAnt units may span or split inventory functions (matching: exact name
+first, else line-span overlap over reviewable items; the synthetic
+module-level unit may credit `top_level` items only); unmatched units are
+counted, never force-matched. Project-less runs emit `join=deferred` records
+whose rows only ever join the inventory of the SAME target tree (wrong-target
+joins are refused, fail-closed). Coverage records load review-capable
+credit from the run-dir top level (parent-written) only — records planted in
+child-writable subdirs like `openant_scan/` are refused at the load
+chokepoint.

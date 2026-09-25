@@ -30,6 +30,19 @@ Usage:
   raptor-coverage-summary [<dir>] --import <path>       Ingest external runtime
       [--format gcov|lcov|coverage.py] [--tool <label>] coverage (gcov/lcov/
                                                         coverage.py) into the store
+  raptor-coverage-summary [<dir>] --scanners            Per-scanner overlay view:
+                                                        which functions each external
+                                                        scanner analyzed, the
+                                                        intersection with LLM review,
+                                                        and the scanner-only residual
+  raptor-coverage-summary [<dir>] --residual            Items analyzed by NO lane
+                                                        (zero coverage of any grade)
+  raptor-coverage-summary --project-scan <scan-dir>     Retroactively project an
+                                                        external scanner's analyzed
+                                                        units (e.g. a failed or
+                                                        pre-overlay openant_scan dir)
+                                                        into its run's coverage
+                                                        records (best-effort)
 
 If <dir> is omitted, uses the active project.
 Accepts: project output dir, run dir, target path, or project name.
@@ -193,6 +206,39 @@ def _store_inputs(args):
         return (read_checklist(run_dir) or None, [run_dir],
                 run_dir / "coverage.json", run_dir / "annotations")
     return None, [], None, None
+
+
+def _cmd_project_scan(scan_dir_arg: str) -> None:
+    """Retroactively project an external scanner's analyzed units.
+
+    The in-band wiring projects after every scan (success AND
+    hard-failure), but runs that predate the overlay — or whose
+    projection itself failed — still hold paid scan artifacts. This
+    surface re-runs the projection over an existing scan dir; the
+    record lands in the scan dir's PARENT run dir (the parent-owned
+    top level), target provenance backfilled from the run's own
+    metadata. Best-effort like the wiring: a failure reports and
+    exits non-zero, mutating nothing.
+    """
+    scan_dir = Path(scan_dir_arg).resolve()
+    if not scan_dir.is_dir():
+        print(f"ERROR: scan dir not found: {_sft(str(scan_dir), max_len=300)}",
+              file=sys.stderr)
+        sys.exit(1)
+    run_dir = scan_dir.parent
+    try:
+        from packages.openant.coverage import project_scan_coverage
+        line = project_scan_coverage(run_dir, scan_dir)
+    except Exception as exc:  # noqa: BLE001 — operator surface: report, never traceback
+        print(f"ERROR: projection failed: {_sft(str(exc), max_len=300)}",
+              file=sys.stderr)
+        sys.exit(1)
+    if line is None:
+        print("Nothing to project: no analyzed units found in "
+              f"{_sft(str(scan_dir), max_len=300)}")
+        return
+    _tprint(line)
+    print(f"Record written to {run_dir / 'coverage-openant.json'}")
 
 
 def _cmd_gaps(view):
@@ -688,6 +734,7 @@ def main():
     import_path, argv = _take_opt("--import", argv)
     import_fmt, argv = _take_opt("--format", argv)
     import_tool, argv = _take_opt("--tool", argv)
+    project_scan_path, argv = _take_opt("--project-scan", argv)
 
     detailed = "--detailed" in argv
     show_gaps = "--gaps" in argv
@@ -821,11 +868,40 @@ def main():
         _cmd_import(import_path, import_fmt, import_tool, args)
         return
 
+    if project_scan_path:
+        _cmd_project_scan(project_scan_path)
+        return
+
     # All report views go through the unified store-backed renderer. `--store`
     # is now the default behaviour; the flag is accepted for back-compat.
     from core.coverage.store_summary import coverage_view, render_coverage
 
     checklist, run_dirs, store_path, annotations_base = _store_inputs(args)
+
+    # External-scanner overlay views (parsed here, past the mark/unmark
+    # dispatch — both are report views over the same store inputs).
+    if "--scanners" in argv:
+        from core.coverage.store_summary import (
+            format_scanner_overlay,
+            scanner_overlay_view,
+        )
+        _tprint(format_scanner_overlay(scanner_overlay_view(
+            run_dirs, checklist, store_path, annotations_base),
+            max_list=200 if detailed else 15))
+        return
+
+    if "--residual" in argv:
+        from core.coverage.store_summary import (
+            format_no_lane_residual,
+            no_lane_residual,
+        )
+        view = coverage_view(run_dirs, checklist, store_path,
+                             annotations_base)
+        if not view:
+            print("No coverage data (missing checklist.json).")
+            return
+        _tprint(format_no_lane_residual(no_lane_residual(view)))
+        return
 
     if show_gaps:
         _cmd_gaps(coverage_view(run_dirs, checklist, store_path, annotations_base))

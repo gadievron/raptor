@@ -702,3 +702,219 @@ def format_store_view(view: dict[str, Any], max_gap: int = 15) -> str:
             f"@ {g['line']}" for g in shown)
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# External-scanner overlay views (the analyzed-units projection —
+# packages/openant/coverage.py writes the records; any future external
+# scanner that emits a ``scanner_coverage`` record joins for free).
+# ---------------------------------------------------------------------------
+
+
+def _reviewed_functions(store: CoverageStore,
+                        checklist: dict[str, Any]) -> set[tuple[str, str]]:
+    """``{(file, name)}`` of inventory items with a REVIEW-grade
+    llm mark — the same depth screen as :func:`store_view` (scanner /
+    read / understand marks never qualify). Walks the full item
+    inventory (stamped script-handler spans included), no kind filter:
+    any item a review-grade mark covers belongs in the intersection."""
+    reviewed: set[tuple[str, str]] = set()
+    for file, name, lo, hi, _kind, _item in iter_inventory_items(checklist):
+        high = hi if hi is not None else lo
+        cov = store.tool_coverage_of_range(file, lo, high)
+        if any(category_of(t) == "llm" and depth_of(t) != DEPTH_SCANNED
+               for t in cov):
+            reviewed.add((file, name))
+    return reviewed
+
+
+def scanner_overlay_view(
+    run_dirs: Iterable[Path],
+    checklist: dict[str, Any] | None,
+    store_path: Path | str | None,
+    annotations_base: Path | str | None = None,
+) -> list[dict[str, Any]] | None:
+    """Per-scanner view over the analyzed-units overlay records.
+
+    For every ``scanner_coverage``-carrying coverage record across the
+    run dirs, aggregated per tool label: which inventory functions the
+    scanner analysed, how many of those ALSO have a RAPTOR LLM review,
+    and the scanner-only residual (analysed by the scanner, reviewed by
+    no one — the set worth routing to --gap-audit or another lane),
+    plus the records' own unit accounting and provenance. Deferred
+    records whose recorded target does not bind to THIS inventory's
+    target are refused the join here exactly like the store import
+    (``importer._deferred_join_refused`` — fail-closed), shown with a
+    ``deferred-refused`` join mode instead. ``None`` when there is no
+    inventory; ``[]`` when no overlay records exist.
+    """
+    if not checklist:
+        return None
+    from core.coverage.record import load_records
+
+    from .importer import (
+        _checklist_target,
+        _deferred_join_refused,
+        _function_ranges,
+        _inventory_paths,
+        _to_inventory_path,
+    )
+    from .summary import _inventory_name_index
+
+    inv_target = _checklist_target(checklist)
+    store = _build_store(run_dirs, checklist, store_path, annotations_base)
+    reviewed = _reviewed_functions(store, checklist)
+    ranges = _function_ranges(checklist, normalise_hi=True)
+    inv_paths = _inventory_paths(checklist)
+    inv_index = _inventory_name_index(inv_paths)
+
+    # Numeric accounting keys summed across a tool's records; the rest
+    # of scanner_coverage rides per-run in ``runs``.
+    _SUM_KEYS = ("units_analyzed", "units_matched", "units_unmatched",
+                 "units_error")
+    tools: dict[str, dict[str, Any]] = {}
+    for rd in run_dirs:
+        rd = Path(rd)
+        for rec in load_records(rd):
+            if not isinstance(rec, dict):
+                continue
+            sc = rec.get("scanner_coverage")
+            tool = rec.get("tool")
+            if not isinstance(sc, dict) or not isinstance(tool, str):
+                continue
+            agg = tools.setdefault(tool, {
+                "tool": tool, "functions": set(), "units": {}, "runs": [],
+            })
+            join_refused = _deferred_join_refused(rec, inv_target)
+            if not join_refused:
+                for fa in rec.get("functions_analysed") or []:
+                    if not isinstance(fa, dict):
+                        continue
+                    file = fa.get("file")
+                    name = fa.get("function")
+                    if not isinstance(file, str) or not isinstance(name, str) \
+                            or not file or not name:
+                        continue
+                    key = (_to_inventory_path(file, inv_paths, inv_index), name)
+                    if key in ranges:
+                        agg["functions"].add(key)
+            for k in _SUM_KEYS:
+                v = sc.get(k)
+                if isinstance(v, int) and not isinstance(v, bool):
+                    agg["units"][k] = agg["units"].get(k, 0) + v
+            if sc.get("truncated"):
+                agg["units"]["truncated"] = True
+            if sc.get("overlap_explosion"):
+                agg["units"]["overlap_explosion"] = True
+            run_row: dict[str, Any] = {"run": rd.name}
+            for k in ("source", "model", "level", "join"):
+                v = sc.get(k)
+                if isinstance(v, str) and v:
+                    run_row[k] = v
+            if join_refused:
+                # Same fail-closed rule as the store import: the
+                # deferred rows never join a foreign inventory; the
+                # record stays visible with its accounting.
+                run_row["join"] = "deferred-refused"
+            agg["runs"].append(run_row)
+
+    out: list[dict[str, Any]] = []
+    for tool in sorted(tools):
+        agg = tools[tool]
+        funcs = agg["functions"]
+        unreviewed = sorted(funcs - reviewed)
+        out.append({
+            "tool": tool,
+            "functions_analysed": len(funcs),
+            "also_reviewed": len(funcs & reviewed),
+            "unreviewed": [
+                {"file": f, "function": n, "line": ranges[(f, n)][0]}
+                for f, n in unreviewed],
+            "units": agg["units"],
+            "runs": agg["runs"],
+        })
+    return out
+
+
+def format_scanner_overlay(rows: list[dict[str, Any]],
+                           max_list: int = 15) -> str:
+    """Render :func:`scanner_overlay_view` as an operator-facing
+    section. Every record-derived string (tool label, provenance
+    fields, file/function names) is terminal-defanged — the overlay
+    records quote child-written scan artifacts."""
+    if rows is None:
+        return "No coverage data (missing checklist.json)."
+    if not rows:
+        return ("No external-scanner overlay records found "
+                "(run /openant or /agentic --openant first).")
+    lines = ["External-scanner coverage overlay (scanner grade — "
+             "never review credit):"]
+    for row in rows:
+        units = row.get("units") or {}
+        lines.append(
+            f"  {_defang(row['tool'])}: {row['functions_analysed']} "
+            f"inventory function(s) analysed; "
+            f"{row['also_reviewed']} also LLM-reviewed; "
+            f"{len(row['unreviewed'])} scanner-only")
+        analyzed = units.get("units_analyzed")
+        if analyzed is not None:
+            bits = [f"{analyzed} analysed"]
+            if units.get("units_unmatched"):
+                bits.append(f"{units['units_unmatched']} unmatched")
+            if units.get("units_error"):
+                bits.append(f"{units['units_error']} errored")
+            if units.get("truncated"):
+                bits.append("TRUNCATED at the intake budget — "
+                            "partial overlay")
+            if units.get("overlap_explosion"):
+                bits.append("WARNING: span blowup — extent suspect")
+            runs_count = len(row.get("runs") or [])
+            summed = (f" (summed across {runs_count} records)"
+                      if runs_count > 1 else "")
+            lines.append(f"    units: {', '.join(bits)}{summed}")
+        for run in row.get("runs") or []:
+            detail = ", ".join(
+                f"{k}={_defang(run[k])}" for k in
+                ("source", "model", "level", "join") if k in run)
+            lines.append(f"    run {_defang(run.get('run') or '?')}"
+                         + (f": {detail}" if detail else ""))
+        shown = row["unreviewed"][:max_list]
+        if shown:
+            lines.append(
+                f"    analysed by {_defang(row['tool'])} but reviewed by "
+                f"no lane (first {len(shown)} of "
+                f"{len(row['unreviewed'])}):")
+            lines.extend(
+                f"      {_defang(g['file'])}:{_defang(g['function'])} "
+                f"@ {g['line']}" for g in shown)
+    return "\n".join(lines)
+
+
+def no_lane_residual(view: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The actionable residual: checklist functions with ZERO coverage
+    of any grade (no tool mark, no finding — verdict ``unexamined``).
+    Derived from :func:`store_view`'s review gap; found-then-lost items
+    are deliberately excluded (they HAD coverage — the main report
+    already flags them for re-examination)."""
+    if not view:
+        return []
+    return [g for g in view.get("review_gap", [])
+            if g.get("verdict") == "unexamined"]
+
+
+def format_no_lane_residual(residual: list[dict[str, Any]],
+                            max_list: int = 200) -> str:
+    """Render :func:`no_lane_residual` ('' never — always states the
+    count, zero included)."""
+    if not residual:
+        return "Every checklist item has coverage from at least one lane."
+    lines = [f"{len(residual)} item(s) analysed by NO lane "
+             f"(no scanner, no LLM, no runtime — route to --gap-audit, "
+             f"another lane, or a fuller scan config):"]
+    shown = residual[:max_list]
+    lines.extend(
+        f"  {_defang(g['file'])}:{_defang(g['function'])} @ {g['line']}"
+        for g in shown)
+    if len(residual) > max_list:
+        lines.append(f"  … (+{len(residual) - max_list} more)")
+    return "\n".join(lines)
