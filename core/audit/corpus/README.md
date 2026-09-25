@@ -325,6 +325,46 @@ Skips are never failures: missing fixtures, absent engines
 (`semgrep` / `spatch` / `codeql` not installed), and per-repo
 infeasibility all land in the skip taxonomy, mirroring `run_corpus`.
 
+## Per-channel micro-corpora (`channels/`)
+
+Each audit channel (an orchestrator channel, refutation gate, or
+mechanical detector — the same mechanism-token vocabulary
+`expected_mechanism` draws from) can carry its own local
+micro-corpus: a handful of labels that exercise exactly that
+channel, refired after every change to it without a full corpus run.
+
+Layout mirrors the main labels dir; content is local, exactly like
+`labels/` — the tree ships machinery only:
+
+```
+core/audit/corpus/channels/<channel>/<bug_class>/<name>.label.json
+```
+
+`<channel>` is a mechanism token (`[a-z0-9_]+`). Labels may carry an
+explicit `channel` field; when present it must agree with the
+directory the label lives under (the loader refuses a mismatch,
+never reconciles it), and when absent the directory is the channel.
+The same `function_id` may appear in different channels'
+micro-corpora — per-channel loads are isolated; only loading one
+dir with a duplicate inside it fails.
+
+Consumption:
+
+- `core.audit.corpus.channels.load_channel_labels("<channel>")` —
+  programmatic load (fails closed on a missing channel dir, listing
+  the available ones);
+- `python3 -m core.audit.corpus.lint channels/<channel>` — the
+  linter takes explicit paths, so channel corpora get the same
+  schema/pin checks as the packaged labels;
+- `group_labels_by_channel(...)` — field-based grouping of an
+  already-loaded mixed set (`""` is the unchanneled bucket, never
+  defaulted into a named channel).
+
+The corpus runner keeps reading the packaged `labels/` dir; channel
+dirs never join a full-corpus run implicitly. Any tool that re-wraps
+channel labels or results meta must carry kind/tag fields verbatim
+and refuse on mismatch — never default them.
+
 ## Adding a label
 
 1. Write the `.label.json` under `labels/<bug_class>/` (see

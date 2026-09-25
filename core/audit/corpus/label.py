@@ -9,11 +9,17 @@ lives in ``sources.json`` (see ``core.audit.corpus.sources``).
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from core.json import load_json
+
+
+# Channel tags share the mechanism-token charset (the ``[a-z0-9_]``
+# vocabulary attribution's gate markers use).
+_CHANNEL_RE = re.compile(r"^[a-z0-9_]+$")
 
 
 SCHEMA_VERSION = 1
@@ -139,6 +145,14 @@ class FunctionLabel:
     # Validation is deliberately lenient — shape only — so labels can
     # pin rules from engines (or rule sets) this checkout doesn't ship.
     expected_rule_hits: dict[str, list[str]] = field(default_factory=dict)
+    # Optional audit-channel tag for per-channel micro-corpora (see
+    # ``core.audit.corpus.channels``): the pipeline channel this label
+    # exercises (e.g. an orchestrator channel or refutation gate name,
+    # the same token vocabulary ``expected_mechanism`` draws from).
+    # Charset-validated only — channels grow with the pipeline, so no
+    # enum is pinned here; the channels loader cross-checks the tag
+    # against the label's channel directory.
+    channel: str = ""
 
     def __post_init__(self) -> None:
         if self.bug_class not in VALID_BUG_CLASSES:
@@ -173,6 +187,13 @@ class FunctionLabel:
                     f"must be one of {sorted(VALID_EXPECTED_STATUSES)}"
                 )
                 raise ValueError(msg)
+        if self.channel and not _CHANNEL_RE.match(self.channel):
+            msg = (
+                f"Invalid channel {self.channel!r}; must match "
+                f"{_CHANNEL_RE.pattern} (lowercase mechanism-token "
+                "charset)"
+            )
+            raise ValueError(msg)
         for engine, rule_ids in self.expected_rule_hits.items():
             if not isinstance(engine, str) or not engine:
                 msg = (
@@ -215,6 +236,7 @@ def load_label(path: Path) -> FunctionLabel:
         excerpt_scope=raw.get("excerpt_scope", "function"),
         expected_mode_results=raw.get("expected_mode_results", {}),
         expected_rule_hits=raw.get("expected_rule_hits", {}),
+        channel=raw.get("channel", ""),
     )
 
 
