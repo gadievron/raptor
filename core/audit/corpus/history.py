@@ -173,8 +173,18 @@ def build_run_record(
     imported: bool = False,
     profile: str = "deployed",
     selection: Any = "full",
+    label_kind: str = "real",
 ) -> dict[str, Any]:
     """Build the RUN header record for one corpus run.
+
+    ``label_kind`` partitions the store: ``real`` runs measure
+    detection on real-world labels; ``synthetic_mutant`` runs are
+    mutation-operator regression floors (see
+    ``core.audit.corpus.mutation``).  The two must never mix in one
+    report — ``compare`` refuses across kinds, ``stability`` groups
+    include the kind, and the post-run delta reports only consider
+    prior runs of the same kind.  Records written before the field
+    existed are read as ``real`` (see :func:`run_label_kind`).
 
     ``profile`` records which knowledge profile produced the run
     (``cold`` = raw first-time-user capability, ``deployed`` = all
@@ -201,6 +211,7 @@ def build_run_record(
         "timestamp": timestamp,
         "pipeline_tree_sha": tree_sha,
         "profile": profile or "deployed",
+        "label_kind": label_kind or "real",
         "selection": selection if selection is not None else "full",
         "config": dict(config),
         "label_set_hash": labels_hash,
@@ -254,6 +265,15 @@ def run_profile(run_rec: dict[str, Any]) -> str:
     return run_rec.get("profile") or "deployed"
 
 
+def run_label_kind(run_rec: dict[str, Any]) -> str:
+    """The run header's label kind, tolerant of pre-kind records.
+
+    Every run recorded before the field existed measured real-world
+    labels (synthetic mutants postdate it) — ``real``.
+    """
+    return run_rec.get("label_kind") or "real"
+
+
 def build_label_records(
     results: list[dict[str, Any]],
     *,
@@ -280,6 +300,7 @@ def build_label_records(
             "run_id": run_id,
             "function_id": fid,
             "span_sha": span_shas.get(fid, ""),
+            "label_kind": row.get("label_kind") or "real",
             "bug_class": row.get("bug_class", ""),
             "expected": row.get("expected", ""),
             "actual": row.get("actual", ""),
@@ -315,6 +336,7 @@ def record_run(
     store: Path | None = None,
     profile: str = "deployed",
     selection: Any = "full",
+    label_kind: str = "real",
 ) -> bool:
     """Append one run to the history store.  Never raises.
 
@@ -336,6 +358,7 @@ def record_run(
             labels_hash=label_set_hash(labels) if labels else "",
             profile=profile,
             selection=selection,
+            label_kind=label_kind,
         )
         span_shas = {
             lb.function_id: getattr(lb.source, "span_sha", "") or ""
@@ -476,7 +499,23 @@ def compare_runs(
     labels_a: dict[str, dict[str, Any]],
     labels_b: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """Compute the fix-impact diff between two runs."""
+    """Compute the fix-impact diff between two runs.
+
+    Refuses cross-kind comparison (``ValueError``): a synthetic-
+    mutant run's flips are mutation-operator regression movements and
+    must never render in the same report as real-label movements —
+    the refusal is structural (here, not just in the CLI) so every
+    programmatic consumer inherits it.
+    """
+    kind_a, kind_b = run_label_kind(run_a), run_label_kind(run_b)
+    if kind_a != kind_b:
+        msg = (
+            f"cannot compare across label kinds: "
+            f"{run_a.get('run_id')} is {kind_a}, "
+            f"{run_b.get('run_id')} is {kind_b} (synthetic-mutant "
+            f"floors never mix with real-label results)"
+        )
+        raise ValueError(msg)
     common = sorted(set(labels_a) & set(labels_b))
     flips: dict[str, list[dict[str, Any]]] = {}
     attribution_changes: list[dict[str, Any]] = []
@@ -540,6 +579,12 @@ def format_compare(diff: dict[str, Any]) -> str:
         f"Compare {a.get('run_id')} ({a.get('timestamp') or '?'}) -> "
         f"{b.get('run_id')} ({b.get('timestamp') or '?'})"
     )
+    if run_label_kind(a) == "synthetic_mutant":
+        lines.append(
+            "  Label kind: synthetic_mutant — flips are mutation-"
+            "operator regression movements, not real-bug detection "
+            "changes"
+        )
     for run, tag in ((a, "run a"), (b, "run b")):
         desc = describe_selection(run)
         if desc and desc != "full":
@@ -631,7 +676,8 @@ def format_runs(runs: list[dict[str, Any]]) -> str:
     lines = [
         f"{'Run':<28} {'Timestamp':<26} {'Tree':<12} {'Profile':<9} "
         f"{'Mode':<10} "
-        f"{'Labels':>6} {'Match':>6} {'Cost':>9} {'Gates':<9} Imported",
+        f"{'Labels':>6} {'Match':>6} {'Cost':>9} {'Gates':<9} "
+        f"{'Imported':<9} Kind",
         "-" * 128,
     ]
     for r in runs:
@@ -654,7 +700,8 @@ def format_runs(runs: list[dict[str, Any]]) -> str:
             f"{totals.get('matched', 0):>6} "
             f"${float(r.get('cost_usd') or 0.0):>8.4f} "
             f"{gate_str:<9} "
-            f"{'yes' if r.get('imported') else 'no'}"
+            f"{'yes' if r.get('imported') else 'no':<9} "
+            f"{run_label_kind(r)}"
         )
     return "\n".join(lines)
 
@@ -664,7 +711,14 @@ def format_trend(
     runs: list[dict[str, Any]],
     labels_by_run: dict[str, list[dict[str, Any]]],
 ) -> str:
-    """Format one label's history across all recorded runs."""
+    """Format one label's history across all recorded runs.
+
+    Partitioned by label kind: the same function_id can be labelled
+    as a real defect in one overlay and as a synthetic mutant in
+    another, and a mutant row rendering inline with real rows would
+    read as a real-detection trend.  Rows are grouped per kind with
+    an explicit section marker — never interleaved.
+    """
     rows = []
     for run in runs:
         rec = _latest_labels(run, labels_by_run).get(function_id)
@@ -673,24 +727,37 @@ def format_trend(
         rows.append((run, rec))
     if not rows:
         return f"No history for label {function_id!r}."
-    lines = [
-        f"History for {function_id}:",
-        f"  {'Run':<28} {'Timestamp':<26} {'Expected':<10} "
-        f"{'Actual':<12} {'Match':<6} {'Attribution':<14} {'Cost':>9}",
-        "  " + "-" * 110,
-    ]
+    by_kind: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
     for run, rec in rows:
-        lines.append(
-            f"  {run.get('run_id', '')[:27]:<28} "
-            f"{(run.get('timestamp') or '')[:25]:<26} "
-            f"{rec.get('expected', ''):<10} "
-            f"{rec.get('actual', ''):<12} "
-            f"{'yes' if rec.get('match') else 'NO':<6} "
-            f"{rec.get('attribution', '') or '-':<14} "
-            f"${float(rec.get('cost_usd') or 0.0):>8.4f}"
-        )
-        if rec.get("error_reason"):
-            lines.append(f"      reason: {rec['error_reason']}")
+        kind = rec.get("label_kind") or run_label_kind(run)
+        by_kind.setdefault(kind, []).append((run, rec))
+    lines = [f"History for {function_id}:"]
+    multi = len(by_kind) > 1
+    for kind in sorted(by_kind):
+        if multi or kind != "real":
+            note = (
+                " (partitioned — mutant rows never trend against "
+                "real rows)" if multi else ""
+            )
+            lines.append(f"  Label kind: {kind}{note}")
+        lines.extend((
+            f"  {'Run':<28} {'Timestamp':<26} {'Expected':<10} "
+            f"{'Actual':<12} {'Match':<6} {'Attribution':<14} "
+            f"{'Cost':>9}",
+            "  " + "-" * 110,
+        ))
+        for run, rec in by_kind[kind]:
+            lines.append(
+                f"  {run.get('run_id', '')[:27]:<28} "
+                f"{(run.get('timestamp') or '')[:25]:<26} "
+                f"{rec.get('expected', ''):<10} "
+                f"{rec.get('actual', ''):<12} "
+                f"{'yes' if rec.get('match') else 'NO':<6} "
+                f"{rec.get('attribution', '') or '-':<14} "
+                f"${float(rec.get('cost_usd') or 0.0):>8.4f}"
+            )
+            if rec.get("error_reason"):
+                lines.append(f"      reason: {rec['error_reason']}")
     return "\n".join(lines)
 
 
@@ -698,27 +765,35 @@ def stability_groups(
     runs: list[dict[str, Any]],
     labels_by_run: dict[str, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    """Group runs by (pipeline tree sha, profile, config), measure variance.
+    """Group runs by (tree sha, label kind, profile, config); measure
+    variance.
 
     Runs without a recorded tree sha (imports) cannot assert
     same-tree and are excluded.  Within each group of two or more
     runs, a label is unstable when the same tree and config produced
-    different verdicts — the nondeterminism measure.
+    different verdicts — the nondeterminism measure.  The label kind
+    joins the group key structurally: a mutant run can never share a
+    nondeterminism group with a real-label run.
     """
-    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    grouped: dict[
+        tuple[str, str, str, str], list[dict[str, Any]],
+    ] = {}
     for run in runs:
         tree = run.get("pipeline_tree_sha") or ""
         if not tree:
             continue
         key = (
             tree,
+            run_label_kind(run),
             run_profile(run),
             json.dumps(run.get("config") or {}, sort_keys=True),
         )
         grouped.setdefault(key, []).append(run)
 
     out = []
-    for (tree, profile, config_json), group in sorted(grouped.items()):
+    for (tree, kind, profile, config_json), group in sorted(
+        grouped.items(),
+    ):
         if len(group) < 2:
             continue
         verdicts: dict[str, dict[str, str]] = {}
@@ -736,6 +811,7 @@ def stability_groups(
         )
         out.append({
             "tree_sha": tree,
+            "label_kind": kind,
             "profile": profile,
             "config": json.loads(config_json),
             "run_ids": [r.get("run_id", "") for r in group],
@@ -758,8 +834,13 @@ def format_stability(groups: list[dict[str, Any]]) -> str:
             f"{k}={v}" for k, v in sorted(g["config"].items())
             if v is not None
         )
+        kind_tag = (
+            f" kind {g['label_kind']}"
+            if g.get("label_kind", "real") != "real" else ""
+        )
         lines.append(
-            f"Tree {g['tree_sha'][:12]} profile {g.get('profile', 'deployed')} "
+            f"Tree {g['tree_sha'][:12]}{kind_tag} "
+            f"profile {g.get('profile', 'deployed')} "
             f"config [{config}] — runs: {', '.join(g['run_ids'])}"
         )
         n_unstable = len(g["unstable"])
@@ -816,6 +897,10 @@ def refire_deltas(
     prior_runs = [
         r for r in runs[:cur_idx]
         if r.get("run_id") != current_run_id
+        # Same-kind priors only: a mutant refire delta against a real
+        # run's record (or vice versa) would phrase a cross-kind flip
+        # as a fix impact.
+        and run_label_kind(r) == run_label_kind(current)
     ]
 
     lines: list[str] = []
@@ -880,6 +965,10 @@ def full_run_delta(store: Path, current_run_id: str) -> str | None:
     prior_runs = [
         r for r in runs[:cur_idx]
         if r.get("run_id") != current_run_id
+        # Same-kind priors only — compare_runs refuses cross-kind
+        # anyway; filtering here finds the latest COMPARABLE run
+        # instead of failing on an interleaved other-kind run.
+        and run_label_kind(r) == run_label_kind(current)
     ]
     if not prior_runs:
         return None
@@ -945,6 +1034,7 @@ def import_results(results_path: Path, store: Path) -> str:
         labels_hash="",
         imported=True,
         profile=meta.get("profile") or "deployed",
+        label_kind=meta.get("label_kind") or "real",
     )
     label_recs = build_label_records(rows, run_id=run_id)
     append_records(store, [run_rec] + label_recs)
@@ -1027,14 +1117,17 @@ def main(argv: list[str] | None = None) -> int:
         try:
             run_a = resolve_run(runs, args.run_a)
             run_b = resolve_run(runs, args.run_b)
+            diff = compare_runs(
+                run_a, run_b,
+                _latest_labels(run_a, labels_by_run),
+                _latest_labels(run_b, labels_by_run),
+            )
         except ValueError as exc:
+            # Unresolvable/ambiguous run tokens, or a cross-kind
+            # compare (mutant floors never mix with real results).
             print(str(exc), file=sys.stderr)
             return 1
-        print(format_compare(compare_runs(
-            run_a, run_b,
-            _latest_labels(run_a, labels_by_run),
-            _latest_labels(run_b, labels_by_run),
-        )))
+        print(format_compare(diff))
         return 0
 
     if args.cmd == "trend":

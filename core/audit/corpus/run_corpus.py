@@ -3472,6 +3472,15 @@ def main(argv: list[str] | None = None) -> int:
              "(overwrites matching function_ids, keeps the rest)",
     )
     parser.add_argument(
+        "--labels-dir", type=Path, default=None,
+        help="Alternate label overlay directory (default: the "
+             "packaged labels/ dir). Synthetic-mutant overlays (see "
+             "core.audit.corpus.mutate) live in their own directory "
+             "so a default full run never loads them; a run refuses "
+             "a label set that mixes synthetic_mutant with real "
+             "labels either way",
+    )
+    parser.add_argument(
         "--model", action="append", default=[],
         help="LLM model to use (repeatable for cross-model comparison; "
              "default: orchestrator default)",
@@ -3621,7 +3630,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"--splice: file not found: {args.splice}", file=sys.stderr)
         return 1
 
-    labels = load_all_labels(bug_class=args.bug_class)
+    if args.labels_dir is not None:
+        labels = load_all_labels(
+            corpus_dir=args.labels_dir, bug_class=args.bug_class,
+        )
+    else:
+        labels = load_all_labels(bug_class=args.bug_class)
 
     if args.label_ids:
         id_set = set(args.label_ids)
@@ -3638,10 +3652,74 @@ def main(argv: list[str] | None = None) -> int:
         print(f" (ids: {len(args.label_ids)})", end="")
     print()
 
+    # --- label-kind partition ---
+    # A run is single-kind by construction: synthetic-mutant floors
+    # are mutation-operator regression numbers, real labels measure
+    # detection on real defects, and one results file mixing the two
+    # would launder the former into the latter everywhere downstream
+    # (metrics, gates, history).  Refuse, never filter silently.
+    from .mutation import (
+        PROVENANCE_SYNTHETIC_MUTANT,
+        apply_labels_to_tree,
+        label_kind,
+    )
+
+    kinds = {label_kind(lb) for lb in labels}
+    if len(kinds) > 1:
+        print(
+            "Label set mixes synthetic_mutant and real labels — a "
+            "corpus run is single-kind by design (mutant floors must "
+            "never read as real-bug results). Keep mutant overlays "
+            "in their own --labels-dir, or select one kind via "
+            "--class/--label.",
+            file=sys.stderr,
+        )
+        return 1
+    run_kind = kinds.pop()
+    if run_kind == PROVENANCE_SYNTHETIC_MUTANT:
+        if args.probe:
+            print(
+                "--probe reads the pinned (unmutated) sources and "
+                "never applies mutation specs — synthetic_mutant "
+                "labels would probe the clean code. Run mutants "
+                "through the audit path (no --probe).",
+                file=sys.stderr,
+            )
+            return 1
+        if args.scope != "excerpt":
+            print(
+                f"--scope {args.scope} audits the shared fixture "
+                f"tree; mutations are only ever applied to the "
+                f"run-private excerpt copy. Synthetic_mutant labels "
+                f"require --scope excerpt (the default).",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"Label kind: {run_kind} (mutation-operator regression "
+              f"run — floors, not real-bug recall)")
+    if args.splice:
+        # Both directions: a mutant refire must not merge into a real
+        # results file and vice versa — the merged rows would grade
+        # under one kind's gates while measuring the other's labels.
+        splice_raw = load_json(args.splice, max_bytes=_MAX_RESULTS_BYTES)
+        splice_kind = "real"
+        if isinstance(splice_raw, dict):
+            splice_kind = (splice_raw.get("meta") or {}).get(
+                "label_kind", "real",
+            )
+        if splice_kind != run_kind:
+            print(
+                f"--splice target records label_kind={splice_kind!r}; "
+                f"this run is {run_kind!r} — refusing to merge across "
+                f"kinds.",
+                file=sys.stderr,
+            )
+            return 1
+
     # Overlay identity: which label files (by canonical content) this
     # run loaded.  Stamped into meta + history so archives are always
     # attributable to their exact label set.
-    labels_content_hash = _label_files_sha256()
+    labels_content_hash = _label_files_sha256(args.labels_dir)
 
     # Resolve and state the transport BEFORE any prep or spend: the
     # first provider line used to appear only once group 1 started
@@ -3844,6 +3922,36 @@ def main(argv: list[str] | None = None) -> int:
                 excerpt_dirs = _build_excerpt_tree(labels, source_dirs)
                 audit_dirs = excerpt_dirs
 
+            if run_kind == PROVENANCE_SYNTHETIC_MUTANT:
+                # Mutation application, post-fetch: the SourcePin is
+                # the UNMUTATED parent ref, so the shared fixture
+                # clone stays clean and the spec is applied to this
+                # run's private excerpt copy only (the scope gate
+                # above guarantees one exists).  Fail-closed before
+                # any review cost: a spec that no longer applies (or
+                # whose applied result fails its content hash) means
+                # the run would measure the wrong code.
+                mutation_errors = apply_labels_to_tree(
+                    labels, excerpt_dirs or {},
+                )
+                if mutation_errors:
+                    print(
+                        f"{len(mutation_errors)} mutation application "
+                        f"error(s) — refusing before any review cost:",
+                        file=sys.stderr,
+                    )
+                    for e in mutation_errors:
+                        print(f"  {e}", file=sys.stderr)
+                    if excerpt_dirs:
+                        _release_excerpt_trees(excerpt_dirs)
+                    return 1
+                n_mutants = sum(
+                    1 for lb in labels
+                    if label_kind(lb) == PROVENANCE_SYNTHETIC_MUTANT
+                )
+                print(f"  Mutations applied and content-verified: "
+                      f"{n_mutants} label(s)", flush=True)
+
             # Resume-stamp axes only this layer knows: scope changes
             # the audited tree, and a drifted default-model
             # resolution is invisible in the requested name.
@@ -3898,6 +4006,13 @@ def main(argv: list[str] | None = None) -> int:
                     "row-level signals only (partial)",
                     flush=True,
                 )
+
+    # Kind-stamp the FRESH rows (before splice): trend/stability/
+    # compare partition on this, and a run is single-kind, so every
+    # row of this run carries the run's kind.  Spliced-in prior rows
+    # keep their own stamps (kind agreement was enforced up front).
+    for row in results:
+        row.setdefault("label_kind", run_kind)
 
     # Conservation invariant over the FRESH rows, before any splice
     # merges in prior results: every selected label must sit in exactly
@@ -3994,6 +4109,11 @@ def main(argv: list[str] | None = None) -> int:
         # The knowledge profile the run was invoked with (probe mode
         # skips the orchestrator, so there it only labels the rows).
         "profile": args.profile,
+        # Label kind of the (single-kind) run: "real" or
+        # "synthetic_mutant".  Mutant results are mutation-operator
+        # regression floors, never real-bug recall — splice and the
+        # history store refuse to mix kinds on this field.
+        "label_kind": run_kind,
         # Whether LLM response-cache replay was possible for this run
         # ("off" = every completion was generated fresh — see
         # --no-llm-cache). Rows may still carry cached=True markers
@@ -4060,6 +4180,7 @@ def main(argv: list[str] | None = None) -> int:
             },
             profile=args.profile,
             selection=selection,
+            label_kind=run_kind,
         )
 
     # History delta report. Read-only history use — results.json and
