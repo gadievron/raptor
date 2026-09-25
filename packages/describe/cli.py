@@ -226,6 +226,17 @@ def _find_cached_extraction(
     return None
 
 
+def resolve_archive_target(
+    raw_path: Path, stderr,
+) -> tuple[Path, Path | None, str] | None:
+    """Public seam over :func:`_resolve_archive` for other
+    read-only, create-time consumers (project create's target-type
+    detection): cache-or-tmp extraction + single-subdir descent,
+    returning ``(target_dir, tmp_root_to_cleanup_or_None, label)``
+    or None on failure. The caller owns ``tmp_root`` cleanup."""
+    return _resolve_archive(Path(raw_path), stderr)
+
+
 def _descend_single_subdir(root: Path) -> Path:
     """When an extracted archive has the common single-top-level-
     subdir layout (``tar czf proj.tgz proj/`` → extract gives
@@ -255,4 +266,4 @@ def _descend_single_subdir(root: Path) -> Path:
     return root
 
 
-__all__ = ["describe_main"]
+__all__ = ["describe_main", "resolve_archive_target"]
