@@ -148,8 +148,10 @@ class TestSandboxFakeHomeWiring:
     ):
         """``fake_home=True`` raises ``ValueError`` if ``output``
         isn't set (see ``context.py:540``). Pin that the scanner
-        passes ``output=out_dir`` so the sandbox can materialise
-        the fake home inside it."""
+        passes ``output=<child work subdir>`` — the child's write
+        grant is NEVER out_dir itself (in standalone /scan that is
+        the run root, where parent-tier coverage records live) — so
+        the sandbox materialises the fake home inside the subdir."""
         mock_which.return_value = "/usr/bin/semgrep"
         mock_run.return_value = (0, '{"runs": []}', "")
         mock_validate.return_value = True
@@ -158,7 +160,8 @@ class TestSandboxFakeHomeWiring:
             name="t", config="p/default",
             repo_path=tmp_path, out_dir=tmp_path, timeout=300,
         )
-        assert mock_run.call_args.kwargs.get("output") == str(tmp_path)
+        assert mock_run.call_args.kwargs.get("output") == str(
+            tmp_path / "semgrep-child")
         assert mock_run.call_args.kwargs.get("target") == str(tmp_path)
 
     @patch('shutil.which')
@@ -386,3 +389,89 @@ class TestAllSemgrepPacksFailedExitCode:
             len(sarif_paths) > 0 and len(failed) == len(sarif_paths)
         )
         assert all_failed is False
+
+
+class TestChildJsonPromotion:
+    """The semgrep child's only run-dir write is the --json-output
+    metadata file, produced inside its dedicated write-grant subdir
+    and PROMOTED to the documented out_dir path by the parent — so
+    downstream readers keep their paths while the child never holds a
+    grant on the coverage-record-bearing directory."""
+
+    @patch('shutil.which')
+    @patch.object(_scanner_mod, "run")
+    @patch.object(_scanner_mod, "validate_sarif")
+    def test_child_json_is_promoted_to_out_dir(
+        self, mock_validate, mock_run, mock_which, tmp_path,
+    ):
+        mock_which.return_value = "/usr/bin/semgrep"
+        mock_validate.return_value = True
+
+        def fake_run(cmd, **kwargs):
+            # The child writes its JSON inside the granted subdir.
+            child_json = (tmp_path / "semgrep-child"
+                          / "semgrep_test_scan.json")
+            child_json.write_text('{"paths": {"scanned": ["a.c"]}}',
+                                  encoding="utf-8")
+            return (0, '{"runs": []}', "")
+
+        mock_run.side_effect = fake_run
+        _, success = run_single_semgrep(
+            name="test_scan", config="p/default",
+            repo_path=tmp_path, out_dir=tmp_path, timeout=300,
+        )
+        assert success is True
+        promoted = tmp_path / "semgrep_test_scan.json"
+        assert promoted.is_file()
+        assert "a.c" in promoted.read_text(encoding="utf-8")
+        assert not (tmp_path / "semgrep-child"
+                    / "semgrep_test_scan.json").exists()
+
+    @patch('shutil.which')
+    @patch.object(_scanner_mod, "run")
+    @patch.object(_scanner_mod, "validate_sarif")
+    def test_symlink_at_child_json_is_not_promoted(
+        self, mock_validate, mock_run, mock_which, tmp_path,
+    ):
+        # A hostile child can leave a SYMLINK at its JSON path; the
+        # parent must not move a child-chosen indirection onto the
+        # documented top-level name.
+        mock_which.return_value = "/usr/bin/semgrep"
+        mock_validate.return_value = True
+        victim = tmp_path / "victim.json"
+        victim.write_text('{"paths": {"scanned": ["evil"]}}',
+                          encoding="utf-8")
+
+        def fake_run(cmd, **kwargs):
+            child_json = (tmp_path / "semgrep-child"
+                          / "semgrep_test_scan.json")
+            child_json.symlink_to(victim)
+            return (0, '{"runs": []}', "")
+
+        mock_run.side_effect = fake_run
+        run_single_semgrep(
+            name="test_scan", config="p/default",
+            repo_path=tmp_path, out_dir=tmp_path, timeout=300,
+        )
+        assert not (tmp_path / "semgrep_test_scan.json").exists()
+
+    @patch('shutil.which')
+    @patch.object(_scanner_mod, "run")
+    @patch.object(_scanner_mod, "validate_sarif")
+    def test_stale_child_json_from_previous_run_is_cleared(
+        self, mock_validate, mock_run, mock_which, tmp_path,
+    ):
+        # A leftover at the child path (previous run, hostile sibling)
+        # must not be misattributed to a run whose child wrote nothing.
+        mock_which.return_value = "/usr/bin/semgrep"
+        mock_validate.return_value = True
+        stale = tmp_path / "semgrep-child" / "semgrep_test_scan.json"
+        stale.parent.mkdir()
+        stale.write_text('{"stale": true}', encoding="utf-8")
+        mock_run.return_value = (0, '{"runs": []}', "")
+        run_single_semgrep(
+            name="test_scan", config="p/default",
+            repo_path=tmp_path, out_dir=tmp_path, timeout=300,
+        )
+        assert not stale.exists()
+        assert not (tmp_path / "semgrep_test_scan.json").exists()

@@ -993,6 +993,26 @@ def run_single_semgrep(
     json_out = out_dir / f"semgrep_{suffix}.json"
     stderr_log = out_dir / f"semgrep_{suffix}.stderr.log"
     exit_file = out_dir / f"semgrep_{suffix}.exit"
+    # The CHILD's write grant is a dedicated subdir, never out_dir
+    # itself: in standalone /scan out_dir is the run ROOT, which holds
+    # parent-tier state — coverage-*.json records above all, which the
+    # coverage load chokepoint trusts at parent tier
+    # (core/coverage/record.py) — and semgrep parses hostile target
+    # files; a root-granted child could plant a top-level
+    # coverage-llm.json and mint review credit. The only child-written
+    # artifact is the --json-output metadata file: it is produced in
+    # the subdir and PROMOTED to its documented out_dir path by the
+    # parent after the run (every downstream reader keeps its path).
+    # sarif/stderr/exit are parent-written from the captured streams
+    # and stay at out_dir directly. Shared across parallel pack
+    # workers by design (same sharing as out_dir before); per-pack
+    # filenames keep them disjoint.
+    child_dir = out_dir / "semgrep-child"
+    child_dir.mkdir(parents=True, exist_ok=True)
+    json_out_child = child_dir / json_out.name
+    # A previous run's (or hostile sibling's) leftover at the child
+    # path must not be misattributed to this run.
+    json_out_child.unlink(missing_ok=True)
 
     logger.debug("Starting Semgrep scan: %s", name)
 
@@ -1007,7 +1027,7 @@ def run_single_semgrep(
     cmd = semgrep_pkg.build_cmd(
         repo_path,
         config,
-        json_output_path=json_out,
+        json_output_path=json_out_child,
         rule_timeout=RaptorConfig.SEMGREP_RULE_TIMEOUT,
         semgrep_bin=semgrep_cmd,
         extra_args=(
@@ -1118,12 +1138,37 @@ def run_single_semgrep(
             _pack_readable.append(str(config))
         rc, so, se = run(
             cmd, timeout=effective_timeout, env=clean_env,
-            target=str(repo_path), output=str(out_dir),
+            # The child's write grant is its work subdir, NOT out_dir
+            # (see child_dir above); the fake HOME lands inside it.
+            target=str(repo_path), output=str(child_dir),
             proxy_hosts=_ph.proxy_hosts_for_semgrep(),
             caller_label="scanner-semgrep",
             fake_home=True,
             readable_paths=_pack_readable or None,
         )
+
+        # Promote the child-written JSON metadata to its documented
+        # out_dir path (parent-tier write). lstat-regular first: the
+        # child owns child_dir while it runs, and promoting a planted
+        # symlink would hand readers a child-chosen indirection (the
+        # budgeted readers refuse non-regular files, but the promoted
+        # name must not carry one in the first place). Absence is not
+        # an error — semgrep omits the file on some failure shapes;
+        # the empty-output handling below already covers those.
+        try:
+            import stat as _stat_mod
+            if _stat_mod.S_ISREG(json_out_child.lstat().st_mode):
+                os.replace(json_out_child, json_out)
+            else:
+                logger.warning(
+                    "semgrep '%s': child JSON output is not a regular "
+                    "file — not promoted", name)
+        except FileNotFoundError:
+            pass
+        except OSError as promote_exc:
+            logger.warning(
+                "semgrep '%s': JSON output promotion failed: %s",
+                name, promote_exc)
 
         # Validate output
         if not so or not so.strip():

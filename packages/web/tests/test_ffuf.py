@@ -745,7 +745,7 @@ def test_run_grants_file_granular_read_scope_to_wordlists(
         str(params.resolve()),
     ]
     assert captured["kwargs"].get("target") is None
-    assert captured["kwargs"]["output"] == str(tmp_path)
+    assert captured["kwargs"]["output"] == str(tmp_path / "ffuf")
 
 
 def test_run_resolves_symlinked_wordlists_for_argv_and_scope(
@@ -1174,7 +1174,8 @@ def test_run_removes_stale_report_before_spawning(
     wordlist.write_text("admin\n", encoding="utf-8")
     monkeypatch.setattr("packages.web.ffuf.shutil.which", lambda _binary: "/usr/bin/ffuf")
 
-    stale = tmp_path / "ffuf_results.json"
+    stale = tmp_path / "ffuf" / "ffuf_results.json"
+    stale.parent.mkdir(exist_ok=True)
     stale.write_text(
         json.dumps({"results": [{"url": "https://example.test/stale", "status": 200}]}),
         encoding="utf-8",
@@ -1218,7 +1219,7 @@ def test_run_refuses_to_parse_oversized_report(
     assert result["result_count"] == 0
     assert result["results"] == []
     # Unparsed report may embed credentials in its config block: 0600.
-    assert (tmp_path / "ffuf_results.json").stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / "ffuf" / "ffuf_results.json").stat().st_mode & 0o777 == 0o600
 
 
 def test_run_scrubs_ffuf_config_block_from_kept_report(
@@ -1255,7 +1256,7 @@ def test_run_scrubs_ffuf_config_block_from_kept_report(
     )
 
     assert result["result_count"] == 1
-    kept = tmp_path / "ffuf_results.json"
+    kept = tmp_path / "ffuf" / "ffuf_results.json"
     raw = kept.read_text(encoding="utf-8")
     assert "atrest-secret-1" not in raw
     parsed = json.loads(raw)
@@ -1285,7 +1286,7 @@ def test_run_keeps_report_config_block_with_reveal_secrets(
     runner = FfufRunner("https://example.test", tmp_path, reveal_secrets=True)
     runner.run(FfufConfig(wordlist=wordlist))
 
-    parsed = json.loads((tmp_path / "ffuf_results.json").read_text(encoding="utf-8"))
+    parsed = json.loads((tmp_path / "ffuf" / "ffuf_results.json").read_text(encoding="utf-8"))
     assert parsed["config"] == {"k": "v"}
 
 
@@ -1576,7 +1577,7 @@ def test_run_delivers_credentials_via_config_file_not_argv(
     assert secret_cookie in seen["config_content"]
     assert "sk-livesecret" in seen["config_content"]
     # Credentials must not persist at rest after the run.
-    assert not (tmp_path / "ffuf_config.toml").exists()
+    assert not (tmp_path / "ffuf" / "ffuf_config.toml").exists()
 
 
 def test_run_refuses_preplanted_symlink_at_config_path(
@@ -1643,7 +1644,7 @@ def test_run_keeps_config_file_only_with_reveal_secrets(
     runner = FfufRunner("https://example.test", tmp_path, reveal_secrets=True)
     runner.run(FfufConfig(wordlist=wordlist, cookies=("session=abc",)))
 
-    assert (tmp_path / "ffuf_config.toml").exists()
+    assert (tmp_path / "ffuf" / "ffuf_config.toml").exists()
 
 
 def test_run_removes_config_file_on_backstop_timeout(
@@ -1665,7 +1666,7 @@ def test_run_removes_config_file_on_backstop_timeout(
     result = runner.run(FfufConfig(wordlist=wordlist, cookies=("session=abc",)))
 
     assert result["timed_out"] is True
-    assert not (tmp_path / "ffuf_config.toml").exists()
+    assert not (tmp_path / "ffuf" / "ffuf_config.toml").exists()
 
 
 def test_run_grants_grace_beyond_ffuf_maxtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
