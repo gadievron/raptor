@@ -310,7 +310,7 @@ def write_bytes_atomically(
 def open_exclusive_artifact(
     path: str | Path,
     *,
-    mode: int = 0o644,
+    mode: int | None = None,
     replace: bool = False,
 ) -> int:
     """Exclusively create the NEW artifact at *path*; return the fd.
@@ -330,10 +330,19 @@ def open_exclusive_artifact(
     name still raises), then the O_EXCL create fails loud if anything
     reappears in the unlink→open window.
 
-    ``mode`` is validated like the atomic writers' (0o000..0o777, no
-    setuid/setgid/sticky) and enforced via best-effort ``fchmod`` so
-    a caller-requested mode (0o600 secrets, 0o755 scripts) wins over
-    the process umask.
+    ``mode`` (optional) is validated like the atomic writers'
+    (0o000..0o777, no setuid/setgid/sticky). When SET, it is enforced
+    via best-effort ``fchmod`` so the caller-requested mode (0o600
+    secrets, 0o755 scripts) wins over the process umask. When ``None``
+    (default), the file is created with the conventional 0o644 masked
+    by the process umask — the behaviour of the plain ``open("w")``
+    these writers replaced, and of ``open_hardened_append`` /
+    ``core.json.append_jsonl`` in the same discipline. Both
+    directions matter: fchmod-forcing an unrequested default silently
+    WIDENED artifacts past a restrictive umask (0o600 under
+    ``umask 077`` became a world-readable 0o644 — target-derived
+    crash artifacts on multi-user hosts), while an explicit mode must
+    keep beating the umask (a 0o755 generated script must execute).
 
     The caller owns the returned fd (``os.fdopen`` or ``os.close``).
     """
@@ -344,14 +353,15 @@ def open_exclusive_artifact(
     fd = os.open(
         str(p),
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_CLOEXEC,
-        mode,
+        0o644 if mode is None else mode,
     )
-    try:
-        os.fchmod(fd, mode)
-    except (OSError, AttributeError):
-        # Windows + some mounts don't honour fchmod — the O_CREAT
-        # mode argument was already best-effort.
-        pass
+    if mode is not None:
+        try:
+            os.fchmod(fd, mode)
+        except (OSError, AttributeError):
+            # Windows + some mounts don't honour fchmod — the O_CREAT
+            # mode argument was already best-effort.
+            pass
     return fd
 
 
@@ -359,14 +369,15 @@ def write_new_bytes(
     path: str | Path,
     content: bytes,
     *,
-    mode: int = 0o644,
+    mode: int | None = None,
     replace: bool = False,
 ) -> None:
     """Write *content* to a NEW artifact at *path* via
-    :func:`open_exclusive_artifact` (see there for the refusal and
-    ``replace`` semantics). Raises ``OSError`` on refusal or write
-    failure; no tempfile, no fsync — for regeneratable outputs where
-    the atomic writers' durability cost is unearned."""
+    :func:`open_exclusive_artifact` (see there for the refusal,
+    ``mode`` and ``replace`` semantics — an explicit ``mode`` beats
+    the umask, the default honours it). Raises ``OSError`` on refusal
+    or write failure; no tempfile, no fsync — for regeneratable
+    outputs where the atomic writers' durability cost is unearned."""
     fd = open_exclusive_artifact(path, mode=mode, replace=replace)
     try:
         view = memoryview(content)
@@ -387,7 +398,7 @@ def write_new_text(
     content: str,
     *,
     encoding: str = "utf-8",
-    mode: int = 0o644,
+    mode: int | None = None,
     replace: bool = False,
 ) -> None:
     """Text variant of :func:`write_new_bytes`."""
