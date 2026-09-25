@@ -15,6 +15,7 @@ from core.coverage.journal import (  # noqa: F401
     encode_key_file,
     entry_producer,
     flush_journal,
+    is_agent_mark,
     is_function_grade,
     is_mechanical_echo,
     latest_entries,

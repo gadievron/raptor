@@ -396,6 +396,58 @@ def is_mechanical_echo(entry: Any) -> bool:
     )
 
 
+def is_agent_mark(entry: Any) -> bool:
+    """True for ``--mark`` review assertions minted OUTSIDE an
+    operator context.
+
+    ``raptor-coverage-summary --mark`` journals ``producer="mark"``
+    rows and stamps ``model`` from the invocation context:
+    ``operator`` only under the mark path's strict live-context
+    discipline (``live_context_grants_operator``), else
+    ``agent-mark``. A review assertion is operator-tier authority —
+    an agent context asserting "reviewed" carries no evidence gate
+    (unlike ``raptor-audit record``), so readers must not let it earn
+    review-grade coverage; granting it review weight is a
+    self-coverage laundering channel (a mapping session could retire
+    every function it merely read).
+
+    BOUNDARY — what this screen does and does not close. It closes
+    the CLI-MEDIATED route: a session that reaches review-grade
+    coverage through ``raptor-coverage-summary`` gets the writer's
+    context stamp, and this predicate keys weight on it (the stamp is
+    MAC-covered on stamped rows, so it cannot be edited after the
+    fact without demoting the row). It does NOT close the run-dir /
+    same-user trust tier: a key-holding in-session process can call
+    ``append_entry`` directly with ``model="operator"`` and a valid
+    MAC — the journal MAC attests "this install's writer-key signed
+    this content", never WHO held the key — and an UNSTAMPED forged
+    ``model="operator"`` row passes this screen into the pre-existing
+    unstamped tier (exact-source-hash-gated fold credit, no verdict
+    reuse, no store import authority beyond that). Those bounds are
+    the journal MAC's own documented trust model, and no claim here
+    exceeds it.
+
+    Grandfathering: rows from the era before the invocation-context
+    stamp landed all carry the then-hardcoded ``model="operator"``
+    and grandfather at operator tier. That bound is CIRCUMSTANTIAL,
+    not mechanical — no per-row fact distinguishes an operator's
+    pre-era mark from an agent's, so the benefit of doubt follows the
+    /annotate legacy clause; the stamp era itself is the mechanism
+    boundary going forward (a ts fence would add nothing: post-era
+    stamped rows come only from the disciplined writer or a
+    key-holder, and a key-holder chooses ts too).
+
+    Accepts a :class:`ReviewJournalEntry` or a raw journal dict.
+    """
+    if isinstance(entry, dict):
+        producer = entry.get("producer")
+        model = entry.get("model")
+    else:
+        producer = getattr(entry, "producer", None)
+        model = getattr(entry, "model", None)
+    return producer == "mark" and model != "operator"
+
+
 def _canonical_strategy_hash(strategies: list[str]) -> str:
     """Sha1 of comma-joined sorted strategy names, first 12 chars.
 
@@ -1260,7 +1312,11 @@ def entry_earns_function_coverage(entry: ReviewJournalEntry) -> bool:
       visibility. No review examined the function, so a durable mark
       would read it as reviewed in every store-derived view
       (including the gap-audit residual) and silently retire it from
-      review scheduling.
+      review scheduling;
+    * agent-context ``--mark`` assertions (:func:`is_agent_mark`) —
+      review-grade marks are operator-tier; a non-operator context's
+      assertion carries no evidence gate and must not retire the
+      function from review.
 
     Same direction as :func:`reviewed_set`; the two differ only on
     edge rows (see its docstring).
@@ -1269,6 +1325,7 @@ def entry_earns_function_coverage(entry: ReviewJournalEntry) -> bool:
         entry.verdict not in ("error", "dark")
         and not entry.edge_callee
         and not is_mechanical_echo(entry)
+        and not is_agent_mark(entry)
     )
 
 

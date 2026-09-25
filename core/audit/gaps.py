@@ -1895,6 +1895,7 @@ def _fold_journal_into_covered(
                 )
             else:
                 from .journal import (
+                    is_agent_mark,
                     is_function_grade,
                     is_mechanical_echo,
                     load_entries,
@@ -1920,12 +1921,18 @@ def _fold_journal_into_covered(
                 # gap functions no review ever visited) is not a
                 # review, and plain credit here retired those
                 # functions from the resumed run's queue.
+                # Agent-context --mark assertions are excluded for
+                # the same reason review-grade marks are operator-
+                # tier (is_agent_mark): a non-operator assertion
+                # carries no evidence gate and must not retire the
+                # function.
                 covered.update(
                     e.key for e in load_entries(out_dir)
                     if e.verdict not in ("error", "dark")
                     and is_function_grade(e)
                     and not getattr(e, "provisional", None)
                     and not is_mechanical_echo(e)
+                    and not is_agent_mark(e)
                 )
         except Exception as exc:
             from core.coverage.journal import JournalIncomplete
@@ -2387,7 +2394,7 @@ def _verify_entries_fold(
     """
     from core.coverage import journal_mac
 
-    from .journal import is_function_grade, is_mechanical_echo
+    from .journal import is_agent_mark, is_function_grade, is_mechanical_echo
 
     def _credit(key: str, line_start: int) -> None:
         covered.add(key)
@@ -2458,6 +2465,14 @@ def _verify_entries_fold(
             # (reuse disabled, unstamped tier, hashless verified)
             # had no screen and marked never-reviewed functions
             # covered.
+            continue
+        if is_agent_mark(entry):
+            # Review-grade marks are operator-tier (the /annotate
+            # authority rule): an agent context's --mark assertion
+            # carries no evidence gate, so no fold route may credit
+            # or import it. The operator's own mark rows
+            # (model="operator", MAC-covered when stamped) keep the
+            # full fold behaviour.
             continue
         if getattr(entry, "provisional", None):
             # A cadence-tick promotion the producing run never

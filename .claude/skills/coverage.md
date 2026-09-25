@@ -119,6 +119,19 @@ the marks then land on the `understand` record (examination evidence,
 scanned depth) and never remove functions from the review gap. Statuses
 are not accepted with `--map-grade` (map passes render no verdicts).
 
+Review-grade marks are **operator-tier** and this is enforced
+mechanically, not just by this instruction: unless the invocation
+context earns the strict operator grant (interactive terminal,
+inherited session, no dispatch environment marker, shell-rooted
+ancestry), a plain `--mark` is demoted to map-grade at write time with
+a notice, and journal readers grant review weight only to
+operator-stamped mark rows. Because every dispatch route to this CLI
+carries an environment marker, no live session — agent or otherwise —
+reaches the grant: review-grade `--mark` is effectively retired to
+historical journal rows. Review verdicts belong in the evidence-gated
+channel (`libexec/raptor-audit record`); durable operator review
+assertions belong in `/annotate` (human-grade, full recorded context).
+
 The JSON file is a flat array of `{file, item}` objects. The `item` key matches any inventory item (function, global, struct, macro). `function` is accepted as a backwards-compatible alias. An optional `status` (`clean` / `suspicious` / `finding` / `dormant`) sets the journaled verdict; default `clean`.
 ```json
 [
@@ -130,7 +143,7 @@ The JSON file is a flat array of `{file, item}` objects. The `item` key matches 
 
 Write this file using the Write tool, then pass it to `--mark-file`.
 
-**Durability:** in a project context (run dir under a project with a checklist), every mark is ALSO journaled into the project's `review-journal-index.json` as a review assertion (`producer=mark`, `model=operator`) with a source hash. Journaled marks survive run deletion, suppress `/audit` gaps cross-run through the hash-verified fold, and resurface automatically when the function's source drifts. On a standalone run dir the mark stays record-only (same-run suppression only).
+**Durability:** in a project context (run dir under a project with a checklist), every review-grade mark is ALSO journaled into the project's `review-journal-index.json` as a review assertion (`producer=mark`, `model` stamped from the invocation context: `operator` under a corroborated interactive terminal, else `agent-mark` — and non-operator marks demote to map-grade before journaling) with a source hash. Journaled marks survive run deletion, suppress `/audit` gaps cross-run through the hash-verified fold, and resurface automatically when the function's source drifts. On a standalone run dir the mark stays record-only (same-run suppression only).
 
 **Remove from reviewed** (undo incorrect mark):
 ```bash
