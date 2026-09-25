@@ -266,10 +266,21 @@ _DETECTORS: list[_FrameworkDetector] = [
                 # URL, string) minted the "parameterised" hint for a
                 # concatenated query — steering review away from the
                 # exact sites the hint claims are safe.
+                #
+                # The window is a single character CLASS ([^()],
+                # which already matches newline), never an
+                # alternation like (?:[^()]|\n): arms overlapping on
+                # \n hand the engine TWO derivations per newline, and
+                # the {0,200} bound only caps that split search at
+                # 2^199 — a planted newline run after the call opener
+                # pins a CPU (exponential backtracking, ~x2 per
+                # newline; scanned-repo content is attacker-shaped).
+                # One class denotes the same window with one parse
+                # per input, so matching stays linear.
                 re.compile(
                     r"JdbcTemplate"
                     r"|NamedParameterJdbcTemplate"
-                    r"|\.query\s*\((?:[^()]|\n){0,200}?\?",
+                    r"|\.query\s*\([^()]{0,200}?\?",
                 ),
                 ["CWE-89"],
             ),
@@ -303,13 +314,15 @@ _DETECTORS: list[_FrameworkDetector] = [
         [
             # database/sql parameterised queries
             (
-                # Bounded argument windows — see the spring CWE-89
-                # detector note.
+                # Bounded single-class argument windows — see the
+                # spring CWE-89 detector note (an (?:[^()]|\n)
+                # spelling here backtracks exponentially on a planted
+                # newline run).
                 re.compile(
                     r"\"database/sql\""
-                    r"|\.QueryRow\s*\((?:[^()]|\n){0,200}?(?:\$\d|\?)"
-                    r"|\.Query\s*\((?:[^()]|\n){0,200}?(?:\$\d|\?)"
-                    r"|\.Exec\s*\((?:[^()]|\n){0,200}?(?:\$\d|\?)",
+                    r"|\.QueryRow\s*\([^()]{0,200}?(?:\$\d|\?)"
+                    r"|\.Query\s*\([^()]{0,200}?(?:\$\d|\?)"
+                    r"|\.Exec\s*\([^()]{0,200}?(?:\$\d|\?)",
                 ),
                 ["CWE-89"],
             ),
@@ -325,10 +338,12 @@ _DETECTORS: list[_FrameworkDetector] = [
         [
             # ActiveRecord parameterised queries
             (
-                # Bounded argument window — see the spring CWE-89
-                # detector note.
+                # Bounded single-class argument window — see the
+                # spring CWE-89 detector note (an (?:[^()]|\n)
+                # spelling here backtracks exponentially on a planted
+                # newline run).
                 re.compile(
-                    r"ActiveRecord|\.where\s*\((?:[^()]|\n){0,200}?\?"
+                    r"ActiveRecord|\.where\s*\([^()]{0,200}?\?"
                     r"|class\s+\w+\s*<\s*ApplicationRecord",
                 ),
                 ["CWE-89"],

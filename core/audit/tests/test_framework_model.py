@@ -182,3 +182,48 @@ class TestBoundedDetectorWindows:
         result = framework_negates_cwe("user.rb", source, "CWE-89")
         assert result is not None
         assert result.framework == "rails"
+
+
+class TestDetectorWindowsLinearOnHostileRuns:
+    """The bounded argument windows must be a single character CLASS.
+
+    The previous spelling (?:[^()]|\n){0,200}? put a branch whose
+    arms OVERLAP on newline ([^()] already matches \n) under the
+    repeat: two derivations per newline hand the backtracking engine
+    a split search the {0,200} bound only caps at 2^199, so a planted
+    newline run after a call opener — scanned-repo file content is
+    attacker-shaped — pinned a CPU (~x2 per newline; ~0.2s CPU at 22
+    newlines and doubling).  The single-class spelling denotes the
+    same window with one parse per input; each probe below completes
+    in microseconds where the overlapping-arms spelling needs
+    seconds, so re-introducing the ambiguity fails the budget in
+    finite time.  Match-set preservation is pinned by the multiline
+    positives in TestBoundedDetectorWindows.
+    """
+
+    # 26 unterminated newlines: far past where the overlapping-arms
+    # spelling crosses ~1s CPU, trivially inside any real budget for
+    # the single-class spelling.
+    _HOSTILE_RUNS = [
+        ("Dao.java", "tmpl.query(" + "\n" * 26),
+        ("q.go", "db.Exec(" + "\n" * 26),
+        ("q.go", "db.Query(" + "\n" * 26),
+        ("q.go", "db.QueryRow(" + "\n" * 26),
+        ("user.rb", "User.where(" + "\n" * 26),
+    ]
+
+    def test_hostile_newline_runs_complete_within_budget(self):
+        import time
+
+        for filename, source in self._HOSTILE_RUNS:
+            start = time.process_time()
+            result = framework_negates_cwe(filename, source, "CWE-89")
+            elapsed = time.process_time() - start
+            assert result is None, (filename, source[:20])
+            assert elapsed < 0.25, (
+                f"{filename}: hostile newline-run probe took "
+                f"{elapsed:.3f}s CPU — the argument window is "
+                f"backtracking superlinearly again (keep it a single "
+                f"character class, never an alternation with "
+                f"newline-overlapping arms)"
+            )
