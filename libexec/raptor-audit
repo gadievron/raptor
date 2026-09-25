@@ -1671,7 +1671,32 @@ def cmd_run(args: argparse.Namespace) -> int:
         # compiled artifact: the checklist builder routes them and the
         # orchestrator skips source-only pre-passes.
         if not (target_path.is_file() and _is_binary_audit_target(target_path)):
-            print(f"error: target not found: {target_path}", file=sys.stderr)
+            if target_path.is_file():
+                # The file EXISTS — "not found" was a lie that sent
+                # operators path-debugging. Name what /audit accepts,
+                # and for archives name the canonical route (audit does
+                # not unpack).
+                hint = ""
+                try:
+                    from core.archive import is_archive
+                    if is_archive(target_path):
+                        hint = (
+                            " — /audit does not unpack archives; extract"
+                            " it (or run /scan on it, which unpacks into"
+                            " the shared _sources cache) and audit the"
+                            " extracted tree"
+                        )
+                except Exception:  # noqa: BLE001 — hint is best-effort
+                    pass
+                print(
+                    f"error: target exists but is not a recognized audit"
+                    f" target (source directory, ELF/PE/Mach-O binary,"
+                    f" or .gpr Ghidra project): {target_path}{hint}",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"error: target not found: {target_path}",
+                      file=sys.stderr)
             return 1
 
     # --- lifecycle start ---
