@@ -3267,6 +3267,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 # win over the env waiver in both directions.
                 explicit_floor=_explicit_tier,
                 explicit_source=_explicit_src,
+                # Host-scoped standing consent (WSL host-consent
+                # marker) — lowest precedence; only replaces the
+                # fail-closed default arms with ns-only.
+                host_floor=_host_consented_floor(),
             )
         except _errors.SandboxFloorError as _resolve_exc:
             # The never-BARE-by-consent refusal ("--sandbox-floor
@@ -3302,6 +3306,30 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 "(source: project setting sandbox-floor; per-run "
                 "--sandbox-floor overrides).",
                 _tiers.tier_label(_floor),
+            )
+        elif (_floor_source == _tiers.FLOOR_SOURCE_HOST
+                and sys.platform == "linux"
+                and state.warn_once("_floor_host_banner_warned")):
+            # Posture line for the host-scoped consent, once per
+            # process — the marker's grant date names WHICH ceremony
+            # this floor traces to (the startup banner prints the
+            # same posture through the check_env WSL section).
+            _granted = "date unavailable"
+            try:
+                from . import host_consent as _host_consent
+                _consent = _host_consent.applied_consent()
+                if _consent is not None:
+                    _granted = _consent.granted_at[:10]
+            except Exception:  # noqa: BLE001 — banner detail only
+                logger.debug("host-consent banner probe failed",
+                             exc_info=True)
+            logger.warning(
+                "sandbox: untrusted containment floor '%s' by host "
+                "consent, granted %s — Landlock unavailable on this "
+                "kernel. Revoke: bin/raptor wsl-consent revoke; a "
+                "per-run --sandbox-floor or the project "
+                "sandbox-floor setting overrides.",
+                _tiers.tier_label(_floor), _granted,
             )
         if (_floor_source in (_tiers.FLOOR_SOURCE_FLAG,
                               _tiers.FLOOR_SOURCE_PROJECT)
@@ -3625,8 +3653,17 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 )
             if (_floor_source in _tiers.CONSENT_FLOOR_SOURCES
                     and sys.platform == "linux"
-                    and delivered <= _tiers.ContainmentTier.NS_NOMOUNT):
-                # Consented-degrade warning, per call. The exposure
+                    and delivered <= _tiers.ContainmentTier.NS_NOMOUNT
+                    and (_floor_source != _tiers.FLOOR_SOURCE_HOST
+                         or state.warn_once(
+                             "_floor_host_degrade_notice_warned"))):
+                # Consented-degrade warning, per call — except under
+                # the host-consent source, where it collapses to one
+                # notice per process: the marker's premise means
+                # EVERY untrusted call on the host runs at ns-only,
+                # so per-call repeats carry no new information (the
+                # flag/env/project sources keep per-call reporting —
+                # their floors bite selectively). The exposure
                 # named must match what the admitted lane actually
                 # leaves open: the redefined ns-only tier keeps a
                 # fresh pid-ns procfs (its exposure is the missing
@@ -3648,19 +3685,33 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     _consent_surface = (
                         f"--sandbox-floor "
                         f"{_tiers.tier_label(_floor)} lowers")
+                elif _floor_source == _tiers.FLOOR_SOURCE_HOST:
+                    _consent_surface = (
+                        f"the WSL host consent (bin/raptor "
+                        f"wsl-consent) sets "
+                        f"{_tiers.tier_label(_floor)} as")
                 else:
                     _consent_surface = (
                         f"the project sandbox-floor="
                         f"{_tiers.tier_label(_floor)} setting lowers")
+                _once_suffix = (
+                    " (Landlock is unavailable on this kernel; "
+                    "Windows-interop surfaces — /usr/lib/wsl, "
+                    "binfmt_misc, the interop socket — remain "
+                    "reachable at this tier, see docs/wsl.md; "
+                    "shown once per process)"
+                    if _floor_source == _tiers.FLOOR_SOURCE_HOST
+                    else "")
                 logger.warning(
                     "sandbox: %s the "
                     "untrusted containment floor and %s — proceeding on "
-                    "the %s lane %s.",
+                    "the %s lane %s%s.",
                     _consent_surface,
                     detail or ("the mount-ns backend cannot engage for "
                                "this call"),
                     lane,
                     _waived_exposure,
+                    _once_suffix,
                 )
             _executed = executor()
             if _max_capture_bytes is not None:
@@ -7879,6 +7930,7 @@ def run(cmd: list[str], block_network: bool = True, target: str | None = None,
                         waiver_active=_degraded_untrusted_waiver(),
                         explicit_floor=_explicit_tier,
                         explicit_source=_explicit_src,
+                        host_floor=_host_consented_floor(),
                     )
                 except _errors.SandboxFloorError as _floor_exc:
                     raise _record_floor_refusal(
@@ -8686,28 +8738,66 @@ def _explicit_untrusted_floor() -> (
     return None, None
 
 
+def _host_consented_floor() -> "_tiers.ContainmentTier | None":
+    """The WSL host-consent marker's untrusted floor, or ``None``.
+
+    The LOWEST-precedence consent surface: consulted only after the
+    explicit surfaces and the env waiver decline, so the marker only
+    ever replaces the fail-closed default refusal — never a floor
+    another surface chose. The env waiver deliberately outranks it:
+    the waiver is a per-invocation operator action whose frozen
+    landlock mapping predates the marker, and a standing machine
+    marker must not change what an explicitly exported waiver has
+    always meant. All conditional-inertness rules (WSL kernel only,
+    Landlock-less only, kernel-family match, tamper fail-closed) live
+    in :mod:`core.sandbox.host_consent`; this wrapper adds the
+    platform gate and the never-raise guarantee floor resolution
+    requires. Off-WSL the cached detection short-circuits, so
+    non-WSL hosts pay no marker I/O.
+    """
+    if sys.platform != "linux":
+        return None
+    try:
+        from . import host_consent
+        label = host_consent.host_consented_floor()
+        if label is None:
+            return None
+        return _tiers.label_tier(label)
+    except Exception:  # noqa: BLE001 — a consent probe must never break floor resolution
+        logger.debug("host-consent floor probe failed", exc_info=True)
+        return None
+
+
 def resolve_untrusted_floor() -> "tuple[_tiers.ContainmentTier, str]":
     """Resolve the untrusted containment floor from the consent chain.
 
     Precedence (highest wins), evaluated fresh on every call:
 
         per-run ``--sandbox-floor`` flag  >  project ``sandbox-floor``
-        setting  >  legacy env var  >  class default (refuse below
-        MOUNT_NS / SEATBELT)
+        setting  >  legacy env var  >  host-consent marker  >  class
+        default (refuse below MOUNT_NS / SEATBELT)
 
     The explicit surfaces win in BOTH directions — a flag/project
     ``mount-ns`` refuses the degraded tiers even when the env waiver
     is set, and a flag/project ``landlock`` lowers without the env
-    var. Returns ``(tier, source)``; a flag value of ``none`` resolves
-    to BARE here and is refused for untrusted-class work at floor
-    resolution (tiers.resolve_call_floor's never-BARE-by-consent arm)
-    — BARE consents to nothing on any acceptance arm.
+    var. The host-consent marker (see
+    :mod:`core.sandbox.host_consent`) supplies exactly ``ns-only``,
+    and only where the chain would otherwise refuse at the default —
+    so a project-set HIGHER floor is never lowered by it, and the env
+    waiver's frozen landlock mapping is untouched where set. Returns
+    ``(tier, source)``; a flag value of ``none`` resolves to BARE
+    here and is refused for untrusted-class work at floor resolution
+    (tiers.resolve_call_floor's never-BARE-by-consent arm) — BARE
+    consents to nothing on any acceptance arm.
     """
     tier, source = _explicit_untrusted_floor()
     if tier is not None and source is not None:
         return tier, source
     if _degraded_untrusted_waiver():
         return _tiers.waived_untrusted_floor(), _tiers.FLOOR_SOURCE_ENV
+    host_tier = _host_consented_floor()
+    if host_tier is not None:
+        return host_tier, _tiers.FLOOR_SOURCE_HOST
     return _tiers.untrusted_default_floor(), _tiers.FLOOR_SOURCE_DEFAULT
 
 
@@ -8720,7 +8810,9 @@ def untrusted_fresh_procfs_required() -> bool:
     Consent chain: per-run ``--sandbox-floor`` flag > project
     ``sandbox-floor`` setting > the legacy
     ``RAPTOR_ALLOW_DEGRADED_UNTRUSTED`` env var (frozen alias for
-    "untrusted floor := landlock") > the fail-closed class default.
+    "untrusted floor := landlock") > the WSL host-consent marker
+    (ns-only — a floor that still demands the fresh procfs) > the
+    fail-closed class default.
 
     The untrusted entry points consume this internally. Direct
     ``run()`` callers that execute attacker-derived payloads (LLM

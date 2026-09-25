@@ -180,6 +180,14 @@ _floor_lowered_banner_warned = False
 # in-force floor source for this process's untrusted-class calls.
 _floor_flag_banner_warned = False
 _floor_project_banner_warned = False
+# Host-consent twins: the WSL host-consent marker is the in-force
+# floor source. Banner once per process, AND — unlike the other
+# consent sources, whose consented-degrade warning fires per call —
+# the per-call degrade warning collapses to one notice per process:
+# under the marker EVERY untrusted call on the host runs at ns-only,
+# so per-call reporting is pure spam carrying no new information.
+_floor_host_banner_warned = False
+_floor_host_degrade_notice_warned = False
 # Disagreement banner: two consent surfaces named DIFFERENT untrusted
 # floors and the higher-precedence one won (flag > project > env var).
 # Once per process, naming both surfaces and both values.

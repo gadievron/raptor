@@ -159,6 +159,8 @@ def _sandbox_state_guard():
         "_floor_lowered_banner_warned",
         "_floor_flag_banner_warned",
         "_floor_project_banner_warned",
+        "_floor_host_banner_warned",
+        "_floor_host_degrade_notice_warned",
         "_floor_surface_disagreement_warned",
         "_inherit_netns_block_warned",
         "_mountless_unachievable_warned",

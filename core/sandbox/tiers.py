@@ -108,6 +108,11 @@ FLOOR_SOURCE_DEFAULT = "default"
 FLOOR_SOURCE_ENV = "env"
 FLOOR_SOURCE_FLAG = "flag"
 FLOOR_SOURCE_PROJECT = "project"
+# Host-scoped standing consent (the WSL host-consent marker,
+# core/sandbox/host_consent.py) — the lowest-precedence consent
+# surface: it only ever replaces the fail-closed DEFAULT refusal with
+# the ns-only tier, never a floor another surface chose.
+FLOOR_SOURCE_HOST = "host-consent"
 FLOOR_SOURCE_OPERATOR_DISABLE = "operator-disable"
 
 # Sources that carry OPERATOR CONSENT to a lowered untrusted floor
@@ -116,6 +121,7 @@ FLOOR_SOURCE_OPERATOR_DISABLE = "operator-disable"
 # set; the surface named in each message follows the source.
 CONSENT_FLOOR_SOURCES = frozenset({
     FLOOR_SOURCE_ENV, FLOOR_SOURCE_FLAG, FLOOR_SOURCE_PROJECT,
+    FLOOR_SOURCE_HOST,
 })
 
 # The tier vocabulary the EXPLICIT consent surfaces accept
@@ -183,6 +189,7 @@ def resolve_call_floor(
     waiver_active: bool = False,
     explicit_floor: "ContainmentTier | None" = None,
     explicit_source: str | None = None,
+    host_floor: "ContainmentTier | None" = None,
 ) -> tuple[ContainmentTier, str]:
     """Resolve one run() call's containment floor and its source.
 
@@ -209,14 +216,30 @@ def resolve_call_floor(
     explicit surfaces set the UNTRUSTED floor, exactly like the
     legacy env var, never a process-wide minimum for trusted work.
 
+    ``host_floor`` carries the host-scoped standing consent (the WSL
+    host-consent marker; ``None`` = absent or inert — the caller reads
+    the marker, this module reads no files by design). It admits
+    exactly one value, NS_NOMOUNT — the marker's charter is the
+    Landlock-less-WSL-kernel situation and nothing wider — and is
+    consumed only where resolution would otherwise land on the
+    fail-closed class default: the derived/literal fresh-procfs
+    contract arm (NS_NOMOUNT still delivers a fresh pid-ns procfs, so
+    the ask is honoured, exactly as an explicit ns-only floor honours
+    it) and the underived untrusted-workload arm (the marker is a
+    ceremony-granted surface with the explicit surfaces' class
+    coverage, unlike the ambient env waiver, whose derivation-only
+    honouring below is unchanged). It never touches the waived arm or
+    the trusted default: the marker replaces a REFUSAL, never a floor
+    some other surface chose.
+
     Precedence (highest wins): operator-explicit disable (``--sandbox
     none`` / ``--no-sandbox`` / ``disabled=True`` — the documented
     "all bets off" surface, floor := BARE) > explicit consent surface
     (flag > project, both directions — raising back to mount-ns and
     lowering to landlock are equally expressible) > the per-call
-    contract / the env-waived mapping > the trusted default (BARE —
-    plain ``run()``'s documented contract is enforceability-gated
-    degradation, not a tier floor).
+    contract / the env-waived mapping > the host-consent marker >
+    the trusted default (BARE — plain ``run()``'s documented contract
+    is enforceability-gated degradation, not a tier floor).
 
     Never-BARE-by-consent: an explicit floor of BARE ("none") on an
     untrusted-class call raises :class:`SandboxFloorError` — untrusted
@@ -225,6 +248,25 @@ def resolve_call_floor(
     ``--no-sandbox``), which remains globally authoritative, is the
     only surface that runs untrusted work bare.
     """
+    if host_floor is not None:
+        # Coding-error guard, not a consent decision: the host marker
+        # store validates the recorded floor label itself; a caller
+        # handing any other tier here is wiring a wider surface than
+        # the ceremony grants. Non-enum junk gets the same
+        # host_floor-naming message instead of the bare enum
+        # ValueError.
+        try:
+            host_ok = (ContainmentTier(host_floor)
+                       is ContainmentTier.NS_NOMOUNT)
+        except ValueError:
+            host_ok = False
+        if not host_ok:
+            msg = (
+                "resolve_call_floor: host_floor admits exactly "
+                "ContainmentTier.NS_NOMOUNT (the WSL host-consent "
+                f"marker's single consentable value); got {host_floor!r}"
+            )
+            raise ValueError(msg)
     if operator_disabled:
         return ContainmentTier.BARE, FLOOR_SOURCE_OPERATOR_DISABLE
     untrusted_class = (require_fresh_procfs is not None) or untrusted_workload
@@ -275,6 +317,11 @@ def resolve_call_floor(
             return untrusted_default_floor(), FLOOR_SOURCE_DEFAULT
         return explicit_floor, explicit_source
     if require_fresh_procfs:
+        if host_floor is not None:
+            # NS_NOMOUNT delivers a fresh pid-ns procfs, so the
+            # contract ask is honoured at the consented tier — the
+            # same shape as an explicit ns-only floor above.
+            return ContainmentTier.NS_NOMOUNT, FLOOR_SOURCE_HOST
         return untrusted_default_floor(), FLOOR_SOURCE_DEFAULT
     if require_fresh_procfs is False:
         # Kwarg present-but-zeroed: an untrusted-class call running at
@@ -287,7 +334,13 @@ def resolve_call_floor(
         # fail CLOSED at the class default. Granting the waived floor
         # here would attribute consent nobody verified — the lowered
         # floor belongs only to callers that carried the derivation
-        # through.
+        # through. The host marker is different in kind from the env
+        # waiver: like the explicit surfaces (which cover this arm
+        # through the explicit branch above), it names a tier for ALL
+        # untrusted-class work on the host it was granted for, so it
+        # applies here too.
+        if host_floor is not None:
+            return ContainmentTier.NS_NOMOUNT, FLOOR_SOURCE_HOST
         return untrusted_default_floor(), FLOOR_SOURCE_DEFAULT
     return ContainmentTier.BARE, FLOOR_SOURCE_DEFAULT
 
