@@ -32,7 +32,18 @@ VALID_BUG_CLASSES = frozenset({
     "aliasing", "lifecycle", "variant",
     "auth", "clean", "concurrency", "integer",
     "trap", "uninitialised", "fail_open",
+    "consistency",
 })
+
+# Label provenance kinds.  ``""`` (default) is a real-world label —
+# public provenance lives in cve/fix_commit.  ``synthetic_mutant``
+# marks a mutation-generated label (see ``core.audit.corpus.mutation``
+# for the spec, the honesty contract, and application mechanics):
+# synthetic labels are declared, never laundered — the provenance
+# lint's no-cve/fix_commit warning is carved out ONLY on this kind,
+# and the runner/history store partition on it so mutant regression
+# floors never read as real-bug recall.
+VALID_PROVENANCE_KINDS = frozenset({"", "synthetic_mutant"})
 
 # ``suspicious`` labels a REAL defect whose correct grade at the
 # pinned tree sits below finding: the flaw is present and must never
@@ -140,6 +151,17 @@ class FunctionLabel:
     fix_commit: str = ""
     expected_mechanism: str = ""
     excerpt_scope: str = "function"
+    # Provenance kind (see VALID_PROVENANCE_KINDS).  Synthetic mutants
+    # additionally require a ``mutation`` spec and a content-addressed
+    # parent pin (``source.span_sha``), and must NOT carry cve /
+    # fix_commit — synthetic labels are declared, never dressed up
+    # with public-provenance anchors they do not have.
+    provenance_kind: str = ""
+    # Mutation spec (synthetic_mutant only): operator, site, edits,
+    # and the content hash of the applied result.  Validated by
+    # ``core.audit.corpus.mutation.validate_mutation_spec``; the
+    # SourcePin stays the UNMUTATED parent ref by design.
+    mutation: dict[str, Any] = field(default_factory=dict)
     expected_mode_results: dict[str, str] = field(default_factory=dict)
     # Optional per-engine exact-rule expectations for the mechanical
     # rule-verification runner (``rule_eval``): engine name -> list of
@@ -175,6 +197,46 @@ class FunctionLabel:
             msg = (
                 f"Invalid excerpt_scope {self.excerpt_scope!r}; "
                 f"must be one of {sorted(VALID_EXCERPT_SCOPES)}"
+            )
+            raise ValueError(msg)
+        if self.provenance_kind not in VALID_PROVENANCE_KINDS:
+            msg = (
+                f"Invalid provenance_kind {self.provenance_kind!r}; "
+                f"must be one of {sorted(VALID_PROVENANCE_KINDS)}"
+            )
+            raise ValueError(msg)
+        if self.provenance_kind == "synthetic_mutant":
+            from .mutation import validate_mutation_spec
+
+            spec_errors = validate_mutation_spec(
+                self.mutation,
+                span=(self.source.line_start, self.source.line_end),
+            )
+            if spec_errors:
+                msg = (
+                    f"Invalid synthetic_mutant label: "
+                    + "; ".join(spec_errors)
+                )
+                raise ValueError(msg)
+            if not self.source.span_sha:
+                msg = (
+                    "synthetic_mutant label requires a content-"
+                    "addressed parent pin (source.span_sha) — "
+                    "application must verify the clean upstream span"
+                )
+                raise ValueError(msg)
+            if self.cve.strip() or self.fix_commit.strip():
+                msg = (
+                    "synthetic_mutant label must not carry cve/"
+                    "fix_commit — synthetic provenance is declared, "
+                    "never dressed as public provenance"
+                )
+                raise ValueError(msg)
+        elif self.mutation:
+            msg = (
+                "mutation spec present without "
+                "provenance_kind='synthetic_mutant' — a mutated label "
+                "must declare its kind"
             )
             raise ValueError(msg)
         for mode, status in self.expected_mode_results.items():
@@ -238,6 +300,8 @@ def load_label(path: Path) -> FunctionLabel:
         fix_commit=raw.get("fix_commit", ""),
         expected_mechanism=raw.get("expected_mechanism", ""),
         excerpt_scope=raw.get("excerpt_scope", "function"),
+        provenance_kind=raw.get("provenance_kind", ""),
+        mutation=raw.get("mutation", {}),
         expected_mode_results=raw.get("expected_mode_results", {}),
         expected_rule_hits=raw.get("expected_rule_hits", {}),
         channel=raw.get("channel", ""),

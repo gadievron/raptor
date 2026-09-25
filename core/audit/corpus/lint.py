@@ -238,9 +238,19 @@ def provenance_check(
     """WARNINGS (never failures) for vulnerable-class labels that
     carry neither ``cve`` nor ``fix_commit``. A warning, not an error:
     existing labels predate the field, and provenance may live in the
-    rationale prose — the warning surfaces the gap for curation."""
+    rationale prose — the warning surfaces the gap for curation.
+
+    Carve-out, keyed EXPLICITLY on the provenance kind: a
+    ``synthetic_mutant`` label has no public provenance by
+    construction (its defect is machine-introduced on a pinned clean
+    ref and the kind field declares exactly that), so warning on it
+    would only train operators to ignore this warning where it is
+    real.  The schema separately refuses cve/fix_commit on synthetic
+    labels, so the carve-out can never hide a laundered anchor."""
     warnings: list[str] = []
     for path, label in pairs:
+        if label.provenance_kind == "synthetic_mutant":
+            continue
         if (
             label.expected_status in _VULNERABLE_STATUSES
             and not label.cve.strip()
