@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import core.audit.orchestrator as orch_mod
 from core.audit.orchestrator import (
     OrchestratorConfig,
@@ -68,6 +70,24 @@ def _patch_confirming_chain(
             orch_mod, "run_prefilter",
             lambda *a, **kw: SimpleNamespace(hits=[]),
         )
+
+
+
+@pytest.fixture(autouse=True)
+def _stub_mechanical_detectors(monkeypatch) -> None:
+    """Stub the pre-loop mechanical-detector pass at its seam (the
+    test_consistency_wiring / test_scorecard_events idiom) for every
+    run_orchestrator driver in this file: the pass does real I/O —
+    sandboxed coccinelle spawns where spatch is installed, plus the
+    per-process detector-cache import-closure fingerprint on whichever
+    test opens the cache first in a worker — seconds per run, entirely
+    orthogonal to the promotion cadence under test, and enough to trip
+    the default-tier duration guard on a contended runner. Module-wide
+    (not per-class) on purpose: stubbing a single class only displaces
+    the first-payer cost onto the file's next unstubbed orchestrated
+    run."""
+    monkeypatch.setattr(orch_mod, "_run_mechanical_detectors",
+                        lambda *a, **k: ({}, set()))
 
 
 class TestIncrementalTick:
