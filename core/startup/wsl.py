@@ -10,13 +10,21 @@ Two advisory questions, both answered fail-toward-False:
     Windows-interop mount?  WSL2 serves Windows drives (the
     ``/mnt/<drive>`` automount family) over 9p, so the containing
     filesystem's ``statfs(2)`` ``f_type`` is ``V9FS_MAGIC``.
+  * :func:`is_wsl2` / :func:`is_wsl1` — which WSL flavour?
+    :func:`is_wsl` is True for BOTH; the flavour split matters
+    because WSL2 runs a real Linux kernel while WSL1 emulates
+    syscalls (no namespaces, Landlock, or seccomp — nothing for a
+    sandbox to stand on).
 
-Consumers use these for messaging only: banner/doctor advisories
-(:func:`wsl_advisories`) and warn-only notes when a target or output
-root lands on a Windows-interop mount
-(:func:`warn_windows_interop_mount`). Detection must never break or
-steer a run — every error path returns False / stays silent, and
-nothing here changes sandbox floors, read modes, or verdicts.
+The messaging consumers (banner/doctor advisories via
+:func:`wsl_advisories`, the warn-only Windows-interop-mount notes via
+:func:`warn_windows_interop_mount`) must never break or steer a run —
+every error path returns False / stays silent. The sandbox layer
+additionally consumes :func:`is_wsl` (WSL-only profile masks and the
+/mnt ambient-read deny — deny-direction hardening only) and
+:func:`is_wsl1` (refusing sandboxed execution where no kernel
+enforcement exists); those consumers keep the same never-raise
+contract, and a probe failure still reads as plain Linux.
 """
 
 from __future__ import annotations
@@ -32,6 +40,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "fs_is_drvfs_or_9p",
     "is_wsl",
+    "is_wsl1",
+    "is_wsl2",
     "warn_tmpdir_windows_interop",
     "warn_windows_interop_mount",
     "wsl_advisories",
@@ -57,7 +67,21 @@ _KERNEL_ID_PATHS: tuple[str, ...] = (
 #: docs/wsl.md.
 _V9FS_MAGIC: int = 0x01021997
 
+#: WSL2 flavour token. WSL2 kernel releases carry
+#: ``-microsoft-standard`` (modern builds append ``-WSL2``:
+#: ``5.15.167.4-microsoft-standard-WSL2``; early WSL2 previews ended
+#: at ``-microsoft-standard``). WSL1's syscall-emulation layer
+#: reports spellings like ``4.4.0-19041-Microsoft`` — the
+#: ``microsoft`` token without ``microsoft-standard``. Fail
+#: direction: a WSL identity that matches :func:`is_wsl` but not
+#: this token classifies as WSL1, and the sandbox consumer REFUSES
+#: on WSL1 — so an unrecognised WSL flavour fails toward refusal
+#: (loud, with the WSL2 upgrade named), never toward pretending a
+#: kernel exists.
+_WSL2_TOKEN = "microsoft-standard"
+
 _is_wsl_cache: bool | None = None
+_is_wsl2_cache: bool | None = None
 
 
 def _read_kernel_id() -> str:
@@ -95,6 +119,47 @@ def is_wsl(kernel_id: str | None = None) -> bool:
                 logger.debug("WSL kernel-id probe failed", exc_info=True)
         _is_wsl_cache = detected
     return _is_wsl_cache
+
+
+def is_wsl2(kernel_id: str | None = None) -> bool:
+    """True when the running kernel identifies as WSL2 specifically.
+
+    :func:`is_wsl` is True for BOTH WSL flavours; this discriminator
+    matches the ``microsoft-standard`` release token that only WSL2
+    kernels carry (see ``_WSL2_TOKEN`` for the spellings and the fail
+    direction). Same contract as :func:`is_wsl`: *kernel_id* injects
+    the identity text and bypasses the cache; otherwise the
+    filesystem answer is cached process-wide, and every failure reads
+    as False.
+    """
+    if kernel_id is not None:
+        return is_wsl(kernel_id) and _WSL2_TOKEN in kernel_id.lower()
+    global _is_wsl2_cache
+    if _is_wsl2_cache is None:
+        detected = False
+        if is_wsl():
+            try:
+                detected = _WSL2_TOKEN in _read_kernel_id().lower()
+            except Exception:  # noqa: BLE001 — detection must never break a run
+                logger.debug("WSL2 kernel-id probe failed", exc_info=True)
+        _is_wsl2_cache = detected
+    return _is_wsl2_cache
+
+
+def is_wsl1(kernel_id: str | None = None) -> bool:
+    """True when the running kernel identifies as WSL1.
+
+    Derived, never separately probed: WSL minus the WSL2 flavour
+    token (``is_wsl() and not is_wsl2()``), so :func:`is_wsl`'s
+    semantics are untouched and the three predicates can never
+    disagree. WSL1 emulates Linux syscalls on the NT kernel — no
+    namespaces, no Landlock, no seccomp — so the sandbox consumer
+    refuses execution outright rather than "degrading" to layers
+    that do not exist there.
+    """
+    if kernel_id is not None:
+        return is_wsl(kernel_id) and not is_wsl2(kernel_id)
+    return is_wsl() and not is_wsl2()
 
 
 def _statfs_f_type(path: Path) -> int | None:
