@@ -45,6 +45,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.source import read_contained_bytes
+
 from ._extract import (
     ExtractionRefusal,
     extract_chain,
@@ -618,17 +620,21 @@ def _file_binding_hazard(target_path: Path | str, file_path: str) -> str:
     — that residual is stated in the receipt policy rather than
     silently guessed. A file over the scan budget refuses (fail
     closed) with the bound named.
+
+    The read goes through ``core.source.read_contained_bytes``: the
+    hypothesis-named path must confine under the target root
+    (traversal and symlink escapes land in the unreadable arm, like
+    the previous resolve-prefix check), the open refuses non-regular
+    files instead of blocking on a planted FIFO (same arm), and the
+    read itself is bounded at the scan budget.
     """
-    base = Path(target_path)
-    full = base / file_path
-    try:
-        if not str(full.resolve()).startswith(str(base.resolve())):
-            return ""
-        with open(full, "rb") as fh:
-            raw = fh.read(_BINDING_SCAN_BUDGET + 1)
-    except (OSError, ValueError):
+    got = read_contained_bytes(
+        Path(target_path), file_path, _BINDING_SCAN_BUDGET,
+    )
+    if got is None:
         return ""
-    if len(raw) > _BINDING_SCAN_BUDGET:
+    raw, truncated = got
+    if truncated:
         return (
             f"target file exceeds the {_BINDING_SCAN_BUDGET}-byte "
             "binding-scan budget — namespace/import declarations "
