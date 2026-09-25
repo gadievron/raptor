@@ -68,6 +68,15 @@ Tools installed outside the mount-namespace bind tree (`~/.local/bin/`,
 `/opt/homebrew/bin/`) aren't visible. Pass `tool_paths=[<bin_dir>]` to the
 sandbox call, or install the tool to a standard system path.
 
+### Landlock missing / untrusted-exec refuses under WSL2
+
+Stock WSL2 kernels ship without Landlock, so untrusted-exec runs
+refuse at the default `mount-ns` floor. Two remedies — a custom
+kernel with Landlock via `.wslconfig`, or explicit `ns-only`
+containment consent (`--sandbox-floor ns-only` /
+`/project set sandbox-floor ns-only`) — with recipes, verification
+steps, and the drvfs mount guidance in [wsl.md](wsl.md).
+
 
 ## Running under endpoint security (EDR)
 
