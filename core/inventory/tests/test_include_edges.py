@@ -94,6 +94,39 @@ class TestPhpIncludeEdges:
         assert fb.fallback is True
         assert fb.value == "../"
 
+    def test_fallback_is_exact_shape_only(self):
+        # ``fallback`` may only mark the exact one-guard shape: an
+        # OUTER conditional around the fallback makes it an ordinary
+        # conditional define (the record cannot express "fallback
+        # plus outer condition", and claiming it would bind a
+        # constant a direct request may never define).
+        src = ("<?php\n"
+               "if ($_GET['setup']) {\n"
+               "  if (!defined('AUTH')) define('AUTH', 'yes');\n"
+               "}\n"
+               "if (!defined('K')) define('K', '1');\n")
+        g = self._edges(src)
+        defs = {d.name: d for d in g.defines}
+        assert defs["AUTH"].fallback is False
+        assert defs["AUTH"].conditional is True
+        assert defs["K"].fallback is True  # the exact shape still marks
+
+    def test_closure_and_arrow_bodies_are_function_body(self):
+        # Anonymous/arrow function bodies run at CALL time: their
+        # includes and defines must never surface as file-scope.
+        src = ("<?php\n"
+               "$cb = function () { include 'gate.php'; "
+               "define('X', '1'); };\n"
+               "$ar = fn() => include 'late.php';\n"
+               "include 'now.php';\n")
+        g = self._edges(src)
+        by_tail = {e.literal_tail: e for e in g.includes}
+        assert by_tail["gate.php"].position == "function_body"
+        assert by_tail["late.php"].position == "function_body"
+        assert by_tail["now.php"].position == "file_scope"
+        [d] = g.defines
+        assert d.position == "function_body"
+
     def test_lossy_flag_still_set(self):
         from core.inventory.call_graph import INDIRECTION_DYNAMIC_IMPORT
         g = self._edges()
@@ -298,6 +331,55 @@ class TestPhpIncludeEdges:
         x = IncludeDefine.from_dict({"name": 3, "fallback": "y"})
         assert x.name == ""
         assert x.fallback is True
+
+    def test_boundary_records(self):
+        src = ("<?php\n"
+               "define('APP_PATH', './');\n"
+               "if (!defined('IN_APP')) die('x');\n"
+               "if ($x) { return; }\n"
+               "if (defined('DONE')) exit;\n"
+               "goto skip;\n"
+               "skip:\n"
+               "return;\n"
+               "__halt_compiler();\n")
+        g = self._edges(src)
+        kinds = [(b["line"], b["kind"]) for b in g.boundaries]
+        assert kinds == [
+            (3, "conditional_abort"), (4, "conditional_return"),
+            (5, "conditional_abort"), (6, "goto"),
+            (8, "terminator"), (9, "halt"),
+        ]
+        assert g.boundaries[0]["guard_constant"] == "IN_APP"
+        assert g.boundaries[0]["guard_negated"] is True
+        assert g.boundaries[2]["guard_constant"] == "DONE"
+        assert g.boundaries[2]["guard_negated"] is False
+        assert "guard_constant" not in g.boundaries[1]
+
+    def test_boundary_nested_conditional_has_no_guard_info(self):
+        # Guard info only when there is exactly ONE enclosing
+        # conditional and it is guard-shaped — a nested return can't
+        # be no-opped by binding one constant.
+        src = ("<?php\nif (!defined('A')) { if ($x) { return; } }\n")
+        g = self._edges(src)
+        [b] = g.boundaries
+        assert b["kind"] == "conditional_return"
+        assert "guard_constant" not in b
+
+    def test_boundary_inside_function_ignored(self):
+        src = "<?php\nfunction f() { return 1; }\n$x = 1;\n"
+        assert self._edges(src).boundaries == []
+
+    def test_boundary_overflow_sentinel(self):
+        src = "<?php\n" + "\n".join(
+            "if ($c%d) { return; }" % i for i in range(12))
+        g = self._edges(src)
+        assert len(g.boundaries) == 9
+        assert g.boundaries[-1]["kind"] == "overflow"
+
+    def test_parse_errors_flag(self):
+        assert self._edges("<?php\n$x = 1;\n").parse_errors is False
+        assert self._edges(
+            "<?php if ( { ; process($x);").parse_errors is True
 
     def test_non_php_graph_has_no_include_keys(self):
         d = FileCallGraph().to_dict()
