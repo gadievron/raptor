@@ -37,9 +37,11 @@ def _overlay(tmp_path: Path, data: dict) -> Path:
     return path
 
 
+# SYNTHETIC fixture entry — invented path/case, per the fixture
+# convention (never a real suite location).
 _ENTRY = {
     "id": "case-1",
-    "file": "app/routes/contributions.js",
+    "file": "app/routes/demo-example.js",
     "line_start": 10,
     "line_end": 20,
     "cwe": "CWE-94",
