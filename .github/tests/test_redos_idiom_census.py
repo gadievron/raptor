@@ -119,19 +119,75 @@ live in ``data/redos_scan_restart_expected.json`` under the same
 propose/refuse/nightly regime as the trailing-span arm, over the
 same universe (call sites and pattern-table entries both).
 
+NESTED-QUANTIFIER ARM (Rule N): the exponential-composition family —
+an EFFECTIVELY-UNBOUNDED repeat (unbounded, or bounded at or above
+``_EFFECTIVELY_UNBOUNDED`` — a large bound only caps the split
+search below the bound, so ``(?:a+){1,5000}`` measures the same
+~2^n as its unbounded twin) whose body can match the same run in
+more than one way, the classic ``(a*)*`` / ``(?:a+)+`` shape.  On a
+failing continuation the engine tries every split of the run between
+the inner and outer repeats — O(2^n) on n pumped characters, so ~100
+bytes of hostile input pin a CPU indefinitely (a difference in kind
+from the polynomial arms above; this arm closes the boundary the
+two-stage arms declared).  Two body-ambiguity conditions, judged on
+the OPTIMIZED parse tree so the rule agrees with the engine
+(``sre_parse`` collapses single-char alternations like
+``(?:\\s|\\n)`` into one character class — no branch survives to the
+engine, so no member):
+
+* **nested variable run**: some path through the body — descending
+  groups, choosing branch arms — carries a repeat able to consume
+  >= 2 distinct nonzero widths of a run (unbounded, or bounded with
+  ``max(lo,1) < hi``) while every sibling on the path can match
+  empty.  A run of the inner repeat's characters then splits between
+  outer iterations in exponentially many ways (``(?:A*|B)*``,
+  ``(?:\\s+|X)+``, ``(?:a{1,2})+``).
+* **branch ambiguity**: a branch (anywhere in the body) two of whose
+  arms can completely match the same single character, or two of
+  whose arms can both match empty (the shape prefix-hoisting leaves
+  behind for same-word arms, ``(a|a)`` -> ``a(?:|)``) — each
+  iteration then carries >= 2 interchangeable derivations, doubling
+  the path count per pumped unit.
+
+Membership additionally requires a FAILABLE continuation after the
+outer repeat (a required consuming atom or a failable zero-width
+assertion): with nothing to fail past the repeat, the greedy first
+parse succeeds and no split is ever retried.  Lookaround and
+atomic-group BODIES are searched too, with the continuation scoped
+to the body: both constructs are atomic (a succeeded one is never
+re-entered), but an ambiguous repeat with an in-body failable
+continuation does its exponential work internally before the
+construct resolves (``(?=(?:v+)+w)`` explodes while the lookahead
+is still being evaluated); a possessive/atomic repeat is never
+itself an outer candidate — its first greedy parse commits, so the
+outer split is never retried.  The FIX for a member is removing
+the ambiguity (single-character base, unambiguous alternation) —
+never merely bounding the outer repeat, which the threshold above
+exists to catch.  Single-stage by design — no pump-oracle pin
+file: a genuine member is exponential, never "linear at the real
+call site", so there is nothing for an empirical stage to dispose;
+the arm reuses the MULTILINE arm's allowlist grammar over the same
+shared universe (call sites, table entries, and the pattern data
+files), and ``_exponential_growth`` (a bounded CPU-time doubling
+probe) is the adjudication tool for any future hit.  Named
+constructed-only boundaries: same-STRING arm overlap longer than
+one character after prefix-hoisting (``(?:foo|f[o0]o)*``) is
+outside the one-char completion check, and an ambiguous-body outer
+bounded BELOW the threshold is deliberate non-membership (the
+bounded-nuisance band — capped-exponential under ~bound-size
+inputs, degree-(bound-1) polynomial beyond; unanchored spellings
+stay Rule S's to measure, ^-anchored ones are accepted residual) —
+the tree sweep at introduction found no live shape of either.
+
 HONEST BOUNDARY — mechanisms NO arm covers with a dedicated rule:
-(1) nested-quantifier ambiguity (the classic ``(?:a+)+``
-exponential) — no ADJACENT pair exists (Rule C blind) and the
-ambiguity lives inside one repeat rather than in the position loop
-(Rule S's pump happens to fire on some such shapes when the inner
-repeat sits on the spine, but coverage is NOT claimed).  The
-boundary self-check pins the exemplar shape as a non-member of Rule
-C/R so nobody assumes coverage; an adversarial sweep at introduction
-time measured every nested-unbounded site in the tree and found no
-live member of the dangerous subclass.  That family still needs its
-own membership rule and attack synthesis — a follow-up arm, not a
-silent extension of these.  Also outside the static universe, by
-construction: (2)
+(1) a trailing ambiguous repeat with NO failable continuation inside
+the pattern, called under ``fullmatch`` — the implicit end-of-string
+requirement is the failable continuation Rule N demands, but it
+lives at the call site, not in the parse tree the rule judges (the
+resolver folds ``fullmatch`` into the anchored ``match`` mode, so
+the spelling is statically invisible; the tree sweep at introduction
+found no anchored-mode site with a trailing ambiguous repeat).  Also
+outside the static universe, by construction: (2)
 patterns assembled or learned at RUNTIME (e.g. discovered-convention
 registries) — no static census can see them; their consumers own
 input bounds; and (3) a pattern table in a module that never binds
@@ -147,6 +203,7 @@ import re
 import sys
 import unicodedata
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -2186,6 +2243,327 @@ def _regen_scan_expected(workers: int = 8) -> int:
     return 0
 
 
+# ═════════════════════════════════════════════════════════════════════
+# Nested-quantifier arm (Rule N): exponential-composition ambiguity —
+# an unbounded repeat over a body that can match the same run in more
+# than one way (see the module docstring).  Single-stage: the static
+# rule IS the verdict (a genuine member is exponential — there is no
+# "linear at the real call site" case for an oracle stage to dispose),
+# with the MULTILINE arm's allowlist grammar and a bounded CPU-time
+# growth probe (``_exponential_growth``) for adjudication.
+# ═════════════════════════════════════════════════════════════════════
+
+# (posix-relative path, pattern variable/first-40-chars key) ->
+# justification.  Empty on purpose: the exponential class has no
+# acceptable input-bound story short of a proof the pattern never
+# meets attacker-shaped text — fix a member by REMOVING THE
+# AMBIGUITY (a single-character base inside the repeated group, an
+# unambiguous alternation), never by merely bounding the outer
+# repeat: ``(?:a+){1,5000}`` keeps the whole split search below the
+# bound and measures the same ~2^n as its unbounded twin.  (Both
+# historical fixes removed the ambiguity; the one that also bounded
+# its outer repeat is safe because of its single-unit arms, not
+# because of the bound.)
+_NESTED_ALLOWLIST: dict[tuple[str, str], str] = {}
+
+# Outer-repeat bound at or above which Rule N treats a bounded
+# repeat as unbounded.  Mechanism: an outer bound hi caps the
+# ambiguous split search at ~2^(hi-1) engine states, fully reachable
+# from a ~hi-byte input (measured ~65 ns/state on this class, so the
+# cap in wall terms doubles per +1 on the bound: hi=16 ~2 ms, hi=24
+# ~0.5 s, hi=28 ~10 s, hi=32 ~2.5 min — a {1,5000} spelling measures
+# the same ~1.0 doublings/char as its unbounded twin).  Why not
+# lower: below 24 the pattern is a POLYNOMIAL split search (degree
+# hi-1 in input length — the bound caps the split count, not the
+# states per split, so long inputs still cost real CPU: {1,12}
+# measures tens of seconds at a few dozen bytes), excluded on CLASS
+# grounds — this arm's verdict is "exponential", and diluting it
+# with polynomial members would blunt both; the sub-threshold band
+# stays deliberately non-member (its unanchored spellings are Rule
+# S's to measure empirically; the ^-anchored ones are a NAMED
+# residual, see the module docstring).  Why not higher: at 24 the cap already
+# reads as a stall and every +1 doubles it — waiting for a "clearly
+# unbounded-equivalent" bound only excuses members whose worst case
+# is a hang.  Two-direction regression tests pin both sides of the
+# knob.
+_EFFECTIVELY_UNBOUNDED = 24
+
+
+def _fold_case(chars: set[int], flags: int) -> set[int]:
+    """Close a char set over ASCII/simple case folding when the
+    pattern is compiled IGNORECASE — ``(a|A)*`` is the same
+    two-derivations-per-char ambiguity as ``(a|a)*`` under it."""
+    if not flags & re.IGNORECASE:
+        return chars
+    folded = set(chars)
+    for char in chars:
+        folded.add(ord(chr(char).lower()[0]))
+        folded.add(ord(chr(char).upper()[0]))
+    return folded
+
+
+def _one_char_node(node: tuple, flags: int) -> set[int]:
+    """Chars c such that ``node`` alone can match exactly the
+    one-character string c."""
+    op, arg = node
+    if op is sre_parse.LITERAL:
+        return _fold_case({arg}, flags)
+    if op is sre_parse.NOT_LITERAL:
+        return set(_PROBE) - {arg}
+    if op is sre_parse.IN:
+        return _fold_case(_in_set(arg), flags)
+    if op is sre_parse.ANY:
+        return set(_PROBE) if flags & re.DOTALL else set(_PROBE) - {10}
+    if op is sre_parse.SUBPATTERN:
+        return _one_char_seq(arg[3], flags)
+    if op is sre_parse.BRANCH:
+        chars: set[int] = set()
+        for branch in arg[1]:
+            chars |= _one_char_seq(branch, flags)
+        return chars
+    if op in (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT):
+        lo, hi, body = arg
+        if lo <= 1 <= hi:
+            return _one_char_seq(body, flags)
+        return set()
+    return set()  # AT / ASSERT / GROUPREF: zero-width or unknown
+
+
+def _one_char_seq(seq, flags: int) -> set[int]:
+    """Chars c such that the WHOLE sequence can match exactly c:
+    one node consumes exactly c, every other node matches empty."""
+    can_empty = True
+    chars: set[int] = set()
+    for node in seq:
+        node_empty = _is_transparent(node)
+        node_chars = _one_char_node(node, flags)
+        new_chars = chars if node_empty else set()
+        if can_empty:
+            new_chars = new_chars | node_chars
+        can_empty = can_empty and node_empty
+        chars = new_chars
+        if not can_empty and not chars:
+            return set()
+    return chars
+
+
+def _variable_run_node(node: tuple, flags: int) -> bool:
+    """Can ``node`` consume a run with >= 2 distinct NONZERO widths?
+    (Zero-width iterations are pruned by the engine's empty-match
+    guard, so ``a?`` — widths {0,1} — offers exactly one usable
+    width and is unambiguous under an outer repeat.)"""
+    op, arg = node
+    if op in (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT):
+        lo, hi, body = arg
+        if not _seq_charset(body, flags):
+            return False  # zero-width body: nothing to split
+        if hi == _MAXREP or max(lo, 1) < hi:
+            return True
+        return _variable_run_seq(body, flags)  # fixed count: descend
+    if op is sre_parse.SUBPATTERN:
+        return _variable_run_seq(arg[3], flags)
+    if op is sre_parse.BRANCH:
+        return any(_variable_run_seq(b, flags) for b in arg[1])
+    return False
+
+
+def _variable_run_seq(seq, flags: int) -> bool:
+    """Nested-variable-run condition: some node in the sequence is a
+    variable-width run consumer while EVERY sibling can match empty —
+    an outer iteration can then begin and end anywhere inside the
+    run, so outer iterations split it ambiguously.  The transparent-
+    siblings requirement is what keeps ``(?:"[^"]*")*`` (iterations
+    pinned by required delimiters) and ``(?:a\\s*)+`` (the linear /
+    polynomial adjacent-span family, Rule C/S territory) out."""
+    nodes = list(seq)
+    for i, node in enumerate(nodes):
+        if not all(_is_transparent(other)
+                   for j, other in enumerate(nodes) if j != i):
+            continue
+        if _variable_run_node(node, flags):
+            return True
+    return False
+
+
+def _branch_ambiguity(seq, flags: int,
+                      path_consumes: bool = False) -> bool:
+    """Branch-ambiguity condition, anywhere in the sequence: a BRANCH
+    two of whose arms can completely match the same single character,
+    or two of whose arms can both match empty (what prefix-hoisting
+    leaves of same-word arms) PROVIDED something else on the branch's
+    derivation path can consume — an empty-empty branch that IS the
+    whole iteration only yields zero-width iterations, which the
+    engine's empty-match guard prunes (``(?:x|(?:|))*`` is linear;
+    ``(a|a)*`` — hoisted to ``a(?:|)`` — doubles per consumed char).
+    Judged on the optimized tree — single-char alternations the
+    parser collapsed into one character class carry no branch and no
+    ambiguity."""
+    nodes = list(seq)
+    for i, node in enumerate(nodes):
+        op, arg = node
+        siblings_consume = path_consumes or any(
+            _charset(other, flags)
+            for j, other in enumerate(nodes) if j != i
+        )
+        if op is sre_parse.SUBPATTERN:
+            if _branch_ambiguity(arg[3], flags, siblings_consume):
+                return True
+        elif op in (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT):
+            if _branch_ambiguity(arg[2], flags, siblings_consume):
+                return True
+        elif op is sre_parse.BRANCH:
+            arms = [_one_char_seq(branch, flags) for branch in arg[1]]
+            for k, chars in enumerate(arms):
+                if any(chars & other for other in arms[k + 1:]):
+                    return True
+            empty_arms = sum(
+                1 for branch in arg[1]
+                if all(_is_transparent(n) for n in branch)
+            )
+            if empty_arms >= 2 and siblings_consume:
+                return True
+            # Arms recurse with the BRANCH node's own context only:
+            # a sibling ARM's consumption is never on this arm's
+            # derivation path.
+            if any(_branch_ambiguity(branch, flags, siblings_consume)
+                   for branch in arg[1]):
+                return True
+    return False
+
+
+def _nested_body_ambiguity(body, flags: int) -> str | None:
+    """Which ambiguity class (if any) an unbounded repeat's body
+    carries.  The branch condition additionally requires the body to
+    consume at all — a purely zero-width body has no run to pump and
+    the engine prunes its empty iterations."""
+    if _variable_run_seq(body, flags):
+        return "nested-variable-run"
+    if _seq_charset(body, flags) and _branch_ambiguity(body, flags):
+        return "branch-ambiguity"
+    return None
+
+
+# Interpreter-conditional ops (Python 3.11+): the older-interpreter
+# ``sre_parse`` fallback lacks them, so the finder compares against
+# None there (matching no node) instead of raising at import.
+_ATOMIC_GROUP = getattr(sre_parse, "ATOMIC_GROUP", None)
+_POSSESSIVE_REPEAT = getattr(sre_parse, "POSSESSIVE_REPEAT", None)
+
+
+def _find_nested_lanes(seq, flags: int, tail_after=()) -> list[str]:
+    """Rule N proposer: every effectively-unbounded repeat with an
+    ambiguous body AND a failable continuation (walked with the
+    enclosing tail visible, like the other arms' finders).  Returns
+    the ambiguity kinds, one entry per member repeat.
+
+    Lookaround and atomic-group bodies are searched with an EMPTY
+    outer tail: both constructs are atomic — the engine never
+    re-enters one that succeeded, so only an in-body continuation can
+    drive the split retries — but an ambiguous repeat WITH an in-body
+    failable continuation does its exponential work internally before
+    the construct resolves (``(?=(?:v+)+w)`` explodes while the
+    lookahead is still being evaluated).  A possessive/atomic repeat
+    is never itself an outer candidate for the same reason: its first
+    greedy parse commits, so the outer split is never retried."""
+    lanes: list[str] = []
+    nodes = list(seq)
+    for i, node in enumerate(nodes):
+        op, arg = node
+        rest = nodes[i + 1:] + list(tail_after)
+        if op is sre_parse.SUBPATTERN:
+            lanes.extend(_find_nested_lanes(arg[3], flags, rest))
+        elif op is sre_parse.BRANCH:
+            for branch in arg[1]:
+                lanes.extend(_find_nested_lanes(branch, flags, rest))
+        elif op in (sre_parse.ASSERT, sre_parse.ASSERT_NOT):
+            lanes.extend(_find_nested_lanes(arg[1], flags))
+        elif op is _ATOMIC_GROUP:
+            lanes.extend(_find_nested_lanes(arg, flags))
+        elif op is _POSSESSIVE_REPEAT:
+            lanes.extend(_find_nested_lanes(arg[2], flags))
+        elif op in (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT):
+            lanes.extend(_find_nested_lanes(arg[2], flags, rest))
+            if arg[1] != _MAXREP and arg[1] < _EFFECTIVELY_UNBOUNDED:
+                # A small outer bound caps the split search (see
+                # _EFFECTIVELY_UNBOUNDED); at or above the threshold
+                # the bound is cosmetic and the repeat is judged as
+                # unbounded.
+                continue
+            kind = _nested_body_ambiguity(arg[2], flags)
+            if kind is None:
+                continue
+            tail = _tail_verdict(rest, flags)
+            if tail["consuming"] or tail["failable_zw"]:
+                lanes.append(kind)
+    return lanes
+
+
+def _nested_is_member(pattern: str, flags: int = 0) -> bool:
+    """Rule N membership for one pattern (bool-only: the rule is the
+    verdict; there is no oracle stage)."""
+    try:
+        parsed = sre_parse.parse(pattern, flags)
+    except (re.error, ValueError, OverflowError):
+        return False
+    return bool(_find_nested_lanes(parsed, parsed.state.flags))
+
+
+def _nested_members() -> dict[tuple[str, str], list[str]]:
+    """Rule N's member set over the shared runtime-source extraction
+    (call sites and table entries both; table entries judged at their
+    worst case exactly like the two-stage arms — Rule N ignores call
+    mode anyway, since one anchored attempt already explodes)."""
+    members: dict[tuple[str, str], list[str]] = {}
+    for site in _all_runtime_sites():
+        if _nested_is_member(site.pattern, site.flags):
+            members.setdefault(site.key, []).append(
+                f"{site.key[0]}:{site.lineno}: {site.key[1]}",
+            )
+    return members
+
+
+def _exponential_growth(pattern: str, flags: int,
+                        attack: Callable[[int], str]) -> float:
+    """Adjudication probe: CPU-time doubling rate per pumped
+    character of ``re.search(pattern, attack(n))`` over small
+    doubling-family sizes.  A genuinely exponential member measures
+    ~1.0 doublings/char (x16 per +4 chars); a linear pattern never
+    clears the trust floor and measures 0.0.  CPU time
+    (``process_time``) like the oracle probe workers — co-runner
+    load cannot inflate it — and the step budget (break past 20 ms,
+    n capped at 26) bounds the worst probe at a fraction of a
+    second, so the probe is deterministic and default-tier safe."""
+    import math
+    import time
+
+    rx = re.compile(pattern, flags)
+    probes: list[tuple[int, float]] = []
+    n = 10
+    while n <= 26:
+        text = attack(n)
+        start = time.process_time()
+        rx.search(text)
+        elapsed = time.process_time() - start
+        probes.append((n, elapsed))
+        if elapsed > 0.02:
+            break
+        n += 4
+    trusted = [(size, t) for size, t in probes if t >= 1e-3]
+    if len(trusted) < 2:
+        return 0.0
+    (n1, t1), (n2, t2) = trusted[-2], trusted[-1]
+    return math.log2(t2 / max(t1, 1e-7)) / (n2 - n1)
+
+
+# Growth rate (doublings per pumped char) at or above which the probe
+# calls a shape exponential.  Genuine members measure ~1.0; the floor
+# sits far below (x3 per +4 chars) so scheduler noise cannot flap the
+# verdict in either direction, and far above any polynomial (a
+# quadratic member's ratio per +4 chars at these sizes is ~1.5x,
+# ~0.15 doublings/char).
+_EXPONENTIAL_RATE = 0.4
+
+
 class RedosIdiomCensus(unittest.TestCase):
 
     def test_detector_catches_the_idiom(self) -> None:
@@ -2901,12 +3279,9 @@ class TrailingSpanCensus(unittest.TestCase):
         for pattern, flags in (
             # nested-quantifier ambiguity: the classic exponential
             # ((?:a+)+ tail) has NO adjacent pair — Rule C is blind
-            # to it by construction. The adversarial sweep that
-            # pinned this boundary measured every nested-unbounded
-            # site in the tree with inner-run attacks and found no
-            # live member of the dangerous (ambiguous-outer-width)
-            # subclass; the shape stays named here so a future
-            # member is a known gap, not a surprise.
+            # to it by construction, and the shape stays pinned as a
+            # non-member of these arms.  Rule N owns the family now
+            # (see the handshake below and NestedQuantifierCensus).
             (r"(?:\w+)+\)", 0),
             # multi-term chain (prompt_defence's pre-fix class)
             (r"ignore\b.*\ball\b.*\binstructions", re.IGNORECASE),
@@ -2927,9 +3302,13 @@ class TrailingSpanCensus(unittest.TestCase):
             )
             rule_c, rule_r, _pairs, _entries = _site_rules(site)
             self.assertFalse(rule_c or rule_r, pattern)
-            # Coverage handshake: every boundary shape except the
-            # nested-quantifier exemplar is Rule S's to own.
-            if pattern != r"(?:\w+)+\)":
+            # Coverage handshake: the nested-quantifier exemplar is
+            # Rule N's to own; every other boundary shape is Rule
+            # S's.  Each routing is a positive claim, so a shrunk
+            # rule fails here instead of silently reopening the gap.
+            if pattern == r"(?:\w+)+\)":
+                self.assertTrue(_nested_is_member(pattern, flags))
+            else:
                 self.assertTrue(_site_scan_lanes(site), pattern)
 
 
@@ -3339,6 +3718,283 @@ class ScanRestartNightly(unittest.TestCase):
         self.assertFalse(violations,
                          "scan-restart nightly oracle disagrees with "
                          "pins:\n  " + "\n  ".join(violations))
+
+
+class NestedQuantifierCensus(unittest.TestCase):
+    """Rule N arm: exponential-composition membership is static and
+    single-stage (the rule is the verdict); the CPU-time growth probe
+    backs adjudication and the self-checks below."""
+
+    def test_rule_n_catches_known_spellings(self) -> None:
+        """Detector self-check on the class's two in-tree member
+        spellings (both fixed before this arm existed — the arm
+        exists to catch the NEXT one the day it lands) and the
+        classic shapes; the fixed spellings and the safe common
+        idioms must NOT be members (flood guard)."""
+        # Member 1: a starred base inside a repeated attribute-body
+        # group — the (a*)* shape.  An unterminated "__attribute__(("
+        # line makes the engine try every split of the body between
+        # the two stars.
+        self.assertTrue(_nested_is_member(
+            r"(?:__attribute__\s*\(\((?:[^()]*|\([^()]*\))*\)\)\s*)*"
+            r"(?:__declspec\s*\([^()]*\)\s*)?(?:extern\s+)?"))
+        self.assertTrue(_nested_is_member(r"(?:[^()]*|\([^()]*\))*\)\)"))
+        # Its fixed spelling: single-character base — same language,
+        # one parse per input.
+        self.assertFalse(_nested_is_member(
+            r"(?:__attribute__\s*\(\((?:[^()]|\([^()]*\))*\)\)\s*)*"
+            r"(?:__declspec\s*\([^()]*\)\s*)?(?:extern\s+)?"))
+        self.assertFalse(_nested_is_member(r"(?:[^()]|\([^()]*\))*\)\)"))
+        # Member 2: an unbounded repeat over a branch whose \s+ arm
+        # is itself an unbounded repeat — a hostile whitespace run
+        # between the keywords splits between the \s+ iterations in
+        # O(2^k) ways.
+        self.assertTrue(_nested_is_member(
+            r"\b(?:drop|truncate)\b"
+            r"|\binto(?:\s+|/\*.*?\*/)+(?:out|dump)file\b",
+            re.IGNORECASE))
+        # Its fixed spelling: single-char / bounded-comment glue
+        # under a BOUNDED outer repeat.
+        self.assertFalse(_nested_is_member(
+            r"\binto(?:\s|/\*.{0,512}?\*/){1,64}(?:out|dump)file\b",
+            re.IGNORECASE))
+        # Classic shapes of both ambiguity conditions.
+        self.assertTrue(_nested_is_member(r"(?:a+)+$"))
+        self.assertTrue(_nested_is_member(r"(a*)*x"))
+        self.assertTrue(_nested_is_member(r"(?:\w+)+\)"))
+        self.assertTrue(_nested_is_member(r"(?:\w+\s*)*x"))
+        self.assertTrue(_nested_is_member(r"(?:a{1,2})+!"))
+        self.assertTrue(_nested_is_member(r"(a|a)*b"))
+        # Post-hoist same-char arm overlap: (?:ab|a.) leaves
+        # a(?:b|.) — arms overlap on 'b'.
+        self.assertTrue(_nested_is_member(r"(?:ab|a.)*!"))
+        # Case-folded arm overlap: multi-node arms survive the
+        # parser's single-char collapse, and IGNORECASE makes 'A'
+        # and 'a' the same derivation choice on the same character.
+        # The identical spelling WITHOUT the flag is unambiguous
+        # (disjoint arms) — the fold must be flag-conditional.
+        self.assertTrue(_nested_is_member(r"(?:Ax?|a)*!",
+                                          re.IGNORECASE))
+        self.assertFalse(_nested_is_member(r"(?:Ax?|a)*!"))
+        # Parser-collapsed alternations: sre_parse folds single-char
+        # arms into ONE character class, so the engine never sees a
+        # branch — runtime-linear, not members (the rule judges the
+        # optimized tree precisely so it agrees with the engine).
+        self.assertFalse(_nested_is_member(r"(?:\s|\n)*x"))
+        self.assertFalse(_nested_is_member(r"(?:\w|\d)*!"))
+        self.assertFalse(_nested_is_member(r"(a|A)*b", re.IGNORECASE))
+        # Empty-empty arms count only when something else on their
+        # derivation path consumes: an empty-empty branch that IS the
+        # whole iteration is pruned by the engine's empty-match guard
+        # (linear), while one sharing its iteration with a consuming
+        # sibling doubles per consumed character (exponential).
+        self.assertFalse(_nested_is_member(r"(?:x|(?:|))*y"))
+        self.assertTrue(_nested_is_member(r"(?:a?(?:|))*y"))
+        # Safe common idioms: the escaped-string scanner (single-char
+        # arms, disjoint — a backslash always routes to the escape
+        # arm), delimiter-pinned iterations, single-usable-width
+        # optional, prefix-code alternation, and an ambiguous repeat
+        # with NOTHING failable after it (greedy first parse
+        # succeeds; no split is retried).
+        self.assertFalse(_nested_is_member(r'(?:[^"\\]|\\.)*"'))
+        self.assertFalse(_nested_is_member(r'(?:"[^"]*")*x'))
+        self.assertFalse(_nested_is_member(r"(?:a?)*x"))
+        self.assertFalse(_nested_is_member(r"(?:ab|a)*c"))
+        self.assertFalse(_nested_is_member(r"(?:a+)+"))
+        # Sibling arms' territory stays theirs: adjacent overlapping
+        # spans (Rule C/S) and the MULTILINE anchor idiom carry no
+        # ambiguous UNBOUNDED-over-variable composition.
+        self.assertFalse(_nested_is_member(r"\s*==\s*0\b"))
+        self.assertFalse(_nested_is_member(r"^\s*import", re.MULTILINE))
+
+    def test_bounded_huge_outer_is_effectively_unbounded(self) -> None:
+        """A large outer bound is cosmetic: the split search survives
+        below the bound, so ``(?:w+){1,5000}z`` measures the same
+        ~1.0 doublings/char as its unbounded twin — including the
+        ^-anchored spelling, whose single anchored attempt already
+        explodes (no other arm can see it: Rule S keys on the
+        position loop).  Both sides of the knob are pinned: at the
+        threshold the bound is unbounded to the rule; just below it
+        the shape enters the bounded-nuisance band (capped split
+        search — deliberately non-member, see _EFFECTIVELY_UNBOUNDED
+        for both directions of that trade)."""
+        self.assertTrue(_nested_is_member(r"(?:w+){1,5000}z"))
+        self.assertTrue(_nested_is_member(r"^(?:w+){1,5000}z"))
+        self.assertTrue(_nested_is_member(r"(?:w{1,5000}){1,5000}z"))
+        self.assertTrue(_nested_is_member(r"(?:w+){1,32}z"))
+        # The knob itself, both directions.
+        threshold = _EFFECTIVELY_UNBOUNDED
+        self.assertTrue(_nested_is_member(
+            r"(?:w+){1,%d}z" % threshold))
+        self.assertFalse(_nested_is_member(
+            r"(?:w+){1,%d}z" % (threshold - 1)))
+        # Small-bounded nesting (empirically flat at probe sizes —
+        # the growth-probe leg below) stays non-member.
+        self.assertFalse(_nested_is_member(r"(?:w+){1,4}z"))
+        # A LOWER bound at/above the threshold with a small upper
+        # bound cannot exist ({32,4} is a parse error); a huge lower
+        # bound implies a huge upper bound and is judged by hi.
+        self.assertTrue(_nested_is_member(r"(?:w+){32,}z"))
+
+    def test_lookaround_and_atomic_bodies_are_searched(self) -> None:
+        """An exponential composition inside a lookaround or atomic
+        group does its work internally before the construct resolves
+        — members even though the construct itself is atomic.  The
+        continuation is scoped to the body: with no in-body failable
+        continuation the body's greedy first parse succeeds and the
+        atomicity prevents any retry (non-members), and a
+        possessive/atomic OUTER repeat is likewise never a candidate
+        (its first parse commits)."""
+        self.assertTrue(_nested_is_member(r"(?=(?:v+)+w)v"))
+        self.assertTrue(_nested_is_member(r"^(?=(?:v+)+w)v"))
+        self.assertTrue(_nested_is_member(r"(?!(?:v+)+w)v"))
+        self.assertTrue(_nested_is_member(r"(?>(?:p+)+q)r"))
+        # Unambiguous lookahead body: safe.
+        self.assertFalse(_nested_is_member(r"(?=(?:v+)w)v"))
+        # Ambiguous body but no in-body failable continuation: the
+        # greedy parse succeeds inside the atomic construct.
+        self.assertFalse(_nested_is_member(r"(?=(?:v+)+)x"))
+        # Possessive outer over an ambiguous body: first parse
+        # commits, never retried.
+        self.assertFalse(_nested_is_member(r"(?:a+)++x"))
+        self.assertFalse(_nested_is_member(r"(?:a+)*+x"))
+
+    def test_runtime_source_has_no_members(self) -> None:
+        """Default-tier closure: no runtime regex — call site or
+        table entry — is a Rule N member beyond the (empty)
+        allowlist.  A genuine member is exponential on ~100 bytes of
+        hostile input: fix it by REMOVING the ambiguity
+        (single-character base inside the repeated group, unambiguous
+        alternation) rather than allowlisting — and never by merely
+        bounding the outer repeat, which keeps the split search
+        below the bound."""
+        members = _nested_members()
+        unexpected = sorted(set(members) - set(_NESTED_ALLOWLIST))
+        stale = sorted(set(_NESTED_ALLOWLIST) - set(members))
+        sites = [s for key in unexpected for s in members[key]]
+        self.assertFalse(unexpected, (
+            f"nested-quantifier (exponential-composition) regex in "
+            f"runtime source — an unbounded repeat whose body can "
+            f"match the same run in multiple ways, O(2^n) on a "
+            f"failing continuation. Remove the AMBIGUITY "
+            f"(single-character base, unambiguous alternation); "
+            f"bounding the outer repeat alone is NOT a fix — the "
+            f"split search survives below the bound. Adjudicate "
+            f"with _exponential_growth. "
+            f"{len(sites)} member call site(s):\n  "
+            + "\n  ".join(sites)
+        ))
+        self.assertFalse(stale,
+                         f"stale nested allowlist entries: {stale}")
+
+    def test_pattern_data_files_have_no_members(self) -> None:
+        """The same closure for the pattern DATA files the runtime
+        loads (preflight injection corpora, SCA exfil rules) — a
+        corpus line is compiled and searched over untrusted content
+        exactly like a source-constant pattern."""
+        _load_patterns, _exfil = _data_file_loaders()
+        members = [
+            (stem, compiled.pattern)
+            for stem, patterns in sorted(_load_patterns().items())
+            for compiled in patterns
+            if _nested_is_member(compiled.pattern, compiled.flags)
+        ]
+        members.extend(
+            ("exfil_destinations", rule.pattern.pattern)
+            for rule in _exfil._load_rules()
+            if rule.pattern is not None
+            and _nested_is_member(rule.pattern.pattern,
+                                  rule.pattern.flags)
+        )
+        self.assertFalse(members, (
+            "nested-quantifier (exponential-composition) regex in a "
+            "pattern data file:\n  "
+            + "\n  ".join(f"{stem}: {pat}" for stem, pat in members)
+        ))
+
+    def test_planted_member_is_caught(self) -> None:
+        """Self-check through the shared extraction: a module planted
+        with a KNOWN-exponential member spelling is flagged from its
+        real call site, and the fixed spelling in the same module is
+        not (no flood)."""
+        import tempfile
+
+        source = (
+            "import re\n"
+            "BAD = re.compile(\n"
+            "    r'\\binto(?:\\s+|/\\*.*?\\*/)+(?:out|dump)file\\b',\n"
+            "    re.IGNORECASE,\n"
+            ")\n"
+            "OK = re.compile(\n"
+            "    r'\\binto(?:\\s|/\\*.{0,512}?\\*/){1,64}"
+            "(?:out|dump)file\\b',\n"
+            "    re.IGNORECASE,\n"
+            ")\n"
+            "def check(t):\n"
+            "    return BAD.search(t) or OK.search(t)\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".py", delete=False,
+        ) as fh:
+            fh.write(source)
+            probe = Path(fh.name)
+        try:
+            flagged = {
+                site.name
+                for site in _extract_sites(probe)
+                if _nested_is_member(site.pattern, site.flags)
+            }
+        finally:
+            probe.unlink()
+        self.assertIn("BAD", flagged)
+        self.assertNotIn("OK", flagged)
+
+    def test_probe_confirms_exponential_class(self) -> None:
+        """Empirical self-check (CPU-time, tiny n): a flagged member
+        spelling measures exponential growth on its pump family and
+        its fixed spelling does not — so the adjudication probe can
+        FAIL, and the flagged class is demonstrably the exponential
+        one, not a static-only claim."""
+        rate = _exponential_growth(
+            r"(?:[^()]*|\([^()]*\))*\)\)", 0, lambda n: "a" * n,
+        )
+        self.assertGreaterEqual(rate, _EXPONENTIAL_RATE)
+        rate = _exponential_growth(
+            r"(?:[^()]|\([^()]*\))*\)\)", 0, lambda n: "a" * n,
+        )
+        self.assertLess(rate, _EXPONENTIAL_RATE)
+        rate = _exponential_growth(
+            r"\binto(?:\s+|/\*.*?\*/)+(?:out|dump)file\b",
+            re.IGNORECASE, lambda n: "into" + " " * n + "x",
+        )
+        self.assertGreaterEqual(rate, _EXPONENTIAL_RATE)
+        rate = _exponential_growth(
+            r"\binto(?:\s|/\*.{0,512}?\*/){1,64}(?:out|dump)file\b",
+            re.IGNORECASE, lambda n: "into" + " " * n + "x",
+        )
+        self.assertLess(rate, _EXPONENTIAL_RATE)
+        # The bounded-huge outer is the unbounded blowup below its
+        # bound (the ^-anchored spelling: a single anchored attempt
+        # already carries the whole split search); small-bounded
+        # nesting caps the search and stays flat at probe sizes.
+        rate = _exponential_growth(
+            r"^(?:w+){1,5000}z", 0, lambda n: "w" * n,
+        )
+        self.assertGreaterEqual(rate, _EXPONENTIAL_RATE)
+        rate = _exponential_growth(
+            r"(?:w+){1,4}z", 0, lambda n: "w" * n,
+        )
+        self.assertLess(rate, _EXPONENTIAL_RATE)
+        # An exponential composition inside a lookahead does its work
+        # while the (atomic) construct is still being evaluated.
+        rate = _exponential_growth(
+            r"^(?=(?:v+)+w)v", 0, lambda n: "v" * n,
+        )
+        self.assertGreaterEqual(rate, _EXPONENTIAL_RATE)
+        rate = _exponential_growth(
+            r"^(?=(?:v+)w)v", 0, lambda n: "v" * n,
+        )
+        self.assertLess(rate, _EXPONENTIAL_RATE)
 
 
 if __name__ == "__main__":
