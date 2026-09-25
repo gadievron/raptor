@@ -166,6 +166,9 @@
     "artifacts:write_only_artifact::-symbolic.json": {
       "note": "operator-facing evidence artifact: the full per-finding FeasibilityMap JSON for a symbolically-synthesized witness (mitigation_feasibility/<finding>-symbolic.json), mirroring the raptor-run-feasibility per-finding map files; the machine-consumed summary rides the finding's feasibility.empirical_mitigation_map"
     },
+    "artifacts:write_only_artifact::.candidate.yaml": {
+      "note": "deliberate design: tp-harvest rule CANDIDATES are maintainer-review drafts - no production code may load them (never-auto-enable doctrine; emission into the in-tree rules surface is refused and run-dir symlink pre-plants are refused at the harvest structure gate, see core/tp_harvest/candidates.py + harvest.py). Promotion is a reviewed hand-copy into engine/semgrep/rules per the runbook README written beside the candidates."
+    },
     "artifacts:write_only_artifact::.line-check.json": {
       "note": "operator-facing sidecar next to a crash-analysis report (blamed_lines.check_report): the same summary dict is returned in-process and stamped into the report .md; the sidecar exists for humans/jq, same class as suppressions.jsonl"
     },
