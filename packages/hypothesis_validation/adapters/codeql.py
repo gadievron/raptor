@@ -537,7 +537,7 @@ class CodeQLAdapter(ToolAdapter):
                 # materialise the whole file first.
                 with Path(qp).open(encoding="utf-8", errors="replace") as fh:
                     ql_header = fh.read(65536)
-                for line in ql_header.split("\n"):
+                for line in ql_header.split("\n"):  # line-model: RAPTOR-side query files; lines strip()-normalised
                     stripped = line.strip().lstrip("*").strip()
                     if stripped.startswith("@id "):
                         at_id = stripped[4:].strip()

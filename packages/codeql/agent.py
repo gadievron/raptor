@@ -1261,7 +1261,7 @@ class CodeQLAgent:
             table = tabulate(table_data, headers=headers, tablefmt="simple", maxcolwidths=[20, 25, 10, 25, 5])
 
             # Indent the table
-            for line in table.split('\n'):
+            for line in table.split('\n'):  # line-model: tabulate-generated display text
                 print(f"  {line}")
 
         except ImportError:

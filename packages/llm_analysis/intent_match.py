@@ -544,7 +544,7 @@ def _parse_judge_response(content: str) -> tuple[str, str]:
     """
     if not content:
         return VERDICT_UNCERTAIN, "empty LLM response"
-    first_line = content.strip().split("\n", 1)[0].strip()
+    first_line = content.strip().split("\n", 1)[0].strip()  # line-model: LLM response verdict line; strip()-normalised
     if ":" in first_line:
         verdict_word, _, reason = first_line.partition(":")
         verdict_word = verdict_word.strip().lower()

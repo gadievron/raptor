@@ -266,7 +266,7 @@ def _split_lines(text: str) -> list[str]:
     invisible to a splitlines()-based scanner while staying fully
     actionable by ``git apply`` (which sees one intact header line).
     """
-    return text.split("\n")
+    return text.split("\n")  # line-model: deliberate git-apply \n line model (see docstring)
 
 
 def _parse_unified_diff(text: str) -> ParsedDiff | None:

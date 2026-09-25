@@ -1017,7 +1017,7 @@ class AutonomousCodeQLAnalyzer:
 
             # Remove markdown code blocks if present
             if "```" in exploit_code:
-                lines = exploit_code.split("\n")
+                lines = exploit_code.split("\n")  # line-model: LLM response text
                 code_lines = []
                 in_code_block = False
 

@@ -96,7 +96,7 @@ def sanitize_dockerfile(text: str) -> str:
     text = re.sub(r"\\{4,}", r"\\\\", text)  # collapse 4+ backslashes to 2
 
     out_lines: list[str] = []
-    for raw in text.split("\n"):
+    for raw in text.split("\n"):  # line-model: LLM/RAPTOR-generated Dockerfile text
         line = raw
         stripped = line.strip()
         if stripped.upper().startswith("LABEL "):
@@ -280,7 +280,7 @@ def _merge_continuation_lines(text: str) -> list[str]:
     """
     out: list[str] = []
     buf = ""
-    for raw in text.split("\n"):
+    for raw in text.split("\n"):  # line-model: LLM/RAPTOR-generated Dockerfile text
         # If the previous line ended in `\`, this physical line continues
         # the prior logical one. Strip the trailing `\` (and any
         # whitespace before/after) before joining.
