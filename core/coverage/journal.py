@@ -364,15 +364,23 @@ class ReviewJournalEntry:
 
 
 def is_mechanical_echo(entry: Any) -> bool:
-    """True for post-loop mechanical echo rows.
+    """True for post-loop mechanically-minted rows.
 
-    Pattern-scan findings are journalled after the review loop for
-    cross-layer visibility — one ``[mechanical]`` row per finding,
-    zero cost, no rationale, ``post-loop-mechanical`` strategy tag.
-    They are NOT LLM reviews: naive verdict counts that include them
-    inflate by one suspicious row per pattern-scan finding. Accepts a
-    :class:`ReviewJournalEntry` or a raw journal dict — the single
-    counting rule for every summary consumer.
+    Two writers journal LLM-free rows after the review loop, both
+    counted into the post-loop mechanical tally and neither an LLM
+    review:
+
+    * pattern-scan echoes — one ``[mechanical]`` row per finding,
+      zero cost, no rationale, ``post-loop-mechanical`` strategy tag;
+    * consistency-census synthesized outcomes — ``[consistency:...]``
+      body, ``consistency-census`` strategy tag; the settled verdict
+      is minted from census receipts, not from a review.
+
+    Naive verdict counts that include either kind inflate by one row
+    per mechanical finding, and coverage credit for either retires a
+    never-reviewed function. Accepts a :class:`ReviewJournalEntry` or
+    a raw journal dict — the single counting/screening rule for every
+    summary and coverage consumer.
     """
     if isinstance(entry, dict):
         strategies = entry.get("strategies")
@@ -380,9 +388,11 @@ def is_mechanical_echo(entry: Any) -> bool:
     else:
         strategies = getattr(entry, "strategies", None)
         body = getattr(entry, "body", None)
+    strategies = strategies or []
     return (
-        "post-loop-mechanical" in (strategies or [])
-        or (body or "").startswith("[mechanical]")
+        "post-loop-mechanical" in strategies
+        or "consistency-census" in strategies
+        or (body or "").startswith(("[mechanical]", "[consistency:"))
     )
 
 
@@ -1244,7 +1254,13 @@ def entry_earns_function_coverage(entry: ReviewJournalEntry) -> bool:
     * edge-contract rows (``edge_callee`` set) — only the CALL EDGE
       was examined, and ``ReviewJournalEntry.key`` documents the
       invariant: an edge review must never mark the caller function
-      itself as reviewed.
+      itself as reviewed;
+    * ``[mechanical]`` echo rows (:func:`is_mechanical_echo`) —
+      post-loop pattern-scan findings journalled for cross-layer
+      visibility. No review examined the function, so a durable mark
+      would read it as reviewed in every store-derived view
+      (including the gap-audit residual) and silently retire it from
+      review scheduling.
 
     Same direction as :func:`reviewed_set`; the two differ only on
     edge rows (see its docstring).
@@ -1252,6 +1268,7 @@ def entry_earns_function_coverage(entry: ReviewJournalEntry) -> bool:
     return (
         entry.verdict not in ("error", "dark")
         and not entry.edge_callee
+        and not is_mechanical_echo(entry)
     )
 
 

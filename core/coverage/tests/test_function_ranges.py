@@ -79,3 +79,60 @@ def test_import_journal_edge_contract_entries_do_not_mark_caller(tmp_path):
     assert marks == 1
     assert store.tool_coverage_of_range("src/a.py", 10, 20)
     assert not store.tool_coverage_of_range("src/a.py", 30, 30)
+
+
+def test_import_journal_mechanical_echo_entries_do_not_mark(tmp_path):
+    """Post-loop ``[mechanical]`` echo rows journal pattern-scan
+    findings for cross-layer visibility — no review examined the
+    function. Projecting them into store marks read never-reviewed
+    functions as reviewed in every store-derived coverage view."""
+    from core.coverage.journal import ReviewJournalEntry
+    from core.coverage.store import CoverageStore
+
+    reviewed = ReviewJournalEntry(
+        ts="2026-01-01T00:00:00Z", run_id="audit-1",
+        file="src/a.py", function="f", verdict="clean",
+        source_hash="", body="real review body",
+    )
+    echo = ReviewJournalEntry(
+        ts="2026-01-01T00:00:00Z", run_id="audit-1",
+        file="src/a.py", function="g", verdict="suspicious",
+        source_hash="", body="[mechanical] pattern match in g",
+        strategies=["post-loop-mechanical"],
+    )
+    store = CoverageStore(tmp_path / "coverage.json")
+    with mock.patch(
+        "core.coverage.journal.load_index",
+        return_value={reviewed.key: reviewed, echo.key: echo},
+    ):
+        marks = import_journal(store, tmp_path, _CHECKLIST)
+
+    assert marks == 1
+    assert store.tool_coverage_of_range("src/a.py", 10, 20)
+    assert not store.tool_coverage_of_range("src/a.py", 30, 30)
+
+
+def test_import_journal_consistency_census_entries_do_not_mark(tmp_path):
+    """The consistency census's LLM-free synthesized outcomes journal
+    with their own markers (``consistency-census`` tag /
+    ``[consistency:`` body) — neither pattern-echo marker — and must
+    be screened by the same rule: no review examined the function."""
+    from core.coverage.journal import ReviewJournalEntry
+    from core.coverage.store import CoverageStore
+
+    census = ReviewJournalEntry(
+        ts="2026-01-01T00:00:00Z", run_id="audit-1",
+        file="src/a.py", function="g", verdict="suspicious",
+        source_hash="",
+        body="[consistency:handler-outcome] census-confirmed variant",
+        strategies=["consistency-census"],
+    )
+    store = CoverageStore(tmp_path / "coverage.json")
+    with mock.patch(
+        "core.coverage.journal.load_index",
+        return_value={census.key: census},
+    ):
+        marks = import_journal(store, tmp_path, _CHECKLIST)
+
+    assert marks == 0
+    assert not store.tool_coverage_of_range("src/a.py", 30, 30)

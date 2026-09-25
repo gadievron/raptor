@@ -1894,7 +1894,11 @@ def _fold_journal_into_covered(
                     strategy_backfill=_strategy_backfill_from(own_entries),
                 )
             else:
-                from .journal import is_function_grade, load_entries
+                from .journal import (
+                    is_function_grade,
+                    is_mechanical_echo,
+                    load_entries,
+                )
                 # Provisional rows (unfinalized cadence-tick
                 # promotions) are excluded here too: this is the
                 # reuse-DISABLED resume path (cold-profile
@@ -1911,11 +1915,17 @@ def _fold_journal_into_covered(
                 # reviewed-set hardening did not reach, and it kept
                 # interrupted dark rows unadjudicated forever on
                 # every reuse-disabled resume.
+                # ``[mechanical]`` echo rows are excluded everywhere
+                # a fold credits: a pattern-scan echo (written for
+                # gap functions no review ever visited) is not a
+                # review, and plain credit here retired those
+                # functions from the resumed run's queue.
                 covered.update(
                     e.key for e in load_entries(out_dir)
                     if e.verdict not in ("error", "dark")
                     and is_function_grade(e)
                     and not getattr(e, "provisional", None)
+                    and not is_mechanical_echo(e)
                 )
         except Exception as exc:
             from core.coverage.journal import JournalIncomplete
@@ -2377,7 +2387,7 @@ def _verify_entries_fold(
     """
     from core.coverage import journal_mac
 
-    from .journal import is_function_grade
+    from .journal import is_function_grade, is_mechanical_echo
 
     def _credit(key: str, line_start: int) -> None:
         covered.add(key)
@@ -2438,6 +2448,16 @@ def _verify_entries_fold(
     to_verify: dict[str, list] = {}
     for entry in entries:
         if entry.verdict == "error" or not is_function_grade(entry):
+            continue
+        if is_mechanical_echo(entry):
+            # Post-loop pattern-scan echo rows are cross-layer
+            # visibility, never reviews — no fold route may credit
+            # or import them. With verdict reuse enabled their
+            # ``post-loop-mechanical`` tag already refused reuse at
+            # the strategy screen, but the plain-credit routes
+            # (reuse disabled, unstamped tier, hashless verified)
+            # had no screen and marked never-reviewed functions
+            # covered.
             continue
         if getattr(entry, "provisional", None):
             # A cadence-tick promotion the producing run never
