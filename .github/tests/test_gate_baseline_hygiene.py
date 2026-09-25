@@ -45,7 +45,7 @@ _BASELINE_NAME_RE = re.compile(r"\b\w*baseline\w*\.json\b")
 #: at introduction time; raise this floor when a new gate baseline
 #: lands, lower it only with the removal of a gate and its baseline
 #: (which the on-disk pin below still balances).
-_UNIVERSE_FLOOR = 6
+_UNIVERSE_FLOOR = 8
 
 
 def gate_baseline_names() -> tuple[str, ...]:
