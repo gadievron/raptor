@@ -159,6 +159,8 @@ def _find_line(source: str, pos: int) -> int:
 # decompilations — each marks the start of an independent function.
 _XREF_SEGMENT_MARKER_RE = re.compile(
     r"(?m)^// --- (?:caller|callee): .+ ---$",
+    # line-model: the xref producer emits these marker lines itself,
+    # \n-joined — decompiled target text never anchors here
 )
 
 

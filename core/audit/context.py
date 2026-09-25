@@ -4327,7 +4327,7 @@ def _parse_patterns(text: str) -> list[tuple]:
         full_text = text[start:end].rstrip()
         body_after_heading = text[m.end():end].strip()
         first_line = ""
-        for line in body_after_heading.split("\n"):
+        for line in body_after_heading.split("\n"):  # line-model: RAPTOR-authored patterns markdown
             line = line.strip()
             if line and not line.startswith("---") and not line.startswith("```"):
                 first_line = line

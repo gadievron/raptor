@@ -3535,7 +3535,7 @@ def review_one_function(
             # schema discipline — no tool ran, nothing was refuted —
             # so it carries no grade; any future non-receipted sweep
             # transition stays ungraded by the same allowlist.
-            _sweep_reason = (outcome.body or "").split("\n", 1)[0][:200]
+            _sweep_reason = (outcome.body or "").split("\n", 1)[0][:200]  # line-model: journal entry body (RAPTOR/LLM text)
             if _sweep_reason.startswith("[smt-disproof:"):
                 _sc_record_refutation(
                     result.scorecard_events, outcome,

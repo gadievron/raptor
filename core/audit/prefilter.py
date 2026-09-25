@@ -1454,13 +1454,13 @@ def _judged_view_lines(
         # (_LINE_TERMINATORS), and both views then split on "\n" ONLY
         # so no residual byte can desync them.
         src = _normalize_line_terminators(source.strip())
-        raw_lines = [ln.strip() for ln in src.split("\n")]
+        raw_lines = [ln.strip() for ln in src.split("\n")]  # line-model: _normalize_line_terminators rewrites \r to \n above
         kept = [
             idx for idx, ln in enumerate(raw_lines)
             if ln and ln not in ("{", "}")
         ]
         code_lines = [raw_lines[i] for i in kept]
-        sview = sanitized_view(src, language=lang).split("\n")
+        sview = sanitized_view(src, language=lang).split("\n")  # line-model: _normalize_line_terminators rewrites \r to \n above
         ref_lines = [
             sview[i].strip() if i < len(sview) else ""
             for i in kept
@@ -1481,8 +1481,8 @@ def _judged_view_lines(
         # tuple were to miss.
         src = _normalize_line_terminators(source.strip())
         cview = sanitized_view(src, language=lang, keep_strings=True)
-        rlines = sanitized_view(src, language=lang).split("\n")
-        for idx, raw in enumerate(cview.split("\n")):
+        rlines = sanitized_view(src, language=lang).split("\n")  # line-model: _normalize_line_terminators rewrites \r to \n above
+        for idx, raw in enumerate(cview.split("\n")):  # line-model: _normalize_line_terminators rewrites \r to \n above
             ln = raw.strip()
             rl = rlines[idx].strip() if idx < len(rlines) else ""
             if not ln or ln in ("{", "}"):
@@ -1887,7 +1887,7 @@ def _wrapper_tail_gates(
         if return_count > 1:
             return False, ""
         if not re.search(r'\breturn\b', body_no_sig):
-            stmts = [s.strip() for s in body_no_sig.split("\n") if s.strip()]
+            stmts = [s.strip() for s in body_no_sig.split("\n") if s.strip()]  # line-model: statement count only; strip()-normalised
             if len(stmts) > 1:
                 return False, ""
 

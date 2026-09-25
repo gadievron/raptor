@@ -100,7 +100,7 @@ def _parse(asm_text: str) -> list[dict]:
     """Tokenise into label / insn records with 1-based line numbers."""
     records: list[dict] = []
     in_block = False
-    for lineno, raw in enumerate(asm_text.split("\n"), start=1):
+    for lineno, raw in enumerate(asm_text.split("\n"), start=1):  # line-model: host-generated perlasm output is \n-model; tokens are strip()-normalised
         line, in_block = _strip_comment(raw, in_block)
         if not line.strip():
             continue

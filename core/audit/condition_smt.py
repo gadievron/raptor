@@ -1844,7 +1844,7 @@ def check_auth_bypass(
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
 
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
 
     auth_checks = _extract_auth_checks(lines, vocab)
     if not auth_checks:
@@ -2143,7 +2143,7 @@ def check_lock_discipline(
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
 
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     acquires = _extract_lock_acquires(lines, vocab)
     if not acquires:
         return LockDisciplineResult(
@@ -2585,7 +2585,7 @@ def check_resource_leak(
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
 
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     allocs = _extract_allocs(lines, vocab)
     if not allocs:
         return ResourceLeakResult(
@@ -3021,7 +3021,7 @@ def check_null_propagation(
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
 
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     assigns = _extract_nullable_assigns(lines, vocab=vocab)
     if not assigns:
         return NullPropagationResult(
@@ -3229,7 +3229,7 @@ def check_integer_narrowing(source: str) -> IntegerNarrowingResult:
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
 
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     is_go = any(
         "func " in ln or "package " in ln
         for ln in lines[:30]
@@ -3547,7 +3547,7 @@ def derive_parse_wrappers(file_text: str) -> frozenset:
     definition (Go ``func`` at column 0, or a C-style definition at
     column 0).
     """
-    lines = file_text.split("\n")
+    lines = file_text.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     wrappers: set[str] = set()
     for i, line in enumerate(lines):
         stripped = line.lstrip()
@@ -3670,7 +3670,7 @@ def check_parsed_int_contract(
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
 
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     parsed_vars: dict[str, int] = {}
     wrapper_re = None
     if parse_wrappers:
@@ -4020,7 +4020,7 @@ def check_early_release(
     """
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     is_go = any(
         "func " in ln or "package " in ln or ".Lock()" in ln
         for ln in lines[:30]
@@ -4353,7 +4353,7 @@ def check_lock_domain(
     """
     from .safety_contract import assert_boost_only
     assert_boost_only("condition_smt")
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     is_go = any(
         "func " in ln or "package " in ln or ".Lock()" in ln
         for ln in lines[:30]
@@ -4931,7 +4931,7 @@ def check_race_protection(
     if not source or not source.strip():
         return RaceProtectionResult(reasoning="empty source")
 
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
 
     # Non-C: bail
     if any(kw in source for kw in ("func ", "package ", "import (")):

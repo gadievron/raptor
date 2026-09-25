@@ -173,7 +173,7 @@ _FIELD_ASSIGN = re.compile(
 
 def detect_uninit_leak_regex(source: str) -> list[UninitLeak]:
     """Regex fallback: same-function struct → partial-init → copy sink."""
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     results: list[UninitLeak] = []
 
     stack_structs: dict[str, int] = {}

@@ -346,7 +346,7 @@ def _infer_from_docstring(spec: InferredSpec, gap: dict[str, Any]) -> None:
     # assertions, reachable without planting any test file. Truncate
     # first, defuse last (see _defuse_repo_text).
     if not spec.intent:
-        first_line = docstring.split("\n")[0].strip().rstrip(".")
+        first_line = docstring.split("\n")[0].strip().rstrip(".")  # line-model: first-line intent slice; strip() drops any trailing \r
         if 10 <= len(first_line) <= 200:
             spec.intent = _defuse_repo_text(first_line.lower())
             spec.sources.append(SpecSource(
@@ -355,7 +355,7 @@ def _infer_from_docstring(spec: InferredSpec, gap: dict[str, Any]) -> None:
                 evidence=f"first line: {first_line[:60]}",
             ))
 
-    for line in docstring.split("\n"):
+    for line in docstring.split("\n"):  # line-model: per-line keyword scan; strip()-normalised
         line_stripped = line.strip().lower()
 
         if any(k in line_stripped for k in ("raises", "throw", "error")):

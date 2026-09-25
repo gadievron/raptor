@@ -1108,7 +1108,7 @@ def run_compiler_analyzer_sweep(
 
     got_src = read_text_capped(full_path)
     source_text = "" if got_src is None else got_src[0]
-    source_lines = source_text.split("\n")
+    source_lines = source_text.split("\n")  # line-model: read_text_capped universal-newline read above
     identifiers = extract_hypothesis_identifiers(
         hypothesis, source_text, function_name,
     )

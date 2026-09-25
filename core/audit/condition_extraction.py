@@ -392,7 +392,7 @@ def _extract_condition_text(cond_node, lang: str, source_bytes: bytes) -> str:
     # Last resort: return full text truncated
     full = _node_text(cond_node, source_bytes)
     # Take first line only
-    first_line = full.split("\n")[0].strip()
+    first_line = full.split("\n")[0].strip()  # line-model: first-line display slice; strip() drops any trailing \r
     if len(first_line) > 200:
         first_line = first_line[:197] + "..."
     return first_line

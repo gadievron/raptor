@@ -74,7 +74,12 @@ def read_function_source(
         # \n-model split (core.source.lines contract): the span comes
         # from the pinned checklist, whose inventory counts \n.
         return "\n".join(split_lines(text)[line_start - 1:line_end])
-    return text
+    # Whole-file fallback: trim exactly one \r before each \n — the
+    # same per-line content the span path's split_lines join hands
+    # consumers, with the whole-file byte shape (trailing newline)
+    # kept. A bare \r stays in-line: same plantable-byte posture as
+    # the span path, never a break.
+    return text.replace("\r\n", "\n")
 
 
 # Tier counters are incremented from parallel review workers and the

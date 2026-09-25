@@ -1251,7 +1251,7 @@ def _expanded_second_pass(
             return None
         source = got[0]
         if line_start and line_end:
-            lines = source.split("\n")
+            lines = source.split("\n")  # line-model: read_text_capped universal-newline read above
             segment = "\n".join(lines[max(0, line_start - 1):line_end])
         else:
             segment = source
