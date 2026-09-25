@@ -464,3 +464,38 @@ class SageClient:
             self._query_cache[key] = result
         return result
 
+    def list_memories(self, limit: int = 200, offset: int = 0) -> Any | None:
+        """One page of the server's memory listing (SDK passthrough).
+
+        Returns the raw SDK response (``.memories`` = memory objects
+        carrying ``memory_id`` / ``content`` / ``domain_tag``,
+        ``.has_more`` / ``.total`` where the server provides them) or
+        ``None`` when SAGE is unavailable or the call fails. Needed by
+        id-bearing operator operations (forget a specific row) — the
+        semantic :meth:`query` deliberately drops ids.
+        """
+        client = self._get_client()
+        if client is None:
+            return None
+        try:
+            return client.list_memories(limit=limit, offset=offset)
+        except Exception as e:  # noqa: BLE001 — degrade, never raise into hooks
+            logger.warning("SAGE list_memories failed: %s", e)
+            return None
+
+    def forget(self, memory_id: str, reason: str = "") -> bool:
+        """Deprecate one memory by full id (SDK passthrough).
+
+        Returns True on success, False when SAGE is unavailable or the
+        server refuses. Deprecation is the server's own soft-delete —
+        committed-status queries stop returning the row.
+        """
+        client = self._get_client()
+        if client is None:
+            return False
+        try:
+            client.forget(memory_id, reason=reason)
+            return True
+        except Exception as e:  # noqa: BLE001 — degrade, never raise into hooks
+            logger.warning("SAGE forget failed: %s", e)
+            return False
