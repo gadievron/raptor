@@ -119,3 +119,59 @@ class TestPreStampFallback:
     def test_stamp_absent_and_no_target_path_degrades_closed(self):
         assert gap_for_site(
             _checklist(stamps=False), "mod/save.php", 8) is None
+
+
+_PHP_PLANTED = """\
+<?php
+// note\f\fplant
+require_once('a.php');
+require_once('b.php');
+$cmd = $_POST['cmd'];
+process_line($cmd);
+"""
+
+
+class TestPreStampFallbackLineModel:
+    """The recompute slices the file with the checklist's \\n-counted
+    line numbers.  ``str.splitlines()`` also breaks on plantable
+    bytes (\\f, \\x85, ...), so one such byte planted in an early
+    comment used to shift every later index — the handler span was
+    recomputed from substitute (wiring) lines and the hit unbound."""
+
+    @staticmethod
+    def _planted_checklist(target: Path) -> dict:
+        return {
+            "target_path": str(target),
+            "files": [
+                {
+                    "path": "mod/save.php",
+                    "language": "php",
+                    "items": [
+                        {"name": "interstitial:1-2",
+                         "kind": "interstitial",
+                         "line_start": 1, "line_end": 2},
+                        {"name": "interstitial:3-4",
+                         "kind": "interstitial",
+                         "line_start": 3, "line_end": 4},
+                        {"name": "interstitial:5-6",
+                         "kind": "interstitial",
+                         "line_start": 5, "line_end": 6},
+                    ],
+                },
+            ],
+        }
+
+    def test_planted_bytes_do_not_shift_the_handler_span(self, tmp_path):
+        target = tmp_path / "target"
+        (target / "mod").mkdir(parents=True)
+        (target / "mod" / "save.php").write_text(_PHP_PLANTED)
+        ck = self._planted_checklist(target)
+        gap = gap_for_site(ck, "mod/save.php", 5)
+        assert gap is not None and gap["name"] == "interstitial:5-6"
+
+    def test_wiring_span_still_refuses_with_planted_bytes(self, tmp_path):
+        target = tmp_path / "target"
+        (target / "mod").mkdir(parents=True)
+        (target / "mod" / "save.php").write_text(_PHP_PLANTED)
+        ck = self._planted_checklist(target)
+        assert gap_for_site(ck, "mod/save.php", 3) is None
