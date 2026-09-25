@@ -57,46 +57,16 @@ PROMPT_INTENDED: dict[str, str] = {
 }
 
 # Referenced commands the hand-picked allowlist drifted away from.
-# Each is a dispatched-surface command that today hits a permission
+# Each row is a dispatched-surface command that hits a permission
 # prompt mid-chain (denied-and-skipped in dispatched contexts).
-# Pre-approving any of them is a standing permission grant — an
-# operator decision, owed and tracked here, not made by this test.
-# Moving a name out of this table = adding its settings.json entry in
-# the same reviewed change.
-PENDING_OPERATOR_DECISION: dict[str, str] = {
-    "raptor-may-ask": "the interactivity gate itself — every gated "
-                      "ask currently starts with a permission prompt "
-                      "for the gate that decides whether asking is "
-                      "allowed",
-    "raptor-enrich-context-map-imports": "MAP-5j enricher; prompts "
-                                         "mid-chain while MAP-4 "
-                                         "forbids manual import "
-                                         "enumeration",
-    "raptor-review": "audit-results navigation CLI (/review dispatch)",
-    "raptor-clone-repo": "hardened clone helper the oss/crash lanes "
-                         "mandate over bare git clone",
-    "raptor-fetch-attachment": "hardened attachment fetcher",
-    "raptor-cve-diff": "/cve-diff dispatch",
-    "raptor-cve-env": "/cve-env dispatch",
-    "raptor-cve-checker": "CVE metadata checker",
-    "raptor-tune": "/tune dispatch",
-    "raptor-describe": "/describe dispatch (read-only target survey)",
-    "raptor-study-loop": "study pipeline driver",
-    "raptor-study-prep": "study pipeline stage",
-    "raptor-study-run": "study pipeline stage",
-    "raptor-sca-run": "/sca dispatch",
-    "raptor-llm-scorecard": "/scorecard dispatch (read-only queries)",
-    "raptor-smt-validate-path": "Z3 path-feasibility check (pure "
-                                "compute)",
-    "raptor-smt-check-null-deref": "Z3 checker (pure compute)",
-    "raptor-smt-check-oob": "Z3 checker (pure compute)",
-    "raptor-smt-check-overflow": "Z3 checker (pure compute)",
-    "raptor-smt-check-overflow-to-oob": "Z3 checker (pure compute)",
-    "raptor-fetch-anchor": "session-scoped WebFetch-anchor writer for "
-                           "the crash-report-fetcher (writes one file "
-                           "under .claude/run/); grant owed with the "
-                           "rest of this worklist",
-}
+# Pre-approving one is a standing permission grant — an operator
+# decision, owed and tracked here, not made by this test. Moving a
+# name out of this table = adding its settings.json entry in the
+# same reviewed change. Empty today: the accumulated worklist was
+# adjudicated by the operator and shipped as grants; the table
+# stays as the intake point for the next reference this test
+# catches.
+PENDING_OPERATOR_DECISION: dict[str, str] = {}
 
 
 def _doc_files() -> list[Path]:
