@@ -977,6 +977,15 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
                     "Subprocess sandboxing unavailable — neither user "
                     "namespaces nor Landlock are supported on this kernel"
                 )
+            # WSL host section (messaging only — banner and doctor both
+            # render it, doctor via its check_env passthrough). Rides
+            # the probe results gathered just above; is_wsl() is cached
+            # and False everywhere off-WSL, so non-WSL hosts pay one
+            # /proc read per process and see no line.
+            from core.startup.wsl import is_wsl, wsl_advisories
+            if is_wsl():
+                parts.append("WSL")
+                warnings.extend(wsl_advisories(landlock_ok))
     except Exception:
         # Never let a sandbox-probe bug kill startup, but leave a trail
         # at DEBUG so the bug is findable instead of invisible.
