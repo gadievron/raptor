@@ -54,7 +54,7 @@ def _drive_binary_route(script_mod, monkeypatch, tmp_path: Path,
     import core.inventory.binary_builder as binary_builder
 
     out = tmp_path / "out"
-    out.mkdir()
+    out.mkdir(exist_ok=True)   # tests may pre-populate the out dir
     target = tmp_path / "prog"
     target.write_bytes(b"\x7fELF" + b"\0" * 12)
 
@@ -81,21 +81,48 @@ def _drive_binary_route(script_mod, monkeypatch, tmp_path: Path,
 
 
 class TestChecklistWriteAtomic:
-    def test_checklist_written_via_atomic_writer(
+    def test_checklist_written_via_accessor(
             self, script_mod, monkeypatch, tmp_path: Path):
+        # The binary route writes through save_checklist (atomic +
+        # flocked + retires a superseded sharded layout) — pin the
+        # accessor call and the on-disk result.
+        import core.inventory as inv
         calls: list[Path] = []
-        real = script_mod.save_json
+        real = inv.save_checklist
 
-        def recording_save(path, data, *a, **kw):
-            calls.append(Path(path))
-            return real(path, data, *a, **kw)
+        def recording_save(output_dir, data):
+            calls.append(Path(output_dir))
+            return real(output_dir, data)
 
-        monkeypatch.setattr(script_mod, "save_json", recording_save)
+        monkeypatch.setattr(inv, "save_checklist", recording_save)
         captured = _drive_binary_route(script_mod, monkeypatch, tmp_path)
-        assert captured["out"] / "checklist.json" in calls
+        assert captured["out"] in calls
         loaded = json.loads(
             (captured["out"] / "checklist.json").read_text())
         assert loaded["total_items"] == 0
+
+    def test_write_retires_stale_sharded_layout(
+            self, script_mod, monkeypatch, tmp_path: Path):
+        # A leftover sharded checklist/ dir must not shadow the fresh
+        # binary inventory via the index.json discriminator.
+        import hashlib
+        out = tmp_path / "out"
+        out.mkdir()
+        shard_dir = out / "checklist"
+        shard_dir.mkdir()
+        content = b'{"files":[]}\n'
+        (shard_dir / "shard-stale-000.json").write_bytes(content)
+        (shard_dir / "index.json").write_text(json.dumps({
+            "schema_version": 1, "meta": {"target_path": "/stale"},
+            "shards": [{"path": "shard-stale-000.json",
+                        "file_count": 0, "item_count": 0, "sloc": 0,
+                        "bytes": len(content),
+                        "sha256": hashlib.sha256(content).hexdigest()}],
+        }))
+        _drive_binary_route(script_mod, monkeypatch, tmp_path)
+        assert not (shard_dir / "index.json").exists()
+        from core.inventory import read_checklist
+        assert read_checklist(out)["total_items"] == 0
 
 
 class TestContextMapRead:

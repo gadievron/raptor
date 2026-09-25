@@ -205,10 +205,13 @@ def _build_binary_checklist(target: Path, output_dir: Path) -> dict:
         include_auto_named=True,
         context_map=context_map,
     )
-    # Atomic write: every downstream stage (validate stage 0, the
-    # enrich family) reads checklist.json; a torn write surfaces as
-    # "exists but fails to parse" everywhere at once.
-    save_json(output_dir / "checklist.json", checklist)
+    # Accessor write (atomic, flocked): every downstream stage
+    # (validate stage 0, the enrich family) reads through the
+    # accessors, and a direct save_json here would leave a stale
+    # sharded checklist/ dir winning the on-disk discriminator over
+    # the fresh binary inventory.
+    from core.inventory import save_checklist
+    save_checklist(output_dir, checklist)
     return checklist
 
 

@@ -285,7 +285,9 @@ class TestPromoteChecklist(unittest.TestCase):
 
 
 class TestChecklistWriteBudget(unittest.TestCase):
-    """The writer refuses artifacts the core-inventory readers refuse."""
+    """Over-budget single-file serialisations switch the writer to
+    the sharded layout; only artifacts NO layout can store fail
+    fast."""
 
     def _tiny_budget(self, n: int):
         import core.inventory as inv
@@ -293,32 +295,59 @@ class TestChecklistWriteBudget(unittest.TestCase):
         inv._MAX_CHECKLIST_BYTES = n
         self.addCleanup(setattr, inv, "_MAX_CHECKLIST_BYTES", real)
 
-    def test_save_refuses_over_budget_and_writes_nothing(self):
+    def test_save_over_budget_emits_sharded_layout(self):
+        self._tiny_budget(64)
+        with TemporaryDirectory() as d:
+            save_checklist(
+                d, {"files": [{"path": "a/f.py", "items": []}],
+                    "pad": "x" * 200})
+            self.assertFalse((Path(d) / "checklist.json").exists())
+            self.assertTrue(
+                (Path(d) / "checklist" / "index.json").is_file())
+            loaded = read_checklist(d)
+            self.assertEqual(loaded["pad"], "x" * 200)
+            self.assertEqual(loaded["files"][0]["path"], "a/f.py")
+
+    def test_update_over_budget_switches_to_sharded(self):
+        with TemporaryDirectory() as d:
+            save_checklist(d, {"files": []})
+            # Budget the EXISTING small file still fits (RMW must load
+            # it) but the grown transform result does not.
+            self._tiny_budget(400)
+            update_checklist(
+                d, lambda data: {"files": [{"path": "a/f.py"}],
+                                 "pad": "x" * 600})
+            self.assertFalse((Path(d) / "checklist.json").exists())
+            self.assertEqual(read_checklist(d)["pad"], "x" * 600)
+
+    def test_unshardable_document_fails_fast(self):
+        # No 'files' list to shard: the stacked fail-fast still
+        # applies — never write an artifact every reader refuses.
         from core.inventory import ChecklistBudgetExceededError
         self._tiny_budget(64)
         with TemporaryDirectory() as d:
-            with self.assertRaises(ChecklistBudgetExceededError) as ctx:
-                save_checklist(d, {"files": [], "pad": "x" * 200})
-            self.assertFalse((Path(d) / "checklist.json").exists())
-            # The error must be actionable: name the budget and the
-            # scoped-inventory remedy.
-            msg = str(ctx.exception)
-            self.assertIn("--scope", msg)
-            self.assertIn("64", msg)
-
-    def test_update_refuses_over_budget_and_preserves_existing(self):
-        from core.inventory import ChecklistBudgetExceededError
-        with TemporaryDirectory() as d:
-            path = Path(d) / "checklist.json"
-            path.write_text("{}")
-            original = path.read_text()
-            self._tiny_budget(64)
             with self.assertRaises(ChecklistBudgetExceededError):
-                update_checklist(
-                    d, lambda data: {"files": [], "pad": "x" * 200})
-            # Refusal must not atomically replace the usable on-disk
-            # checklist with an over-budget one.
-            self.assertEqual(path.read_text(), original)
+                save_checklist(d, {"pad": "x" * 200})
+            self.assertFalse((Path(d) / "checklist.json").exists())
+            self.assertFalse((Path(d) / "checklist").exists())
+
+    def test_indivisible_entry_fails_fast(self):
+        # A single file entry over the per-shard reader budget cannot
+        # be stored by any split.
+        import core.inventory as inv
+        from core.inventory import ChecklistBudgetExceededError
+        real = inv._MAX_CHECKLIST_SHARD_BYTES
+        inv._MAX_CHECKLIST_SHARD_BYTES = 128
+        self.addCleanup(
+            setattr, inv, "_MAX_CHECKLIST_SHARD_BYTES", real)
+        self._tiny_budget(64)
+        with TemporaryDirectory() as d:
+            with self.assertRaises(ChecklistBudgetExceededError) as ctx:
+                save_checklist(
+                    d, {"files": [{"path": "gen/huge.c",
+                                   "blob": "y" * 400}]})
+            self.assertIn("gen/huge.c", str(ctx.exception))
+            self.assertFalse((Path(d) / "checklist").exists())
 
     def test_small_checklist_still_saves(self):
         with TemporaryDirectory() as d:

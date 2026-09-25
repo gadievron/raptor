@@ -2,6 +2,9 @@
  "_comment": "Accepted canonical-JSON findings. Keys are rule:file:symbol (no line numbers). Every entry is a deliberately-raw json.dumps site whose byte form is frozen (MAC canonical form, persisted hash identity, digest-keyed cache, byte-stability contract) or a display/artifact site inside a canonical module whose writer surface has not been migrated. Add an entry ONLY with a note; check_canonical_json.py fails CI on any finding not listed here and warns on stale entries.",
  "version": 1,
  "entries": {
+  "substrate_dumps_flows_to_hash:core/inventory/__init__.py:_write_sharded_checklist": {
+   "note": "shard-file integrity checksum: sha256 over the EXACT bytes written to the shard file, verified against the same on-disk bytes at read — a file checksum, not a content address, so encoder-dependence is immaterial (hash and file always come from the one serialization instance)"
+  },
   "dumps_flows_to_hash:core/project/report.py:_finding_fingerprint": {
    "note": "sha256[:12] finding ids persisted in manifest.json/findings.jsonl; pinned form uses ensure_ascii=False, so dumps_canonical would change every id — frozen"
   },
