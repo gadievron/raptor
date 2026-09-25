@@ -137,11 +137,14 @@ applies unchanged.
   so this validation is the only target/core drift gate a resume has;
   undetectable drift (non-git target, prior run predating fingerprint
   recording) warns loudly instead.
-- Uncommitted worktree changes are NOT detected by the refusal gate —
-  the fingerprint is HEAD-only by design (content-hashing a hostile
-  worktree would execute repo-configured filter commands). A dirty
-  worktree is surfaced as a warning at validation (stat-only probe,
-  never refuses): an edited unit would adopt its stale prior verdict.
+- Uncommitted worktree changes are NOT detected — the fingerprint is
+  HEAD-only by design, and no dirtiness probe runs at all: any git
+  dirtiness query (`status`, and even `ls-files -m` on racily-clean
+  index entries) can re-hash worktree content through repo-configured
+  filter commands, executing hostile code outside the sandbox. If you
+  edited tracked files since the prior run, commit them and run a
+  fresh scan — an edited unit would otherwise silently adopt its
+  stale prior verdict (path-keyed checkpoints).
 - **Trust:** the prior run dir is trusted as THIS installation's own
   output. Its checkpoint contents shape the resumed run's verdicts —
   upstream adopts completed checkpoints without content

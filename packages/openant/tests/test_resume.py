@@ -203,31 +203,53 @@ class TestValidatePriorRun(unittest.TestCase):
             _validate(prior, self.repo)
 
     @unittest.skipIf(shutil.which("git") is None, "git not available")
-    def test_dirty_worktree_warns_never_refuses(self):
-        import time
-        _git(self.repo, "init", "-q")
+    def test_validation_never_executes_repo_configured_filters(self):
+        """Validating a git target must never run the repo-configured
+        clean filter — git dirtiness queries (status; ls-files -m on
+        RACILY-CLEAN index entries) re-hash worktree content through
+        filter.<x>.clean, executing hostile repo config in the
+        unsandboxed parent. The gate is HEAD-only and no dirtiness
+        probe ships; uncommitted edits pass validation undetected (the
+        documented limit) with the filter untouched."""
+        canary = self.base / "filter-canary"
+
+        def _g(*args: str) -> None:
+            # The hostile filter is neutralised for OUR setup writes
+            # only (-c wins over the repo config); validation gets the
+            # repo as shipped, hostile filter armed.
+            subprocess.run(
+                ["git", "-C", str(self.repo),
+                 "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                 "-c", "commit.gpgsign=false",
+                 "-c", "filter.evil.clean=cat", *args],
+                check=True, capture_output=True, timeout=60,
+            )
+
+        _g("init", "-q")
+        _g("config", "filter.evil.clean",
+           f"touch {canary}; cat")
+        (self.repo / ".gitattributes").write_text("* filter=evil\n")
         (self.repo / "a.txt").write_text("one")
-        # Backdate the file so the fresh index is deterministically
-        # newer (no racily-clean smudge in the stat-only probe).
-        past = time.time() - 10
-        os.utime(self.repo / "a.txt", (past, past))
-        _git(self.repo, "add", "a.txt")
-        _git(self.repo, "commit", "-q", "-m", "one")
+        _g("add", "-A")
+        _g("commit", "-q", "-m", "one")
+        # Entries are racily clean (just written, NOT backdated) — the
+        # exact index state in which stat-shaped plumbing re-hashes.
+        if canary.exists():
+            canary.unlink()
         prior = _mk_prior(self.base, self.repo,
                           tfp=target_fingerprint(self.repo))
-        # Clean worktree at the same HEAD: no dirty warning.
-        result = _validate(prior, self.repo)
-        self.assertFalse(
-            any("uncommitted" in w for w in result.warnings),
-            result.warnings)
-        # Uncommitted edit to a tracked unit: HEAD is unchanged, so
-        # the refusal gate cannot see it — the validation must WARN
-        # (and only warn).
+        _validate(prior, self.repo)
+        self.assertFalse(canary.exists(),
+                         "validation executed the repo-configured "
+                         "clean filter")
+        # Dirty worktree at the same HEAD: passes validation (the
+        # documented HEAD-only limit) — still with no filter run.
         (self.repo / "a.txt").write_text("edited, not committed")
         result = _validate(prior, self.repo)
-        self.assertTrue(
-            any("uncommitted" in w for w in result.warnings),
-            result.warnings)
+        self.assertFalse(canary.exists(),
+                         "validation executed the repo-configured "
+                         "clean filter on a dirty worktree")
+        self.assertTrue(result.remaining["resumable"])
 
     def test_unverifiable_target_drift_warns_not_refuses(self):
         prior = _mk_prior(self.base, self.repo)  # no fingerprint recorded
