@@ -274,15 +274,16 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
         logger.debug("joern runner not importable; skipping CPG import")
         return False
 
-    from packages.joern.tunables import JoernTunables
-
     # Fallbacks defer to the canonical tunables defaults — a local
     # literal here silently drifts from the policy import_cpg and
     # from_tuning own (a 120s local import fallback once killed the
     # whole Joern tier for runs without resolved tunables).
-    cpg_timeout = (
-        getattr(tunables, "cpg_timeout_s", JoernTunables.cpg_timeout_s)
-        if tunables else JoernTunables.cpg_timeout_s
+    # resolve_cpg_timeout_s refines a derived ("auto") timeout from
+    # the scope's source-size estimate; non-auto tunables pass
+    # through unchanged.
+    from packages.joern.tunables import resolve_cpg_timeout_s
+    cpg_timeout = resolve_cpg_timeout_s(
+        tunables, target_path, exclude_dirs=exclude_dirs,
     )
     import_timeout = (
         getattr(tunables, "import_timeout_s", None) if tunables else None
@@ -1042,20 +1043,26 @@ def build_joern_evidence(
 
     cache_dir = resolve_cpg_cache_dir(out_dir)
     status: dict = {}
+    # An in-target run output dir must not feed the CPG content
+    # key: its artifacts change every segment, flapping the key
+    # and re-buying a full rebuild per resume.
+    presweep_excludes = run_exclude_dirs(out_dir, target_path)
+    from packages.joern.tunables import resolve_cpg_timeout_s
     flows = run_joern_pre_sweep(
         target_path, {},
         cache_dir=cache_dir,
         on_progress=on_progress,
-        stall_timeout=tunables.cpg_timeout_s,
+        # A derived ("auto") CPG timeout resolves against this
+        # sweep's own target/exclusion set (non-auto passes through).
+        stall_timeout=resolve_cpg_timeout_s(
+            tunables, target_path, exclude_dirs=presweep_excludes,
+        ),
         query_timeout=tunables.query_timeout_s,
         heap_mb=tunables.heap_mb,
         server=joern_server,
         status_out=status,
         deadline_monotonic=deadline_monotonic,
-        # An in-target run output dir must not feed the CPG content
-        # key: its artifacts change every segment, flapping the key
-        # and re-buying a full rebuild per resume.
-        exclude_dirs=run_exclude_dirs(out_dir, target_path),
+        exclude_dirs=presweep_excludes,
         abort_check=abort_check,
     )
     if abort_check is not None and abort_check():

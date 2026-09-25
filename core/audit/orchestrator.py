@@ -1846,6 +1846,19 @@ def run_orchestrator(
         _joern_lifecycle = False
     else:
         _joern_path = _joern_target(config)
+        if _jt is not None and getattr(_jt, "cpg_timeout_auto", False):
+            # A derived ("auto") CPG timeout resolves against the
+            # narrowed joern target here so the post-loop build wait
+            # (_await_joern_build) matches the wall the build itself
+            # runs under — the from_tuning fallback number can be
+            # smaller than the scope-derived wall on large targets.
+            from packages.joern.tunables import resolve_cpg_timeout_s
+            joern_timeout_s = resolve_cpg_timeout_s(
+                _jt, _joern_path,
+                exclude_dirs=_run_exclude_dirs(
+                    config.out_dir, _joern_path,
+                ),
+            ) + _jt.query_timeout_s
         _joern_timings: dict[str, float] = {}
         joern_server = _start_joern_server_raw(
             _joern_path, config.joern_overrides, _jt,

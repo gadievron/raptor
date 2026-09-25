@@ -13,7 +13,14 @@ override per-run.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -96,3 +103,45 @@ class JoernTunables:
             cpg_timeout_auto=cpg_timeout_auto,
             heap_is_derived=heap_is_derived,
         )
+
+
+def resolve_cpg_timeout_s(
+    tunables: JoernTunables | None,
+    target: Path | str,
+    *,
+    exclude_dirs: tuple[str, ...] = (),
+) -> int:
+    """Build-site resolution of a derived CPG timeout.
+
+    Non-auto tunables (an explicit config value or an operator
+    override) return their number unchanged. Auto tunables derive the
+    timeout from the in-scope source-size estimate of *target* under
+    the same exclusion set the build will use — key/analysis/timeout
+    parity. Estimation failure degrades to the unknown-scope fallback
+    already held in ``cpg_timeout_s``, never to an error (a timeout
+    derivation must not cost the channel).
+    """
+    base = int(
+        getattr(tunables, "cpg_timeout_s", JoernTunables.cpg_timeout_s)
+        if tunables is not None else JoernTunables.cpg_timeout_s
+    )
+    if tunables is None or not getattr(tunables, "cpg_timeout_auto", False):
+        return base
+    try:
+        from pathlib import Path as _Path
+
+        from core.tuning import derive_joern_cpg_timeout_s
+
+        from .runner import estimate_in_scope_sloc
+        sloc = estimate_in_scope_sloc(
+            _Path(target), exclude_dirs=exclude_dirs,
+        )
+        derived = derive_joern_cpg_timeout_s(sloc if sloc > 0 else None)
+    except Exception:  # noqa: BLE001 — derivation must not cost the channel
+        logger.debug("CPG timeout derivation failed", exc_info=True)
+        return base
+    logger.info(
+        "joern CPG timeout derived: %ds (~%d estimated in-scope SLOC)",
+        derived, sloc,
+    )
+    return derived
