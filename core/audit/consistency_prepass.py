@@ -1007,6 +1007,81 @@ def run_consistency_prepass(
                     ],
                 })
 
+    # ── enum×switch completeness — detection-grade, C/C++ first ─────
+    if not _over_budget():
+        try:
+            from .enum_switch import (
+                DIMENSION_ENUM_SWITCH,
+                detect_enum_switch_deviations,
+            )
+            es_devs, es_stats = detect_enum_switch_deviations(
+                source_texts,
+                min_group=int(floors.value("enum-switch.min_switches")),
+                ratio=float(floors.value("enum-switch.ratio")),
+            )
+        except Exception:
+            _dim_failed("enum-switch")
+            logger.debug("consistency prepass: enum-switch census "
+                         "failed", exc_info=True)
+            es_devs, es_stats = [], {}
+        for reason_key, count in (
+            es_stats.get("inconclusive_reasons") or {}
+        ).items():
+            telemetry["inconclusive_reasons"][reason_key] = (
+                telemetry["inconclusive_reasons"].get(reason_key, 0)
+                + count
+            )
+        if es_stats.get("caps_hit"):
+            telemetry["enum_switch_caps_hit"] = True
+        if es_devs:
+            counts = _dim(DIMENSION_ENUM_SWITCH)
+            for dev in es_devs:
+                counts["confirmed"] += 1
+                mechanical.append({
+                    "file": dev.file,
+                    "function": dev.enclosing_function,
+                    "detector": "enum_switch_deviation",
+                    "line": dev.line,
+                    "description": dev.description,
+                    "callee": dev.missing_member,
+                    "rule_id": (
+                        dev.peer_evidence.rule_id
+                        if dev.peer_evidence else ""
+                    ),
+                    "cwe": dev.cwe,
+                })
+                leads.append({
+                    "dimension": DIMENSION_ENUM_SWITCH,
+                    "callee": dev.missing_member,
+                    "file": dev.file,
+                    "function": dev.enclosing_function,
+                    "line": dev.line,
+                    "rule_id": (
+                        dev.peer_evidence.rule_id
+                        if dev.peer_evidence else ""
+                    ),
+                    "description": dev.description[:300],
+                    "security_relevant": False,
+                    "n": dev.n,
+                    "conforming": dev.conforming,
+                    "ratio": dev.ratio,
+                    "score": round(
+                        lead_strength_score(dev.conforming, dev.n), 4,
+                    ),
+                    "formation": (
+                        dev.peer_evidence.formation
+                        if dev.peer_evidence else ""
+                    ),
+                    "contract_source": "majority",
+                    "sites": [
+                        f"{e.file}:{e.line} {e.snippet}".strip()
+                        for e in (
+                            dev.peer_evidence.exhibits
+                            if dev.peer_evidence else []
+                        )
+                    ],
+                })
+
     # ── clone-drift dimension (§3.9) ────────────────────────────────
     if not _over_budget():
         from .consistency_verify import (

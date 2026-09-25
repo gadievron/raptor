@@ -136,6 +136,7 @@ def floors_registry() -> tuple[FloorSpec, ...]:
     from . import clone_drift as cd_clone
     from . import consistency_dimensions as cd
     from . import consistency_verify as cv
+    from . import enum_switch as es
 
     def spec(dimension: str, name: str, default: int | float, kind: str,
              overridable: bool, consumer: str) -> FloorSpec:
@@ -222,6 +223,13 @@ def floors_registry() -> tuple[FloorSpec, ...]:
              KIND_RATIO, True,
              "consistency_verify.guard_presence_verdict SMT-witness "
              "promote gate"),
+        # enum-switch.
+        spec("enum-switch", "min_switches", es.ENUM_SWITCH_MIN_GROUP,
+             KIND_MIN_SITES, True,
+             "enum_switch.detect_enum_switch_deviations"),
+        spec("enum-switch", "ratio", es.ENUM_SWITCH_RATIO,
+             KIND_RATIO, True,
+             "enum_switch.detect_enum_switch_deviations"),
         # clone-drift (similarity floors, enumerated for the sweep
         # surface; consumed inside clone_drift's winnowing, not
         # threadable per run).

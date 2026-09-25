@@ -28,6 +28,10 @@ Layer hierarchy:
                                     verb-prefix + sig shape on what
                                     remains, per-directory (medium)
   L6  Paired operations          — stem + verb match, global (medium)
+  L8  Enum-switch cohorts        — functions switching over the same
+                                    enum (mechanical join;
+                                    non-exclusive: switch co-location
+                                    is review structure, not identity)
       Binary decomp similarity   — normalized-hash / shingle-Jaccard
                                     via the ghidra similarity seam
                                     (decompiler-inferred, lower
@@ -79,6 +83,11 @@ _TYPE_COHORT = "type_cohort"
 _ANCHOR_FAMILY = "binary_anchor_family"
 _CALLEE_SIGNATURE = "shared_callee_signature"
 _DECOMP_SIMILARITY = "decomp_similarity"
+# L8 group type. Deliberately NOT admitted by the interface parity
+# dimension: the completeness census (core.audit.enum_switch) owns
+# the enum comparison; body-property votes over switch-containing
+# functions would be a second, weaker claim on the same structure.
+GROUP_TYPE_ENUM_SWITCH = "enum_switch"
 
 # Layer / group-type RESERVATION: claimed ids are L10 ("route_family"),
 # L7 ("interface_slot"), L8 ("enum_switch"), L9 ("clone_family");
@@ -222,6 +231,7 @@ def resolve_peer_groups(
     decomp_texts: dict[str, str] | None = None,
     route_models: Any | None = None,
     interface_slots: list[Any] | None = None,
+    enum_cohorts: list[tuple[str, list[str]]] | None = None,
     notes: list[str] | None = None,
 ) -> list[SiblingGroup]:
     """Build peer groups from all available signals.
@@ -266,6 +276,13 @@ def resolve_peer_groups(
       :func:`_interface_slot_groups` for the join contract (name
       resolution through the ambiguity-excluding index, claim floor,
       minority-unchoosable member cap).
+    * ``enum_cohorts`` — ``(enum name, [switching functions])``
+      pairs (the :func:`core.audit.enum_switch.enum_switch_cohorts`
+      producer builds them). Independent L8 layer: switch
+      co-location is review structure, not identity, so it never
+      claims — and its group type is deliberately NOT admitted by
+      the interface parity dimension (the completeness census owns
+      the enum comparison).
 
     When ``checklist`` is supplied, every layer sees the functions
     enriched with the checklist items' ``metadata`` (parameters,
@@ -404,6 +421,14 @@ def resolve_peer_groups(
     l6 = _paired_operation_groups(functions)
     groups.extend(l6)
     layer_report.append(f"paired-op {len(l6)}")
+    # L8: enum-switch cohorts (independent — switch co-location is
+    # review structure, not identity, so it never claims).
+    if enum_cohorts:
+        l8 = _enum_switch_groups(enum_cohorts, functions)
+        groups.extend(l8)
+        layer_report.append(f"enum-switch {len(l8)}")
+    else:
+        layer_report.append("enum-switch skipped (no cohorts)")
     # Binary decomp-similarity (independent): decompiler-inferred —
     # pseudo-code is approximate, so this layer never claims
     # exclusively and its groups carry the lower-confidence label.
@@ -1795,6 +1820,58 @@ def _decomp_similarity_groups(
 
     logger.info("binary decomp-similarity: %d groups", len(groups))
     return groups, note
+
+
+# ── L8: Enum-switch cohorts ──────────────────────────────────────────
+
+
+def _enum_switch_groups(
+    enum_cohorts: list[tuple[str, list[str]]],
+    functions: list[dict[str, Any]],
+) -> list[SiblingGroup]:
+    """L8: functions whose switches dispatch over the same enum.
+
+    Cohorts arrive pre-joined from the enum×switch census producer
+    (``core.audit.enum_switch.enum_switch_cohorts`` — its ambiguity
+    and cap rules carry through); this layer only resolves member
+    names against the resolver's records. Non-exclusive: the same
+    functions legitimately belong to co-callee or dispatch families
+    too. Enum names are target-derived — escaped at emission.
+    """
+    if not enum_cohorts or not functions:
+        return []
+    from core.security.log_sanitisation import escape_nonprintable
+
+    func_by_name = _name_index(functions)
+
+    groups: list[SiblingGroup] = []
+    for enum_name, members in enum_cohorts:
+        matched = [
+            func_by_name[m] for m in sorted(set(members))
+            if m in func_by_name
+        ]
+        if len(matched) < 2:
+            continue
+        name_esc = escape_nonprintable(str(enum_name))
+        groups.append(SiblingGroup(
+            group_id=f"enum_switch:{name_esc}",
+            # Plain string by the module-header convention.
+            sibling_type=GROUP_TYPE_ENUM_SWITCH,  # type: ignore[arg-type]
+            description=f"Functions switching over enum {name_esc}",
+            siblings=[
+                SiblingPath(
+                    label=r.get("name", ""),
+                    file=r.get("file", ""),
+                    function=r.get("name", ""),
+                    line=r.get("line", 0),
+                )
+                for r in matched
+            ],
+            shared_context=f"Shared dispatch enum: {name_esc}",
+        ))
+
+    logger.info("L8 enum-switch: %d groups", len(groups))
+    return groups
 
 
 # ── L2: Dispatch-site groups ─────────────────────────────────────────
