@@ -359,7 +359,7 @@ def generate_asm(gen: PerlasmGenerator, flavour: str, target: Path,
 
 def _sloc(text: str) -> int:
     return sum(
-        1 for line in text.split("\n")
+        1 for line in text.split("\n")  # line-model: generated-asm decode; SLOC count over strip()-normalised lines
         if line.strip() and not line.strip().startswith(("//", "#", "/*", "*"))
     )
 
@@ -438,7 +438,7 @@ def pl_kernel_items(pl_text: str, kernel_names: set[str]) -> list:
         m.group(1): m.group(3)
         for m in _PL_SCALAR_ASSIGN_RE.finditer(pl_text)
     }
-    lines = pl_text.split("\n")
+    lines = pl_text.split("\n")  # line-model: universal-newline read_text upstream
     defs: list[tuple[int, str, str]] = []
     for i, line in enumerate(lines, 1):
         m = _PL_LABEL_DEF_RE.match(line)

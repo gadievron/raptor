@@ -609,7 +609,7 @@ def _detect_ruby(content: str) -> list[DeadRange]:
     if stripped is None:
         # Grammar unavailable — cannot vouch a code view; no witness.
         return []
-    lines = stripped.split("\n")
+    lines = stripped.split("\n")  # line-model: byte-decoded view; pattern tails (\s*/.*) tolerate \r and captures are leading indent
     ranges: list[DeadRange] = []
     # Single pass with a stack of pending dead-if openers. Per-opener
     # forward rescans made a balanced nested ladder O(openers x file)

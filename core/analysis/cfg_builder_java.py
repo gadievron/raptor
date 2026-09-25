@@ -1063,7 +1063,7 @@ class _JavaCFGBuilder:
         return node
 
     def _short_label(self, n) -> str:
-        text = _node_text(n).split("\n", 1)[0].strip()
+        text = _node_text(n).split("\n", 1)[0].strip()  # line-model: display label slice; strip() drops any trailing \r
         return text[:60] + ("…" if len(text) > 60 else "")
 
     def _escapes(self, n) -> bool:

@@ -1538,7 +1538,7 @@ def _is_github_workflow(rel_path: str, content: str) -> bool:
         return True
     from .extractors import GitHubWorkflowExtractor
     return any(GitHubWorkflowExtractor._JOBS_RE.match(line)
-               for line in content.split("\n"))
+               for line in content.split("\n"))  # line-model: byte-decoded content; the matcher's \s*/.* tail tolerates a trailing \r
 
 
 _worker_ctx: dict[str, Any] = {}

@@ -246,7 +246,7 @@ def check_typestate_violations(
             models[key] = _build_alloc_free_model(alloc, free)
 
     violations: list[TypeStateViolation] = []
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: byte-decoded prompt context; state tracking runs on strip()-normalised lines
 
     alloc_lookup: dict[str, list[TypeStateModel]] = {}
     free_lookup: dict[str, list[TypeStateModel]] = {}

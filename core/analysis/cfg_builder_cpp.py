@@ -1071,7 +1071,7 @@ class _CPPCFGBuilder:
 
     def _short_label(self, n) -> str:
         # Use just the first 60 chars of the source span for the label.
-        text = _node_text(n).split("\n", 1)[0].strip()
+        text = _node_text(n).split("\n", 1)[0].strip()  # line-model: display label slice; strip() drops any trailing \r
         return text[:60] + ("…" if len(text) > 60 else "")
 
     def _build_stmts(

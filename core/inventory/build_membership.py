@@ -93,7 +93,7 @@ _GO_PACKAGE = re.compile(r"^\s*package\s+\w+")
 
 
 def _detect_go(content: str) -> BuildExcluded | None:
-    for i, raw in enumerate(content.split("\n"), 1):
+    for i, raw in enumerate(content.split("\n"), 1):  # line-model: byte-decoded inventory content; every guard runs on strip()-normalised lines
         line = raw.strip()
         if _GO_PACKAGE.match(raw):
             # Build constraints must precede the package clause; once we
