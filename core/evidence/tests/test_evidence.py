@@ -1,6 +1,13 @@
 """Tests for core.evidence — the unified evidence vocabulary."""
 
-from core.evidence import EvidenceTier, TIER_RANK, stronger, make_evidence
+from core.evidence import (
+    EvidenceRecord,
+    EvidenceTier,
+    TIER_RANK,
+    evidence_id,
+    make_evidence,
+    stronger,
+)
 
 
 class TestEvidenceTierOrdering:
@@ -91,6 +98,92 @@ class TestMakeEvidence:
         assert d["tier"] == "heuristic"
         assert isinstance(d["data"], dict)
 
+class TestEvidenceId:
+    def test_deterministic(self):
+        args = ("sha256here", "sink_call", "nm", {"symbol": "memcpy"})
+        assert evidence_id(*args) == evidence_id(*args)
+
+    def test_bound_to_binary_bytes(self):
+        # Same observation on a DIFFERENT binary must mint a different
+        # id — ids are the dedup key across runs, and a rebuild of the
+        # target must not silently alias its evidence onto the old one.
+        a = evidence_id("sha-one", "sink_call", "nm", {"symbol": "memcpy"})
+        b = evidence_id("sha-two", "sink_call", "nm", {"symbol": "memcpy"})
+        assert a != b
+
+    def test_bound_to_observation_data(self):
+        a = evidence_id("sha", "sink_call", "nm", {"symbol": "memcpy"})
+        b = evidence_id("sha", "sink_call", "nm", {"symbol": "strcpy"})
+        assert a != b
+
+
+class TestMakeEvidencePayloadIsolation:
+    def test_data_is_copied_not_aliased(self):
+        # The record must snapshot the caller's dict: producers reuse
+        # scratch dicts across observations, and an aliased payload
+        # would let a later mutation rewrite an already-minted record
+        # (whose id was computed from the ORIGINAL contents).
+        payload = {"symbol": "memcpy"}
+        rec = make_evidence(
+            "sha",
+            kind="sink_call",
+            source="nm",
+            summary="calls memcpy",
+            tier=EvidenceTier.HEADER_BACKED,
+            confidence="candidate",
+            reproducible=True,
+            tool="nm",
+            data=payload,
+        )
+        payload["symbol"] = "system"
+        assert rec.data == {"symbol": "memcpy"}
+
+    def test_to_dict_returns_fresh_data_dict(self):
+        rec = make_evidence(
+            "sha",
+            kind="k",
+            source="s",
+            summary="x",
+            tier=EvidenceTier.HEURISTIC,
+            confidence="low",
+            reproducible=False,
+            tool="t",
+            data={"a": 1},
+        )
+        d = rec.to_dict()
+        d["data"]["a"] = 2
+        assert rec.data["a"] == 1
+
+
+class TestEvidenceRecordContracts:
+    def test_typestate_violations_not_counted_as_evidence(self):
+        # Documented contract: typestate_violations is populated
+        # mid-loop, AFTER evidence-driven prioritisation ran, so it
+        # must not flip has_any_evidence().
+        rec = EvidenceRecord(file="a.c", function="f")
+        rec.typestate_violations = [{"rule": "use_after_close"}]
+        assert not rec.has_any_evidence()
+
+    def test_sink_unreachable_not_counted_as_evidence(self):
+        # sink_unreachable is a NEGATIVE signal (scope narrowing) —
+        # counting it would make every unreachable function look like
+        # it carries mechanical evidence.
+        rec = EvidenceRecord(file="a.c", function="f")
+        rec.sink_unreachable = True
+        assert not rec.has_any_evidence()
+
+    def test_binary_parser_boundary_counts_as_evidence(self):
+        rec = EvidenceRecord(file="a.c", function="f")
+        rec.binary_parser_boundary = True
+        assert rec.has_any_evidence()
+
+    def test_all_joern_flows_preserves_this_run_first_order(self):
+        rec = EvidenceRecord(file="a.c", function="f")
+        rec.joern_flows = ["this_run_flow"]
+        rec.imported_joern_flows = ["imported_flow"]
+        assert rec.all_joern_flows() == ["this_run_flow", "imported_flow"]
+
+
 class TestEvidenceIndexScopeNormalisation:
     """Scope filtering mirrors core.audit.gaps._in_scope (the
     authority): './' spellings strip, absolute paths rebase against
@@ -148,3 +241,16 @@ class TestEvidenceIndexScopeNormalisation:
 
     def test_no_scope_unfiltered(self):
         assert len(self._keys(None)) == 3
+
+    def test_absolute_scope_equal_to_target_root_means_whole_tree(self):
+        assert len(self._keys("/repo")) == 3
+
+    def test_scope_naming_target_root_component_means_whole_tree(self):
+        # Scope "proj" against target ".../proj" names the target root
+        # itself, not a subdirectory — it must widen to the whole tree
+        # rather than silently matching zero checklist paths.
+        from core.evidence import build_evidence_index
+        checklist = self._checklist()
+        checklist["target_path"] = "/repo/proj"
+        keys = set(build_evidence_index(checklist=checklist, scope="proj"))
+        assert len(keys) == 3
