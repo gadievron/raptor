@@ -589,7 +589,7 @@ def split_source_lines(text: str) -> list[str]:
     line"); consumers bounds-check indices and skip blank lines, so
     it is inert.
     """
-    return text.split("\n")
+    return text.split("\n")  # line-model: deliberate \n-only model; \r tails tolerated at every consumer (see docstring)
 
 
 def _span_is_code(view: str | None, start: int) -> bool:

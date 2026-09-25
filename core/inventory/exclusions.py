@@ -212,7 +212,7 @@ def is_generated_file(content: str, check_lines: int = 10) -> bool:
     comment to count. Generators emit their markers in comment
     headers; the substring-only check matched any prose mention.
     """
-    lines = content.split('\n', check_lines)[:check_lines]
+    lines = content.split('\n', check_lines)[:check_lines]  # line-model: comment-prefix match and marker substring are \r-position-independent
     # Comment-line shapes for the languages we extract from.
     # `re.match` against the leading-whitespace + comment-start
     # pattern. If the line isn't a comment, skip it for marker

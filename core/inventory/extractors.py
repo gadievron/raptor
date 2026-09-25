@@ -277,7 +277,7 @@ class PythonExtractor:
         """Regex fallback for unparseable Python."""
         functions = []
         pattern = r'^(?:async\s+)?def\s+(\w+)\s*\('
-        for i, line in enumerate(content.split('\n'), 1):
+        for i, line in enumerate(content.split('\n'), 1):  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
             match = re.match(pattern, line.strip())
             if match:
                 functions.append(FunctionInfo(
@@ -598,7 +598,7 @@ class JavaScriptExtractor:
     def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions = []
         seen = set()
-        lines = content.split('\n')
+        lines = content.split('\n')  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
 
         for i, line in enumerate(lines, 1):
             if len(line) > self._MAX_JS_LINE:
@@ -781,7 +781,7 @@ class CExtractor:
     def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions = []
         seen = set()
-        lines = content.split('\n')
+        lines = content.split('\n')  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or \s-tailed (\r-tolerant)
 
         i = 0
         while i < len(lines):
@@ -1280,7 +1280,7 @@ class JavaExtractor:
         brace_depth = 0
         class_depth = -1
 
-        for i, line in enumerate(content.split('\n'), 1):
+        for i, line in enumerate(content.split('\n'), 1):  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
             stripped = line.lstrip()
 
             # Comment-only lines never affect brace depth — count
@@ -1367,7 +1367,7 @@ class GoExtractor:
     def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions = []
 
-        for i, line in enumerate(content.split('\n'), 1):
+        for i, line in enumerate(content.split('\n'), 1):  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
             match = re.match(self.PATTERN, line)
             if match:
                 # match.group(1) is the receiver variable name (e.g. "s"); unused
@@ -1470,7 +1470,7 @@ class LuaExtractor:
         return ''.join(out)
 
     def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
-        lines = content.split('\n')
+        lines = content.split('\n')  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
         functions: list[FunctionInfo] = []
         seen: set = set()
 
@@ -1761,7 +1761,7 @@ class PerlExtractor:
     def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions: list[FunctionInfo] = []
         seen: set = set()
-        lines = content.split('\n')
+        lines = content.split('\n')  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
         for i, line in enumerate(lines):
             stripped = line.strip()
             if stripped.startswith('#'):
@@ -1799,7 +1799,7 @@ class ShellExtractor:
     def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions: list[FunctionInfo] = []
         seen: set = set()
-        lines = content.split('\n')
+        lines = content.split('\n')  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
         for i, line in enumerate(lines):
             stripped = line.strip()
             if stripped.startswith('#'):
@@ -1833,7 +1833,7 @@ class ObjCExtractor:
     _METHOD_RE = re.compile(r'^\s*[-+]\s*\([^)]*\)\s*([A-Za-z_]\w*)')
 
     def extract(self, filepath: str, content: str) -> list[FunctionInfo]:
-        lines = content.split('\n')
+        lines = content.split('\n')  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
         functions: list[FunctionInfo] = []
         seen: set = set()
         for i, line in enumerate(lines):
@@ -1890,7 +1890,7 @@ class AsmExtractor:
     )
 
     def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
-        lines = content.split('\n')
+        lines = content.split('\n')  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
         exported = set(self._GLOBL_RE.findall(content))
         labels: list[tuple] = []  # (name, 0-based line index)
         for i, line in enumerate(lines):
@@ -1941,7 +1941,7 @@ class GitHubWorkflowExtractor:
     _RUN_RE = re.compile(r'(?m)^[^\S\n]+(?:-\s+)?run:')
 
     def extract(self, _filepath: str, content: str) -> list[CodeItem]:
-        lines = content.split('\n')
+        lines = content.split('\n')  # line-model: byte-decoded inventory content; matcher tails (\s*/.*) tolerate \r
         jobs_start = None
         for i, line in enumerate(lines):
             if self._JOBS_RE.match(line):
@@ -2069,7 +2069,7 @@ class GenericExtractor:
         functions = []
         seen = set()
 
-        for i, line in enumerate(content.split('\n'), 1):
+        for i, line in enumerate(content.split('\n'), 1):  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
             if len(line) > self._MAX_LINE:
                 continue
             for pattern in self.PATTERNS:
@@ -2102,7 +2102,7 @@ class RubyExtractor:
     def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions: list[FunctionInfo] = []
         seen: set = set()
-        for i, line in enumerate(content.split('\n'), 1):
+        for i, line in enumerate(content.split('\n'), 1):  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
             if line.lstrip().startswith('#'):
                 continue
             m = self._DEF_RE.match(line)

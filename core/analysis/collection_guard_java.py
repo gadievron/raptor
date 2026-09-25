@@ -162,7 +162,7 @@ def _line_byte_range(source_text: str, line: int) -> tuple[int, int]:
     # normalisation) so the returned offsets stay true to the text
     # tree-sitter parsed; the separator byte is counted explicitly.
     offset = 0
-    chunks = source_text.split("\n")
+    chunks = source_text.split("\n")  # line-model: callers read universal-newline; offsets stay self-consistent with the parsed text
     for i, chunk in enumerate(chunks, 1):
         blen = len(chunk.encode("utf-8", errors="replace"))
         if i < len(chunks):

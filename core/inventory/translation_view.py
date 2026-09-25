@@ -234,7 +234,7 @@ def _pp_directive_line_view(
     directives (under-blank — dead code stays visible, the cheap
     failure); the scanner must never MISS an opener the compiler
     sees, which is what the literal/raw-string tracking is for."""
-    lines = content.split("\n")
+    lines = content.split("\n")  # line-model: byte-decoded view; the splice regex is CRLF-aware and \r rides through blanking harmlessly
     view: list[str | None] = [None] * len(lines)
     raw_strings = language == "cpp"
     in_comment = False
@@ -341,7 +341,7 @@ def detect_preprocessor_dead_ranges(
 
     Nesting-aware: anything inside a dead arm is dead.
     """
-    lines = content.split("\n")
+    lines = content.split("\n")  # line-model: byte-decoded view; directive tail (.*)$ tolerates \r and the captured rest is strip()-normalised
     p3_lines = _pp_directive_line_view(content, language)
     stack: list[dict] = []
     dead: set[int] = set()
@@ -486,7 +486,7 @@ def _blank_ranges(content: str, ranges: list[tuple[int, int]]) -> str:
     are preserved. The on-disk file is untouched."""
     if not ranges:
         return content
-    lines = content.split("\n")
+    lines = content.split("\n")  # line-model: line-count-preserving blanking; the [^\n] sub flattens \r too
     dead: set[int] = set()
     for lo, hi in ranges:
         dead.update(range(lo, hi + 1))

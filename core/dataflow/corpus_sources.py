@@ -84,7 +84,7 @@ def parse_pinned_sources(text: str) -> list[PinnedSource]:
                                     local_path=path))
         sha = path = None
 
-    for line in text.split("\n"):
+    for line in text.split("\n"):  # line-model: RAPTOR-owned SOURCES.md, universal-newline read
         m = _SECTION.match(line)
         if m:
             _flush()
