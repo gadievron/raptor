@@ -50,6 +50,19 @@ Consumers:
   * Direct-call consumers: core annotations, labeled attempts, binary
     fingerprint store, witness store, coverage store, sandbox
     calibration cache, sandbox summary + audit-degraded markers.
+
+Client-locality caveat (WSL drvfs/9p, no behaviour change): on a
+Windows-interop mount the ``os.replace`` commit is executed by the
+9p server, and readers within the same distro (one client) keep the
+full old-bytes-or-new-bytes guarantee exactly as on a local
+filesystem — this covers every consumer above (annotation saves,
+``save_json`` metadata writes, the JSON cache's puts) when writer
+and reader share the distro. Readers on ANOTHER client (Windows
+side, another distro) go through their own attribute/dentry caches:
+they still never see a torn file, but can keep observing the
+pre-replace content for the cache window after the commit, and the
+fsync durability legs are delegated to the 9p server. Placement
+guidance lives in docs/wsl.md.
 """
 
 from __future__ import annotations

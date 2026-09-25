@@ -16,6 +16,14 @@ here). Contract, matching those siblings:
 - degrade to a no-op without ``fcntl`` (non-POSIX);
 - the lock file is deliberately never unlinked — unlink-after-unlock
   races split lockers across two inodes.
+
+Client-locality caveat (WSL drvfs/9p, no behaviour change): on a
+Windows-interop mount, ``flock`` is implemented by the 9p client —
+it serialises processes within one distro (one client) exactly as on
+a local filesystem, but grants no exclusion against Windows-side
+writers or other WSL distros mounting the same drive. Artifacts on
+such mounts keep same-distro correctness and silently lose the
+cross-context guarantee; placement guidance lives in docs/wsl.md.
 """
 
 from __future__ import annotations

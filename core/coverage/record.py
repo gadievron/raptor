@@ -66,7 +66,11 @@ def read_manifest_lines(manifest_path: Path) -> set[str]:
     solely against hypothetical non-append writers. fcntl.flock is
     non-fatal: on platforms without flock (Windows; raptor doesn't
     really support them but the import is best-effort) we fall back
-    to an unlocked read.
+    to an unlocked read. On WSL drvfs/9p mounts the LOCK_SH here is
+    additionally client-local (serialises against same-distro writers
+    only) — inert for this reader, whose integrity already rests on
+    the writers' single-write ``O_APPEND`` discipline, not the lock;
+    see docs/wsl.md for the general caveat.
 
     Use ``rstrip("\r\n")`` not ``strip()`` — the latter also trims
     leading/trailing spaces, but POSIX permits filenames that
