@@ -193,6 +193,29 @@ The shim writes `hunt-result.json` or `trace-result.json` to `$OUTPUT_DIR`
 and prints a one-screen summary. After it returns, surface the summary
 to the user and point them at the result file.
 
+**Resume (multi-model `--hunt`/`--trace` only):** the shim pins the run's
+resolved options (`understand-run-config.json`, plus a traces snapshot for
+`--trace`) and checkpoints each model's finished result as produced
+(`understand-checkpoints/`). If the run is interrupted (SIGTERM/Ctrl-C exits
+130 and marks the lifecycle `interrupted`; a hard kill leaves `running` with a
+dead worker, which resume also accepts), re-enter it as the SAME run:
+
+```bash
+libexec/raptor-understand --resume "$OUTPUT_DIR"
+```
+
+Checkpointed models return their persisted results at no new cost (their
+recorded spend carries into the resumed run's continuous accounting); only the
+remaining models dispatch, capped by the original budget minus booked spend.
+Configuration comes from the pinned config — do not pass `--target`, `--out`,
+or `--model`. Gates: a completed run is never resumed (`--reopen` handles the
+contradicted case where `completed` was stamped without a `*-result.json`);
+target files referenced by checkpoints are re-hashed against the tree NOW, and
+any drift refuses the resume unless `--allow-drift` (which carries the results
+loudly and stamps `resumed_with_drift` into the payload). A successful resume
+completes the run's lifecycle itself — do not run the Step 5 `complete` stub
+after `--resume`.
+
 **In-session path (no `--model`, or `--map` / `--teach`):**
 
 **Step 1: Start the run and build inventory:**
