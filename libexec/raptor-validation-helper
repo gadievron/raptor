@@ -1213,6 +1213,14 @@ def prepare_B(workdir, target=None):
         _save_artifact(wdir / "attack-tree.json", {"root": "ROOT", "nodes": []})
     if not (wdir / "disproven.json").exists():
         _save_artifact(wdir / "disproven.json", {"disproven": []})
+
+    # Bootstrap/gate facts (PHP targets): per-finding
+    # bootstrap_context from the include graph's per-entry
+    # environment walk, so Stage B verifies the pre-derived gate
+    # facts (citing lines) before reasoning past them. Advisory —
+    # never a status writer. Silent skip when no walk was derived.
+    _attach_bootstrap_context(workdir, data)
+
     _save_findings(workdir, data)
 
     # SMT feasibility over bridge-imported paths BEFORE Stage B runs,
@@ -1454,27 +1462,11 @@ def _attach_include_facts(workdir, findings_data):
         if not isinstance(fpath, str) or not fpath:
             continue
         facts = include_facts_for_file(graph, fpath)
-        fp = fpath.replace("\\", "/")
-        if facts is None and fp.startswith("/") and graph_target:
-            # Absolute finding path: strip the graph's own target
-            # prefix — exact, never a guess. A bare tail-endswith
-            # here wrong-attached: /x/cache/b.php ends with /b.php,
-            # so it would receive key "b.php"'s facts even though
-            # its real relative path (cache/b.php) is a different
-            # file (or no graph key at all).
-            root = graph_target.rstrip("/")
-            if fp.startswith(root + "/"):
-                facts = include_facts_for_file(graph, fp[len(root) + 1:])
-        elif facts is None and not fp.startswith("/"):
-            # Relative shortened path: accept only a key whose OWN
-            # tail is the finding path, component-aligned from the
-            # key's left, and unique — "cache/b.php" never matches
-            # key "b.php" (subdir sibling), and two same-named keys
-            # refuse rather than guess.
-            matches = [k for k in graph_paths
-                       if k == fp or k.endswith("/" + fp)]
-            if len(matches) == 1:
-                facts = include_facts_for_file(graph, matches[0])
+        if facts is None:
+            key = _graph_key_for_finding(graph_paths, graph_target,
+                                         fpath)
+            if key is not None:
+                facts = include_facts_for_file(graph, key)
         if facts is None:
             continue
         finding["include_facts"] = facts
@@ -1482,6 +1474,72 @@ def _attach_include_facts(workdir, findings_data):
     if attached:
         print(f"Include-graph facts: attached to {attached} finding(s) "
               "(hint-tier, census-qualified)")
+
+
+def _graph_key_for_finding(graph_paths, graph_target, fpath):
+    """Resolve an LLM-authored finding path to a graph key without
+    guessing. Absolute paths resolve ONLY via the graph's own
+    target prefix (a bare tail-endswith wrong-attached subdir
+    siblings' facts); relative shortened paths accept only a UNIQUE
+    key whose own tail is the finding path, component-aligned from
+    the key's left."""
+    fp = fpath.replace("\\", "/")
+    if fp.startswith("/"):
+        if graph_target:
+            root = graph_target.rstrip("/")
+            if fp.startswith(root + "/"):
+                return fp[len(root) + 1:]
+        return None
+    matches = [k for k in graph_paths
+               if k == fp or k.endswith("/" + fp)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _attach_bootstrap_context(workdir, findings_data):
+    """Stage B bootstrap/gate facts from the environment walk.
+
+    Annotates each finding whose file the walk knows with
+    ``bootstrap_context``: the entry classes reaching it (with
+    receipts), the guaranteed-prefix files shared by every
+    guaranteed-reaching class, and the MANDATORY census + qualifier
+    (the producer refuses to build the object at all when the graph
+    census fails validation). Hint-tier inputs to Stage B's gate
+    verification — never a status writer; disproven findings are
+    skipped.
+    """
+    try:
+        from core.inventory.include_graph import (
+            bootstrap_context_for_file,
+            load_include_graph,
+        )
+    except ImportError:
+        return
+    graph = load_include_graph(workdir)
+    if not graph or not isinstance(graph.get("walk"), dict):
+        return
+    graph_paths = list(graph.get("files") or {})
+    graph_target = (graph.get("target_path")
+                    if isinstance(graph.get("target_path"), str) else "")
+    attached = 0
+    for finding in findings_data.get("findings", []):
+        if finding.get("status") == "disproven":
+            continue
+        fpath = finding.get("file", "")
+        if not isinstance(fpath, str) or not fpath:
+            continue
+        ctx = bootstrap_context_for_file(graph, fpath)
+        if ctx is None:
+            key = _graph_key_for_finding(graph_paths, graph_target,
+                                         fpath)
+            if key is not None:
+                ctx = bootstrap_context_for_file(graph, key)
+        if ctx is None:
+            continue
+        finding["bootstrap_context"] = ctx
+        attached += 1
+    if attached:
+        print(f"Bootstrap context: attached to {attached} finding(s) "
+              "(hint-tier gate facts, census-qualified)")
 
 
 # ---------------------------------------------------------------------------
