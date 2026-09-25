@@ -160,6 +160,20 @@ def volatile_target_reason(target: str | None) -> str | None:
     return None
 
 
+def _warn_windows_interop(path: str | Path, role: str) -> None:
+    """Warn-only advisory when *path* is on a Windows-interop
+    (drvfs/9p) mount on a WSL host — perf and flock-semantics caveat
+    plus the docs/wsl.md pointer. Fires at the resolution chokepoints
+    only (default target, output root); never refuses, never raises,
+    and is free off WSL (the cached detection short-circuits).
+    """
+    try:
+        from core.startup.wsl import warn_windows_interop_mount
+        warn_windows_interop_mount(path, role)
+    except Exception:  # noqa: BLE001 — advisory must never break resolution
+        logger.debug("windows-interop advisory failed", exc_info=True)
+
+
 def resolve_default_target() -> str | None:
     """CLAUDE.md DEFAULT TARGET DIRECTORY resolution: (1) active project,
     (2) ``RAPTOR_CALLER_DIR``, (3) None (caller asks the user).
@@ -210,6 +224,8 @@ def resolve_default_target() -> str | None:
             logger.warning("%s", banner)
             print(banner, file=sys.stderr)
             return None
+        _warn_windows_interop(
+            project_target, "default target (active project)")
         return project_target
     env = os.environ.get("RAPTOR_CALLER_DIR")
     if not env:
@@ -230,6 +246,7 @@ def resolve_default_target() -> str | None:
         logger.warning("%s", banner)
         print(banner, file=sys.stderr)
         return None
+    _warn_windows_interop(env, "default target (RAPTOR_CALLER_DIR)")
     return env
 
 
@@ -280,7 +297,9 @@ def get_output_dir(command: str, target_name: str = "",
                         "trust markers do not apply",
                         effective_target, project_name, project_target,
                     )
-        return Path(explicit_out).resolve()
+        out_path = Path(explicit_out).resolve()
+        _warn_windows_interop(out_path, "output directory (--out)")
+        return out_path
 
     active = _resolve_active_project()
 
@@ -295,7 +314,9 @@ def get_output_dir(command: str, target_name: str = "",
 
         # Project mode: command-YYYYMMDD-HHMMSS-pidNNNNN (hyphens throughout).
         # See unique_run_suffix() for the collision-prevention rationale.
-        return Path(project_dir) / f"{command}-{unique_run_suffix('-')}"
+        run_dir = Path(project_dir) / f"{command}-{unique_run_suffix('-')}"
+        _warn_windows_interop(run_dir, "output directory")
+        return run_dir
 
     # Standalone mode: command_target_YYYYMMDD_HHMMSS_pidNNNNN (underscores,
     # backwards compatible with existing directories created before project
@@ -306,7 +327,9 @@ def get_output_dir(command: str, target_name: str = "",
     else:
         dirname = f"{command}_{suffix}"
 
-    return RaptorConfig.get_out_dir() / dirname
+    out_dir = RaptorConfig.get_out_dir() / dirname
+    _warn_windows_interop(out_dir, "output directory")
+    return out_dir
 
 
 _URL_SCHEME_RE = re.compile(r"\A[a-zA-Z][a-zA-Z0-9+.-]*://")

@@ -987,6 +987,19 @@ class ProjectManager:
 
             Path(output_dir).mkdir(parents=True, exist_ok=True)
             save_json(project_file, project.to_dict())
+        # Warn-only advisory (WSL hosts): a project whose target or
+        # output dir sits on a Windows-interop mount degrades every
+        # subsequent run there (slow file I/O, client-local flock).
+        # Never blocks creation; free off WSL (cached detection).
+        try:
+            from core.startup.wsl import warn_windows_interop_mount
+            if not _URL_SCHEME_RE.match(resolved_target):
+                warn_windows_interop_mount(
+                    resolved_target, "project target")
+            warn_windows_interop_mount(
+                output_dir, "project output directory")
+        except Exception:  # noqa: BLE001 — advisory must never break create
+            logger.debug("windows-interop advisory failed", exc_info=True)
         logger.info("Created project '%s' → %s", name, output_dir)
         return project
 
