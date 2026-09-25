@@ -31,6 +31,20 @@ own open is what this census checks), ``os.rename``/``os.replace``
 (O_EXCL by construction). A site reachable only through those shapes
 still needs reviewer eyes — this gate is the fence, not the proof.
 
+Flagger blind spots — write spellings the census does NOT scan
+(none present in the covered packages today; each is pinned unflagged
+AND documented by ``test_flagger_blind_spots_documented``, so a
+flagger upgrade that learns one must promote it out of that table):
+module-routed opens whose mode rides at builtin position (``io.open``
+/ ``codecs.open`` / ``gzip.open`` with a ``"w"``/``"wt"`` mode — the
+method-style arm reads args[0] as the mode), bare
+``os.open(p, os.O_WRONLY)`` (write-to-existing follows a planted
+symlink; only O_CREAT/O_TRUNC carriers are checked), update modes
+(``"r+"`` opens for writing without a ``w``/``a`` prefix), archive
+writers (``zipfile.ZipFile(p, "w")`` / ``tarfile.open(p, "w")``
+open their destination like a bare ``open``), and
+``logging.FileHandler`` (an append open in constructor clothing).
+
 Hardened routes that vanish from this census: ``core.atomic_fs``
 (``write_text_atomically`` / ``write_bytes_atomically`` — os.replace
 never follows a symlink; ``open_exclusive_artifact`` /
@@ -318,6 +332,41 @@ def test_flagger_catches_bypass_spellings() -> None:
     assert _flags_of("shutil.copytree(src, dst, dirs_exist_ok=True)")
     assert _flags_of("p.touch()")
     assert _flags_of("p.write_text(x)")
+
+
+# Spelling the flagger does not scan -> the docstring token that
+# names it in the "Flagger blind spots" paragraph above.
+_DOCUMENTED_BLIND_SPOTS: dict[str, str] = {
+    'io.open(p, "w")': "io.open",
+    'codecs.open(p, "w", "utf-8")': "codecs.open",
+    'gzip.open(p, "wt")': "gzip.open",
+    "os.open(p, os.O_WRONLY)": "os.open(p, os.O_WRONLY)",
+    'open(p, "r+")': '"r+"',
+    'zipfile.ZipFile(p, "w")': 'zipfile.ZipFile(p, "w")',
+    'tarfile.open(p, "w")': 'tarfile.open(p, "w")',
+    "logging.FileHandler(p)": "logging.FileHandler",
+}
+
+
+def test_flagger_blind_spots_documented() -> None:
+    """The census's honesty contract: every known-unscanned write
+    spelling is named in the module docstring, where the accepted
+    gaps are promised. Each entry is pinned in BOTH directions — it
+    must not flag (a flagger upgrade that learns the shape moves it
+    to ``test_flagger_catches_bypass_spellings`` and out of the
+    docstring paragraph) and it must stay documented (the boundary
+    stays explicit while the shape stays unscanned)."""
+    for snippet, token in _DOCUMENTED_BLIND_SPOTS.items():
+        assert not _flags_of(snippet), (
+            f"{snippet!r} now flags — the flagger learned this shape; "
+            "promote it to test_flagger_catches_bypass_spellings and "
+            "drop it from the blind-spot table + docstring paragraph"
+        )
+        assert __doc__ is not None and token in __doc__, (
+            f"blind-spot spelling {snippet!r} is not named in the "
+            f"module docstring (expected token {token!r}) — the "
+            "census promises its unscanned shapes are documented"
+        )
 
 
 def test_flagger_ignores_hardened_and_read_shapes() -> None:
