@@ -117,6 +117,17 @@ class TestFunctionLabel:
         )
         assert label.expected_mode_results["security"] == "suspicious"
 
+    def test_channel_default_empty(self):
+        assert _make_label().channel == ""
+
+    def test_channel_valid_token_accepted(self):
+        assert _make_label(channel="api_boundary").channel == \
+            "api_boundary"
+
+    def test_channel_invalid_token_rejected(self):
+        with pytest.raises(ValueError, match="Invalid channel"):
+            _make_label(channel="Api-Boundary")
+
     def test_expected_rule_hits_default_empty(self):
         assert _make_label().expected_rule_hits == {}
 
