@@ -468,6 +468,63 @@ def _coerce_findings_container(
     return None, None
 
 
+def _queue_import_readjudication(
+    container: dict, dest: Path, source_name: str,
+) -> None:
+    """Cross-check incoming ``--findings`` rows against disproofs the
+    run dir already recorded.
+
+    Pipeline handoff shares ``--out`` across runs, so a prior pass's
+    verdicts sit in *dest* (findings.json) until this import
+    OVERWRITES them — the one moment a new independent claim meets a
+    recorded disproof at the same site, and pre-fix the contradiction
+    vanished with the overwrite. Emit re-adjudication queue records IN
+    ADDITION to the (unchanged) overwrite; nothing is auto-overturned
+    — the queue is input for a scoped /validate. Runs on the RAW
+    incoming rows (before id/status normalisation) so records carry
+    the producer's own identity and status vocabulary.
+
+    Best-effort: a cross-check failure warns and never blocks the
+    import.
+    """
+    try:
+        from core.project.readjudication import (
+            QUEUE_FILENAME,
+            detect_contradictions,
+            queued_count,
+            write_queue,
+        )
+        prior = load_json(dest)
+        if isinstance(prior, dict):
+            prior_rows = prior.get("findings") or []
+        elif isinstance(prior, list):
+            prior_rows = prior
+        else:
+            prior_rows = []
+        prior_rows = [r for r in prior_rows if isinstance(r, dict)]
+        incoming = [
+            f for f in container.get("findings", []) if isinstance(f, dict)
+        ]
+        # Oldest-first ordering contract: the recorded disproofs
+        # precede the incoming claims.
+        records = detect_contradictions([
+            ("prior findings.json", prior_rows),
+            (source_name, incoming),
+        ]) if prior_rows else []
+        # Fresh recomputation semantics: always (re)write so a stale
+        # queue from an earlier import doesn't outlive its inputs.
+        write_queue(dest.parent, records)
+        n = queued_count(records)
+        if n:
+            print(f"  ⚠️  {n} incoming finding(s) contradict recorded "
+                  f"disproofs — re-adjudication queue: {QUEUE_FILENAME} "
+                  f"(nothing auto-overturned; adjudicate the queued "
+                  f"sites with a scoped /validate)")
+    except Exception as e:  # noqa: BLE001 — additive trail, never import-fatal
+        print(f"  ⚠️  re-adjudication cross-check failed: "
+              f"{_sft(str(e), max_len=200)}", file=sys.stderr)
+
+
 def _import_findings_file(
     findings_path: str | Path, dest: Path, target: str | None = None,
 ) -> None:
@@ -475,10 +532,13 @@ def _import_findings_file(
 
     Loads the source file, coerces recognised shapes into the
     canonical container (see :func:`_coerce_findings_container`),
-    normalises foreign finding ids, and persists via the provenance-
-    stamping artifact writer. An unrecognisable payload preserves the
-    legacy behaviour: the file is copied verbatim (so the operator can
-    inspect exactly what was imported) and the count reports 0.
+    cross-checks the incoming rows against disproofs already recorded
+    in the run dir (re-adjudication queue — additive, never a verdict
+    change), normalises foreign finding ids, and persists via the
+    provenance-stamping artifact writer. An unrecognisable payload
+    preserves the legacy behaviour: the file is copied verbatim (so
+    the operator can inspect exactly what was imported) and the count
+    reports 0.
     """
     import shutil
 
@@ -507,6 +567,11 @@ def _import_findings_file(
         return
     if shape_note:
         print(f"  Import shape: {shape_note}")
+
+    # Contradiction check BEFORE dest is overwritten and before any
+    # normalisation rewrites ids/statuses.
+    _queue_import_readjudication(container, dest, src.name)
+
     # Normalise foreign ids at the import chokepoint so the container
     # satisfies its own schema before any stage prep validates it.
     renamed = _normalise_finding_ids(container)

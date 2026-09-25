@@ -38,6 +38,14 @@ any failure keeps the bridge order.
 
 This starts the run lifecycle, builds the checklist, and imports any /understand output. The last line of output is `OUTPUT_DIR=<path>` — use that path for all subsequent stages.
 
+`--findings <file>` imports pre-existing findings. Import-time behaviour to know:
+
+- **Re-adjudication queue**: when an incoming finding matches a site this run
+  dir already recorded as disproven/ruled out, the import additionally writes a
+  `readjudication-queue.jsonl` record (site, new claim, matched disproof and its
+  `would_reconsider_if` condition). Nothing is auto-overturned — the queue is
+  input for a scoped follow-up validate on those sites.
+
 ### Threat Model Context (before any LLM stage)
 
 If the target has a project threat model, load it before starting Stage A:

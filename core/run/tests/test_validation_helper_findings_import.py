@@ -144,3 +144,87 @@ class TestImportFindingsFile:
         captured = capsys.readouterr()
         assert "Pre-existing findings: 0 from weird.json" in captured.out
         assert "no recognisable findings/variants" in captured.err
+
+
+class TestImportReadjudicationCrossCheck:
+    """The --findings import cross-checks incoming rows against
+    disproofs already recorded in the run dir BEFORE overwriting them
+    — the drop behaviour is unchanged, the contradiction is queued."""
+
+    def test_contradiction_queued_and_overwrite_unchanged(
+            self, tmp_path, capsys):
+        mod = _load_helper()
+        dest = tmp_path / "findings.json"
+        dest.write_text(json.dumps({"findings": [{
+            "id": "FIND-1",
+            "file": "a.c",
+            "function": "add",
+            "line": 3,
+            "vuln_type": "buffer_overflow",
+            "status": "disproven",
+            "disproved_because": {
+                "conclusion": "bounded by caller",
+                "would_reconsider_if": "a caller passes unchecked input",
+            },
+        }]}))
+        src = tmp_path / "rescan.json"
+        src.write_text(json.dumps([_finding("SCAN-1")]))
+        mod._import_findings_file(src, dest, target="/t")
+
+        queue = (tmp_path / "readjudication-queue.jsonl").read_text()
+        records = [json.loads(line) for line in queue.splitlines()]
+        assert len(records) == 1
+        rec = records[0]
+        assert rec["action"] == "queued"
+        assert rec["site"] == {"file": "a.c", "function": "add", "line": 3}
+        assert rec["disproof"]["would_reconsider_if"] == (
+            "a caller passes unchecked input")
+        # Overwrite behaviour unchanged: the import replaced dest with
+        # the incoming container (id normalised as ever, original kept
+        # as source_id); nothing was auto-overturned or kept.
+        saved = load_json(dest)
+        assert [f.get("source_id") for f in saved["findings"]] == ["SCAN-1"]
+        # The queue record carries the producer's ORIGINAL id — the
+        # cross-check ran before normalisation.
+        assert rec["new_claim"]["id"] == "SCAN-1"
+        out = capsys.readouterr().out
+        assert ("1 incoming finding(s) contradict recorded disproofs"
+                in out)
+        assert "nothing auto-overturned" in out
+
+    def test_no_prior_disproofs_no_queue(self, tmp_path):
+        mod = _load_helper()
+        dest = tmp_path / "findings.json"
+        src = tmp_path / "scan.json"
+        src.write_text(json.dumps([_finding("SCAN-1")]))
+        mod._import_findings_file(src, dest, target="/t")
+        assert not (tmp_path / "readjudication-queue.jsonl").exists()
+
+    def test_incoming_disproof_agreement_not_queued(self, tmp_path):
+        mod = _load_helper()
+        dest = tmp_path / "findings.json"
+        dest.write_text(json.dumps({"findings": [
+            _finding("FIND-1", status="disproven"),
+        ]}))
+        src = tmp_path / "rescan.json"
+        src.write_text(json.dumps([_finding("SCAN-1",
+                                            status="false_positive")]))
+        mod._import_findings_file(src, dest, target="/t")
+        assert not (tmp_path / "readjudication-queue.jsonl").exists()
+
+    def test_reimport_refreshes_queue(self, tmp_path):
+        # Fresh-write semantics: a second import over a now-clean prior
+        # container clears the stale queue instead of appending.
+        mod = _load_helper()
+        dest = tmp_path / "findings.json"
+        dest.write_text(json.dumps({"findings": [
+            _finding("FIND-1", status="disproven"),
+        ]}))
+        src = tmp_path / "rescan.json"
+        src.write_text(json.dumps([_finding("SCAN-1")]))
+        mod._import_findings_file(src, dest, target="/t")
+        assert (tmp_path / "readjudication-queue.jsonl").exists()
+        # Second import: prior container (just written) has no
+        # disproofs any more.
+        mod._import_findings_file(src, dest, target="/t")
+        assert not (tmp_path / "readjudication-queue.jsonl").exists()
