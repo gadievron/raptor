@@ -78,6 +78,16 @@ SEED_EXCLUDES = frozenset({
     "final-reports",
 })
 
+# Directory nesting cap for the seeding walk. Both-direction contract:
+# a genuine pinned-CLI scan dir is a few levels deep (checkpoint dirs,
+# staged-config residue), so the cap must stay far above that — and the
+# prior scan dir was CHILD-WRITABLE during the original run, so nesting
+# depth is child-authored and the walk must refuse pathological depth
+# loudly (residue-free) rather than chase it. Raising the cap needs a
+# real scan shape that exceeds it; lowering it toward real scan depths
+# would refuse legitimate resumes.
+SEED_MAX_DEPTH = 64
+
 # Upstream fingerprint sidecar name + the scheme version whose digest
 # algorithm ``_key_digest`` replicates. Only sidecars at THIS version
 # are ever rebased; any other version is left untouched (upstream then
@@ -437,14 +447,18 @@ def seed_scan_dir(prior_scan: Path, new_scan: Path) -> int:
     directories behind — a symlink there is a plant that a
     dereferencing copy would follow, ingesting arbitrary host files
     (or whole trees) into the NEW run dir, which ships in exports and
-    feeds later LLM passes; a FIFO/device is a hang/read trap. Every
-    entry is therefore classified via fd-true ``lstat``/``fstat``
-    (regular files are opened ``O_NOFOLLOW|O_NONBLOCK`` and re-checked
-    on the open fd, so a swap between scan and open cannot slip a
-    non-regular entry through), and ANY symlink or special file
-    REFUSES the whole resume loudly. On any failure the partially
-    seeded dir is removed — a refused resume leaves no hostile residue
-    in the new run dir.
+    feeds later LLM passes; a FIFO/device is a hang/read trap. The
+    walk is fd-true END TO END: each directory is held as an
+    ``O_DIRECTORY|O_NOFOLLOW`` fd and every entry is classified and
+    opened RELATIVE to that fd (regular files additionally re-checked
+    by ``fstat`` on the open fd), so a rename/symlink swap between
+    scan and open cannot redirect ANY step of the walk — directories
+    included. ANY symlink or special file REFUSES the whole resume
+    loudly, as does nesting deeper than :data:`SEED_MAX_DEPTH`
+    (child-authored depth must not drive the walk into pathological
+    trees). On any failure — refusal, OS error, or anything else —
+    the partially seeded dir is removed: a refused resume leaves no
+    hostile residue in the new run dir.
     """
     prior_scan = Path(prior_scan)
     new_scan = Path(new_scan)
@@ -453,7 +467,7 @@ def seed_scan_dir(prior_scan: Path, new_scan: Path) -> int:
             f"--resume: refusing to seed into non-empty {new_scan}")
     try:
         new_scan.mkdir(parents=True, exist_ok=True)
-        _copy_regular_tree(prior_scan, new_scan, top=True)
+        _copy_regular_tree(prior_scan, new_scan)
     except OpenAntResumeError:
         shutil.rmtree(new_scan, ignore_errors=True)
         raise
@@ -462,6 +476,12 @@ def seed_scan_dir(prior_scan: Path, new_scan: Path) -> int:
         raise OpenAntResumeError(
             f"--resume: seeding from {prior_scan} failed ({e}); the "
             f"partially-seeded run dir was removed") from e
+    except BaseException:
+        # The no-residue contract holds for EVERY exception type
+        # (interpreter limits, an interrupt landing mid-copy), not
+        # just the shapes wrapped into a refusal above.
+        shutil.rmtree(new_scan, ignore_errors=True)
+        raise
     return sum(1 for _ in new_scan.iterdir())
 
 
@@ -474,10 +494,51 @@ def _refuse_entry(kind: str, name: str) -> None:
         f"refusing to seed from it (nothing was kept)")
 
 
-def _copy_regular_tree(src: Path, dst: Path, *, top: bool) -> None:
-    """Recursive copy admitting ONLY regular files and directories —
-    see :func:`seed_scan_dir` for why anything else refuses."""
-    with os.scandir(src) as it:
+def _copy_regular_tree(src: Path, dst: Path) -> None:
+    """Iterative, fd-true copy admitting ONLY regular files and
+    directories — see :func:`seed_scan_dir` for why anything else
+    refuses.
+
+    Iterative with an explicit stack: the prior scan dir's nesting
+    depth is child-authored, and per-level recursion let a deep tree
+    blow the interpreter's recursion limit — an exception class the
+    caller's refusal handling did not own, so hostile residue stayed
+    behind. Depth beyond :data:`SEED_MAX_DEPTH` refuses loudly.
+
+    fd-true for DIRECTORIES too, not just files: every subdirectory is
+    opened ``O_DIRECTORY|O_NOFOLLOW`` relative to its parent's fd
+    (``dir_fd``), and entries are listed/classified/opened against
+    that fd — so a symlink swapped in after classification fails the
+    open (ELOOP) instead of redirecting the walk, at every level.
+    """
+    # Each frame: (open directory fd, destination dir, depth,
+    # top-level flag). Fds are owned by the stack until their frame is
+    # processed; the finally lanes guarantee none leaks on refusal.
+    stack: list[tuple[int, Path, int, bool]] = [(
+        os.open(src, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW),
+        dst, 1, True,
+    )]
+    try:
+        while stack:
+            dir_fd, dst_dir, depth, top = stack.pop()
+            try:
+                _seed_one_dir(dir_fd, dst_dir, depth, top, stack)
+            finally:
+                os.close(dir_fd)
+    finally:
+        for fd, _dst, _depth, _top in stack:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _seed_one_dir(dir_fd: int, dst_dir: Path, depth: int,
+                  top: bool, stack: list[tuple[int, Path, int, bool]],
+                  ) -> None:
+    """Copy one directory level (entries listed relative to *dir_fd*),
+    pushing subdirectory fds onto *stack* for the iterative walk."""
+    with os.scandir(dir_fd) as it:
         entries = sorted(it, key=lambda e: e.name)
     for entry in entries:
         name = entry.name
@@ -489,27 +550,40 @@ def _copy_regular_tree(src: Path, dst: Path, *, top: bool) -> None:
         if entry.is_symlink():
             _refuse_entry("symlink", name)
         if entry.is_dir(follow_symlinks=False):
-            (dst / name).mkdir()
-            _copy_regular_tree(Path(entry.path), dst / name, top=False)
+            if depth >= SEED_MAX_DEPTH:
+                raise OpenAntResumeError(
+                    f"--resume: prior scan dir nests directories deeper "
+                    f"than {SEED_MAX_DEPTH} levels — a legitimate scan "
+                    f"leaves a few levels of checkpoint state behind; "
+                    f"refusing to seed from it (nothing was kept)")
+            (dst_dir / name).mkdir()
+            stack.append((
+                os.open(name,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=dir_fd),
+                dst_dir / name, depth + 1, False,
+            ))
         elif entry.is_file(follow_symlinks=False):
-            _copy_regular_file(Path(entry.path), dst / name)
+            _copy_regular_file(name, dst_dir / name, dir_fd=dir_fd)
         else:
             _refuse_entry("special file (fifo/device/socket)", name)
 
 
-def _copy_regular_file(src: Path, dst: Path) -> None:
+def _copy_regular_file(src_name: str, dst: Path, *, dir_fd: int) -> None:
     """Copy one REGULAR file without ever following a link or blocking
-    on a special file: ``O_NOFOLLOW`` refuses a symlink at open even
-    if one was swapped in after the scandir classification,
-    ``O_NONBLOCK`` keeps a swapped-in FIFO from hanging the open, and
-    the ``fstat`` on the OPEN fd is the authoritative type check. The
-    destination is RAPTOR-created (``O_EXCL`` into a fresh tree)."""
+    on a special file: the source opens RELATIVE to its directory's fd
+    (``dir_fd``), ``O_NOFOLLOW`` refuses a symlink at open even if one
+    was swapped in after the scandir classification, ``O_NONBLOCK``
+    keeps a swapped-in FIFO from hanging the open, and the ``fstat``
+    on the OPEN fd is the authoritative type check. The destination is
+    RAPTOR-created (``O_EXCL`` into a fresh tree)."""
     import stat as stat_mod
-    in_fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    in_fd = os.open(src_name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                    dir_fd=dir_fd)
     try:
         st = os.fstat(in_fd)
         if not stat_mod.S_ISREG(st.st_mode):
-            _refuse_entry("special file (fifo/device/socket)", src.name)
+            _refuse_entry("special file (fifo/device/socket)", src_name)
     except BaseException:
         os.close(in_fd)
         raise

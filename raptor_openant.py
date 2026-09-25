@@ -562,6 +562,18 @@ def _main_body(parser: argparse.ArgumentParser, args: argparse.Namespace,
             _write_skip_report(out_dir, repo_path, str(e),
                                outcome="resume_refused")
             return 2
+        except Exception as e:  # noqa: BLE001 — refusal must be clean
+            # Anything unexpected out of validation/seeding is still a
+            # REFUSED resume, not a crash: report + exit 2, never an
+            # unhandled traceback that leaves no resume_refused record
+            # and the lifecycle stuck running. (seed_scan_dir removed
+            # any partial seed before the exception reached here.)
+            print(f"\n✗ --resume failed: {_sft(str(e), max_len=600)}",
+                  file=sys.stderr)
+            _write_skip_report(out_dir, repo_path,
+                               f"resume failed: {e}",
+                               outcome="resume_refused")
+            return 2
         # Re-apply the adopted knobs (oa_config was populated from the
         # pre-adoption args above).
         oa_config.model = args.model
