@@ -1,5 +1,6 @@
 """Tests for project clean — delete old runs, keep latest N."""
 
+import sys
 import time
 import unittest
 
@@ -202,6 +203,48 @@ class TestLiveRunExclusion(unittest.TestCase):
             meta["tool_pid_start"] = start
         else:
             meta.pop("tool_pid_start", None)
+        # Drop the session stamp: what start_run records here is
+        # ambient-env-dependent (under a claude-launched shell the
+        # CLAUDECODE getppid() fallback records a judgeable — and
+        # comm-refused, hence dead — session; on a bare/CI host it
+        # records none, which routes liveness through the session-less
+        # grace-age gate instead). These tests pin the WORKER arm, so
+        # the record must be deterministically session-less on every
+        # host; the dead-session arm has its own explicitly-stamped
+        # test below.
+        for key in ("session_pid", "session_start", "session_boot_id",
+                    "session_pidns", "session_machine_id"):
+            meta.pop(key, None)
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    @staticmethod
+    def _mark_running_dead_session(project, name, tool_pid):
+        """``status=running`` with a coherently-stamped session the
+        liveness check must judge DEAD on any host: the stamped pid is
+        THIS python process — alive, same boot, matching starttime —
+        so only the comm cross-check refuses it (a python test runner
+        is never claude-shaped). No synthetic/dead pid is involved, so
+        there is no pid-recycling race to flake on."""
+        import json
+        import os
+
+        from core.project import sessions as _sessions
+        meta_path = project.output_path / name / ".raptor-run.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["status"] = "running"
+        meta["tool_pid"] = tool_pid
+        meta.pop("tool_pid_start", None)
+        meta["session_pid"] = os.getpid()
+        start = _sessions.proc_starttime(os.getpid())
+        boot = _sessions.boot_id()
+        assert start is not None and boot is not None, (
+            "linux-only helper: /proc identity sources required"
+        )
+        meta["session_start"] = start
+        meta["session_boot_id"] = boot
+        pidns = _sessions.pidns_id()
+        if pidns is not None:
+            meta["session_pidns"] = pidns
         meta_path.write_text(json.dumps(meta), encoding="utf-8")
 
     def test_plan_clean_skips_live_run(self):
@@ -216,6 +259,11 @@ class TestLiveRunExclusion(unittest.TestCase):
             ])
             # Oldest run is live: running + this process's (alive) pid.
             self._mark_running(p, "scan-20260401", os.getpid())
+            # Aged past the write-activity grace window, so "live" can
+            # only come from the WORKER-liveness arm — un-aged, the
+            # session-less grace gate would keep the fresh dir live
+            # even with worker liveness broken (vacuous direction).
+            self._age_tree(p.output_path / "scan-20260401")
             plan = plan_clean(p, keep=1)
             self.assertIn("scan-20260401", plan["skipped_live"])
             self.assertNotIn("scan-20260401", plan["deleted"])
@@ -223,8 +271,13 @@ class TestLiveRunExclusion(unittest.TestCase):
             self.assertIn("scan-20260402", plan["deleted"])
 
     def test_plan_clean_reclaims_stale_running_run(self):
-        # status=running with a DEAD worker is a stale abandon, not a
-        # live run — clean may plan it.
+        # status=running with a DEAD worker and no recorded session is
+        # a stale abandon once write-quiet past the grace window —
+        # clean may plan it. (A session-LESS record cannot be judged by
+        # worker liveness alone: the recorded worker may be a transient
+        # stub shell, so the grace-age gate applies — the aging below
+        # is what makes the reclaim deterministic on hosts that record
+        # no session.)
         from core.project.clean import plan_clean
         with TemporaryDirectory() as d:
             p = _make_project_with_runs(d, [
@@ -232,6 +285,26 @@ class TestLiveRunExclusion(unittest.TestCase):
                 ("scan", "scan-20260402"),
             ])
             self._mark_running(p, "scan-20260401", -1)
+            self._age_tree(p.output_path / "scan-20260401")
+            plan = plan_clean(p, keep=1)
+            self.assertEqual(plan["skipped_live"], [])
+            self.assertIn("scan-20260401", plan["deleted"])
+
+    @unittest.skipUnless(sys.platform == "linux",
+                         "session identity check reads /proc")
+    def test_plan_clean_reclaims_dead_session_running_run(self):
+        # The dead-SESSION arm: dead/malformed worker pid + a stamped
+        # session whose identity check refuses (comm cross-check — see
+        # _mark_running_dead_session) is a stale abandon even while
+        # the run dir is write-FRESH: a judged-dead session
+        # short-circuits the grace-age gate.
+        from core.project.clean import plan_clean
+        with TemporaryDirectory() as d:
+            p = _make_project_with_runs(d, [
+                ("scan", "scan-20260401"),
+                ("scan", "scan-20260402"),
+            ])
+            self._mark_running_dead_session(p, "scan-20260401", -1)
             plan = plan_clean(p, keep=1)
             self.assertEqual(plan["skipped_live"], [])
             self.assertIn("scan-20260401", plan["deleted"])
@@ -305,8 +378,11 @@ class TestLiveRunExclusion(unittest.TestCase):
             ])
             plan = plan_clean(p, keep=1)
             self.assertIn("scan-20260401", plan["deleted"])
-            # Resumed between plan and execute.
+            # Resumed between plan and execute. Aged past the grace
+            # window so survival can only come from the WORKER arm
+            # (same vacuity defence as test_plan_clean_skips_live_run).
             self._mark_running(p, "scan-20260401", os.getpid())
+            self._age_tree(p.output_path / "scan-20260401")
             execute_clean(plan, output_path=p.output_path)
             self.assertTrue((p.output_path / "scan-20260401").is_dir())
             self.assertIn("scan-20260401", plan["skipped_live"])
@@ -321,6 +397,9 @@ class TestLiveRunExclusion(unittest.TestCase):
                 ("scan", "scan-20260402"),
             ])
             self._mark_running(p, "scan-20260402", os.getpid())
+            # Aged: liveness must come from the worker arm (see
+            # test_plan_clean_skips_live_run).
+            self._age_tree(p.output_path / "scan-20260402")
             plan = plan_dedup(p)
             self.assertIn("scan-20260402", plan["skipped_live"])
             self.assertNotIn("scan-20260402", plan["deleted"])
