@@ -29,6 +29,10 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from packages.openant.config import OpenAntConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -554,10 +558,25 @@ def main() -> int:
             # failure, exit >= 2, missing pipeline output). Exit
             # non-zero so the lifecycle records a failed run — an
             # empty-findings exit 0 here would be indistinguishable
-            # from a target that scanned clean.
+            # from a target that scanned clean. Failed scans are THE
+            # --resume population, so the report carries the same
+            # resume-gate fields as a successful one: the target
+            # fingerprint (drift gate), the scan-shape config with the
+            # core provenance (shape adoption + core-drift gate), and
+            # the best-known cost (combined-cost accounting) — a
+            # fieldless report degraded every one of those gates to a
+            # warning or a silent no-op.
+            from packages.openant.resume import target_fingerprint
             print(f"\n✗ OpenAnt scan failed: {_sft(error)}", file=sys.stderr)
-            _write_skip_report(out_dir, repo_path, error,
-                               outcome="scan_failed")
+            _write_skip_report(
+                out_dir, repo_path, error,
+                outcome="scan_failed",
+                target_fp=target_fingerprint(repo_path),
+                config=_scan_shape_config(
+                    oa_config, scan_result.get("core_provenance") or {}),
+                cost=_reconcile_run_cost(
+                    oa_out, scan_result.get("token_usage") or {}),
+            )
             return 1
         # A skipped-but-not-hard-error result also means the target was
         # NOT scanned — same honesty rule as the not-configured paths.
@@ -613,9 +632,11 @@ def main() -> int:
 
     cost = _reconcile_run_cost(oa_out, scan_result.get("token_usage") or {})
 
-    # Recorded on EVERY scan run so a later --resume can verify the
-    # target did not drift in between (the checkpoints are only valid
-    # against the tree that produced them).
+    # Recorded on every outcome that leaves resumable scan state —
+    # here on success, and in the scan_failed skip report above — so a
+    # later --resume can verify the target did not drift in between
+    # (the checkpoints are only valid against the tree that produced
+    # them).
     from packages.openant.resume import target_fingerprint
 
     final_report = {
@@ -623,14 +644,8 @@ def main() -> int:
         "repository": str(repo_path),
         "target_fingerprint": target_fingerprint(repo_path),
         "duration_seconds": round(duration, 2),
-        "config": {
-            "model": oa_config.model,
-            "level": oa_config.level,
-            "enhance": oa_config.enhance,
-            "verify": oa_config.verify,
-            "language": oa_config.language,
-            "core_provenance": scan_result.get("core_provenance") or {},
-        },
+        "config": _scan_shape_config(
+            oa_config, scan_result.get("core_provenance") or {}),
         "phases": {
             "openant_scan": {
                 "completed": True,
@@ -792,6 +807,23 @@ def _adopt_prior_scan_config(args, prior_report: dict) -> list:
     return notes
 
 
+def _scan_shape_config(oa_config: "OpenAntConfig",
+                       core_provenance: dict) -> dict:
+    """The report's ``config`` block: the scan-shape knobs a later
+    --resume adopts (model, level, enhance, verify, language) plus the
+    core provenance its drift gate verifies. One builder so the
+    success report and the scan_failed skip report can never diverge
+    in which fields the resume gates find."""
+    return {
+        "model": oa_config.model,
+        "level": oa_config.level,
+        "enhance": oa_config.enhance,
+        "verify": oa_config.verify,
+        "language": oa_config.language,
+        "core_provenance": core_provenance,
+    }
+
+
 def _write_forecast_report(out_dir: Path, repo_path: Path, forecast: dict,
                            *, resumed_from: str | None = None) -> None:
     """Report for a --forecast run. outcome=forecast_only: the target
@@ -816,7 +848,10 @@ def _write_forecast_report(out_dir: Path, repo_path: Path, forecast: dict,
 
 
 def _write_skip_report(out_dir: Path, repo_path: Path, error: str,
-                       *, outcome: str) -> None:
+                       *, outcome: str,
+                       target_fp: dict | None = None,
+                       config: dict | None = None,
+                       cost: dict | None = None) -> None:
     """Report for a run in which the target was NOT scanned.
 
     ``outcome`` (snake_case, machine-readable): ``not_configured`` (no
@@ -829,15 +864,29 @@ def _write_skip_report(out_dir: Path, repo_path: Path, error: str,
     from every run directory, so an empty list here reads as "OpenAnt
     scanned this target and found nothing" — a claim neither outcome
     supports.
+
+    ``target_fp`` / ``config`` / ``cost``: outcomes that leave
+    resumable scan state behind (``scan_failed``) pass the resume-gate
+    fields so a later --resume gets the same drift refusal, shape
+    adoption, and cost accounting as a resume of a successful run —
+    without them the drift gates degrade to warnings, the shape
+    adoption silently no-ops, and the prior spend books as $0.
     """
-    save_json(out_dir / "raptor_openant_report.json", {
+    report: dict = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "repository": str(repo_path),
         "outcome": outcome,
         "error": error,
         "phases": {"openant_scan": {"completed": False, "error": error}},
         "outputs": {},
-    })
+    }
+    if target_fp is not None:
+        report["target_fingerprint"] = target_fp
+    if config is not None:
+        report["config"] = config
+    if cost is not None:
+        report["cost"] = cost
+    save_json(out_dir / "raptor_openant_report.json", report)
 
 
 def _write_markdown_report(

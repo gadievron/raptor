@@ -9,6 +9,7 @@ target or core version), so RAPTOR's validation is the only
 target/core drift gate a resume has.
 """
 
+import argparse
 import hashlib
 import json
 import os
@@ -243,6 +244,91 @@ class TestValidatePriorRun(unittest.TestCase):
         prior = _mk_prior(self.base, self.repo)
         result = _validate(prior, None)
         self.assertEqual(result.repository, self.repo.resolve())
+
+
+class TestScanFailedReportResumesLikeSuccess(unittest.TestCase):
+    """A hard-failed scan's report — written by the REAL scan_failed
+    writer (``raptor_openant._write_skip_report``) — must feed the
+    resume gates the same fields a successful run's report does: the
+    drift gate REFUSES (never just warns) on a git target whose HEAD
+    changed, the scan-shape adoption sees a config block, the core
+    provenance verifies, and the prior spend books its real figure.
+    Hard-failed runs are the primary --resume population."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.base = Path(self._td.name)
+        self.repo = self.base / "repo"
+        self.repo.mkdir()
+        self.addCleanup(self._td.cleanup)
+
+    def _mk_scan_failed_prior(self, tfp: dict) -> Path:
+        import raptor_openant
+        from packages.openant.config import OpenAntConfig
+        run = self.base / "prior"
+        scan = run / "openant_scan"
+        _write(scan / "dataset.json", {"units": [
+            {"id": "f.py:u0", "code": {"primary_code": "x" * 100}}]})
+        _write(scan / "analyze_checkpoints" / "u0.json",
+               _analyze_row("f.py:u0", "ERROR", "error"))
+        _write(scan / "analyze_checkpoints" / "_summary.json", {
+            "phase": "done", "total_units": 1, "completed": 0,
+            "incomplete": 0, "errors": 1})
+        oa_config = OpenAntConfig(core_path=self.base / "core",
+                                  model="opus", level="all",
+                                  verify=True, language="python")
+        raptor_openant._write_skip_report(
+            run, self.repo, "OpenAnt timed out after 1800s",
+            outcome="scan_failed",
+            target_fp=tfp,
+            config=raptor_openant._scan_shape_config(
+                oa_config,
+                {"pinned_commit": OPENANT_PINNED_COMMIT,
+                 "head": _CORE_HEAD, "matches": True}),
+            cost={"total_usd": 3.75, "openant_reported_usd": 0.0,
+                  "gateway_ledger_usd": 3.75},
+        )
+        return run
+
+    def test_git_drift_refuses_not_warns(self):
+        prior = self._mk_scan_failed_prior({"kind": "git", "head": "a" * 40})
+        with self.assertRaisesRegex(OpenAntResumeError, "target drift"):
+            _validate(prior, self.repo)
+
+    def test_shape_cost_and_provenance_adopted(self):
+        import raptor_openant
+        prior = self._mk_scan_failed_prior({"kind": "non-git"})
+        result = _validate(prior, self.repo)
+        # The failed run's real spend books, not $0.
+        self.assertEqual(result.prior_cost_usd, 3.75)
+        # Core provenance is recorded: no unverifiable-core warning.
+        self.assertFalse(any("core" in w for w in result.warnings),
+                         result.warnings)
+        # The scan-shape adoption sees the config block and adopts it.
+        args = argparse.Namespace(model="sonnet", level="reachable",
+                                  language="auto", no_enhance=False,
+                                  verify=False)
+        notes = raptor_openant._adopt_prior_scan_config(args, result.report)
+        self.assertTrue(notes)
+        self.assertEqual(args.model, "opus")
+        self.assertEqual(args.level, "all")
+        self.assertEqual(args.language, "python")
+        self.assertTrue(args.verify)
+
+    def test_fieldless_skip_report_still_warns_not_crashes(self):
+        # A report without the fields (older runs, other outcomes)
+        # keeps the warn-and-proceed lane.
+        import raptor_openant
+        run = self.base / "prior"
+        scan = run / "openant_scan"
+        _write(scan / "dataset.json", {"units": []})
+        _write(scan / "analyze_checkpoints" / "u0.json",
+               _analyze_row("f.py:u0", "ERROR", "error"))
+        raptor_openant._write_skip_report(
+            run, self.repo, "boom", outcome="scan_failed")
+        result = _validate(run, self.repo)
+        self.assertTrue(any("UNVERIFIABLE" in w for w in result.warnings))
+        self.assertEqual(result.prior_cost_usd, 0.0)
 
 
 class TestAssessRemaining(unittest.TestCase):

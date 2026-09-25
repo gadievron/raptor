@@ -128,6 +128,14 @@ class TestHardErrorFailsRun(unittest.TestCase):
             report = json.loads(
                 (out_dir / "raptor_openant_report.json").read_text())
             self.assertEqual(report["outcome"], "scan_failed")
+            # The failed run's report carries the resume-gate fields —
+            # a later --resume of this run must get the same drift
+            # refusal, shape adoption, and cost accounting a resume of
+            # a successful run gets.
+            self.assertIn("target_fingerprint", report)
+            self.assertEqual(report["config"]["model"], "sonnet")
+            self.assertIn("core_provenance", report["config"])
+            self.assertIn("total_usd", report["cost"])
 
     def test_scanner_exit3_direct_exit_code(self):
         """Direct raptor_openant.py invocation: same exit 1 without the
