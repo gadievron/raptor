@@ -657,7 +657,12 @@ def main() -> None:
     p_merge.add_argument("--yes", action="store_true", help="Skip confirmation")
 
     # clean
-    p_clean = sub.add_parser("clean", help="Delete old runs, keep latest n",
+    p_clean = sub.add_parser("clean",
+                             help="Delete old runs, keep latest n; sweeps "
+                                  "_sources extractions no kept run "
+                                  "references (any _sources dir named "
+                                  "*-<sha256> counts as a cache entry — "
+                                  "don't store your own data there)",
                              usage="raptor project clean [<name>] [--keep <n>] [--dedup] [--dry-run] [--yes]", **_F)
     p_clean.add_argument("name", nargs="?", help="Project name")
     p_clean.add_argument("--keep", type=int, default=1, metavar="<n>",
@@ -3198,14 +3203,33 @@ def _do_clean(project, keep, dry_run, yes, dedup: bool=False) -> None:
     """Clean old runs from a project. With ``dedup``, the deletion set is the
     coverage-aware lossless subset (runs fully subsumed by a survivor) rather
     than recency-based ``--keep N``."""
-    from .clean import execute_clean, plan_clean, plan_dedup
+    from .clean import (
+        execute_clean,
+        execute_sources_sweep,
+        plan_clean,
+        plan_dedup,
+        plan_sources_sweep,
+    )
 
     plan = plan_dedup(project) if dedup else plan_clean(project, keep=keep)
 
     for name in plan.get("skipped_live", []):
         print(f"  Skipped (still running): {name}")
 
-    if not plan["deleted"]:
+    # Extraction-cache sweep rides every clean: _sources entries whose
+    # archive sha no surviving run (nor the project's own archive
+    # target) references are reclaimed alongside the runs. Bounded and
+    # age-gated — see plan_sources_sweep. Best-effort: a sweep-plan
+    # hiccup must never block the run clean.
+    try:
+        sources_plan = plan_sources_sweep(project, plan["delete_dirs"])
+    except Exception as exc:  # noqa: BLE001
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "sources sweep planning failed: %s", exc)
+        sources_plan = {"delete_dirs": [], "deleted": [], "freed_bytes": 0}
+
+    if not plan["deleted"] and not sources_plan["deleted"]:
         print("No redundant runs to dedup." if dedup else "Nothing to clean.")
         return
 
@@ -3219,6 +3243,13 @@ def _do_clean(project, keep, dry_run, yes, dedup: bool=False) -> None:
     freed_mb = plan['freed_bytes'] / 1024 / 1024
     total_runs = len(plan['deleted']) + len(plan['kept'])
     print(f"\n  Total: {total_runs} runs → {len(plan['kept'])} runs ({freed_mb:.1f}MB to free)")
+
+    if sources_plan["deleted"]:
+        src_mb = sources_plan["freed_bytes"] / 1024 / 1024
+        print(f"  _sources cache: {len(sources_plan['deleted'])} "
+              f"unreferenced extraction(s) to sweep ({src_mb:.1f}MB)")
+        for name in sources_plan["deleted"]:
+            print(f"    {sanitise_for_terminal(name, max_len=120)}")
 
     # Coverage-aware: classify what each removal costs (read-only).
     consequences = _classify_clean_coverage(project, plan)
@@ -3250,7 +3281,29 @@ def _do_clean(project, keep, dry_run, yes, dedup: bool=False) -> None:
     execute_clean(plan, output_path=project.output_path)
     for name in plan["deleted"]:
         print(_red(f"  Deleted: {name}"))
-    print(f"Done. {len(plan['deleted'])} runs deleted ({freed_mb:.1f}MB freed)")
+    if sources_plan["deleted"]:
+        # The sweep executor re-vets the plan at the last moment: the
+        # confirm wait above is unbounded and a cache HIT doesn't bump
+        # an entry's mtime, so a run that started while we waited can
+        # have re-referenced a planned entry. The refresh only ever
+        # SHRINKS the confirmed set; a re-plan failure deletes
+        # nothing. Same containment root as the run clean.
+        sources_plan = execute_sources_sweep(
+            project, sources_plan, plan["delete_dirs"],
+            output_path=project.output_path)
+        for name in sources_plan.get("skipped_referenced", []):
+            print("  Skipped (re-referenced since plan): _sources/"
+                  f"{sanitise_for_terminal(name, max_len=120)}")
+        for name in sources_plan["deleted"]:
+            print(_red("  Swept: _sources/"
+                       f"{sanitise_for_terminal(name, max_len=120)}"))
+    swept_note = ""
+    if sources_plan["deleted"]:
+        swept_note = (
+            f", {len(sources_plan['deleted'])} _sources extraction(s) "
+            f"swept ({sources_plan['freed_bytes'] / 1024 / 1024:.1f}MB)")
+    print(f"Done. {len(plan['deleted'])} runs deleted "
+          f"({freed_mb:.1f}MB freed){swept_note}")
 
 
 def _classify_clean_coverage(project, plan):
