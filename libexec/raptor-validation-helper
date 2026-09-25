@@ -490,6 +490,37 @@ def _is_dark_row(finding: dict) -> bool:
 #: large and the backlog is a routing artifact, not a findings store).
 _BACKLOG_SITES_PER_CLUSTER = 50
 
+#: Clusters listed in the backlog artifact. Cluster classes derive
+#: from attacker-influenced fields (cwe_id / vuln_type free text), so
+#: a hostile import can mint one cluster per row — the listing is
+#: bounded, the ``total`` stays exact, and truncation is flagged.
+_BACKLOG_CLUSTER_CAP = 100
+
+
+def _remove_stale_witness_backlog(dest_dir: Path) -> None:
+    """Remove a backlog artifact that would outlive its inputs.
+
+    A re-import with no dark rows — or with ``--include-dark`` — into
+    the same ``--out`` must not leave the PREVIOUS import's backlog on
+    disk: the validation report reads the file and would render a
+    phantom routed count the fresh import marker contradicts. Same
+    staleness semantics as the re-adjudication queue's fresh-write.
+    Regular files only (lstat, no follow) — a planted special is left
+    alone with a loud note, never operated through.
+    """
+    import stat as _stat_mod
+    path = Path(dest_dir) / "witness-backlog.json"
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return
+    if _stat_mod.S_ISREG(st.st_mode):
+        path.unlink(missing_ok=True)
+    else:
+        print(f"  ⚠️  witness-backlog.json is not a regular file "
+              f"(mode=0o{st.st_mode:o}) — left in place (planted "
+              f"special?)", file=sys.stderr)
+
 
 def _route_dark_to_witness_backlog(
     container: dict, dest_dir: Path, source_name: str,
@@ -519,22 +550,30 @@ def _route_dark_to_witness_backlog(
     ]
 
     def _cluster_class(finding: dict) -> str:
+        # Class strings are attacker-influenced free text — capped so
+        # a hostile row cannot bloat the artifact via its class key.
         for key in ("cwe_id", "cwe"):
             cwe = finding.get(key)
             if isinstance(cwe, str) and cwe.strip():
-                return cwe.strip().upper()
+                return cwe.strip().upper()[:100]
         vt = finding.get("vuln_type")
         if isinstance(vt, str) and vt.strip():
-            return vt.strip().lower()
+            return vt.strip().lower()[:100]
         return "unclassified"
 
     def _site(finding: dict) -> dict:
+        # ``line`` in a hostile row can be dict/list-shaped — only a
+        # real int is stored (0 = unknown), matching the queue
+        # records' coercion.
+        line = finding.get("line")
+        if isinstance(line, bool) or not isinstance(line, int):
+            line = 0
         return {
             "id": str(finding.get("id") or "")[:120],
             "file": str(finding.get("file")
                         or finding.get("file_path") or "")[:300],
             "function": str(finding.get("function") or "")[:200],
-            "line": finding.get("line"),
+            "line": line,
             "title": str(finding.get("title")
                          or finding.get("hypothesis") or "")[:300],
         }
@@ -554,7 +593,7 @@ def _route_dark_to_witness_backlog(
             cluster["sites_truncated"] = True
         clusters.append(cluster)
 
-    _save_artifact(dest_dir / "witness-backlog.json", {
+    backlog = {
         "source_file": source_name,
         "total": len(dark),
         "note": (
@@ -563,8 +602,25 @@ def _route_dark_to_witness_backlog(
             "candidacy by default; re-import with --include-dark to "
             "validate them"
         ),
-        "clusters": clusters,
-    })
+        "clusters": clusters[:_BACKLOG_CLUSTER_CAP],
+    }
+    if len(clusters) > _BACKLOG_CLUSTER_CAP:
+        backlog["clusters_truncated"] = True
+        backlog["cluster_classes_total"] = len(clusters)
+
+    # Loud-and-replace on a planted special: _save_artifact's atomic
+    # tempfile+rename never opens the destination (no FIFO hang, no
+    # symlink follow) — the plant is replaced, and the note says so.
+    try:
+        import stat as _stat_mod
+        st = os.lstat(dest_dir / "witness-backlog.json")
+        if not _stat_mod.S_ISREG(st.st_mode):
+            print(f"  ⚠️  replacing non-regular witness-backlog.json "
+                  f"(mode=0o{st.st_mode:o} — planted special?)",
+                  file=sys.stderr)
+    except OSError:
+        pass
+    _save_artifact(dest_dir / "witness-backlog.json", backlog)
     return len(dark)
 
 
@@ -602,6 +658,11 @@ def _queue_import_readjudication(
         else:
             prior_rows = []
         prior_rows = [r for r in prior_rows if isinstance(r, dict)]
+        # Incoming dark rows count as claims here by design: a dark
+        # grade is still an independent assertion of the site. The
+        # record's new_claim.status field carries the grade so a
+        # queue reader can weigh a tool-blind hypothesis accordingly
+        # — weighting is the reader's job, not a filter's.
         incoming = [
             f for f in container.get("findings", []) if isinstance(f, dict)
         ]
@@ -680,6 +741,10 @@ def _import_findings_file(
     # on explicit opt-in. Runs before id normalisation so backlog rows
     # keep the producer's own ids. Suspicious rows are untouched —
     # they stay eligible under the same contract as scanner findings.
+    # Either way the PREVIOUS import's backlog must not outlive its
+    # inputs: when nothing routes on THIS import (no dark rows, or
+    # --include-dark), a stale artifact would make the report render a
+    # phantom routed count.
     dark_routed = 0
     if include_dark:
         n_dark = sum(1 for f in container.get("findings", [])
@@ -687,6 +752,7 @@ def _import_findings_file(
         if n_dark:
             print(f"  {n_dark} dark item(s) included in stage-A "
                   f"candidacy (--include-dark)")
+        _remove_stale_witness_backlog(dest.parent)
     else:
         dark_routed = _route_dark_to_witness_backlog(
             container, dest.parent, src.name)
@@ -694,6 +760,23 @@ def _import_findings_file(
             print(f"  {dark_routed} dark item(s) routed to the witness "
                   f"backlog — not validated; --include-dark to override "
                   f"(witness-backlog.json)")
+            if dark_routed > len(container.get("findings", [])):
+                # Majority-dark anomaly hint. Threshold = routed
+                # outnumber the surviving candidates: below that,
+                # routing is incidental attrition and a second line is
+                # noise; above it, most of what the operator handed in
+                # will NOT be judged by this run — usually a sign the
+                # import was an audit dark follow-up that needed
+                # --include-dark, or that witness acquisition, not
+                # validation, is the actual next step.
+                print(f"  note: majority of the import is dark "
+                      f"({dark_routed} routed vs "
+                      f"{len(container.get('findings', []))} candidate(s)) "
+                      f"— the witness backlog is this run's main output; "
+                      f"pass --include-dark if these rows were "
+                      f"deliberately selected for validation")
+        else:
+            _remove_stale_witness_backlog(dest.parent)
 
     # Normalise foreign ids at the import chokepoint so the container
     # satisfies its own schema before any stage prep validates it.

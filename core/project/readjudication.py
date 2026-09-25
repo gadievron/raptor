@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import stat as _stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -89,6 +90,25 @@ _TEXT_CAP = 500
 #: record (never a silent stop).
 RECORD_CAP = 500
 
+#: Cap on queue records per SITE. The queue's actionable unit is the
+#: site (a scoped /validate targets sites), and mechanism identity is
+#: attacker-influenced free text — without a per-site bound, one
+#: matching site flooded with mechanism-varied claims fills the whole
+#: global cap oldest-source-first and EVICTS every other site's real
+#: contradiction. Beyond a handful of mechanism variants, extra
+#: records at the same site add no adjudication signal; site
+#: diversity is what the cap must preserve. Suppressions are counted
+#: and announced (never silent).
+SITE_RECORD_CAP = 5
+
+#: Cap on a single mechanism identifier stored in a record. Mechanism
+#: vocabulary is short (``CWE-N``, canonical vuln_type strings); the
+#: raw field is attacker-influenced free text, and an uncapped entry
+#: let one record smuggle megabytes past every _TEXT_CAP bound —
+#: flooding the queue artifact beyond its readers' byte budgets. The
+#: pair-dedup key uses the capped form (built from this same set).
+_MECHANISM_CAP = 100
+
 
 def _record_status(finding: dict[str, Any]) -> str:
     """The finding's most-final status string (``final_status`` wins,
@@ -125,6 +145,14 @@ def site_key(finding: dict[str, Any]) -> tuple[str, str, Any] | None:
     line)``. The two tiers deliberately do NOT cross-match: pairing a
     line-only row to a function-keyed disproof would need line-range
     data no finding shape carries.
+
+    Known blind spots (named, not silently absorbed): a function
+    RENAMED between the disproof and the new claim yields two sites
+    and no match (nothing in the finding shape carries rename
+    lineage); and producers with drifting function-name vocabularies
+    (qualified vs bare names, module-scoped spellings) key different
+    sites for the same code — pre-existing producer drift this
+    matcher inherits rather than papers over.
     """
     file_path = finding_file(finding)
     if not file_path:
@@ -142,15 +170,23 @@ def _mechanisms(finding: dict[str, Any]) -> frozenset[str]:
     """The mechanism identifiers a row claims: normalised vuln_type
     plus CWE ids. The two vocabularies live in disjoint namespaces
     (lower-case types vs upper-case ``CWE-N``), so a set intersection
-    only matches like with like."""
+    only matches like with like.
+
+    Entries are capped at :data:`_MECHANISM_CAP` — the raw fields are
+    attacker-influenced free text and this set feeds BOTH the stored
+    record and the pair-dedup key. Known coarseness: the schema's
+    catch-all vuln_type ``other`` matches ``other``, so two unrelated
+    novel-class claims read as mechanism-matched — acceptable because
+    the comparison is a note, never a gate.
+    """
     out: set[str] = set()
     vuln_type = finding.get("vuln_type")
     if isinstance(vuln_type, str) and vuln_type.strip():
-        out.add(vuln_type.strip().lower())
+        out.add(vuln_type.strip().lower()[:_MECHANISM_CAP])
     for key in ("cwe_id", "cwe"):
         cwe = finding.get(key)
         if isinstance(cwe, str) and cwe.strip():
-            out.add(cwe.strip().upper())
+            out.add(cwe.strip().upper()[:_MECHANISM_CAP])
     return frozenset(out)
 
 
@@ -174,10 +210,16 @@ def _claim_fields(finding: dict[str, Any], source: str) -> dict[str, Any]:
         "rule_id": _cap_text(finding.get("rule_id") or "", 120),
         "tool": _cap_text(finding.get("tool") or "", 80),
         "mechanism": sorted(_mechanisms(finding)),
+        # candidate_reasoning / dataflow_summary close the chain for
+        # real /validate rows, which carry those fields rather than
+        # title/description/message — without them every claim summary
+        # from the validate corpus rendered empty.
         "summary": _cap_text(
             finding.get("title")
             or finding.get("description")
             or finding.get("message")
+            or finding.get("candidate_reasoning")
+            or finding.get("dataflow_summary")
             or "",
             300,
         ),
@@ -273,12 +315,21 @@ def detect_contradictions(
     One record per (site, claim source, disproof source, claim
     mechanism); when several disproofs precede the claim, the LATEST
     one is quoted and ``prior_disproofs_at_site`` carries the count.
-    Bounded by :data:`RECORD_CAP` with an explicit truncation record.
+
+    Bounds — announced, never silent: :data:`SITE_RECORD_CAP` per
+    site FIRST (mechanism identity is attacker-influenced free text;
+    one flooded site must never occupy the global cap and evict other
+    sites' real contradictions — site diversity is the queue's
+    value), then :data:`RECORD_CAP` overall. Every suppression is
+    counted on the terminal truncation record (``suppressed``), which
+    each rendering surface (report section, /project findings notice,
+    merge log, /review) re-states.
     """
     disproofs: dict[tuple, list[tuple[str, dict[str, Any]]]] = {}
     records: list[dict[str, Any]] = []
     seen: set[tuple] = set()
-    truncated = 0
+    site_queued: dict[tuple, int] = {}
+    suppressed = 0
     for label, findings in sources:
         # Claims first, then this source's disproofs are indexed —
         # so a same-source pair never fires.
@@ -295,9 +346,11 @@ def detect_contradictions(
             if pair in seen:
                 continue
             seen.add(pair)
-            if len(records) >= RECORD_CAP:
-                truncated += 1
+            if (site_queued.get(key, 0) >= SITE_RECORD_CAP
+                    or len(records) >= RECORD_CAP):
+                suppressed += 1
                 continue
+            site_queued[key] = site_queued.get(key, 0) + 1
             disproof_label, disproof_row = prior[-1]
             records.append(build_queue_record(
                 finding, label, disproof_row, disproof_label,
@@ -309,13 +362,15 @@ def detect_contradictions(
             key = site_key(finding)
             if key is not None:
                 disproofs.setdefault(key, []).append((label, finding))
-    if truncated:
+    if suppressed:
         records.append({
             "kind": "readjudication",
             "action": "truncated",
+            "suppressed": suppressed,
             "note": (
-                f"record cap {RECORD_CAP} reached — "
-                f"{truncated} further contradiction(s) not recorded"
+                f"record caps reached (per-site {SITE_RECORD_CAP}, "
+                f"total {RECORD_CAP}) — {suppressed} further "
+                f"contradiction(s) not recorded"
             ),
         })
     return records
@@ -353,6 +408,24 @@ def queued_count(records: Sequence[dict[str, Any]]) -> int:
     )
 
 
+def suppressed_count(records: Sequence[dict[str, Any]]) -> int:
+    """Contradictions the caps refused to record (from the truncation
+    marker's ``suppressed`` field). Every surface that renders a
+    queued count re-states this number — a capped queue must never
+    read as a complete one. Tolerant: only positive int-typed fields
+    count (the queue file is agent-writable)."""
+    total = 0
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        if record.get("action") != "truncated":
+            continue
+        value = record.get("suppressed")
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            total += value
+    return total
+
+
 def contradicted_disproof_count(records: Sequence[dict[str, Any]]) -> int:
     """Distinct recorded disproofs the queue contradicts — the honest
     headline number ("N recorded disproofs contradicted")."""
@@ -371,53 +444,57 @@ def contradicted_disproof_count(records: Sequence[dict[str, Any]]) -> int:
     return len(seen)
 
 
-_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
-_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
-
-
 def write_queue(
     out_dir: Path, records: Sequence[dict[str, Any]],
 ) -> Path | None:
     """Write the queue artifact FRESH into *out_dir*; best-effort.
 
-    Fresh (truncate), not append: every detection pass is a full
-    recomputation over its current inputs, so appending would
-    duplicate the same contradictions on each re-run of a merged view.
-    Symlink-refusing open (O_NOFOLLOW) — the queue lives in agent-
-    writable run/report dirs, the same trust posture as
-    ``core.json.append_jsonl``. An empty detection removes a stale
-    queue file so a resolved contradiction doesn't linger (symlinked
-    paths are left alone — never operate through one).
+    Fresh, not append: every detection pass is a full recomputation
+    over its current inputs, so appending would duplicate the same
+    contradictions on each re-run of a merged view. An empty
+    detection removes a stale queue file so a resolved contradiction
+    doesn't linger.
+
+    Hardening — the queue lives in agent-writable run/report dirs:
+
+    * No-open lstat gate first: a pre-planted special (symlink, FIFO,
+      device) at the queue path is refused LOUDLY without ever
+      opening it — an open on a FIFO blocks forever (the plantable
+      hang ``core.json.bounded`` documents), and this writer must
+      never block or write through a link. lstat never follows and
+      never blocks.
+    * Atomic tempfile + rename via ``core.atomic_fs`` (the shared
+      primitive, O_EXCL/O_NOFOLLOW-hardened tempfile) — concurrent
+      merged-view regenerations replace the file whole instead of
+      tearing each other's half-written lines. The gate is by-name;
+      a special swapped in AFTER it is replaced by the rename, which
+      opens nothing at the destination — the lstat is the loud
+      refusal, the rename is the safety.
 
     Returns the written path, or None when nothing was written.
     """
     path = Path(out_dir) / QUEUE_FILENAME
     try:
+        st = os.lstat(path)
+    except OSError:
+        st = None
+    if st is not None and not _stat.S_ISREG(st.st_mode):
+        logger.warning(
+            "readjudication: refusing non-regular queue path %s "
+            "(mode=0o%o) — planted special?", path, st.st_mode,
+        )
+        return None
+    try:
         if not records:
-            if path.is_symlink():
-                logger.debug(
-                    "readjudication: refusing symlinked queue path %s", path)
-            elif path.is_file():
-                path.unlink()
+            if st is not None:
+                path.unlink(missing_ok=True)
             return None
         payload = "".join(
             json.dumps(record, sort_keys=True, allow_nan=False) + "\n"
             for record in records
         ).encode("utf-8")
-        flags = (os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-                 | _O_NOFOLLOW | _O_CLOEXEC)
-        fd = os.open(str(path), flags, 0o644)
-        try:
-            view = memoryview(payload)
-            written = 0
-            while written < len(view):
-                n = os.write(fd, view[written:])
-                if n <= 0:
-                    raise OSError(
-                        f"short write to {path}: os.write returned {n}")
-                written += n
-        finally:
-            os.close(fd)
+        from core.atomic_fs import write_bytes_atomically
+        write_bytes_atomically(path, payload, tmp_prefix=".~readj-")
     except (OSError, TypeError, ValueError):
         # Best-effort by contract: the queue is an additive signal —
         # a write failure must never break the merge / report / import
@@ -432,6 +509,7 @@ __all__ = [
     "DISPROOF_STATUSES",
     "QUEUE_FILENAME",
     "RECORD_CAP",
+    "SITE_RECORD_CAP",
     "build_queue_record",
     "contradicted_disproof_count",
     "detect_contradictions",
@@ -439,5 +517,6 @@ __all__ = [
     "is_disproof",
     "queued_count",
     "site_key",
+    "suppressed_count",
     "write_queue",
 ]

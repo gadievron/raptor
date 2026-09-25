@@ -310,6 +310,7 @@ def render_grouped_findings_markdown(
         from core.project.readjudication import (
             QUEUE_FILENAME,
             contradicted_disproof_count,
+            suppressed_count,
         )
         n_disproofs = contradicted_disproof_count(queued)
         lines.append("## Re-adjudication queue")
@@ -321,6 +322,16 @@ def render_grouped_findings_markdown(
             f"is auto-overturned: adjudicate with a scoped /validate "
             f"on the queued sites."
         )
+        n_suppressed = suppressed_count(readjudication)
+        if n_suppressed:
+            # A capped queue must never read as complete — restate the
+            # truncation marker wherever the count renders.
+            lines.append("")
+            lines.append(
+                f"⚠️ {n_suppressed} further contradiction(s) not "
+                f"recorded (record caps) — the listing below is a "
+                f"bounded sample, not the full set."
+            )
         lines.append("")
         for record in queued:
             # Every rendered value is finding-derived (LLM-authored or

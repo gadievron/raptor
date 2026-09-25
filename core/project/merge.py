@@ -379,20 +379,33 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
     # nothing about the merge result changes, and no verdict is ever
     # overturned here — adjudication is a validation-lane task.
     # Best-effort: an additive signal must never break the merge.
+    # Per-run queue files from source runs are NOT in KNOWN_FILES, so
+    # the artefact-copy legs below carry them into the merged output
+    # (collision-renamed against the fresh queue written here). That
+    # is deliberate: /project merge deletes the source runs afterwards,
+    # and an import-time queue records contradictions against a prior
+    # container this recomputation can no longer see — the renamed
+    # copies are the only surviving per-run trail.
     readjudication_queued = 0
     try:
         from core.project.readjudication import (
             detect_project_contradictions,
             queued_count,
+            suppressed_count,
             write_queue,
         )
         readj_records = detect_project_contradictions(run_dirs)
         readjudication_queued = queued_count(readj_records)
         queue_path = write_queue(output_dir, readj_records)
         if readjudication_queued and queue_path is not None:
+            n_suppressed = suppressed_count(readj_records)
+            # A capped queue must never read as complete.
+            capped = (f" (+{n_suppressed} further not recorded — "
+                      f"record caps)" if n_suppressed else "")
             logger.info(
                 "%d recorded disproof contradiction(s) queued for "
-                "re-adjudication → %s", readjudication_queued, queue_path,
+                "re-adjudication%s → %s",
+                readjudication_queued, capped, queue_path,
             )
     except Exception:  # noqa: BLE001 — additive trail, never merge-fatal
         logger.warning("re-adjudication detection failed", exc_info=True)

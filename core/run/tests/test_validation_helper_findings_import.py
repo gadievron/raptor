@@ -358,3 +358,114 @@ class TestImportReadjudicationCrossCheck:
         # disproofs any more.
         mod._import_findings_file(src, dest, target="/t")
         assert not (tmp_path / "readjudication-queue.jsonl").exists()
+
+
+class TestWitnessBacklogStaleness:
+    """The backlog must not outlive its inputs: a shared --out
+    re-import with no routed rows (or with --include-dark) removes the
+    previous import's artifact — otherwise the report renders a
+    phantom routed count the fresh marker contradicts. Two-direction:
+    routed rows write it, non-routing imports clear it."""
+
+    def _import(self, mod, tmp_path, rows, **kw):
+        src = tmp_path / "in.json"
+        src.write_text(json.dumps({"findings": rows}))
+        mod._import_findings_file(src, tmp_path / "findings.json",
+                                  target="/t", **kw)
+
+    def test_zero_dark_reimport_clears_stale_backlog(self, tmp_path):
+        mod = _load_helper()
+        self._import(mod, tmp_path, [_graded("EXT-1", "dark")])
+        assert (tmp_path / "witness-backlog.json").exists()
+        # Re-import into the SAME --out with no dark rows.
+        self._import(mod, tmp_path, [_graded("EXT-2", "finding")])
+        assert not (tmp_path / "witness-backlog.json").exists()
+        marker = load_json(tmp_path / "findings-import.json")
+        assert marker["dark_routed"] == 0
+
+    def test_include_dark_reimport_clears_stale_backlog(self, tmp_path):
+        mod = _load_helper()
+        self._import(mod, tmp_path, [_graded("EXT-1", "dark")])
+        assert (tmp_path / "witness-backlog.json").exists()
+        self._import(mod, tmp_path, [_graded("EXT-1", "dark")],
+                     include_dark=True)
+        assert not (tmp_path / "witness-backlog.json").exists()
+
+    def test_symlinked_backlog_not_operated_through(self, tmp_path,
+                                                    capsys):
+        mod = _load_helper()
+        victim = tmp_path / "victim.txt"
+        victim.write_text("keep")
+        (tmp_path / "witness-backlog.json").symlink_to(victim)
+        self._import(mod, tmp_path, [_graded("EXT-1", "finding")])
+        # Stale-removal must not unlink through (or remove) a planted
+        # special silently — it is left in place with a loud note.
+        assert victim.read_text() == "keep"
+        assert (tmp_path / "witness-backlog.json").is_symlink()
+        assert "not a regular file" in capsys.readouterr().err
+
+
+class TestWitnessBacklogFieldBounds:
+    """Backlog fields derive from hostile import rows — every stored
+    field is typed/capped and every listing bounded with exact
+    counts."""
+
+    def test_junk_line_and_class_capped(self, tmp_path):
+        mod = _load_helper()
+        src = tmp_path / "in.json"
+        src.write_text(json.dumps({"findings": [
+            _graded("EXT-1", "dark", line={"evil": "x" * 100},
+                    cwe_id="CWE-787" + "Z" * 500),
+        ]}))
+        mod._import_findings_file(src, tmp_path / "findings.json",
+                                  target="/t")
+        backlog = load_json(tmp_path / "witness-backlog.json")
+        cluster = backlog["clusters"][0]
+        assert len(cluster["class"]) <= 100
+        assert cluster["sites"][0]["line"] == 0  # dict-shaped → unknown
+
+    def test_cluster_listing_bounded_total_exact(self, tmp_path):
+        mod = _load_helper()
+        cap = mod._BACKLOG_CLUSTER_CAP
+        rows = [_graded(f"EXT-{i}", "dark", cwe_id=f"CWE-{i}")
+                for i in range(cap + 5)]
+        src = tmp_path / "in.json"
+        src.write_text(json.dumps({"findings": rows}))
+        mod._import_findings_file(src, tmp_path / "findings.json",
+                                  target="/t")
+        backlog = load_json(tmp_path / "witness-backlog.json")
+        assert backlog["total"] == cap + 5          # counts stay honest
+        assert len(backlog["clusters"]) == cap      # listing bounded
+        assert backlog["clusters_truncated"] is True
+        assert backlog["cluster_classes_total"] == cap + 5
+
+
+class TestMajorityDarkHint:
+
+    def test_majority_dark_import_gets_the_note(self, tmp_path, capsys):
+        mod = _load_helper()
+        src = tmp_path / "in.json"
+        src.write_text(json.dumps({"findings": [
+            _graded("EXT-1", "dark"),
+            _graded("EXT-2", "dark", function="g"),
+            _graded("EXT-3", "finding"),
+        ]}))
+        mod._import_findings_file(src, tmp_path / "findings.json",
+                                  target="/t")
+        out = capsys.readouterr().out
+        assert "majority of the import is dark" in out
+        assert "--include-dark" in out
+
+    def test_minority_dark_import_stays_quiet(self, tmp_path, capsys):
+        mod = _load_helper()
+        src = tmp_path / "in.json"
+        src.write_text(json.dumps({"findings": [
+            _graded("EXT-1", "dark"),
+            _graded("EXT-2", "finding"),
+            _graded("EXT-3", "finding", function="g"),
+        ]}))
+        mod._import_findings_file(src, tmp_path / "findings.json",
+                                  target="/t")
+        out = capsys.readouterr().out
+        assert "routed to the witness backlog" in out  # count still prints
+        assert "majority of the import is dark" not in out

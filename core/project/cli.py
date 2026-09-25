@@ -2670,15 +2670,20 @@ def _print_findings(project, detailed: bool=False) -> None:
             contradicted_disproof_count,
             detect_project_contradictions,
             queued_count,
+            suppressed_count,
         )
         readj_records = detect_project_contradictions(run_dirs)
         n_queued = queued_count(readj_records)
         if n_queued:
+            n_suppressed = suppressed_count(readj_records)
+            # A capped queue must never read as complete.
+            capped = (f" +{n_suppressed} further not recorded "
+                      f"(record caps)" if n_suppressed else "")
             print()
             print(
                 f"⚠️  {contradicted_disproof_count(readj_records)} recorded "
                 f"disproof(s) contradicted by newer signals "
-                f"({n_queued} queued) — re-adjudication queue; run "
+                f"({n_queued} queued{capped}) — re-adjudication queue; run "
                 f"`/project report` to write the queue artifact. "
                 f"Nothing is auto-overturned."
             )
