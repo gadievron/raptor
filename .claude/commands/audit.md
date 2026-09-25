@@ -23,7 +23,7 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
        [--review-passes <N>] [--max-workers <N>] [--subsystem-depth <N>] [--batch-sloc-threshold <N>]
        [--include-kinds <list>] [--max-propagation-depth <N>] [--adversarial] [--edges]
        [--no-verdict-reuse] [--schedule {cost,priority}] [--prior-journal <run-dir>]
-       [--prior-claims <N>] [--hypothesis-seeds <file> ...]
+       [--prior-claims <N>] [--hypothesis-seeds <file> ...] [--seed-rereview]
        [--dynamic | --no-dynamic]
        [--binary <path> ...] [--binary-auto] [--no-binary-oracle] [--no-vendored-triage]
        [--annotations-dir <path>] [--no-validate] [--model <name> ...]
@@ -51,6 +51,7 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
 - `--prior-journal <run-dir>` — run directory whose `review-journal.jsonl` feeds prior finding-grade claims (/agentic per-finding analyses) into review context (repeatable). Covers journals not yet merged into the project index — the `/agentic --gap-audit` post-pass passes its parent run dir here
 - `--prior-claims <N>` — max prior finding-grade claims injected per function, newest first (default: 3; 0 disables the injection)
 - `--hypothesis-seeds <file>` — `sibling-hypotheses.json` seed file (repeatable): externally-produced hypothesis claims with evidence refs and disproof recipes boost matching gap-queue entries and enter review context as hint-tier blocks; a co-located `sibling-hypotheses.json` in the output dir is discovered automatically. Seeds never mint findings, carry no verdict weight, and suppress nothing — the LLM still reviews and tools still render verdicts
+- `--seed-rereview` — opt-in (also on `resume`): seeds resolving to ALREADY-COVERED checklist functions get a fresh review instead of recording as `no_matching_gap` misses — hoisted ahead of the `--budget` cut via the `--pin` mechanism (on a bounded run they claim slots first and can displace never-reviewed gaps; excess is cut and recorded), never satisfied by verdict reuse, at most one forced review per seed per run. Use against a fully-covered target (e.g. `/binary siblings` output). The flag is the operator's consent to re-open spend on covered code
 - `--dynamic` / `--no-dynamic` — enable/disable dynamic validation (Frida observation / target execution) for confirmed findings; `--no-dynamic` also overrides the project's `dynamic` trust marker. The run also resolves the project's `config` trust marker (the `--trust-repo` umbrella) into `repo_trusted`, which arms the trust-gated refutation witnesses — there is no per-run flag for that; the marker is the control (a banner prints when it affects the run)
 - `--binary <path>` — debug binary for binary-oracle enrichment (repeatable); `--binary-auto` auto-detects under common build dirs; `--no-binary-oracle` disables the oracle for this run
 - `--no-vendored-triage` — disable the vendored/generated-code triage tier (skip/glance decisions; every decision leaves a `suppressions.jsonl` record)
@@ -105,7 +106,7 @@ If the operator passed `--scope`, still map the full target (the map covers the 
 libexec/raptor-audit run "$TARGET_PATH" --out "$OUTPUT_DIR"
 ```
 
-Pass through any operator flags (`--strategy`, `--budget`, `--scope`, `--pin`, `--scope-floor`, `--no-scope-floor`, `--pre-scan`, `--annotations-dir`, `--no-validate`, `--model`, `--adversarial`, `--edges`, `--max-propagation-depth`, `--codeql-db`, `--max-cost`, `--deepen-reserve`, `--max-time`, `--review-passes`, `--max-workers`, `--subsystem-depth`, `--batch-sloc-threshold`, `--include-kinds`, `--no-verdict-reuse`, `--schedule`, `--prior-journal`, `--prior-claims`, `--dynamic`, `--no-dynamic`, `--binary`, `--binary-auto`, `--no-binary-oracle`, `--no-vendored-triage`).
+Pass through any operator flags (`--strategy`, `--budget`, `--scope`, `--pin`, `--scope-floor`, `--no-scope-floor`, `--pre-scan`, `--annotations-dir`, `--no-validate`, `--model`, `--adversarial`, `--edges`, `--max-propagation-depth`, `--codeql-db`, `--max-cost`, `--deepen-reserve`, `--max-time`, `--review-passes`, `--max-workers`, `--subsystem-depth`, `--batch-sloc-threshold`, `--include-kinds`, `--no-verdict-reuse`, `--schedule`, `--prior-journal`, `--prior-claims`, `--hypothesis-seeds`, `--seed-rereview`, `--dynamic`, `--no-dynamic`, `--binary`, `--binary-auto`, `--no-binary-oracle`, `--no-vendored-triage`).
 
 The orchestrator handles everything from here: gap computation, context assembly, LLM review, tool chain dispatch, Joern background build, sweep validation, constraint propagation, Mode 2 checker synthesis, /validate post-pass, report generation, and lifecycle completion.
 

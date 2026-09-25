@@ -155,7 +155,9 @@ become a false outlier.
 rows), `sibling-hypotheses.json` (audit hypothesis-seed intake: claims
 with evidence refs, tier, disproof recipe — `/audit` discovers it
 co-located; seeds boost gap priority and ride into review context as
-hints), and `sibling-clusters.md`.
+hints; against a fully-covered target pass `--seed-rereview` so seeded
+functions get a fresh review instead of recording as misses), and
+`sibling-clusters.md`.
 
 **Claims and non-claims.** Sibling output is differential structure,
 never findings:
