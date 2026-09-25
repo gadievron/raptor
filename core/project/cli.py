@@ -2659,6 +2659,34 @@ def _print_findings(project, detailed: bool=False) -> None:
             print()
         _print_sca_findings_section(sca_findings, detailed)
 
+    # Re-adjudication signal: the merged view above deliberately lets
+    # a recorded disproof outrank a newer claim at the same site —
+    # surface the contradiction count so the fold is never SILENT.
+    # Counts only here (no finding-derived text reaches the terminal);
+    # /project report materialises the full queue artifact.
+    # Best-effort: an additive signal must never break the view.
+    try:
+        from .readjudication import (
+            contradicted_disproof_count,
+            detect_project_contradictions,
+            queued_count,
+        )
+        readj_records = detect_project_contradictions(run_dirs)
+        n_queued = queued_count(readj_records)
+        if n_queued:
+            print()
+            print(
+                f"⚠️  {contradicted_disproof_count(readj_records)} recorded "
+                f"disproof(s) contradicted by newer signals "
+                f"({n_queued} queued) — re-adjudication queue; run "
+                f"`/project report` to write the queue artifact. "
+                f"Nothing is auto-overturned."
+            )
+    except Exception:  # noqa: BLE001 — additive trail, never view-fatal
+        import logging as _logging
+        _logging.getLogger(__name__).debug(
+            "re-adjudication detection failed", exc_info=True)
+
 
 def _print_code_findings(merged, detailed: bool=False) -> None:
     """Render code findings as a grouped table (the original view)."""

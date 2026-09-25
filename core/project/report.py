@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -14,6 +15,8 @@ from core.security.prompt_output_sanitise import (
     sanitise_inline,
     sanitise_string,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -216,6 +219,7 @@ def render_grouped_findings_markdown(
     project_name: str,
     *,
     sca_findings: Iterable[dict[str, Any]] = (),
+    readjudication: Iterable[dict[str, Any]] = (),
 ) -> str:
     """Render all findings into one project-level Markdown report.
 
@@ -224,6 +228,13 @@ def render_grouped_findings_markdown(
     (SCA)" section below — they're dep-level (no source file:line), so bucketing them
     separately keeps the severity-grouped code view clean. Mirrors the
     interactive ``/project findings`` view.
+
+    ``readjudication`` — queue records from
+    :mod:`core.project.readjudication` — render in their own section:
+    recorded disproofs that a later independent signal contradicts.
+    The section states counts and per-site pairs only; it never
+    changes a finding's rendered status (re-adjudication is a
+    validation-lane task).
     """
     findings = sorted(
         findings,
@@ -233,8 +244,9 @@ def render_grouped_findings_markdown(
         sca_findings,
         key=lambda item: (*_severity_key(item), _finding_title(item).lower()),
     )
+    readjudication = [r for r in readjudication if isinstance(r, dict)]
     lines = [f"# {project_name} findings", ""]
-    if not findings and not sca_findings:
+    if not findings and not sca_findings and not readjudication:
         lines.append("No findings.")
         return "\n".join(lines) + "\n"
 
@@ -293,6 +305,55 @@ def render_grouped_findings_markdown(
                 lines.extend(f"  - escalated: {_md_heading(reason)}" for reason in reasons)
         lines.append("")
 
+    queued = [r for r in readjudication if r.get("action") == "queued"]
+    if queued:
+        from core.project.readjudication import (
+            QUEUE_FILENAME,
+            contradicted_disproof_count,
+        )
+        n_disproofs = contradicted_disproof_count(queued)
+        lines.append("## Re-adjudication queue")
+        lines.append("")
+        lines.append(
+            f"{n_disproofs} recorded disproof(s) contradicted by new "
+            f"signals — re-adjudication queue ({len(queued)} queued "
+            f"signal(s); full records in `{QUEUE_FILENAME}`). Nothing "
+            f"is auto-overturned: adjudicate with a scoped /validate "
+            f"on the queued sites."
+        )
+        lines.append("")
+        for record in queued:
+            # Every rendered value is finding-derived (LLM-authored or
+            # import-restored) — same _md_heading sanitiser as the
+            # finding sections above.
+            site = record.get("site")
+            site = site if isinstance(site, dict) else {}
+            claim = record.get("new_claim")
+            claim = claim if isinstance(claim, dict) else {}
+            disproof = record.get("disproof")
+            disproof = disproof if isinstance(disproof, dict) else {}
+            location = str(site.get("file") or "?")
+            if site.get("function"):
+                location += f"::{site.get('function')}"
+            claim_mech = ", ".join(
+                str(m) for m in claim.get("mechanism") or []) or "?"
+            lines.append(
+                f"- **{_md_heading(location)}** — new "
+                f"{_md_heading(claim_mech)} claim from "
+                f"{_md_heading(claim.get('source') or '?')} vs recorded "
+                f"{_md_heading(disproof.get('status') or 'disproof')} from "
+                f"{_md_heading(disproof.get('source') or '?')}"
+            )
+            if record.get("mechanism_match") is False:
+                lines.append(
+                    f"  - {_md_heading(record.get('mechanism_note') or 'mechanism mismatch')}")
+            reconsider = disproof.get("would_reconsider_if")
+            if reconsider:
+                lines.append(
+                    f"  - disproof's own reconsideration condition: "
+                    f"{_md_heading(reconsider)}")
+        lines.append("")
+
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -318,6 +379,7 @@ def export_findings_directory(
     findings: Iterable[dict[str, Any]], output_dir: Path, *,
     project_name: str = "project",
     sca_findings: Iterable[dict[str, Any]] = (),
+    readjudication: Iterable[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     """Write grouped Markdown/JSON findings under ``output_dir/findings``.
 
@@ -343,6 +405,7 @@ def export_findings_directory(
     aggregate_path.write_text(
         render_grouped_findings_markdown(
             findings, project_name, sca_findings=sca_findings,
+            readjudication=readjudication,
         ),
         encoding="utf-8",
     )
@@ -523,11 +586,32 @@ def generate_project_report(project) -> dict[str, Any]:
         report_dir / "findings.json",
         {"findings": merged, "sca_findings": sca_findings},
     )
+
+    # Re-adjudication queue: recorded disproofs a LATER run's signal
+    # contradicts. The merge fold above (correctly) let the disproof
+    # win the merged view; the queue preserves the contradiction as an
+    # additive artifact + report section — never a verdict change.
+    # Best-effort: the report must not fail on the additive trail.
+    readj_records: list[dict[str, Any]] = []
+    try:
+        from core.project.readjudication import (
+            detect_project_contradictions,
+            queued_count,
+            write_queue,
+        )
+        readj_records = detect_project_contradictions(oldest_first)
+        write_queue(report_dir, readj_records)
+        readjudication_queued = queued_count(readj_records)
+    except Exception:  # noqa: BLE001 — additive trail, never report-fatal
+        logger.warning("re-adjudication detection failed", exc_info=True)
+        readjudication_queued = 0
+
     findings_export = export_findings_directory(
         merged,
         project.output_path,
         project_name=project.name,
         sca_findings=sca_findings,
+        readjudication=readj_records,
     )
 
     # Aggregate annotations across runs + project-level overrides.
@@ -567,6 +651,7 @@ def generate_project_report(project) -> dict[str, Any]:
     return {
         "findings": len(merged),
         "sca_findings": len(sca_findings),
+        "readjudication_queued": readjudication_queued,
         "runs": len(run_dirs),
         "annotations": len(annotations),
         "report_dir": str(report_dir),

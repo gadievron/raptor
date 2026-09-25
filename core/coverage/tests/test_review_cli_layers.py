@@ -250,6 +250,52 @@ def test_show_run_entry_wins_over_index(tmp_path, capsys):
     assert "finding" not in out
 
 
+# ── show: re-adjudication queue records ──────────────────────────────
+
+def test_show_renders_readjudication_queue_records(tmp_path, capsys):
+    """A queued contradiction (recorded disproof vs later signal) at
+    this function surfaces in the unified view — with hostile record
+    bytes escaped before the terminal."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_journal(run_dir, [_entry("src/a.c", "foo", verdict="clean")])
+    (run_dir / "readjudication-queue.jsonl").write_text(
+        json.dumps({
+            "kind": "readjudication",
+            "action": "queued",
+            "site": {"file": "src/a.c", "function": "foo", "line": 3},
+            "new_claim": {"source": "scan-run", "mechanism": ["CWE-787"],
+                          "status": "not_disproven"},
+            "disproof": {
+                "source": "audit-run",
+                "status": "disproven",
+                "would_reconsider_if": "a caller\x1b[31m passes raw input",
+            },
+            "mechanism_match": True,
+        }) + "\n"
+        # Non-queued marker rows and junk lines are skipped.
+        + json.dumps({"action": "truncated", "note": "cap"}) + "\n"
+        + "not json\n",
+        encoding="utf-8",
+    )
+    _cli.cmd_show(_ns(file="src/a.c", function="foo", out=str(run_dir)))
+    out = capsys.readouterr().out
+    assert "Re-adjudication queued" in out
+    assert "nothing auto-overturned" in out
+    assert "scan-run" in out and "audit-run" in out
+    assert "would reconsider if" in out
+    assert "\x1b" not in out  # record bytes escaped at render
+
+
+def test_show_no_readjudication_section_without_records(tmp_path, capsys):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_journal(run_dir, [_entry("src/a.c", "foo", verdict="clean")])
+    _cli.cmd_show(_ns(file="src/a.c", function="foo", out=str(run_dir)))
+    out = capsys.readouterr().out
+    assert "Re-adjudication" not in out
+
+
 # ── compact: legacy-key re-homing ────────────────────────────────────
 
 def test_compact_rehomes_legacy_keys(tmp_path, capsys):
