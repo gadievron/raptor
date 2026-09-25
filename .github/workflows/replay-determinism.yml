@@ -1,0 +1,249 @@
+name: Replay determinism
+
+# Detection-behaviour drift gate over the frozen-LLM-transcript
+# replay seam (core/llm/transcript.py). Three jobs, two tiers:
+#
+# * seam-census — the transcript-seam census gate
+#   (.github/scripts/check_transcript_seam.py): every LLM dispatch
+#   construction outside the record/replay seam must be fenced or
+#   adjudicated in the baseline, so a new dispatch path cannot
+#   silently bypass replay coverage.
+# * replay-determinism (public tier) — fully hermetic pytest lane:
+#   the transcript unit suite, the record-then-replay acceptance
+#   test, and the synthetic-corpus harness tests (replay is
+#   deterministic; a miss is loud and never dispatches live; verdict
+#   drift, truncation, and leftover entries all red). No credentials,
+#   no LLM dispatch, no spend (the transport availability probe is
+#   suppressed in the harness), no private content.
+# * replay-eval-private (maintainer tier) — the private-case replay
+#   lane (.github/evals/test_replay_eval_lane.py). Case content is
+#   supplied locally under core/audit/corpus/replay-cases and never
+#   committed, so on public runners this lane SKIPS WITH NOTICE by
+#   design; the skip count is checked against the skip-budget gate so
+#   the lane cannot rot silently in either direction (a maintainer
+#   runner losing its cases shows up as growth against its own
+#   recorded count).
+#
+# Trigger scope (paths): the surfaces whose changes can move
+# detection behaviour under replay — prompt text, orchestration,
+# classifier context, and the seam itself. Derivation:
+#   core/llm/**                    the seam, client dispatch, prompt
+#                                  budget/methodology/CWE strategies
+#   packages/llm_analysis/**       the /analyze classification loop,
+#                                  prompt construction, context
+#                                  injection (source-intel inject)
+#   core/audit/**                  audit orchestration + its LLM
+#                                  review/summary/spec surfaces +
+#                                  corpus machinery (replay-case home)
+#   core/analysis/**               patch-localisation dispatch (census-
+#                                  adjudicated llm_client site)
+#   libexec/**                     launcher pipeline stages and operator
+#                                  CLIs with census-adjudicated
+#                                  llm_client sites (study-loop,
+#                                  understand, validation-helper, ...)
+#   core/dataflow/**               barrier synthesis dispatch and the
+#                                  validator lanes feeding verdicts
+#   core/orchestration/**          pipeline bridges that steer what
+#                                  reaches the classifier
+#   packages/codeql/**             dataflow validation evidence that
+#                                  enters classification context
+#   packages/source_intel/**       evidence blocks injected into
+#                                  classification prompts
+#   packages/checker_synthesis/**  LLM checker-synthesis dispatch
+#   packages/code_understanding/** multi-model dispatch stacks on the
+#                                  census's provider arm
+#   packages/fuzzing/**            crash-ranking LLM dispatch
+#   packages/strategy_eval/**      strategy efficacy completers
+#   packages/exploitability_validation/**  validation-stage dispatch
+#   .github/evals/** + the gate script/baseline + this workflow —
+#                                  the gate's own surface
+# Err-inclusive by doctrine; deliberately NOT covered: tiers/*.md and
+# .claude/** (in-session assistant guidance — the transcript seam
+# records LLMClient wire dispatch, not the hosting session), and
+# packages/cve_diff / cve_env (dedicated transport stacks adjudicated
+# on the census provider arm; their behaviour is not replayed by this
+# gate). A dispatch site added OUTSIDE the path list still cannot rot:
+# the daily scheduled run executes every job with no path constraint
+# (the same belt-and-braces shape as the miswiring sweep), so the
+# census reds at most one day later.
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'core/llm/**'
+      - 'packages/llm_analysis/**'
+      - 'core/audit/**'
+      - 'core/analysis/**'
+      - 'libexec/**'
+      - 'core/dataflow/**'
+      - 'core/orchestration/**'
+      - 'packages/codeql/**'
+      - 'packages/source_intel/**'
+      - 'packages/checker_synthesis/**'
+      - 'packages/code_understanding/**'
+      - 'packages/fuzzing/**'
+      - 'packages/strategy_eval/**'
+      - 'packages/exploitability_validation/**'
+      - '.github/evals/**'
+      - '.github/scripts/check_transcript_seam.py'
+      - '.github/scripts/transcript_seam_baseline.json'
+      - '.github/workflows/replay-determinism.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - 'core/llm/**'
+      - 'packages/llm_analysis/**'
+      - 'core/audit/**'
+      - 'core/analysis/**'
+      - 'libexec/**'
+      - 'core/dataflow/**'
+      - 'core/orchestration/**'
+      - 'packages/codeql/**'
+      - 'packages/source_intel/**'
+      - 'packages/checker_synthesis/**'
+      - 'packages/code_understanding/**'
+      - 'packages/fuzzing/**'
+      - 'packages/strategy_eval/**'
+      - 'packages/exploitability_validation/**'
+      - '.github/evals/**'
+      - '.github/scripts/check_transcript_seam.py'
+      - '.github/scripts/transcript_seam_baseline.json'
+      - '.github/workflows/replay-determinism.yml'
+  schedule:
+    # 05:50 UTC — clear of miswiring-scan (05:30), tests.yml full
+    # crons (06:00) and nightly.yml (07:00). Schedule events ignore
+    # path filters, so this is the full-tree census backstop for
+    # dispatch sites added outside the PR path list.
+    - cron: '50 5 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.14'
+
+permissions:
+  contents: read
+
+jobs:
+  # Transcript-seam census: pure stdlib Python; no setup beyond
+  # checkout + interpreter. Invocation is verbatim (no flags, pipes,
+  # or wrappers) so a failure surfaces the gate's own report
+  # unfiltered and local reproduction is exactly the command shown.
+  seam-census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Belt-and-braces: no step in this job needs git credentials.
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run transcript-seam census against baseline
+        run: python3 .github/scripts/check_transcript_seam.py
+
+  # Public tier: hermetic record/replay determinism suites. Installs
+  # the dev requirements into the runner's system Python (the
+  # _tier.yml runner-path model); no credentials, no LLM dispatch, no
+  # spend — replay never reaches a provider by construction, the
+  # harness suppresses the transport availability probe client
+  # construction otherwise issues, and the suites assert exactly that
+  # (including a tripwired-HTTP-helper pin).
+  replay-determinism:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
+      - name: Install deps
+        # --system installs into the setup-python interpreter so the
+        # test step's `python` resolves the deps without venv
+        # activation (same model as _tier.yml's runner path).
+        run: uv pip install --system -r requirements-dev.txt
+
+      - name: Run replay-determinism suites
+        env:
+          PYTEST_ADDOPTS: "-o faulthandler_timeout=120"
+          RAPTOR_MAX_TEST_SECONDS: "30"
+        run: >
+          python -m pytest
+          core/llm/tests/test_transcript.py
+          packages/llm_analysis/tests/test_transcript_replay_e2e.py
+          .github/evals/test_replay_harness.py
+          --junitxml="$RUNNER_TEMP/replay-public.xml"
+
+      # Fixed full collection on every run, hence --full: a skip
+      # appearing in these hermetic suites means a dependency or
+      # fixture degraded on the public runner.
+      - name: Check skip count against the lane's recorded budget
+        run: |
+          python3 .github/scripts/check_skip_budget.py \
+            --lane replay-public --full \
+            --junit-xml "$RUNNER_TEMP/replay-public.xml"
+
+  # Maintainer tier: private-case replay lane. On public runners the
+  # case corpus is absent and the lane skips with notice — the
+  # recorded skip budget (one module-level skip) pins that shape, so
+  # a grown count (a maintainer runner whose case corpus went
+  # missing, or a case that started skipping) fails instead of
+  # rotting green.
+  replay-eval-private:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
+      - name: Install deps
+        run: uv pip install --system -r requirements-dev.txt
+
+      - name: Run private-case replay-eval lane
+        env:
+          PYTEST_ADDOPTS: "-o faulthandler_timeout=120"
+          RAPTOR_MAX_TEST_SECONDS: "30"
+        run: >
+          python -m pytest -rs
+          .github/evals/test_replay_eval_lane.py
+          --junitxml="$RUNNER_TEMP/replay-eval.xml"
+
+      - name: Check skip count against the lane's recorded budget
+        run: |
+          python3 .github/scripts/check_skip_budget.py \
+            --lane replay-eval --full \
+            --junit-xml "$RUNNER_TEMP/replay-eval.xml"
