@@ -1372,6 +1372,57 @@ def mode_codeql(args: list) -> int:
                               "Running CodeQL analysis...")
 
 
+def _refuse_archive_analyze_target(args: list) -> str | None:
+    """Refusal message when analyze's ``--repo`` names an archive, else
+    None.
+
+    analyze is the one repo-taking mode that runs OUTSIDE the run
+    lifecycle (no run dir, hence no ``_sources`` cache anchor of its
+    own), so the archive target is REFUSED with the canonical form
+    rather than routed through the scan-style unpack: its input SARIF
+    is keyed to whatever tree the producing scan actually ran on — the
+    content-addressed extraction that scan already cached — so the
+    correct remedy is pointing at that tree, not bolting a second
+    extraction path onto a lifecycle-less mode. Pre-fix the archive
+    passed straight through and agent.py's containment gate dropped
+    EVERY SARIF finding as "path traversal" (nothing resolves under a
+    file), exiting 0 — a silently-wrong empty analysis.
+    """
+    if _wants_help(args):
+        return None  # help is not a run; let the child render it
+    repo = _extract_target(args)
+    if not repo:
+        return None
+    p = Path(repo)
+    try:
+        if not p.is_file():
+            return None
+        from core.archive import is_archive
+        if not is_archive(p):
+            return None
+    except OSError:
+        return None
+    hint = ""
+    try:
+        # Name the concrete cached tree when a prior run extracted it.
+        from core.archive import safe_cache_name
+        from packages.describe.cli import _find_cached_extraction
+        cached = _find_cached_extraction(p, safe_cache_name)
+        if cached is not None:
+            hint = f" A prior run already extracted it: --repo {cached}"
+    except Exception:  # noqa: BLE001 — the hint is best-effort decoration
+        pass
+    return (
+        f"analyze: --repo {repo} is an archive. analyze joins existing "
+        f"SARIF findings to the source TREE they were scanned from — "
+        f"against an archive file every finding path fails containment "
+        f"and is silently dropped. Pass the extracted tree the SARIF "
+        f"was produced from (archive-target scans extract to "
+        f"<out>/_sources/<name>-<sha>/), or scan the archive itself: "
+        f"python3 raptor.py scan --repo {repo}.{hint}"
+    )
+
+
 def mode_llm_analysis(args: list) -> int:
     """Run LLM-powered vulnerability analysis on existing SARIF files."""
     script_root = Path(__file__).parent
@@ -1380,6 +1431,11 @@ def mode_llm_analysis(args: list) -> int:
     if not llm_script.exists():
         print(f"✗ LLM analysis script not found: {llm_script}", file=sys.stderr)
         return 1
+
+    refusal = _refuse_archive_analyze_target(args)
+    if refusal:
+        print(f"✗ {refusal}", file=sys.stderr)
+        return 2
 
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
     return _run_script(llm_script, args)
