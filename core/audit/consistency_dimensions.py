@@ -1262,6 +1262,36 @@ DIMENSION_INTERFACE = "interface"
 
 INTERFACE_MIN_GROUP = MIN_GROUP_SITES
 
+# Family-size CEILING at comparator intake — for every formation
+# layer (the floors above are mins; until now no max existed at the
+# point where groups enter a vote). Both directions: an uncapped
+# family turns one hub group into a whole-tree blob where a single
+# deviant among hundreds is noise for the N-vs-K vote (and multiplies
+# per-member body extraction); too low splits genuinely wide
+# interface families. 32 matches the formation layers' own member-cap
+# class (route/slot 32, binary/type-cohort 24), so honest producers
+# are unaffected — the ceiling is the backstop for producers that do
+# not cap. Selection at the ceiling is seeded-random, never a
+# sortable prefix: member names are attacker-chosen text, and a
+# deterministic cut would let a hostile repo name the deviant past it.
+MAX_FAMILY_MEMBERS = 32
+
+
+def _intake_capped(members: list[Any]) -> tuple[list[Any], bool]:
+    """Apply :data:`MAX_FAMILY_MEMBERS` at comparator intake.
+
+    Returns ``(members, capped)`` — order-preserving under the
+    ceiling, seeded-random survivors above it (see the constant's
+    rationale)."""
+    if len(members) <= MAX_FAMILY_MEMBERS:
+        return members, False
+    import os
+    import random as _random
+
+    rnd = _random.Random(os.urandom(16))
+    keep = set(rnd.sample(range(len(members)), MAX_FAMILY_MEMBERS))
+    return [m for i, m in enumerate(members) if i in keep], True
+
 # Peer-group layers whose membership is mechanical (L2 dispatch-site
 # extraction, L4 type-cohort index, L10 route families, L7
 # interface-slot census). Literal strings by convention here; the
@@ -1323,6 +1353,10 @@ class InterfaceDeviation:
     n: int
     conforming: int
     cwe: str
+    #: When the family exceeded MAX_FAMILY_MEMBERS at intake, the
+    #: ORIGINAL resolved size — the vote ran over a seeded sample of
+    #: n members, and the description says so (0 = no sampling).
+    sampled_from: int = 0
     peer_evidence: PeerEvidence | None = None
 
     @property
@@ -1336,16 +1370,23 @@ class InterfaceDeviation:
         # are protected by) an auth check — a recorded decorator may
         # not wrap the registered callable.
         if self.property_name == _ROUTE_AUTH_PRESENCE_PROPERTY:
-            return (
+            base = (
                 f"{self.conforming}/{self.n} implementors in "
                 f"{self.group_id} carry the auth decorator; "
                 f"{self.enclosing_function} does not"
             )
-        return (
-            f"{self.conforming}/{self.n} implementors in "
-            f"{self.group_id} perform {self.property_name}; "
-            f"{self.enclosing_function} does not"
-        )
+        else:
+            base = (
+                f"{self.conforming}/{self.n} implementors in "
+                f"{self.group_id} perform {self.property_name}; "
+                f"{self.enclosing_function} does not"
+            )
+        if self.sampled_from:
+            base += (
+                f" (vote over a seeded sample of {self.n} of the "
+                f"family's {self.sampled_from} members)"
+            )
+        return base
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -1359,6 +1400,8 @@ class InterfaceDeviation:
             "ratio": round(self.ratio, 3),
             "cwe": self.cwe,
         }
+        if self.sampled_from:
+            d["sampled_from"] = self.sampled_from
         if self.peer_evidence is not None:
             d["peer_evidence"] = self.peer_evidence.to_dict()
         return d
@@ -1406,6 +1449,12 @@ def detect_interface_deviations(
                 resolved.append((s, named[1], named[2]))
         if len(resolved) < min_group:
             continue
+        # Family-size ceiling (see MAX_FAMILY_MEMBERS): the vote runs
+        # over a bounded, unchoosable sample of an oversized family —
+        # and every receipt SAYS so (in-band degradation: a reviewer
+        # must never read "31/32 conform" as the whole family).
+        total_resolved = len(resolved)
+        resolved, intake_capped = _intake_capped(resolved)
 
         def _member_properties(
             s: Any, body: str,
@@ -1491,6 +1540,9 @@ def detect_interface_deviations(
                     cwe=_INTERFACE_PROPERTY_CWE.get(
                         asym.property_name, "CWE-20",
                     ),
+                    sampled_from=(
+                        total_resolved if intake_capped else 0
+                    ),
                     peer_evidence=PeerEvidence(
                         dimension=DIMENSION_INTERFACE,
                         formation="interface",
@@ -1504,8 +1556,15 @@ def detect_interface_deviations(
                         ),
                         exhibits=exhibits,
                         contract_source="majority",
+                        # In-band sampling marker: the vote ran over
+                        # a seeded sample of an oversized family.
                         provenance=(
                             f"interface:{gtype}:{asym.property_name}"
+                            + (
+                                f":sampled{len(resolved)}"
+                                f"of{total_resolved}"
+                                if intake_capped else ""
+                            )
                         ),
                     ),
                 ))
