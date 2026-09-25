@@ -225,6 +225,23 @@ class FunctionLabel:
                     "application must verify the clean upstream span"
                 )
                 raise ValueError(msg)
+            if (
+                self.mutation.get("mutated_span_sha")
+                == self.source.span_sha
+                and self.mutation.get("mutated_line_end")
+                == self.source.line_end
+            ):
+                # Edits are span-contained, so an equal span hash over
+                # the unchanged range means the spec is a no-op — a
+                # hand-crafted no-op label could declare pristine
+                # upstream code carrying a REAL bug as "synthetic".
+                msg = (
+                    "no-op mutation spec: mutated_span_sha equals the "
+                    "parent pin over the same range — a synthetic "
+                    "label must introduce its own defect, never "
+                    "re-declare upstream code"
+                )
+                raise ValueError(msg)
             if self.cve.strip() or self.fix_commit.strip():
                 msg = (
                     "synthetic_mutant label must not carry cve/"

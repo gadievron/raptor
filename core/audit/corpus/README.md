@@ -430,7 +430,13 @@ certify self-consistency only. The circularity breaker is the
 complementary REAL label set (incomplete-fix / missed-variant CVEs
 labelled at the pre-fix ref with `cve`/`fix_commit` + `peer_set`,
 plus intentional-divergence `clean` labels for the FP side) — those
-are ordinary `consistency`-class labels, not mutants.
+are ordinary `consistency`-class labels, not mutants. No-op specs
+(the applied result hashes identical to the parent pin) are refused
+at schema, generation, and application — a no-op label could
+re-declare pristine upstream code carrying a real bug as
+"synthetic"; the residual that survives is inherent: a COSMETIC edit
+adjacent to a real upstream bug cannot be excluded mechanically, so
+mutant curation stays an operator responsibility.
 
 Mechanics: a mutant label carries `provenance_kind:
 "synthetic_mutant"` plus a `mutation` spec (operator, site, drop-in
@@ -443,7 +449,11 @@ the parent span and the applied result (`--scope excerpt` required;
 `cve`/`fix_commit` (declared, never laundered — the provenance-lint
 warning is carved out on the kind alone), and they never enter
 `core/recall` (its manifest hard-rejects non-benchmark|cve
-provenance by design).
+provenance by design). One mutant per file per run for
+negative-delta operators: after the first applied deletion shifts
+the lines below it, a second label pinned below that span fails
+parent verification (the correct, fail-closed direction) — split
+such mutants across runs or files.
 
 Separation is structural, not advisory: mutant overlays live
 OUTSIDE the packaged `labels/` dir and run via
