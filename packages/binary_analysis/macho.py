@@ -44,6 +44,11 @@ _THIN_MAGICS = {
     b"\xfe\xed\xfa\xcf": (">", 64),
     b"\xcf\xfa\xed\xfe": ("<", 64),
 }
+# Public sniff surface: the magic sets without the parse parameters.
+# External sniffers (the content-identity front door) key on these so
+# no second copy of the Mach-O magic tables can drift.
+THIN_MACHO_MAGICS = frozenset(_THIN_MAGICS)
+FAT_MACHO_MAGICS = frozenset(_FAT_MAGICS)
 _CPU_TYPES = {
     7: "x86",
     0x01000007: "x86_64",
@@ -1351,6 +1356,8 @@ def macho_facts_evidence(
 
 
 __all__ = [
+    "FAT_MACHO_MAGICS",
+    "THIN_MACHO_MAGICS",
     "AppBundleMetadata",
     "MachOFacts",
     "MachOSectionFact",
