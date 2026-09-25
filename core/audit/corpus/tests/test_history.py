@@ -1141,6 +1141,34 @@ class TestLabelKindSeparation:
         assert history.run_label_kind(runs[0]) == "synthetic_mutant"
         assert labels[run_id][0]["label_kind"] == "synthetic_mutant"
 
+    def test_import_refuses_row_meta_kind_mismatch(self, tmp_path):
+        # A re-wrapped/hand-edited artifact must carry the kind
+        # verbatim: an explicit row kind contradicting meta refuses,
+        # never silently defaults.
+        results = tmp_path / "results.json"
+        results.write_text(json.dumps({
+            "meta": {"label_kind": "real"},
+            "results": [
+                {"function_id": "a.c:f",
+                 "label_kind": "synthetic_mutant"},
+            ],
+        }))
+        with pytest.raises(ValueError, match="mixed-kind import"):
+            history.import_results(results, tmp_path / "s.jsonl")
+
+    def test_import_kindless_rows_inherit_meta_kind(self, tmp_path):
+        # Kind-less rows under a synthetic meta must never be
+        # recorded as real.
+        results = tmp_path / "results.json"
+        results.write_text(json.dumps({
+            "meta": {"label_kind": "synthetic_mutant"},
+            "results": [{"function_id": "a.c:f"}],
+        }))
+        store = tmp_path / "s.jsonl"
+        run_id = history.import_results(results, store)
+        _, labels = history.load_store(store)
+        assert labels[run_id][0]["label_kind"] == "synthetic_mutant"
+
     def test_runs_listing_shows_kind(self):
         out = history.format_runs([
             _run_rec("m1", label_kind="synthetic_mutant"),
