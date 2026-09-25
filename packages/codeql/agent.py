@@ -1429,7 +1429,11 @@ Examples:
     build_commands = None
     if args.build_command:
         if not languages or len(languages) != 1:
-            print("✗ --build-command requires exactly one language specified with --languages", file=sys.stderr)
+            print(
+                "✗ --build-command requires exactly one language — pass "
+                "--languages <lang> to pin the traced language",
+                file=sys.stderr,
+            )
             sys.exit(1)
         build_commands = {_normalise_language(languages[0]): args.build_command}
 
