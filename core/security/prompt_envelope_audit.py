@@ -490,6 +490,18 @@ def audit_file(path: Path) -> list[Violation]:
             "UntrustedBlock",
             "wrap_tool_result",
             "wrap_untrusted",
+            # Identifier-grade defence helpers (core/audit/context.py):
+            # flatten + tag-forgery neutralise + non-printable/backtick
+            # escape, and the integral-or-"?" line-number rejection.
+            # Naming them here (rather than riding the unknown-call
+            # fallthrough in _attr_name) lets the ancestor walk in
+            # _is_in_sanitiser_call recognise the compose-then-defend
+            # idiom: f"[{x.get('source')}]" passed WHOLE to the
+            # defence, which must see the composed text precisely
+            # because individually-clean fragments can reassemble a
+            # boundary-tag shape across the composition.
+            "_defend_identifier",
+            "_defend_line",
         }
 
     # Functions whose f-string args are logged/displayed, not sent to
@@ -535,6 +547,21 @@ def audit_file(path: Path) -> list[Violation]:
                 # First enclosing Call settles it — don't keep walking.
                 return (isinstance(func, ast.Attribute)
                         and func.attr in _NON_LLM_CALLS)
+        return False
+
+    def _is_in_sanitiser_call(parent_stack: list[ast.AST]) -> bool:
+        """Return True if the f-string is an ARGUMENT of a known
+        sanitiser call — the compose-then-defend idiom:
+        ``_defend_identifier(f"[{obs.get('source')}]")`` sanitises
+        the COMPOSED text (which is the point: fragments that are
+        individually clean can reassemble a boundary-tag shape across
+        the template's own characters, so the defence must run after
+        composition). Same first-enclosing-Call discipline as
+        ``_is_in_non_llm_call``: an interpolation nested under a
+        NON-sanitiser call still fires."""
+        for parent in reversed(parent_stack):
+            if isinstance(parent, ast.Call):
+                return _is_sanitised(parent)
         return False
 
     def _is_in_envelope_constructor(parent_stack: list[ast.AST]) -> bool:
@@ -643,6 +670,7 @@ def audit_file(path: Path) -> list[Violation]:
             if (attr in _UNTRUSTED_ATTRS
                     and not _is_sanitised(node.value)
                     and not _is_in_non_llm_call(self._parent_stack)
+                    and not _is_in_sanitiser_call(self._parent_stack)
                     and not _is_in_envelope_constructor(self._parent_stack)):
                 self._emit(node, attr)
             self.generic_visit(node)
