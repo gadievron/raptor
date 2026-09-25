@@ -217,6 +217,50 @@ def buildless_degradation_summary(db_path: Path) -> tuple:
     )
 
 
+# Hint appended to a failed traced build's stderr tail when the build
+# tried to write into the read-only-mounted source tree. The sandbox
+# mounts target= read-only by design; in-tree builds (object files next
+# to sources) fail on the first write and the raw errno alone does not
+# tell the operator what to change.
+_READONLY_TARGET_HINT = (
+    "hint: the target tree is mounted read-only inside the sandbox — "
+    "point the build out of tree (e.g. `make O=<dir under the staging "
+    "area>`) or otherwise avoid writing into the source tree."
+)
+
+
+def _build_stderr_tail(stderr: str | None, *, max_lines: int = 10,
+                       max_chars: int = 2048) -> str:
+    """Bounded, terminal-safe tail of a failed build's stderr.
+
+    Returns ``""`` when there is nothing to show. The bounds apply to
+    the PRE-escape text: the last ``max_lines`` lines within the last
+    ``max_chars`` characters of the raw stderr. Build stderr is
+    target-controlled text (traced builds run the repo's build
+    scripts), so that window is then escaped via the
+    ``core.security.log_sanitisation`` contract before it reaches the
+    operator's terminal — escaping expands each non-printable byte to
+    a ``\\xHH``/``\\uHHHH`` literal, so the returned string can run a
+    small constant factor past ``max_chars`` but stays bounded by it.
+    A clipped tail carries an explicit elision marker. When the tail names a read-only filesystem, the
+    out-of-tree-build hint is appended (see
+    :data:`_READONLY_TARGET_HINT`).
+    """
+    if not stderr:
+        return ""
+    from core.security.log_sanitisation import escape_nonprintable
+    window = stderr[-max_chars:]
+    lines = window.splitlines()
+    clipped = len(window) < len(stderr) or len(lines) > max_lines
+    tail = "\n".join(lines[-max_lines:])
+    detail = escape_nonprintable(tail, preserve_newlines=True)
+    if clipped:
+        detail = "[... earlier build output elided ...]\n" + detail
+    if "Read-only file system" in tail:
+        detail += "\n" + _READONLY_TARGET_HINT
+    return detail
+
+
 @dataclass
 class DatabaseMetadata:
     """Metadata for CodeQL database."""
@@ -1096,7 +1140,8 @@ class DatabaseManager:
         *,
         force: bool,
         audit_run_dir: Path | None,
-        failed_errors: list,
+        failed_errors: list[str],
+        build_stderr: str | None = None,
     ) -> "DatabaseResult | None":
         """Retry a failed traced/autobuild create with ``--build-mode=none``.
 
@@ -1119,13 +1164,20 @@ class DatabaseManager:
                 "unavailable: %s", language, detail,
             )
             return None
+        # The first failed_errors entry is the exit-code summary; the
+        # actual make/compiler errors ride in build_stderr and are
+        # surfaced as an escaped bounded tail (target-controlled text —
+        # never interpolated raw) so the operator does not have to dig
+        # through the staging log to learn WHY the traced build died.
+        stderr_tail = _build_stderr_tail(build_stderr)
         logger.warning(
             "traced %s build failed — falling back to buildless "
             "extraction (--build-mode=none): build-generated code is "
             "invisible and dependency types resolve best-effort. "
-            "Traced failure: %s",
+            "Traced failure: %s%s",
             language,
-            "; ".join(failed_errors[:2]) or "see extractor log",
+            "; ".join(failed_errors[:1]) or "see extractor log",
+            ("\nbuild stderr tail:\n" + stderr_tail) if stderr_tail else "",
         )
         result = self.create_database(
             repo_path, language,
@@ -1875,6 +1927,7 @@ class DatabaseManager:
                     repo_path, language, traced_build,
                     force=force, audit_run_dir=audit_run_dir,
                     failed_errors=errors,
+                    build_stderr=result.stderr,
                 )
                 if fallback is not None:
                     return fallback
