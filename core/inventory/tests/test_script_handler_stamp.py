@@ -245,3 +245,83 @@ class TestStampHelpers:
         # Unusable span → classified over no source → wiring (False),
         # but still stamped (a bool verdict, not a crash).
         assert items[0][SCRIPT_HANDLER_FIELD] is False
+
+
+# \n-model layout (the plants live INSIDE line 2's comment):
+# 1 <?php
+# 2 // banner<FF><FF><FF><FF>
+# 3 function helper($x) { return trim($x); }
+# 4 $cmd = $_POST['cmd'];
+# 5 echo $cmd;
+_PHP_FF_PLANTED = (
+    "<?php\n"
+    "// banner\f\f\f\f\n"
+    "function helper($x) { return trim($x); }\n"
+    "$cmd = $_POST['cmd'];\n"
+    "echo $cmd;\n"
+)
+
+
+class TestStampLineModel:
+    """The stamp producer slices content with the items' \\n-counted
+    line numbers.  ``str.splitlines()`` also breaks on plantable
+    bytes (\\f, \\x85, U+2028 — all legal PHP comment text), so bytes
+    planted in an early comment used to shift every later span: the
+    handler stamp was derived from substitute (comment/wiring) lines,
+    flipped to False for every consumer, and the SHA-reuse re-derive
+    reproduced the same wrong verdict on each rebuild."""
+
+    def test_planted_formfeeds_do_not_flip_the_handler_stamp(self):
+        from core.inventory.script_handler import (
+            stamp_script_handler_items,
+        )
+        items = [
+            {"name": "interstitial:1-2", "kind": "interstitial",
+             "line_start": 1, "line_end": 2},
+            {"name": "interstitial:4-5", "kind": "interstitial",
+             "line_start": 4, "line_end": 5},
+        ]
+        assert stamp_script_handler_items(items, "php", _PHP_FF_PLANTED)
+        stamps = {it["name"]: it["script_handler"] for it in items}
+        # The $_POST/echo span stays a handler; the header span,
+        # plants and all, stays non-handler.
+        assert stamps["interstitial:4-5"] is True
+        assert stamps["interstitial:1-2"] is False
+
+    def test_planted_separators_do_not_truncate_a_whole_file_span(self):
+        # U+2028 at a comment tail: splitlines() yields extra rows, so
+        # a whole-file span sliced [0:N] used to drop the trailing
+        # handler lines.
+        from core.inventory.script_handler import (
+            stamp_script_handler_items,
+        )
+        content = (
+            "<?php\n"
+            "// banner\u2028\u2028\n"
+            + "include 'a.php';\n" * 6
+            + "$c = $_POST['cmd'];\n"
+            "system($c);\n"
+        )
+        items = [{"name": "interstitial:1-10", "kind": "interstitial",
+                  "line_start": 1, "line_end": 10}]
+        stamp_script_handler_items(items, "php", content)
+        assert items[0]["script_handler"] is True
+
+    def test_planted_and_clean_twins_stamp_identically(self, tmp_path):
+        # End to end through the builder: the planted file's stamps
+        # equal its plant-stripped twin's (plants sit inside one
+        # line, so the \n-model spans are identical by construction).
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "planted.php").write_text(_PHP_FF_PLANTED)
+        (target / "clean.php").write_text(_PHP_FF_PLANTED.replace("\f", ""))
+        inv = build_inventory(str(target), str(tmp_path / "out"))
+        by_file = _items_by_file(inv)
+
+        def stamp_map(path: str) -> dict[str, object]:
+            return {it["name"]: script_handler_stamp(it)
+                    for it in _interstitials(by_file[path])}
+
+        planted = stamp_map("planted.php")
+        assert stamp_map("clean.php") == planted
+        assert True in planted.values()  # non-vacuous: handler present

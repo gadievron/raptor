@@ -29,6 +29,8 @@ from __future__ import annotations
 import re
 from typing import Any, NamedTuple
 
+from core.source.lines import split_lines
+
 from .languages import SCRIPT_PER_FILE_LANGUAGES
 
 #: The additive checklist-item field carrying the classification.
@@ -80,11 +82,12 @@ SCRIPT_HANDLER_FIELD = "script_handler"
 #     an all-overlap trailing run is simply part of the name (both
 #     readings accepted before), and any run containing a plain
 #     whitespace char enters the gate there.
-#   * The comma list is bounded at 1000 names so the list repeat is
+#   * The comma list is bounded at 1000 gated repeats (the first
+#     name plus 1000 more: 1001 names max) so the list repeat is
 #     not an unbounded quantifier adjacent to the name/whitespace
 #     repeats. Too high: none — matching stays linear regardless, the
 #     bound only caps repeat depth. Too low: a (generated) global
-#     list beyond 1000 names stops matching and the span classifies
+#     list beyond the cap stops matching and the span classifies
 #     handler code — toward inclusion, a review slot spent, never a
 #     span written off.
 _PHP_WIRING_STMT_RE = re.compile(
@@ -425,6 +428,18 @@ def php_interstitial_is_handler(source: str | None) -> bool:
     if not source:
         return False
     in_comment = False
+    # splitlines() here is DELIBERATE (contrast the \n-model slicing
+    # in stamp_script_handler_items): this loop is classifier-internal
+    # — no index ever meets an external line number, so the extra
+    # separators (\f, \x85, U+2028, ...) cannot desync a span. They
+    # only add statement boundaries, and that cuts toward inclusion:
+    # ``// x <FF> payload()`` yields ``payload()`` as its own line —
+    # handler code — where a \n-only split would leave it swallowed
+    # by the comment (PHP-correct, but the exclusion direction). The
+    # only shapes the extra boundaries can flip TOWARD wiring are
+    # lines whose every fragment is itself wiring-shaped
+    # (``global $a<FF>global $b``) — fragments with no payload or
+    # output channel by the wiring policy's own definition.
     for raw in source.splitlines():
         line = raw.strip()
         if not line:
@@ -591,7 +606,15 @@ def stamp_script_handler_items(
         if not isinstance(item, dict) or item.get("kind") != "interstitial":
             continue
         if source_lines is None:
-            source_lines = content.splitlines()
+            # \n-model split: the items' line numbers come from
+            # compute_interstitial_items, which counts \n only —
+            # str.splitlines() also breaks on plantable bytes (\f,
+            # \x85, U+2028, ...), and one such byte in an early
+            # comment would shift every later span onto substitute
+            # lines, flipping a real handler stamp to False for
+            # every consumer (and re-deriving the same wrong verdict
+            # on each SHA-reuse rebuild).
+            source_lines = split_lines(content)
         span = _span_source(
             source_lines, item.get("line_start"), item.get("line_end"))
         item[SCRIPT_HANDLER_FIELD] = interstitial_is_handler(language, span)

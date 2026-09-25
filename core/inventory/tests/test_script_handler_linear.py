@@ -95,17 +95,18 @@ class TestWiringHostileShapesLinear:
 
 
 class TestWiringListBound:
-    """Two directions of the 1000-name comma-list bound."""
+    """Two directions of the comma-list bound: 1000 gated repeats
+    after the first name, so 1001 names is the last wiring shape."""
 
     def test_at_bound_is_wiring(self):
         stmt = "global " + ",".join(f"$v{i}" for i in range(1001))
-        assert _PHP_WIRING_STMT_RE.match(stmt)  # 1000 commas
+        assert _PHP_WIRING_STMT_RE.match(stmt)  # 1001 names, at bound
 
     def test_over_bound_classifies_handler_code(self):
         # Toward inclusion: an absurd list costs a review slot, it
         # never writes a span off as wiring.
         stmt = "global " + ",".join(f"$v{i}" for i in range(1002))
-        assert not _PHP_WIRING_STMT_RE.match(stmt)  # 1001 commas
+        assert not _PHP_WIRING_STMT_RE.match(stmt)  # 1002 names
 
 
 class TestInterpHostileShapesLinear:

@@ -502,13 +502,18 @@ def compute_gaps(
                 # enforced on the read itself, not a by-name stat
                 # that races a growing plant; FIFO plants refuse
                 # at the open.
-                from core.source import read_text_capped
+                from core.source import read_text_capped, split_lines
 
                 got = read_text_capped(
                     resolved, _MAX_HYDRATED_FILE_BYTES,
                 )
                 if got is not None and not got[1]:
-                    source_lines = got[0].splitlines()
+                    # \n-model split: checklist line numbers count
+                    # \n only; str.splitlines() also breaks on
+                    # plantable bytes and would recompute the
+                    # stamp-absent classification from substitute
+                    # lines (see gap_for_site's fallback).
+                    source_lines = split_lines(got[0])
             _source_lines_cache[file_path] = source_lines
         lines = _source_lines_cache[file_path]
         if lines is None:

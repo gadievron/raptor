@@ -572,3 +572,61 @@ class TestStarProseAllowlist:
             "* @return int\n"
             "*/\n"
             "include('a.php');\n")
+
+
+class TestSelectionLineModel:
+    """The stamp-absent recompute in compute_gaps hydrates the span
+    with the checklist's \\n-counted line numbers.  Plantable bytes
+    (\\f, \\x85, U+2028) in an early comment used to shift the
+    ``str.splitlines()`` indices, so the handler span was recomputed
+    from substitute lines and NOTHING was scheduled -- the poisoned
+    file dropped out of review entirely."""
+
+    # \n-model layout: a whole-file span [1,10] whose two handler
+    # lines sit LAST — two U+2028 bytes at the comment tail add two
+    # splitlines() rows, so the shifted slice [0:10] used to hold
+    # only the header + includes and the recompute read pure wiring.
+    _PLANTED_HANDLER = (
+        "<?php\n"
+        "// banner\u2028\u2028\n"
+        + "include 'a.php';\n" * 6
+        + "$c = $_POST['cmd'];\n"
+        "system($c);\n"
+    )
+
+    @staticmethod
+    def _planted_checklist(tmp_path: Path, content: str) -> dict:
+        target = tmp_path / "target"
+        target.mkdir(exist_ok=True)
+        (target / "flood.php").write_text(content)
+        return {
+            "target_path": str(target),
+            "files": [
+                {
+                    "path": "flood.php",
+                    "language": "php",
+                    "items": [
+                        {"name": "interstitial:1-10",
+                         "kind": "interstitial",
+                         "line_start": 1, "line_end": 10},
+                    ],
+                },
+            ],
+        }
+
+    def test_planted_handler_span_still_scheduled(self, tmp_path: Path):
+        ck = self._planted_checklist(tmp_path, self._PLANTED_HANDLER)
+        gaps = compute_gaps(ck, [])
+        assert "flood.php:interstitial:1-10" in _gap_names(gaps)
+
+    def test_planted_wiring_span_still_stays_out(self, tmp_path: Path):
+        # Same plants, no handler lines: plants alone never ADMIT a
+        # wiring span either.
+        wiring_only = (
+            "<?php\n"
+            "// banner\u2028\u2028\n"
+            + "include 'a.php';\n" * 8
+        )
+        ck = self._planted_checklist(tmp_path, wiring_only)
+        gaps = compute_gaps(ck, [])
+        assert "flood.php:interstitial:1-10" not in _gap_names(gaps)
