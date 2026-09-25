@@ -701,6 +701,14 @@ class FileCallGraph:
     defines: list[IncludeDefine] = field(default_factory=list)
     includes_extracted: bool = False
     includes_truncated: bool = False
+    # Phase-1b walk inputs. ``parse_errors`` marks an ERROR-bearing
+    # parse tree (recovery can re-parent statements, so this file's
+    # conditional flags are never guarantee-grade). ``boundaries``
+    # lists the file-scope straight-line boundary statements
+    # (return/exit/die/goto/__halt_compiler) in document order,
+    # capped with an ``overflow`` sentinel entry.
+    parse_errors: bool = False
+    boundaries: list[dict] = field(default_factory=list)
     # First file-scope direct-access guard, when present:
     # ``{"line": N, "constant": "IN_APP"}`` for
     # ``if (!defined('IN_APP')) die(...)`` /
@@ -835,6 +843,10 @@ class FileCallGraph:
                 out["includes_truncated"] = True
             if self.direct_access_guard is not None:
                 out["direct_access_guard"] = dict(self.direct_access_guard)
+            if self.parse_errors:
+                out["parse_errors"] = True
+            if self.boundaries:
+                out["boundaries"] = [dict(b) for b in self.boundaries]
         return out
 
     @classmethod
@@ -946,6 +958,11 @@ class FileCallGraph:
                 dict(d["direct_access_guard"])
                 if isinstance(d.get("direct_access_guard"), dict) else None
             ),
+            parse_errors=bool(d.get("parse_errors", False)),
+            boundaries=[
+                dict(b) for b in (d.get("boundaries") or [])
+                if isinstance(b, dict)
+            ],
         )
 
 
@@ -4663,6 +4680,13 @@ def extract_call_graph_php(
 
     walker = _PhpCallGraph()
     walker.walk(tree.root_node)
+    # Prerequisite for every guarantee-direction consumer: ERROR
+    # recovery can re-parent statements, so an ERROR-bearing tree's
+    # conditional flags are census/reachability-usable only.
+    try:
+        walker.graph.parse_errors = bool(tree.root_node.has_error)
+    except AttributeError:
+        walker.graph.parse_errors = True  # unknown ⇒ not guarantee-grade
     return walker.graph
 
 
@@ -4758,6 +4782,12 @@ class _PhpCallGraph:
         # detection).
         self._cond_depth = 0
         self._notdef_guards: list[str] = []
+        # Parallel to the conditional depth: the ``defined()``-guard
+        # condition of each enclosing conditional (name, negated) —
+        # None for non-guard conditionals. Straight-line boundary
+        # records consult the top so the phase-1b walk can treat a
+        # ``!defined(C)`` abort as a no-op under a bound C.
+        self._cond_guard_stack: list[tuple[str, bool] | None] = []
         # Guard-eligibility window (see _PROLOGUE_INERT_STMTS).
         self._guard_prologue_open = True
         self.graph.includes_extracted = True
@@ -4859,7 +4889,14 @@ class _PhpCallGraph:
                 yield c
             return
 
-        if node.type in (self._FUNCTION_DEF, self._METHOD_DECL):
+        if node.type in (self._FUNCTION_DEF, self._METHOD_DECL,
+                         "anonymous_function", "arrow_function"):
+            # Anonymous and arrow functions are enclosing scopes like
+            # any named function: their bodies run at CALL time, so
+            # includes and defines inside them are function_body
+            # facts — recording them as file-scope handed the walk
+            # unconditional-looking statements that a direct request
+            # never executes at load time.
             name = self._first_child_of_type(node, (self._NAME,))
             method_name = name.text.decode() if name else "<anon>"
             if (node.type == self._METHOD_DECL
@@ -4896,10 +4933,23 @@ class _PhpCallGraph:
                 yield c
             return
 
+        if node.type in ("return_statement", "exit_statement",
+                         "goto_statement"):
+            self._record_boundary(
+                node,
+                "goto" if node.type == "goto_statement"
+                else ("return" if node.type == "return_statement"
+                      else "abort"),
+            )
+            for c in node.children:
+                yield c
+            return
+
         if node.type == "if_statement":
             guard = self._not_defined_guard_name(node)
             self._maybe_record_access_guard(node, guard)
             self._cond_depth += 1
+            self._cond_guard_stack.append(self._defined_condition(node))
             if guard is not None:
                 self._notdef_guards.append(guard)
             try:
@@ -4908,15 +4958,18 @@ class _PhpCallGraph:
             finally:
                 if guard is not None:
                     self._notdef_guards.pop()
+                self._cond_guard_stack.pop()
                 self._cond_depth -= 1
             return
 
         if node.type in self._CONDITIONAL_NODES:
             self._cond_depth += 1
+            self._cond_guard_stack.append(None)
             try:
                 for c in node.children:
                     yield c
             finally:
+                self._cond_guard_stack.pop()
                 self._cond_depth -= 1
             return
 
@@ -4930,11 +4983,13 @@ class _PhpCallGraph:
                 for c in node.children:
                     if not pushed and c.type in self._LOGICAL_OPS:
                         self._cond_depth += 1
+                        self._cond_guard_stack.append(None)
                         pushed = True
                         continue
                     yield c
             finally:
                 if pushed:
+                    self._cond_guard_stack.pop()
                     self._cond_depth -= 1
             return
 
@@ -5032,9 +5087,14 @@ class _PhpCallGraph:
             self.graph.indirection.add(INDIRECTION_DYNAMIC_IMPORT)
         # define('NAME', …) — walk input for the include graph's
         # per-entry constant-environment resolution (phase 1b).
-        if (node.type == self._FUNCTION_CALL and len(chain) == 1
-                and chain[0].lower() == "define"):
-            self._record_define(node)
+        if node.type == self._FUNCTION_CALL and len(chain) == 1:
+            head = chain[0].lower()
+            if head == "define":
+                self._record_define(node)
+            elif head in self._ABORT_NAMES:
+                self._record_boundary(node, "abort")
+            elif head == "__halt_compiler":
+                self._record_boundary(node, "halt")
 
     # ---- include layer (structured edges, defines, guards) --------
 
@@ -5120,13 +5180,25 @@ class _PhpCallGraph:
         elif len(value) > 512:
             # Same planted-material rule as edge tails.
             value, raw_value = None, value[:self._MAX_RAW_LEN] + "…"
+        # ``fallback`` is EXACT-SHAPE-ONLY: precisely one enclosing
+        # conditional and it is ``!defined('<same name>')``. Any
+        # extra outer conditional (a request-controlled branch around
+        # the fallback) makes this an ordinary conditional define —
+        # the record cannot express "fallback plus outer condition",
+        # so claiming fallback would let the walk bind a constant a
+        # direct request may never define.
+        exact_fallback = (
+            self._cond_depth == 1
+            and bool(self._cond_guard_stack)
+            and self._cond_guard_stack[-1] == (name, True)
+        )
         self.graph.defines.append(IncludeDefine(
             line=node.start_point[0] + 1,
             name=name,
             value=value,
             raw_value=raw_value,
             conditional=self._cond_depth > 0,
-            fallback=name in self._notdef_guards,
+            fallback=exact_fallback,
             position="function_body" if self._enclosing else "file_scope",
         ))
 
@@ -5363,6 +5435,57 @@ class _PhpCallGraph:
             ):
                 return [c]
         return []
+
+    #: Straight-line boundary records are capped; the overflow entry
+    #: keeps the cap honest (the walk treats it as a boundary at that
+    #: line — a missed later boundary must never fabricate a
+    #: guarantee below it).
+    _MAX_BOUNDARIES: ClassVar[int] = 8
+
+    def _record_boundary(self, node, kind: str) -> None:
+        """Record a file-scope straight-line boundary statement —
+        return / exit / die / goto / __halt_compiler — with the
+        enclosing ``defined()``-guard condition when there is exactly
+        one enclosing conditional and it is guard-shaped (the
+        phase-1b walk no-ops a ``!defined(C)`` abort under a bound
+        C, and hard-applies a ``defined(C)`` one)."""
+        if self._enclosing:
+            return
+        bl = self.graph.boundaries
+        if bl and bl[-1].get("kind") == "overflow":
+            return
+        line = node.start_point[0] + 1
+        if len(bl) >= self._MAX_BOUNDARIES:
+            bl.append({"line": line, "kind": "overflow"})
+            return
+        entry: dict = {"line": line, "kind": kind}
+        if kind in ("return", "abort"):
+            if self._cond_depth == 0:
+                entry["kind"] = "terminator"
+            else:
+                entry["kind"] = "conditional_" + kind
+                if (self._cond_depth == 1 and self._cond_guard_stack
+                        and self._cond_guard_stack[-1] is not None):
+                    name, negated = self._cond_guard_stack[-1]
+                    entry["guard_constant"] = name
+                    entry["guard_negated"] = negated
+        bl.append(entry)
+
+    def _defined_condition(self, node) -> tuple[str, bool] | None:
+        """(constant, negated) for an ``if (defined('N'))`` /
+        ``if (!defined('N'))`` condition, else None."""
+        cond = self._first_child_of_type(
+            node, ("parenthesized_expression",))
+        if cond is None:
+            return None
+        expr = self._unwrap_parens(cond)
+        if expr is None:
+            return None
+        if expr.type == self._FUNCTION_CALL:
+            name = self._defined_call_constant(expr)
+            return (name, False) if name is not None else None
+        neg = self._not_defined_guard_name(node)
+        return (neg, True) if neg is not None else None
 
     def _not_defined_guard_name(self, node) -> str | None:
         """The N of an ``if (!defined('N'))`` condition, or None."""
