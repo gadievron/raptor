@@ -208,6 +208,59 @@ class TestFloorsRegistry:
             }
 
 
+class TestDetectorBindingDriftFence:
+    """The prepass passes explicit ``floors.value(...)`` arguments to
+    every pass-through detector, so a detector whose signature default
+    is rebound to a NEW constant would be silently overridden while
+    the value-drift fence stays green (both sides of that fence read
+    the same live symbol — value drift is impossible by construction,
+    BINDING drift is not). This fence pins the binding: each
+    detector's signature default must equal the registry default for
+    the key the prepass threads into that parameter."""
+
+    _BINDINGS = (
+        ("detect_flag_mode_deviations", "min_sites",
+         "flag-mode.min_sites"),
+        ("detect_flag_mode_deviations", "ratio", "flag-mode.ratio"),
+        ("detect_cleanup_deviations", "min_group", "cleanup.min_group"),
+        ("detect_cleanup_deviations", "ratio", "cleanup.ratio"),
+        ("detect_argument_shape_deviations", "min_sites",
+         "argument-shape.min_sites"),
+        ("detect_argument_shape_deviations", "ratio",
+         "argument-shape.ratio"),
+        ("detect_interface_deviations", "min_group",
+         "interface.min_group"),
+        ("detect_interface_deviations", "ratio", "interface.ratio"),
+        ("detect_ordering_deviations", "min_group",
+         "ordering.min_group"),
+        ("detect_ordering_deviations", "ratio", "ordering.ratio"),
+        ("detect_sanitize_sink_deviations", "min_sites",
+         "sanitize-sink.min_sites"),
+        ("detect_sanitize_sink_deviations", "ratio",
+         "sanitize-sink.ratio"),
+        ("detect_guard_presence_deviations", "min_sites",
+         "guard-presence.min_sites"),
+        ("detect_guard_presence_deviations", "ratio",
+         "guard-presence.ratio"),
+    )
+
+    def test_detector_signature_defaults_match_the_registry(self):
+        import inspect
+
+        from core.audit import consistency_dimensions as cd
+
+        defaults = {s.key: s.default for s in floors_registry()}
+        for fn_name, param, key in self._BINDINGS:
+            fn = getattr(cd, fn_name)
+            actual = inspect.signature(fn).parameters[param].default
+            assert actual == defaults[key], (
+                f"{fn_name}({param}=...) signature default "
+                f"{actual!r} != registry default {defaults[key]!r} "
+                f"for {key!r} — rebind the registry entry or the "
+                f"detector default; they must stay one value"
+            )
+
+
 class TestResolveFloors:
     def test_defaults(self):
         floors = resolve_floors(None)
