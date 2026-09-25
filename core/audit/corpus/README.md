@@ -412,6 +412,55 @@ and refuse on mismatch — never default them.
    source status is printed inline; a file found under a known prefix
    (e.g. `src/`) suggests the corrected path.
 
+## Synthetic mutants (regression floors, never recall estimates)
+
+`python3 -m core.audit.corpus.mutate` generates labels by applying
+ONE mechanical mutation to ONE member of a peer family the
+consistency census scores consistent at a pinned clean upstream ref.
+Operators, each mapped to a census dimension: `drop-guard`
+(guard-presence), `swap-order` (ordering), `remove-pair-release`
+(cleanup), `drop-return-check` (return-usage census), and
+`flip-bound` (guard-predicate).
+
+**Honesty framing (binding).** Mutant numbers are mutation-operator
+regression floors conditioned on family-found — an end-to-end
+plumbing harness (family formation → census → thresholds → lead),
+NOT a real-bug recall estimate. Dimension gates on mutants alone
+certify self-consistency only. The circularity breaker is the
+complementary REAL label set (incomplete-fix / missed-variant CVEs
+labelled at the pre-fix ref with `cve`/`fix_commit` + `peer_set`,
+plus intentional-divergence `clean` labels for the FP side) — those
+are ordinary `consistency`-class labels, not mutants.
+
+Mechanics: a mutant label carries `provenance_kind:
+"synthetic_mutant"` plus a `mutation` spec (operator, site, drop-in
+line edits, and the content hash of the applied result). The
+`SourcePin` stays the UNMUTATED parent ref, so pin lint and the
+spend gate keep verifying against the real tree; the runner applies
+the spec to its run-private excerpt copy post-fetch, verifying both
+the parent span and the applied result (`--scope excerpt` required;
+`--probe` refuses mutants). Mutant labels never carry
+`cve`/`fix_commit` (declared, never laundered — the provenance-lint
+warning is carved out on the kind alone), and they never enter
+`core/recall` (its manifest hard-rejects non-benchmark|cve
+provenance by design).
+
+Separation is structural, not advisory: mutant overlays live
+OUTSIDE the packaged `labels/` dir and run via
+`--labels-dir <overlay>`; a run refuses a label set that mixes
+kinds; `--splice` refuses across kinds; and the history store
+stamps `label_kind` on every record — `compare` refuses cross-kind,
+`stability` partitions on the kind, `trend` renders per-kind
+sections, and the post-run delta reports only consider same-kind
+priors.
+
+The in-tree baseline floors live in the fixture package
+(`tests/fixtures/mutcorpus/`) with the current per-operator floor
+values pinned by `tests/test_mutation_floors.py` — update an
+operator's expected value there when its consuming dimension lands.
+Floors against real pinned fixture repos are generated per
+engagement with `mutate --check` and recorded alongside the run.
+
 ## Content-addressed pins (`source.span_sha`)
 
 A pin may carry `span_sha`: the span hash (SHA-256[:12] over the raw
