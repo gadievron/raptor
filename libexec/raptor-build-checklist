@@ -83,6 +83,26 @@ def main() -> None:
         # budget, --scope remedy) — surface it without traceback spam.
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
+    except ValueError as exc:
+        # Builder refusals (unrecognised single-file target, escaping
+        # --scope entry) pre-fix surfaced as a raw traceback. One
+        # actionable line instead — and for the archive case, the
+        # canonical route: this builder works on TREES, never inside
+        # archives.
+        msg = str(exc)
+        try:
+            from core.archive import is_archive
+            if Path(target).is_file() and is_archive(target):
+                msg = (
+                    f"target is an archive, not a source tree: {target}"
+                    f" — extract it (or run /scan on it, which unpacks"
+                    f" into the shared _sources cache) and build the"
+                    f" checklist on the extracted tree"
+                )
+        except Exception:  # noqa: BLE001 — hint is best-effort
+            pass
+        print(f"ERROR: {msg}", file=sys.stderr)
+        sys.exit(1)
 
     total = checklist.get("total_files", 0)
     items = checklist.get("total_items", 0)
