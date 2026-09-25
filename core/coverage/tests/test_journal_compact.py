@@ -193,6 +193,56 @@ class TestCompaction:
         stats = compact_journal(tmp_path)
         assert stats.dropped_reemissions > 0
 
+    def test_init_worker_record_compacts(self, tmp_path: Path) -> None:
+        """The detached-launch record shape (tool_pid=1 — always
+        alive) must not refuse compaction forever: pid<=1 is never
+        live evidence."""
+        from core.run.metadata import RUN_METADATA_FILE
+        _reemission_run(tmp_path, n_functions=2, n_segments=3)
+        (tmp_path / RUN_METADATA_FILE).write_text(json.dumps({
+            "command": "audit",
+            "status": "running",
+            "tool_pid": 1,
+            "timestamp": "2026-09-20T00:00:00+00:00",
+        }))
+        stats = compact_journal(tmp_path)
+        assert stats.dropped_reemissions > 0
+
+    def test_recycled_worker_record_compacts(self, tmp_path: Path) -> None:
+        """A live pid whose starttime differs from the record is a
+        recycled pid — the original worker is dead."""
+        from unittest import mock
+
+        from core.project import sessions
+        from core.run.metadata import RUN_METADATA_FILE
+        _reemission_run(tmp_path, n_functions=2, n_segments=3)
+        (tmp_path / RUN_METADATA_FILE).write_text(json.dumps({
+            "command": "audit",
+            "status": "running",
+            "tool_pid": os.getpid(),   # alive...
+            "tool_pid_start": "1",     # ...but another incarnation
+            "timestamp": "2026-09-20T00:00:00+00:00",
+        }))
+        with mock.patch.object(sessions, "proc_starttime",
+                               lambda pid: "777"):
+            stats = compact_journal(tmp_path)
+        assert stats.dropped_reemissions > 0
+
+    def test_live_run_refusal_names_the_evidence(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.run.metadata import RUN_METADATA_FILE
+        append_entry(tmp_path, _entry(1))
+        (tmp_path / RUN_METADATA_FILE).write_text(json.dumps({
+            "command": "audit",
+            "status": "running",
+            "tool_pid": os.getpid(),
+            "timestamp": "2026-09-20T00:00:00+00:00",
+        }))
+        with pytest.raises(CompactRefused,
+                           match=rf"worker pid {os.getpid()} is alive"):
+            compact_journal(tmp_path)
+
     def test_missing_journal_refused(self, tmp_path: Path) -> None:
         with pytest.raises(CompactRefused, match="nothing to compact"):
             compact_journal(tmp_path)
