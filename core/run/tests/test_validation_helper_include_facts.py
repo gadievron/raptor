@@ -132,6 +132,68 @@ class TestAttachIncludeFacts:
         assert data["findings"][0]["include_facts"]["role"] == "library"
         assert "include_facts" not in data["findings"][1]
 
+    def test_bootstrap_context_attaches_with_census(self, tmp_path):
+        mod = _load_helper()
+        g = _graph()
+        g["census"] = {"unresolved_edge_count": 2,
+                       "unwalked_target_count": 1}
+        g["walk"] = {
+            "entries_walked": 1, "entries_truncated": False,
+            "outcomes": {},
+            "entry_classes": [{
+                "class": "ecabc12345", "entry_count": 1,
+                "entries": ["entry.php"],
+                "guaranteed_prefix": ["lib/shared.php"],
+            }],
+            "prefixes": {"entry.php": {
+                "class": "ecabc12345",
+                "members": [
+                    {"file": "entry.php", "guaranteed": True,
+                     "via": [], "root": True},
+                    {"file": "lib/shared.php", "guaranteed": True,
+                     "via": ["entry.php:3->lib/shared.php"]},
+                ],
+                "member_total": 2, "unresolved": [],
+                "unresolved_total": 0,
+            }},
+            "file_facts": {"lib/shared.php": {"classes": [{
+                "class": "ecabc12345", "guaranteed": True,
+                "entries_reaching": 1,
+                "receipt": "entry.php -> entry.php:3->lib/shared.php",
+            }]}},
+        }
+        (tmp_path / "include-graph.json").write_text(json.dumps(g))
+        data = _findings("lib/shared.php", "other.c")
+        mod._attach_bootstrap_context(str(tmp_path), data)
+        ctx = data["findings"][0]["bootstrap_context"]
+        assert ctx["tier"] == "hint"
+        [cls] = ctx["entry_classes"]
+        assert cls["guaranteed"] is True
+        assert ctx["unresolved_census"]["unresolved_edges"] == 2
+        assert "qualifier" in ctx
+        # schema-valid by construction (census mandatory)
+        from packages.exploitability_validation.schemas import (
+            validate_findings,
+        )
+        payload = {"stage": "B", "findings": [{
+            "id": "FIND-0001", "file": "lib/shared.php",
+            "function": "f",
+            "line": 1, "vuln_type": "xss",
+            "status": "not_disproven",
+            "bootstrap_context": ctx}]}
+        valid, errors = validate_findings(payload)
+        assert valid, errors
+        # non-graph file untouched
+        assert "bootstrap_context" not in data["findings"][1]
+
+    def test_bootstrap_context_skips_without_walk(self, tmp_path):
+        mod = _load_helper()
+        (tmp_path / "include-graph.json").write_text(
+            json.dumps(_graph()))  # 1a-shaped graph, no walk section
+        data = _findings("lib/shared.php")
+        mod._attach_bootstrap_context(str(tmp_path), data)
+        assert "bootstrap_context" not in data["findings"][0]
+
     def test_enums_sanitised_in_attached_facts(self, tmp_path):
         mod = _load_helper()
         g = _graph()
