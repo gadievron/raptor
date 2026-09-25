@@ -474,6 +474,24 @@ Output files: `openant_findings.json` (findings in Raptor schema),
 (raw OpenAnt output).  OpenAnt also runs inside [/agentic](#agentic) via
 `--openant`, or as the sole scanner via `--openant-only`.
 
+The scanner's own report deduplicates caller/callee findings (a
+same-CWE callee with a single caller collapses into the caller's
+finding), dropping the callee's per-unit verdict from its output.
+RAPTOR recovers those verdicts from the scan artifacts and appends them
+to `openant_findings.json` as hint-tier candidates: each record carries
+`metadata.provenance_tier = "recovered_checkpoint_verdict"` and
+`level: note` (below a normal scanner finding), names the surviving
+finding it was collapsed into, and is counted separately in every
+report surface ("N findings + M recovered checkpoint verdicts") —
+never blended into the scanner's own findings count (in `/agentic`
+scan metrics, `total_findings` counts scanner findings only; recovered
+verdicts ride their own key).  Recovery is best-effort and bounded:
+missing or drifted artifacts degrade to zero recovered records with a
+warning, never a failed run, and record volume is hard-capped per run
+(500) with the truncation stated loudly — the artifacts are written by
+the sandboxed scan child over an untrusted repository, so an unbounded
+candidate population is treated as hostile, not as signal.
+
 ---
 
 ## Systematic Review
