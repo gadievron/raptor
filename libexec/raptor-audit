@@ -2353,10 +2353,21 @@ def cmd_journal(args: argparse.Namespace) -> int:
     final verdict per function and the journal spend floor are
     unchanged). The original is preserved as
     ``review-journal.jsonl.pre-compact``.
+
+    ``--supersede`` adds the lossy-with-archive tier: only the NEWEST
+    row per review identity (site, source hash, verdict, model,
+    strategy set, producer) is kept — the remedy for a journal
+    dominated by distinct-bodied live review rows, which the lossless
+    tier cannot shrink. Claim rows, corrections, provisional and
+    error/dark rows are retained outright; each dropped cost-bearing
+    row is replaced in place by a small spend-carrier row, so the
+    journal spend floor is preserved exactly; the full original is
+    preserved as ``review-journal.jsonl.pre-supersede``.
     """
     if getattr(args, "journal_command", None) != "compact":
         print(
-            "error: usage: raptor-audit journal compact <out-dir>",
+            "error: usage: raptor-audit journal compact <out-dir> "
+            "[--supersede]",
             file=sys.stderr,
         )
         return 1
@@ -2364,19 +2375,26 @@ def cmd_journal(args: argparse.Namespace) -> int:
     if not out_dir.is_dir():
         print(f"error: {out_dir} is not a directory", file=sys.stderr)
         return 1
+    supersede = bool(getattr(args, "supersede", False))
     from core.coverage.journal_compact import CompactRefused, compact_journal
     try:
-        stats = compact_journal(out_dir)
+        stats = compact_journal(out_dir, supersede=supersede)
     except CompactRefused as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     ratio = f"{stats.ratio:.1f}x" if stats.bytes_after else "n/a"
     print(f"journal: {stats.journal_path}")
-    print(
-        f"  rows:  {stats.rows_before} -> {stats.rows_after} "
-        f"({stats.dropped_reemissions} duplicate re-emission row(s) "
-        "dropped)"
+    dropped_bits = (
+        f"{stats.dropped_reemissions} duplicate re-emission row(s) "
+        "dropped"
     )
+    if supersede:
+        dropped_bits += (
+            f"; {stats.dropped_superseded} superseded row(s) dropped, "
+            f"{stats.spend_carriers} spend-carrier row(s) written"
+        )
+    print(f"  rows:  {stats.rows_before} -> {stats.rows_after} "
+          f"({dropped_bits})")
     print(
         f"  bytes: {stats.bytes_before} -> {stats.bytes_after} "
         f"({ratio})"
@@ -2386,10 +2404,17 @@ def cmd_journal(args: argparse.Namespace) -> int:
             f"  kept verbatim: {stats.kept_unparseable} line(s) the "
             "reader cannot parse (never deleted)"
         )
-    print(
-        f"  spend floor: ${stats.spend_usd_after:.2f} (unchanged — "
-        "only zero-cost duplicates drop)"
-    )
+    if supersede:
+        print(
+            f"  spend floor: ${stats.spend_usd_after:.2f} (preserved "
+            "exactly — dropped rows' costs carried by spend-carrier "
+            "rows)"
+        )
+    else:
+        print(
+            f"  spend floor: ${stats.spend_usd_after:.2f} (unchanged — "
+            "only zero-cost duplicates drop)"
+        )
     print(f"  backup: {stats.backup_path}")
     return 0
 
@@ -3469,6 +3494,18 @@ def main() -> int:
     p_jcompact.add_argument(
         "out_dir",
         help="Run output directory containing review-journal.jsonl",
+    )
+    p_jcompact.add_argument(
+        "--supersede",
+        action="store_true",
+        help="Also keep only the newest row per review identity "
+             "(site, source hash, verdict, model, strategy set, "
+             "producer) — for journals plain compaction cannot "
+             "shrink. Claim rows, corrections, provisional and "
+             "error/dark rows are retained; dropped rows' costs are "
+             "preserved by in-place spend-carrier rows; the full "
+             "original is archived as "
+             "review-journal.jsonl.pre-supersede",
     )
 
     args = parser.parse_args()
