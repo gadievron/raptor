@@ -173,6 +173,15 @@ never findings:
 - Export-contract asymmetries (length-cap / null-check presence across a
   named export family) ride the same artifacts under the same caveats.
 
+**Composition with /audit.** `/audit <binary>` captures a mapped
+sibling run's `sibling-hypotheses.json` into the audit run dir for the
+normal seed intake — an artifact this command already produced (or an
+operator adjudicated) is captured verbatim, and only a map with no
+artifact gets a fresh `--auto` engine run. The hand-run command
+remains the manual route and the escape hatch when the auto pass
+degrades (`--no-auto-siblings` opts the audit out; source targets
+never run it).
+
 ## Investigation Behaviour
 
 `investigate` is the normal operator path. It runs the static map, reads its

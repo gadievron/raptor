@@ -27,6 +27,7 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
        [--dynamic | --no-dynamic]
        [--binary <path> ...] [--binary-auto] [--no-binary-oracle] [--no-vendored-triage]
        [--annotations-dir <path>] [--no-validate] [--model <name> ...]
+       [--no-auto-siblings]
 ```
 
 - `<target_path>` — path to codebase to review (required on first run; resolved per DEFAULT TARGET DIRECTORY if omitted)
@@ -55,6 +56,7 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
 - `--dynamic` / `--no-dynamic` — enable/disable dynamic validation (Frida observation / target execution) for confirmed findings; `--no-dynamic` also overrides the project's `dynamic` trust marker. The run also resolves the project's `config` trust marker (the `--trust-repo` umbrella) into `repo_trusted`, which arms the trust-gated refutation witnesses — there is no per-run flag for that; the marker is the control (a banner prints when it affects the run)
 - `--binary <path>` — debug binary for binary-oracle enrichment (repeatable); `--binary-auto` auto-detects under common build dirs; `--no-binary-oracle` disables the oracle for this run
 - `--no-vendored-triage` — disable the vendored/generated-code triage tier (skip/glance decisions; every decision leaves a `suppressions.jsonl` record)
+- `--no-auto-siblings` — binary targets only: skip the automatic sibling-consistency pass (default on for binary targets: a mapped sibling run for the same binary seeds the run's hypothesis intake via a captured `sibling-hypotheses.json`; source targets never run it). Also accepted by `resume` for a single segment
 - `--annotations-dir <path>` — annotations directory for team workflows or cross-run review (default: project-level `annotations/` for lifecycle runs, else `$OUTPUT_DIR/annotations`)
 - `--no-validate` — skip the /validate post-pass (not recommended)
 - `--model <name>` — model ID (repeatable for multi-model consensus; first model used for lifecycle)

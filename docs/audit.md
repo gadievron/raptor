@@ -72,6 +72,7 @@ full flag table.
 | `--dynamic` / `--no-dynamic` | Enable/disable dynamic validation (Frida observation / target execution) for confirmed findings |
 | `--binary <path>` / `--binary-auto` / `--no-binary-oracle` | Binary-oracle reachability enrichment of the inventory |
 | `--no-vendored-triage` | Disable the vendored/generated-code triage tier (corroborated generated files → skip tier, uncorroborated banners / vendored paths / generated-shape structure → glance tier; every decision leaves a `suppressions.jsonl` record and the run summary counts them) |
+| `--no-auto-siblings` | Binary targets only: skip the automatic sibling-consistency pass (default: on for binary targets; source targets never run it) — see [Hypothesis seeds](#hypothesis-seeds). Also accepted by `resume` for a single segment |
 | `--annotations-dir <dir>` | Annotations directory (default: project-level `annotations/`, falling back to `<out>/annotations`) |
 
 
@@ -501,6 +502,32 @@ recipe, and `derived_from_target` flags on the text fields.  A
 co-located file in the run's output directory is discovered
 automatically; `--hypothesis-seeds <file>` (repeatable) names others,
 and the flag is persisted so `resume` segments see the same seeds.
+
+**Auto-siblings (binary targets).** For a binary target the pipeline
+runs the sibling-consistency pass itself — no hand-ferrying: when a
+mapped sibling run for the same binary exists (discovered through
+the shared sibling-run search with a recorded-target gate and a
+FAIL-CLOSED build-identity gate — the map manifest's `binary_sha256`
+must be present and match the audit target's content hash, so
+another binary's, another build's, or an identity-unverifiable map
+never seeds the audit), its `sibling-hypotheses.json` is captured
+co-located into the audit run dir, where the normal intake ingests
+it.  A map run that already holds the artifact (a prior hand-run,
+possibly operator-adjudicated) is captured verbatim — the engine is
+not re-run over it (receipt provenance `captured_existing`); only a
+map with no artifact runs the landed `raptor-binary siblings --auto`
+engine (provenance `computed`), inside a bounded worker that
+degrades to `engine_timeout` instead of stalling audit start.
+Operator `--hypothesis-seeds` files merge through the intake's usual
+multi-source path (shared record cap, per-seed source provenance in
+the receipt).  A co-located seed file that already exists in the
+audit run dir (operator-ferried, or captured by an earlier segment)
+is reused — nothing runs.  Every other non-captured outcome degrades
+loudly to today's unseeded audit: one warning names the reason, the
+`auto-siblings.json` receipt persists it, and the run report carries
+an "Auto-siblings pass skipped" section with the manual escape
+hatch.  `--no-auto-siblings` (on `run` and `resume`) opts out;
+source targets never enter the pass.
 
 Seeds are an attention channel riding two existing seams: matched
 gap-queue entries get one bounded priority boost — applied after the
