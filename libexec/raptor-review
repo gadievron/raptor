@@ -23,9 +23,15 @@ Usage:
   raptor-review live                       # tail-follow a running audit's journal
   raptor-review compact                    # compact project journal index
   raptor-review verdict <id> fp|tp|retest  # record a human verdict on a finding
-                                           # (fp requires an interactive terminal;
-                                           #  tp/retest work non-interactively —
-                                           #  they only cause re-analysis)
+                                           # (fp gates on the live-context
+                                           #  operator grant, which refuses the
+                                           #  dispatch trust markers every
+                                           #  shipped launcher route carries —
+                                           #  fp does not mint in production;
+                                           #  use /annotate for operator FP
+                                           #  assertions, tp/retest for
+                                           #  re-analysis — both work
+                                           #  non-interactively)
   raptor-review digest [run-dir]           # ranked end-of-run summary
 
 Common options:
@@ -1426,15 +1432,24 @@ def _verdict_repo_root(args, ref) -> Path | None:
 
 
 def _operator_provenance(args) -> tuple:
-    """``(source, note, warning, interactive)`` for the verdict row.
+    """``(source, note, warning, operator)`` for the verdict row.
 
     Same doctrine as /annotate: ``source`` defaults to ``human`` when
     the invocation is interactive-TTY, else ``agent``; an explicit
     ``--source human`` from a non-TTY invocation is demoted to
     ``agent`` with a warning (the non-tty stamp would contradict it —
     readers demote such records anyway). The note records the full
-    invocation-context stamp for the auditor. ``interactive`` feeds
-    the fp verb's TTY gate.
+    invocation-context stamp for the auditor.
+
+    ``operator`` feeds the fp verb's gate and is the full live-context
+    operator-grant discipline
+    (``core.annotations.provenance.live_context_grants_operator`` —
+    the same chokepoint the coverage --mark path stamps with), NOT the
+    bare TTY stamp: a pty makes ``isatty`` true by design, and an
+    in-session agent invocation is interactive-TTY on the launcher's
+    terminal while carrying the dispatch environment marker — the
+    exact shapes the grant demotes. Both facts come from ONE detected
+    context so the gate can never disagree with the audited stamp.
     """
     from core.annotations.provenance import (
         ENV_MARKERS_KEY,
@@ -1444,9 +1459,11 @@ def _operator_provenance(args) -> tuple:
         SID_KEY,
         TTY_KEY,
         detect_invocation_context,
+        live_context_grants_operator,
     )
     ctx = detect_invocation_context()
     interactive = ctx[PROVENANCE_KEY] == INTERACTIVE_TTY
+    operator = live_context_grants_operator(ctx)
     requested = getattr(args, "source", None)
     warning = None
     if requested == "human" and not interactive:
@@ -1462,7 +1479,7 @@ def _operator_provenance(args) -> tuple:
             f"tty={ctx[TTY_KEY]} provenance={ctx[PROVENANCE_KEY]} "
             f"sid={ctx[SID_KEY]} envm={ctx[ENV_MARKERS_KEY]} "
             f"parents={ctx[PARENTS_KEY]}")
-    return source, note, warning, interactive
+    return source, note, warning, operator
 
 
 def _record_operator_verdict(run_dir, finding, verdict, reason, source):
@@ -1531,13 +1548,15 @@ def _forget_or_report(forget_fn, *args, **kwargs) -> int:
 def cmd_verdict(args) -> None:
     """Record a human FP/TP/retest verdict on a finding.
 
-    Interactivity asymmetry: ``fp`` is refused from non-interactive
-    invocations — its row suppresses the finding cross-run with
-    pipeline authority, so it is reserved for human terminal
-    judgment. ``tp`` and ``retest`` stay available non-interactively:
-    they are fail-safe (their only effect is that the finding gets
-    RE-analyzed), and their provenance stamp records the
-    non-interactive context either way.
+    Authority asymmetry: ``fp`` is refused unless the live invocation
+    context earns the OPERATOR grant
+    (``live_context_grants_operator`` — not a bare TTY check: a pty
+    makes ``isatty`` true by design) — its row suppresses the finding
+    cross-run with pipeline authority, so it is reserved for human
+    terminal judgment. ``tp`` and ``retest`` stay available
+    non-interactively: they are fail-safe (their only effect is that
+    the finding gets RE-analyzed), and their provenance stamp records
+    the invocation context either way.
     """
     from core.run.verdicts import (
         finding_coords,
@@ -1567,32 +1586,44 @@ def cmd_verdict(args) -> None:
     rel, fn, line = finding_coords(ref.finding)
     rule = finding_rule_id(ref.finding)
     reason = (args.reason or "").strip()
-    source, prov_note, prov_warning, interactive = \
+    source, prov_note, prov_warning, operator = \
         _operator_provenance(args)
     if prov_warning:
         print(f"  ⚠️  {prov_warning}", file=sys.stderr)
 
     from core.sage.hooks import SUPPRESS_TTL_DAYS
 
-    # TTY gate — fp only, decided BEFORE anything touches SAGE or
-    # disk. A CLI fp row is MAC-identical to a pipeline row and
-    # suppresses this finding cross-run for the whole TTL; the
+    # Operator-grant gate — fp only, decided BEFORE anything touches
+    # SAGE or disk. A CLI fp row is MAC-identical to a pipeline row
+    # and suppresses this finding cross-run for the whole TTL; the
     # pipeline's own agent-authored rows are minted at a governed
     # chokepoint behind an actual analysis verdict, while this verb
     # is an id-addressed assertion channel on the preapproved libexec
-    # surface — interactive human judgment is the gate that keeps it
-    # operator-tier. tp/retest stay available non-interactively
-    # (fail-safe asymmetry: they only ever cause RE-analysis).
-    if verb == "fp" and not interactive:
-        print("  Refused: the fp verb requires an interactive "
-              "operator terminal. A false-positive verdict "
-              "suppresses this finding on future runs for "
+    # surface — human judgment is the gate that keeps it
+    # operator-tier, and the bar is the live-context operator-grant
+    # chokepoint (live_context_grants_operator, same as the coverage
+    # --mark writer), not a bare isatty check: an in-session agent on
+    # the launcher's pty IS interactive-TTY and could otherwise mint
+    # the standing suppression itself. tp/retest stay available
+    # non-interactively (fail-safe asymmetry: they only ever cause
+    # RE-analysis).
+    if verb == "fp" and not operator:
+        print("  Refused: the fp verb requires an operator context "
+              "(the live-context grant discipline: an interactive "
+              "terminal at an operator shell, no agent-session or "
+              "dispatch environment marker — "
+              "core.annotations.provenance."
+              "live_context_grants_operator). A false-positive "
+              "verdict suppresses this finding on future runs for "
               f"{SUPPRESS_TTL_DAYS} days — that standing "
               "suppression is reserved for human judgment (the "
-              "annotation provenance doctrine). Nothing was "
-              "stored or changed. Re-run from a terminal, or use "
-              "'tp'/'retest' (both stay available "
-              "non-interactively — they only cause re-analysis).",
+              "annotation provenance doctrine), and a bare TTY is "
+              "not evidence of one (a pty wrapper or an agent "
+              "session's own terminal makes isatty true by design). "
+              "Nothing was stored or changed. Use 'tp'/'retest' "
+              "(both stay available non-interactively — they only "
+              "cause re-analysis), or record the review via "
+              "/annotate.",
               file=sys.stderr)
         sys.exit(2)
 
@@ -1911,8 +1942,14 @@ def main():
 
     p_verd = sub.add_parser(
         "verdict", parents=[common],
-        help="Record a human FP/TP/retest verdict on a finding "
-             "(fp requires an interactive terminal)")
+        help="Record a human FP/TP/retest verdict on a finding. "
+             "fp gates on the live-context operator grant, which "
+             "refuses the dispatch trust markers every shipped "
+             "launcher route carries — fp does not mint in "
+             "production (setting _RAPTOR_TRUSTED=1 to reach this "
+             "CLI is itself a refused marker, so the preamble's "
+             "bypass hint does not help here); use /annotate for "
+             "operator FP assertions, tp/retest for re-analysis")
     p_verd.add_argument("finding_id")
     p_verd.add_argument("verdict", choices=["fp", "tp", "retest"])
     p_verd.add_argument("-m", "--reason", default=None,

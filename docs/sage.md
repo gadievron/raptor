@@ -336,10 +336,16 @@ Operators record or overturn verdicts by hand with
 `fp` stores a suppressing false-positive row, `tp` clears prior
 suppressing rows and sets `manual_override` on the stored finding
 records so future passes force the finding through, `retest` clears
-the stored verdict entirely so the next run re-analyzes.  `fp`
-requires an interactive terminal (its row suppresses with
-pipeline-grade authority, so it is reserved for human judgment);
-`tp`/`retest` work non-interactively — they only cause re-analysis.
+the stored verdict entirely so the next run re-analyzes.  `fp` is
+gated on the live-context operator grant (its row suppresses with
+pipeline-grade authority, so it is reserved for human judgment) —
+and the grant refuses the dispatch trust markers every shipped
+launcher route carries, so in practice `fp` does not mint in
+production: the CLI standing-suppression mint is retired pending an
+operator decision on a sanctioned terminal ceremony.  Record
+operator FP assertions with `/annotate` instead (human grade,
+production-reachable); `tp`/`retest` work non-interactively — they
+only cause re-analysis.
 
 ### CodeQL build reliability
 

@@ -88,15 +88,28 @@ def env(tmp_path, monkeypatch):
     return mod, run, target, calls
 
 
-def _patch_provenance(monkeypatch, interactive: bool):
+def _patch_provenance(monkeypatch, interactive: bool, *,
+                      envm: str = "none",
+                      parents: str = "bash,sshd"):
+    """Inject an invocation context at the documented test seam.
+
+    ``interactive=True`` with the defaults is a context that earns the
+    full OPERATOR grant (``live_context_grants_operator``): an
+    interactive TTY, inherited session, no dispatch environment
+    marker, and a shell-rooted ancestry that does not END at the
+    shell (an interactive shell has a live parent — hence
+    ``bash,sshd``; a bare ``bash`` chain is the orphaned launder
+    shape and does NOT grant). Override ``envm``/``parents`` to model
+    the interactive-but-not-operator shapes the fp gate must refuse.
+    """
     import core.annotations.provenance as prov
     ctx = {
         prov.TTY_KEY: "stdin,stdout,stderr" if interactive else "none",
         prov.PROVENANCE_KEY: (prov.INTERACTIVE_TTY if interactive
                               else prov.NON_TTY),
         prov.SID_KEY: prov.SID_INHERITED,
-        prov.ENV_MARKERS_KEY: "none",
-        prov.PARENTS_KEY: "bash",
+        prov.ENV_MARKERS_KEY: envm,
+        prov.PARENTS_KEY: parents,
     }
     monkeypatch.setattr(prov, "detect_invocation_context", lambda: ctx)
 
@@ -152,6 +165,60 @@ class TestFpVerb:
             mod.cmd_verdict(_args(run, "find-001", "fp",
                                   source="human"))
         assert calls["store"] == []
+
+    def test_fp_refused_on_tty_without_operator_grant(
+            self, env, monkeypatch, capsys):
+        # The gate is live_context_grants_operator, NOT bare isatty:
+        # an in-session agent invocation on the launcher's pty is
+        # interactive-TTY while carrying the dispatch environment
+        # marker — the exact laundering shape that could otherwise
+        # mint a standing 30-day suppression. Refuse with zero
+        # mutation and a message naming the operator requirement.
+        # (Reverting the gate to a bare TTY check reds this test.)
+        mod, run, _target, calls = env
+        _patch_provenance(monkeypatch, interactive=True,
+                          envm="claudecode")
+        before = (run / "findings.json").read_text(encoding="utf-8")
+        with pytest.raises(SystemExit) as exc:
+            mod.cmd_verdict(_args(run, "find-001", "fp"))
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "Refused" in err
+        assert "operator context" in err
+        assert "live_context_grants_operator" in err
+        assert calls["store"] == []
+        assert not (run / "suppressions.jsonl").exists()
+        assert (run / "findings.json").read_text(
+            encoding="utf-8") == before
+
+    def test_fp_refused_on_tty_with_orphaned_ancestry(
+            self, env, monkeypatch, capsys):
+        # Second interactive-but-not-operator axis: a chain that ends
+        # at the shell (no live parent) is the orphaned/reparented
+        # launder shape — interactive-TTY, grant refused.
+        mod, run, _target, calls = env
+        _patch_provenance(monkeypatch, interactive=True,
+                          parents="bash")
+        with pytest.raises(SystemExit) as exc:
+            mod.cmd_verdict(_args(run, "find-001", "fp"))
+        assert exc.value.code == 2
+        assert "operator context" in capsys.readouterr().err
+        assert calls["store"] == []
+
+    def test_tp_and_retest_stay_available_without_operator_grant(
+            self, env, monkeypatch):
+        # The fail-safe asymmetry is unchanged: tp/retest only cause
+        # re-analysis, so the interactive-agent context that the fp
+        # gate refuses still runs them (their stamp records the
+        # context, envm included, for the auditor).
+        mod, run, _target, calls = env
+        _patch_provenance(monkeypatch, interactive=True,
+                          envm="claudecode")
+        mod.cmd_verdict(_args(run, "find-001", "tp"))
+        assert calls["store"][0][5] == "true_positive"
+        assert "envm=claudecode" in calls["store"][0][6]
+        mod.cmd_verdict(_args(run, "find-001", "retest"))
+        assert len(calls["forget"]) == 2
 
     def test_non_tty_source_is_agent(self, env, monkeypatch):
         # tp stays available non-interactively (fail-safe: it only
