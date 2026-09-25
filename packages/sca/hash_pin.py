@@ -71,10 +71,16 @@ _USES_RE = re.compile(
         (?P<repo>[A-Za-z0-9_.\-]+)
         (?P<sub>(?:/[A-Za-z0-9_./\-]+)?)
         @(?P<ref>[A-Za-z0-9_./\-]+)
-        (?P<trailing>[ \t]*(?:\#.*)?)?$
+        (?P<trailing>[ \t]*(?:\#.*)?)?\r?$
     """,
     re.MULTILINE | re.VERBOSE,
 )
+# ``\r?$``: the keepends line elements carry their terminators, so a
+# CRLF checkout puts a ``\r`` between the ref and the ``$`` — without
+# the tolerance every mutable ``uses:`` ref on such a file silently
+# stayed unpinned (no match, no ``skipped`` entry).  The ``\r`` sits
+# outside every capture; the comment-arm ``.*`` can still absorb one
+# into ``trailing``, which is ``.strip()``-ed before reuse.
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -201,8 +207,15 @@ def _rewrite_file(
         )
         if trailing:
             replacement += f"  {trailing}"
-        # Preserve any original trailing newline.
-        suffix = "\n" if raw.endswith("\n") else ""
+        # Preserve the original line terminator byte-for-byte (the
+        # keepends elements carry it): a CRLF line stays CRLF instead
+        # of turning into the file's lone LF line.
+        if raw.endswith("\r\n"):
+            suffix = "\r\n"
+        elif raw.endswith(("\n", "\r")):
+            suffix = raw[-1]
+        else:
+            suffix = ""
         new_line = replacement + suffix
         out_lines.append(new_line)
         changes.append(HashPinChange(
