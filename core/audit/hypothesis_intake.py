@@ -87,7 +87,15 @@ MAX_SEEDS_PER_FUNCTION = 8
 #: actual review-slot displacement — while the status quo caps seed
 #: influence at "same work, earlier"; if a future series decides
 #: seeds should move the cut, it must change BOTH sites and this
-#: rationale together.
+#: rationale together. ONE consented exception exists and it is NOT
+#: this boost: under ``--seed-rereview`` (opt-in, default off) the
+#: scheduled RE-REVIEW lane rides the --pin hoist, so on a bounded
+#: run seed-scheduled functions claim budget slots first and CAN
+#: displace never-reviewed gaps (recorded in not-attempted.json).
+#: That displacement is operator-consented spend, bounded by
+#: MAX_SEED_RECORDS (200), and flag-gated — with the flag off, and
+#: at BOTH boost sites always, the no-displacement contract above
+#: stands unchanged.
 SEED_PRIORITY_BOOST = 10
 
 # Text caps mirror the sibling injectors (context_inject clips
@@ -451,10 +459,123 @@ def _match_gap(
     return None, "no_matching_gap"
 
 
+def _checklist_indexes(
+    checklist: dict[str, Any],
+) -> tuple[dict[tuple[str, str], dict], dict[tuple[str, int], dict]]:
+    """(file, name) and binary (file, address) lookup over the FULL
+    checklist inventory (every item, covered or not) — the re-review
+    resolution space. Same key scheme as :func:`_gap_indexes`; one
+    entry object per item feeds both indexes so the address/name
+    conflict refusal in :func:`_match_gap` keeps working on identity."""
+    from core.inventory.binary_builder import is_binary_item
+
+    by_name: dict[tuple[str, str], dict] = {}
+    by_addr: dict[tuple[str, int], dict] = {}
+    for file_info in checklist.get("files", []) or []:
+        fp = file_info.get("path", "") or ""
+        if not fp:
+            continue
+        for item in file_info.get("items", file_info.get("functions", [])):
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name", "") or ""
+            if not name:
+                continue
+            metadata = item.get("metadata") or {}
+            entry = {"file": fp, "name": name}
+            by_name.setdefault((fp, name), entry)
+            addr = metadata.get("address")
+            if addr is None:
+                addr = item.get("address")
+            probe = {"file": fp, "address": item.get("address")}
+            if is_binary_item(probe) and isinstance(
+                addr, int,
+            ) and not isinstance(addr, bool):
+                by_addr.setdefault((fp, addr), entry)
+    return by_name, by_addr
+
+
+def _satisfied_rereview_keys(out_dir: Path) -> set[str]:
+    """``file:function`` keys whose run journal already holds a
+    COMPLETED seed-forced re-review row.
+
+    The ``seed_rereview`` row marker exists precisely for this: once
+    the seed-forced fresh review has produced a settled verdict, the
+    key returns to normal covered/verdict-reuse semantics — without
+    this, every resume segment re-scheduled every seed (N seeds × M
+    segments of repeated full-price reviews under ONE consent, the
+    schedule head occupied ahead of residual progress). Error and
+    dark verdicts do NOT satisfy — same retry discipline as the
+    coverage fold — and edge rows never carry the marker's meaning
+    for the function itself. Same trust domain as the rest of the
+    run dir (the journal this run wrote); best-effort — an unreadable
+    journal degrades to "nothing satisfied", never an error.
+    """
+    try:
+        from core.coverage.journal import load_entries
+        return {
+            entry.key for entry in load_entries(Path(out_dir))
+            if getattr(entry, "seed_rereview", None)
+            and entry.verdict not in ("error", "dark")
+            and not entry.edge_callee
+        }
+    except Exception:  # noqa: BLE001 — enrichment, never a gate
+        logger.debug("seed-rereview satisfaction scan failed",
+                     exc_info=True)
+        return set()
+
+
+def rereview_candidate_keys(
+    checklist: dict[str, Any],
+    out_dir: Path,
+    extra_paths: list[Path] | None = None,
+) -> set[str]:
+    """Resolve this run's seeds against the FULL checklist inventory.
+
+    The ``--seed-rereview`` resolution pass: every seed that joins a
+    checklist item (address wins, then a non-placeholder name — the
+    exact :func:`_match_gap` semantics, including the conflict and
+    placeholder refusals) contributes that item's
+    ``make_function_key``. ``compute_gaps`` consumes the set as its
+    ``seed_rereview_keys`` — a key the coverage/journal/reuse folds
+    would have suppressed is un-suppressed and marked for a fresh,
+    seed-forced review. A seed naming a function absent from the
+    checklist resolves to nothing here and stays a recorded miss in
+    the intake proper. Pure resolution: no boost, no stamp, no
+    artifact — accounting stays in :func:`apply_hypothesis_seeds`.
+
+    ONE fresh review per consent: keys whose run journal already
+    holds a completed ``seed_rereview`` row are excluded
+    (:func:`_satisfied_rereview_keys`), so resume segments do not
+    re-buy the review the seed already forced. A NEW run (fresh out
+    dir) with the flag is a new consent and schedules again.
+    """
+    from core.coverage.journal import make_function_key
+
+    paths = discover_seed_paths(Path(out_dir), extra_paths)
+    if not paths:
+        return set()
+    seeds, _skips, _sources = load_seed_files(paths)
+    if not seeds:
+        return set()
+    by_name, by_addr = _checklist_indexes(checklist)
+    keys: set[str] = set()
+    for seed in seeds:
+        entry, _reason = _match_gap(seed, by_name, by_addr)
+        if entry is not None:
+            keys.add(make_function_key(entry["file"], entry["name"]))
+    if keys:
+        keys -= _satisfied_rereview_keys(Path(out_dir))
+    return keys
+
+
 def apply_hypothesis_seeds(
     gaps: list[dict[str, Any]],
     out_dir: Path,
     extra_paths: list[Path] | None = None,
+    *,
+    rereview: bool = False,
+    checklist: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Load seeds, boost matched gaps, stamp review-context hints.
 
@@ -463,6 +584,29 @@ def apply_hypothesis_seeds(
     to ``hypothesis-seed-intake.json``) or ``None`` when there is
     nothing to ingest. Never raises past its own logging — the caller
     treats the whole intake as best-effort.
+
+    ``rereview`` (the ``--seed-rereview`` consent flag): seeds whose
+    matched gap carries the ``seed_rereview`` marker (stamped by
+    ``compute_gaps`` when the seed resolution un-suppressed a covered
+    checklist function) are accounted in a third bucket —
+    ``rereview_scheduled`` in the receipt, reason
+    ``rereview_scheduled`` in the fid-miss ledger (join succeeded;
+    the row keeps the resolved address as its audit trail) — instead
+    of ``matched``. Stamp + boost semantics are identical to matched
+    gaps: the claim/evidence context injects at the same review seam.
+    With the flag off this function is behaviourally identical to the
+    two-bucket intake (no marker can exist, the receipt carries no
+    ``rereview_scheduled`` key, the log line keeps its shape).
+
+    ``checklist`` (rereview mode only, ignored otherwise): a seed
+    that misses the gap queue is resolved against the checklist and,
+    when its key already carries a completed seed-forced review in
+    the run journal (:func:`_satisfied_rereview_keys`), counted as
+    ``rereview_already_satisfied`` — honest accounting for resume
+    segments — instead of a ``no_matching_gap`` miss. Satisfied
+    seeds write NO ledger row: the join already succeeded once and
+    was recorded; re-recording it every segment would accumulate a
+    fid-misses operation per resume.
     """
     paths = discover_seed_paths(out_dir, extra_paths)
     if not paths:
@@ -481,13 +625,43 @@ def apply_hypothesis_seeds(
     seeds, skips, sources = load_seed_files(paths)
     boosted: set[int] = set()
     matched = 0
+    rereview_scheduled = 0
+    rereview_satisfied = 0
     conflicts = 0
     misses: list[dict[str, Any]] = []
+    scheduled_rows: list[dict[str, Any]] = []
+    # Rereview-mode satisfaction classifier: a queue-missing seed
+    # whose checklist resolution lands on a key the run journal
+    # already re-reviewed under this consent (completed seed_rereview
+    # row) is "already satisfied", not a miss. Built once, only when
+    # the caller passed the checklist under the flag.
+    cl_by_name: dict = {}
+    cl_by_addr: dict = {}
+    satisfied_keys: set[str] = set()
+    if rereview and checklist is not None and seeds:
+        cl_by_name, cl_by_addr = _checklist_indexes(checklist)
+        satisfied_keys = _satisfied_rereview_keys(Path(out_dir))
     if seeds:
         by_name, by_addr = _gap_indexes(gaps)
         for seed in seeds:
             gap, miss_reason = _match_gap(seed, by_name, by_addr)
             if gap is None:
+                if (
+                    miss_reason == "no_matching_gap"
+                    and satisfied_keys
+                ):
+                    entry, _cl_reason = _match_gap(
+                        seed, cl_by_name, cl_by_addr,
+                    )
+                    if entry is not None:
+                        from core.coverage.journal import (
+                            make_function_key,
+                        )
+                        if make_function_key(
+                            entry["file"], entry["name"],
+                        ) in satisfied_keys:
+                            rereview_satisfied += 1
+                            continue
                 # A seed the queue cannot place is a recorded miss,
                 # never an error: entry-detection disagreements and
                 # out-of-scope functions are expected residue of any
@@ -509,7 +683,35 @@ def apply_hypothesis_seeds(
                     miss["fid"] = seed.fid
                 misses.append(miss)
                 continue
-            matched += 1
+            if rereview and gap.get("seed_rereview"):
+                # Seed-forced re-review (--seed-rereview): the gap
+                # exists only because the resolution pass
+                # un-suppressed a covered checklist function. The
+                # join SUCCEEDED — record it in the ledger with the
+                # resolved address, reason ``rereview_scheduled``,
+                # never as a miss count.
+                rereview_scheduled += 1
+                row: dict[str, Any] = {
+                    "seed_id": seed.seed_id,
+                    "file": seed.file,
+                    "reason": "rereview_scheduled",
+                }
+                if seed.function:
+                    row["function"] = seed.function
+                resolved_addr = seed.address
+                if resolved_addr is None:
+                    meta_addr = (gap.get("metadata") or {}).get("address")
+                    if isinstance(meta_addr, int) and not isinstance(
+                        meta_addr, bool,
+                    ):
+                        resolved_addr = meta_addr
+                if resolved_addr is not None:
+                    row["address"] = f"{resolved_addr:#x}"
+                if seed.fid:
+                    row["fid"] = seed.fid
+                scheduled_rows.append(row)
+            else:
+                matched += 1
             stamped = gap.setdefault("seed_hypotheses", [])
             if len(stamped) < MAX_SEEDS_PER_FUNCTION:
                 stamped.append(seed.stamp())
@@ -531,7 +733,15 @@ def apply_hypothesis_seeds(
         "conflicts": conflicts,
         "skipped": skips,
     }
-    if misses:
+    if rereview:
+        # Third and fourth buckets, present only under the consent
+        # flag so the flag-off receipt stays byte-identical to the
+        # two-bucket intake. ``rereview_already_satisfied``: seeds
+        # whose forced review this run already completed (resume
+        # segments) — the key is back to normal covered semantics.
+        summary["rereview_scheduled"] = rereview_scheduled
+        summary["rereview_already_satisfied"] = rereview_satisfied
+    if misses or scheduled_rows:
         # Pointer for reviewers: the per-miss records live in the
         # addrmap ledger, not in this receipt.
         from core.binary.addrmap import MISSES_FILENAME
@@ -542,16 +752,21 @@ def apply_hypothesis_seeds(
     except OSError:
         logger.warning("hypothesis-seed intake receipt write failed",
                        exc_info=True)
-    if misses:
+    if misses or scheduled_rows:
         # The addrmap miss ledger is the ONE place cross-tool join
         # residue lands (escape/clip/caps live there). The FULL miss
         # list goes in: the loader's record cap (MAX_SEED_RECORDS,
-        # 200) keeps it under the ledger's own per-operation cap
-        # (500), so the ledger's per-operation count always equals
-        # this receipt's ``missed`` — no divergence under floods.
+        # 200) keeps misses + scheduled rows under the ledger's own
+        # per-operation cap (500), so the ledger's per-operation
+        # count always equals this receipt's ``missed`` (plus
+        # ``rereview_scheduled`` rows under the flag) — no divergence
+        # under floods.
         try:
             from core.binary.addrmap import record_fid_misses
-            record_fid_misses(Path(out_dir), "audit-seed-intake", misses)
+            record_fid_misses(
+                Path(out_dir), "audit-seed-intake",
+                misses + scheduled_rows,
+            )
         except Exception:  # noqa: BLE001 — miss log never fails intake
             logger.warning("hypothesis-seed miss recording failed",
                            exc_info=True)
@@ -561,12 +776,26 @@ def apply_hypothesis_seeds(
         # content, and a planted seed file must not be discoverable
         # only by reading the run dir. Paths are escaped at capture in
         # load_seed_files.
-        logger.info(
-            "hypothesis-seed intake: %d external hypothesis seeds "
-            "ingested from %s — %d matched (%d gaps boosted), "
-            "%d missed (%d conflicts), skips=%s",
-            len(seeds),
-            ", ".join(s["path"] for s in sources) or "no readable source",
-            matched, len(boosted), len(misses), conflicts, skips or {},
-        )
+        if rereview:
+            logger.info(
+                "hypothesis-seed intake: %d external hypothesis seeds "
+                "ingested from %s — %d matched (%d gaps boosted), "
+                "%d scheduled for re-review, %d already satisfied, "
+                "%d missed (%d conflicts), skips=%s",
+                len(seeds),
+                ", ".join(s["path"] for s in sources)
+                or "no readable source",
+                matched, len(boosted), rereview_scheduled,
+                rereview_satisfied, len(misses), conflicts, skips or {},
+            )
+        else:
+            logger.info(
+                "hypothesis-seed intake: %d external hypothesis seeds "
+                "ingested from %s — %d matched (%d gaps boosted), "
+                "%d missed (%d conflicts), skips=%s",
+                len(seeds),
+                ", ".join(s["path"] for s in sources)
+                or "no readable source",
+                matched, len(boosted), len(misses), conflicts, skips or {},
+            )
     return summary
