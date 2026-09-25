@@ -46,6 +46,19 @@ _REGISTRY = {
     # of it. (Uses the same not-reviewed bucket as "read"; the depth ladder has
     # no distinct "mapped" rung and the review axis is depth's only consumer.)
     "understand": (CATEGORY_LLM, DEPTH_SCANNED),
+    # "openant" = the external OpenAnt scanner ANALYSED a unit covering
+    # this function (the analyzed-units overlay, packages/openant/
+    # coverage.py). Scanner grade by design: an external LLM scanner
+    # reading/analysing a function is llm-extent examination evidence —
+    # exactly the `read`/`understand` bucket — but it is NOT a RAPTOR
+    # review, so it must stay at SCANNED depth, structurally outside
+    # every review-covered set (store_summary's reviewed screens, the
+    # audit gap fold's (llm, analysed) gate, the --fail-under percent).
+    # Registering it above the unknown/scanned default only fixes the
+    # CATEGORY (llm, so the extent views attribute it) — the depth is
+    # deliberately identical to the default so a registry regression
+    # can never promote scanner marks into review credit.
+    "openant": (CATEGORY_LLM, DEPTH_SCANNED),
     "audit": (CATEGORY_LLM, DEPTH_ANALYSED),
     # "journal" = a coverage record derived from review-journal entries
     # (build_from_journal; /agentic writes coverage-journal.json). Every
