@@ -108,6 +108,10 @@ def resume_ineligibility(
       appended so the pipeline can point at its own new-run path);
     * status ``running`` with the recorded worker still alive — the
       run is actually in flight, resuming would double-drive it.
+      Worker liveness is the full identity check
+      (:func:`core.run.metadata.worker_liveness_for_meta`): a stamped
+      record needs a starttime match, pid<=1 is never live evidence,
+      and a legacy bare-pid record keeps the plain probe.
 
     ``completion_artifacts`` names the file(s) a genuinely completed
     run of this pipeline always leaves behind. ``completed`` with
@@ -122,9 +126,9 @@ def resume_ineligibility(
     from core.run.metadata import (
         RESUMABLE_STATUSES,
         STATUS_RUNNING,
-        _tool_pid_alive,
         load_run_metadata,
         reopen_run,
+        worker_liveness_for_meta,
     )
 
     out_dir = Path(out_dir)
@@ -158,12 +162,21 @@ def resume_ineligibility(
         )
     if status not in RESUMABLE_STATUSES:
         return f"run status {status!r} is not resumable"
-    if status == STATUS_RUNNING and _tool_pid_alive(meta.get("tool_pid")):
-        return (
-            "run is still in flight (recorded worker process is "
-            "alive) — resuming now would double-drive it. Wait for "
-            "it to stop, or kill it first."
-        )
+    if status == STATUS_RUNNING:
+        # Full-identity liveness for EVERY pipeline's resume: pid
+        # alive AND recorded starttime matching (a recycled pid is not
+        # the worker); pid<=1 is never live evidence (a detached
+        # launch's reparented-to-init record once made this refusal
+        # permanent — PID 1 is always alive). The detail names what
+        # was checked so the refusal is diagnosable against the
+        # metadata.
+        alive, detail = worker_liveness_for_meta(meta)
+        if alive:
+            return (
+                f"run is still in flight ({detail}) — resuming now "
+                "would double-drive it. Wait for it to stop, or kill "
+                "it first."
+            )
     return None
 
 
