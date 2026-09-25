@@ -1083,8 +1083,53 @@ def format_context_for_prompt(
         if extra > 0:
             ip.append(f"- (+{extra} more includers — full set in "
                       "include-graph.json)")
+        bc = ic.get("bootstrap")
+        if isinstance(bc, dict):
+            for cls in (bc.get("entry_classes") or [])[:3]:
+                if not isinstance(cls, dict):
+                    continue
+                sample = ", ".join(
+                    _defend_identifier(str(e), max_length=200)
+                    for e in (cls.get("entries") or [])[:3])
+                ip.append(
+                    f"- Entry class `{_defend_identifier(str(cls.get('class', '?')), max_length=32)}` "
+                    f"reaches this file "
+                    f"({cls.get('entry_count', 0)} entries, "
+                    f"{'guaranteed' if cls.get('guaranteed') else 'reachability only'}"
+                    f"; e.g. {sample})")
+            prefix = bc.get("guaranteed_prefix") or []
+            if prefix:
+                names = ", ".join(
+                    _defend_identifier(str(r.get("file", "?")),
+                                       max_length=200)
+                    for r in prefix[:10] if isinstance(r, dict))
+                # Elision counts against the producer's TRUE shared
+                # total (the carried list is itself capped) — the
+                # "+N more" must never understate what was cut.
+                total = bc.get("guaranteed_prefix_total")
+                if not (isinstance(total, int)
+                        and not isinstance(total, bool)
+                        and total >= len(prefix)):
+                    total = len(prefix)
+                more = total - min(len(prefix), 10)
+                ip.append(
+                    "- Guaranteed to have executed BEFORE this file "
+                    "on every guaranteed entry path (hint — verify "
+                    f"against source, cite lines): {names}"
+                    + (f" (+{more} more)" if more > 0 else ""))
+            if bc.get("note"):
+                ip.append("- Note: " + _defend_identifier(
+                    str(bc["note"]), max_length=300))
+        census_q = str(ic.get("qualifier", ""))
+        if isinstance(bc, dict) and bc.get("qualifier"):
+            # The bootstrap qualifier is the graph-level qualifier
+            # plus the walk's own honesty (the "environment walk was
+            # TRUNCATED for N entries" sentence) — when gate lines
+            # render above, the census line must carry it too, or a
+            # budget-starved walk reads as a complete class partition.
+            census_q = str(bc["qualifier"])
         ip.append("- Census: " + _defend_identifier(
-            str(ic.get("qualifier", "")), max_length=400))
+            census_q, max_length=600))
         sections.append(PromptSection("include_context",
                                       "\n".join(ip), 1))
 
@@ -5042,7 +5087,24 @@ def _build_include_context(
     # Enum/bound re-validation of the untrusted artifact lives in
     # include_facts_for_file — the ONE query both consumers (this
     # block and validate stage C) go through.
-    return include_facts_for_file(graph, file_path) or None
+    facts = include_facts_for_file(graph, file_path)
+    if not facts:
+        return None
+    # Phase-1b bootstrap facts, when the environment walk ran: the
+    # entry classes reaching this file and the guaranteed-prefix
+    # files shared by every guaranteed-reaching class. Same producer
+    # discipline (census-mandatory: the builder refuses without a
+    # valid census), hint tier, prompt-context only.
+    try:
+        from core.inventory.include_graph import (
+            bootstrap_context_for_file,
+        )
+        bc = bootstrap_context_for_file(graph, file_path)
+        if bc:
+            facts["bootstrap"] = bc
+    except Exception:
+        logger.debug("bootstrap context build failed", exc_info=True)
+    return facts
 
 
 def _load_project_context(
