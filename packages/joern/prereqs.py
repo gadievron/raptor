@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -53,14 +54,121 @@ def _joern_parse_path() -> str | None:
     return _resolved_joern_parse
 
 
+# Mirrors core.sandbox.python_paths._SYSTEM_PREFIXES: dirs already in
+# the mount-ns baseline bind set need no tool_paths declaration.
+# (test_tool_paths pins the two tuples equal so drift is test-visible.)
+_SYSTEM_PREFIXES = ("/usr/", "/lib/", "/lib64/", "/etc/", "/bin/", "/sbin/")
+
+_resolved_java: str | None = None
+_java_resolved: bool = False
+
+
+def _java_path() -> str | None:
+    """Realpath of the ``java`` the launcher scripts will exec, cached
+    beside the launcher resolutions so one spawn's declaration cannot
+    diverge from the next after a mid-run PATH mutation."""
+    global _resolved_java, _java_resolved
+    if not _java_resolved:
+        found = shutil.which("java")
+        _resolved_java = os.path.realpath(found) if found else None
+        _java_resolved = True
+    return _resolved_java
+
+
+def _java_declared_root(java_real: str) -> str | None:
+    """The directory a non-system ``java`` earns in the sandbox bind set.
+
+    ``<root>/bin/java`` is the JDK layout, but climbing two levels
+    blindly is dangerous: a wrapper at ``~/bin/java`` climbs to ``$HOME``
+    itself, a version-manager shim under ``~/.local/bin`` climbs to
+    ``~/.local`` — either would bind a credential-bearing tree read-only
+    into a sandbox that parses hostile source (and, under the strict
+    profile, union it into the Landlock read allowlist). So the climb is
+    earned, not assumed: the candidate root must carry a JDK shape marker
+    (``release`` file, ``jmods/``, or ``lib/modules``) and must not be
+    ``$HOME`` or an ancestor of it. Anything else falls back to declaring
+    only the ``bin/`` dir (never ``$HOME`` itself), loudly.
+    """
+    bin_dir = os.path.realpath(str(Path(java_real).parent))
+    root = os.path.realpath(str(Path(bin_dir).parent))
+    home = os.path.realpath(os.path.expanduser("~"))
+    rootp, homep = Path(root), Path(home)
+    jdk_shaped = ((rootp / "release").is_file()
+                  or (rootp / "jmods").is_dir()
+                  or (rootp / "lib" / "modules").is_file())
+    home_or_above = root == home or homep.is_relative_to(rootp)
+    if jdk_shaped and not home_or_above:
+        return root
+    if bin_dir == home or Path(bin_dir) in homep.parents:
+        logging.getLogger(__name__).warning(
+            "joern tool_paths: java at %s resolves under a root too broad "
+            "to declare (%s); not binding it — a sandboxed joern call may "
+            "demote if this java is required", java_real, root)
+        return None
+    logging.getLogger(__name__).warning(
+        "joern tool_paths: %s is not JDK-shaped (or is $HOME-adjacent); "
+        "declaring only the bin dir %s", root, bin_dir)
+    return bin_dir
+
+
+def _under_system_prefix(path: str) -> bool:
+    return any(
+        path == prefix.rstrip("/") or path.startswith(prefix)
+        for prefix in _SYSTEM_PREFIXES
+    )
+
+
+def joern_tool_paths() -> list[str]:
+    """Sandbox read-allowed roots for the Joern toolchain.
+
+    Joern is routinely installed outside the system dirs (a coursier or
+    tarball unpack under the operator's home), which puts its launchers
+    outside the sandbox's mount-ns bind tree: without a ``tool_paths``
+    declaration every sandboxed ``joern-parse``/``joern`` call demotes to
+    the mountless namespace backend (host paths visible by name).
+    Declaring the install roots keeps those calls on the bind-tree lane.
+
+    Covered roots, deduplicated, system-prefix entries dropped (they are
+    already in the bind tree):
+
+    - the parent dir of each resolved launcher (``joern-cli/`` — the
+      launcher scripts, ``lib/`` jars, and ``bin/`` re-exec helpers all
+      live under it; resolvers already cache the realpath, see above)
+    - for a non-system ``java`` (the launcher scripts exec it from
+      PATH; a user-local JDK — sdkman, tarball — would otherwise fail
+      at exec inside mount-ns): the JDK root, but only when it earns
+      the climb — see ``_java_declared_root``.
+    """
+    candidates: list[str] = []
+    for launcher in (_joern_path(), _joern_parse_path()):
+        if launcher:
+            candidates.append(str(Path(launcher).parent))
+    java = _java_path()
+    if java and not _under_system_prefix(java):
+        root = _java_declared_root(java)
+        if root:
+            candidates.append(root)
+    paths: list[str] = []
+    for raw in candidates:
+        resolved = os.path.realpath(raw)
+        if (os.path.isabs(resolved) and os.path.isdir(resolved)
+                and not _under_system_prefix(resolved)
+                and resolved not in paths):
+            paths.append(resolved)
+    return paths
+
+
 def reset_path_cache() -> None:
     """Clear cached paths. Call between tests that patch shutil.which."""
     global _resolved_joern, _joern_resolved
     global _resolved_joern_parse, _joern_parse_resolved
+    global _resolved_java, _java_resolved
     _resolved_joern = None
     _joern_resolved = False
     _resolved_joern_parse = None
     _joern_parse_resolved = False
+    _resolved_java = None
+    _java_resolved = False
 
 
 def is_available() -> bool:

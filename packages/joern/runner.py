@@ -26,7 +26,7 @@ from pathlib import Path
 from core.analysis._joern_lines import parse_marker_line, parse_marker_records
 
 from .models import FlowStep, JoernCPG, JoernMethodSummary, JoernResult, TaintFlow
-from .prereqs import _joern_parse_path, _joern_path
+from .prereqs import _joern_parse_path, _joern_path, joern_tool_paths
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -688,6 +688,7 @@ def build_cpg(
             target=str(target),
             output=str(output_dir),
             block_network=True,
+            tool_paths=joern_tool_paths(),
         )
     except TypeError:
         try:
@@ -952,6 +953,7 @@ def run_query(
                 output=str(cpg.path.parent),
                 cwd=str(cpg.path.parent),
                 block_network=True,
+                tool_paths=joern_tool_paths(),
             )
         except TypeError:
             # Runner without the sandbox kwargs (injected stubs,
