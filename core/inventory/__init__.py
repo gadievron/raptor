@@ -49,7 +49,7 @@ from .extractors import (
 from .languages import LANGUAGE_MAP, detect_language
 from .lookup import lookup_function, normalise_path
 from types import TracebackType
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -76,6 +76,7 @@ __all__ = [
     "KIND_MACRO",
     "LANGUAGE_MAP",
     "CExtractor",
+    "ChecklistBudgetExceededError",
     "CodeItem",
     "FunctionInfo",
     "FunctionMetadata",
@@ -151,6 +152,53 @@ def iter_checklist_items(checklist):
 # tracks target size (measured 11.6-35.9 MB on big targets) — the
 # checklist budget class.
 _MAX_CHECKLIST_BYTES = 256 * 1024 * 1024
+
+
+class ChecklistBudgetExceededError(RuntimeError):
+    """The serialised checklist would exceed the core-inventory read budget.
+
+    The ``checklist.json`` readers in this module gate their loads on
+    :data:`_MAX_CHECKLIST_BYTES` — an artifact written past that budget
+    is refused right back at this module's own accessors (and other
+    reader lanes gate at their own, sometimes tighter, byte budgets),
+    so the writer raises this instead of completing the write.
+    """
+
+
+def _enforce_checklist_budget(data: Any, checklist_path: "Path") -> None:
+    """Refuse to serialise a checklist the core-inventory readers refuse.
+
+    Raises :class:`ChecklistBudgetExceededError` when the serialised
+    artifact would exceed :data:`_MAX_CHECKLIST_BYTES`. Measurement
+    reuses ``dumps_artifact`` — the same serialisation ``save_json``
+    performs — so the number compared against the budget is the number
+    the readers' ``fstat`` gate will see (+1 for save_json's trailing
+    newline). The double serialisation on the passing path is bounded
+    by the budget itself and is cheap next to the inventory build.
+    """
+    from core.json import dumps_artifact
+
+    size = len(dumps_artifact(data).encode("utf-8")) + 1
+    # Failing fast here cuts both ways: raising refuses to write an
+    # inventory whose serialisation is over budget even though the
+    # write itself would succeed (a LOWER budget would start refusing
+    # working mid-size inventories); NOT raising writes an artifact
+    # the core-inventory readers refuse at their fstat load gate
+    # (other reader lanes gate at their own budgets), deferring the
+    # same failure to a less actionable place — the write site is
+    # where "build a scoped inventory instead" is still cheap advice.
+    if size <= _MAX_CHECKLIST_BYTES:
+        return
+    raise ChecklistBudgetExceededError(
+        f"refusing to write {checklist_path}: serialised checklist is "
+        f"{size} bytes, over the {_MAX_CHECKLIST_BYTES}-byte budget "
+        f"the core-inventory readers enforce at load (other reader "
+        f"lanes gate at their own byte budgets) — the artifact would "
+        f"be unusable downstream. Build a scoped inventory instead "
+        f"(the checklist builder's repeatable --scope flag restricts "
+        f"it to named subdirectories), or run scoped analyses over "
+        f"subtrees of the target."
+    )
 
 
 def _resolve_checklist_path(output_dir):
@@ -238,6 +286,9 @@ def save_checklist(output_dir, data) -> None:
                          overwrite_generator=False)
 
     checklist_path = _resolve_checklist_path(output_dir)
+    # Budget gate BEFORE the lock/write: an over-budget artifact must
+    # never replace a previously usable checklist on disk.
+    _enforce_checklist_budget(data, checklist_path)
     with _checklist_lock(checklist_path):
         save_json(checklist_path, data)
 
@@ -320,4 +371,8 @@ def update_checklist(output_dir, transform_fn) -> None:
             from core.artifacts.provenance import stamp_provenance
             stamp_provenance(updated, "core-inventory", untrusted=False,
                              overwrite_generator=False)
+        # Same budget gate as save_checklist: refusing keeps the
+        # on-disk checklist readable instead of atomically replacing
+        # it with one the readers reject at their load gates.
+        _enforce_checklist_budget(updated, checklist_path)
         save_json(checklist_path, updated)

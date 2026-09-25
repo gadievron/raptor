@@ -74,8 +74,15 @@ def main() -> None:
         )
         return
 
+    from core.inventory import ChecklistBudgetExceededError
     from packages.exploitability_validation import build_checklist
-    checklist = build_checklist(target, output_dir, scope=parsed.scope)
+    try:
+        checklist = build_checklist(target, output_dir, scope=parsed.scope)
+    except ChecklistBudgetExceededError as exc:
+        # The writer already composed the actionable message (size,
+        # budget, --scope remedy) — surface it without traceback spam.
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     total = checklist.get("total_files", 0)
     items = checklist.get("total_items", 0)

@@ -284,5 +284,48 @@ class TestPromoteChecklist(unittest.TestCase):
             self.assertFalse((project_dir / "checklist.json").exists())
 
 
+class TestChecklistWriteBudget(unittest.TestCase):
+    """The writer refuses artifacts the core-inventory readers refuse."""
+
+    def _tiny_budget(self, n: int):
+        import core.inventory as inv
+        real = inv._MAX_CHECKLIST_BYTES
+        inv._MAX_CHECKLIST_BYTES = n
+        self.addCleanup(setattr, inv, "_MAX_CHECKLIST_BYTES", real)
+
+    def test_save_refuses_over_budget_and_writes_nothing(self):
+        from core.inventory import ChecklistBudgetExceededError
+        self._tiny_budget(64)
+        with TemporaryDirectory() as d:
+            with self.assertRaises(ChecklistBudgetExceededError) as ctx:
+                save_checklist(d, {"files": [], "pad": "x" * 200})
+            self.assertFalse((Path(d) / "checklist.json").exists())
+            # The error must be actionable: name the budget and the
+            # scoped-inventory remedy.
+            msg = str(ctx.exception)
+            self.assertIn("--scope", msg)
+            self.assertIn("64", msg)
+
+    def test_update_refuses_over_budget_and_preserves_existing(self):
+        from core.inventory import ChecklistBudgetExceededError
+        with TemporaryDirectory() as d:
+            path = Path(d) / "checklist.json"
+            path.write_text("{}")
+            original = path.read_text()
+            self._tiny_budget(64)
+            with self.assertRaises(ChecklistBudgetExceededError):
+                update_checklist(
+                    d, lambda data: {"files": [], "pad": "x" * 200})
+            # Refusal must not atomically replace the usable on-disk
+            # checklist with an over-budget one.
+            self.assertEqual(path.read_text(), original)
+
+    def test_small_checklist_still_saves(self):
+        with TemporaryDirectory() as d:
+            save_checklist(d, {"files": [{"path": "a.py"}]})
+            self.assertEqual(
+                read_checklist(d)["files"][0]["path"], "a.py")
+
+
 if __name__ == "__main__":
     unittest.main()
