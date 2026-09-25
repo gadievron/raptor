@@ -96,7 +96,22 @@ jobs:
           RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
         run: |
           set -f  # word-split $PYTEST_EXTRA without glob expansion
-          python -m pytest $TEST_PATH $PYTEST_EXTRA
+          python -m pytest $TEST_PATH $PYTEST_EXTRA \
+            --junitxml="$RUNNER_TEMP/pytest-junit.xml"
+
+      # Skip-count budget over the junit the run just wrote. The lane
+      # key carries the execution path — the two paths run under
+      # different provisioning, so their counts are recorded
+      # separately. No --full: a path-filtered dispatch collects a
+      # subset, so only growth past the recorded count trips here; the
+      # force-full events and the nightlies provide the exact check.
+      - name: Check skip count against the lane's recorded budget
+        env:
+          TIER: ${{ inputs.tier }}
+        run: |
+          python3 .github/scripts/check_skip_budget.py \
+            --lane "${TIER}/image" \
+            --junit-xml "$RUNNER_TEMP/pytest-junit.xml"
 
   # Fallback path: fork PRs can't pull the private image, so install into
   # the runner's system Python (uv's cache keyed on requirements*.txt).
@@ -143,4 +158,16 @@ jobs:
           RAPTOR_RANDOMISE_TESTS: ${{ github.run_id }}
         run: |
           set -f  # word-split $PYTEST_EXTRA without glob expansion
-          python -m pytest $TEST_PATH $PYTEST_EXTRA
+          python -m pytest $TEST_PATH $PYTEST_EXTRA \
+            --junitxml="$RUNNER_TEMP/pytest-junit.xml"
+
+      # Same skip-count budget as the image path, recorded under its
+      # own lane key — this path installs onto the bare runner, so
+      # optional-tool skips legitimately differ from the image's.
+      - name: Check skip count against the lane's recorded budget
+        env:
+          TIER: ${{ inputs.tier }}
+        run: |
+          python3 .github/scripts/check_skip_budget.py \
+            --lane "${TIER}/runner" \
+            --junit-xml "$RUNNER_TEMP/pytest-junit.xml"

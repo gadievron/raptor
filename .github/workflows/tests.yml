@@ -1266,7 +1266,17 @@ jobs:
         # The detectors run against the tree in lint.yml's
         # ``repo-invariants`` job on every PR and in the daily
         # miswiring-scan.yml sweep.
-        run: pytest .github/tests .github/scripts/tests
+        run: pytest .github/tests .github/scripts/tests --junitxml="$RUNNER_TEMP/ci-lint.xml"
+
+      # Self-censusing: this lane is the skip-budget gate's own home
+      # suite (and its simulations skip when bash/jq vanish from the
+      # runner), so it checks its own count. Fixed full collection of
+      # both dirs on every run, hence --full.
+      - name: Check skip count against the lane's recorded budget
+        run: |
+          python3 .github/scripts/check_skip_budget.py \
+            --lane ci-lint --full \
+            --junit-xml "$RUNNER_TEMP/ci-lint.xml"
 
       - name: Run release-workflow simulation
         # Bash test (pytest doesn't collect .sh): simulates the release
