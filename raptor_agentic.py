@@ -3866,6 +3866,26 @@ def main() -> int:
                     openant_hard_error = _oa_err
                     openant_metrics["hard_error"] = True
                     print(f"✗ OpenAnt scan failed: {_oa_err}", file=sys.stderr)
+                    # Coverage overlay, best-effort even on the failed
+                    # scan: units analysed BEFORE the failure are paid
+                    # work sitting in the scan artifacts (a truncated
+                    # results.json, or the per-unit checkpoints — the
+                    # fallback lane's shipped consumer). A projection
+                    # failure never changes how this phase already
+                    # failed.
+                    try:
+                        from packages.openant.coverage import (
+                            project_scan_coverage,
+                        )
+                        _overlay = project_scan_coverage(
+                            out_dir, oa_out, level=oa_config.level,
+                            repo_path=original_repo_path)
+                        if _overlay:
+                            print(f"  {_overlay} (partial scan)")
+                    except Exception as _cov_exc:  # noqa: BLE001 — overlay is additive; the failure outcome stands
+                        print(f"⚠️  OpenAnt coverage overlay failed: "
+                              f"{sanitise_for_terminal(str(_cov_exc), max_len=300)}",
+                              file=sys.stderr)
                 else:
                     # stderr like its hard-error twin and every other
                     # degrade lane — a piped stdout consumer must not
@@ -3956,6 +3976,31 @@ def main() -> int:
                         )
                 except Exception:
                     logger.debug("Coverage tracking for OpenAnt failed", exc_info=True)
+
+                # Coverage overlay (best-effort): project the scan's
+                # analyzed UNITS into a scanner-grade coverage record
+                # (coverage-openant.json; packages/openant/coverage.py)
+                # — function-precise, unlike the finding-file manifest
+                # append above, and the source of the --scanners /
+                # residual views. Fail-open by contract: a projection
+                # failure prints loudly and never fails the phase.
+                try:
+                    from packages.openant.coverage import (
+                        project_scan_coverage,
+                    )
+                    _overlay = project_scan_coverage(
+                        out_dir, oa_out, level=oa_config.level,
+                        repo_path=original_repo_path)
+                    if _overlay:
+                        # Count-only summary (nothing artifact-derived).
+                        print(f"  {_overlay}")
+                except Exception as _cov_exc:  # noqa: BLE001 — overlay is additive; the scan result stands
+                    print(f"⚠️  OpenAnt coverage overlay failed (scan "
+                          f"results unaffected): "
+                          f"{sanitise_for_terminal(str(_cov_exc), max_len=300)}",
+                          file=sys.stderr)
+                    logger.debug("OpenAnt coverage overlay failed",
+                                 exc_info=True)
         except RuntimeError as e:
             openant_metrics["error"] = f"not configured: {e}"
             logger.warning("OpenAnt not configured (continuing without it): %s", e)
