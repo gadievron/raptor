@@ -1,10 +1,10 @@
-"""Same-run resume substrate for /audit — ``raptor-audit resume``.
+"""Same-run resume for /audit — ``raptor-audit resume``.
 
 An audit killed by an external supervisor (harness background-shell
 cap, SIGTERM, OOM) leaves coherent artifacts: the review journal holds
 every completed verdict, ``cost-breakdown.json`` holds the reconciled
 spend ledger, and ``checklist.json`` pins the original scope. This
-module provides the mechanical pieces that let a later invocation
+module provides the audit-specific legs that let a later invocation
 re-enter that run AS THE SAME RUN:
 
 * ``audit-run-config.json`` — the run's resolved options, persisted at
@@ -23,26 +23,47 @@ re-enter that run AS THE SAME RUN:
   ``totals.total_spend_usd``) is authoritative;
 * resume-marker rows — appended to the run's audit log and LLM
   telemetry JSONL so both ledgers record the segment boundary.
+
+The pipeline-agnostic mechanics (config pinning, eligibility, the
+span-hash drift compare, spend-evidence clamping, the incremental
+spend floor, the budget math) live in :mod:`core.run.resume`; this
+module binds them to the audit's journal, ledger, and artifacts.
 """
 
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from core.json.jsonl import append_jsonl
-from core.json.utils import load_json, save_json
+from core.json.utils import load_json
+from core.run.resume import (  # noqa: F401 — re-exported audit surface
+    _MAX_SPEND_EVIDENCE_USD,
+    EXHAUSTED_BUDGET_EPSILON_USD,
+    SPEND_FLOOR_FILENAME,
+    SpanDriftRecord,
+    _spend_value,
+    max_of_evidence,
+    persist_spend_floor,
+    remaining_budget_usd,
+    spans_drift,
+    spend_floor_usd,
+)
+from core.run.resume import load_run_config as _load_run_config
+from core.run.resume import (
+    resume_ineligibility as _resume_ineligibility,
+)
+from core.run.resume import save_run_config as _save_run_config
 
 logger = logging.getLogger(__name__)
 
 RUN_CONFIG_FILENAME = "audit-run-config.json"
 
-# Byte budget for loading the persisted run config. Real configs are
-# a few KiB; 8 MiB is generous headroom while keeping a planted
-# oversize file unread.
+# Byte budget for loading audit resume evidence (run config, prior
+# ledger, pipeline-tail marker). Real payloads are a few KiB; 8 MiB is
+# generous headroom while keeping a planted oversize file unread.
 _RUN_CONFIG_MAX_BYTES = 8 * 1024 * 1024
 
 #: Staged by a launcher that owns this run's validation at the
@@ -63,29 +84,21 @@ def save_run_config(out_dir: Path, config: dict[str, Any]) -> Path:
     reads it back so segment N runs under the ORIGINAL configuration;
     it never re-derives options from fresh CLI flags.
     """
-    out_dir = Path(out_dir)
-    path = out_dir / RUN_CONFIG_FILENAME
-    save_json(path, config)
-    return path
+    return _save_run_config(out_dir, config, filename=RUN_CONFIG_FILENAME)
 
 
 def load_run_config(out_dir: Path) -> dict[str, Any] | None:
     """Load ``audit-run-config.json``, or ``None`` when absent/corrupt.
 
-    Bounded load: resume reads whatever directory the operator points
-    it at, so the st_size gate (before any read) keeps an oversize
-    config from being buffered — it degrades to ``None`` like a
-    corrupt one. Real run configs are a few KiB.
+    Bounded load (see :func:`core.run.resume.load_run_config`): an
+    oversize or unreadable config degrades to ``None`` like a corrupt
+    one. ``_RUN_CONFIG_MAX_BYTES`` is read at call time so tests can
+    tighten the budget.
     """
-    path = Path(out_dir) / RUN_CONFIG_FILENAME
-    if not path.is_file():
-        return None
-    try:
-        data = load_json(path, strict=True, max_bytes=_RUN_CONFIG_MAX_BYTES)
-    except (OSError, ValueError):
-        logger.warning("could not read %s", path, exc_info=True)
-        return None
-    return data if isinstance(data, dict) else None
+    return _load_run_config(
+        out_dir, filename=RUN_CONFIG_FILENAME,
+        max_bytes=_RUN_CONFIG_MAX_BYTES,
+    )
 
 
 # ── Eligibility ──────────────────────────────────────────────────────
@@ -93,68 +106,29 @@ def load_run_config(out_dir: Path) -> dict[str, Any] | None:
 def resume_ineligibility(out_dir: Path, reopen: bool = False) -> str | None:
     """Why *out_dir* may NOT be resumed. ``None`` when eligible.
 
-    Refusals:
-    * no run metadata — not a run directory;
-    * status ``completed`` — final results; point the operator at a
-      fresh run (verdict reuse re-imports the priors at $0 there);
-    * status ``running`` with the recorded worker still alive — the
-      run is actually in flight, resuming would double-drive it.
-
-    ``reopen`` handles the contradicted-completion case: a genuinely
-    completed audit always has an ``audit-report.json`` (the pipeline
-    tail writes it before the lifecycle completes), so ``completed``
+    The substrate gates (see :func:`core.run.resume.resume_ineligibility`)
+    bound to the audit's completion artifact: a genuinely completed
+    audit always has an ``audit-report.json`` (the pipeline tail
+    writes it before the lifecycle completes), so ``completed``
     WITHOUT a report means the status was stamped by a step that did
     not own the run (observed: a mapping-phase lifecycle complete on
-    the audit dir). With ``reopen=True`` that contradiction — and only
-    that contradiction — flips the run back to ``interrupted`` and the
-    resume proceeds; a completed run WITH a report stays final
-    regardless of the flag.
+    the audit dir) — ``reopen=True`` flips that contradiction — and
+    only that contradiction — back to ``interrupted``.
     """
-    from core.run.metadata import (
-        RESUMABLE_STATUSES,
-        STATUS_RUNNING,
-        _tool_pid_alive,
-        load_run_metadata,
-        reopen_run,
-    )
-
-    meta = load_run_metadata(Path(out_dir))
-    if not meta:
-        return f"no .raptor-run.json in {out_dir} — not a run directory"
-    status = meta.get("status")
-    if status == "completed":
-        contradicted = not (Path(out_dir) / "audit-report.json").is_file()
-        if contradicted and reopen:
-            reopen_run(
-                Path(out_dir),
-                note="resume --reopen: completed status contradicted "
-                     "by missing audit-report.json",
-            )
-            return None
-        if contradicted:
-            return (
-                "run status is 'completed' but there is no "
-                "audit-report.json — the completion was probably "
-                "stamped by a step that did not own this run (e.g. a "
-                "mapping-phase lifecycle complete on the audit dir). "
-                "Pass --reopen to flip it back to 'interrupted' and "
-                "resume."
-            )
-        return (
-            "run is completed — completed runs are never resumed. "
+    return _resume_ineligibility(
+        out_dir,
+        completion_artifacts=("audit-report.json",),
+        reopen=reopen,
+        completed_hint=(
             "Start a new run on the same project instead: cross-run "
             "verdict reuse imports this run's verdicts at $0 and "
             "reviews only the remaining gaps."
-        )
-    if status not in RESUMABLE_STATUSES:
-        return f"run status {status!r} is not resumable"
-    if status == STATUS_RUNNING and _tool_pid_alive(meta.get("tool_pid")):
-        return (
-            "run is still in flight (recorded worker process is "
-            "alive) — resuming now would double-drive it. Wait for "
-            "it to stop, or kill it first."
-        )
-    return None
+        ),
+        contradiction_example=(
+            " (e.g. a mapping-phase lifecycle complete on the audit "
+            "dir)"
+        ),
+    )
 
 
 # ── Staleness gate ───────────────────────────────────────────────────
@@ -178,14 +152,13 @@ def compute_drift(
     Returns ``(drifted, checked)`` where *checked* counts the entries
     that carried a verifiable ``source_hash``. Uses the same span
     hashing as the cross-run reuse fold (``core.staleness.hash_spans``,
-    common-prefix comparison), so the resume gate and the in-run fold
-    can never disagree about what "changed" means.
+    common-prefix comparison — via :func:`core.run.resume.spans_drift`),
+    so the resume gate and the in-run fold can never disagree about
+    what "changed" means.
 
     Error verdicts are skipped (they are retried, not reused); entries
     without a recorded hash cannot be verified and are not counted.
     """
-    from core.staleness import hash_spans
-
     from .journal import latest_entries
 
     by_file: dict[str, list[Any]] = {}
@@ -196,37 +169,30 @@ def compute_drift(
             continue
         by_file.setdefault(entry.file, []).append(entry)
 
-    drifted: list[DriftItem] = []
-    checked = 0
-    target_path = Path(target_path)
-    for file_path, entries in sorted(by_file.items()):
-        resolved = _safe_target_join(target_path, file_path)
-        spans = [
-            (e.line_start, e.line_end or e.line_start) for e in entries
-        ]
-        if resolved is None or not resolved.is_file():
-            current_hashes = [""] * len(entries)
-        else:
-            current_hashes = hash_spans(resolved, spans)
-        for entry, current in zip(entries, current_hashes):
-            checked += 1
-            stored = entry.source_hash
-            if not current or current[:len(stored)] != stored[:len(current)]:
-                drifted.append(DriftItem(
-                    file=entry.file,
-                    function=entry.function,
-                    stored_hash=stored,
-                    current_hash=current,
-                ))
-    return drifted, checked
-
-
-def _safe_target_join(target_path: Path, rel: str) -> Path | None:
-    """Join a journal-recorded relative path under the target root,
-    refusing traversal — journal files are run artifacts, not trusted
-    path input. Same helper the reuse fold uses."""
-    from ._util import safe_join
-    return safe_join(target_path, rel)
+    records = [
+        SpanDriftRecord(
+            file=entry.file,
+            label=entry.function,
+            stored_hash=entry.source_hash,
+            line_start=entry.line_start,
+            line_end=entry.line_end or entry.line_start,
+        )
+        for _file, entries in sorted(by_file.items())
+        for entry in entries
+    ]
+    drifted, checked = spans_drift(Path(target_path), records)
+    return (
+        [
+            DriftItem(
+                file=d.file,
+                function=d.label,
+                stored_hash=d.stored_hash,
+                current_hash=d.current_hash,
+            )
+            for d in drifted
+        ],
+        checked,
+    )
 
 
 # ── Budget math ──────────────────────────────────────────────────────
@@ -238,35 +204,6 @@ def load_prior_cost_breakdown(out_dir: Path) -> dict[str, Any] | None:
         return None
     data = load_json(path, max_bytes=_RUN_CONFIG_MAX_BYTES)
     return data if isinstance(data, dict) else None
-
-
-#: Per-value ceiling on any single spend-evidence figure read from
-#: run-dir JSON. Orders of magnitude above any real run's spend, so it
-#: never clips genuine evidence — its job is keeping the budget math
-#: finite, not modelling budgets.
-_MAX_SPEND_EVIDENCE_USD = 1e7
-
-
-def _spend_value(value: Any) -> float | None:
-    """A finite, bounded, non-negative spend figure from run-dir JSON
-    evidence — ``None`` for non-numeric shapes.
-
-    All three prior-spend evidence sources (reconciled ledger, journal
-    ``cost_usd`` rows, ``spend-floor.json``) live inside the sandbox-
-    writable run dir. A planted ``1.6e308`` summed to ``inf``, and a
-    booked ``inf`` reported the run's budget as exhausted on every
-    later resume while the floor writer detonated on the encoder's
-    non-finite refusal. Clamps keep the fail direction refuse-to-spend
-    without granting the writer anything a plain forged number would
-    not: an overclaim (``inf``/oversize) clamps to the ceiling, an
-    underclaim (``-inf``/``NaN``/negative) clamps to $0.
-    """
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return None
-    v = float(value)
-    if not math.isfinite(v):
-        v = _MAX_SPEND_EVIDENCE_USD if v > 0 else 0.0
-    return min(max(0.0, v), _MAX_SPEND_EVIDENCE_USD)
 
 
 def booked_spend_usd(breakdown: dict[str, Any] | None) -> float:
@@ -313,63 +250,6 @@ def journal_spend_usd(out_dir: Path) -> float:
     return total
 
 
-SPEND_FLOOR_FILENAME = "spend-floor.json"
-
-
-def persist_spend_floor(
-    out_dir: Path,
-    spend_usd: float,
-    segment: int | None = None,
-) -> None:
-    """Atomically persist an incremental whole-run spend floor.
-
-    ``cost-breakdown.json`` is only written at reconciliation/salvage,
-    so a segment killed hard (SIGKILL, OOM) booked $0 and the next
-    segment's remaining budget overspent the cap by the dead segment's
-    whole spend. This sidecar is updated cheaply during the run; the
-    resume budget math takes ``max(reconciled ledger, journal floor,
-    spend floor)``.
-
-    Monotonic: never lowers the recorded figure (a resumed segment's
-    ledger starts below the whole-run floor until it re-books the
-    prior segments).
-
-    Single-writer assumption: the read-compare-write below is not
-    atomic ACROSS processes — two concurrent writers could interleave
-    and let the lower figure land last. The orchestrator runs one
-    segment per run directory at a time (resume replaces, never
-    overlaps), so within that contract the file write itself being
-    atomic (save_json tempfile+rename) is sufficient; no locking
-    machinery here.
-    """
-    out_dir = Path(out_dir)
-    if not out_dir.is_dir():
-        return
-    clamped = _spend_value(spend_usd)
-    if clamped is None:
-        return
-    spend_usd = clamped
-    if spend_usd <= spend_floor_usd(out_dir):
-        return
-    payload: dict[str, Any] = {"spend_usd": round(spend_usd, 6)}
-    if segment is not None:
-        payload["segment"] = segment
-    path = out_dir / SPEND_FLOOR_FILENAME
-    save_json(path, payload)
-
-
-def spend_floor_usd(out_dir: Path) -> float:
-    """The persisted incremental spend floor, $0 when absent/corrupt."""
-    path = Path(out_dir) / SPEND_FLOOR_FILENAME
-    if not path.is_file():
-        return 0.0
-    data = load_json(path, max_bytes=_RUN_CONFIG_MAX_BYTES)
-    if not isinstance(data, dict):
-        return 0.0
-    spend = _spend_value(data.get("spend_usd"))
-    return 0.0 if spend is None else spend
-
-
 def resolve_prior_spend(out_dir: Path) -> tuple[float, str]:
     """Resolve the whole-run spend booked by all prior segments.
 
@@ -401,48 +281,22 @@ def resolve_prior_spend(out_dir: Path) -> tuple[float, str]:
     ledger = booked_spend_usd(breakdown)
     journal = journal_spend_usd(out_dir)
     floor = spend_floor_usd(out_dir)
-    booked = max(ledger, journal, floor)
-    if breakdown is not None and ledger >= journal and ledger >= floor:
-        note = "reconciled ledger"
-    elif journal >= floor:
-        note = (
-            "journal per-entry floor — exceeds the reconciled ledger"
-            if breakdown is not None
-            else "journal per-entry floor — the run died before its "
-                 "first ledger reconciliation"
-        )
-    else:
-        note = (
-            "incremental spend floor — the prior segment died before "
-            "its ledger reconciliation"
-        )
-    return booked, note
-
-
-#: Effective cap handed to the pipeline when the remaining budget is
-#: zero or negative: small enough that the reservation gate refuses
-#: every LLM call, while the $0 verdict re-import, the mechanical
-#: passes, and the final report still run.
-EXHAUSTED_BUDGET_EPSILON_USD = 1e-6
-
-
-def remaining_budget_usd(
-    original_cap: float | None,
-    booked: float,
-) -> float | None:
-    """Remaining budget = original cap minus booked spend.
-
-    ``None`` (no cap) stays ``None``. A fully-consumed cap returns
-    :data:`EXHAUSTED_BUDGET_EPSILON_USD` rather than 0/negative —
-    ``max_cost_usd=0`` reads as "no cap" throughout the orchestrator,
-    which would be the exact opposite of the operator's intent.
-    """
-    if original_cap is None:
-        return None
-    remaining = float(original_cap) - max(0.0, booked)
-    if remaining <= 0:
-        return EXHAUSTED_BUDGET_EPSILON_USD
-    return remaining
+    journal_note = (
+        "journal per-entry floor — exceeds the reconciled ledger"
+        if breakdown is not None
+        else "journal per-entry floor — the run died before its "
+             "first ledger reconciliation"
+    )
+    evidence: list[tuple[float, str]] = []
+    if breakdown is not None:
+        evidence.append((ledger, "reconciled ledger"))
+    evidence.append((journal, journal_note))
+    evidence.append((
+        floor,
+        "incremental spend floor — the prior segment died before "
+        "its ledger reconciliation",
+    ))
+    return max_of_evidence(evidence)
 
 
 # ── Resume markers ───────────────────────────────────────────────────
