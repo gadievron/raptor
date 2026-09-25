@@ -102,6 +102,15 @@ class PeerEvidence:
     exhibits: list[PeerExhibit] = field(default_factory=list)
     contract_source: str = "none"
     provenance: str = ""  # e.g. "iris_spec:xref_backed", "wur:harvested"
+    #: Similarity-weighted membership (clone-family formation): the
+    #: weighted family size / weighted conformer mass. OPTIONAL and
+    #: unset today — no producer emits them yet; the fields exist so
+    #: readers never misread the integer ``n``/``conforming`` as the
+    #: basis of a weighted ratio once a weighting layer lands.
+    #: Serialization is additive (emitted only when set) and readers
+    #: must tolerate their absence.
+    weighted_n: float | None = None
+    weighted_conforming: float | None = None
 
     def __post_init__(self) -> None:
         if len(self.exhibits) > MAX_EXHIBITS:
@@ -115,6 +124,18 @@ class PeerEvidence:
     def rule_id(self) -> str:
         return rule_id(self.dimension, detection=not self.registry_grade)
 
+    @property
+    def score(self) -> float:
+        """Lead-strength ranking score: the Wilson lower bound of
+        ``conforming / n`` — a monotone shrinkage score for small-N
+        ranking, NOT a confidence claim (family members are
+        copy-paste-correlated and the census is exhaustive; see
+        :mod:`core.audit.consistency_stats`). Computed from the
+        integer fields even when the weighted fields are set —
+        weighted scoring waits for a producer of the weights."""
+        from .consistency_stats import lead_strength_score
+        return lead_strength_score(self.conforming, self.n)
+
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
             "kind": "peer_evidence",
@@ -124,6 +145,7 @@ class PeerEvidence:
             "n": self.n,
             "conforming": self.conforming,
             "ratio": round(self.ratio, 3),
+            "score": round(self.score, 4),
             "exhibits": [e.to_dict() for e in self.exhibits],
             "contract_source": self.contract_source,
             "provenance": self.provenance,
@@ -131,4 +153,8 @@ class PeerEvidence:
         }
         if self.deviant is not None:
             d["deviant"] = self.deviant.to_dict()
+        if self.weighted_n is not None:
+            d["weighted_n"] = round(self.weighted_n, 3)
+        if self.weighted_conforming is not None:
+            d["weighted_conforming"] = round(self.weighted_conforming, 3)
         return d
