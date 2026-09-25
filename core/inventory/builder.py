@@ -69,7 +69,10 @@ from .languages import (
     refine_language,
 )
 from .module_load_abort import detect_module_load_abort
-from .script_handler import stamp_script_handler_items
+from .script_handler import (
+    reconcile_interstitial_items,
+    stamp_script_handler_items,
+)
 from .translation_view import detect_macro_call_targets, preprocess_view
 
 logger = logging.getLogger(__name__)
@@ -1884,7 +1887,13 @@ def _process_single_file(
                 # match would otherwise skip the parse indefinitely:
                 # a pre-stamp entry, a tampered stamp on an unchanged
                 # file, and a stale verdict from an older classifier
-                # would all persist forever. Same for the span hashes
+                # would all persist forever. Interstitial GEOMETRY is
+                # reconciled first: the stamp re-derivation slices by
+                # the recorded span, so a shifted span would classify
+                # the wrong bytes — the geometry is line arithmetic
+                # over the record's other items (no parse), and a
+                # cached set that disagrees with the content-derived
+                # one is replaced loudly. Same for the span hashes
                 # of stamped handler spans (the pre-stamp hasher
                 # skipped every interstitial): the function-level diff
                 # needs them, and hashing the identical content now
@@ -1892,6 +1901,9 @@ def _process_single_file(
                 # like the fresh-parse hasher below.
                 items_list = old_entry.get('items')
                 if isinstance(items_list, list):
+                    reconcile_interstitial_items(
+                        items_list, language, content,
+                    )
                     stamp_script_handler_items(
                         items_list, language, content,
                     )

@@ -331,3 +331,153 @@ class TestStampLineModel:
         planted = stamp_map("planted.php")
         assert stamp_map("clean.php") == planted
         assert True in planted.values()  # non-vacuous: handler present
+
+
+def _interstitial_state(items: list[dict]) -> dict[str, tuple]:
+    return {
+        it["name"]: (it["line_start"], it["line_end"],
+                     it.get(SCRIPT_HANDLER_FIELD), it.get("span_hash"))
+        for it in _interstitials(items)
+    }
+
+
+class TestSpanReconciliation:
+    """SHA-reuse span self-healing. The stamp re-derivation slices by
+    the item's recorded line_start/line_end — sibling coordinates in
+    the same writable checklist — so a shifted span would make the
+    heal classify wiring-only bytes and durably stamp a real handler
+    span False. The reuse path re-derives the interstitial GEOMETRY
+    from content first (line arithmetic over the record's other
+    items, no parse): tampered spans heal loudly, legitimate reuse
+    keeps every item byte-identical."""
+
+    def test_sha_reuse_heals_tampered_spans(self, tmp_path):
+        target = _write_tree(tmp_path)
+        out = tmp_path / "out"
+        inv = build_inventory(str(target), str(out))
+        truth = _interstitial_state(_items_by_file(inv)["handler.php"])
+        assert any(state[2] is True for state in truth.values())
+
+        # Shift the True-stamped span onto the wiring-only
+        # require_once line (5): at BASE behaviour the re-derivation
+        # would slice line 5, stamp False, and every consumer follows.
+        ck_path = out / "checklist.json"
+        ck = json.loads(ck_path.read_text())
+        shifted = 0
+        for f in ck.get("files", []):
+            if f.get("path") != "handler.php":
+                continue
+            for it in f.get("items", []):
+                if (it.get("kind") == "interstitial"
+                        and it.get(SCRIPT_HANDLER_FIELD) is True):
+                    it["line_start"] = it["line_end"] = 5
+                    it.pop("span_hash", None)
+                    shifted += 1
+        assert shifted
+        ck_path.write_text(json.dumps(ck))
+
+        healed = build_inventory(str(target), str(out))
+        assert _interstitial_state(
+            _items_by_file(healed)["handler.php"]) == truth
+
+    def test_sha_reuse_backfills_missing_interstitials(self, tmp_path):
+        # A record written before the interstitial layer existed never
+        # re-parses on the SHA fast path — the geometry backfills from
+        # content the same way (the carried-gap rule).
+        target = _write_tree(tmp_path)
+        out = tmp_path / "out"
+        inv = build_inventory(str(target), str(out))
+        truth = _interstitial_state(_items_by_file(inv)["handler.php"])
+
+        ck_path = out / "checklist.json"
+        ck = json.loads(ck_path.read_text())
+        for f in ck.get("files", []):
+            if f.get("path") == "handler.php":
+                f["items"] = [it for it in f.get("items", [])
+                              if it.get("kind") != "interstitial"]
+        ck_path.write_text(json.dumps(ck))
+
+        healed = build_inventory(str(target), str(out))
+        assert _interstitial_state(
+            _items_by_file(healed)["handler.php"]) == truth
+
+    def test_legitimate_reuse_is_byte_identical_and_parse_free(
+            self, tmp_path, monkeypatch):
+        target = _write_tree(tmp_path)
+        out = tmp_path / "out"
+        inv = build_inventory(str(target), str(out))
+        before = {f["path"]: f.get("items") for f in inv["files"]}
+
+        # The reconciliation is line arithmetic only — an unchanged
+        # tree must take the SHA-reuse path without any re-parse.
+        def _no_parse(*_a, **_k):
+            raise AssertionError("reuse path re-parsed a file")
+
+        import core.inventory.builder as builder_mod
+        monkeypatch.setattr(builder_mod, "extract_items", _no_parse)
+        reused = build_inventory(str(target), str(out))
+        after = {f["path"]: f.get("items") for f in reused["files"]}
+        for path in ("handler.php", "wiring.php"):
+            assert after[path] == before[path]
+
+    def test_reconcile_replaces_shifted_spans_loudly(self, caplog):
+        import logging
+
+        from core.inventory.script_handler import (
+            reconcile_interstitial_items,
+        )
+        items = [
+            {"kind": "function", "name": "f",
+             "line_start": 3, "line_end": 5},
+            {"kind": "interstitial", "name": "interstitial:6-7",
+             "line_start": 2, "line_end": 2,  # shifted
+             SCRIPT_HANDLER_FIELD: False, "span_hash": "0" * 12},
+        ]
+        content = ("<?php\ninclude 'a.php';\nfunction f($v) {\n"
+                   "  return $v;\n}\n$c = $_POST['cmd'];\nsystem($c);\n")
+        with caplog.at_level(
+                logging.WARNING, logger="core.inventory.script_handler"):
+            changed = reconcile_interstitial_items(items, "php", content)
+        assert changed is True
+        assert any("interstitial spans disagree" in r.message
+                   for r in caplog.records)
+        spans = sorted((it["line_start"], it["line_end"])
+                       for it in _interstitials(items))
+        assert spans == [(1, 2), (6, 7)]
+        # Replaced items carry no stale fields; the stamp pass that
+        # follows on the reuse path re-derives them.
+        assert all(SCRIPT_HANDLER_FIELD not in it and "span_hash" not in it
+                   for it in _interstitials(items))
+        # Non-interstitial items are inputs, never touched.
+        assert items[0] == {"kind": "function", "name": "f",
+                            "line_start": 3, "line_end": 5}
+
+    def test_reconcile_keeps_matching_geometry_untouched(self):
+        from core.inventory.script_handler import (
+            reconcile_interstitial_items,
+        )
+        items = [
+            {"kind": "function", "name": "f",
+             "line_start": 3, "line_end": 5},
+            {"kind": "interstitial", "name": "interstitial:1-2",
+             "line_start": 1, "line_end": 2,
+             SCRIPT_HANDLER_FIELD: False, "span_hash": "abc" * 4},
+            {"kind": "interstitial", "name": "interstitial:6-7",
+             "line_start": 6, "line_end": 7,
+             SCRIPT_HANDLER_FIELD: True, "span_hash": "def" * 4},
+        ]
+        snapshot = [dict(it) for it in items]
+        content = ("<?php\ninclude 'a.php';\nfunction f($v) {\n"
+                   "  return $v;\n}\n$c = $_POST['cmd'];\nsystem($c);\n")
+        assert reconcile_interstitial_items(items, "php", content) is False
+        assert items == snapshot
+
+    def test_reconcile_is_a_no_op_outside_script_languages(self):
+        from core.inventory.script_handler import (
+            reconcile_interstitial_items,
+        )
+        items = [{"kind": "interstitial", "name": "interstitial:9-9",
+                  "line_start": 9, "line_end": 9}]
+        snapshot = [dict(it) for it in items]
+        assert reconcile_interstitial_items(items, "c", "int x;\n") is False
+        assert items == snapshot
