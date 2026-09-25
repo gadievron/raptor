@@ -186,6 +186,7 @@ def compute_gaps(
     scope_floor: bool = True,
     own_run_reuse: bool = False,
     reuse_stats: dict | None = None,
+    seed_rereview_keys: set | None = None,
 ) -> list[dict[str, Any]]:
     """Compute the list of unreviewed functions.
 
@@ -254,6 +255,19 @@ def compute_gaps(
             ``domain_model_context`` refuse hash-verified entries) —
             unique per function — for the run summary's per-reason
             split.
+        seed_rereview_keys: ``--seed-rereview`` resolution set
+            (``make_function_key`` keys from ``core.audit.
+            hypothesis_intake.rereview_candidate_keys``). A key the
+            coverage/journal folds would have suppressed is
+            UN-suppressed — its coverage credit and any pending
+            verdict-reuse import are dropped for this computation
+            (the journal history is untouched; the fresh verdict
+            appends) and the re-emitted gap carries
+            ``seed_rereview: True`` so the orchestrator can hoist it
+            and the journal row can record the seed-forced
+            provenance. Keys that were never covered pass through
+            unchanged (they are ordinary gaps); ``None``/empty is
+            byte-identical to today's behaviour.
 
     Returns:
         List of gap dicts sorted by priority, each containing:
@@ -395,6 +409,37 @@ def compute_gaps(
         domain_ctx=domain_ctx,
         reuse_stats=reuse_stats,
     )
+    # Seed-forced re-review (--seed-rereview): drop the suppression
+    # the folds just granted for every resolved seed key, AFTER all
+    # coverage/journal/reuse folds so nothing re-covers the key. Only
+    # keys that WERE suppressed get the marker — an uncovered seed
+    # key is an ordinary gap and must stay in the ordinary buckets.
+    # Same-named items share one key, so un-suppressing re-emits
+    # every sibling at that key (over-reviewing an overload beats
+    # never re-reviewing the seeded one). The reuse_sink pop is the
+    # fresh-review guarantee: a hash-verified prior verdict must not
+    # satisfy a seed-forced re-review as a $0 import — the prior
+    # verdict stays in the journal history and the new verdict
+    # appends.
+    seed_rereview_hits: set = set()
+    for _srk in seed_rereview_keys or ():
+        _was_covered = False
+        if _srk in covered_functions:
+            covered_functions.discard(_srk)
+            _was_covered = True
+        if covered_credits.pop(_srk, None) is not None:
+            _was_covered = True
+        if reuse_sink is not None and reuse_sink.pop(_srk, None) is not None:
+            _was_covered = True
+        if _was_covered:
+            seed_rereview_hits.add(_srk)
+    if seed_rereview_hits:
+        logger.info(
+            "seed re-review: %d covered function(s) un-suppressed for "
+            "a fresh seed-forced review (prior verdicts stay in the "
+            "journal history)",
+            len(seed_rereview_hits),
+        )
     file_tool_coverage = _build_file_tool_coverage(coverage_records)
     entry_point_set = extract_context_map_set(context_map, "entry_points")
     if not entry_point_set:
@@ -708,6 +753,12 @@ def compute_gaps(
                 "sloc": sloc,
                 "metadata": metadata,
             }
+            if func_key in seed_rereview_hits:
+                # Seed-forced re-review marker: consumed by the
+                # orchestrator's pin hoist, the intake's third
+                # accounting bucket, and the journal row's
+                # provenance field.
+                gap["seed_rereview"] = True
             # Receiver-qualified display/report name. Same-named
             # methods (seven ``Null*.Scan`` in one file) are otherwise
             # indistinguishable in progress lines, journal rows, and
@@ -948,10 +999,25 @@ def hoist_pins(
         )
     if not pinned:
         return gaps
+    # Escaped AND bounded at emit: operator-typed pins are printable
+    # and short, but --seed-rereview routes CHECKLIST-derived keys
+    # (target-controlled function names) through this line — a hostile
+    # name must not flood the operator's terminal (escaping alone
+    # leaves printable length unbounded), and up to MAX_SEED_RECORDS
+    # keys can funnel into one banner, so the list is capped too.
+    from core.security.log_sanitisation import sanitise_for_terminal
+    _shown_pins = sorted(matched)
+    _PIN_LIST_CAP = 20
+    _pins_text = ", ".join(
+        sanitise_for_terminal(p, max_len=120)
+        for p in _shown_pins[:_PIN_LIST_CAP]
+    )
+    if len(_shown_pins) > _PIN_LIST_CAP:
+        _pins_text += f", … (+{len(_shown_pins) - _PIN_LIST_CAP} more)"
     logger.info(
         "--pin: %d pin(s) matched %d gap(s) hoisted to the front of "
         "the schedule: %s",
-        len(matched), len(pinned), ", ".join(sorted(matched)),
+        len(matched), len(pinned), _pins_text,
     )
     # An operator pin is an explicit review order: mark the gap so the
     # review loop's triage-skip gate cannot drop it (a pinned function
@@ -960,6 +1026,44 @@ def hoist_pins(
     for g in pinned:
         g["pinned"] = True
     return pinned + [g for g in gaps if id(g) not in pinned_ids]
+
+
+def merge_rereview_pins(
+    pins: list[str] | None,
+    gaps: list[dict[str, Any]],
+) -> list[str] | None:
+    """Operator pins plus the seed-forced re-review gaps' keys.
+
+    ``--seed-rereview`` scheduling rides :func:`hoist_pins` — the
+    SAME mechanism ``--pin`` uses (hoisted ahead of the ``--budget``
+    cut; excess beyond the budget is still cut and recorded in
+    not-attempted.json; ``pinned`` triage-skip override) — by
+    joining the marked gaps' keys to the operator's pin list. No
+    second scheduling path. On a bounded run the hoisted re-reviews
+    claim slots first, so never-reviewed gaps can be displaced —
+    consented, flag-gated spend (see the SEED_PRIORITY_BOOST
+    rationale). With no marked gaps the operator's list is returned
+    UNCHANGED (the same object), so the flag-off path is
+    byte-identical. Keys use the bare inventory spelling
+    (``file:name``), which :func:`gap_keys` always answers to.
+    """
+    extra = sorted({
+        f"{g.get('file', '')}:{g.get('name', '')}"
+        for g in gaps if g.get("seed_rereview")
+    })
+    if not extra:
+        return pins
+    merged = list(pins or [])
+    seen = set(merged)
+    merged.extend(k for k in extra if k not in seen)
+    logger.info(
+        "seed re-review: %d function(s) hoisted ahead of the "
+        "--budget cut via the pin mechanism (--pin semantics: excess "
+        "beyond the budget is still cut and recorded; fresh review, "
+        "reuse import refused)",
+        len(extra),
+    )
+    return merged
 
 
 def truncate_gaps_to_budget(
