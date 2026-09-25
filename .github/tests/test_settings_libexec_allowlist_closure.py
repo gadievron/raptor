@@ -73,13 +73,6 @@ PENDING_OPERATOR_DECISION: dict[str, str] = {
                                          "forbids manual import "
                                          "enumeration",
     "raptor-review": "audit-results navigation CLI (/review dispatch)",
-    "raptor-binary-study": "binary --study dispatch",
-    "raptor-binary-study-oneshot": "one-shot binary --study dispatch "
-                                   "(sequences raptor-ghidra import + "
-                                   "raptor-binary-study, both likewise "
-                                   "un-allowlisted today — the prompts "
-                                   "are consistent family-wide until "
-                                   "the operator grants the family)",
     "raptor-clone-repo": "hardened clone helper the oss/crash lanes "
                          "mandate over bare git clone",
     "raptor-fetch-attachment": "hardened attachment fetcher",
@@ -92,7 +85,6 @@ PENDING_OPERATOR_DECISION: dict[str, str] = {
     "raptor-study-prep": "study pipeline stage",
     "raptor-study-run": "study pipeline stage",
     "raptor-sca-run": "/sca dispatch",
-    "raptor-ghidra": "Ghidra RE bridge dispatch",
     "raptor-llm-scorecard": "/scorecard dispatch (read-only queries)",
     "raptor-smt-validate-path": "Z3 path-feasibility check (pure "
                                 "compute)",
