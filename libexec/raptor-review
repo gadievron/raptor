@@ -276,6 +276,49 @@ def _load_suppression_records(
     return records
 
 
+def _load_readjudication_records(
+    out_dir: Path | None, file: str, function: str,
+) -> list[dict]:
+    """Re-adjudication queue records for this function from
+    readjudication-queue.jsonl (core.project.readjudication).
+
+    A record means a recorded disproof at this site was contradicted
+    by a later independent signal — queued, never auto-overturned.
+    Same tolerant-reader + hostile-artifact discipline as
+    :func:`_load_suppression_records` (the queue lives in the same
+    agent-writable run dir).
+    """
+    if not out_dir:
+        return []
+    path = out_dir / "readjudication-queue.jsonl"
+    if not path.is_file():
+        return []
+    records = []
+    try:
+        import os as _os
+        import stat as _stat
+        _st = _os.stat(path)
+        if not _stat.S_ISREG(_st.st_mode) or _st.st_size > 64 * 1024 * 1024:
+            return []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = loads(line)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict) or rec.get("action") != "queued":
+                continue
+            site = rec.get("site")
+            site = site if isinstance(site, dict) else {}
+            if site.get("file") == file and site.get("function") == function:
+                records.append(rec)
+    except OSError:
+        return []
+    return records
+
+
 def _annotations_dir(out_dir: Path | None) -> Path | None:
     """Annotation base for READS — the run pin decides the project
     level (record.py's resolver, shared with the orchestrator and
@@ -410,6 +453,28 @@ def _show_function(file, function, cm, entries, index, ann_dir, args, out_dir=No
             reason = str(rec.get("reason", ""))
             if reason:
                 print(f"      {_line(reason, max_chars=160)}")
+
+    readjudication = _load_readjudication_records(out_dir, file, function)
+    if readjudication:
+        print()
+        print("  Re-adjudication queued (recorded disproof contradicted "
+              "by a later signal — nothing auto-overturned):")
+        for rec in readjudication:
+            claim = rec.get("new_claim")
+            claim = claim if isinstance(claim, dict) else {}
+            disproof = rec.get("disproof")
+            disproof = disproof if isinstance(disproof, dict) else {}
+            mech = ", ".join(str(m) for m in claim.get("mechanism") or [])
+            print(f"    new {_line(mech or '?', max_chars=80)} claim from "
+                  f"{_line(str(claim.get('source', '?')), max_chars=80)} vs "
+                  f"{_line(str(disproof.get('status', 'disproof')), max_chars=40)} from "
+                  f"{_line(str(disproof.get('source', '?')), max_chars=80)}")
+            reconsider = str(disproof.get("would_reconsider_if", ""))
+            if reconsider:
+                print(f"      would reconsider if: "
+                      f"{_line(reconsider, max_chars=160)}")
+            if rec.get("mechanism_match") is False:
+                print(f"      {_line(str(rec.get('mechanism_note', 'mechanism mismatch')), max_chars=160)}")
 
     if ann:
         print()

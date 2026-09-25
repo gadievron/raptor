@@ -370,6 +370,33 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
     if merged:
         save_json(output_dir / "findings.json", {"findings": merged})
 
+    # --- Re-adjudication queue ---
+    # The status race above deliberately lets a recorded disproof
+    # outrank a newer claim at the same key — correct for the merged
+    # VIEW, but it destroys the contradiction signal at exactly the
+    # moment it matters (a later independent scanner re-asserting a
+    # site someone ruled out). Emit the queue IN ADDITION to the fold;
+    # nothing about the merge result changes, and no verdict is ever
+    # overturned here — adjudication is a validation-lane task.
+    # Best-effort: an additive signal must never break the merge.
+    readjudication_queued = 0
+    try:
+        from core.project.readjudication import (
+            detect_project_contradictions,
+            queued_count,
+            write_queue,
+        )
+        readj_records = detect_project_contradictions(run_dirs)
+        readjudication_queued = queued_count(readj_records)
+        queue_path = write_queue(output_dir, readj_records)
+        if readjudication_queued and queue_path is not None:
+            logger.info(
+                "%d recorded disproof contradiction(s) queued for "
+                "re-adjudication → %s", readjudication_queued, queue_path,
+            )
+    except Exception:  # noqa: BLE001 — additive trail, never merge-fatal
+        logger.warning("re-adjudication detection failed", exc_info=True)
+
     # --- Re-stamp the imported-origin marker ---
     # A merged output that folds ANY imported (unsigned-archive) source
     # must itself carry the marker: the merge CLI deletes the source
@@ -527,6 +554,7 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
         "unique_vulns": vuln_count,
         "sarif_files_merged": sarif_files_merged,
         "artefacts_preserved": artefacts_preserved,
+        "readjudication_queued": readjudication_queued,
     }
 
     # Documented convention (_finding_key docstring): "N findings (M
