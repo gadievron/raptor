@@ -345,9 +345,30 @@ class TestSageHandlesFunctionLevelFindings(unittest.TestCase):
         self.assertIn("_line >= 0", src)
 
     def test_line_zero_uses_file_hash(self):
+        """line=0 findings must store a capped file-prefix hash.
+
+        The formula lives in the shared writer helper
+        (core.sage.hooks.finding_verdict_source_hash — one home for
+        both the analysis loop and the operator verdict CLI); the
+        agent must route through it, and the helper itself must hash
+        the capped file prefix for line-less findings.
+        """
         agent_py = Path(__file__).parents[3] / "packages" / "llm_analysis" / "agent.py"
         src = agent_py.read_text()
-        self.assertIn("sha256_string", src)
+        self.assertIn("finding_verdict_source_hash", src)
+
+        import hashlib
+        import tempfile
+
+        from core.sage.hooks import finding_verdict_source_hash
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "mod.py"
+            f.write_text("x = 1\n", encoding="utf-8")
+            expected = hashlib.sha256(b"x = 1\n").hexdigest()[:12]
+            self.assertEqual(
+                finding_verdict_source_hash(Path(td), "mod.py", 0),
+                expected,
+            )
 
 
 class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
