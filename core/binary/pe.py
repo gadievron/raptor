@@ -66,6 +66,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO
 
+# ONE entropy primitive repo-wide — deliberately shared with the ELF
+# tier so the number means the same thing on every facts record. Its
+# packedness-refusal rationale (entropy is a measurement, never a
+# packed/encrypted verdict) travels with it; any change to that
+# posture is amended THERE, beside is_packed.
+from core.binary.elf import _shannon_entropy
+
 logger = logging.getLogger(__name__)
 
 
@@ -175,6 +182,28 @@ _SECTION_NAME_BYTES = 8
 # trip this; the screen guards derived arithmetic and keeps the
 # per-field degradation contract airtight.
 _MAX_SEEK_OFFSET = 2**62
+# ---- Entropy caps: same values and both-direction rationale as the
+# ELF facts extractor (core.binary.elf) — the two tiers measure the
+# same fact and must degrade identically, so a consumer comparing
+# elf/pe records never reads a cap difference as a content
+# difference.
+#
+# Per-section sample window: leading bytes are representative for the
+# compressed/encrypted/code question; larger re-opens IO
+# amplification from one attacker-padded section, smaller invites a
+# low-entropy decoy prefix (which at 4 MiB costs the attacker real
+# file size). ``sampled`` on the record says exactly what was
+# measured.
+_MAX_ENTROPY_SECTION_BYTES = 4 * 1024 * 1024
+# Whole-walk IO budget across MANY large sections; lower loses
+# tail-section facts on legitimately huge binaries, higher re-opens
+# the aggregate amplification the per-section window closed.
+_MAX_ENTROPY_TOTAL_BYTES = 64 * 1024 * 1024
+# Sections measured. Real images stay two orders below; a crafted
+# table at the _MAX_SECTIONS cap would otherwise buy 4096 bounded
+# reads. The section ROW is still recorded past this — only the
+# measurement is skipped, with a marker.
+_MAX_ENTROPY_SECTIONS = 2_048
 # Data-directory entries parsed. The spec defines exactly 16;
 # NumberOfRvaAndSizes is an attacker u32, and honoring a larger
 # claim would walk header bytes past the defined table (or off the
@@ -192,6 +221,14 @@ class PeSection:
     verbatim up to the field width) — escape at render.
     ``characteristics`` is the raw u32; consumers mask what they
     need (fail open on unknown bits).
+
+    ``entropy`` is the Shannon entropy of the section's leading RAW
+    file bytes (bits per byte) — a deterministic measurement, never
+    a packedness verdict (see :func:`core.binary.elf.is_packed`'s
+    recorded refusal). ``None`` when nothing was measured (no raw
+    bytes, unreadable data, or a cap fired — the ``caps_hit``
+    markers say which). ``sampled < raw_size`` means the bounded
+    leading window was measured, not the whole section.
     """
 
     name: str
@@ -200,6 +237,8 @@ class PeSection:
     raw_size: int             # SizeOfRawData as claimed
     raw_offset: int           # PointerToRawData as claimed
     characteristics: int
+    entropy: float | None = None
+    sampled: int = 0
 
 
 @dataclass
@@ -242,6 +281,16 @@ class PeFacts:
     size_of_headers: int = 0
     declared_section_count: int = 0       # NumberOfSections as claimed
     sections: list[PeSection] = field(default_factory=list)
+    # Overlay = file bytes past the headers AND past every section's
+    # raw data, clamped to the actual file size. A claim STARTING
+    # past EOF establishes no extent; an in-file claim over-running
+    # EOF clamps to the file end — which extends the mapped region
+    # there, so a trailing overlay behind such an over-claim is
+    # masked (the claim owns those bytes as far as this fact can
+    # tell). Authenticode certificates conventionally live here.
+    overlay_present: bool = False
+    overlay_offset: int | None = None
+    overlay_size: int = 0
     caps_hit: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -510,8 +559,38 @@ def _extract_facts_stream(f: BinaryIO, file_size: int) -> PeFacts | None:
     if resolver.has_overlaps():
         caps.add("overlapping_sections")
 
+    _compute_overlay(facts, file_size)
+
     facts.caps_hit = sorted(caps)
     return facts
+
+
+def _compute_overlay(facts: PeFacts, file_size: int) -> None:
+    """Overlay presence/size: file bytes past every mapped extent.
+
+    Every contribution is clamped to ``file_size``. Precisely: a
+    raw claim STARTING past EOF (truncated / doctored image)
+    establishes no extent at all; a claim starting in-file but
+    over-running EOF clamps to the file end — which extends the
+    mapped region there, so a trailing overlay sitting behind such
+    an over-claim is masked by it (the claim owns those bytes as
+    far as this fact can tell). When NO extent is establishable at
+    all (no usable SizeOfHeaders and no in-file section data), the
+    overlay stays absent rather than declaring the whole file an
+    overlay; the optional-header / section markers already record
+    why.
+    """
+    end = 0
+    if facts.size_of_headers:
+        end = min(facts.size_of_headers, file_size)
+    for sec in facts.sections:
+        if sec.raw_size and sec.raw_offset < file_size:
+            end = max(end, min(sec.raw_offset + sec.raw_size,
+                               file_size))
+    if end and file_size > end:
+        facts.overlay_present = True
+        facts.overlay_offset = end
+        facts.overlay_size = file_size - end
 
 
 def _parse_optional_header(opt: bytes, facts: PeFacts,
@@ -586,7 +665,7 @@ def _read_section_table(
     if table_offset > _MAX_SEEK_OFFSET:
         caps.add("section_table_truncated")
         return []
-    sections: list[PeSection] = []
+    headers: list[tuple[str, int, int, int, int, int]] = []
     try:
         f.seek(table_offset)
         for _ in range(count):
@@ -602,17 +681,58 @@ def _read_section_table(
             # that is well-formed, not hostile).
             name = name_raw[:_SECTION_NAME_BYTES].split(
                 b"\x00", 1)[0].decode("utf-8", errors="replace")
-            sections.append(PeSection(
-                name=name,
-                virtual_address=virtual_address,
-                virtual_size=virtual_size,
-                raw_size=raw_size,
-                raw_offset=raw_offset,
-                characteristics=sec_characteristics,
-            ))
+            headers.append((name, virtual_address, virtual_size,
+                            raw_size, raw_offset, sec_characteristics))
     except OSError:
         # Screened-read net: keep the walked prefix, record the gap.
         caps.add("section_table_truncated")
+
+    # Second pass: measure entropy over each section's leading raw
+    # bytes, bounded by the per-section window and the whole-walk
+    # budget. The row is recorded either way — only the measurement
+    # degrades, marker-visibly.
+    sections: list[PeSection] = []
+    entropy_budget = _MAX_ENTROPY_TOTAL_BYTES
+    measured = 0
+    for (name, virtual_address, virtual_size, raw_size, raw_offset,
+         sec_characteristics) in headers:
+        entropy: float | None = None
+        sampled = 0
+        if raw_size == 0:
+            pass                    # no file bytes — nothing to measure
+        elif measured >= _MAX_ENTROPY_SECTIONS:
+            caps.add("entropy_sections_capped")
+        elif entropy_budget <= 0:
+            caps.add("entropy_budget_exhausted")
+        elif raw_offset > _MAX_SEEK_OFFSET:
+            caps.add("section_data_unreadable")
+        else:
+            data = b""
+            try:
+                f.seek(raw_offset)
+                data = f.read(min(raw_size, _MAX_ENTROPY_SECTION_BYTES,
+                                  entropy_budget))
+            except OSError:
+                # Belt-and-braces behind the offset screen: a kernel
+                # refusal costs this measurement, not the walk.
+                pass
+            if not data:
+                caps.add("section_data_unreadable")   # offset past EOF
+            else:
+                entropy_budget -= len(data)
+                entropy = _shannon_entropy(data)
+                sampled = len(data)
+                measured += 1
+        sections.append(PeSection(
+            name=name,
+            virtual_address=virtual_address,
+            virtual_size=virtual_size,
+            raw_size=raw_size,
+            raw_offset=raw_offset,
+            characteristics=sec_characteristics,
+            entropy=entropy,
+            sampled=sampled,
+        ))
     return sections
 
 

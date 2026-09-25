@@ -184,6 +184,8 @@ def build_pe(spec: PeSpec | None = None, **overrides) -> bytes:
     if len(blob) < spec.size_of_headers:
         blob += b"\x00" * (spec.size_of_headers - len(blob))
     for sec, raw_ptr, raw_size in placed:
+        if not sec.data:
+            continue        # a claim-only section places no bytes
         end = raw_ptr + len(sec.data)
         if len(blob) < end:
             blob += b"\x00" * (end - len(blob))
@@ -564,3 +566,202 @@ class TestSectionTable:
         facts = extract_pe_facts(p)
         assert facts is not None
         assert facts.sections[0].name == "\x1b[31mX"
+
+
+# ---------------------------------------------------------------------------
+# Per-section entropy — raw numbers, bounded reads, deterministic
+# ---------------------------------------------------------------------------
+
+
+class TestSectionEntropy:
+    def test_known_values(self, tmp_path):
+        p = tmp_path / "entropy.exe"
+        p.write_bytes(build_pe(_standard_spec(secs=[
+            Sec(name=b".zeros", va=0x1000, data=b"\x00" * 1024),
+            Sec(name=b".cycle", va=0x2000, data=bytes(range(256)) * 4),
+        ])))
+        facts = extract_pe_facts(p)
+        assert facts is not None
+        by_name = {s.name: s for s in facts.sections}
+        assert by_name[".zeros"].entropy == 0.0
+        assert by_name[".cycle"].entropy == 8.0
+        assert by_name[".zeros"].raw_size == 1024
+        assert by_name[".zeros"].sampled == 1024
+
+    def test_deterministic(self, tmp_path):
+        p = tmp_path / "det.exe"
+        p.write_bytes(build_pe(_standard_spec()))
+        a = extract_pe_facts(p)
+        b = extract_pe_facts(p)
+        assert a is not None and b is not None
+        assert a.sections == b.sections
+
+    def test_sample_window_recorded(self, tmp_path, monkeypatch):
+        """A section larger than the window is sampled, and the
+        record SAYS so (sampled < raw_size)."""
+        monkeypatch.setattr(pe_mod, "_MAX_ENTROPY_SECTION_BYTES", 16)
+        p = tmp_path / "window.exe"
+        p.write_bytes(build_pe(_standard_spec(secs=[
+            Sec(name=b".big", va=0x1000, data=bytes(range(256))),
+        ])))
+        facts = extract_pe_facts(p)
+        assert facts is not None
+        rec = facts.sections[0]
+        assert rec.raw_size == 256 and rec.sampled == 16
+        assert rec.entropy == 4.0                # 16 distinct bytes
+
+    def test_total_budget_capped(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pe_mod, "_MAX_ENTROPY_TOTAL_BYTES", 8)
+        p = tmp_path / "budget.exe"
+        p.write_bytes(build_pe(_standard_spec(secs=[
+            Sec(name=b".one", va=0x1000, data=b"x" * 64),
+            Sec(name=b".two", va=0x2000, data=b"y" * 64),
+        ])))
+        facts = extract_pe_facts(p)
+        assert facts is not None
+        assert "entropy_budget_exhausted" in facts.caps_hit
+        by_name = {s.name: s for s in facts.sections}
+        # The row survives; only the measurement is skipped.
+        assert by_name[".two"].entropy is None
+        assert by_name[".two"].sampled == 0
+        # The budget participates in the read bound itself: the
+        # first section is clipped to it, not read whole.
+        assert by_name[".one"].sampled == 8
+
+    def test_measured_count_capped(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pe_mod, "_MAX_ENTROPY_SECTIONS", 1)
+        p = tmp_path / "count.exe"
+        p.write_bytes(build_pe(_standard_spec(secs=[
+            Sec(name=b".one", va=0x1000, data=b"x" * 8),
+            Sec(name=b".two", va=0x2000, data=b"y" * 8),
+        ])))
+        facts = extract_pe_facts(p)
+        assert facts is not None
+        assert len(facts.sections) == 2          # rows never dropped
+        assert facts.sections[0].entropy is not None
+        assert facts.sections[1].entropy is None
+        assert "entropy_sections_capped" in facts.caps_hit
+
+    def test_raw_offset_past_eof_marked(self, tmp_path):
+        p = tmp_path / "ghost.exe"
+        p.write_bytes(build_pe(_standard_spec(secs=[
+            Sec(name=b".ghost", va=0x1000, data=b"", raw_size=64,
+                raw_ptr=0x40000000),
+            Sec(name=b".real", va=0x2000, data=b"payload!"),
+        ])))
+        facts = extract_pe_facts(p)
+        assert facts is not None
+        by_name = {s.name: s for s in facts.sections}
+        assert by_name[".ghost"].entropy is None
+        assert by_name[".real"].entropy is not None
+        assert "section_data_unreadable" in facts.caps_hit
+
+    def test_offset_screen_degrades_one_measurement(self, tmp_path,
+                                                    monkeypatch):
+        """A raw pointer past the seek screen degrades that ONE
+        measurement with a marker — the walk and the record survive.
+        (u32 fields cannot genuinely exceed 2**62, so the screen is
+        exercised by lowering it: the marker path must hold if the
+        arithmetic around it ever changes.)"""
+        monkeypatch.setattr(pe_mod, "_MAX_SEEK_OFFSET", 0x500)
+        p = tmp_path / "screen.exe"
+        p.write_bytes(build_pe(_standard_spec(secs=[
+            Sec(name=b".near", va=0x1000, data=b"payload!"),   # @0x400
+            Sec(name=b".far", va=0x2000, data=b"q" * 16,
+                raw_ptr=0x600),
+        ])))
+        facts = extract_pe_facts(p)
+        assert facts is not None
+        by_name = {s.name: s for s in facts.sections}
+        assert by_name[".near"].entropy is not None
+        assert by_name[".far"].entropy is None
+        assert "section_data_unreadable" in facts.caps_hit
+
+    def test_no_raw_bytes_is_not_a_gap(self, tmp_path):
+        """A bss-style section (VirtualSize > 0, SizeOfRawData 0)
+        occupies no file bytes — entropy None WITHOUT a marker:
+        truthful absence, not degradation."""
+        p = tmp_path / "bss.exe"
+        p.write_bytes(build_pe(_standard_spec(secs=[
+            Sec(name=b".bss", va=0x1000, data=b"", vsize=0x2000,
+                raw_size=0, raw_ptr=0),
+        ])))
+        facts = extract_pe_facts(p)
+        assert facts is not None
+        assert facts.sections[0].entropy is None
+        assert facts.sections[0].sampled == 0
+        assert "section_data_unreadable" not in facts.caps_hit
+
+
+# ---------------------------------------------------------------------------
+# Cap parity with the ELF tier
+# ---------------------------------------------------------------------------
+
+
+class TestCapParityWithElf:
+    def test_shared_bounds_match_the_elf_tier(self):
+        """The entropy caps and the seek screen are VALUE-COUPLED to
+        the ELF facts extractor: a consumer comparing elf/pe records
+        must never read a cap difference as a content difference.
+        Change both modules together, or split them here
+        deliberately with a recorded reason."""
+        from core.binary import elf as elf_mod
+        assert (pe_mod._MAX_ENTROPY_SECTION_BYTES
+                == elf_mod._MAX_ENTROPY_SECTION_BYTES)
+        assert (pe_mod._MAX_ENTROPY_TOTAL_BYTES
+                == elf_mod._MAX_ENTROPY_TOTAL_BYTES)
+        assert (pe_mod._MAX_ENTROPY_SECTIONS
+                == elf_mod._MAX_ENTROPY_SECTIONS)
+        assert pe_mod._MAX_SEEK_OFFSET == elf_mod._MAX_SEEK_OFFSET
+
+
+# ---------------------------------------------------------------------------
+# Overlay — bytes past every mapped extent
+# ---------------------------------------------------------------------------
+
+
+class TestOverlay:
+    def test_clean_image_has_no_overlay(self, tmp_path):
+        p = tmp_path / "clean.exe"
+        p.write_bytes(build_pe(_standard_spec()))
+        facts = extract_pe_facts(p)
+        assert facts is not None
+        assert facts.overlay_present is False
+        assert facts.overlay_offset is None
+        assert facts.overlay_size == 0
+
+    def test_appended_overlay_detected(self, tmp_path):
+        spec = _standard_spec(overlay=b"OVERLAY!" * 16)
+        p = tmp_path / "tail.exe"
+        p.write_bytes(build_pe(spec))
+        facts = extract_pe_facts(p)
+        assert facts is not None
+        assert facts.overlay_present is True
+        assert facts.overlay_size == 128
+        last = max(s.raw_offset + s.raw_size for s in facts.sections)
+        assert facts.overlay_offset == last
+
+    def test_sectionless_image_overlay_after_headers(self, tmp_path):
+        p = tmp_path / "hdrsonly.exe"
+        p.write_bytes(build_pe(_standard_spec(
+            secs=[], overlay=b"X" * 32)))
+        facts = extract_pe_facts(p)
+        assert facts is not None
+        assert facts.overlay_present is True
+        assert facts.overlay_offset == facts.size_of_headers
+        assert facts.overlay_size == 32
+
+    def test_raw_claim_past_eof_establishes_no_extent(self, tmp_path):
+        """A section claiming raw bytes past EOF must not turn the
+        claim into a mapped extent (which could swallow a real
+        overlay or invent a negative one)."""
+        spec = _standard_spec(secs=[
+            Sec(name=b".huge", va=0x1000, data=b"x" * 16,
+                raw_size=0x10000000),
+        ])
+        p = tmp_path / "hugeclaim.exe"
+        p.write_bytes(build_pe(spec))
+        facts = extract_pe_facts(p)
+        assert facts is not None
+        assert facts.overlay_present is False
+        assert facts.overlay_size == 0
