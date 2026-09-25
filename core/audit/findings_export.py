@@ -677,9 +677,13 @@ def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
         # tier's exposure is unchanged by admitting the sentinel: a
         # sibling-run copy of a sentinel row verifies here exactly
         # like a sibling-run copy of a ``run_id=""`` row always did,
-        # and both stay visibly install-scoped, never run-scoped.
-        # Exact match only: any other value is a run attribution and
-        # fails toward the foreign arm.
+        # and both stay visibly install-scoped, never run-scoped —
+        # the run arm below therefore refuses a run identity that
+        # EQUALS the sentinel (a run dir literally named
+        # ``cli-record`` would otherwise mint run scope for every
+        # sentinel row byte-copied into it: receipts with no marker
+        # and no count). Exact match only: any other value is a run
+        # attribution and fails toward the foreign arm.
         verified = (
             journal_mac.entry_provenance(entry)
             == journal_mac.ROW_VERIFIED
@@ -687,7 +691,8 @@ def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
         receipt_scope = None
         if not verified:
             unverified_rows += 1
-        elif run_identity and entry.run_id == run_identity:
+        elif (run_identity != RUN_ID_UNATTRIBUTED
+                and run_identity and entry.run_id == run_identity):
             receipt_scope = "run"
         elif not entry.run_id or entry.run_id == RUN_ID_UNATTRIBUTED:
             receipt_scope = "install"
