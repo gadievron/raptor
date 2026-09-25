@@ -699,7 +699,7 @@ def _sanitize_markdown(text: str) -> str:
     annotation parser would interpret as real function headings.
     """
     lines = []
-    for line in text.split("\n"):
+    for line in text.split("\n"):  # line-model: per-line prefix sanitiser; \r never inspected
         stripped = line.lstrip()
         if stripped.startswith("#"):
             line = stripped.lstrip("#").lstrip()

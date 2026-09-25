@@ -412,7 +412,7 @@ def _detect_error_conflated_with_empty(
     results: list[FailOpenPattern] = []
 
     for name, start_line, body in _extract_functions(source):
-        lines = body.split("\n")
+        lines = body.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
 
         # Pass 1: identify which line-indices are inside an except block.
         # An except block starts at an ``except ...:`` header and ends

@@ -244,7 +244,7 @@ def _blank_if0_regions(view: str) -> str:
     direction for receipt consumers). Line lengths are preserved, so
     offsets keep mapping 1:1.
     """
-    lines = view.split("\n")
+    lines = view.split("\n")  # line-model: view text derives from \n-model audit reads; lengths kept 1:1
     out: list[str] = []
     depth = 0
     for ln in lines:

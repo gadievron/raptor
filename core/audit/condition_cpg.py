@@ -833,7 +833,7 @@ def _fallback_interprocedural(
         if not lang:
             continue
 
-        for i, line in enumerate(source.split("\n"), 1):
+        for i, line in enumerate(source.split("\n"), 1):  # line-model: source_map reads are universal-newline (read_contained)
             if call_pattern.search(line):
                 guards = extract_sink_guards(
                     source, fp, sink_lines=[i],

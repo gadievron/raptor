@@ -108,7 +108,7 @@ class ExpandedView:
     errors: list = field(default_factory=list)
 
     def lines(self) -> list:
-        return self.text.split("\n") if self.text else []
+        return self.text.split("\n") if self.text else []  # line-model: cpp-emitted text is \n-model (the lexer consumes \r\n)
 
     def origin_of(self, expanded_line: int) -> tuple | None:
         """(original_file_rel, original_line) for a 1-indexed expanded
@@ -384,7 +384,7 @@ def _parse_linemarked_output(
     line_map: list = []
     cur_file: str | None = None
     cur_line = 0
-    for raw in output.split("\n"):
+    for raw in output.split("\n"):  # line-model: cpp-emitted text is \n-model (the lexer consumes \r\n)
         m = _LINEMARKER_RE.match(raw)
         if m:
             cur_line = int(m.group(1))
@@ -649,7 +649,7 @@ def recover_macro_defined_functions(
 
     # Precompute expanded-line offsets for offset → line lookup.
     line_offsets: list = [0]
-    for line in view.text.split("\n"):
+    for line in view.text.split("\n"):  # line-model: offset arithmetic over cpp-emitted \n-model text
         line_offsets.append(line_offsets[-1] + len(line) + 1)
 
     import bisect

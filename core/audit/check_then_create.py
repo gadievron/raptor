@@ -124,7 +124,7 @@ def scan_function(
     file_path: str, function: str, source: str,
 ) -> list[CheckThenCreate]:
     """Scan one Go function body for the compound."""
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     findings: list[CheckThenCreate] = []
 
     for w_idx, line in enumerate(lines):
@@ -224,7 +224,7 @@ def scan_gaps(
         le = gap.get("line_end") or ls
         if not ls:
             continue
-        body = "\n".join(text.split("\n")[ls - 1:le])
+        body = "\n".join(text.split("\n")[ls - 1:le])  # line-model: source_texts reads are universal-newline (read_contained)
         try:
             for f in scan_function(fp, gap.get("name", ""), body):
                 f.check_line += ls - 1

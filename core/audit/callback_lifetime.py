@@ -235,7 +235,7 @@ def check_safe_teardown(
     )
     free_re = _call_re(_free_names(vocab))
 
-    lines = sanitized_view(source, language="c").split("\n")
+    lines = sanitized_view(source, language="c").split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     async_lines: list[int] = []
     free_lines: list[int] = []
     # (line, column) call positions: C statements on one line execute
@@ -354,7 +354,7 @@ def check_callback_lifetime_local(
     cancel_re = _call_re(_cancel_names(vocab))
     free_re = _call_re(_free_names(vocab))
 
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
 
     registrations: list[int] = []
     frees: list[int] = []

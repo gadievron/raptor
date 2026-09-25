@@ -99,7 +99,7 @@ def scan_sync_escape(
     file_path: str, function: str, source: str,
 ) -> list[AuthWitness]:
     """Synchronized-section escape within one Java function body."""
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     findings: list[AuthWitness] = []
     for i, line in enumerate(lines):
         if not _SYNC_RE.match(line):
@@ -160,7 +160,7 @@ def scan_null_concat(
     """Nullable getter concatenated into digest material."""
     if not nullable_getters:
         return []
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     findings: list[AuthWitness] = []
     concat_vars: dict[str, tuple[int, str]] = {}
     for i, line in enumerate(lines):
@@ -242,7 +242,7 @@ def scan_gaps(
         le = gap.get("line_end") or ls
         if not ls:
             continue
-        body = "\n".join(text.split("\n")[ls - 1:le])
+        body = "\n".join(text.split("\n")[ls - 1:le])  # line-model: source_texts reads are universal-newline (read_contained)
         fn = gap.get("name", "")
         if fp not in nullable_cache:
             nullable_cache[fp] = _nullable_getters(text)

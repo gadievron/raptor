@@ -274,7 +274,7 @@ def extract_functions_from_source(source: str) -> list:
     per-function source slices without a full AST parse.
     """
     funcs: list = []
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     for m in _FUNC_DEF_RE.finditer(source):
         name = m.group("name")
         indent = len(m.group("indent"))

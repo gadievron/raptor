@@ -310,7 +310,7 @@ def _join_continuations(text: str) -> list[str]:
     """Physical lines with backslash-newline continuations joined."""
     lines: list[str] = []
     buf: list[str] = []
-    for raw in text.split("\n"):
+    for raw in text.split("\n"):  # line-model: closure text from universal-newline reads
         if raw.endswith("\\"):
             buf.append(raw[:-1])
             continue

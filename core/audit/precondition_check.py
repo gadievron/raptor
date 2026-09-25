@@ -271,7 +271,7 @@ def _extract_python_function(source: str, name: str) -> str | None:
         return None
     indent = len(m.group(1))
     start = m.start()
-    lines = source[start:].split('\n')
+    lines = source[start:].split('\n')  # line-model: read_contained universal-newline read upstream
     result = [lines[0]]
     for line in lines[1:]:
         stripped = line.lstrip()

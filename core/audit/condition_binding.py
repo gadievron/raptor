@@ -111,7 +111,7 @@ def extract_sink_arg_identifiers(
     used as arguments. This is a best-effort text extraction — for
     precise analysis, use the AST/CST layer.
     """
-    lines = source.split("\n")
+    lines = source.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
     if sink_line < 1 or sink_line > len(lines):
         return frozenset()
 
