@@ -612,6 +612,7 @@ def import_functions_analysed(
     ranges: dict[tuple, tuple],
     inventory_paths: set,
     provenance: dict[str, Any] | None = None,
+    checklist_target: str | None = None,
 ) -> int:
     """Function-level marks from a record's ``functions_analysed`` — the precise
     "this function was reviewed" signal (an operator ``--mark``, or a
@@ -619,10 +620,23 @@ def import_functions_analysed(
     ``files_examined`` (whole-file "the tool looked at this file"): marking one
     function must NOT mark the whole file. Each (file, function) is resolved to
     its inventory line range and marked with the record's tool; entries that
-    don't resolve to an inventory function are skipped. Returns the count."""
+    don't resolve to an inventory function are skipped. Returns the count.
+
+    ``checklist_target`` — the joining inventory's ``target_path``,
+    consumed by the deferred-join gate (:func:`_deferred_join_refused`):
+    a scanner-overlay record whose rows were never build-time-joined
+    may only import into the inventory of the tree it scanned, and a
+    caller that cannot supply the target refuses deferred records
+    fail-closed."""
     tool = record.get("tool")
     fa_list = record.get("functions_analysed")
     if not tool or not fa_list or not isinstance(fa_list, list):
+        return 0
+    if _deferred_join_refused(record, checklist_target):
+        logger.warning(
+            "coverage import: refusing deferred scanner-overlay join "
+            "for record %r — record target does not match (or does "
+            "not bind to) this inventory's target_path", tool)
         return 0
     stamp = _tool_stamp(
         tool, provenance, record_version=record.get("version"),
@@ -654,6 +668,45 @@ def import_functions_analysed(
     return marked
 
 
+def _deferred_join_refused(
+    record: dict[str, Any], checklist_target: str | None,
+) -> bool:
+    """Whether a scanner-overlay record's ``functions_analysed`` rows
+    must NOT join the inventory whose target is ``checklist_target``.
+
+    A ``scanner_coverage.join == "deferred"`` record carries RAW rows
+    that were never validated against any inventory (a project-less
+    scan). Joining them by name into an arbitrary checklist would let
+    a record from one tree mint marks in another project whose
+    inventory happens to share ``(file, function)`` names — so a
+    deferred join is allowed only when the record's recorded
+    ``target_path`` names the same tree as the joining checklist's,
+    and FAIL-CLOSED when either side is missing (an unbindable
+    deferred record stays unjoined; its unit accounting remains
+    visible in the --scanners view). Spelling comparison is lexical
+    (``normpath``) — both sides record resolved absolute paths at
+    write time; symlink-alias spellings of the same tree refuse, the
+    safe direction. Build-time-joined records (``join ==
+    "inventory"``) were validated against their own run's inventory
+    and pass through.
+    """
+    sc = record.get("scanner_coverage")
+    if not isinstance(sc, dict) or sc.get("join") != "deferred":
+        return False
+    have = sc.get("target_path")
+    if not (isinstance(checklist_target, str) and checklist_target
+            and isinstance(have, str) and have):
+        return True
+    import os
+    return os.path.normpath(checklist_target) != os.path.normpath(have)
+
+
+def _checklist_target(checklist: dict[str, Any]) -> str | None:
+    target = checklist.get("target_path") if isinstance(checklist, dict) \
+        else None
+    return target if isinstance(target, str) and target else None
+
+
 def import_run_dir(
     store: CoverageStore, run_dir: Path, checklist: dict[str, Any],
 ) -> int:
@@ -680,7 +733,8 @@ def import_run_dir(
         try:
             total += import_record(store, rec, total_lines, prov)
             total += import_functions_analysed(
-                store, rec, ranges, inv_paths, prov)
+                store, rec, ranges, inv_paths, prov,
+                checklist_target=_checklist_target(checklist))
         except Exception as exc:  # noqa: BLE001 — record containment boundary
             # Coverage records are run-dir JSON: the per-field
             # normalisation above covers the fields the importer
