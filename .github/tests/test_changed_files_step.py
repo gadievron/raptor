@@ -1,14 +1,18 @@
 """Simulation tests for the ``changed_files`` workflow step in
-tests.yml / codeql.yml.
+tests.yml / codeql.yml / preflight.yml.
 
-The step's push branch reads the GitHub compare API, which caps the
-``files`` array at 300 entries and silently returns the FIRST 300 for
-a bigger diff (the key stays present — it is not omitted). A truncated
-list is indistinguishable from a real one downstream, so the step
-itself must detect the cap and discard the list (→ full dispatch).
-These tests extract the step's ``run:`` script from the workflow YAML
-and execute it under bash against a stubbed ``gh``, so the guard is
-exercised as the shell code that actually ships.
+The step's push branch (tests.yml / codeql.yml) reads the GitHub
+compare API, which caps the ``files`` array at 300 entries and
+silently returns the FIRST 300 for a bigger diff (the key stays
+present — it is not omitted). A truncated list is indistinguishable
+from a real one downstream, so the step itself must detect the cap
+and discard the list (→ full dispatch). preflight.yml's variant has
+no full-dispatch fallback; instead it retries a hard ``gh api``
+failure and then fails LOUDLY — an empty file would silently skip
+every simulation leg and let the skipped-is-pass aggregate go green.
+These tests extract each step's ``run:`` script from the workflow
+YAML and execute it under bash against a stubbed ``gh``, so the
+guards are exercised as the shell code that actually ships.
 """
 
 from __future__ import annotations
@@ -36,7 +40,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _extract_changed_files_run(workflow: Path) -> str:
+def _extract_changed_files_run(
+    workflow: Path, must_contain: str = "compare",
+) -> str:
     """Pull the ``run: |`` body of the ``changed_files`` step out of a
     workflow file, without a YAML dependency (the ci_lint job installs
     only pytest)."""
@@ -71,7 +77,9 @@ def _extract_changed_files_run(workflow: Path) -> str:
             break
         body.append(ln)
     script = textwrap.dedent("\n".join(body))
-    assert "compare" in script, "extracted script lost the push branch"
+    assert must_contain in script, (
+        f"extracted script lost its {must_contain!r} branch"
+    )
     # The harness runs plain ``bash -c``; GHA injects ``-e``. Parity
     # holds only while the shipped script sets its own strictness —
     # if this line is ever dropped, the sim would keep passing while
@@ -188,6 +196,108 @@ class TestCompareCapTruncation:
         assert out_list.is_file()
         assert out_list.read_text(encoding="utf-8").strip() == ""
         assert "list=" in gh_output
+
+
+PREFLIGHT = REPO_ROOT / ".github/workflows/preflight.yml"
+
+
+def _run_preflight_step(
+    tmp_path: Path, fail_times: int, filenames: list[str],
+) -> tuple[subprocess.CompletedProcess, Path, int]:
+    """Execute preflight.yml's changed_files step against a stubbed
+    ``gh`` that fails its first *fail_times* invocations.
+
+    The step passes ``--jq`` to gh (jq runs inside gh, unlike the
+    push-branch steps that pipe raw JSON through local jq), so the
+    stub's success output is the post-filter line list. ``sleep`` is
+    stubbed to a no-op so the retry backoff doesn't cost the test
+    real seconds. Returns (process, changed-files path, gh call
+    count).
+    """
+    script = _extract_changed_files_run(PREFLIGHT, must_contain="attempt")
+    script = script.replace("/tmp/", f"{tmp_path}/scratch/")
+    (tmp_path / "scratch").mkdir()
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    response_file = tmp_path / "response.txt"
+    response_file.write_text("\n".join(filenames) + "\n", encoding="utf-8")
+    count_file = tmp_path / "gh_calls"
+    count_file.write_text("0", encoding="utf-8")
+    gh_stub = bin_dir / "gh"
+    gh_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'n=$(cat "$GH_STUB_COUNT")\n'
+        'n=$((n + 1))\n'
+        'echo "$n" > "$GH_STUB_COUNT"\n'
+        'if [ "$n" -le "$GH_STUB_FAILS" ]; then\n'
+        '  echo "stub outage" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        'cat "$GH_STUB_RESPONSE"\n',
+        encoding="utf-8",
+    )
+    gh_stub.chmod(gh_stub.stat().st_mode | stat.S_IXUSR)
+    sleep_stub = bin_dir / "sleep"
+    sleep_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    sleep_stub.chmod(sleep_stub.stat().st_mode | stat.S_IXUSR)
+
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "GH_STUB_RESPONSE": str(response_file),
+        "GH_STUB_COUNT": str(count_file),
+        "GH_STUB_FAILS": str(fail_times),
+        "GH_TOKEN": "stub-token",
+        "REPO": "owner/repo",
+        "PR_NUMBER": "7",
+    }
+    proc = subprocess.run(
+        ["bash", "-c", script],
+        env=env, capture_output=True, text=True, timeout=60,
+    )
+    out_list = tmp_path / "scratch" / "changed_files.txt"
+    calls = int(count_file.read_text(encoding="utf-8"))
+    return proc, out_list, calls
+
+
+class TestPreflightRetryLoop:
+    def test_first_attempt_success(self, tmp_path):
+        proc, out_list, calls = _run_preflight_step(
+            tmp_path, fail_times=0,
+            filenames=["core/pkg/tests/test_a.py"],
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert calls == 1
+        assert out_list.read_text(encoding="utf-8").splitlines() == [
+            "core/pkg/tests/test_a.py",
+        ]
+
+    def test_transient_failures_are_retried(self, tmp_path):
+        proc, out_list, calls = _run_preflight_step(
+            tmp_path, fail_times=2,
+            filenames=["core/pkg/tests/test_a.py"],
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert calls == 3
+        assert "retrying" in proc.stdout
+        assert out_list.read_text(encoding="utf-8").splitlines() == [
+            "core/pkg/tests/test_a.py",
+        ]
+
+    def test_total_failure_refuses_loudly(self, tmp_path):
+        # An exhausted retry loop must FAIL the step — an empty
+        # changed-file list would make preflight_scope skip every
+        # simulation leg and the skipped-is-pass aggregate go green
+        # on no data.
+        proc, _out_list, calls = _run_preflight_step(
+            tmp_path, fail_times=3,
+            filenames=["core/pkg/tests/test_a.py"],
+        )
+        assert proc.returncode != 0
+        assert calls == 3
+        assert "::error::" in proc.stdout
+        assert "refusing to skip" in proc.stdout
 
 
 class TestRenameCompanionsDontCountTowardCap:
