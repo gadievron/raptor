@@ -406,6 +406,7 @@ class TestTuningFrozen(unittest.TestCase):
             codeql_max_disk_cache_mb=0,
             joern_enabled=True,
             joern_heap_mb=2048,
+            joern_heap_ceiling_mb=65536,
             joern_cpg_timeout_s=300,
             joern_query_timeout_s=300,
             max_semgrep_workers=4, max_codeql_workers=2,
@@ -448,3 +449,147 @@ class TestJoernHeapDeadZone:
 
     def test_floor_untouched(self, monkeypatch):
         assert self._heap_for_total(1024, monkeypatch) == 1024
+
+
+class TestJoernHeapCeiling:
+    """The heap ceiling caps the DERIVED heap; explicit values pass."""
+
+    def _load(self, tmp_path, monkeypatch, config, total_mb):
+        import core.tuning as t
+        monkeypatch.setattr(t, "_detect_total_ram_mb", lambda: total_mb)
+        path = tmp_path / "tuning.json"
+        path.write_text(json.dumps(config))
+        return t.load_tuning(path)
+
+    def test_ceiling_default_is_min_quarter_ram_64g(self, monkeypatch):
+        import core.tuning as t
+        monkeypatch.setattr(t, "_detect_total_ram_mb", lambda: 495 * 1024)
+        assert t._detect_joern_heap_ceiling_mb() == 64 * 1024
+        monkeypatch.setattr(t, "_detect_total_ram_mb", lambda: 64 * 1024)
+        assert t._detect_joern_heap_ceiling_mb() == 16 * 1024
+
+    def test_auto_heap_capped_at_default_ceiling(self, tmp_path, monkeypatch):
+        # 25% of 495 GiB ≈ 124 GiB raw derivation — the very heap the
+        # ceiling exists to stop on a fresh install.
+        t = self._load(tmp_path, monkeypatch, {}, total_mb=495 * 1024)
+        assert t.joern_heap_mb == 64 * 1024
+        assert t.joern_heap_ceiling_mb == 64 * 1024
+
+    def test_auto_heap_below_ceiling_untouched(self, tmp_path, monkeypatch):
+        t = self._load(tmp_path, monkeypatch, {}, total_mb=64 * 1024)
+        assert t.joern_heap_mb == 16 * 1024
+
+    def test_explicit_heap_never_capped(self, tmp_path, monkeypatch):
+        t = self._load(
+            tmp_path, monkeypatch,
+            {"joern_heap_mb": 126 * 1024}, total_mb=495 * 1024,
+        )
+        assert t.joern_heap_mb == 126 * 1024
+
+    def test_explicit_ceiling_caps_auto_heap(self, tmp_path, monkeypatch):
+        t = self._load(
+            tmp_path, monkeypatch,
+            {"joern_heap_ceiling_mb": 8192}, total_mb=495 * 1024,
+        )
+        assert t.joern_heap_mb == 8192
+
+    def test_ceiling_in_dead_zone_clamps_down(self, tmp_path, monkeypatch):
+        # A capped heap in the compressed-oops dead zone is strictly
+        # worse than the 31 GiB compressed maximum.
+        t = self._load(
+            tmp_path, monkeypatch,
+            {"joern_heap_ceiling_mb": 40 * 1024}, total_mb=495 * 1024,
+        )
+        assert t.joern_heap_mb == 31 * 1024
+
+    def test_invalid_heap_falls_back_to_capped_auto(self, tmp_path, monkeypatch):
+        t = self._load(
+            tmp_path, monkeypatch,
+            {"joern_heap_mb": -5}, total_mb=495 * 1024,
+        )
+        assert t.joern_heap_mb == 64 * 1024
+
+    def test_derived_flag_tracks_heap_provenance(self, tmp_path, monkeypatch):
+        # Limit-raising consumers key on this flag: an explicit heap
+        # is an operator assertion, honored both directions.
+        auto = self._load(tmp_path, monkeypatch, {}, total_mb=64 * 1024)
+        assert auto.joern_heap_mb_derived is True
+        explicit = self._load(
+            tmp_path, monkeypatch,
+            {"joern_heap_mb": 2048}, total_mb=64 * 1024,
+        )
+        assert explicit.joern_heap_mb_derived is False
+
+
+class TestDerivedCpgTimeout:
+    """SLOC-derived CPG-build timeout curve and the auto sentinel."""
+
+    def test_auto_resolves_to_derived_sentinel(self, tmp_path):
+        from core.tuning import JOERN_CPG_TIMEOUT_DERIVED, load_tuning
+        path = tmp_path / "tuning.json"
+        path.write_text(json.dumps({"joern_cpg_timeout_s": "auto"}))
+        t = load_tuning(path)
+        assert t.joern_cpg_timeout_s == JOERN_CPG_TIMEOUT_DERIVED
+
+    def test_default_is_auto_sentinel(self, tmp_path):
+        from core.tuning import JOERN_CPG_TIMEOUT_DERIVED, load_tuning
+        path = tmp_path / "tuning.json"
+        path.write_text("{}")
+        assert load_tuning(path).joern_cpg_timeout_s == JOERN_CPG_TIMEOUT_DERIVED
+
+    def test_static_value_unchanged(self, tmp_path):
+        from core.tuning import load_tuning
+        path = tmp_path / "tuning.json"
+        path.write_text(json.dumps({"joern_cpg_timeout_s": 7200}))
+        assert load_tuning(path).joern_cpg_timeout_s == 7200
+
+    def test_curve_floor(self):
+        from core.tuning import derive_joern_cpg_timeout_s
+        assert derive_joern_cpg_timeout_s(10_000) == 300
+
+    def test_curve_calibration_point_has_slack(self):
+        from core.tuning import derive_joern_cpg_timeout_s
+        # The measured 2,849 s build must clear its own derived wall.
+        derived = derive_joern_cpg_timeout_s(3_000_000)
+        assert derived >= 2 * 2849
+        assert derived <= 14400
+
+    def test_curve_cap(self):
+        from core.tuning import derive_joern_cpg_timeout_s
+        assert derive_joern_cpg_timeout_s(40_000_000) == 14400
+
+    def test_unknown_scope_fallback(self):
+        from core.tuning import derive_joern_cpg_timeout_s
+        assert derive_joern_cpg_timeout_s(None) == 1800
+        assert derive_joern_cpg_timeout_s(0) == 1800
+
+    def test_knowably_undersized_cap_warns(self, caplog):
+        # When even the PRE-slack estimate exceeds the cap, the
+        # capped wall is knowably undersized — say so at derivation
+        # time so the operator can act before paying it.
+        import logging
+        from core.tuning import derive_joern_cpg_timeout_s
+        with caplog.at_level(logging.WARNING, logger="core.tuning"):
+            assert derive_joern_cpg_timeout_s(38_000_000) == 14400
+        assert "likely undersized" in caplog.text
+
+    def test_in_cap_scopes_do_not_warn(self, caplog):
+        import logging
+        from core.tuning import derive_joern_cpg_timeout_s
+        with caplog.at_level(logging.WARNING, logger="core.tuning"):
+            derive_joern_cpg_timeout_s(3_000_000)
+            # Slack-capped but raw estimate inside the cap: the wall
+            # still carries real headroom, no advisory.
+            derive_joern_cpg_timeout_s(10_000_000)
+        assert not caplog.records
+
+    def test_derived_max_helpers(self, tmp_path, monkeypatch):
+        import core.tuning as t
+        assert t.derived_max_joern_cpg_timeout_s() == 14400
+        monkeypatch.setattr(t, "_detect_total_ram_mb", lambda: 495 * 1024)
+        path = tmp_path / "tuning.json"
+        path.write_text("{}")
+        monkeypatch.setattr(t, "_TUNING_PATH", path)
+        monkeypatch.setattr(t, "_cached", None)
+        monkeypatch.setattr(t, "_cached_stat", None)
+        assert t.derived_max_joern_heap_mb() == 64 * 1024
