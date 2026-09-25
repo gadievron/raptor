@@ -485,7 +485,10 @@ finding it was collapsed into, and is counted separately in every
 report surface ("N findings + M recovered checkpoint verdicts") —
 never blended into the scanner's own findings count (in `/agentic`
 scan metrics, `total_findings` counts scanner findings only; recovered
-verdicts ride their own key).  Recovery is best-effort and bounded:
+verdicts ride their own key, and `artifact_findings_total` carries the
+row count of `openant_findings.json` as written — the sum of the two —
+for consumers reconciling against the artifact file).  Recovery is
+best-effort and bounded:
 missing or drifted artifacts degrade to zero recovered records with a
 warning, never a failed run, and record volume is hard-capped per run
 (500) with the truncation stated loudly — the artifacts are written by
