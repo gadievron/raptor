@@ -1843,12 +1843,22 @@ def _build_covered_set(
         # here would suppress exactly the functions fuzzing proved live.
         if category_of(record.get("tool", "")) == CATEGORY_RUNTIME:
             continue
-        # ``or {}`` guards (store.py's normalise pattern): coverage
-        # records are on-disk JSON, and one degenerate record with a
-        # null ``files``/``functions`` value must degrade to "no
-        # coverage from this record", not crash gap computation.
-        for file_path, file_data in (record.get("files") or {}).items():
-            for func_name in (file_data or {}).get("functions") or {}:
+        # isinstance guards at every level: coverage records are
+        # on-disk JSON, and the containers are as forgeable as the
+        # values — a LIST ``files`` passed the old ``or {}`` null
+        # screen and crashed the fold on ``.items()`` (an AttributeError
+        # a child-plantable record turned into a gap-computation DoS);
+        # same for a list ``file_data`` / non-dict ``functions``. Any
+        # non-dict level degrades to "no coverage from this record".
+        files = record.get("files")
+        if not isinstance(files, dict):
+            files = {}
+        for file_path, file_data in files.items():
+            funcs = (file_data.get("functions")
+                     if isinstance(file_data, dict) else None)
+            if not isinstance(funcs, dict):
+                continue
+            for func_name in funcs:
                 covered.add(make_function_key(file_path, func_name))
         # Modern per-tool records carry function-level review marks in
         # functions_analysed (operator --mark, coverage-llm.json,
