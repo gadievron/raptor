@@ -63,10 +63,37 @@ SCRIPT_HANDLER_FIELD = "script_handler"
 # ``use``/``namespace`` stay prefix-anchored: their tails are
 # compile-time-only syntax (imports incl. function/const/group forms;
 # a namespace BLOCK's body classifies independently).
+#
+# The global arm's spelling is DETERMINISTIC on purpose — this file
+# parses scanned-repo PHP, so a hostile statement must cost linear
+# time. Two ambiguities in the naive ``name (\s*,\s*name)* \s*$``
+# spelling are quadratic under backtracking and are closed here:
+#
+#   * ``\s`` and the identifier class overlap on \x85 (NEL) and \xa0
+#     (NBSP) — both Unicode whitespace AND PHP identifier bytes — so
+#     a name's trailing run could be split between the name repeat
+#     and an adjacent whitespace repeat at every position. Each
+#     name's trailing whitespace is therefore folded into ONE gated
+#     group whose first character is required and NON-identifier
+#     (``(?![\x85\xa0])\s``): the split point is unique, so a failing
+#     statement backtracks O(n), never O(n^2). Language-identical —
+#     an all-overlap trailing run is simply part of the name (both
+#     readings accepted before), and any run containing a plain
+#     whitespace char enters the gate there.
+#   * The comma list is bounded at 1000 names so the list repeat is
+#     not an unbounded quantifier adjacent to the name/whitespace
+#     repeats. Too high: none — matching stays linear regardless, the
+#     bound only caps repeat depth. Too low: a (generated) global
+#     list beyond 1000 names stops matching and the span classifies
+#     handler code — toward inclusion, a review slot spent, never a
+#     span written off.
 _PHP_WIRING_STMT_RE = re.compile(
     r"^(?:use|namespace)\b"
-    r"|^global\s+\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*"
-    r"(?:\s*,\s*\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)*\s*$"
+    r"|^global\s+"
+    r"\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*"
+    r"(?:(?![\x85\xa0])\s\s*)?"
+    r"(?:,\s*\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*"
+    r"(?:(?![\x85\xa0])\s\s*)?){0,1000}$"
     r"|^declare\s*\([^()]*\)\s*$",
 )
 _PHP_INCLUDE_KEYWORD_RE = re.compile(
@@ -117,11 +144,26 @@ class IncludeClassification(NamedTuple):
 _CONST_NAME_RE = re.compile(r"^[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*$")
 
 # PHP string-interpolation hole openers inside a double-quoted string:
-# $name, ${expr}, {$expr}.
+# $name, ${expr}, {$expr}. Scanned with finditer over hostile string
+# bodies, so every interior span is BOUNDED at 1000 chars — an
+# unbounded ``[^}]*`` re-scans the remaining body from every opener
+# position, quadratic on a body salted with openers and no closer.
+# Overflow keeps the DYNAMIC direction: an opener whose interior
+# exceeds the bound still matches as a bare ``${`` / ``{$`` hole (the
+# bounded-lookahead alternatives), so an oversized hole can never
+# make its string read as pure literal — wiring is never granted by
+# overflow. Too high: none — the per-opener cost is capped by the
+# bound either way. Too low: holes wider than the bound stop
+# swallowing their interior, so the interior's own text feeds the
+# lit/dyn split instead (census material only; the shape stays
+# dynamic). Real interpolation holes are tens of chars.
 _INTERP_VAR_RE = re.compile(
-    r"\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*(?:\[[^\]]*\]|->[A-Za-z_]\w*)?"
-    r"|\$\{[^}]*\}"
-    r"|\{\$[^}]*\}",
+    r"\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*"
+    r"(?:\[[^\]]{0,1000}\]|->[A-Za-z_]\w*)?"
+    r"|\$\{[^}]{0,1000}\}"
+    r"|\$\{(?=[^}]{1000})"
+    r"|\{\$[^}]{0,1000}\}"
+    r"|\{\$(?=[^}]{1000})",
 )
 
 
