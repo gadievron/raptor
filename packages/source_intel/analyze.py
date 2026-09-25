@@ -2644,7 +2644,7 @@ def _scan_project_alias_observations(
         if got is None:
             continue
         text = got[0]
-        file_lines = text.split("\n")
+        file_lines = text.split("\n")  # line-model: universal-newline read_text_capped above
         for family, alias_name in alias_pairs:
             # Word-boundary check; substring would risk false positives
             # on prefix-overlap (FOO_CHECK vs MUST_CHECK).
@@ -2717,7 +2717,7 @@ def _scan_alias_in_file(path: Path) -> list[AttributeEvidence]:
     text = got[0]
 
     observations: list[AttributeEvidence] = []
-    file_lines = text.split("\n")
+    file_lines = text.split("\n")  # line-model: universal-newline read_text_capped above
     for spelling in ALL_WUR_ALIASES:
         if spelling not in text:
             continue

@@ -364,7 +364,7 @@ def _count_usage(scan_roots: list[Path], names: set[str]) -> dict[str, int]:
         if got is None:
             continue
         text = got[0]
-        for line in text.split("\n"):
+        for line in text.split("\n"):  # line-model: universal-newline read_text_capped above
             # Skip lines that DEFINE one of our candidates — those
             # aren't usage, they're definition. (A define line may
             # also mention OTHER macros in its expansion; we still

@@ -427,7 +427,7 @@ def _scan_chunks(body: str) -> tuple[list[str], bool]:
     chunks: list[str] = []
     buf: list[str] = []
     buf_len = 0
-    segments = scan_body.split("\n")
+    segments = scan_body.split("\n")  # line-model: deliberate \n-only chunking matching the pattern grammar's line model (see comment above)
     lines = [
         seg + "\n" if i < len(segments) - 1 else seg
         for i, seg in enumerate(segments)

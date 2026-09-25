@@ -654,7 +654,7 @@ def _extract_redirect_blocks(
     # Per-line uses ORIGINAL body — masking doesn't help here and
     # would erase the ``${{ secrets.X }}`` content the KEY=VALUE
     # extractor needs to see.
-    for line in body.split("\n"):
+    for line in body.split("\n"):  # line-model: YAML scalar loading already normalised line breaks to \n
         if not redirect_re.search(line):
             continue
         if "<<" in line:
@@ -723,7 +723,7 @@ def _extract_envfile_multiline_writes(
     open_key: str | None = None
     close_re: re.Pattern[str] | None = None
     parts: list[str] = []
-    for line in body.split("\n"):
+    for line in body.split("\n"):  # line-model: YAML scalar loading already normalised line breaks to \n
         rm = redirect_re.search(line) or tee_re.search(line)
         if rm is None:
             # Content not written to the target — not part of the
@@ -953,7 +953,7 @@ def _strip_bash_full_line_comments(body: str) -> str:
     """
     return "\n".join(
         "" if line.lstrip().startswith("#") else line
-        for line in body.split("\n")
+        for line in body.split("\n")  # line-model: YAML scalar loading already normalised line breaks to \n
     )
 
 
