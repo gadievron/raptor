@@ -397,3 +397,25 @@ def test_allowlist_entries_still_live() -> None:
         "(fixed or drifted — remove or re-key them):\n"
         + "\n".join(sorted(stale))
     )
+
+
+def test_allowlist_entries_match_exactly_one_site() -> None:
+    """An allowlist entry is the adjudication record of ONE site. The
+    (relpath, stripped-line) key is not injective: a SECOND hazard
+    with byte-identical source text in the same file would ride the
+    existing entry straight past the unlisted check with no
+    adjudication of its own. Refuse multiplicity — the >1 direction
+    that ``test_allowlist_entries_still_live``'s ==0 staleness check
+    does not cover — so every new site earns its own entry (rework
+    the duplicate line, or route it through a hardened helper)."""
+    _found, keys = _census()
+    multi = [
+        f"{rel}: {line} (matches {keys[(rel, line)]} flagged sites)"
+        for (rel, line) in _ALLOWLIST
+        if keys[(rel, line)] > 1
+    ]
+    assert not multi, (
+        "allowlist entries matching more than one flagged site — a "
+        "site added after the entry was minted is riding another "
+        "site's adjudication:\n" + "\n".join(sorted(multi))
+    )
