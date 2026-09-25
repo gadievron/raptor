@@ -9,9 +9,11 @@ from pathlib import Path
 
 from core.inventory.include_graph import (
     ARTIFACT_NAME,
+    bootstrap_context_for_file,
     build_include_graph,
     census_qualifier,
     directly_requestable_library,
+    executed_before,
     include_facts_for_file,
     load_include_graph,
     save_include_graph,
@@ -35,7 +37,7 @@ def _php_file(path, includes=None, defines=None, guard=None):
             "items": [], "call_graph": cg}
 
 
-def _inventory(files, excluded=(), target="/t"):
+def _inventory_dict(files, excluded=(), target="/t"):
     return {
         "target_path": target,
         "parse_fingerprint": "fp-test",
@@ -45,8 +47,8 @@ def _inventory(files, excluded=(), target="/t"):
 
 
 class TestDerivation:
-    def _base_inventory(self):
-        return _inventory([
+    def _base_inventory_dict(self):
+        return _inventory_dict([
             _php_file("entry_a.php", includes=[
                 _edge(3, "require_once", "const_prefix",
                       const_name="APP_PATH", literal_tail="lib/shared.php",
@@ -64,7 +66,7 @@ class TestDerivation:
         ])
 
     def test_reverse_index_and_roles(self):
-        g = build_include_graph(self._base_inventory())
+        g = build_include_graph(self._base_inventory_dict())
         shared = g["files"]["lib/shared.php"]
         assert shared["role"] == "library"
         assert shared["includer_count"] == 2
@@ -78,12 +80,12 @@ class TestDerivation:
     def test_role_vocabulary_has_no_dual(self):
         # "dual" is a QUERY over includer-index + guard evidence,
         # never a stored label.
-        g = build_include_graph(self._base_inventory())
+        g = build_include_graph(self._base_inventory_dict())
         assert {e["role"] for e in g["files"].values()} <= {
             "library", "designed_entry"}
 
     def test_dual_is_a_query(self):
-        inv = self._base_inventory()
+        inv = self._base_inventory_dict()
         inv["files"].append(_php_file("lib/unguarded.php"))
         inv["files"][0]["call_graph"]["includes"].append(
             _edge(9, "require", "const_prefix", const_name="APP_PATH",
@@ -99,14 +101,14 @@ class TestDerivation:
             g["files"]["entry_a.php"]) is False
 
     def test_guard_evidence_carried(self):
-        g = build_include_graph(self._base_inventory())
+        g = build_include_graph(self._base_inventory_dict())
         shared = g["files"]["lib/shared.php"]
         assert shared["direct_access_guard"] is True
         assert shared["direct_access_guard_line"] == 2
         assert shared["direct_access_guard_constant"] == "IN_APP"
 
     def test_ambiguous_tail_refuses_into_census(self):
-        inv = _inventory([
+        inv = _inventory_dict([
             _php_file("entry.php", includes=[
                 _edge(3, "require", "const_prefix",
                       const_name="APP_PATH", literal_tail="dup.php"),
@@ -123,7 +125,7 @@ class TestDerivation:
         assert g["census"]["unresolved_edge_count"] == 1
 
     def test_literal_edges_resolve_via_anchored_target(self):
-        inv = _inventory([
+        inv = _inventory_dict([
             _php_file("src/entry.php", includes=[
                 _edge(2, "include", "literal", literal_tail="other.php",
                       target="src/other.php"),
@@ -136,7 +138,7 @@ class TestDerivation:
                 == "relative_literal")
 
     def test_missing_literal_target_joins_census(self):
-        inv = _inventory([
+        inv = _inventory_dict([
             _php_file("entry.php", includes=[
                 _edge(2, "include", "literal", literal_tail="gone.php",
                       target="gone.php"),
@@ -147,7 +149,7 @@ class TestDerivation:
         assert rec["reason"] == "target_missing"
 
     def test_resolution_profile_counts(self):
-        g = build_include_graph(self._base_inventory())
+        g = build_include_graph(self._base_inventory_dict())
         fs = g["resolution_profile"]["file_scope"]
         assert fs["const_prefix"] == 2
         assert fs["total"] == 2
@@ -155,7 +157,7 @@ class TestDerivation:
             "resolved_tail_unique"] == 2
 
     def test_artifact_stamps(self):
-        g = build_include_graph(self._base_inventory())
+        g = build_include_graph(self._base_inventory_dict())
         assert g["tier"] == "hint"
         assert g["producer"]["module"] == (
             "core.inventory.include_graph")
@@ -165,7 +167,7 @@ class TestDerivation:
 
 
 class TestTwoComponentCensus:
-    def _dispatcher_inventory(self, tmp_path: Path):
+    def _dispatcher_inventory_dict(self, tmp_path: Path):
         """A dynamic dispatcher whose candidates land on foreign-
         extension files the walker cannot parse — the census's
         second component."""
@@ -174,7 +176,7 @@ class TestTwoComponentCensus:
         (target / "entry.php").write_text("<?php\n")
         (target / "modules" / "one.mod").write_text("plain text\n")
         (target / "modules" / "two.mod").write_text("plain text\n")
-        inv = _inventory([
+        inv = _inventory_dict([
             _php_file("entry.php", includes=[
                 _edge(5, "require_once", "dynamic",
                       literal_stem="modules/", literal_tail=".mod",
@@ -184,7 +186,7 @@ class TestTwoComponentCensus:
         return inv, target
 
     def test_mod_shaped_unwalked_target_renders(self, tmp_path):
-        inv, target = self._dispatcher_inventory(tmp_path)
+        inv, target = self._dispatcher_inventory_dict(tmp_path)
         g = build_include_graph(inv, target_root=target)
         paths = {t["path"]: t for t in g["unwalked_targets"]}
         assert "modules/one.mod" in paths
@@ -200,7 +202,7 @@ class TestTwoComponentCensus:
             "modules/one.mod", "modules/two.mod"]
 
     def test_without_target_root_census_narrows_honestly(self, tmp_path):
-        inv, _target = self._dispatcher_inventory(tmp_path)
+        inv, _target = self._dispatcher_inventory_dict(tmp_path)
         g = build_include_graph(inv)  # inventory-only universe
         assert g["census"]["unwalked_target_count"] == 0
         assert g["census"]["unresolved_edge_count"] == 1
@@ -210,7 +212,7 @@ class TestTwoComponentCensus:
         target.mkdir()
         for i in range(40):
             (target / f"f{i}.php").write_text("<?php\n")
-        inv = _inventory([
+        inv = _inventory_dict([
             _php_file("f0.php", includes=[
                 _edge(2, "include", "dynamic", literal_tail=".php",
                       raw='"$page.php"'),
@@ -227,7 +229,7 @@ class TestTwoComponentCensus:
         (target / "skipped").mkdir(parents=True)
         (target / "entry.php").write_text("<?php\n")
         (target / "skipped" / "inner.php").write_text("<?php\n")
-        inv = _inventory([
+        inv = _inventory_dict([
             _php_file("entry.php", includes=[
                 _edge(2, "require", "const_prefix",
                       const_name="APP_PATH",
@@ -245,7 +247,7 @@ class TestTwoComponentCensus:
 
 class TestArtifactIO:
     def test_save_load_roundtrip_with_lock(self, tmp_path):
-        g = build_include_graph(_inventory([_php_file("a.php")]))
+        g = build_include_graph(_inventory_dict([_php_file("a.php")]))
         save_include_graph(tmp_path, g)
         assert (tmp_path / ARTIFACT_NAME).is_file()
         # checklist.lock discipline: the lock file is the checklist's
@@ -272,7 +274,7 @@ class TestTailAlignment:
         # unique bare-suffix match exists — and is exactly the wrong
         # thing to trust: '.conf.php' would "uniquely" hit a file
         # that merely ENDS with those bytes.
-        inv = _inventory([
+        inv = _inventory_dict([
             _php_file("entry.php", includes=[
                 _edge(3, "require", "const_prefix", const_name="C",
                       literal_tail=".conf.php"),
@@ -287,7 +289,7 @@ class TestTailAlignment:
             "unresolved_tail_unaligned"] == 1
 
     def test_aligned_tail_still_resolves(self):
-        inv = _inventory([
+        inv = _inventory_dict([
             _php_file("entry.php", includes=[
                 _edge(3, "require", "const_prefix", const_name="C",
                       literal_tail="inc/boot.php"),
@@ -303,17 +305,17 @@ class TestTruncationCensus:
     a file whose edges were capped may be missing includer
     contributions entirely, and the qualifier must say so."""
 
-    def _flood_inventory(self, truncated: bool):
+    def _flood_inventory_dict(self, truncated: bool):
         cg_edges = [_edge(1, "include", "literal",
                           literal_tail="pad.php", target="pad.php")]
         f = _php_file("flood.php", includes=cg_edges)
         if truncated:
             f["call_graph"]["includes_truncated"] = True
-        return _inventory([f, _php_file("pad.php"),
+        return _inventory_dict([f, _php_file("pad.php"),
                            _php_file("deep.php")])
 
     def test_truncated_file_joins_census_and_qualifier(self):
-        g = build_include_graph(self._flood_inventory(True))
+        g = build_include_graph(self._flood_inventory_dict(True))
         assert g["census"]["truncated_file_count"] == 1
         assert g["truncated_files"] == [
             {"path": "flood.php", "recorded_edges": 1}]
@@ -325,7 +327,7 @@ class TestTruncationCensus:
 
     def test_normal_tree_census_byte_identical(self):
         # The mechanism must not alter censuses on non-flood trees.
-        g = build_include_graph(self._flood_inventory(False))
+        g = build_include_graph(self._flood_inventory_dict(False))
         assert g["census"] == {"unresolved_edge_count": 0,
                                "unwalked_target_count": 0}
         assert "truncated_files" not in g
@@ -362,7 +364,7 @@ class TestDerivationCostBounds:
             _edge(1, "require", "const_prefix", const_name="C",
                   literal_tail="lib/only.php")]))
         files.append(_php_file("lib/only.php"))
-        inv = _inventory(files)
+        inv = _inventory_dict(files)
         t0 = time.monotonic()
         g = build_include_graph(inv)
         elapsed = time.monotonic() - t0
@@ -387,7 +389,7 @@ class TestDerivationCostBounds:
             _edge(1, "require", "const_prefix", const_name="C",
                   literal_tail="lib/only.php")]))
         files.append(_php_file("lib/only.php"))
-        inv = _inventory(files)
+        inv = _inventory_dict(files)
         t0 = time.monotonic()
         g = build_include_graph(inv)
         elapsed = time.monotonic() - t0
@@ -407,15 +409,352 @@ class TestDerivationCostBounds:
             for k in range(MAX_TREE_SCAN_EDGES_PER_RUN + 5)
         ]
         files.append(_php_file("dispatch.php", includes=edges))
-        g = build_include_graph(_inventory(files))
+        g = build_include_graph(_inventory_dict(files))
         overflowed = [r for r in g["unresolved_edges"]
                       if r.get("candidates_overflow")]
         assert len(overflowed) == 5  # past-budget edges refuse loudly
 
 
+class TestWalkIntegration:
+    """The environment walk riding the graph derivation: artifact
+    section, basis supersede, and the 1b consumer queries."""
+
+    def _inventory_dict(self):
+        def cg(includes=(), defines=(), boundaries=(),
+               parse_errors=False):
+            d = {"imports": {}, "calls": [], "indirection": [],
+                 "includes": list(includes), "defines": list(defines)}
+            if boundaries:
+                d["boundaries"] = list(boundaries)
+            if parse_errors:
+                d["parse_errors"] = True
+            return d
+
+        files = [
+            {"path": "src/e1.php", "language": "php", "sha256": "x",
+             "items": [], "call_graph": cg(
+                 includes=[_edge(3, "require_once", "const_prefix",
+                                 const_name="APP",
+                                 literal_tail="inc/gate.php")],
+                 defines=[{"line": 2, "name": "APP", "value": "../",
+                           "conditional": False, "fallback": False,
+                           "position": "file_scope"}])},
+            {"path": "src/e2.php", "language": "php", "sha256": "x",
+             "items": [], "call_graph": cg(
+                 includes=[_edge(3, "require_once", "const_prefix",
+                                 const_name="APP",
+                                 literal_tail="inc/gate.php")],
+                 defines=[{"line": 2, "name": "APP", "value": "../",
+                           "conditional": False, "fallback": False,
+                           "position": "file_scope"}])},
+            # gate has NO define (inherits) + an edge whose tail is
+            # AMBIGUOUS for the 1a suffix rule (two dup.php) but
+            # exact under the environment.
+            {"path": "inc/gate.php", "language": "php", "sha256": "x",
+             "items": [], "call_graph": cg(
+                 includes=[
+                     _edge(2, "require", "const_prefix",
+                           const_name="APP",
+                           literal_tail="lib/shared.php"),
+                     _edge(4, "require", "const_prefix",
+                           const_name="APP", literal_tail="dup.php"),
+                     _edge(6, "require", "const_prefix",
+                           const_name="APP",
+                           literal_tail="conf/.env.php"),
+                 ],
+                 boundaries=[{"line": 8,
+                              "kind": "conditional_return"}])},
+            {"path": "lib/shared.php", "language": "php",
+             "sha256": "x", "items": [], "call_graph": cg()},
+            {"path": "dup.php", "language": "php", "sha256": "x",
+             "items": [], "call_graph": cg()},
+            {"path": "a/dup.php", "language": "php", "sha256": "x",
+             "items": [], "call_graph": cg()},
+            {"path": "conf/.env.php", "language": "php",
+             "sha256": "x", "items": [], "call_graph": cg()},
+        ]
+        return _inventory_dict(files)
+
+    def test_walk_section_and_classes(self):
+        g = build_include_graph(self._inventory_dict())
+        w = g["walk"]
+        # Pass-1 candidates include the ambiguity-orphaned files; the
+        # env supersede flips them to library afterwards, so only the
+        # real entries keep classes.
+        assert w["entries_walked"] == 5
+        [cls] = [c for c in w["entry_classes"]
+                 if c["entry_count"] == 2]
+        assert set(cls["guaranteed_prefix"]) >= {
+            "inc/gate.php", "lib/shared.php", "dup.php",
+            "conf/.env.php"}
+        p = w["prefixes"]["src/e1.php"]
+        assert p["class"] == cls["class"]
+        members = {m["file"]: m for m in p["members"]}
+        assert members["lib/shared.php"]["guaranteed"] is True
+        # a file the supersede flipped to library is unclassed
+        assert w["prefixes"]["dup.php"]["class"] is None
+        assert g["files"]["dup.php"]["role"] == "library"
+
+    def test_env_supersedes_ambiguous_tail(self):
+        # 1a refused dup.php (two suffix candidates); the walk
+        # grounds it — the ref joins with basis env_resolved and the
+        # 1a census discharges that edge.
+        g = build_include_graph(self._inventory_dict())
+        refs = g["files"]["dup.php"]["included_by"]
+        assert refs and all(r["basis"] == "env_resolved" for r in refs)
+        assert g["files"]["dup.php"]["role"] == "library"
+        assert not any(
+            u.get("file") == "inc/gate.php" and u.get("line") == 4
+            for u in g["unresolved_edges"])
+        assert g["resolution_profile"]["outcomes"][
+            "env_resolved_from_census"] >= 1
+        assert g["resolution_profile"]["outcomes"][
+            "env_census_discharged"] >= 1
+
+    def test_env_resolves_dotfile_exactly(self):
+        # Prerequisite (iv): the walk closes the dotfile residue the
+        # 1a alignment rule refused.
+        g = build_include_graph(self._inventory_dict())
+        refs = g["files"]["conf/.env.php"]["included_by"]
+        assert [r["basis"] for r in refs] == ["env_resolved"]
+
+    def test_env_confirms_unique_tail_basis(self):
+        g = build_include_graph(self._inventory_dict())
+        [ref] = g["files"]["lib/shared.php"]["included_by"]
+        assert ref["basis"] == "env_resolved"  # upgraded from tail_unique
+        assert g["resolution_profile"]["outcomes"][
+            "env_confirmed_tail_basis"] >= 1
+
+    def test_executed_before_queries(self):
+        g = build_include_graph(self._inventory_dict())
+        assert executed_before(g, "src/e1.php", "lib/shared.php") is True
+        assert executed_before(g, "src/e1.php", "nope.php") is False
+        assert executed_before(g, "nope.php", "lib/shared.php") is None
+        # line-aware: gate.php's own boundary at line 8
+        assert executed_before(
+            g, "src/e1.php", "inc/gate.php", line=5) is True
+        assert executed_before(
+            g, "src/e1.php", "inc/gate.php", line=9) is False
+
+    def test_bootstrap_context_shape(self):
+        g = build_include_graph(self._inventory_dict())
+        ctx = bootstrap_context_for_file(g, "lib/shared.php")
+        assert ctx["tier"] == "hint"
+        [cls] = ctx["entry_classes"]
+        assert cls["guaranteed"] is True
+        assert cls["entry_count"] == 2
+        assert "src/e1.php" in cls["receipt"]
+        # ORDER-AWARE: dup.php is included at gate.php:4, AFTER
+        # lib/shared.php (gate.php:2) — it must NOT render as having
+        # run first. Only the gate file itself precedes.
+        assert {r["file"] for r in ctx["guaranteed_prefix"]} == {
+            "inc/gate.php"}
+        # the MANDATORY census
+        assert "unresolved_edges" in ctx["unresolved_census"]
+        assert "unwalked_targets" in ctx["unresolved_census"]
+        assert "qualifier" in ctx
+        assert ctx["invariants"] == []
+
+    def test_bootstrap_context_refuses_without_valid_census(self):
+        g = build_include_graph(self._inventory_dict())
+        g["census"] = {"unresolved_edge_count": "forged"}
+        assert bootstrap_context_for_file(g, "lib/shared.php") is None
+
+    def test_shared_prefix_intersects_ALL_classes_not_rendered_cap(self):
+        # The guaranteed-prefix intersection must run over every
+        # guaranteed-reaching class — intersecting only the rendered
+        # (capped) subset would overclaim "on every stock path".
+        g = build_include_graph(self._inventory_dict())
+        walk = g["walk"]
+        # synthesize 7 guaranteed-reaching classes; only the first
+        # shares nothing beyond "common.php"
+        walk["file_facts"]["lib/shared.php"] = {"classes": [
+            {"class": f"ec{i:08d}", "guaranteed": True,
+             "entries_reaching": 1, "receipt": f"e{i}.php -> x",
+             "preceding": (["common.php", "extra.php"]
+                           if i < 6 else ["common.php"])}
+            for i in range(7)
+        ]}
+        walk["entry_classes"] = [
+            {"class": f"ec{i:08d}", "entry_count": 1,
+             "entries": [f"e{i}.php"],
+             "guaranteed_prefix": ["common.php", "extra.php",
+                                   "lib/shared.php"]}
+            for i in range(7)
+        ]
+        ctx = bootstrap_context_for_file(g, "lib/shared.php",
+                                         max_classes=5)
+        assert ctx["entry_class_total"] == 7
+        assert len(ctx["entry_classes"]) == 5  # rendering capped
+        # extra.php is NOT shared by class 6 — must not be claimed
+        assert [r["file"] for r in ctx["guaranteed_prefix"]] == [
+            "common.php"]
+
+    def test_executed_before_unknown_for_parse_errored_member(self):
+        inv = self._inventory_dict()
+        for f in inv["files"]:
+            if f["path"] == "lib/shared.php":
+                f["call_graph"]["parse_errors"] = True
+        g = build_include_graph(inv)
+        # membership guarantee would be True, but the member's own
+        # line structure is not trustworthy — unknown, never a guess
+        assert executed_before(
+            g, "src/e1.php", "lib/shared.php") is None
+
+    def test_backslash_disagreement_never_evicts_1a_ref(self):
+        # On POSIX the literally-backslash-named file is what runs;
+        # a separator-interpretation disagreement between the lanes
+        # keeps the 1a base and censuses the disagreement.
+        inv = _inventory_dict([
+            {"path": "e.php", "language": "php", "sha256": "x",
+             "items": [], "call_graph": {
+                 "imports": {}, "calls": [], "indirection": [],
+                 "includes": [_edge(3, "include", "const_prefix",
+                                    const_name="SM",
+                                    literal_tail="x\\gate.php")],
+                 "defines": [{"line": 2, "name": "SM",
+                              "value": "lib/", "conditional": False,
+                              "fallback": False,
+                              "position": "file_scope"}]}},
+            {"path": "lib/x\\gate.php", "language": "php",
+             "sha256": "x", "items": [],
+             "call_graph": {"imports": {}, "calls": [],
+                            "indirection": [], "includes": [],
+                            "defines": []}},
+            {"path": "lib/x/gate.php", "language": "php",
+             "sha256": "x", "items": [],
+             "call_graph": {"imports": {}, "calls": [],
+                            "indirection": [], "includes": [],
+                            "defines": []}},
+        ])
+        g = build_include_graph(inv)
+        # env resolves the literal backslash file (no rewriting)
+        refs = g["files"]["lib/x\\gate.php"]["included_by"]
+        assert any(r["basis"] == "env_resolved" for r in refs)
+        # and no eviction of any surviving 1a base ever plants the
+        # forward-slash decoy
+        assert g["files"]["lib/x/gate.php"]["includer_count"] == 0
+
+    def test_bootstrap_context_census_carries_walk_truncation(self):
+        g = build_include_graph(self._inventory_dict())
+        w = g["walk"]
+        w["budget_exhausted"] = True
+        w["outcomes"]["entries_unclassed_truncated"] = 2
+        ctx = bootstrap_context_for_file(g, "lib/shared.php")
+        assert ctx["unresolved_census"]["walk_truncated_entries"] == 2
+        assert ctx["unresolved_census"]["walk_budget_exhausted"] is True
+        assert "TRUNCATED for 2 entries" in ctx["qualifier"]
+
+    def _starved_inventory_dict(self, entry_count=6):
+        # Many entries, one shared library — with a tiny statement
+        # budget only the first entry's walk completes.
+        def entry(path):
+            return {
+                "path": path, "language": "php", "sha256": "x",
+                "items": [], "call_graph": {
+                    "imports": {}, "calls": [], "indirection": [],
+                    "includes": [_edge(3, "require_once",
+                                       "const_prefix",
+                                       const_name="APP",
+                                       literal_tail="lib/shared.php")],
+                    "defines": [{"line": 2, "name": "APP",
+                                 "value": "./", "conditional": False,
+                                 "fallback": False,
+                                 "position": "file_scope"}]}}
+        files = [entry(f"e{i}.php") for i in range(1, entry_count + 1)]
+        files.append({"path": "lib/shared.php", "language": "php",
+                      "sha256": "x", "items": [],
+                      "call_graph": {"imports": {}, "calls": [],
+                                     "indirection": [], "includes": [],
+                                     "defines": []}})
+        return _inventory_dict(files)
+
+    def test_budget_exhaustion_reaches_bootstrap_via_render(
+            self, monkeypatch):
+        # THE RENDER PATH: budget_exhausted must survive the fold
+        # into the artifact's walk section — bootstrap reads the
+        # rendered section, so a hand-injected flag would not prove
+        # the plumbing.
+        import core.inventory.include_walk as iw
+        monkeypatch.setattr(iw, "MAX_WALK_STMT_VISITS", 3)
+        g = build_include_graph(self._starved_inventory_dict())
+        assert g["walk"]["budget_exhausted"] is True
+        ctx = bootstrap_context_for_file(g, "lib/shared.php")
+        assert ctx["unresolved_census"]["walk_budget_exhausted"] is True
+        assert ctx["unresolved_census"]["walk_truncated_entries"] == 5
+        assert "TRUNCATED for 5 entries" in ctx["qualifier"]
+        assert "(global walk budget exhausted)" in ctx["qualifier"]
+
+    def test_unstarved_walk_carries_no_budget_flag(self):
+        g = build_include_graph(self._starved_inventory_dict())
+        assert g["walk"]["budget_exhausted"] is False
+        ctx = bootstrap_context_for_file(g, "lib/shared.php")
+        assert "walk_budget_exhausted" not in ctx["unresolved_census"]
+        assert "TRUNCATED" not in ctx["qualifier"]
+
+    def _gated_inventory_dict(self):
+        # The gate-first idiom: e1 includes zz_gate FIRST, then the
+        # a01..a04 helpers, then the target. Alphabetically the gate
+        # sorts LAST — a capped alphabetical slice hides exactly it.
+        def cg(includes=(), defines=()):
+            return {"imports": {}, "calls": [], "indirection": [],
+                    "includes": list(includes),
+                    "defines": list(defines)}
+        define = {"line": 2, "name": "APP", "value": "./",
+                  "conditional": False, "fallback": False,
+                  "position": "file_scope"}
+        e1_includes = [
+            _edge(3 + i, "require_once", "const_prefix",
+                  const_name="APP", literal_tail=t)
+            for i, t in enumerate(["zz_gate.php", "a01.php",
+                                   "a02.php", "a03.php", "a04.php",
+                                   "target.php"])]
+        files = [
+            {"path": "e1.php", "language": "php", "sha256": "x",
+             "items": [],
+             "call_graph": cg(e1_includes, [define])},
+        ]
+        for p in ("a01.php", "a02.php", "a03.php", "a04.php",
+                  "zz_gate.php", "target.php"):
+            files.append({"path": p, "language": "php", "sha256": "x",
+                          "items": [], "call_graph": cg()})
+        return _inventory_dict(files)
+
+    def test_prefix_cap_renders_execution_order_total_and_marker(self):
+        # An alphabetical slice would render a01..a03 and cut off
+        # exactly the gate; witness-entry execution pre-order
+        # surfaces it first, and the elision is explicit (true
+        # total + marker).
+        g = build_include_graph(self._gated_inventory_dict())
+        ctx = bootstrap_context_for_file(g, "target.php",
+                                         max_prefix=3)
+        assert [r["file"] for r in ctx["guaranteed_prefix"]] == [
+            "zz_gate.php", "a01.php", "a02.php"]
+        assert ctx["guaranteed_prefix_total"] == 5
+        assert ctx["guaranteed_prefix_truncated"] is True
+
+    def test_prefix_under_cap_has_total_and_no_marker(self):
+        g = build_include_graph(self._gated_inventory_dict())
+        ctx = bootstrap_context_for_file(g, "target.php")
+        assert ctx["guaranteed_prefix_total"] == 5
+        assert len(ctx["guaranteed_prefix"]) == 5
+        assert "guaranteed_prefix_truncated" not in ctx
+
+    def test_bootstrap_context_none_for_unknown_file(self):
+        g = build_include_graph(self._inventory_dict())
+        assert bootstrap_context_for_file(g, "unknown.php") is None
+
+    def test_entry_file_gets_own_class_with_note(self):
+        g = build_include_graph(self._inventory_dict())
+        ctx = bootstrap_context_for_file(g, "src/e1.php")
+        assert ctx["entry_classes"][0]["guaranteed"] is True
+        assert "is itself an entry" in ctx["entry_classes"][0]["receipt"]
+        assert "verify include order" in ctx["note"]
+
+
 class TestConsumerQueries:
     def _graph(self):
-        inv = _inventory([
+        inv = _inventory_dict([
             _php_file("entry.php", includes=[
                 _edge(3, "require_once", "const_prefix",
                       const_name="APP_PATH", literal_tail="lib/x.php"),

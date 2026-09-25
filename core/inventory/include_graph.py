@@ -76,6 +76,10 @@ MAX_TREE_FILES = 200_000
 MAX_CANDIDATES_PER_EDGE = 32
 MAX_TREE_SCAN_EDGES_PER_RUN = 256
 MAX_MATCH_PROBES_PER_RUN = 2_000_000
+MAX_PREFIX_MEMBERS_RENDERED = 64
+MAX_WALK_UNRESOLVED_RENDERED = 25
+MAX_CLASS_ENTRIES_RENDERED = 25
+MAX_VIA_RENDERED = 8
 MAX_INCLUDED_BY_RENDERED = 200
 MAX_UNRESOLVED_LISTED = 2000
 MAX_UNWALKED_LISTED = 2000
@@ -320,6 +324,8 @@ def build_include_graph(
 
     # Per-file edge lists (+ recompute exception).
     edges_by_file: dict[str, list[dict[str, Any]]] = {}
+    defines_by_file: dict[str, list[dict[str, Any]]] = {}
+    walk_meta: dict[str, dict[str, Any]] = {}
     guards: dict[str, dict[str, Any]] = {}
     edges_unavailable: list[str] = []
     truncated_files: list[dict[str, Any]] = []
@@ -336,6 +342,17 @@ def build_include_graph(
             edges_by_file[path] = [
                 e for e in cg["includes"] if isinstance(e, dict)
             ]
+            defines_by_file[path] = [
+                d for d in (cg.get("defines") or [])
+                if isinstance(d, dict)
+            ]
+            walk_meta[path] = {
+                "parse_errors": bool(cg.get("parse_errors")),
+                "boundaries": [
+                    b for b in (cg.get("boundaries") or [])
+                    if isinstance(b, dict)
+                ],
+            }
             # Edge-capped extraction is a census fact, not a detail:
             # every edge past the walker cap is INVISIBLE here, so
             # this file's outgoing includer contributions may be
@@ -411,11 +428,14 @@ def build_include_graph(
             return "not_php"
         return "not_in_language_map"
 
+    resolved_1a: dict[tuple[str, int], tuple[str, dict[str, Any]]] = {}
+
     def _resolve_to(target: str, basis: str,
                     includer: str, e: dict[str, Any]) -> None:
         ref = _edge_ref(includer, e)
         ref["basis"] = basis
         included_by.setdefault(target, []).append(ref)
+        resolved_1a[(includer, ref["line"])] = (target, ref)
         reason = _walkability_reason(target)
         if reason is not None:
             _note_unwalked(target, reason, includer, e)
@@ -513,6 +533,78 @@ def build_include_graph(
                         _note_unwalked(c, why, path, e)
             unresolved.append(rec)
 
+    # ---- Phase 1b: per-entry constant-environment walk -----------
+    # Entry candidates come from the pass-1 includer index (zero
+    # includers); the walk's environment-grounded resolutions then
+    # SUPERSEDE the 1a per-file bases (the basis field was recorded
+    # for exactly this), and roles are derived afterwards from the
+    # merged index.
+    walk_data: dict[str, Any] | None = None
+    if edges_by_file:
+        from core.inventory.include_walk import walk_entries
+        pass1_entries = sorted(
+            p for p in edges_by_file if not included_by.get(p))
+        walk_data = walk_entries(
+            pass1_entries,
+            edges_by_file=edges_by_file,
+            defines_by_file=defines_by_file,
+            meta_by_file=walk_meta,
+            tree_set=tree_set,
+        )
+        for (includer, line), rec in sorted(
+                walk_data["env_resolutions"].items()):
+            targets = sorted(rec["targets"])
+            if len(targets) > 1:
+                _bump(outcomes, "env_multi_target")
+            old = resolved_1a.get((includer, line))
+            for target in targets:
+                if old is not None and old[0] == target:
+                    old[1]["basis"] = "env_resolved"
+                    _bump(outcomes, "env_confirmed_tail_basis")
+                    continue
+                ref = {
+                    "includer": includer, "line": line,
+                    "keyword": rec["keyword"],
+                    "conditional": rec["conditional"],
+                    "position": rec["position"],
+                    "basis": "env_resolved",
+                }
+                included_by.setdefault(target, []).append(ref)
+                why = _walkability_reason(target)
+                if why is not None:
+                    _note_unwalked(target, why, includer,
+                                   {"line": line})
+                if old is None:
+                    _bump(outcomes, "env_resolved_from_census")
+                else:
+                    _bump(outcomes, "env_superseded_tail_mismatch")
+            if old is not None and old[0] not in targets:
+                if "\\" in old[0] or any("\\" in t for t in targets):
+                    # Backslash-bearing paths are literal file names
+                    # on POSIX runtimes — a separator-interpretation
+                    # disagreement between the lanes must never evict
+                    # the 1a base (it may be the file that actually
+                    # runs). Keep both, census the disagreement.
+                    _bump(outcomes, "env_tail_disagreement_kept")
+                else:
+                    # The suffix guess disagreed with the grounded
+                    # resolution — the guessed ref comes out.
+                    refs = included_by.get(old[0], [])
+                    if old[1] in refs:
+                        refs.remove(old[1])
+                        if not refs:
+                            included_by.pop(old[0], None)
+            if old is None:
+                # The edge left the 1a census (env grounded it).
+                before = len(unresolved)
+                unresolved[:] = [
+                    u for u in unresolved
+                    if not (u.get("file") == includer
+                            and u.get("line") == line)
+                ]
+                if len(unresolved) != before:
+                    _bump(outcomes, "env_census_discharged")
+
     # File roles — includer index + guard evidence ONLY.
     files_out: dict[str, dict[str, Any]] = {}
     for path in sorted(php_records):
@@ -589,7 +681,126 @@ def build_include_graph(
         graph["php_files_without_edges"] = len(edges_unavailable)
     if recomputed:
         graph["recomputed_files"] = recomputed
+
+    if walk_data is not None:
+        graph["walk"] = _render_walk(walk_data, files_out)
     return graph
+
+
+def _render_walk(walk_data: dict[str, Any],
+                 files_out: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Fold the walk output into artifact shape: capped per-entry
+    prefixes, the entry-class partition, and the query-ready
+    ``file_facts`` reverse index (file → classes reaching it, with a
+    guaranteed flag and one example receipt). Entries whose role
+    flipped to library after the basis supersede drop out of the
+    entry-class partition (their walks remain as prefix data)."""
+    prefixes_out: dict[str, dict[str, Any]] = {}
+    file_facts: dict[str, dict[str, Any]] = {}
+    still_entries = {
+        p for p, e in files_out.items()
+        if e.get("role") == "designed_entry"
+    }
+    class_index: dict[str, dict[str, Any]] = {
+        c["class"]: c for c in walk_data["entry_classes"]
+    }
+
+    for entry, p in sorted(walk_data["prefixes"].items()):
+        members = p["members"]
+        rendered = []
+        for m in members[:MAX_PREFIX_MEMBERS_RENDERED]:
+            r: dict[str, Any] = {
+                "file": m["file"],
+                "guaranteed": bool(m["guaranteed"]),
+                "via": list(m["via"][-MAX_VIA_RENDERED:]),
+            }
+            if len(m["via"]) > MAX_VIA_RENDERED:
+                r["via_total"] = len(m["via"])  # elision is explicit
+            for k in ("boundary_line", "unwalked", "parse_errors",
+                      "root"):
+                if m.get(k) is not None and m.get(k) is not False:
+                    r[k] = m[k]
+            rendered.append(r)
+        entry_out: dict[str, Any] = {
+            "class": p["class"] if entry in still_entries else None,
+            "members": rendered,
+            "member_total": len(members),
+            "unresolved": p["unresolved"][:MAX_WALK_UNRESOLVED_RENDERED],
+            "unresolved_total": len(p["unresolved"]),
+        }
+        if p["closure_truncated"]:
+            entry_out["closure_truncated"] = True
+        if p.get("unresolved_overflow"):
+            entry_out["unresolved_truncated"] = True
+        if len(members) > MAX_PREFIX_MEMBERS_RENDERED:
+            entry_out["members_render_truncated"] = True
+        prefixes_out[entry] = entry_out
+
+        if p["class"] is None or entry not in still_entries:
+            continue
+        cls = class_index.get(p["class"])
+        guaranteed_set = set(
+            cls["guaranteed_prefix"]) if cls else set()
+        # Order-aware: "executed BEFORE this file" means members that
+        # PRECEDE it in this entry's execution order — a file
+        # included after the target must never render as having run
+        # first. The per-slot set intersects across the class's
+        # entries (different entries may reach the file at different
+        # points).
+        preceding_guaranteed: list[str] = []
+        for m in members:
+            if m.get("root"):
+                continue
+            ff = file_facts.setdefault(m["file"], {"classes": {}})
+            slot = ff["classes"].get(p["class"])
+            if slot is None:
+                slot = {
+                    "guaranteed": m["file"] in guaranteed_set,
+                    "entries_reaching": 0,
+                    "receipt": " -> ".join(
+                        [entry] + list(m["via"][-MAX_VIA_RENDERED:])),
+                    "preceding": sorted(preceding_guaranteed),
+                }
+                ff["classes"][p["class"]] = slot
+            else:
+                slot["preceding"] = sorted(
+                    set(slot.get("preceding") or [])
+                    & set(preceding_guaranteed))
+            slot["entries_reaching"] += 1
+            if m["guaranteed"]:
+                preceding_guaranteed.append(m["file"])
+
+    entry_classes = []
+    for c in walk_data["entry_classes"]:
+        live = [e for e in c["entries"] if e in still_entries]
+        if not live:
+            continue
+        entry_classes.append({
+            "class": c["class"],
+            "entry_count": len(live),
+            "entries": live[:MAX_CLASS_ENTRIES_RENDERED],
+            "guaranteed_prefix": c["guaranteed_prefix"],
+        })
+
+    return {
+        "entries_walked": walk_data["entries_walked"],
+        "entries_truncated": walk_data["entries_truncated"],
+        # Census fact, not a detail: bootstrap_context_for_file reads
+        # the RENDERED walk section, so a dropped flag here would
+        # silently erase "(global walk budget exhausted)" from every
+        # consumer's qualifier.
+        "budget_exhausted": bool(walk_data.get("budget_exhausted")),
+        "outcomes": walk_data["outcomes"],
+        "entry_classes": entry_classes,
+        "prefixes": prefixes_out,
+        "file_facts": {
+            f: {"classes": [
+                {"class": cid, **slot}
+                for cid, slot in sorted(ff["classes"].items())
+            ]}
+            for f, ff in sorted(file_facts.items())
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -704,6 +915,225 @@ def census_qualifier(graph: dict[str, Any]) -> str:
         f"target(s) in this tree{trunc}. Steering context — verify "
         f"against source; never treat as a verdict input."
     )
+
+
+def _norm_key(file_path: str) -> str:
+    return (file_path.replace("\\", "/").removeprefix("./")
+            if file_path else "")
+
+
+def executed_before(
+    graph: dict[str, Any], entry: str, file_path: str,
+    line: int | None = None,
+) -> bool | None:
+    """Whether ``file_path``'s file-scope code (above ``line`` when
+    given) is GUARANTEED to have executed once ``entry`` reaches its
+    own code — the §1a bootstrap-gate query. Returns None (unknown)
+    when there is no walk data, the entry was not walked, or the
+    prefix rendering was truncated before the file; never guesses."""
+    walk = graph.get("walk")
+    if not isinstance(walk, dict):
+        return None
+    prefix = (walk.get("prefixes") or {}).get(_norm_key(entry))
+    if not isinstance(prefix, dict):
+        return None
+    target = _norm_key(file_path)
+    for m in prefix.get("members") or []:
+        if not isinstance(m, dict) or m.get("file") != target:
+            continue
+        if m.get("parse_errors"):
+            # The member's own tree is ERROR-bearing: its recorded
+            # boundary and line structure are not trustworthy enough
+            # for a yes/no at line granularity — unknown, never a
+            # guess.
+            return None
+        if not m.get("guaranteed"):
+            return False
+        b = m.get("boundary_line")
+        if (line is not None and isinstance(b, int)
+                and not isinstance(b, bool) and line >= b):
+            return False  # below the member's straight-line boundary
+        return True
+    if prefix.get("members_render_truncated") or prefix.get(
+            "closure_truncated"):
+        return None  # honest unknown — the prefix list is partial
+    return False
+
+
+def bootstrap_context_for_file(
+    graph: dict[str, Any], file_path: str,
+    *, max_classes: int = 5, max_prefix: int = 15,
+) -> dict[str, Any] | None:
+    """The §5 ``bootstrap_context`` object for one file: the entry
+    classes that reach it, the guaranteed-prefix files shared by
+    EVERY guaranteed-reaching class (the facts that hold on every
+    stock path), and the MANDATORY census. Returns None when there is
+    no walk data, the file is unknown to the walk, or the graph
+    census fails validation — a bootstrap_context without a valid
+    census must never exist (hint tier, like everything here)."""
+    walk = graph.get("walk")
+    if not isinstance(walk, dict):
+        return None
+    counts = _census_counts(graph)
+    if counts is None:
+        return None  # never an unqualified gate fact
+    ue, ut, tf = counts
+    path = _norm_key(file_path)
+    file_facts = walk.get("file_facts") or {}
+    prefixes = walk.get("prefixes") or {}
+    class_rows = {c.get("class"): c
+                  for c in walk.get("entry_classes") or []
+                  if isinstance(c, dict)}
+
+    # ALL reaching classes participate in the shared-prefix
+    # intersection below; only the rendered list is capped — an
+    # intersection over a capped subset would overclaim "on every
+    # stock path".
+    classes: list[dict[str, Any]] = []
+    note: str | None = None
+    ff = file_facts.get(path)
+    if isinstance(ff, dict):
+        for row in (ff.get("classes") or []):
+            if not isinstance(row, dict):
+                continue
+            cid = row.get("class")
+            cls = class_rows.get(cid) or {}
+            classes.append({
+                "class": str(cid or ""),
+                "guaranteed": bool(row.get("guaranteed")),
+                "entry_count": cls.get("entry_count", 0),
+                "entries": list(cls.get("entries") or [])[:5],
+                "receipt": str(row.get("receipt") or "")[:400],
+                "_preceding": [x for x in (row.get("preceding") or [])
+                               if isinstance(x, str)],
+            })
+    own = prefixes.get(path)
+    if isinstance(own, dict) and own.get("class"):
+        cls = class_rows.get(own["class"]) or {}
+        classes.insert(0, {
+            "class": str(own["class"]),
+            "guaranteed": True,
+            "entry_count": cls.get("entry_count", 0),
+            "entries": list(cls.get("entries") or [])[:5],
+            "receipt": path + " (is itself an entry of this class)",
+            "_preceding": [],  # nothing precedes the entry itself
+        })
+        note = ("this file is a designed entry: its class prefix is "
+                "complete at end-of-bootstrap — for code inside the "
+                "entry itself, verify include order above the "
+                "finding line")
+    if not classes:
+        return None
+    # Rendering order: guaranteed classes first, biggest first (the
+    # cap below must not hide the guaranteed ones behind
+    # reachability-only rows).
+    classes.sort(key=lambda c: (not c["guaranteed"],
+                                -c["entry_count"], c["class"]))
+
+    # Guaranteed-PRECEDING prefix shared by EVERY guaranteed-reaching
+    # class — files whose file-scope code ran BEFORE this file on
+    # every stock path. Order-aware by construction: the per-slot
+    # preceding sets were collected in execution order, so a file
+    # included AFTER the target never renders as having run first.
+    guaranteed_classes = [c for c in classes if c["guaranteed"]]
+    shared: list[str] = []
+    if guaranteed_classes:
+        sets = [set(c.get("_preceding") or [])
+                for c in guaranteed_classes]
+        shared = (sorted(set.intersection(*sets) - {path})
+                  if sets else [])
+    if shared:
+        # Render order must not hide the load-bearing row: an
+        # alphabetical slice of a shared set larger than the cap can
+        # cut off exactly the file that gates the whole surface.
+        # Execution pre-order from a witness entry (first entry of
+        # the largest guaranteed class) fixes that mechanically: the
+        # walk's member lists are pre-order (an includer renders
+        # before its children), and the include-the-gate-first idiom
+        # puts the gate at the top of every gated entry — so the
+        # outermost first includes fill the cap, page-local helpers
+        # trail. Files absent from the witness's (render-capped)
+        # member list keep a deterministic name-sorted tail; the
+        # true total + an explicit marker are carried below whenever
+        # the cap bites.
+        order: dict[str, int] = {}
+        witness_entries = guaranteed_classes[0].get("entries") or []
+        if witness_entries:
+            wp = prefixes.get(str(witness_entries[0]))
+            if isinstance(wp, dict):
+                for i, m in enumerate(wp.get("members") or []):
+                    if isinstance(m, dict) and isinstance(
+                            m.get("file"), str):
+                        order.setdefault(m["file"], i)
+        unseen = len(order)
+        shared.sort(key=lambda f: (order.get(f, unseen), f))
+    guaranteed_prefix = []
+    for f in shared[:max_prefix]:
+        row: dict[str, Any] = {"file": f, "guaranteed": True}
+        f_ff = file_facts.get(f)
+        if isinstance(f_ff, dict):
+            for cr in f_ff.get("classes") or []:
+                if (isinstance(cr, dict)
+                        and cr.get("class") == guaranteed_classes[0]["class"]):
+                    row["via"] = str(cr.get("receipt") or "")[:400]
+                    break
+        guaranteed_prefix.append(row)
+
+    walk_outcomes = walk.get("outcomes") or {}
+    rendered_classes = []
+    for c in classes[:max_classes]:
+        rc = dict(c)
+        rc.pop("_preceding", None)  # internal to the intersection
+        rendered_classes.append(rc)
+    ctx: dict[str, Any] = {
+        "tier": "hint",
+        "entry_class_total": len(classes),
+        "entry_classes": rendered_classes,
+        "guaranteed_prefix": guaranteed_prefix,
+        "guaranteed_prefix_total": len(shared),
+        "unresolved_census": {
+            "unresolved_edges": ue,
+            "unwalked_targets": ut,
+            "walk_unresolved": sum(
+                v for k, v in walk_outcomes.items()
+                if isinstance(v, int) and k.startswith("edge_env_")
+                and k != "edge_env_resolved"),
+            "sites": [
+                f"{r.get('file', '?')}:{r.get('line', '?')}"
+                for r in (graph.get("unresolved_edges") or [])[:5]
+                if isinstance(r, dict)
+            ],
+        },
+        "qualifier": census_qualifier(graph),
+        "invariants": [],
+    }
+    if len(shared) > max_prefix:
+        ctx["guaranteed_prefix_truncated"] = True  # elision explicit
+    if tf:
+        ctx["unresolved_census"]["truncated_files"] = tf
+    # Walk-truncation joins the census: unclassed/uncapped/budgeted
+    # entries shrink the class partition, and an includer-set or
+    # gate fact quoted without that qualifier would overstate "every
+    # stock path".
+    walk_truncated = (
+        int(walk_outcomes.get("entries_unclassed_truncated") or 0)
+        + int(walk_outcomes.get("entries_truncated") or 0))
+    if walk.get("budget_exhausted"):
+        ctx["unresolved_census"]["walk_budget_exhausted"] = True
+    if walk_truncated:
+        ctx["unresolved_census"]["walk_truncated_entries"] = walk_truncated
+    if walk_truncated or walk.get("budget_exhausted"):
+        ctx["qualifier"] = (
+            ctx["qualifier"].rstrip()
+            + f" The environment walk was TRUNCATED for "
+              f"{walk_truncated} entr"
+            + ("y" if walk_truncated == 1 else "ies")
+            + (" (global walk budget exhausted)"
+               if walk.get("budget_exhausted") else "")
+            + " — their entry classes are absent from these facts.")
+    if note:
+        ctx["note"] = note
+    return ctx
 
 
 def directly_requestable_library(entry: dict[str, Any]) -> bool:
