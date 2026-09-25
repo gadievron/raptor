@@ -348,8 +348,25 @@ BLOCK_BOUNDARY_TAG_NAMES: tuple[str, ...] = (
 # One arm per registered name: opener (with optional attributes, e.g.
 # `[threat-model-context source=operator]`) and closer, whitespace-
 # tolerant like the XML arms. Attribute run bounded at 256.
+#
+# The closing `]` is OPTIONAL — matching the XML arms' prefix
+# philosophy (`<untrusted` matches with no `>` required). A
+# closer-required arm left tag HALVES invisible: `[name attrs…`
+# without its `]` matched nothing, so two separately-neutralised
+# fragments could reassemble into a live tag when a rendering site
+# joined them (`fragment-with-opener` + `separator` + `]…`) — the
+# cross-identifier reassembly class. Any live reassembled tag must
+# carry `[` plus the complete registered name inside ONE fragment
+# (the join separator would otherwise land inside the name or the
+# `\s*` gap and kill the match), so neutralising the unclosed opener
+# half closes the class for every consumer. Trade in the benign
+# direction: prose containing an unclosed `[<name>…` run — text
+# already spelling the reserved boundary vocabulary — now gets the
+# same invisible ZWSP defang a complete tag gets; bracketed prose
+# not spelling a registered name is untouched (pinned by
+# test_benign_brackets_untouched).
 _BRACKET_BOUNDARY_ARMS = "".join(
-    r"|\[/?\s*" + re.escape(name) + r"\b[^\]]{0,256}\]"
+    r"|\[/?\s*" + re.escape(name) + r"\b[^\]]{0,256}\]?"
     for name in BLOCK_BOUNDARY_TAG_NAMES
 )
 
