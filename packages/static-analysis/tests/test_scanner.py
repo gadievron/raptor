@@ -290,6 +290,97 @@ class TestComputePythonToolPaths:
         assert str(lib_dir) in result, \
             f"stdlib dir missing from {result!r}"
 
+    def _fake_prefix_layout(self, root, with_pyvenv_cfg):
+        """Synthesise a Python prefix layout under ``root``:
+        bin/python3.13 (fake interpreter file), lib/python3.13/,
+        and a console script whose shebang points at the fake
+        interpreter. With ``with_pyvenv_cfg`` the layout is a PEP
+        405 venv (pyvenv.cfg at the root); without it, a plain
+        prefix install. Returns (script, bin_dir, lib_dir)."""
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        lib_dir = root / "lib" / "python3.13"
+        lib_dir.mkdir(parents=True)
+        py = bin_dir / "python3.13"
+        py.write_text("#!/bin/sh\necho fake python\n")
+        py.chmod(0o755)
+        script = bin_dir / "sometool"
+        script.write_text(f"#!{py}\nprint('hi')\n")
+        script.chmod(0o755)
+        if with_pyvenv_cfg:
+            (root / "pyvenv.cfg").write_text(
+                "home = /usr/bin\n"
+                "include-system-site-packages = false\n"
+            )
+        return script, bin_dir, lib_dir
+
+    def test_venv_layout_with_pyvenv_cfg_includes_venv_root(
+            self, tmp_path):
+        """pyvenv.cfg visibility is the PEP 405 venv-activation
+        toggle; without it the interpreter falls back to the base
+        prefix and drops the venv site-packages. A layout WITH
+        pyvenv.cfg must therefore get the venv root (where the cfg
+        lives) into the bind set, alongside bin/ and lib/pythonX.Y/."""
+        venv = tmp_path / "venv"
+        venv.mkdir()
+        script, bin_dir, lib_dir = self._fake_prefix_layout(
+            venv, with_pyvenv_cfg=True)
+        result = _compute_python_tool_paths([str(script)])
+        assert str(venv) in result, \
+            f"venv root missing from {result!r}"
+        assert str(bin_dir) in result, \
+            f"bin dir missing from {result!r}"
+        assert str(lib_dir) in result, \
+            f"stdlib dir missing from {result!r}"
+
+    def test_layout_without_pyvenv_cfg_excludes_root(self, tmp_path):
+        """Identical layout but NO pyvenv.cfg → a plain prefix
+        install, not a venv; the root holds nothing Python needs and
+        must stay OUT of the bind set (least privilege for the mount
+        namespace). bin/ and lib/pythonX.Y/ keep their binds."""
+        prefix = tmp_path / "prefix"
+        prefix.mkdir()
+        script, bin_dir, lib_dir = self._fake_prefix_layout(
+            prefix, with_pyvenv_cfg=False)
+        result = _compute_python_tool_paths([str(script)])
+        assert str(prefix) not in result, \
+            f"non-venv root wrongly bound: {result!r}"
+        assert str(bin_dir) in result, \
+            f"bin dir regressed: {result!r}"
+        assert str(lib_dir) in result, \
+            f"stdlib dir regressed: {result!r}"
+
+    def test_system_prefix_venv_root_is_skipped(self, tmp_path):
+        """A /usr-rooted layout adds nothing: even when pyvenv.cfg
+        appears to exist at the system prefix root, /usr is already
+        in the mount-ns bind tree and must not enter the bind set.
+        The venv root is the only derived path that can land ON a
+        skip prefix (bin/stdlib dirs are always deeper), so fake the
+        cfg's existence to make the prefix skip the deciding gate."""
+        script = tmp_path / "tool"
+        script.write_text("#!/usr/bin/python3\nprint('hi')\n")
+        script.chmod(0o755)
+        real_is_file = Path.is_file
+
+        def fake_is_file(self):
+            # Fake interp + cfg so the venv-root branch runs without
+            # needing writable /usr; everything else stays real.
+            if str(self) in ("/usr/bin/python3", "/usr/pyvenv.cfg"):
+                return True
+            return real_is_file(self)
+
+        with patch.object(Path, "is_file", fake_is_file):
+            result = _compute_python_tool_paths([str(script)])
+        assert "/usr" not in result, \
+            f"system prefix root wrongly bound: {result!r}"
+        for p in result:
+            assert not p.startswith("/usr/"), \
+                f"{p!r} should have been filtered out"
+        # Sanity: the function did run past the interp branch — the
+        # script's own bin dir (interesting) is still returned.
+        assert str(tmp_path.resolve()) in result, \
+            f"script bin dir missing from {result!r}"
+
 
 class TestValidatePolicyGroups:
     """Unknown policy groups are an argparse-level hard error, not a
