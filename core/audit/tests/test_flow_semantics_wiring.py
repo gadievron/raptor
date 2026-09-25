@@ -92,7 +92,7 @@ class TestStartServerWiring:
         monkeypatch.setattr(
             jb, "_ensure_cpg_loaded",
             lambda s, t, tun=None, exclude_dirs=(),
-            scope_exclude_dirs=(): True,
+            scope_exclude_dirs=(), out_dir=None: True,
         )
         import packages.joern.lifecycle as lifecycle
         monkeypatch.setattr(lifecycle, "joern_acquire", lambda tun: srv)

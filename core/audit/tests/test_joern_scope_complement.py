@@ -154,7 +154,7 @@ class TestScopeThreadedToBuild:
         seen: dict = {}
 
         def fake_ensure(srv, target_path, tunables=None, exclude_dirs=(),
-                        scope_exclude_dirs=()):
+                        scope_exclude_dirs=(), out_dir=None):
             seen["scope"] = scope_exclude_dirs
             return True
 
@@ -166,6 +166,12 @@ class TestScopeThreadedToBuild:
 
     def test_ensure_cpg_loaded_keys_slot_on_scope(self, monkeypatch, tmp_path):
         import core.audit.joern_backend as jb
+
+        # _ensure_cpg_loaded mkdirs its cache under Path.home() —
+        # keep the test's writes inside its own tmp tree.
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
 
         captured: dict = {}
 
