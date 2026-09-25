@@ -6115,6 +6115,26 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             "route-model build for peer groups failed", exc_info=True,
         )
 
+    # L7: interface-slot census — ops-struct slot families from the
+    # gap source texts (the extractor the reachability exemption
+    # already trusts) plus subclass-override sets from checklist
+    # metadata. No family → None → the layer stays empty
+    # (equivalence pin).
+    prep_interface_slots = None
+    try:
+        from core.analysis.interface_slots import (
+            interface_slot_families,
+        )
+
+        prep_interface_slots = interface_slot_families(
+            _gap_source_texts(), checklist,
+        )
+    except Exception:
+        logger.debug(
+            "interface-slot census for peer groups failed",
+            exc_info=True,
+        )
+
     # Fail-soft like the sibling prep blocks above: the resolver
     # consumes producer-controlled inputs (checklist metadata is
     # LLM-enrichable), and peer groups are an enrichment layer — one
@@ -6129,6 +6149,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             type_ref_index=prep_type_ref_index,
             checklist=checklist,
             route_models=prep_route_models,
+            interface_slots=prep_interface_slots,
         )
     except Exception:
         peer_groups = []
