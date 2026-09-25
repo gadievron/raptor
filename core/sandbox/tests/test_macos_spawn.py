@@ -41,10 +41,20 @@ def _unique_sleep_marker(prefix: str) -> str:
     A's target mid-test. The random suffix makes the target's full
     argv unique to this invocation, so an exact-argv match is an
     identity proof (same defence as the sandbox teardown's random
-    ``_SBX_RUN_ID`` environ token). coreutils and BSD ``sleep`` both
-    accept arbitrarily large integer durations.
+    ``_SBX_RUN_ID`` environ token).
+
+    The randomness lives in the FRACTIONAL digits, keeping the total
+    duration a few days: an earlier spelling appended them to the
+    integer part, and the resulting ~1e17-second duration made
+    darwin's ``/bin/sleep`` exit immediately (past the platform's
+    representable sleep deadline — an unsigned 64-bit NANOSECOND
+    count, ~584 years), so the "hung" target was gone before the
+    timeout under test and TimeoutExpired never raised — while the
+    orphan test silently took its target-never-started skip lane on
+    the same hosts. coreutils and BSD ``sleep`` both accept
+    fractional durations.
     """
-    return f"{prefix}{uuid.uuid4().int % 10**12:012d}"
+    return f"{prefix}.{uuid.uuid4().int % 10**12:012d}"
 
 
 def _exact_sleep_pids(marker: str) -> list[int]:
