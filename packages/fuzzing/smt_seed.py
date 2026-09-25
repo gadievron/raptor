@@ -37,6 +37,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import stat
 import struct
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -45,6 +46,7 @@ from typing import Any
 
 from core.atomic_fs import write_new_bytes, write_text_atomically
 from core.json import load_json, save_json
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.source import read_text_capped
 
 # Analysis-report / attack-path artifacts are RAPTOR-written run
@@ -368,8 +370,23 @@ def synthesize_seeds(
         lines = [f'{name}="{value}"' for name, value in sorted(dict_entries.items())]
         # Atomic write: the run dir is reused and target-writable —
         # os.replace over a planted symlink replaces the symlink
-        # itself, never follows it.
-        write_text_atomically(dict_path, "\n".join(lines) + "\n")
+        # itself, never follows it. Same write containment as the
+        # merge in merge_witness_dict: os.replace cannot swap a
+        # planted DIRECTORY (and removing a target-planted tree is a
+        # destructive step never taken here) — warn once and ship the
+        # manifest without a dictionary file rather than crash the
+        # /fuzz run.
+        try:
+            write_text_atomically(dict_path, "\n".join(lines) + "\n")
+        except OSError as exc:
+            logger.warning(
+                "witness dictionary not written (%s: %s) — a planted "
+                "object at %s? left in place; seeds and manifest are "
+                "unaffected",
+                type(exc).__name__,
+                sanitise_for_terminal(str(exc), max_len=200),
+                sanitise_for_terminal(str(dict_path)))
+            dict_path = None
 
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -401,10 +418,15 @@ def merge_witness_dict(seed_dir: Path, run_out_dir: Path) -> Path | None:
     operator-readable file content into the merged ``fuzz.dict`` the
     NEXT campaign's sandboxed target can read; an unbounded read of a
     planted multi-GB file was a parent memory lever. A planted
-    non-regular ``fuzz.dict`` is refused loudly and REPLACED by the
-    atomic write (its content is never read); a hostile witness dict
-    or an over-``MAX_DICT_FILE_CHARS`` file on either side refuses
-    the whole merge loudly.
+    non-regular ``fuzz.dict`` is refused loudly (its content is never
+    read) and handled per shape: a symlink or FIFO is REPLACED by the
+    atomic write (``os.replace`` swaps the plant's inode itself), a
+    DIRECTORY skips the merge — ``os.replace`` cannot swap a
+    directory, and removing a target-planted tree from the
+    unsandboxed parent is a destructive step this merge never takes.
+    A hostile witness dict or an over-``MAX_DICT_FILE_CHARS`` file on
+    either side refuses the whole merge loudly. Any write failure is
+    contained here (warn + skip), never propagated to the CLI.
     """
     witness_dict = Path(seed_dir) / "smt-witness.dict"
     witness_got = read_text_capped(witness_dict, MAX_DICT_FILE_CHARS)
@@ -437,8 +459,27 @@ def merge_witness_dict(seed_dir: Path, run_out_dir: Path) -> Path | None:
     elif os.path.lexists(target):
         # Present but not a readable regular file: a planted symlink
         # (dangling ones pass exists()==False), FIFO, or directory.
-        # Never read through it — merge from empty; the atomic write
-        # below replaces the plant itself, never what it points at.
+        # Never read through any of them; the shapes then diverge at
+        # the write. A DIRECTORY is refused outright: os.replace
+        # cannot swap one (the atomic write raised IsADirectoryError
+        # up through the /fuzz CLI), and removing a target-planted
+        # tree from the unsandboxed parent is a destructive step this
+        # merge never takes (same contract as open_exclusive_artifact
+        # replace=True: a directory at the name still raises).
+        try:
+            plant_is_dir = stat.S_ISDIR(os.lstat(target).st_mode)
+        except OSError:
+            plant_is_dir = False  # vanished/unreadable: let the
+            # hardened write below decide loudly.
+        if plant_is_dir:
+            logger.warning(
+                "refusing witness-dict merge: %s is a directory "
+                "(planted in the reused run dir?) — merge skipped, "
+                "directory left in place",
+                sanitise_for_terminal(str(target)))
+            return None
+        # Symlink/FIFO: merge from empty; the atomic write below
+        # replaces the plant itself, never what it points at.
         logger.warning(
             "%s is not a readable regular file (planted symlink/FIFO "
             "in the reused run dir?) — its content is NOT merged; "
@@ -452,8 +493,22 @@ def merge_witness_dict(seed_dir: Path, run_out_dir: Path) -> Path | None:
         return target if target.is_file() else None
     # Atomic read-merge-write commit (same rationale as the witness
     # dict write above — the plain write_text followed planted
-    # symlinks in the reused run dir).
-    write_text_atomically(target, "\n".join([*existing, *added]) + "\n")
+    # symlinks in the reused run dir). Contained: a plant re-appearing
+    # in the check→write window (or any other write failure) must
+    # cost only the merge, never the fuzz run — the caller
+    # (synthesize_from_run_dir → the bare /fuzz CLI handler) has no
+    # handler of its own. The atomic writer already unlinked its
+    # tempfile on the failure path.
+    try:
+        write_text_atomically(target, "\n".join([*existing, *added]) + "\n")
+    except OSError as exc:
+        logger.warning(
+            "witness-dict merge not written (%s: %s) — merge skipped; "
+            "the dictionary at %s is a planted or hostile object?",
+            type(exc).__name__,
+            sanitise_for_terminal(str(exc), max_len=200),
+            sanitise_for_terminal(str(target)))
+        return None
     return target
 
 
