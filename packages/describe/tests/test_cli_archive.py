@@ -378,3 +378,92 @@ class TestArchiveAnalysisPointer:
         assert rc == 0
         doc = json.loads(out_buf.getvalue())
         assert doc["archive_path"] == str(archive.resolve())
+
+
+class TestArchiveCacheCrossLocation:
+    """Pins the cross-location cache probe: extractions produced by
+    PROJECTLESS runs land in ``<out root>/_sources/<name>-<sha>`` (the
+    run dir's parent), and must be found with or without an active
+    project. Pre-fix ``_find_cached_extraction`` returned None the
+    moment no project was active and never probed the out root, so a
+    content-addressed hit on disk was re-extracted every time."""
+
+    def _snap(self, archive: Path):
+        from core.archive import safe_cache_name
+        from core.run.provenance import archive_snapshot
+        snap = archive_snapshot(archive)
+        assert snap is not None
+        return safe_cache_name(snap["archive_name"], snap["archive_sha256"])
+
+    def _make_archive(self, tmp_path: Path) -> Path:
+        src = tmp_path / "proj"
+        _make_c_daemon_source(src)
+        archive = tmp_path / "proj.tar.gz"
+        _make_tarball(src, archive)
+        return archive
+
+    def test_out_root_cache_found_without_active_project(
+        self, tmp_path, monkeypatch,
+    ):
+        from core.archive import safe_cache_name
+        from packages.describe.cli import _find_cached_extraction
+        archive = self._make_archive(tmp_path)
+        out_root = tmp_path / "outroot"
+        cache_dir = out_root / "_sources" / self._snap(archive)
+        cache_dir.mkdir(parents=True)
+        monkeypatch.setenv("RAPTOR_OUT_DIR", str(out_root))
+        monkeypatch.setattr(
+            "core.run.output._resolve_active_project", lambda: None,
+        )
+        hit = _find_cached_extraction(archive, safe_cache_name)
+        assert hit == cache_dir
+
+    def test_project_miss_falls_through_to_out_root(
+        self, tmp_path, monkeypatch,
+    ):
+        from core.archive import safe_cache_name
+        from packages.describe.cli import _find_cached_extraction
+        archive = self._make_archive(tmp_path)
+        project_out = tmp_path / "project_out"
+        project_out.mkdir()
+        out_root = tmp_path / "outroot"
+        cache_dir = out_root / "_sources" / self._snap(archive)
+        cache_dir.mkdir(parents=True)
+        monkeypatch.setenv("RAPTOR_OUT_DIR", str(out_root))
+        monkeypatch.setattr(
+            "core.run.output._resolve_active_project",
+            lambda: (str(project_out), "_t", "/tmp"),
+        )
+        hit = _find_cached_extraction(archive, safe_cache_name)
+        assert hit == cache_dir
+
+    def test_project_cache_still_preferred(self, tmp_path, monkeypatch):
+        # Order pin: the active project's own extraction wins over the
+        # out-root one (both content-addressed to the same bytes; the
+        # project's copy is the one its runs share).
+        from core.archive import safe_cache_name
+        from packages.describe.cli import _find_cached_extraction
+        archive = self._make_archive(tmp_path)
+        name = self._snap(archive)
+        project_out = tmp_path / "project_out"
+        proj_cache = project_out / "_sources" / name
+        proj_cache.mkdir(parents=True)
+        out_root = tmp_path / "outroot"
+        (out_root / "_sources" / name).mkdir(parents=True)
+        monkeypatch.setenv("RAPTOR_OUT_DIR", str(out_root))
+        monkeypatch.setattr(
+            "core.run.output._resolve_active_project",
+            lambda: (str(project_out), "_t", "/tmp"),
+        )
+        hit = _find_cached_extraction(archive, safe_cache_name)
+        assert hit == proj_cache
+
+    def test_no_cache_anywhere_returns_none(self, tmp_path, monkeypatch):
+        from core.archive import safe_cache_name
+        from packages.describe.cli import _find_cached_extraction
+        archive = self._make_archive(tmp_path)
+        monkeypatch.setenv("RAPTOR_OUT_DIR", str(tmp_path / "outroot"))
+        monkeypatch.setattr(
+            "core.run.output._resolve_active_project", lambda: None,
+        )
+        assert _find_cached_extraction(archive, safe_cache_name) is None
