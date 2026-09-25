@@ -21,6 +21,13 @@ from typing import Any, BinaryIO
 
 from core.sandbox import run_trusted
 
+# ONE entropy primitive repo-wide — deliberately shared with the ELF
+# tier so the number means the same thing on every facts record. Its
+# packedness-refusal rationale (entropy is a measurement, never a
+# packed/encrypted verdict) travels with it; any change to that
+# posture is amended THERE, beside is_packed.
+from core.binary.elf import _shannon_entropy
+
 from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 
 logger = logging.getLogger(__name__)
@@ -443,12 +450,113 @@ _MAX_LOAD_COMMANDS = 4096
 # would spin on or re-read the same bytes — so it is a hard walk abort,
 # never a skip.
 _MIN_LOAD_COMMAND_SIZE = 8
+# lc_str names retained per command, in BYTES. Install names and
+# rpaths are filesystem paths — macOS bounds a path at MAXPATHLEN
+# (1024), so this truncates no real name; anything longer is crafted
+# text, and every retained byte is multiplied by the per-kind list
+# caps below. The name bytes are bounded within their own command's
+# cmdsize either way (walk invariant d) — this cap bounds what the
+# RECORD retains, marker-visibly.
+_MAX_LC_NAME_BYTES = 1024
+# Dylib names retained per linkage kind. Heavyweight real images
+# (Qt / Electron app frameworks) link a few hundred dylibs, so a lower
+# cap would drop genuine linkage facts; a higher one multiplies
+# retained attacker text. Once a kind's list is full its NAME BYTES
+# are no longer even read — only the header walk continues — and the
+# per-kind COUNT keeps counting, so the record never under-reports how
+# much linkage the file claims.
+_MAX_DYLIB_NAMES = 512
+# Rpath entries retained. Real rpath counts are single digits; two
+# orders of headroom, same fan-out and stop-reading logic as the
+# dylib cap.
+_MAX_RPATHS = 256
+# Total lc_str name BYTES one file's walk may retain, shared across
+# every slice of a fat container (same value and rationale as the ELF
+# import walk's _MAX_TOTAL_NAME_BYTES): the per-kind list caps bound
+# each slice, but 64 fat entries aliasing one crafted slice would
+# multiply the retained text 64-fold — the worst small-file record
+# must stay bounded by a budget the attacker cannot dodge by adding
+# slices. Real fat binaries carry a few hundred KB of names across
+# 2-5 slices; on breach names stop being retained OR READ (counts
+# keep counting) with a marker, never silently.
+_MAX_TOTAL_NAME_BYTES = 8 * 1024 * 1024
+# Section records retained per slice. Real slices carry well under a
+# hundred sections; nsects is an attacker u32 on EVERY segment command
+# and the segment count is bounded only by the load-command cap, so
+# without a record cap a crafted slice buys thousands of rows per
+# segment times thousands of segments.
+_MAX_SECTION_RECORDS = 2_048
+# ---- Entropy caps: same values and both-direction rationale as the
+# ELF facts extractor (core.binary.elf) — the tiers measure the same
+# fact and must degrade identically, so a consumer comparing
+# elf/pe/macho records never reads a cap difference as a content
+# difference. Value-coupled to the ELF module by the cap-parity test.
+# The total budget is FILE-level, shared across every slice of a fat
+# container: 64 fat entries must not multiply the IO bound the ELF
+# tier fixed per file.
+_MAX_ENTROPY_SECTION_BYTES = 4 * 1024 * 1024
+_MAX_ENTROPY_TOTAL_BYTES = 64 * 1024 * 1024
+_MAX_ENTROPY_SECTIONS = 2_048
 
-# Load-command types this walk parses. Values are the fixed struct
-# sizes from <mach-o/loader.h>; LC_REQ_DYLD (0x80000000) is part of the
-# command value where Apple defines it so.
+# Load-command types this walk parses. LC_REQ_DYLD (0x80000000) is
+# part of the command value where <mach-o/loader.h> defines it so.
 _LC_REQ_DYLD = 0x80000000
+_LC_SEGMENT = 0x1
+_LC_UNIXTHREAD = 0x5
+_LC_DYSYMTAB = 0xB
+_LC_LOAD_DYLIB = 0xC
+_LC_LOAD_WEAK_DYLIB = 0x18 | _LC_REQ_DYLD
+_LC_SEGMENT_64 = 0x19
 _LC_UUID = 0x1B
+_LC_RPATH = 0x1C | _LC_REQ_DYLD
+_LC_REEXPORT_DYLIB = 0x1F | _LC_REQ_DYLD
+_LC_CODE_SIGNATURE = 0x1D
+_LC_VERSION_MIN_MACOSX = 0x24
+_LC_VERSION_MIN_IPHONEOS = 0x25
+_LC_MAIN = 0x28 | _LC_REQ_DYLD
+_LC_VERSION_MIN_TVOS = 0x2F
+_LC_VERSION_MIN_WATCHOS = 0x30
+_LC_BUILD_VERSION = 0x32
+
+# The three linkage kinds this record distinguishes; LC_ID_DYLIB and
+# lazy/upward variants stay unparsed by design (linkage facts, not a
+# loader model).
+_DYLIB_KINDS: dict[int, str] = {
+    _LC_LOAD_DYLIB: "load",
+    _LC_LOAD_WEAK_DYLIB: "weak",
+    _LC_REEXPORT_DYLIB: "reexport",
+}
+
+# Legacy min-OS commands: the platform is implied by the command.
+_LC_VERSION_MIN_PLATFORM: dict[int, str] = {
+    _LC_VERSION_MIN_MACOSX: "macos",
+    _LC_VERSION_MIN_IPHONEOS: "ios",
+    _LC_VERSION_MIN_TVOS: "tvos",
+    _LC_VERSION_MIN_WATCHOS: "watchos",
+}
+
+# LC_BUILD_VERSION platform enum. Values outside the map FAIL OPEN as
+# "platform_<raw>" — the field is attacker-controlled and a new Apple
+# platform must never make the fact silently vanish.
+_BUILD_VERSION_PLATFORMS: dict[int, str] = {
+    1: "macos",
+    2: "ios",
+    3: "tvos",
+    4: "watchos",
+    5: "bridgeos",
+    6: "maccatalyst",
+    7: "ios_simulator",
+    8: "tvos_simulator",
+    9: "watchos_simulator",
+    10: "driverkit",
+    11: "visionos",
+    12: "visionos_simulator",
+}
+
+# Section-type values that occupy no file bytes (S_ZEROFILL,
+# S_GB_ZEROFILL, S_THREAD_LOCAL_ZEROFILL) — entropy absence on these
+# is truthful, not a gap.
+_S_ZEROFILL_TYPES = {0x1, 0x4, 0x12}
 
 # Fixed-header size per PARSED command type. A cmdsize below the fixed
 # size of a command this walk decodes means the bytes it would decode
@@ -458,11 +566,97 @@ _LC_UUID = 0x1B
 # read, and an unknown type must not hide the rest of the walk
 # (fail-open, mirroring the ELF export-type doctrine).
 _LC_PARSED_FIXED_SIZE: dict[int, int] = {
+    _LC_SEGMENT: 56,
+    _LC_DYSYMTAB: 80,
+    _LC_LOAD_DYLIB: 24,
+    _LC_LOAD_WEAK_DYLIB: 24,
+    _LC_SEGMENT_64: 72,
     _LC_UUID: 24,
+    _LC_RPATH: 12,
+    _LC_CODE_SIGNATURE: 16,
+    _LC_VERSION_MIN_MACOSX: 16,
+    _LC_VERSION_MIN_IPHONEOS: 16,
+    _LC_MAIN: 24,
+    _LC_VERSION_MIN_TVOS: 16,
+    _LC_VERSION_MIN_WATCHOS: 16,
+    _LC_BUILD_VERSION: 24,
+    _LC_REEXPORT_DYLIB: 24,
 }
 
 # mach_header is 28 bytes; mach_header_64 appends a reserved u32.
 _MACH_HEADER_SIZES = {32: 28, 64: 32}
+
+
+@dataclass
+class _SliceWalkState:
+    """Per-slice mutable walk state.
+
+    ``section_records`` mirrors the total section rows retained on
+    this slice's record, maintained O(1) at append time. It must
+    NEVER be recomputed by summing over ``facts.segments`` per
+    segment command: that re-sum is O(segments^2) per slice — at the
+    4096-command cap, times 64 aliasing fat entries, it is billions
+    of generator steps bought by a sub-MiB file. Note the failure
+    mode deliberately: the analytic READ-COUNT ceiling holds on that
+    shape while the wall clock explodes — op counts do not price
+    CPU-per-op, so per-command work must be O(1) by construction,
+    not merely read-bounded.
+    """
+
+    section_records: int = 0
+
+
+@dataclass
+class _WalkBudgets:
+    """File-level budgets shared across every slice of a fat
+    container — a hostile file must not multiply any per-slice bound
+    by adding fat entries (defaults read the module constants at
+    instantiation so tests can pin the caps)."""
+
+    entropy_remaining: int = field(
+        default_factory=lambda: _MAX_ENTROPY_TOTAL_BYTES)
+    entropy_measured: int = 0
+    name_bytes_remaining: int = field(
+        default_factory=lambda: _MAX_TOTAL_NAME_BYTES)
+
+
+@dataclass
+class MachOSectionFact:
+    """One section row from a segment command. ``entropy`` is the
+    Shannon entropy of the section's leading file bytes (bits per
+    byte) — a deterministic measurement, never a packedness verdict
+    (see :func:`core.binary.elf.is_packed`'s recorded refusal).
+    ``None`` when nothing was measured (no file bytes, unreadable
+    data, or a cap fired — the ``caps_hit`` markers say which);
+    ``sampled < size`` means the bounded leading window was measured,
+    not the whole section. Names come from fixed 16-byte fields in the
+    hostile file — escape at render."""
+
+    segment: str
+    name: str
+    addr: int
+    size: int
+    offset: int          # file offset RELATIVE to the slice start
+    flags: int           # raw value; type bits mask _S_ZEROFILL_TYPES
+    entropy: float | None = None
+    sampled: int = 0
+
+
+@dataclass
+class MachOSegmentFact:
+    """One LC_SEGMENT / LC_SEGMENT_64 row (raw claims as the file
+    states them — nothing here is validated against the slice extent
+    except the section entropy reads, which bound themselves)."""
+
+    name: str
+    vmaddr: int
+    vmsize: int
+    fileoff: int
+    filesize: int
+    maxprot: int
+    initprot: int
+    nsects_declared: int
+    sections: list[MachOSectionFact] = field(default_factory=list)
 
 
 @dataclass
@@ -494,6 +688,33 @@ class MachOSliceFacts:
     ncmds_walked: int = 0
     sizeofcmds_declared: int = 0
     uuid: str | None = None
+    # Dylib linkage, split by kind. Lists are capped (marker on
+    # breach); the per-kind COUNTS keep counting past the cap, so the
+    # record never under-reports claimed linkage.
+    load_dylibs: list[str] = field(default_factory=list)
+    weak_dylibs: list[str] = field(default_factory=list)
+    reexport_dylibs: list[str] = field(default_factory=list)
+    dylib_counts: dict[str, int] = field(
+        default_factory=lambda: {"load": 0, "weak": 0, "reexport": 0})
+    rpaths: list[str] = field(default_factory=list)
+    # LC_DYSYMTAB symbol-range counts (export/symbol PRESENCE — the
+    # export trie and symbol-table contents stay unparsed by design).
+    # Empty dict = no LC_DYSYMTAB seen.
+    dysymtab: dict[str, int] = field(default_factory=dict)
+    # Min-OS / platform: LC_BUILD_VERSION preferred over the legacy
+    # LC_VERSION_MIN_* family regardless of command order;
+    # ``min_os_source`` says which one populated the fields.
+    platform: str | None = None
+    min_os: str | None = None
+    sdk: str | None = None          # None when the file says 0 (unset)
+    min_os_source: str | None = None   # "build_version" | "version_min"
+    entry_offset: int | None = None    # LC_MAIN entryoff
+    has_unixthread: bool = False       # presence only, by design
+    # LC_CODE_SIGNATURE: presence + DECLARED size only — the blob is
+    # never parsed here (a signature skim is its own hostile parser).
+    code_signature_present: bool = False
+    code_signature_size: int = 0
+    segments: list[MachOSegmentFact] = field(default_factory=list)
     caps_hit: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -567,7 +788,8 @@ def extract_macho_slice_facts(
                 # the walk's first read inside the declared extent
                 # (invariant c).
                 return None
-            return _extract_slice_facts_stream(handle, offset, size, eof)
+            return _extract_slice_facts_stream(
+                handle, offset, size, eof, _WalkBudgets())
     except OSError:
         return None
     except struct.error:
@@ -584,9 +806,10 @@ def _extract_facts_stream(f: BinaryIO) -> MachOFacts | None:
     if len(magic) < 4:
         return None
     caps: set[str] = set()
+    budgets = _WalkBudgets()
     if magic in _THIN_MAGICS:
         facts = MachOFacts(is_fat=False, declared_slices=1)
-        item = _extract_slice_facts_stream(f, 0, eof, eof)
+        item = _extract_slice_facts_stream(f, 0, eof, eof, budgets)
         if item is not None:
             facts.slices.append(item)
     elif magic in _FAT_MAGICS:
@@ -640,7 +863,8 @@ def _extract_facts_stream(f: BinaryIO) -> MachOFacts | None:
                 caps.add("fat_slices_overlap")
                 break
         for s_off, s_size in accepted:
-            item = _extract_slice_facts_stream(f, s_off, s_size, eof)
+            item = _extract_slice_facts_stream(
+                f, s_off, s_size, eof, budgets)
             if item is None:
                 caps.add("fat_entry_not_macho")
             else:
@@ -653,6 +877,7 @@ def _extract_facts_stream(f: BinaryIO) -> MachOFacts | None:
 
 def _extract_slice_facts_stream(
     f: BinaryIO, slice_offset: int, slice_size: int, eof: int,
+    budgets: _WalkBudgets,
 ) -> MachOSliceFacts | None:
     """Walk one slice's mach header + load commands.
 
@@ -707,15 +932,20 @@ def _extract_slice_facts_stream(
         ncmds_walk = _MAX_LOAD_COMMANDS
         caps.add("lc_ncmds_capped")
     _walk_load_commands(
-        f, facts, caps, endian=endian, bits=bits,
+        f, facts, caps, budgets, endian=endian, bits=bits,
         cmds_start=cmds_start, region_end=region_end, ncmds=ncmds_walk,
+    )
+    _measure_section_entropy(
+        f, facts, caps, slice_offset=slice_offset,
+        slice_end=slice_end, budgets=budgets,
     )
     facts.caps_hit = sorted(caps)
     return facts
 
 
 def _walk_load_commands(
-    f: BinaryIO, facts: MachOSliceFacts, caps: set[str], *,
+    f: BinaryIO, facts: MachOSliceFacts, caps: set[str],
+    budgets: _WalkBudgets, *,
     endian: str, bits: int, cmds_start: int, region_end: int,
     ncmds: int,
 ) -> None:
@@ -738,6 +968,7 @@ def _walk_load_commands(
     the slice extent and the file end.
     """
     header_fmt = f"{endian}II"
+    state = _SliceWalkState()
     cursor = cmds_start
     for _ in range(ncmds):
         if cursor + _MIN_LOAD_COMMAND_SIZE > region_end:
@@ -778,8 +1009,8 @@ def _walk_load_commands(
             caps.add("lc_walk_abort_bounds")
             break
         _parse_load_command(
-            f, facts, caps, cmd=cmd, cmdsize=cmdsize, start=cursor,
-            endian=endian,
+            f, facts, caps, budgets, state, cmd=cmd,
+            cmdsize=cmdsize, start=cursor, endian=endian,
         )
         facts.ncmds_walked += 1
         cursor += cmdsize    # strictly increasing: cmdsize >= 8 held above
@@ -794,8 +1025,47 @@ def _read_exact(f: BinaryIO, pos: int, count: int) -> bytes | None:
     return data if len(data) == count else None
 
 
+def _read_lc_name(
+    f: BinaryIO, start: int, cmdsize: int, name_off: int, fixed: int,
+    caps: set[str],
+) -> str | None:
+    """One lc_str read. Walk invariant (d): the offset is bounded
+    within its own command's cmdsize — a hostile offset (past cmdsize,
+    a "negative" u32, or pointing back into the cmd/cmdsize/fixed
+    fields) never buys a read outside the command's own bytes, and the
+    string never crosses into the next command. The retained text is
+    additionally byte-capped at capture; hostile names are stored as
+    DATA and escaped at render by consumers."""
+    if name_off < fixed or name_off >= cmdsize:
+        caps.add("lc_str_out_of_bounds")
+        return None
+    window = min(cmdsize - name_off, _MAX_LC_NAME_BYTES + 1)
+    raw = _read_exact(f, start + name_off, window)
+    if raw is None:
+        caps.add("lc_payload_unreadable")
+        return None
+    name = raw.split(b"\x00", 1)[0]
+    if len(name) > _MAX_LC_NAME_BYTES:
+        name = name[:_MAX_LC_NAME_BYTES]
+        caps.add("lc_name_truncated")
+    return name.decode("utf-8", errors="replace")
+
+
+def _decode_version(value: int) -> str:
+    """Decode the packed xxxx.yy.zz version u32."""
+    return (f"{(value >> 16) & 0xFFFF}"
+            f".{(value >> 8) & 0xFF}.{value & 0xFF}")
+
+
+def _fixed_name(raw: bytes) -> str:
+    """A fixed 16-byte segname/sectname field: NUL-trimmed, hostile
+    text decoded losslessly enough to stay data (escape at render)."""
+    return raw.split(b"\x00", 1)[0].decode("utf-8", errors="replace")
+
+
 def _parse_load_command(
-    f: BinaryIO, facts: MachOSliceFacts, caps: set[str], *,
+    f: BinaryIO, facts: MachOSliceFacts, caps: set[str],
+    budgets: _WalkBudgets, state: _SliceWalkState, *,
     cmd: int, cmdsize: int, start: int, endian: str,
 ) -> None:
     """Decode one load command's facts. ``cmdsize`` has already been
@@ -819,17 +1089,279 @@ def _parse_load_command(
             # identity, and any fact it could have steered is
             # surfaced.
             caps.add("conflicting_lc_uuid")
+    elif cmd in _DYLIB_KINDS:
+        kind = _DYLIB_KINDS[cmd]
+        facts.dylib_counts[kind] += 1
+        target = {
+            "load": facts.load_dylibs,
+            "weak": facts.weak_dylibs,
+            "reexport": facts.reexport_dylibs,
+        }[kind]
+        if len(target) >= _MAX_DYLIB_NAMES:
+            # Counted, not retained — and the name bytes are not even
+            # read: past the cap each surplus command costs only its
+            # header walk (the inertness the op-count test pins).
+            caps.add("dylib_names_capped")
+            return
+        if budgets.name_bytes_remaining <= 0:
+            # File-level retained-name budget (shared across fat
+            # slices): exhausted means no further name reads either.
+            caps.add("lc_name_budget_exhausted")
+            return
+        head = _read_exact(f, start + 8, 4)
+        if head is None:
+            caps.add("lc_payload_unreadable")
+            return
+        name_off = struct.unpack(f"{endian}I", head)[0]
+        name = _read_lc_name(f, start, cmdsize, name_off, 24, caps)
+        if name is not None:
+            budgets.name_bytes_remaining -= len(name.encode("utf-8"))
+            target.append(name)
+    elif cmd == _LC_RPATH:
+        if len(facts.rpaths) >= _MAX_RPATHS:
+            caps.add("rpaths_capped")
+            return
+        if budgets.name_bytes_remaining <= 0:
+            caps.add("lc_name_budget_exhausted")
+            return
+        head = _read_exact(f, start + 8, 4)
+        if head is None:
+            caps.add("lc_payload_unreadable")
+            return
+        name_off = struct.unpack(f"{endian}I", head)[0]
+        name = _read_lc_name(f, start, cmdsize, name_off, 12, caps)
+        if name is not None:
+            budgets.name_bytes_remaining -= len(name.encode("utf-8"))
+            facts.rpaths.append(name)
+    elif cmd == _LC_DYSYMTAB:
+        if facts.dysymtab:
+            return                      # first wins
+        payload = _read_exact(f, start + 8, 24)
+        if payload is None:
+            caps.add("lc_payload_unreadable")
+            return
+        values = struct.unpack(f"{endian}IIIIII", payload)
+        facts.dysymtab = {
+            "ilocalsym": values[0], "nlocalsym": values[1],
+            "iextdefsym": values[2], "nextdefsym": values[3],
+            "iundefsym": values[4], "nundefsym": values[5],
+        }
+    elif cmd == _LC_BUILD_VERSION:
+        payload = _read_exact(f, start + 8, 16)
+        if payload is None:
+            caps.add("lc_payload_unreadable")
+            return
+        plat_raw, minos, sdk, _ntools = struct.unpack(
+            f"{endian}IIII", payload)
+        platform = _BUILD_VERSION_PLATFORMS.get(
+            plat_raw, f"platform_{plat_raw}")   # fail open, raw kept
+        min_os = _decode_version(minos)
+        sdk_str = _decode_version(sdk) if sdk else None
+        if facts.min_os_source == "build_version":
+            # First wins; a later LC_BUILD_VERSION stating something
+            # DIFFERENT is marked (zippered images legitimately carry
+            # two — the marker records that this fact is one of
+            # several, without extending the record).
+            if (facts.platform, facts.min_os,
+                    facts.sdk) != (platform, min_os, sdk_str):
+                caps.add("multiple_build_versions")
+            return
+        # LC_BUILD_VERSION is preferred over the legacy family
+        # regardless of command order.
+        facts.platform = platform
+        facts.min_os = min_os
+        facts.sdk = sdk_str
+        facts.min_os_source = "build_version"
+    elif cmd in _LC_VERSION_MIN_PLATFORM:
+        if facts.min_os_source == "build_version":
+            return              # build_version preferred, documented
+        payload = _read_exact(f, start + 8, 8)
+        if payload is None:
+            caps.add("lc_payload_unreadable")
+            return
+        version, sdk = struct.unpack(f"{endian}II", payload)
+        platform = _LC_VERSION_MIN_PLATFORM[cmd]
+        min_os = _decode_version(version)
+        sdk_str = _decode_version(sdk) if sdk else None
+        if facts.min_os_source == "version_min":
+            # First wins; a later legacy command stating something
+            # DIFFERENT is marked (identical duplicates silent) —
+            # the same steering-visibility rule as the LC_UUID and
+            # LC_BUILD_VERSION conflicts.
+            if (facts.platform, facts.min_os,
+                    facts.sdk) != (platform, min_os, sdk_str):
+                caps.add("multiple_version_min")
+            return
+        facts.platform = platform
+        facts.min_os = min_os
+        facts.sdk = sdk_str
+        facts.min_os_source = "version_min"
+    elif cmd == _LC_MAIN:
+        if facts.entry_offset is not None:
+            return                      # first wins
+        payload = _read_exact(f, start + 8, 8)
+        if payload is None:
+            caps.add("lc_payload_unreadable")
+            return
+        facts.entry_offset = struct.unpack(f"{endian}Q", payload)[0]
+    elif cmd == _LC_UNIXTHREAD:
+        # Presence only, by design: the thread-state blob is
+        # arch-specific register soup this fact layer never decodes.
+        facts.has_unixthread = True
+    elif cmd == _LC_CODE_SIGNATURE:
+        if facts.code_signature_present:
+            return                      # first wins
+        payload = _read_exact(f, start + 8, 8)
+        if payload is None:
+            caps.add("lc_payload_unreadable")
+            return
+        _dataoff, datasize = struct.unpack(f"{endian}II", payload)
+        # Presence + DECLARED size only. The signature blob is never
+        # read here — parsing it is a separate hostile-parser problem.
+        facts.code_signature_present = True
+        facts.code_signature_size = datasize
+    elif cmd in (_LC_SEGMENT, _LC_SEGMENT_64):
+        _parse_segment(f, facts, caps, state, cmd=cmd,
+                       cmdsize=cmdsize, start=start, endian=endian)
+
+
+def _parse_segment(
+    f: BinaryIO, facts: MachOSliceFacts, caps: set[str],
+    state: _SliceWalkState, *,
+    cmd: int, cmdsize: int, start: int, endian: str,
+) -> None:
+    is64 = cmd == _LC_SEGMENT_64
+    fixed = 72 if is64 else 56
+    fmt = f"{endian}16sQQQQiiII" if is64 else f"{endian}16sIIIIiiII"
+    payload = _read_exact(f, start + 8, fixed - 8)
+    if payload is None:
+        caps.add("lc_payload_unreadable")
+        return
+    (segname, vmaddr, vmsize, fileoff, filesize, maxprot, initprot,
+     nsects, _segflags) = struct.unpack(fmt, payload)
+    segment = MachOSegmentFact(
+        name=_fixed_name(segname),
+        vmaddr=vmaddr, vmsize=vmsize,
+        fileoff=fileoff, filesize=filesize,
+        maxprot=maxprot, initprot=initprot,
+        nsects_declared=nsects,
+    )
+    facts.segments.append(segment)
+    sec_size = 80 if is64 else 68
+    # Walk invariant (d) applied to the section array: nsects is an
+    # attacker u32, but the rows live inside THIS command's bytes —
+    # only as many rows as cmdsize actually holds are read.
+    take = min(nsects, (cmdsize - fixed) // sec_size)
+    if take < nsects:
+        caps.add("segment_sections_clamped")
+    # O(1) maintained counter (see _SliceWalkState): a per-command
+    # re-sum over facts.segments here is quadratic in the segment
+    # count and invisible to the read-count pin.
+    allowance = _MAX_SECTION_RECORDS - state.section_records
+    if take > allowance:
+        take = allowance
+        caps.add("section_records_capped")
+    if take <= 0:
+        return
+    rows = _read_exact(f, start + fixed, take * sec_size)
+    if rows is None:
+        caps.add("lc_payload_unreadable")
+        return
+    row_fmt = (f"{endian}16s16sQQIIIIIIII" if is64
+               else f"{endian}16s16sIIIIIIIII")
+    for index in range(take):
+        row = rows[index * sec_size:(index + 1) * sec_size]
+        values = struct.unpack(row_fmt, row)
+        segment.sections.append(MachOSectionFact(
+            segment=_fixed_name(values[1]),
+            name=_fixed_name(values[0]),
+            addr=values[2],
+            size=values[3],
+            offset=values[4],
+            flags=values[8],
+        ))
+    state.section_records += take
+
+
+def _measure_section_entropy(
+    f: BinaryIO, facts: MachOSliceFacts, caps: set[str], *,
+    slice_offset: int, slice_end: int, budgets: _WalkBudgets,
+) -> None:
+    """Per-section entropy over each section's leading file bytes.
+
+    Walk invariant (c) again: the section ``offset`` is an attacker
+    u32 relative to the slice start — every read is bounded to the
+    slice extent (which the caller already clamped to file EOF), the
+    per-section sample window, and the FILE-level IO budget. The row
+    survives every degradation; only the measurement is skipped,
+    marker-visibly."""
+    for segment in facts.segments:
+        for section in segment.sections:
+            if (section.size == 0
+                    or (section.flags & 0xFF) in _S_ZEROFILL_TYPES):
+                continue    # no file bytes — truthful absence
+            if budgets.entropy_measured >= _MAX_ENTROPY_SECTIONS:
+                caps.add("entropy_sections_capped")
+                continue
+            if budgets.entropy_remaining <= 0:
+                caps.add("entropy_budget_exhausted")
+                continue
+            absolute = slice_offset + section.offset
+            if absolute > _MAX_SEEK_OFFSET or absolute >= slice_end:
+                caps.add("section_data_unreadable")
+                continue
+            count = min(section.size, _MAX_ENTROPY_SECTION_BYTES,
+                        budgets.entropy_remaining,
+                        slice_end - absolute)
+            try:
+                f.seek(absolute)
+                data = f.read(count)
+            except OSError:
+                # Belt-and-braces behind the offset screen: a kernel
+                # refusal costs this measurement, not the walk.
+                caps.add("section_data_unreadable")
+                continue
+            if not data:
+                caps.add("section_data_unreadable")
+                continue
+            budgets.entropy_remaining -= len(data)
+            budgets.entropy_measured += 1
+            section.sampled = len(data)
+            section.entropy = _shannon_entropy(data)
+
+
+def macho_facts_evidence(
+    binary_sha256: str, path: Path, facts: MachOFacts,
+) -> BinaryEvidenceRecord:
+    """Wrap one facts record as HEADER_BACKED evidence — the same
+    ``make_evidence`` shape the slice/bundle intake above emits."""
+    return make_evidence(
+        binary_sha256,
+        kind="macho_facts",
+        source="macho_load_commands",
+        summary=(f"Mach-O load-command facts: "
+                 f"{len(facts.slices)} slice(s) walked"),
+        tier=EvidenceTier.HEADER_BACKED,
+        confidence="confirmed",
+        reproducible=True,
+        tool="binary-intake",
+        location=str(path),
+        data={"facts": facts.to_dict()},
+    )
 
 
 __all__ = [
     "AppBundleMetadata",
     "MachOFacts",
+    "MachOSectionFact",
+    "MachOSegmentFact",
     "MachOSlice",
     "MachOSliceFacts",
     "extract_macho_facts",
     "extract_macho_slice_facts",
     "inspect_app_bundle",
     "inspect_macho_slices",
+    "macho_facts_evidence",
     "resolve_requested_slice",
     "select_slice",
 ]
