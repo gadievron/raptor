@@ -1084,6 +1084,13 @@ class TestSegmentsAndEntropy:
         more row across a second segment is capped + marked, and the
         total retained across segments never exceeds the cap."""
         cap = macho_mod._MAX_SECTION_RECORDS
+        # Fast-fail sanity ceiling BEFORE building: this test
+        # materialises cap section rows (80 bytes each), so a lifted
+        # constant must red here immediately — not as an
+        # allocation hang or CI job timeout.
+        assert cap <= 65536, (
+            f"_MAX_SECTION_RECORDS raised to {cap}: re-size this "
+            "real-value exercise deliberately")
         at_cap = extract(tmp_path, build_thin([segment_cmd(
             b"__BIG", [section_entry(b"__s", b"__BIG")] * cap)]))
         assert at_cap is not None
