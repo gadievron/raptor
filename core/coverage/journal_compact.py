@@ -163,20 +163,25 @@ def _refuse_live_run(out_dir: Path) -> None:
     try:
         from core.run.metadata import (
             STATUS_RUNNING,
-            _tool_pid_alive,
             load_run_metadata,
+            worker_liveness_for_meta,
         )
         meta = load_run_metadata(Path(out_dir))
     except Exception:  # noqa: BLE001 — metadata read is best-effort
         return
     if not meta:
         return
-    if meta.get("status") == STATUS_RUNNING \
-            and _tool_pid_alive(meta.get("tool_pid")):
+    if meta.get("status") != STATUS_RUNNING:
+        return
+    # Full-identity liveness (pid + recorded starttime; pid<=1 never
+    # live) — a reparented-to-init or recycled-pid record must not
+    # refuse compaction forever. The detail names the evidence.
+    alive, detail = worker_liveness_for_meta(meta)
+    if alive:
         raise CompactRefused(
-            f"run at {out_dir} is still in flight (recorded worker "
-            "process is alive) — refusing to compact a live run's "
-            "journal. Wait for it to stop, or kill it first."
+            f"run at {out_dir} is still in flight ({detail}) — "
+            "refusing to compact a live run's journal. Wait for it "
+            "to stop, or kill it first."
         )
 
 
