@@ -356,6 +356,26 @@ def generate_report(
     ):
         report["codeql_provision"] = provision
 
+    # Auto-siblings outcome (binary targets): a degraded pass means
+    # the audit ran UNSEEDED — the sibling-consistency hints this
+    # composition exists to inject never reached the gap queue. The
+    # skip must reach the operator with the manual escape hatch, not
+    # just the run log (same contract as the CodeQL provisioning
+    # block above).
+    try:
+        from .auto_siblings import RECEIPT_FILENAME as _AS_RECEIPT
+        auto_siblings = load_json(
+            out_dir / _AS_RECEIPT, max_bytes=_MAX_RUN_META_BYTES,
+        )
+    except Exception:  # noqa: BLE001 — reporting must not fail the run
+        logger.debug("auto-siblings receipt load failed", exc_info=True)
+        auto_siblings = None
+    if (
+        isinstance(auto_siblings, dict)
+        and auto_siblings.get("status") == "degraded"
+    ):
+        report["auto_siblings"] = auto_siblings
+
     # Phase aborts (persistent LLM auth refusal): a listed phase
     # produced NO trustworthy output — its empty results must not be
     # read as "phase ran and found nothing". Written at abort time by
@@ -1870,6 +1890,21 @@ def _format_summary(report: dict[str, Any]) -> str:
         lines.append(
             "  CodeQL steps for the affected language(s) were skipped, "
             "not refuted."
+        )
+
+    auto_siblings = report.get("auto_siblings")
+    if auto_siblings:
+        lines.append("")
+        lines.append("### ⚠️ Auto-siblings pass skipped")
+        lines.append(
+            f"  - {_line(auto_siblings.get('reason', '?'), max_chars=40)}: "
+            f"{_line(auto_siblings.get('detail', '?'), max_chars=300)}"
+        )
+        lines.append(
+            "  This audit ran without sibling-consistency hypothesis "
+            "seeds (hints only — no verdict was affected). Manual "
+            "route: `raptor-binary siblings <map-run-dir> --auto`, "
+            "then re-run with --hypothesis-seeds."
         )
 
     substrate_skips = report.get("substrate_skips")
