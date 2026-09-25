@@ -243,6 +243,46 @@ class TestCompaction:
                            match=rf"worker pid {os.getpid()} is alive"):
             compact_journal(tmp_path)
 
+    def test_corrupt_run_metadata_refused(self, tmp_path: Path) -> None:
+        """A ``.raptor-run.json`` that exists but does not parse must
+        refuse (fail closed): a run-dir writer corrupting the record
+        must not disable the live-run refusal."""
+        from core.run.metadata import RUN_METADATA_FILE
+        _reemission_run(tmp_path, n_functions=2, n_segments=3)
+        (tmp_path / RUN_METADATA_FILE).write_bytes(b"{torn json")
+        before = (tmp_path / JOURNAL_FILENAME).read_bytes()
+        with pytest.raises(CompactRefused, match="cannot be read"):
+            compact_journal(tmp_path)
+        assert (tmp_path / JOURNAL_FILENAME).read_bytes() == before
+
+    def test_non_object_run_metadata_refused(self, tmp_path: Path) -> None:
+        """Valid JSON that is not an object is the same corrupt-record
+        shape — it cannot prove the run is not in flight."""
+        from core.run.metadata import RUN_METADATA_FILE
+        _reemission_run(tmp_path, n_functions=2, n_segments=3)
+        (tmp_path / RUN_METADATA_FILE).write_text('["not", "a", "dict"]')
+        with pytest.raises(CompactRefused, match="not a JSON object"):
+            compact_journal(tmp_path)
+
+    def test_json_null_run_metadata_refused(self, tmp_path: Path) -> None:
+        """A file containing JSON ``null`` parses to the same ``None``
+        as an absent file — it must not ride the absent (permissive)
+        arm: the file exists, so it is the corrupt-record shape."""
+        from core.run.metadata import RUN_METADATA_FILE
+        _reemission_run(tmp_path, n_functions=2, n_segments=3)
+        (tmp_path / RUN_METADATA_FILE).write_text("null")
+        with pytest.raises(CompactRefused, match="not a JSON object"):
+            compact_journal(tmp_path)
+
+    def test_absent_run_metadata_compacts(self, tmp_path: Path) -> None:
+        """No metadata file at all (legacy / foreign run dirs) keeps
+        the permissive direction — those must stay compactable."""
+        from core.run.metadata import RUN_METADATA_FILE
+        _reemission_run(tmp_path, n_functions=2, n_segments=3)
+        assert not (tmp_path / RUN_METADATA_FILE).exists()
+        stats = compact_journal(tmp_path)
+        assert stats.dropped_reemissions > 0
+
     def test_missing_journal_refused(self, tmp_path: Path) -> None:
         with pytest.raises(CompactRefused, match="nothing to compact"):
             compact_journal(tmp_path)
