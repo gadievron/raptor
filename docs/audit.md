@@ -68,6 +68,7 @@ full flag table.
 | `--prior-journal <run-dir>` | Run dir whose review journal feeds prior finding-grade claims into review context (repeatable; used by `/agentic --gap-audit`) |
 | `--prior-claims <N>` | Max prior finding-grade claims injected per function (default 3; 0 disables) |
 | `--hypothesis-seeds <file>` | `sibling-hypotheses.json` seed file (repeatable); a co-located file in the output dir is picked up automatically — see [Hypothesis seeds](#hypothesis-seeds) |
+| `--seed-rereview` | Schedule a fresh review for seeds resolving to already-covered checklist functions (default off: such seeds record as `no_matching_gap` misses) — see [Hypothesis seeds](#hypothesis-seeds) |
 | `--dynamic` / `--no-dynamic` | Enable/disable dynamic validation (Frida observation / target execution) for confirmed findings |
 | `--binary <path>` / `--binary-auto` / `--no-binary-oracle` | Binary-oracle reachability enrichment of the inventory |
 | `--no-vendored-triage` | Disable the vendored/generated-code triage tier (corroborated generated files → skip tier, uncorroborated banners / vendored paths / generated-shape structure → glance tier; every decision leaves a `suppressions.jsonl` record and the run summary counts them) |
@@ -519,12 +520,41 @@ naming unknown functions are recorded misses in `fid-misses.json`
 (reason-differentiated: placeholder names and address/name conflicts
 are called out as producer errors), never run errors.
 
+Against a fully-covered target the boost has nothing to land on: a
+seed naming a function every prior run already reviewed records as a
+`no_matching_gap` miss and the audit reviews nothing.  `--seed-rereview`
+(on `run` and `resume`; default off — the flag is the operator's
+consent to re-open spend on covered code) changes exactly that case:
+a seed that resolves to a checklist function which is covered rather
+than absent is scheduled for a fresh review — hoisted through the
+same mechanism `--pin` uses, ahead of the `--budget` cut, with the
+seed's claim and disproof recipe injected at the same review-context
+seam as matched-gap seeds.  Note the consented displacement this
+implies on a partially-covered target: scheduled re-reviews claim
+budget slots first, so never-reviewed gaps can be displaced from a
+bounded run (recorded in `not-attempted.json`, like any `--pin`);
+the displacement is flag-gated and bounded by the intake's 200-seed
+record cap, and excess scheduled items beyond the budget are
+themselves cut and recorded.  Verdict reuse never satisfies a
+scheduled function (the prior verdicts stay in the journal history;
+the fresh verdict appends, its row marked `seed_rereview`), and the
+marker also bounds the consent: each seed forces at most ONE fresh
+review per run — resume segments count an already-reviewed seed as
+`rereview_already_satisfied` instead of re-scheduling it.  The
+ledger rows for scheduled seeds carry reason `rereview_scheduled`
+with the resolved address, and the intake line reports the extra
+buckets.  A seed for a function absent from the checklist entirely
+remains a miss, flag or no flag.
+
 What seeds NEVER do: they mint no findings (the Ghidra bookmarks
 bridge remains the only pre-identified-finding lane), carry no
 verdict weight, and suppress nothing — the LLM still forms and
 validates every hypothesis, and tool output is still the verdict.
 A junk or hostile seed file degrades to counted skips, never a
-failed run.
+failed run.  `--seed-rereview` does not change any of this: seeds
+still never mint findings or change verdicts, and scheduled
+re-reviews spend inside `--max-cost`/`--budget` like every other
+review.
 
 ### /agentic → /audit
 
