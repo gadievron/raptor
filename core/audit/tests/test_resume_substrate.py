@@ -122,10 +122,20 @@ class TestEligibility(unittest.TestCase):
             meta = load_json(meta_path)
             meta["status"] = "running"
             meta["tool_pid"] = os.getpid()  # demonstrably alive
+            # The liveness credential is (pid, starttime): keep the
+            # stamp coherent with the substituted pid (a mismatching
+            # stamp is the RECYCLED-pid shape, which is eligible).
+            from core.project.sessions import proc_starttime
+            start = proc_starttime(os.getpid())
+            if start is not None:
+                meta["tool_pid_start"] = start
+            else:  # off-Linux: legacy bare-pid record
+                meta.pop("tool_pid_start", None)
             save_json(meta_path, meta)
             msg = resume_ineligibility(out)
             self.assertIsNotNone(msg)
             self.assertIn("still in flight", msg)
+            self.assertIn(str(os.getpid()), msg)
 
     def test_running_with_dead_worker_eligible(self):
         """SIGKILLed run: status stuck at running, worker gone."""
@@ -140,6 +150,82 @@ class TestEligibility(unittest.TestCase):
             meta["tool_pid"] = 2 ** 22 + 12345  # beyond pid_max default
             save_json(meta_path, meta)
             self.assertIsNone(resume_ineligibility(out))
+
+    def test_running_with_init_worker_eligible(self):
+        """The detached-launch incident shape: setsid/nohup reparented
+        the orchestrator to init before start_run, so the record
+        carried tool_pid=1 — and PID 1 is always alive, so this
+        refusal was PERMANENT until the metadata was hand-edited.
+        pid<=1 is never live evidence: the resume proceeds, with the
+        decision noted."""
+        from core.json import load_json, save_json
+        from core.run import RUN_METADATA_FILE, start_run
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            start_run(out, "audit")
+            meta_path = out / RUN_METADATA_FILE
+            meta = load_json(meta_path)
+            meta["status"] = "running"
+            meta["session_pid"] = 1
+            meta["tool_pid"] = 1
+            meta.pop("tool_pid_start", None)
+            save_json(meta_path, meta)
+            from unittest import mock
+            # Reset the warn-once-per-process note so the assertion is
+            # order-independent across the test battery.
+            with mock.patch("core.run.metadata._PID1_NOTE_EMITTED",
+                            False), \
+                    self.assertLogs("core.run.metadata",
+                                    level="WARNING") as cm:
+                self.assertIsNone(resume_ineligibility(out))
+            self.assertTrue(any(
+                "never a liveness credential" in line
+                for line in cm.output))
+
+    def test_running_with_recycled_worker_eligible(self):
+        """Recycled pid: a live process holds the recorded pid, but
+        its /proc starttime differs from the stamp — the original
+        worker is dead, the run is not in flight."""
+        import os
+        from unittest import mock
+
+        from core.json import load_json, save_json
+        from core.project import sessions
+        from core.run import RUN_METADATA_FILE, start_run
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            start_run(out, "audit")
+            meta_path = out / RUN_METADATA_FILE
+            meta = load_json(meta_path)
+            meta["status"] = "running"
+            meta["tool_pid"] = os.getpid()  # alive, but...
+            meta["tool_pid_start"] = "1"    # ...another incarnation
+            save_json(meta_path, meta)
+            with mock.patch.object(sessions, "proc_starttime",
+                                   lambda pid: "777"):
+                self.assertIsNone(resume_ineligibility(out))
+
+    def test_running_with_legacy_bare_pid_record_refused(self):
+        """Legacy record (no start-time stamp), worker alive: the old
+        behaviour is preserved — refuse, naming the unverified
+        identity."""
+        import os
+
+        from core.json import load_json, save_json
+        from core.run import RUN_METADATA_FILE, start_run
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            start_run(out, "audit")
+            meta_path = out / RUN_METADATA_FILE
+            meta = load_json(meta_path)
+            meta["status"] = "running"
+            meta["tool_pid"] = os.getpid()
+            meta.pop("tool_pid_start", None)
+            save_json(meta_path, meta)
+            msg = resume_ineligibility(out)
+            self.assertIsNotNone(msg)
+            self.assertIn("still in flight", msg)
+            self.assertIn("legacy record", msg)
 
 
 class TestDriftGate(unittest.TestCase):
