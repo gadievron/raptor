@@ -1483,8 +1483,10 @@ def call_llm_for_rule_refinement(
             # spend enters the run ledger and the reservation gate.
             client = getattr(config, "llm_budget_client", None)
         if client is None:
-            from core.llm.client import LLMClient
-            client = LLMClient()
+            # Transcript seam: identical to LLMClient() with no
+            # session active.
+            from core.llm.transcript import build_llm_client
+            client = build_llm_client()
         from core.security.prompt_framing import with_audit_framing
         response = client.generate(
             prompt,

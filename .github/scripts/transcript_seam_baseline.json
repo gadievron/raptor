@@ -5,46 +5,6 @@
       "count": 2,
       "note": "patch-localisation helper on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
     },
-    "llm_client:core/audit/checker_synthesis.py::_build_llm_callable": {
-      "count": 2,
-      "note": "audit checker-synthesis client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
-    },
-    "llm_client:core/audit/corpus/run_corpus.py::_run_phase2_classify": {
-      "count": 1,
-      "note": "corpus-runner phase client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
-    },
-    "llm_client:core/audit/corpus/run_corpus.py::_run_phase2b_chains": {
-      "count": 1,
-      "note": "corpus-runner phase client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
-    },
-    "llm_client:core/audit/corpus/run_corpus.py::_run_probe": {
-      "count": 1,
-      "note": "corpus-runner probe client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
-    },
-    "llm_client:core/audit/gap_ranking.py::rank_gap_queue": {
-      "count": 2,
-      "note": "gap-queue ranking client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
-    },
-    "llm_client:core/audit/llm_review.py::call_llm_for_rule_refinement": {
-      "count": 1,
-      "note": "audit rule-refinement client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
-    },
-    "llm_client:core/audit/llm_summaries.py::run_llm_summary_pass": {
-      "count": 1,
-      "note": "audit summary-pass client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
-    },
-    "llm_client:core/audit/orchestrator.py::_run_llm_client": {
-      "count": 2,
-      "note": "audit orchestrator run client (per-run cost ledger requires a fresh client); adjudicated at census baseline cut, seam adoption tracked per-surface"
-    },
-    "llm_client:core/audit/pipeline.py::_make_llm_client": {
-      "count": 2,
-      "note": "audit pipeline client constructor; adjudicated at census baseline cut, seam adoption tracked per-surface"
-    },
-    "llm_client:core/audit/spec_inference.py::infer_spec_with_llm_sync": {
-      "count": 1,
-      "note": "spec-inference client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
-    },
     "llm_client:core/dataflow/barrier_synth.py::default_completer": {
       "count": 1,
       "note": "barrier-synthesis default completer on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"

@@ -227,8 +227,10 @@ def run_llm_summary_pass(
         # enters the run ledger and the per-call reservation gate.
         client = getattr(config, "llm_budget_client", None)
         if client is None:
-            from core.llm.client import LLMClient
-            client = LLMClient()
+            # Transcript seam: identical to LLMClient() with no
+            # session active.
+            from core.llm.transcript import build_llm_client
+            client = build_llm_client()
     except Exception:
         logger.debug("LLM client unavailable for summary pass", exc_info=True)
         return {}

@@ -33,7 +33,7 @@ def _client_raising(exc=RuntimeError("401 token expired")):
 class TestPhase2FailClosed:
     def test_exception_records_error_not_quality(self):
         findings = [_finding()]
-        with patch("core.llm.client.LLMClient",
+        with patch("core.llm.transcript.build_llm_client",
                    return_value=_client_raising()):
             rc._run_phase2_classify(findings)
         r = findings[0]
@@ -46,7 +46,7 @@ class TestPhase2FailClosed:
         n = rc._PHASE2_FAILURE_ABORT + 4
         findings = [_finding(fid=f"src/a.c:f{i}") for i in range(n)]
         client = _client_raising()
-        with patch("core.llm.client.LLMClient", return_value=client):
+        with patch("core.llm.transcript.build_llm_client", return_value=client):
             rc._run_phase2_classify(findings)
         # Only the first _PHASE2_FAILURE_ABORT calls hit the dead
         # route; the rest are marked errored without a call.
@@ -66,7 +66,7 @@ class TestPhase2FailClosed:
             RuntimeError("x"), RuntimeError("x"), ok,
             RuntimeError("x"), RuntimeError("x"), ok,
         ]
-        with patch("core.llm.client.LLMClient", return_value=client), \
+        with patch("core.llm.transcript.build_llm_client", return_value=client), \
              patch.object(rc, "structured_result",
                           return_value={"classification": "security_finding",
                                         "is_security": True}):
@@ -85,7 +85,7 @@ class TestPhase2FailClosed:
         ok = MagicMock()
         ok.cost = 0.0
         client.generate_structured.return_value = ok
-        with patch("core.llm.client.LLMClient", return_value=client), \
+        with patch("core.llm.transcript.build_llm_client", return_value=client), \
              patch.object(rc, "structured_result",
                           return_value={"classification": "quality_finding",
                                         "is_security": False}):

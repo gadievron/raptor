@@ -13511,14 +13511,16 @@ def _run_llm_client(config: OrchestratorConfig) -> Any:
     client = getattr(config, "llm_budget_client", None)
     if client is not None:
         return client
-    from core.llm.client import LLMClient
+    # Transcript seam: identical to LLMClient(...) with no session
+    # active.
+    from core.llm.transcript import build_llm_client
 
     model = (
         config.models[0]
         if config.models and config.models[0] != "default"
         else None
     )
-    return LLMClient(pinned_model=model) if model else LLMClient()
+    return build_llm_client(pinned_model=model) if model else build_llm_client()
 
 
 #: Seconds between incremental spend-floor writes from the budget

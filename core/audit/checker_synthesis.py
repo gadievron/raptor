@@ -156,14 +156,16 @@ def _build_llm_callable(config: Any):
     client = getattr(config, "llm_budget_client", None)
     if client is None:
         try:
-            from core.llm.client import LLMClient
+            # Transcript seam: identical to LLMClient(...) with no
+            # session active.
+            from core.llm.transcript import build_llm_client
         except ImportError:
             return None
         model = None
         models = getattr(config, "models", None)
         if models and models[0] != "default":
             model = models[0]
-        client = LLMClient(pinned_model=model) if model else LLMClient()
+        client = build_llm_client(pinned_model=model) if model else build_llm_client()
     if not hasattr(client, "generate_structured"):
         return None
 
