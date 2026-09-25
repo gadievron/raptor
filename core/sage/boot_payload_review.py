@@ -210,7 +210,7 @@ def _nl_lines(text: str) -> list[str]:
     variant as already decided. Raw-``\\n`` scanning keeps embedded
     text inside the section body.
     """
-    lines = text.split("\n")
+    lines = text.split("\n")  # line-model: deliberate \n-only byte model over the raw payload capture (newline="" read)
     if lines and lines[-1] == "":
         # Mirror splitlines() on \n-terminated text: no phantom last line.
         lines.pop()
@@ -705,7 +705,7 @@ def strip_tools_text(text: str) -> str:
     """
     out = []
     in_tools = False
-    for line in text.split("\n"):
+    for line in text.split("\n"):  # line-model: deliberate \n-only byte model over the raw payload capture (newline="" read)
         if line.startswith("### "):
             in_tools = line[4:].strip() == SURFACE_TOOLS
         if not in_tools:

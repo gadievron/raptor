@@ -385,7 +385,7 @@ def _quote_body(s: str) -> str:
     ``| | exit=0`` — visibly quoted). See the label-preserving
     excerpting contract in :mod:`core.security.log_sanitisation`.
     """
-    return "\n".join("| " + line for line in _esc(s).split("\n"))
+    return "\n".join("| " + line for line in _esc(s).split("\n"))  # line-model: escape_nonprintable above renders any \r inert
 
 
 def missing_validation_report(run_dir: Path) -> str | None:

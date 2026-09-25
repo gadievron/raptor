@@ -2746,7 +2746,7 @@ def _print_code_findings(merged, detailed: bool=False) -> None:
             or rep.get("reasoning")
         )
         if reasoning and isinstance(reasoning, str):
-            rlines = reasoning.strip().split("\n")[:2]
+            rlines = reasoning.strip().split("\n")[:2]  # line-model: display slice; lines strip()-normalised and terminal-sanitised
             for ln in rlines:
                 print(f"{indent}{sanitise_for_terminal(ln.strip())}")
 
@@ -2859,7 +2859,7 @@ def _print_sca_findings_section(sca_findings, detailed: bool=False) -> None:
         print(f"  [{i:0{pad}d}] {title}")
         desc = f.get("description")
         if desc and isinstance(desc, str):
-            for ln in desc.strip().split("\n")[:2]:
+            for ln in desc.strip().split("\n")[:2]:  # line-model: display slice; lines strip()-normalised and terminal-sanitised
                 print(f"{indent}{sanitise_for_terminal(ln.strip())}")
         for reason in _sca_finding_escalations(f):
             print(f"{indent}escalated: {sanitise_for_terminal(str(reason))}")

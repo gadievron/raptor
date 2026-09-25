@@ -403,7 +403,7 @@ def _strip_json_comments(text: str) -> str:
     """
     result = []
     in_string = False  # persists across lines
-    for line in text.split('\n'):
+    for line in text.split('\n'):  # line-model: config text; a surviving \r is JSON whitespace and comment cuts drop it
         i = 0
         while i < len(line):
             ch = line[i]

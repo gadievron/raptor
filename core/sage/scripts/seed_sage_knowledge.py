@@ -318,7 +318,7 @@ def _chunk_text(text: str, max_chars: int = 1500) -> list[str]:
         # Greedy fixed-width split on `max_chars` boundaries.
         return [line[i:i + max_chars] for i in range(0, len(line), max_chars)] or [""]
 
-    for line in text.split("\n"):
+    for line in text.split("\n"):  # line-model: RAPTOR-owned tiers/ markdown, universal-newline read
         # Hard-split any line that, on its own, exceeds the budget.
         # The flush of `current` happens first so we don't merge an
         # oversized line into the previous paragraph's chunk.

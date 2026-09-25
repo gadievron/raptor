@@ -185,7 +185,7 @@ def extract_fenced_code(text: str) -> str:
     block = text.split("```", 2)[1]
     if "\n" in block:
         # Drop the fence line (optional language tag).
-        block = block.split("\n", 1)[1]
+        block = block.split("\n", 1)[1]  # line-model: LLM response fence parsing
     else:
         # Single-line block — strip a leading language tag, but only a
         # whitespace-delimited KNOWN tag (see _LEADING_LANG_TAG_RE):

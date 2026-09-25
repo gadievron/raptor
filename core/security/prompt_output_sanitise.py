@@ -77,6 +77,9 @@ _LIST_MARKER_RE = re.compile(r'(?m)^([ \t]*)([-+]|\d{1,9}[.)])([ \t])')
 # construct.
 _MD_STRUCTURE_LINE_RE = re.compile(
     r'(?m)^(?=[ \t|:=-]+$)(?=.*[-=])[ \t|:=-]+$'
+    # line-model: a \r-tailed line slips this blanking, but the
+    # escape_nonprintable pass below renders that \r as visible \x0d
+    # text — no renderer sees an intact structure line either way
 )
 
 # Report-side autofetch supplement: forms verified to slip the

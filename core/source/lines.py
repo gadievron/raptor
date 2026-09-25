@@ -85,7 +85,7 @@ def split_lines(text: str) -> list[str]:
     A single trailing empty element (text ending in ``\n``) is
     dropped, matching editor line counts for well-formed text.
     """
-    lines = text.split("\n")
+    lines = text.split("\n")  # line-model: this IS the \n-only chokepoint (one trailing \r trimmed below)
     if "\r" in text:
         lines = [
             line[:-1] if line.endswith("\r") else line

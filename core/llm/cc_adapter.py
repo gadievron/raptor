@@ -956,7 +956,7 @@ def strip_json_fences(text: str) -> str:
     last_candidate: str | None = None
     last_valid: str | None = None
     for part in parts[1::2]:
-        lines = part.strip().split("\n", 1)
+        lines = part.strip().split("\n", 1)  # line-model: LLM response fence parsing
         # First line is a language tag ("json") only when it doesn't
         # already start the JSON payload. Pre-fix the check covered
         # "{" but not "[": a fenced array whose "[" sat alone on the
@@ -1147,7 +1147,7 @@ def parse_cc_structured(
             parts = content.split("```")
             last_valid = None
             for part in parts[1::2]:
-                lines = part.strip().split("\n", 1)
+                lines = part.strip().split("\n", 1)  # line-model: LLM response fence parsing
                 # Drop a language-tag first line ("json") only when it
                 # is not itself the JSON start — same brace/bracket
                 # pair strip_json_fences uses; the previous "{"-only
