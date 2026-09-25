@@ -13,6 +13,11 @@ manifest format:
 The Benchmark itself is NOT bundled; this generator reads the
 operator-acquired clone pinned in ``core/dataflow/corpus/SOURCES.md``
 and refuses to run against any other sha (labels are sha-bound).
+
+``--per-cwe`` splits the same ground truth into one manifest per CWE
+class (the suite spans several), so each class can be run, scored,
+and compared on its own; a class whose every case is labelled
+not-real becomes an ``fp-only`` manifest.
 """
 
 from __future__ import annotations
@@ -140,6 +145,44 @@ def generate_manifest(clone_dir: Path, *, cwes: list[int] | None = None,
     }
 
 
+def generate_per_cwe_manifests(
+        clone_dir: Path, *, cwes: list[int] | None = None,
+        limit: int | None = None) -> dict[int, dict]:
+    """Split the Benchmark's ground truth into one manifest per CWE.
+
+    The suite spans several CWE classes; per-CWE manifests let each
+    class be run and compared on its own. Entry dicts are carried
+    VERBATIM from the combined manifest (never rebuilt), so any keys
+    a future label shape adds pass through unchanged. A CWE whose
+    every case is labelled not-real becomes an ``fp-only`` manifest
+    (clean regions are the measurement); a CWE with no cases at all
+    emits nothing.
+    """
+    combined = generate_manifest(clone_dir, cwes=cwes, limit=limit)
+    by_cwe: dict[int, dict] = {}
+
+    def _shell(cwe: int) -> dict:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "name": f"owasp-benchmark-java-cwe{cwe}",
+            "target": dict(combined["target"]),
+            "language": combined["language"],
+            "profile": combined["profile"],
+            "tolerance": dict(combined["tolerance"]),
+            "expected": [],
+            "clean_regions": [],
+        }
+
+    for key in ("expected", "clean_regions"):
+        for entry in combined[key]:
+            cwe = int(entry["cwe"].split("-", 1)[1])
+            by_cwe.setdefault(cwe, _shell(cwe))[key].append(entry)
+    for manifest in by_cwe.values():
+        if not manifest["expected"]:
+            manifest["corpus_kind"] = "fp-only"
+    return by_cwe
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="recall-measure owasp-manifest",
@@ -147,21 +190,51 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--clone-dir", type=Path,
                    default=Path(OWASP_DEFAULT_CLONE))
-    p.add_argument("--out", type=Path, required=True,
-                   help="manifest JSON output path")
+    p.add_argument("--out", type=Path, default=None,
+                   help="manifest JSON output path (single-manifest "
+                        "mode)")
     p.add_argument("--cwe", action="append", type=int, default=[],
                    help="restrict to CWE number (repeatable)")
     p.add_argument("--limit", type=int, default=None,
                    help="cap expected entries per CWE (sorted, "
                         "deterministic)")
+    p.add_argument("--per-cwe", action="store_true",
+                   help="emit one manifest per CWE class instead of "
+                        "the combined manifest")
+    p.add_argument("--out-dir", type=Path, default=None,
+                   help="output directory for --per-cwe manifests")
     args = p.parse_args(argv)
+    if args.per_cwe:
+        if args.out_dir is None or args.out is not None:
+            p.error("--per-cwe writes multiple manifests: pass "
+                    "--out-dir (and not --out)")
+    elif args.out is None:
+        p.error("--out is required (or use --per-cwe --out-dir)")
 
     try:
-        manifest = generate_manifest(
-            args.clone_dir, cwes=args.cwe or None, limit=args.limit)
+        if args.per_cwe:
+            manifests = generate_per_cwe_manifests(
+                args.clone_dir, cwes=args.cwe or None, limit=args.limit)
+        else:
+            manifest = generate_manifest(
+                args.clone_dir, cwes=args.cwe or None, limit=args.limit)
     except OwaspManifestError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    if args.per_cwe:
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        for cwe in sorted(manifests):
+            m = manifests[cwe]
+            path = args.out_dir / f"{m['name']}.json"
+            save_json(path, m)
+            kind = (" [fp-only]" if m.get("corpus_kind") == "fp-only"
+                    else "")
+            print(f"manifest: {path} "
+                  f"({len(m['expected'])} expected, "
+                  f"{len(m['clean_regions'])} clean regions){kind}")
+        return 0
+
     save_json(args.out, manifest)
     print(f"manifest: {args.out} "
           f"({len(manifest['expected'])} expected, "
