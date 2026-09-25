@@ -165,6 +165,83 @@ _SHADOW_PATHS = frozenset((
     *(f"/{d}" for d in _SYSTEM_RO_DIRS),
 ))
 
+# WSL-host mask set (engaged only when the running kernel identifies
+# as WSL — inert everywhere else). These are the Windows-interop and
+# driver surfaces a WSL host leaks into an otherwise-Linux-shaped
+# sandbox view; interop in particular lets code spawn WINDOWS-side
+# processes that no Linux containment layer (namespaces, Landlock,
+# seccomp) governs:
+#   /run/WSL                  — the WSL_INTEROP socket dir (the
+#                               channel /init uses to launch Windows
+#                               processes). Structurally invisible
+#                               already: step 7's fresh /run tmpfs is
+#                               fail-closed (a mount failure aborts
+#                               setup), and get_safe_env() drops
+#                               WSL_INTEROP/WSLENV (allowlist scrub).
+#                               Listed here so a readable/tool-path
+#                               bind can never re-grant the live host
+#                               socket dir into the fresh tmpfs.
+#   /proc/sys/fs/binfmt_misc  — the interop exec plumbing's
+#                               registration view (WSL registers the
+#                               PE interpreter here). Rides into the
+#                               sandbox on step 6's recursive /proc
+#                               bind; masked in step 8f. The mask is
+#                               a visibility control: binfmt dispatch
+#                               happens in the kernel regardless of
+#                               the mount view — what the masked
+#                               interpreter cannot do is REACH
+#                               Windows, because the socket dir and
+#                               env vars above are withheld.
+#   /usr/lib/wsl              — the Windows-driver/GPU library mounts
+#                               (lib/, drivers/) host-bound under the
+#                               step 4 /usr bind; masked in step 8f.
+#   /dev/dxg                  — the GPU-paravirtualisation device.
+#                               Structurally invisible already: step
+#                               5's minimal /dev never creates it,
+#                               and the extra-bind plan skips device
+#                               nodes (neither dir nor regular file),
+#                               so it cannot be re-granted either.
+# Membership in the plan loop's masked-path refusal keeps every
+# entry authoritative against caller-supplied readable binds — on
+# the caller's spelling AND on the bind's resolved destination (a
+# symlink to a masked path is refused too); the two step 8f mask
+# mounts follow the 8a evidence-dir shadow convention (O_PATH-pinned
+# mount point, empty read-only tmpfs, warn-not-abort —
+# deny-direction hardening whose primary closures are the
+# structural ones named above).
+_WSL_MASKED_PATHS: tuple[str, ...] = (
+    "/run/WSL",
+    "/proc/sys/fs/binfmt_misc",
+    "/usr/lib/wsl",
+    "/dev/dxg",
+)
+
+#: The step 8f mask-mount subset of ``_WSL_MASKED_PATHS`` (the other
+#: entries are structurally absent from the sandbox view — see above).
+_WSL_MASK_MOUNT_DIRS: tuple[str, ...] = (
+    "/proc/sys/fs/binfmt_misc",
+    "/usr/lib/wsl",
+)
+
+
+def _is_wsl_host() -> bool:
+    """WSL detection for the mask set, fail-toward-False.
+
+    Lazy import: core.sandbox must stay importable without pulling
+    core.startup in at module-import time, and by the time this runs
+    the parent's own WSL consumers (context.py's dispatch gate) have
+    already imported and cached the answer in the normal spawn flow,
+    so the post-fork call is a sys.modules + cache lookup. A failure
+    here reads as plain Linux — the detection contract every
+    core.startup.wsl consumer keeps (the masks are deny-direction
+    defence-in-depth; the load-bearing closures are structural).
+    """
+    try:
+        from core.startup import wsl as _startup_wsl
+        return bool(_startup_wsl.is_wsl())
+    except Exception:  # noqa: BLE001 — detection must never break setup
+        return False
+
 # Resolve libc via ctypes.util.find_library so we cope with glibc's
 # "libc.so.6" soname on Debian/Ubuntu AND musl's "libc.musl-*.so.1" on
 # Alpine. Hardcoding "libc.so.6" would make module import fail on
@@ -1298,11 +1375,26 @@ def setup_mount_ns(target: str | None, output: str | None,
     # dir through the child's own readable_paths. Refused loudly in
     # the plan loop below; dropping the bind NARROWS the child's view
     # and keeps the mask — the correct failure direction for a
-    # masking control.
+    # masking control. On a WSL host the Windows-interop/driver mask
+    # set (see _WSL_MASKED_PATHS) joins the same policy: the 8f mask
+    # mounts and the per-ns tmpfs/minimal-dev structural absences
+    # must stay authoritative against caller-supplied readable binds.
+    # Off-WSL the tuple is byte-identical to the pre-WSL shape.
+    _wsl_host = _is_wsl_host()
     _masked_paths: tuple = tuple(
         {f"{p}/.audit" for p in (target, output) if p}
         | ({f"{output}/.raptor-run.json"} if output else set())
+        | (set(_WSL_MASKED_PATHS) if _wsl_host else set())
     )
+    # Resolved twins of the masked paths, for the DESTINATION leg of
+    # the refusal below: the lexical check compares the caller's
+    # spelling, but the bind machinery mounts the RESOLVED source
+    # (inode-pinned), so a symlink whose destination sits at/below a
+    # masked path would bind the live host view at an off-mask
+    # spelling. realpath never raises and normalises nonexistent
+    # tails component-wise (the .audit dir may not exist yet).
+    _masked_paths_resolved: tuple = tuple(dict.fromkeys(
+        os.path.realpath(m) for m in _masked_paths))
 
     _extra_entries: list[tuple[str, int | None, bool, bool, bool]] = []
     _seen_extra_ro: set = set()
@@ -1399,6 +1491,40 @@ def setup_mount_ns(target: str | None, output: str | None,
             _extra_is_file = os.path.isfile(path)
         if not _extra_is_dir and not _extra_is_file:
             continue
+        # Masked-path refusal, DESTINATION leg: the lexical check
+        # above compares the caller's spelling, but what a bind
+        # mounts is the RESOLVED source — a symlink at an off-mask
+        # spelling whose destination sits at/below a masked path
+        # would stack the live host view of the masked content into
+        # the child at the link path. Refuse on the destination too:
+        # the pinned lane reads the PIN's own resolution (the exact
+        # inode path the bind would mount, immune to a post-pin
+        # re-point of the link); the legacy lane realpaths the
+        # entry. Same failure direction as the lexical leg —
+        # dropping the bind narrows the view and keeps the mask.
+        if _masked_paths:
+            _dest = None
+            if _extra_fd is not None:
+                try:
+                    _dest = os.readlink(f"/proc/self/fd/{_extra_fd}")
+                except OSError:
+                    _dest = None
+            if _dest is None:
+                _dest = os.path.realpath(path)
+            if any(_dest == m or _dest.startswith(m + "/")
+                   for m in _masked_paths_resolved):
+                try:
+                    _dest_b = _dest.encode("utf-8", errors="replace")
+                except Exception:  # noqa: BLE001
+                    _dest_b = b"<unencodable>"
+                warn_post_fork(
+                    b"mount_ns: refusing readable bind at masked path "
+                    + _dest_b
+                    + b" (resolved destination of a caller entry; "
+                    b"evidence-dir shadow / run-marker mask / WSL "
+                    b"interop mask stays authoritative)\n"
+                )
+                continue
         _extra_entries.append(
             (path, _extra_fd, _extra_is_dir, _extra_is_file,
              _extra_rw))
@@ -1975,6 +2101,50 @@ def setup_mount_ns(target: str | None, output: str | None,
                     + b" (errno=%d); target will not see this file\n"
                     % (exc.errno or 0)
                 )
+
+    # 8f. WSL host: mask the Windows-interop/driver directories that
+    # ride the host binds into the view (the binfmt_misc registration
+    # mount under the step 6 /proc bind; /usr/lib/wsl under the step 4
+    # /usr bind — host-root mode; in rootfs mode the path exists only
+    # if the image ships it, and masking an image copy is harmless in
+    # the deny direction). Placed LAST among the mount steps so no
+    # extra bind, persona overlay, or etc_overlay entry can stack a
+    # live view back on top; the plan loop's masked-path refusal
+    # already rejects binds at or below each entry. Same convention
+    # as the 8a evidence-dir shadow: O_PATH-pinned mount point (never
+    # a twice-resolved pathname), a single empty read-only tmpfs, and
+    # a warn-not-abort failure direction — these masks are
+    # deny-direction hardening; the interop ESCAPE channel is closed
+    # structurally (fresh /run tmpfs is fail-closed, WSL_INTEROP /
+    # WSLENV are dropped by the env allowlist scrub). Inert off-WSL:
+    # _wsl_host is False and no mount is attempted.
+    if _wsl_host:
+        for _wsl_dir in _WSL_MASK_MOUNT_DIRS:
+            _wsl_mp = f"{root}{_wsl_dir}"
+            try:
+                _wfd = os.open(_wsl_mp, os.O_PATH | os.O_NOFOLLOW
+                               | os.O_DIRECTORY | os.O_CLOEXEC)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                warn_post_fork(
+                    b"sandbox: mount_ns: WSL mask target "
+                    + _wsl_dir.encode("ascii")
+                    + b" is not an openable directory; mask skipped\n"
+                )
+                continue
+            try:
+                _mount("tmpfs", f"/proc/self/fd/{_wfd}", "tmpfs",
+                       MS_RDONLY, "mode=700")
+            except OSError as exc:
+                warn_post_fork(
+                    b"sandbox: mount_ns: WSL interop mask failed for "
+                    + _wsl_dir.encode("ascii")
+                    + b" (errno=%d); the host view of this path stays "
+                    b"readable in the sandbox\n" % (exc.errno or 0)
+                )
+            finally:
+                os.close(_wfd)
 
     # 9. pivot_root. put_old must be a directory INSIDE new_root.
     # Last pre-pivot marker: the trace file lives on a HOST path, so
