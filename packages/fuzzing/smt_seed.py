@@ -35,6 +35,7 @@ from one is traceable back to the finding that predicted it.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import struct
 from dataclasses import dataclass, field
@@ -44,6 +45,7 @@ from typing import Any
 
 from core.atomic_fs import write_new_bytes, write_text_atomically
 from core.json import load_json, save_json
+from core.source import read_text_capped
 
 # Analysis-report / attack-path artifacts are RAPTOR-written run
 # output — the audit-artifact budget class.
@@ -60,6 +62,17 @@ SEED_LEN_CAP = 1024 * 1024
 MAX_WITNESSES = 200
 MAX_SEEDS = 512
 MAX_DICT_ENTRIES = 1024
+
+# Read bound for the two dictionary files ``merge_witness_dict``
+# consumes out of the reused run dir. Downward pressure: both names
+# are predictable and the dir was writable by the previous campaign's
+# sandboxed target, so an unbounded read of a planted file is a
+# parent-process memory lever — past the cap the merge refuses.
+# Upward pressure: AFL-style dictionaries are one short token per
+# line (MAX_DICT_ENTRIES witness tokens render well under 256 KiB),
+# and audit-mined operator dictionaries stay orders of magnitude
+# under 4 MiB — a legitimate dict must never hit the refusal.
+MAX_DICT_FILE_CHARS = 4 * 1024 * 1024
 
 SEED_DIR_NAME = "smt-seeds"
 MANIFEST_NAME = "smt-seeds-manifest.json"
@@ -379,17 +392,60 @@ def merge_witness_dict(seed_dir: Path, run_out_dir: Path) -> Path | None:
     did not pass ``--dict`` (see ``audit_dict``), so appending here
     needs no new runner plumbing. Existing lines (e.g. audit-mined
     tokens) are preserved; duplicates are dropped.
+
+    Both files sit at predictable names inside the reused run dir the
+    previous campaign's sandboxed target could write, and this runs in
+    the unsandboxed parent — so the reads are hardened
+    (``read_text_capped``: O_NOFOLLOW + fstat-S_ISREG, bounded).
+    ``Path.read_text`` followed a planted symlink here, copying
+    operator-readable file content into the merged ``fuzz.dict`` the
+    NEXT campaign's sandboxed target can read; an unbounded read of a
+    planted multi-GB file was a parent memory lever. A planted
+    non-regular ``fuzz.dict`` is refused loudly and REPLACED by the
+    atomic write (its content is never read); a hostile witness dict
+    or an over-``MAX_DICT_FILE_CHARS`` file on either side refuses
+    the whole merge loudly.
     """
     witness_dict = Path(seed_dir) / "smt-witness.dict"
-    if not witness_dict.is_file():
+    witness_got = read_text_capped(witness_dict, MAX_DICT_FILE_CHARS)
+    if witness_got is None:
+        if os.path.lexists(witness_dict):
+            logger.warning(
+                "refusing witness-dict merge: %s is not a readable "
+                "regular file (planted symlink/FIFO in the reused "
+                "run dir?)", witness_dict)
         return None
+    witness_text, witness_truncated = witness_got
+    if witness_truncated:
+        logger.warning(
+            "refusing witness-dict merge: %s exceeds the %d-char "
+            "dictionary bound", witness_dict, MAX_DICT_FILE_CHARS)
+        return None
+
     target = Path(run_out_dir) / "fuzz.dict"
     existing: list[str] = []
-    if target.is_file():
-        existing = target.read_text(encoding="utf-8").splitlines()
+    target_got = read_text_capped(target, MAX_DICT_FILE_CHARS)
+    if target_got is not None:
+        target_text, target_truncated = target_got
+        if target_truncated:
+            logger.warning(
+                "refusing witness-dict merge: %s exceeds the %d-char "
+                "dictionary bound — left untouched", target,
+                MAX_DICT_FILE_CHARS)
+            return None
+        existing = target_text.splitlines()
+    elif os.path.lexists(target):
+        # Present but not a readable regular file: a planted symlink
+        # (dangling ones pass exists()==False), FIFO, or directory.
+        # Never read through it — merge from empty; the atomic write
+        # below replaces the plant itself, never what it points at.
+        logger.warning(
+            "%s is not a readable regular file (planted symlink/FIFO "
+            "in the reused run dir?) — its content is NOT merged; "
+            "the witness dict replaces it", target)
     seen = set(existing)
     added = [
-        line for line in witness_dict.read_text(encoding="utf-8").splitlines()
+        line for line in witness_text.splitlines()
         if line and line not in seen
     ]
     if not added:

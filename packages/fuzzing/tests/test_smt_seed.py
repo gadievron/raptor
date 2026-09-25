@@ -241,6 +241,76 @@ class TestMergeWitnessDict:
         assert merge_witness_dict(seed_dir, tmp_path) is None
         assert not (tmp_path / "fuzz.dict").exists()
 
+    def test_planted_fuzz_dict_symlink_never_read(self, tmp_path, caplog):
+        """The merge runs in the unsandboxed parent over a run dir the
+        previous campaign's sandboxed target could write. A planted
+        symlink at the predictable fuzz.dict name must be refused
+        loudly, never read through — Path.read_text followed it and
+        copied operator-readable file content into the merged dict
+        the NEXT campaign's sandboxed target can read."""
+        seed_dir = tmp_path / "smt-seeds"
+        seed_dir.mkdir()
+        (seed_dir / "smt-witness.dict").write_text('smt_a="\\x01"\n')
+        secret = tmp_path / "operator-secret"
+        secret.write_text("SECRET-LINE\n")
+        (tmp_path / "fuzz.dict").symlink_to(secret)
+
+        with caplog.at_level("WARNING", logger="packages.fuzzing.smt_seed"):
+            target = merge_witness_dict(seed_dir, tmp_path)
+
+        merged = target.read_text()
+        assert "SECRET" not in merged
+        assert 'smt_a="\\x01"' in merged
+        assert not target.is_symlink()  # plant replaced, not followed
+        assert secret.read_text() == "SECRET-LINE\n"  # untouched
+        assert any("not a readable regular file" in r.message
+                   for r in caplog.records)
+
+    def test_planted_witness_dict_symlink_refuses_merge(self, tmp_path, caplog):
+        seed_dir = tmp_path / "smt-seeds"
+        seed_dir.mkdir()
+        secret = tmp_path / "operator-secret"
+        secret.write_text("SECRET-LINE\n")
+        (seed_dir / "smt-witness.dict").symlink_to(secret)
+        (tmp_path / "fuzz.dict").write_text('audit_tok="X"\n')
+
+        with caplog.at_level("WARNING", logger="packages.fuzzing.smt_seed"):
+            assert merge_witness_dict(seed_dir, tmp_path) is None
+
+        # No merge happened and nothing leaked.
+        assert (tmp_path / "fuzz.dict").read_text() == 'audit_tok="X"\n'
+        assert any("refusing witness-dict merge" in r.message
+                   for r in caplog.records)
+
+    def test_oversize_fuzz_dict_refused_untouched(self, tmp_path, caplog):
+        from packages.fuzzing.smt_seed import MAX_DICT_FILE_CHARS
+
+        seed_dir = tmp_path / "smt-seeds"
+        seed_dir.mkdir()
+        (seed_dir / "smt-witness.dict").write_text('smt_a="\\x01"\n')
+        blob = "a" * (MAX_DICT_FILE_CHARS + 1)
+        (tmp_path / "fuzz.dict").write_text(blob)
+
+        with caplog.at_level("WARNING", logger="packages.fuzzing.smt_seed"):
+            assert merge_witness_dict(seed_dir, tmp_path) is None
+
+        assert (tmp_path / "fuzz.dict").read_text() == blob  # untouched
+        assert any("dictionary bound" in r.message for r in caplog.records)
+
+    def test_oversize_witness_dict_refused(self, tmp_path, caplog):
+        from packages.fuzzing.smt_seed import MAX_DICT_FILE_CHARS
+
+        seed_dir = tmp_path / "smt-seeds"
+        seed_dir.mkdir()
+        (seed_dir / "smt-witness.dict").write_text(
+            "a" * (MAX_DICT_FILE_CHARS + 1))
+
+        with caplog.at_level("WARNING", logger="packages.fuzzing.smt_seed"):
+            assert merge_witness_dict(seed_dir, tmp_path) is None
+
+        assert not (tmp_path / "fuzz.dict").exists()
+        assert any("dictionary bound" in r.message for r in caplog.records)
+
 
 class TestEndToEnd:
     def test_dir_scan_to_artifacts(self, tmp_path):
