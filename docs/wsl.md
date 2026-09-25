@@ -1,0 +1,166 @@
+# Running RAPTOR under WSL
+
+**Related documentation:**
+[Sandbox](sandbox.md) |
+[Dependencies](dependencies.md) |
+[Environment Variables](environment.md) |
+[Troubleshooting](troubleshooting.md)
+
+RAPTOR runs on WSL2 (Windows Subsystem for Linux). WSL2 is a real
+Linux kernel in a lightweight VM, so the analysis pipeline behaves as
+on any Linux host; the differences that matter are the kernel build
+(stock WSL2 kernels ship without Landlock), the Windows-interop
+mounts (`/mnt/c` and friends), and a couple of tools that need
+hardware or Windows-side services. WSL1 is not a supported target —
+it emulates Linux syscalls rather than running a Linux kernel, and
+the sandbox layers RAPTOR's untrusted-exec contract requires are not
+available there.
+
+The startup banner and `raptor doctor` print a WSL section on WSL
+hosts covering the points below for your specific machine.
+
+
+## Setup
+
+Inside your WSL2 distro, install RAPTOR exactly as on native Linux
+([dependencies](dependencies.md)) and launch with `bin/raptor`. Two
+placement rules save the most pain:
+
+* **Keep the RAPTOR checkout, analysis targets, and output
+  directories on the distro's Linux filesystem** (your home
+  directory, ext4) — not under `/mnt/c`. See
+  [Windows-interop mounts](#windows-interop-mounts-mntc) below.
+* Launch from the distro side (a WSL shell), not from a Windows
+  shell pointed into the distro.
+
+
+## Landlock and the untrusted-exec floor
+
+RAPTOR's untrusted-execution contract floors at the `mount-ns` tier,
+whose Landlock layer needs kernel support ([sandbox](sandbox.md),
+"Containment floor"). Stock WSL2 kernels ship without Landlock, so
+on an unmodified WSL2 install untrusted-exec runs refuse (fail
+closed) with a message naming the remedies. There are two:
+
+### Option A — custom kernel with Landlock
+
+WSL2 lets you boot your own kernel via `.wslconfig`. Build (or
+obtain) a WSL2 kernel with `CONFIG_SECURITY_LANDLOCK=y` (Landlock is
+upstream since 5.13; Microsoft's kernel source is at
+`microsoft/WSL2-Linux-Kernel`), then in
+`%UserProfile%\.wslconfig` on the Windows side:
+
+```ini
+[wsl2]
+kernel=C:\\wsl\\bzImage
+# Landlock must also be in the active LSM list. This list is the
+# kernel's default stack with landlock prepended — match it to YOUR
+# kernel's CONFIG_LSM and verify after boot (see below).
+kernelCommandLine = lsm=landlock,lockdown,yama,integrity,apparmor,bpf
+```
+
+Then `wsl --shutdown` from Windows and relaunch the distro.
+
+If your shipped kernel already builds Landlock (check with
+`zgrep CONFIG_SECURITY_LANDLOCK /proc/config.gz` when available),
+the `kernelCommandLine` line alone — without a custom `kernel=` —
+may be all you need.
+
+**Verify on your kernel** (kernel builds and default LSM stacks
+vary, so treat the recipe as a template, not a guarantee):
+
+```bash
+cat /sys/kernel/security/lsm     # should list landlock
+sudo dmesg | grep -i landlock    # "LSM: initializing ... landlock"
+```
+
+The RAPTOR startup banner is the end-to-end check: `sandbox ✓ (...)`
+should include `landlock:abiN`.
+
+### Option B — consent to the ns-only tier
+
+If you stay on the stock kernel, consent explicitly to the `ns-only`
+containment tier for untrusted work: namespaces, fresh procfs, and
+seccomp stay enforced; the Landlock filesystem/TCP policy layer is
+absent.
+
+```bash
+# per run
+/agentic --repo <path> --sandbox-floor ns-only
+# standing, per project
+/project set sandbox-floor ns-only
+```
+
+Trade-off: this is a real containment reduction, and RAPTOR says so
+every time the consent takes effect — the project setting prints a
+banner line on each run it affects, and floor-related warnings name
+the downgraded tier. Consent semantics, precedence, and the exact
+guarantees of each tier are in [sandbox.md](sandbox.md).
+
+
+## Windows-interop mounts (`/mnt/c`)
+
+WSL2 serves Windows drives to the distro over a 9p filesystem (the
+drvfs automount family under `/mnt/<drive>`). Two properties matter
+for analysis work:
+
+* **Performance** — file I/O on `/mnt/c` is dramatically slower than
+  the distro filesystem. Scans, inventory builds, CodeQL database
+  creation, and fuzzing corpora all amplify per-file cost, so a
+  target checkout on `/mnt/c` can slow a run by an order of
+  magnitude.
+* **Lock semantics** — `flock` on a 9p mount is client-local: locks
+  are not shared with Windows or with other distros mounting the
+  same drive. RAPTOR uses `flock` for run/registry coordination, so
+  output directories on `/mnt/c` lose cross-context lock guarantees
+  silently.
+
+Keep the RAPTOR checkout, targets, and `out/` on the distro
+filesystem; clone Windows-side repos into the distro rather than
+scanning them in place. RAPTOR warns (warn-only — the run proceeds)
+when a resolved default target, output directory, or project
+target/output sits on such a mount.
+
+Case sensitivity: drvfs directories are case-insensitive by default
+(per-directory `case=` attributes can change this). RAPTOR's path
+containment fails closed under case-spelling mismatches; the visible
+effect of a case-insensitive checkout is cosmetic — two case-variant
+spellings of one file can appear as distinct entries in inventories
+and reports.
+
+The launcher's PATH scrub drops the Windows-interop PATH entries
+that WSL appends by default (they are world-writable under the
+default drvfs automount and could shadow `python3`/`claude`); on WSL
+this collapses multiple drops to one summary line (a single drop
+keeps its per-entry line). `RAPTOR_ALLOW_UNSAFE_PATH=1` keeps them
+if you accept the risk.
+
+
+## Tool notes
+
+| Tool | Status under WSL2 |
+|------|-------------------|
+| Semgrep, CodeQL, Joern, Coccinelle, tree-sitter | Work as on native Linux |
+| AFL++ (`/fuzz`) | Works; use the distro filesystem for corpora/output. `afl-system-config` wants sysctl access — run it inside the distro |
+| gdb | Works |
+| rr (`/crash-analysis` recording) | Needs CPU performance counters, which WSL2 typically does not expose to the VM — expect recording to fail. The rest of `/crash-analysis` (ASAN, gdb, coverage legs) works |
+| docker | Either enable Docker Desktop's WSL integration for the distro, or install Docker Engine inside the distro. Container-backed features (SAGE sidecar, `/cve-env`, env build-on-demand) need one of the two |
+| frida | Works for targets inside the distro; Windows-side processes are out of scope |
+
+The startup banner probes tools on your host — trust it over this
+table when they disagree.
+
+
+## Line endings (CRLF checkouts)
+
+A CRLF-normalised checkout (e.g. cloned with `core.autocrlf=true`)
+analyses correctly: RAPTOR's line model splits CRLF content to the
+same line text as LF content, and the staleness-family hashes read
+both encodings identically, so annotations and stored verdicts do
+not churn between LF and CRLF checkouts of the same code. Byte-exact
+surfaces (file-content hashes, patch application) are deliberately
+encoding-sensitive — a byte-level mismatch between differently
+encoded checkouts is a genuine re-validate signal, not an error.
+When you have the choice, clone with `core.autocrlf=input` (LF
+worktree) inside the distro; it is the encoding the wider Linux
+toolchain expects.

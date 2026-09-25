@@ -721,10 +721,14 @@ the JVM-installer caveat.
 ## Test-suite and CI knobs
 
 Read only by the test infrastructure (root `conftest.py`, per-suite
-gates) — no production code path consults them — but they change what
-a pytest run does, so anyone debugging CI needs them. The workflow
-files under `.github/workflows/` are the reference for what each CI
-tier sets.
+gates) — no production code path consults them, with one narrow
+exception: the two launcher message-shape fixtures at the end of the
+table are read by `bin/raptor` so the WSL PATH-drop aggregation is
+testable off-WSL, and by construction they can only change how a
+warning is grouped, never whether an entry is dropped. Everything
+here changes what a pytest run does, so anyone debugging CI needs
+them. The workflow files under `.github/workflows/` are the
+reference for what each CI tier sets.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -738,6 +742,8 @@ tier sets.
 | `RAPTOR_BEDROCK_E2E_MODEL` | `claude-haiku-4-5` | Model pin for the credential-gated live Bedrock e2e suites (`core/llm/tests/test_bedrock_e2e.py`, `test_bedrock_live_features.py`; both auto-skip without Bedrock credentials in env). Bare RAPTOR names gain the `anthropic.` provider segment; IDs already carrying one pass verbatim. |
 | `RAPTOR_BEDROCK_E2E_RUNTIME_MODEL` | derived | Full model ID override for the live suite's runtime-API leg, which needs a Cross-Region Inference Profile ID; unset, the regional prefix (`us.`/`eu.`/`apac.`/`au.`) is derived from `AWS_REGION`. |
 | `RAPTOR_BEDROCK_E2E_APIS` | `mantle,runtime` | Which Bedrock HTTP surfaces the live feature suite exercises: `mantle`, `runtime`, or both. |
+| `RAPTOR_TEST_PROC_VERSION` | `/proc/version` | Launcher test fixture: file the PATH-scrub's WSL kernel-identity check reads when deciding whether to aggregate world-writable interop-mount drops into one summary line. Message shape only — the drop decision is identical either way. |
+| `RAPTOR_TEST_INTEROP_ROOT` | `/mnt` | Launcher test fixture: path prefix treated as the Windows-interop automount root by the same PATH-drop aggregation. Message shape only, same guarantee. |
 
 Two more are session-internal handoffs the controller conftest mints
 and publishes for its own descendants — never set them manually:
