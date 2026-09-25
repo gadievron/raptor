@@ -1040,7 +1040,7 @@ def format_context_for_prompt(
     ):
         cp = ["\n### Callers (1-hop)"]
         for c in ctx["callers"][:10]:
-            line = c.get('line_start', '?')
+            line = _defend_line(c.get('line_start', '?'))
             ident = _defend_identifier(
                 f"{c.get('file', '?')}:{c.get('name', '?')}",
                 max_length=512,
@@ -1053,7 +1053,7 @@ def format_context_for_prompt(
     if ctx.get("callees"):
         cp = ["\n### Callees (1-hop)"]
         for c in ctx["callees"][:10]:
-            line = c.get('line_start', '?')
+            line = _defend_line(c.get('line_start', '?'))
             ident = _defend_identifier(
                 f"{c.get('file', '?')}:{c.get('name', '?')}",
                 max_length=512,
@@ -1302,7 +1302,7 @@ def format_context_for_prompt(
             ipg_lines.append(
                 f"  - guarded by "
                 f"`{_defend_identifier(str(cg.get('caller_function', '?')), max_length=200)}` "
-                f"(line {cg.get('caller_line', 0)}): "
+                f"(line {_defend_line(cg.get('caller_line', 0))}): "
                 f"{_defend_identifier(str(cg.get('guard_text', ''))[:120], max_length=160)}"
             )
         sections.append(PromptSection(
@@ -1579,14 +1579,21 @@ def format_context_for_prompt(
             "related functions. Check whether this function satisfies or "
             "violates them."),
         ]
+        # Constraint records are propagated from earlier LLM reviews
+        # of target functions — every rendered field goes through the
+        # identifier defence like the sibling sections.
         for ac in ctx["active_constraints"]:
-            src = ac.get("source", "?")
-            kind = ac.get("kind", "?")
-            target = ac.get("target", "?")
-            rule = ac.get("rule", "?")
-            violation = ac.get("violation", "")
-            cwe = ac.get("cwe", "")
-            status = ac.get("status", "open")
+            src = _defend_identifier(ac.get("source", "?"),
+                                     max_length=256)
+            kind = _defend_identifier(ac.get("kind", "?"), max_length=64)
+            target = _defend_identifier(ac.get("target", "?"),
+                                        max_length=256)
+            rule = _defend_identifier(ac.get("rule", "?"), max_length=300)
+            violation = _defend_identifier(ac.get("violation", ""),
+                                           max_length=300)
+            cwe = _defend_identifier(ac.get("cwe", ""), max_length=32)
+            status = _defend_identifier(ac.get("status", "open"),
+                                        max_length=32)
             line = f"- **{kind}** `{target}`: {rule}"
             if violation:
                 line += f" (violation: {violation})"
@@ -1618,13 +1625,21 @@ def format_context_for_prompt(
 
     if ctx.get("prior_attempts", {}).get("exemplars"):
         pp = ["\n### Prior attempts"]
+        # Exemplars are journal-derived (earlier LLM output over the
+        # target): full identifier defence, not bare tag
+        # neutralisation — the summary's newlines stayed live and the
+        # evidence field rendered raw.
         for ex in ctx["prior_attempts"]["exemplars"]:
-            tier_label = f" [{ex['tier']}]" if ex.get("tier") else ""
-            pp.append(
-                f"- {ex['cwe']}{tier_label}: "
-                f"{neutralize_tag_forgery(ex.get('summary', ''))}")
+            tier = _defend_identifier(ex.get("tier", ""), max_length=32)
+            tier_label = f" [{tier}]" if tier else ""
+            cwe = _defend_identifier(ex.get("cwe", "?"), max_length=32)
+            summary = _defend_identifier(ex.get("summary", ""),
+                                         max_length=400)
+            pp.append(f"- {cwe}{tier_label}: {summary}")
             if ex.get("evidence"):
-                pp.append(f"  Evidence: {ex['evidence']}")
+                evidence = _defend_identifier(ex["evidence"],
+                                              max_length=400)
+                pp.append(f"  Evidence: {evidence}")
         sections.append(PromptSection("prior_attempts", "\n".join(pp), 3))
 
     if ctx.get("prior_attempts", {}).get("failure_summary"):
@@ -1684,7 +1699,7 @@ def format_context_for_prompt(
                 f"{hop.get('file', '?')}:{hop.get('name', '?')}",
                 max_length=300,
             )
-            row = f"- `{ident}` (line {hop.get('line', 0)})"
+            row = f"- `{ident}` (line {_defend_line(hop.get('line', 0))})"
             # Join-then-defend: this list renders as one bare-joined
             # text run (no per-item wrapping), so the defence must see
             # the joined text — see the heading-composition note above.
@@ -1774,7 +1789,7 @@ def format_context_for_prompt(
                 )
                 fp.append(
                     f"  Upstream: `{up_ident}` "
-                    f"(line {upstream.get('line', '?')})"
+                    f"(line {_defend_line(upstream.get('line', '?'))})"
                 )
                 if up_vars:
                     fp.append(f"    Tainted vars passed to you: {up_vars}")
@@ -1811,7 +1826,7 @@ def format_context_for_prompt(
                 )
                 fp.append(
                     f"  Downstream: `{dn_ident}` "
-                    f"(line {downstream.get('line', '?')})"
+                    f"(line {_defend_line(downstream.get('line', '?'))})"
                 )
                 if dn_vars:
                     fp.append(f"    Receives tainted: {dn_vars}")
@@ -2130,12 +2145,19 @@ def format_context_for_prompt(
             "inherit a verdict, and still review the whole function, "
             "not just the claimed line."
         )
+        # The head line renders OUTSIDE the untrusted envelope the
+        # body gets — its store-derived fields (an earlier run's LLM
+        # verdict/cwe/model strings) take the identifier defence.
         for pa in ctx["prior_finding_analyses"]:
-            head = f"- Prior claim: **{pa.get('verdict') or 'unknown'}**"
+            verdict = _defend_identifier(pa.get("verdict") or "unknown",
+                                         max_length=64)
+            head = f"- Prior claim: **{verdict}**"
             if pa.get("cwe"):
-                head += f" ({pa['cwe']})"
+                cwe = _defend_identifier(pa["cwe"], max_length=32)
+                head += f" ({cwe})"
             if pa.get("model"):
-                head += f" by {pa['model']}"
+                model = _defend_identifier(pa["model"], max_length=64)
+                head += f" by {model}"
             pfa.append(head)
             # Bodies are excerpted at collection time
             # (prior_claim_excerpt_chars) — one bound, every consumer.
@@ -2866,7 +2888,7 @@ def _format_caller_contract(digest: dict[str, Any]) -> str:
             f"{site.get('file', '?')}:{site.get('caller') or '?'}",
             max_length=512,
         )
-        lines.append(f"- `{ident}` line {site.get('line', '?')}:")
+        lines.append(f"- `{ident}` line {_defend_line(site.get('line', '?'))}:")
         if site.get("excerpt"):
             block = _fenced(site["excerpt"])
             lines.append(block)
