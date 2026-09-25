@@ -2429,14 +2429,19 @@ def _stub_main_run(
     argv=None,
     source_present=True,
     resolve=lambda m: "",
+    labels=None,
+    source_text=None,
+    ensemble=None,
 ):
     """Drive main() with the LLM run stubbed out.
 
-    Sets up one label (a.c:f in repo "test"), a fake project context,
-    stubbed pin verification, deterministic model resolution
-    (*resolve*, so run stamps never depend on the host's LLM config),
-    and an isolated history store; the ensemble stub returns *rows*
-    and *run_dirs*.  Returns ``(rc, results_path, history_path)``.
+    Sets up one label (a.c:f in repo "test", overridable via
+    *labels* / *source_text*), a fake project context, stubbed pin
+    verification, deterministic model resolution (*resolve*, so run
+    stamps never depend on the host's LLM config), and an isolated
+    history store; the ensemble stub returns *rows* and *run_dirs*
+    (or use *ensemble* for a capturing stub).  Returns
+    ``(rc, results_path, history_path)``.
     """
     from contextlib import contextmanager
 
@@ -2452,10 +2457,13 @@ def _stub_main_run(
     if source_present:
         src.mkdir(exist_ok=True)
         (src / "a.c").write_text(
+            source_text
+            if source_text is not None else
             "int f(void) { return 0; }\n"
             "int pad1;\nint pad2;\nint pad3;\nint pad4;\n",
         )
-    labels = [_mk_label("a.c:f")]
+    if labels is None:
+        labels = [_mk_label("a.c:f")]
     monkeypatch.setattr(
         label_mod, "load_all_labels",
         lambda bug_class=None: labels,
@@ -2481,8 +2489,10 @@ def _stub_main_run(
     )
     monkeypatch.setattr(
         run_corpus, "_run_ensemble_audit",
-        lambda labels, dirs, **kw: (
-            list(rows or []), list(run_dirs or []),
+        ensemble if ensemble is not None else (
+            lambda labels, dirs, **kw: (
+                list(rows or []), list(run_dirs or []),
+            )
         ),
     )
     history_path = tmp_path / "history.jsonl"
@@ -3462,3 +3472,213 @@ class TestSaveDebugHostileRows:
         assert len(lines) == 1
         assert lines[0]["function_id"] == "a.c:f"
         assert lines[0]["verdict"] == "clean"
+
+
+MUTANT_SRC = (
+    "int f(char *p)\n"
+    "{\n"
+    "    if (!p)\n"
+    "        return -1;\n"
+    "    p[0] = 1;\n"
+    "    return 0;\n"
+    "}\n"
+)
+
+
+def _mutant_label(src=MUTANT_SRC):
+    from core.audit.corpus.label import (
+        FunctionLabel,
+        SourcePin,
+        compute_span_sha,
+    )
+    from core.audit.corpus.mutation import build_mutation_spec
+
+    spec = build_mutation_spec(
+        MUTANT_SRC,
+        line_start=1, line_end=7,
+        operator="drop-guard", site_line=3,
+        edits=[(3, 4, [])],
+    )
+    return FunctionLabel(
+        function_id="a.c:f",
+        bug_class="consistency",
+        expected_status="finding",
+        rationale="Synthetic drop-guard mutant.",
+        source=SourcePin(
+            repo="test", sha="x", file="a.c",
+            line_start=1, line_end=7,
+            span_sha=compute_span_sha(src, 1, 7),
+        ),
+        labeler="mutation-generator",
+        labeled_at="2026-09-23",
+        provenance_kind="synthetic_mutant",
+        mutation=spec,
+        expected_mechanism="consistency",
+        excerpt_scope="peer_set",
+    )
+
+
+class TestSyntheticMutantRuns:
+    """Single-kind runs, refusal gates, and the mutation-application
+    step: the shared fixture stays clean, the run-private excerpt
+    copy gets the verified mutation, and every artifact (rows, meta,
+    history) is kind-stamped."""
+
+    def _row(self):
+        # model "" = the run's default-model slot (conservation
+        # accounting joins rows to the model that actually ran).
+        return dict(
+            _result_row("a.c:f", expected="finding", actual="finding"),
+            model="",
+        )
+
+    def test_mixed_kind_label_set_refused(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        rc, out, _ = _stub_main_run(
+            tmp_path, monkeypatch,
+            labels=[_mk_label("b.c:g", file="b.c"), _mutant_label()],
+            source_text=MUTANT_SRC,
+        )
+        assert rc == 1
+        assert "mixes synthetic_mutant and real" in (
+            capsys.readouterr().err
+        )
+        assert not out.exists()
+
+    def test_probe_refused_for_mutants(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        rc, _, _ = _stub_main_run(
+            tmp_path, monkeypatch,
+            labels=[_mutant_label()], source_text=MUTANT_SRC,
+            argv=["--probe"],
+        )
+        assert rc == 1
+        assert "never applies mutation specs" in (
+            capsys.readouterr().err
+        )
+
+    def test_non_excerpt_scope_refused(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        rc, _, _ = _stub_main_run(
+            tmp_path, monkeypatch,
+            labels=[_mutant_label()], source_text=MUTANT_SRC,
+            argv=["--scope", "full"],
+        )
+        assert rc == 1
+        assert "require --scope excerpt" in capsys.readouterr().err
+
+    def test_splice_cross_kind_refused(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        prior = tmp_path / "real-results.json"
+        prior.write_text(json.dumps({
+            "meta": {"label_kind": "real"},
+            "results": [],
+        }))
+        rc, _, _ = _stub_main_run(
+            tmp_path, monkeypatch,
+            labels=[_mutant_label()], source_text=MUTANT_SRC,
+            argv=["--splice", str(prior)],
+        )
+        assert rc == 1
+        assert "refusing to merge across kinds" in (
+            capsys.readouterr().err
+        )
+
+    def test_real_run_refuses_mutant_splice_target(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        prior = tmp_path / "mutant-results.json"
+        prior.write_text(json.dumps({
+            "meta": {"label_kind": "synthetic_mutant"},
+            "results": [],
+        }))
+        rc, _, _ = _stub_main_run(
+            tmp_path, monkeypatch,
+            rows=[_result_row("a.c:f")],
+            argv=["--splice", str(prior)],
+        )
+        assert rc == 1
+        assert "refusing to merge across kinds" in (
+            capsys.readouterr().err
+        )
+
+    def test_mutation_applied_and_kind_stamped(
+        self, tmp_path, monkeypatch,
+    ):
+        captured = {}
+
+        def ensemble(labels, dirs, **kw):
+            tree = dirs["test"]
+            captured["text"] = (
+                Path(tree) / "a.c"
+            ).read_text(encoding="utf-8")
+            return [self._row()], []
+
+        rc, out, hist = _stub_main_run(
+            tmp_path, monkeypatch,
+            labels=[_mutant_label()], source_text=MUTANT_SRC,
+            ensemble=ensemble,
+        )
+        assert rc == 0
+        # The audited tree got the mutation; content-verified apply
+        # dropped the guard and kept the dereference.
+        assert "if (!p)" not in captured["text"]
+        assert "p[0] = 1;" in captured["text"]
+        # The shared fixture clone stays clean — mutations only ever
+        # land on the run-private excerpt copy.
+        assert (tmp_path / "repo" / "a.c").read_text() == MUTANT_SRC
+        data = json.loads(out.read_text())
+        assert data["meta"]["label_kind"] == "synthetic_mutant"
+        assert data["results"][0]["label_kind"] == "synthetic_mutant"
+        recs = [
+            json.loads(line)
+            for line in hist.read_text().splitlines()
+        ]
+        run_recs = [r for r in recs if r["record"] == "run"]
+        label_recs = [r for r in recs if r["record"] == "label"]
+        assert run_recs[0]["label_kind"] == "synthetic_mutant"
+        assert label_recs[0]["label_kind"] == "synthetic_mutant"
+
+    def test_apply_failure_refuses_before_review(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        # The fixture drifted after the mutant was generated: parent
+        # span verification must refuse the whole run (exit 1) before
+        # any review spend, and never half-mutate.
+        called = {}
+
+        def ensemble(labels, dirs, **kw):
+            called["ran"] = True
+            return [self._row()], []
+
+        drifted = MUTANT_SRC.replace("p[0] = 1;", "p[1] = 2;")
+        rc, out, _ = _stub_main_run(
+            tmp_path, monkeypatch,
+            labels=[_mutant_label(src=drifted)], source_text=drifted,
+            ensemble=ensemble,
+        )
+        assert rc == 1
+        assert "mutation application error" in capsys.readouterr().err
+        assert "ran" not in called
+        assert not out.exists()
+
+    def test_real_run_meta_stamped_real(self, tmp_path, monkeypatch):
+        rc, out, hist = _stub_main_run(
+            tmp_path, monkeypatch,
+            rows=[dict(_result_row("a.c:f"), model="")],
+        )
+        assert rc == 0
+        data = json.loads(out.read_text())
+        assert data["meta"]["label_kind"] == "real"
+        assert data["results"][0]["label_kind"] == "real"
+        recs = [
+            json.loads(line)
+            for line in hist.read_text().splitlines()
+        ]
+        assert [
+            r["label_kind"] for r in recs if r["record"] == "run"
+        ] == ["real"]

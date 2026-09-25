@@ -982,6 +982,173 @@ class TestFullRunDelta:
         assert history.full_run_delta(store, "v2") is None
 
 
+class TestLabelKindSeparation:
+    """Synthetic-mutant runs never mix with real-label runs anywhere
+    in the history surfaces: compare refuses structurally, stability
+    partitions on the kind, trend renders per-kind sections, and the
+    post-run delta reports only consider same-kind priors."""
+
+    def _store_with(self, tmp_path, records):
+        store = tmp_path / "s.jsonl"
+        history.append_records(store, records)
+        return store
+
+    def test_pre_kind_records_read_as_real(self):
+        assert history.run_label_kind(_run_rec("v1")) == "real"
+        assert history.run_label_kind(
+            _run_rec("v1", label_kind="synthetic_mutant"),
+        ) == "synthetic_mutant"
+
+    def test_run_record_carries_kind(self):
+        rec = history.build_run_record(
+            [], {}, run_id="m1", timestamp="", tree_sha="t",
+            config={}, labels_hash="",
+            label_kind="synthetic_mutant",
+        )
+        assert rec["label_kind"] == "synthetic_mutant"
+        default = history.build_run_record(
+            [], {}, run_id="v1", timestamp="", tree_sha="t",
+            config={}, labels_hash="",
+        )
+        assert default["label_kind"] == "real"
+
+    def test_label_records_carry_kind(self):
+        rows = [
+            {"function_id": "a.c:f",
+             "label_kind": "synthetic_mutant"},
+            {"function_id": "a.c:g"},
+        ]
+        recs = history.build_label_records(rows, run_id="m1")
+        assert recs[0]["label_kind"] == "synthetic_mutant"
+        assert recs[1]["label_kind"] == "real"
+
+    def test_compare_refuses_across_kinds(self):
+        real = _run_rec("v1")
+        mutant = _run_rec("m1", label_kind="synthetic_mutant")
+        with pytest.raises(ValueError, match="label kinds"):
+            history.compare_runs(real, mutant, {}, {})
+
+    def test_compare_cli_reports_cross_kind_refusal(
+        self, tmp_path, capsys,
+    ):
+        store = self._store_with(tmp_path, [
+            _run_rec("v1"),
+            _label_rec("a.c:f", "clean", run_id="v1"),
+            _run_rec("m1", label_kind="synthetic_mutant"),
+            _label_rec("a.c:f", "finding", run_id="m1",
+                       label_kind="synthetic_mutant"),
+        ])
+        rc = history.main(["--store", str(store), "compare",
+                           "v1", "m1"])
+        assert rc == 1
+        assert "label kinds" in capsys.readouterr().err
+
+    def test_same_kind_compare_notes_mutant_framing(self, tmp_path):
+        a = _run_rec("m1", label_kind="synthetic_mutant")
+        b = _run_rec("m2", label_kind="synthetic_mutant")
+        diff = history.compare_runs(a, b, {}, {})
+        out = history.format_compare(diff)
+        assert "mutation-operator regression" in out
+
+    def test_stability_partitions_on_kind(self):
+        runs = [
+            _run_rec("v1", tree="t1"),
+            _run_rec("m1", tree="t1", label_kind="synthetic_mutant"),
+            _run_rec("m2", tree="t1", label_kind="synthetic_mutant"),
+        ]
+        labels = {
+            "v1": [_label_rec("a.c:f", "clean", run_id="v1")],
+            "m1": [_label_rec("a.c:f", "finding", run_id="m1",
+                              label_kind="synthetic_mutant")],
+            "m2": [_label_rec("a.c:f", "clean", run_id="m2",
+                              label_kind="synthetic_mutant")],
+        }
+        groups = history.stability_groups(runs, labels)
+        # v1 never groups with the mutant runs despite the same tree
+        # and config; the two mutant runs group with each other.
+        assert len(groups) == 1
+        assert groups[0]["label_kind"] == "synthetic_mutant"
+        assert set(groups[0]["run_ids"]) == {"m1", "m2"}
+        assert "a.c:f" in groups[0]["unstable"]
+        assert "kind synthetic_mutant" in history.format_stability(
+            groups,
+        )
+
+    def test_trend_partitions_kinds(self):
+        runs = [
+            _run_rec("v1"),
+            _run_rec("m1", label_kind="synthetic_mutant"),
+        ]
+        labels = {
+            "v1": [_label_rec("a.c:f", "clean", run_id="v1")],
+            "m1": [_label_rec("a.c:f", "finding", run_id="m1",
+                              label_kind="synthetic_mutant")],
+        }
+        out = history.format_trend("a.c:f", runs, labels)
+        assert "Label kind: real" in out
+        assert "Label kind: synthetic_mutant" in out
+        assert "partitioned" in out
+
+    def test_full_run_delta_skips_other_kind_priors(self, tmp_path):
+        store = self._store_with(tmp_path, [
+            _run_rec("m1", label_kind="synthetic_mutant"),
+            _label_rec("a.c:f", "clean", run_id="m1",
+                       expected="finding", match=False,
+                       label_kind="synthetic_mutant"),
+            _run_rec("v1"),
+            _label_rec("a.c:f", "finding", run_id="v1",
+                       expected="finding", match=True),
+            _run_rec("m2", label_kind="synthetic_mutant"),
+            _label_rec("a.c:f", "finding", run_id="m2",
+                       expected="finding", match=True,
+                       label_kind="synthetic_mutant"),
+        ])
+        out = history.full_run_delta(store, "m2")
+        # The interleaved real run v1 is not the prior; m1 is.
+        assert out is not None
+        assert "m1" in out
+        assert "v1" not in out
+
+    def test_refire_deltas_only_same_kind_priors(self, tmp_path):
+        store = self._store_with(tmp_path, [
+            _run_rec("v1"),
+            _label_rec("a.c:f", "finding", run_id="v1",
+                       expected="finding", match=True),
+            _run_rec("m1", label_kind="synthetic_mutant"),
+            _label_rec("a.c:f", "clean", run_id="m1",
+                       expected="finding", match=False,
+                       label_kind="synthetic_mutant"),
+        ])
+        lines = history.refire_deltas(
+            store, ["a.c:f"], current_run_id="m1",
+        )
+        # The real run's record must not phrase a cross-kind flip.
+        assert len(lines) == 1
+        assert "no prior history" in lines[0]
+
+    def test_import_reads_meta_kind(self, tmp_path):
+        results = tmp_path / "mutant-results.json"
+        results.write_text(json.dumps({
+            "meta": {"label_kind": "synthetic_mutant"},
+            "results": [
+                {"function_id": "a.c:f",
+                 "label_kind": "synthetic_mutant"},
+            ],
+        }))
+        store = tmp_path / "s.jsonl"
+        run_id = history.import_results(results, store)
+        runs, labels = history.load_store(store)
+        assert history.run_label_kind(runs[0]) == "synthetic_mutant"
+        assert labels[run_id][0]["label_kind"] == "synthetic_mutant"
+
+    def test_runs_listing_shows_kind(self):
+        out = history.format_runs([
+            _run_rec("m1", label_kind="synthetic_mutant"),
+        ])
+        assert "synthetic_mutant" in out
+        assert "Kind" in out
+
+
 class TestInvalidUtf8Line:
     def test_one_bad_line_does_not_kill_the_generator(self, tmp_path):
         # The decode happens in the loop header — one invalid-UTF-8
