@@ -110,3 +110,78 @@ def test_persistent_wrong_length_warns_after_retries(
     assert journal_mac._load_or_create_key() is None
     assert len(_race_warn_calls) == 1
     assert "wrong length" in _race_warn_calls[0][1]
+
+
+class TestAdditiveFieldForwardCompat:
+    """The measured basis for persisting new facts in EXISTING row
+    fields (the mark-context body) instead of additive schema fields:
+    this reader's dataclass round-trip drops unknown fields before the
+    MAC recompute, so an additive field covered by a newer writer's
+    token demotes the whole row here."""
+
+    def _stamped_row(self, tmp_path, monkeypatch):
+        import json
+
+        from core.coverage.journal import (
+            ReviewJournalEntry,
+            append_entry,
+            now_iso,
+        )
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        run = tmp_path / "run1"
+        run.mkdir()
+        append_entry(run, ReviewJournalEntry(
+            ts=now_iso(), run_id="run1", file="a.c", function="f",
+            verdict="clean", source_hash="", line_start=1, line_end=2,
+        ))
+        return run, json.loads((run / "review-journal.jsonl").read_text())
+
+    def test_covered_additive_field_demotes_to_tampered(
+            self, tmp_path, monkeypatch):
+        import json
+
+        from core.coverage.journal import load_entries
+        run, row = self._stamped_row(tmp_path, monkeypatch)
+        row.pop(journal_mac.TOKEN_KEY, None)
+        row["future_field"] = {"sid": "inherited"}
+        row[journal_mac.TOKEN_KEY] = journal_mac.mint_row(row)
+        (run / "review-journal.jsonl").write_text(json.dumps(row) + "\n")
+        entry = load_entries(run)[0]
+        assert "future_field" not in entry.to_dict()
+        assert journal_mac.entry_provenance(entry) == journal_mac.ROW_TAMPERED
+
+    def test_uncovered_additive_field_is_ignored_and_unauthenticated(
+            self, tmp_path, monkeypatch):
+        # The complementary fact: an unknown field OUTSIDE the token's
+        # coverage does not break verification — the reader ignores
+        # unknown JSON keys — which is exactly why authority-bearing
+        # facts must ride a COVERED field, never a loose key.
+        import json
+
+        from core.coverage.journal import load_entries
+        run, row = self._stamped_row(tmp_path, monkeypatch)
+        row["future_field"] = "attacker-appended, not MAC-covered"
+        (run / "review-journal.jsonl").write_text(json.dumps(row) + "\n")
+        entry = load_entries(run)[0]
+        assert journal_mac.entry_provenance(entry) == journal_mac.ROW_VERIFIED
+        assert "future_field" not in entry.to_dict()
+
+    def test_covered_body_field_round_trips_verified(
+            self, tmp_path, monkeypatch):
+        from core.coverage.journal import (
+            ReviewJournalEntry,
+            append_entry,
+            load_entries,
+            now_iso,
+        )
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        run = tmp_path / "run2"
+        run.mkdir()
+        note = "[mark-context] tty=stdin sid=inherited envm=none"
+        append_entry(run, ReviewJournalEntry(
+            ts=now_iso(), run_id="run2", file="a.c", function="f",
+            verdict="clean", source_hash="", body=note,
+        ))
+        entry = load_entries(run)[0]
+        assert entry.body == note
+        assert journal_mac.entry_provenance(entry) == journal_mac.ROW_VERIFIED

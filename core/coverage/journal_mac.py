@@ -50,7 +50,17 @@ No run binding for JOURNAL rows: they deliberately travel across
 runs — the project index aggregates them and cross-run verdict reuse
 is the feature. A replayed validly-stamped row is genuine history
 for the exact source hash it names; staleness is bounded by the
-fold's hash compare, not the MAC.
+fold's hash compare, not the MAC, and the reuse import demotes the
+row's tool receipts to prior-claim context
+(``journal:recall:<origin>``) rather than confirming evidence. The
+one journal consumer that DOES grant a row run-attributed receipt
+authority — the journal-derived graded export — therefore adds a
+run-scope check on top of the MAC: ``run_id`` is covered by the
+token, so a verified row's run attribution is authentic, and
+receipts are honoured only when it names the consuming run
+(legacy rows without attribution grandfather with a visible
+marker). A byte-copied row still verifies as genuine INSTALL
+history; it no longer passes as another run's own record.
 
 Forward compatibility: verification round-trips the row through this
 reader's dataclass, so a row written by a NEWER schema (additive

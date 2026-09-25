@@ -603,6 +603,32 @@ def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
 
     outcomes = []
     unverified_rows = 0
+    foreign_run_rows = 0
+    unscoped_run_rows = 0
+    # The exporting run's identity for the receipt run-scope check:
+    # journal writers stamp ``run_id`` with the run dir's NAME, and
+    # the row MAC covers it (an edited run_id demotes the row to
+    # tampered). Derived from the consumer's own directory, never
+    # from a run-dir artifact. RESOLVED first: a relative spelling
+    # ("." from --out .) has name == "" — comparing against that
+    # inverted both fail directions (same-run rows read foreign;
+    # run_id="" rows read run-scoped WITH receipts and no marker).
+    # A still-empty resolved name (filesystem root) disables the
+    # run-scope tier entirely: nothing grades run-scoped, attributed
+    # rows fail toward foreign, unattributed rows keep the marked
+    # grandfather.
+    # Scope bound (documented, adjudicated): the identity is the
+    # directory BASENAME, so a same-basename dir in another project
+    # replays with receipts. Stamping a stronger identity into rows
+    # is not available — an additive row field demotes at older
+    # readers (their dataclass round-trip drops it before the MAC
+    # recompute; measured) — and basenames are operator-conventional
+    # (timestamped run names), not attacker-chosen from outside the
+    # same-user trust tier that could forge rows outright anyway.
+    try:
+        run_identity = Path(out_dir).resolve().name
+    except OSError:
+        run_identity = out_dir.name
     for entry in latest_entries(out_dir).values():
         if entry.verdict not in ("finding", "suspicious", "dark"):
             continue
@@ -619,21 +645,41 @@ def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
         review_result: dict[str, Any] = {}
         if entry.cwe:
             review_result["vuln_type"] = entry.cwe
-        # Receipt authority is tiered on row provenance: the journal
-        # lives in the target-writable run dir, and the journaled
-        # ``evidence_tools`` stamp is what mints ``confirmed_by``
-        # receipts and confidence=high downstream. Only a row whose
-        # MAC verifies (this install's writer recorded it in some
-        # run — the in-session record gate enforced tool grounding
-        # at record time) keeps its receipts; unstamped/tampered rows
-        # export receipt-less, so the grading caps their confidence
-        # at the LLM-only tier instead of shipping a forged receipt.
+        # Receipt authority is tiered on row provenance AND run
+        # scope: the journal lives in the target-writable run dir,
+        # and the journaled ``evidence_tools`` stamp is what mints
+        # ``confirmed_by`` receipts and confidence=high downstream.
+        # The row MAC is install-scoped (journal rows travel across
+        # runs by design — see core.coverage.journal_mac), so a MAC
+        # alone proves "this install's writer recorded it in SOME
+        # run" — a writer-minted row byte-copied from a sibling run
+        # dir verifies here too. Receipts therefore additionally
+        # require the MAC-covered ``run_id`` to name THIS run: only
+        # then is the row this run's own record (whose in-session
+        # record gate enforced tool grounding at record time).
+        # Unstamped/tampered rows, and verified rows attributed to
+        # another run, export receipt-less — the grading caps their
+        # confidence at the LLM-only tier instead of shipping a
+        # replayed or forged receipt. Verified rows with NO run
+        # attribution (legacy writers) are grandfathered WITH a
+        # marker: stripping every legacy receipt would regress
+        # honest old exports, and the grandfather is visible per
+        # record (``provenance.receipt_scope: install``) and per
+        # container (``derivation.unscoped_run_rows``).
         verified = (
             journal_mac.entry_provenance(entry)
             == journal_mac.ROW_VERIFIED
         )
+        receipt_scope = None
         if not verified:
             unverified_rows += 1
+        elif run_identity and entry.run_id == run_identity:
+            receipt_scope = "run"
+        elif not entry.run_id:
+            receipt_scope = "install"
+            unscoped_run_rows += 1
+        else:
+            foreign_run_rows += 1
         outcomes.append(SimpleNamespace(
             file=entry.file,
             function=entry.function,
@@ -642,9 +688,11 @@ def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
             hypothesis=hypothesis,
             review_result=review_result,
             evidence_tool=(
-                "+".join(entry.evidence_tools or []) if verified else ""
+                "+".join(entry.evidence_tools or [])
+                if receipt_scope else ""
             ),
             model=entry.model or "",
+            receipt_scope=receipt_scope,
         ))
     # out_dir deliberately NOT passed to export_findings: the
     # promotion-alarm sweep correlates orchestrator outcome objects
@@ -662,15 +710,36 @@ def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
     graded["derivation"] = {
         "source": "review-journal",
         "unverified_rows": unverified_rows,
+        "foreign_run_rows": foreign_run_rows,
+        "unscoped_run_rows": unscoped_run_rows,
     }
-    for rec in graded["findings"]:
-        rec.setdefault("provenance", {})["derivation"] = "journal"
+    # Statuses are pre-filtered above, so export_findings emits exactly
+    # one record per outcome, in order — the zip is total.
+    for rec, oc in zip(graded["findings"], outcomes):
+        prov = rec.setdefault("provenance", {})
+        prov["derivation"] = "journal"
+        if getattr(oc, "receipt_scope", None) == "install":
+            # Grandfathered receipt: the row MAC verifies but carries
+            # no run attribution (legacy writer) — receipts kept, the
+            # scope RECORDED per record. No consumer weighs the
+            # marker today; it exists so one can, and so an operator
+            # reading the export sees which receipts are install-
+            # scoped rather than run-attributed.
+            prov["receipt_scope"] = "install"
     if unverified_rows:
         logger.warning(
             "graded findings (journal-derived): %d row(s) without a "
             "verifying integrity token — exported without tool "
             "receipts (confidence capped at the LLM-only tier)",
             unverified_rows,
+        )
+    if foreign_run_rows:
+        logger.warning(
+            "graded findings (journal-derived): %d verified row(s) "
+            "attributed to another run (authenticated run_id does not "
+            "name this run dir — replayed or relocated) — exported "
+            "without tool receipts",
+            foreign_run_rows,
         )
     write_graded_findings(graded, out_dir)
     logger.info(
