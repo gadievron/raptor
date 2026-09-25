@@ -134,6 +134,15 @@ def find_understand_output(
     """
     validate_dir = Path(validate_dir)
     empty: set[str] = set()
+    # ARCHIVE targets never match anything as-is: runs on an archive
+    # extract to the content-addressed _sources/<name>-<sha>/ cache
+    # and their checklists record THAT tree as target_path, and the
+    # freshness check hashes files under target_path (nothing hashes
+    # under a file). Normalise once, up front, to the cached
+    # extraction when one exists — fail-soft to the original path
+    # (discovery simply keeps not matching, exactly the pre-fix
+    # behaviour) when the cache is absent or the probe errors.
+    target_path = _normalize_archive_target(validate_dir, target_path)
 
     # Tier 1: context-map.json (or binary-context-map.json) co-located.
     # Staleness can't be checked here — the validate rebuild overwrites
@@ -159,6 +168,55 @@ def find_understand_output(
     best_dir, stale_files = result
     logger.debug("understand output: selected %s", best_dir)
     return best_dir, stale_files
+
+
+def _normalize_archive_target(
+    validate_dir: Path, target_path: str | None,
+) -> str | None:
+    """Map an ARCHIVE target to its content-addressed extraction dir.
+
+    The cache layout mirrors ``raptor.py:_unpack_archive_target``:
+    ``<out_dir.parent>/_sources/<safe-name>-<sha>/`` — probed beside
+    THIS validate run first (project runs and shared --out siblings),
+    then under the global out root (standalone runs). The dir name
+    embeds the archive's sha256, so a hit is bound to exactly the
+    bytes being validated; a replaced archive hashes to a different
+    name and misses. Non-archive / URL / missing targets pass through
+    untouched, and any probe failure returns the original path — the
+    same no-match outcome as before this equivalence existed.
+    """
+    if not target_path or _is_url_target(target_path):
+        return target_path
+    try:
+        p = Path(target_path)
+        if not p.is_file():
+            return target_path
+        from core.archive import is_archive, safe_cache_name
+        if not is_archive(p):
+            return target_path
+        from core.run.provenance import archive_snapshot
+        snap = archive_snapshot(p)
+        if snap is None:
+            return target_path
+        cache_name = safe_cache_name(
+            snap["archive_name"], snap["archive_sha256"])
+        roots = [Path(validate_dir).resolve().parent]
+        try:
+            from core.config import RaptorConfig
+            roots.append(RaptorConfig.get_out_dir())
+        except Exception:  # noqa: BLE001 — out-root probe is best-effort
+            pass
+        for root in roots:
+            candidate = root / "_sources" / cache_name
+            if candidate.is_dir():
+                logger.debug(
+                    "understand_bridge: archive target normalised to "
+                    "cached extraction %s", candidate)
+                return str(candidate)
+    except Exception:  # noqa: BLE001 — normalisation must never break discovery
+        logger.debug("understand_bridge: archive-target normalisation "
+                     "failed", exc_info=True)
+    return target_path
 
 
 def _collect_candidates(
