@@ -537,3 +537,667 @@ class TestExplicitSliceSelection:
             p, offset=2**62 + 1, size=8) is None
         assert extract_macho_slice_facts(
             p, offset=-1, size=8) is None
+
+
+# ---------------------------------------------------------------------------
+# Builders for the fact-carrying commands
+# ---------------------------------------------------------------------------
+
+LC_LOAD_DYLIB = 0xC
+LC_LOAD_WEAK_DYLIB = 0x80000018
+LC_REEXPORT_DYLIB = 0x8000001F
+LC_RPATH = 0x8000001C
+LC_DYSYMTAB = 0xB
+LC_SYMTAB = 0x2
+LC_BUILD_VERSION = 0x32
+LC_VERSION_MIN_MACOSX = 0x24
+LC_VERSION_MIN_IPHONEOS = 0x25
+LC_MAIN = 0x80000028
+LC_UNIXTHREAD = 0x5
+LC_CODE_SIGNATURE = 0x1D
+LC_SEGMENT = 0x1
+LC_SEGMENT_64 = 0x19
+
+
+def _lc_str_pad(blob: bytes) -> bytes:
+    """Real linkers NUL-pad lc_str commands to 8-byte alignment
+    (dyld refuses unaligned cmdsize); the builders emit realistic
+    aligned commands so alignment tolerance stays a deliberate,
+    separately-tested shape."""
+    return blob + b"\x00" * ((-(8 + len(blob))) % 8)
+
+
+def dylib_cmd(name: bytes, cmd: int = LC_LOAD_DYLIB, *,
+              endian: str = "<", name_off: int = 24,
+              cmdsize: int | None = None,
+              terminate: bool = True) -> bytes:
+    payload = struct.pack(f"{endian}IIII", name_off, 0, 0x10000,
+                          0x10000)
+    blob = payload + name
+    if terminate:
+        blob = _lc_str_pad(blob + b"\x00")
+    return lc(cmd, blob, endian=endian, cmdsize=cmdsize)
+
+
+def rpath_cmd(path: bytes, *, endian: str = "<",
+              name_off: int = 12) -> bytes:
+    blob = _lc_str_pad(struct.pack(f"{endian}I", name_off)
+                       + path + b"\x00")
+    return lc(LC_RPATH, blob, endian=endian)
+
+
+def dysymtab_cmd(counts: tuple[int, int, int, int, int, int], *,
+                 endian: str = "<") -> bytes:
+    payload = struct.pack(f"{endian}6I", *counts)
+    payload += struct.pack(f"{endian}12I", *([0] * 12))
+    return lc(LC_DYSYMTAB, payload, endian=endian)
+
+
+def build_version_cmd(platform: int, minos: int, sdk: int = 0, *,
+                      endian: str = "<") -> bytes:
+    return lc(LC_BUILD_VERSION,
+              struct.pack(f"{endian}IIII", platform, minos, sdk, 0),
+              endian=endian)
+
+
+def version_min_cmd(cmd: int, version: int, sdk: int = 0, *,
+                    endian: str = "<") -> bytes:
+    return lc(cmd, struct.pack(f"{endian}II", version, sdk),
+              endian=endian)
+
+
+def main_cmd(entryoff: int, *, endian: str = "<") -> bytes:
+    return lc(LC_MAIN, struct.pack(f"{endian}QQ", entryoff, 0),
+              endian=endian)
+
+
+def codesig_cmd(dataoff: int, datasize: int, *,
+                endian: str = "<") -> bytes:
+    return lc(LC_CODE_SIGNATURE,
+              struct.pack(f"{endian}II", dataoff, datasize),
+              endian=endian)
+
+
+def section_entry(sectname: bytes, segname: bytes, *, addr: int = 0,
+                  size: int = 0, offset: int = 0, flags: int = 0,
+                  bits: int = 64, endian: str = "<") -> bytes:
+    if bits == 64:
+        return struct.pack(
+            f"{endian}16s16sQQIIIIIIII", sectname, segname, addr,
+            size, offset, 0, 0, 0, flags, 0, 0, 0)
+    return struct.pack(
+        f"{endian}16s16sIIIIIIIII", sectname, segname, addr, size,
+        offset, 0, 0, 0, flags, 0, 0)
+
+
+def segment_cmd(segname: bytes, sections: list[bytes] = (), *,  # type: ignore[assignment]
+                bits: int = 64, endian: str = "<", vmaddr: int = 0,
+                vmsize: int = 0, fileoff: int = 0, filesize: int = 0,
+                maxprot: int = 7, initprot: int = 5,
+                nsects: int | None = None,
+                cmdsize: int | None = None) -> bytes:
+    cmd = LC_SEGMENT_64 if bits == 64 else LC_SEGMENT
+    count = nsects if nsects is not None else len(sections)
+    if bits == 64:
+        fixed = struct.pack(f"{endian}16sQQQQiiII", segname, vmaddr,
+                            vmsize, fileoff, filesize, maxprot,
+                            initprot, count, 0)
+    else:
+        fixed = struct.pack(f"{endian}16sIIIIiiII", segname, vmaddr,
+                            vmsize, fileoff, filesize, maxprot,
+                            initprot, count, 0)
+    return lc(cmd, fixed + b"".join(sections), endian=endian,
+              cmdsize=cmdsize)
+
+
+def thin_with_sections(specs: list[tuple[bytes, bytes, int]], *,
+                       bits: int = 64, endian: str = "<") -> bytes:
+    """A thin Mach-O carrying ONE segment whose sections' data is
+    placed after the load commands, with truthful offsets (relative
+    to the slice start, as the format defines them)."""
+    header_size = 32 if bits == 64 else 28
+    fixed = 72 if bits == 64 else 56
+    entry = 80 if bits == 64 else 68
+    cmdsize = fixed + entry * len(specs)
+    cursor = header_size + cmdsize
+    entries: list[bytes] = []
+    tail = b""
+    for name, data, flags in specs:
+        entries.append(section_entry(
+            name, b"__CRAFT", size=len(data), offset=cursor,
+            flags=flags, bits=bits, endian=endian))
+        tail += data
+        cursor += len(data)
+    seg = segment_cmd(b"__CRAFT", entries, bits=bits, endian=endian)
+    return build_thin([seg], bits=bits, endian=endian, tail=tail)
+
+
+# ---------------------------------------------------------------------------
+# Dylib linkage + rpaths (invariant d: lc_str bounded by cmdsize)
+# ---------------------------------------------------------------------------
+
+
+class TestDylibLinkage:
+    def test_three_kinds_split_and_counted(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            dylib_cmd(b"/usr/lib/libSystem.B.dylib"),
+            dylib_cmd(b"/usr/lib/libweak.dylib",
+                      cmd=LC_LOAD_WEAK_DYLIB),
+            dylib_cmd(b"/usr/lib/libre.dylib", cmd=LC_REEXPORT_DYLIB),
+            dylib_cmd(b"@rpath/libplugin.dylib"),
+        ]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.load_dylibs == ["/usr/lib/libSystem.B.dylib",
+                                    "@rpath/libplugin.dylib"]
+        assert item.weak_dylibs == ["/usr/lib/libweak.dylib"]
+        assert item.reexport_dylibs == ["/usr/lib/libre.dylib"]
+        assert item.dylib_counts == {"load": 2, "weak": 1,
+                                     "reexport": 1}
+        assert item.caps_hit == []
+
+    def test_lc_str_offset_past_cmdsize_dropped(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            dylib_cmd(b"libx.dylib", name_off=0x4000),
+        ]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.load_dylibs == []
+        assert item.dylib_counts["load"] == 1     # counted regardless
+        assert "lc_str_out_of_bounds" in item.caps_hit
+
+    def test_lc_str_negative_ish_offset_dropped(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            dylib_cmd(b"libx.dylib", name_off=0xFFFFFFF0),
+        ]))
+        assert facts is not None
+        assert "lc_str_out_of_bounds" in facts.slices[0].caps_hit
+
+    def test_lc_str_offset_into_fixed_header_dropped(self, tmp_path):
+        # Pointing back into the cmd/cmdsize/timestamp fields is
+        # in-command but semantically bogus — refused, marked.
+        facts = extract(tmp_path, build_thin([
+            dylib_cmd(b"libx.dylib", name_off=4),
+        ]))
+        assert facts is not None
+        assert facts.slices[0].load_dylibs == []
+        assert "lc_str_out_of_bounds" in facts.slices[0].caps_hit
+
+    def test_unterminated_name_never_crosses_into_next_command(
+            self, tmp_path):
+        """No NUL inside the command: the name is exactly the bytes
+        to cmdsize (legal lc_str), and the NEXT command's bytes never
+        leak into it. (16-byte name keeps the unterminated command
+        aligned without padding.)"""
+        facts = extract(tmp_path, build_thin([
+            dylib_cmd(b"libnoterm.16byte", terminate=False),
+            uuid_cmd(b"\x41" * 16),
+        ]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.load_dylibs == ["libnoterm.16byte"]
+        assert item.uuid == "41" * 16     # next command still parsed
+        assert item.caps_hit == []
+
+    def test_name_over_the_byte_cap_truncated(self, tmp_path):
+        long_name = b"/opt/" + b"a" * (macho_mod._MAX_LC_NAME_BYTES + 50)
+        facts = extract(tmp_path, build_thin([dylib_cmd(long_name)]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert len(item.load_dylibs) == 1
+        assert (len(item.load_dylibs[0].encode("utf-8"))
+                == macho_mod._MAX_LC_NAME_BYTES)
+        assert "lc_name_truncated" in item.caps_hit
+
+    def test_list_capped_at_real_cap_counts_stay_exact(self, tmp_path):
+        cap = macho_mod._MAX_DYLIB_NAMES
+        cmds = [dylib_cmd(b"lib%d.dylib" % i) for i in range(cap + 5)]
+        facts = extract(tmp_path, build_thin(cmds))
+        assert facts is not None
+        item = facts.slices[0]
+        assert len(item.load_dylibs) == cap
+        assert item.dylib_counts["load"] == cap + 5
+        assert "dylib_names_capped" in item.caps_hit
+
+    def test_at_the_real_cap_is_clean(self, tmp_path):
+        cap = macho_mod._MAX_DYLIB_NAMES
+        cmds = [dylib_cmd(b"lib%d.dylib" % i) for i in range(cap)]
+        facts = extract(tmp_path, build_thin(cmds))
+        assert facts is not None
+        item = facts.slices[0]
+        assert len(item.load_dylibs) == cap
+        assert "dylib_names_capped" not in item.caps_hit
+
+    def test_file_level_name_budget_shared_across_slices(
+            self, tmp_path, monkeypatch):
+        """The retained-name budget is FILE-level: fat entries
+        aliasing one name-heavy slice cannot multiply the retained
+        text (the slices x names product stays bounded)."""
+        monkeypatch.setattr(macho_mod, "_MAX_TOTAL_NAME_BYTES", 10)
+        # 13 retained bytes overdraw the 10-byte budget (soft budget,
+        # like the entropy one): the SECOND slice's walk sees it
+        # exhausted.
+        inner = build_thin([dylib_cmd(b"/twelve.chars")])
+        facts = extract(tmp_path, build_fat([inner, inner]))
+        assert facts is not None
+        first, second = facts.slices
+        assert first.load_dylibs == ["/twelve.chars"]
+        assert second.load_dylibs == []
+        assert second.dylib_counts["load"] == 1    # still counted
+        assert "lc_name_budget_exhausted" in second.caps_hit
+
+
+class TestRpaths:
+    def test_rpaths_extracted_in_order(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            rpath_cmd(b"@loader_path/../Frameworks"),
+            rpath_cmd(b"/usr/local/lib"),
+        ]))
+        assert facts is not None
+        assert facts.slices[0].rpaths == [
+            "@loader_path/../Frameworks", "/usr/local/lib"]
+
+    def test_rpath_cap_both_directions(self, tmp_path):
+        cap = macho_mod._MAX_RPATHS
+        at_cap = extract(tmp_path, build_thin(
+            [rpath_cmd(b"/r%d" % i) for i in range(cap)]))
+        assert at_cap is not None
+        assert len(at_cap.slices[0].rpaths) == cap
+        assert "rpaths_capped" not in at_cap.slices[0].caps_hit
+        past = extract(tmp_path, build_thin(
+            [rpath_cmd(b"/r%d" % i) for i in range(cap + 1)]))
+        assert past is not None
+        assert len(past.slices[0].rpaths) == cap
+        assert "rpaths_capped" in past.slices[0].caps_hit
+
+    def test_rpath_lc_str_bounded(self, tmp_path):
+        facts = extract(tmp_path, build_thin(
+            [rpath_cmd(b"/real", name_off=0x2000)]))
+        assert facts is not None
+        assert facts.slices[0].rpaths == []
+        assert "lc_str_out_of_bounds" in facts.slices[0].caps_hit
+
+
+# ---------------------------------------------------------------------------
+# Dysymtab counts, versions, entry point, code signature
+# ---------------------------------------------------------------------------
+
+
+class TestDysymtab:
+    def test_counts_recorded(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            dysymtab_cmd((0, 10, 10, 42, 52, 7))]))
+        assert facts is not None
+        assert facts.slices[0].dysymtab == {
+            "ilocalsym": 0, "nlocalsym": 10,
+            "iextdefsym": 10, "nextdefsym": 42,
+            "iundefsym": 52, "nundefsym": 7,
+        }
+
+    def test_absent_is_empty(self, tmp_path):
+        facts = extract(tmp_path, build_thin([uuid_cmd()]))
+        assert facts is not None
+        assert facts.slices[0].dysymtab == {}
+
+    def test_first_wins_on_duplicate(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            dysymtab_cmd((0, 1, 1, 2, 3, 4)),
+            dysymtab_cmd((9, 9, 9, 9, 9, 9))]))
+        assert facts is not None
+        assert facts.slices[0].dysymtab["nextdefsym"] == 2
+
+
+class TestVersions:
+    def test_build_version_macos(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            build_version_cmd(1, 0x000D0100, 0x000E0000)]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.platform == "macos"
+        assert item.min_os == "13.1.0"
+        assert item.sdk == "14.0.0"
+        assert item.min_os_source == "build_version"
+
+    def test_unknown_platform_fails_open(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            build_version_cmd(77, 0x00010000)]))
+        assert facts is not None
+        assert facts.slices[0].platform == "platform_77"
+
+    def test_sdk_zero_is_absent(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            build_version_cmd(1, 0x000C0000, 0)]))
+        assert facts is not None
+        assert facts.slices[0].sdk is None
+
+    def test_legacy_version_min(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            version_min_cmd(LC_VERSION_MIN_MACOSX, 0x000A0F06,
+                            0x000B0000)]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.platform == "macos"
+        assert item.min_os == "10.15.6"
+        assert item.sdk == "11.0.0"
+        assert item.min_os_source == "version_min"
+
+    def test_legacy_ios_platform_implied_by_command(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            version_min_cmd(LC_VERSION_MIN_IPHONEOS, 0x000E0000)]))
+        assert facts is not None
+        assert facts.slices[0].platform == "ios"
+
+    def test_build_version_preferred_regardless_of_order(
+            self, tmp_path):
+        for cmds in (
+            [version_min_cmd(LC_VERSION_MIN_MACOSX, 0x000A0000),
+             build_version_cmd(1, 0x000D0000)],
+            [build_version_cmd(1, 0x000D0000),
+             version_min_cmd(LC_VERSION_MIN_MACOSX, 0x000A0000)],
+        ):
+            facts = extract(tmp_path, build_thin(cmds))
+            assert facts is not None
+            item = facts.slices[0]
+            assert item.min_os == "13.0.0"
+            assert item.min_os_source == "build_version"
+
+    def test_second_differing_build_version_marked(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            build_version_cmd(1, 0x000D0000),
+            build_version_cmd(6, 0x000D0000)]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.platform == "macos"       # first wins
+        assert "multiple_build_versions" in item.caps_hit
+
+    def test_second_identical_build_version_silent(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            build_version_cmd(1, 0x000D0000),
+            build_version_cmd(1, 0x000D0000)]))
+        assert facts is not None
+        assert "multiple_build_versions" not in facts.slices[0].caps_hit
+
+    def test_second_differing_version_min_marked(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            version_min_cmd(LC_VERSION_MIN_MACOSX, 0x000A0000),
+            version_min_cmd(LC_VERSION_MIN_IPHONEOS, 0x000E0000)]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.platform == "macos"        # first wins
+        assert item.min_os == "10.0.0"
+        assert "multiple_version_min" in item.caps_hit
+
+    def test_second_identical_version_min_silent(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            version_min_cmd(LC_VERSION_MIN_MACOSX, 0x000A0000),
+            version_min_cmd(LC_VERSION_MIN_MACOSX, 0x000A0000)]))
+        assert facts is not None
+        assert ("multiple_version_min"
+                not in facts.slices[0].caps_hit)
+
+    def test_version_min_after_build_version_is_silent(self, tmp_path):
+        # build_version is the preferred source (documented); a
+        # legacy command after it steers nothing and is not a
+        # conflict among equals.
+        facts = extract(tmp_path, build_thin([
+            build_version_cmd(1, 0x000D0000),
+            version_min_cmd(LC_VERSION_MIN_MACOSX, 0x000A0000)]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.min_os == "13.0.0"
+        assert "multiple_version_min" not in item.caps_hit
+
+
+class TestEntryAndSignature:
+    def test_lc_main_entry_offset(self, tmp_path):
+        facts = extract(tmp_path, build_thin([main_cmd(0x4F00)]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.entry_offset == 0x4F00
+        assert item.has_unixthread is False
+
+    def test_unixthread_presence_only(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            lc(LC_UNIXTHREAD, b"\x00" * 24)]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.has_unixthread is True
+        assert item.entry_offset is None
+
+    def test_code_signature_presence_and_declared_size(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            codesig_cmd(0x9000, 0x1234)]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.code_signature_present is True
+        assert item.code_signature_size == 0x1234
+
+    def test_code_signature_never_read(self, tmp_path):
+        """A declared blob far past EOF: the size is recorded as the
+        file's CLAIM, no read happens, no marker fires — the blob is
+        out of scope by design."""
+        facts = extract(tmp_path, build_thin([
+            codesig_cmd(0x40000000, 0x7FFFFFFF)]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.code_signature_size == 0x7FFFFFFF
+        assert item.caps_hit == []
+
+
+# ---------------------------------------------------------------------------
+# Segments, sections, entropy
+# ---------------------------------------------------------------------------
+
+
+class TestSegmentsAndEntropy:
+    def test_sections_with_known_entropy(self, tmp_path):
+        facts = extract(tmp_path, thin_with_sections([
+            (b"__zeros", b"\x00" * 1024, 0),
+            (b"__cycle", bytes(range(256)) * 4, 0),
+        ]))
+        assert facts is not None
+        seg = facts.slices[0].segments[0]
+        assert seg.name == "__CRAFT"
+        assert seg.nsects_declared == 2
+        by_name = {s.name: s for s in seg.sections}
+        assert by_name["__zeros"].entropy == 0.0
+        assert by_name["__zeros"].sampled == 1024
+        assert by_name["__cycle"].entropy == 8.0
+        assert facts.slices[0].caps_hit == []
+
+    def test_32_bit_segment_parses(self, tmp_path):
+        facts = extract(tmp_path, thin_with_sections(
+            [(b"__text", b"\xccPAYLOAD" * 4, 0)], bits=32))
+        assert facts is not None
+        seg = facts.slices[0].segments[0]
+        assert seg.sections[0].name == "__text"
+        assert seg.sections[0].entropy is not None
+
+    def test_zerofill_section_is_truthful_absence(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            segment_cmd(b"__DATA", [section_entry(
+                b"__bss", b"__DATA", size=0x4000, offset=0,
+                flags=0x1)]),
+        ]))
+        assert facts is not None
+        item = facts.slices[0]
+        sec = item.segments[0].sections[0]
+        assert sec.entropy is None and sec.sampled == 0
+        assert "section_data_unreadable" not in item.caps_hit
+
+    def test_section_offset_past_slice_end_marked(self, tmp_path):
+        facts = extract(tmp_path, build_thin([
+            segment_cmd(b"__DATA", [section_entry(
+                b"__ghost", b"__DATA", size=64, offset=0x100000)]),
+        ]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.segments[0].sections[0].entropy is None
+        assert "section_data_unreadable" in item.caps_hit
+
+    def test_entropy_read_stops_at_slice_boundary(self, tmp_path):
+        """A section claiming bytes past its slice's fat extent is
+        clipped AT THE SLICE END — the next slice's bytes are never
+        measured into this slice's record (invariant c)."""
+        header_size = 32
+        cmdsize = 72 + 80
+        data = b"\xAA" * 16
+        seg = segment_cmd(b"__CRAFT", [section_entry(
+            b"__greedy", b"__CRAFT", size=0x10000,
+            offset=header_size + cmdsize)])
+        first = build_thin([seg], tail=data)
+        second = build_thin([uuid_cmd()])
+        facts = extract(tmp_path, build_fat([first, second]))
+        assert facts is not None
+        sec = facts.slices[0].segments[0].sections[0]
+        assert sec.sampled == len(data)     # clipped at the slice end
+        assert sec.entropy == 0.0           # one distinct byte value
+
+    def test_nsects_lying_past_cmdsize_clamped(self, tmp_path):
+        """Invariant (d) on the section array: rows live inside the
+        command's own bytes — a huge nsects claim reads only what
+        cmdsize holds."""
+        facts = extract(tmp_path, build_thin([
+            segment_cmd(b"__DATA", [section_entry(
+                b"__one", b"__DATA")], nsects=0xFFFF)]))
+        assert facts is not None
+        item = facts.slices[0]
+        seg = item.segments[0]
+        assert seg.nsects_declared == 0xFFFF
+        assert len(seg.sections) == 1
+        assert "segment_sections_clamped" in item.caps_hit
+
+    def test_section_record_cap(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(macho_mod, "_MAX_SECTION_RECORDS", 3)
+        entries = [section_entry(b"__s%d" % i, b"__DATA")
+                   for i in range(5)]
+        facts = extract(tmp_path, build_thin([
+            segment_cmd(b"__DATA", entries)]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert len(item.segments[0].sections) == 3
+        assert "section_records_capped" in item.caps_hit
+
+    def test_section_record_cap_at_the_real_value(self, tmp_path):
+        """Both directions at the REAL cap (lifting the constant must
+        redden this): a slice holding exactly the cap is clean; one
+        more row across a second segment is capped + marked, and the
+        total retained across segments never exceeds the cap."""
+        cap = macho_mod._MAX_SECTION_RECORDS
+        at_cap = extract(tmp_path, build_thin([segment_cmd(
+            b"__BIG", [section_entry(b"__s", b"__BIG")] * cap)]))
+        assert at_cap is not None
+        item = at_cap.slices[0]
+        assert len(item.segments[0].sections) == cap
+        assert "section_records_capped" not in item.caps_hit
+        past = extract(tmp_path, build_thin([
+            segment_cmd(b"__BIG",
+                        [section_entry(b"__s", b"__BIG")] * cap),
+            segment_cmd(b"__ONE",
+                        [section_entry(b"__t", b"__ONE")])]))
+        assert past is not None
+        item = past.slices[0]
+        assert sum(len(seg.sections) for seg in item.segments) == cap
+        assert item.segments[1].sections == []
+        assert "section_records_capped" in item.caps_hit
+
+    def test_sample_window_recorded(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(macho_mod,
+                            "_MAX_ENTROPY_SECTION_BYTES", 16)
+        facts = extract(tmp_path, thin_with_sections(
+            [(b"__big", bytes(range(256)), 0)]))
+        assert facts is not None
+        sec = facts.slices[0].segments[0].sections[0]
+        assert sec.size == 256 and sec.sampled == 16
+        assert sec.entropy == 4.0            # 16 distinct byte values
+
+    def test_total_budget_shared_across_fat_slices(self, tmp_path,
+                                                   monkeypatch):
+        """The IO budget is FILE-level: a fat container must not
+        multiply the bound per slice."""
+        monkeypatch.setattr(macho_mod, "_MAX_ENTROPY_TOTAL_BYTES", 8)
+        one = thin_with_sections([(b"__one", b"x" * 64, 0)])
+        two = thin_with_sections([(b"__two", b"y" * 64, 0)])
+        facts = extract(tmp_path, build_fat([one, two]))
+        assert facts is not None
+        first = facts.slices[0].segments[0].sections[0]
+        second = facts.slices[1].segments[0].sections[0]
+        assert first.sampled == 8           # clipped by the budget
+        assert second.entropy is None and second.sampled == 0
+        assert ("entropy_budget_exhausted"
+                in facts.slices[1].caps_hit)
+
+    def test_measured_count_capped(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(macho_mod, "_MAX_ENTROPY_SECTIONS", 1)
+        facts = extract(tmp_path, thin_with_sections([
+            (b"__one", b"x" * 8, 0), (b"__two", b"y" * 8, 0)]))
+        assert facts is not None
+        secs = facts.slices[0].segments[0].sections
+        assert secs[0].entropy is not None
+        assert secs[1].entropy is None       # row survives, unmeasured
+        assert ("entropy_sections_capped"
+                in facts.slices[0].caps_hit)
+
+    def test_truncated_segment_fixed_header_aborts(self, tmp_path):
+        """Invariant (a): a segment command shorter than its own
+        fixed header aborts the walk."""
+        facts = extract(tmp_path, build_thin([
+            segment_cmd(b"__DATA", [], cmdsize=40), uuid_cmd()]))
+        assert facts is not None
+        item = facts.slices[0]
+        assert item.segments == []
+        assert item.uuid is None
+        assert ("lc_walk_abort_fixed_header_truncated"
+                in item.caps_hit)
+
+
+# ---------------------------------------------------------------------------
+# Cap parity with the ELF tier
+# ---------------------------------------------------------------------------
+
+
+class TestCapParityWithElf:
+    def test_shared_bounds_match_the_elf_tier(self):
+        """The entropy caps and the seek screen are VALUE-COUPLED to
+        the ELF facts extractor: a consumer comparing elf/pe/macho
+        records must never read a cap difference as a content
+        difference. Change both modules together, or split them here
+        deliberately with a recorded reason."""
+        from core.binary import elf as elf_mod
+        assert (macho_mod._MAX_ENTROPY_SECTION_BYTES
+                == elf_mod._MAX_ENTROPY_SECTION_BYTES)
+        assert (macho_mod._MAX_ENTROPY_TOTAL_BYTES
+                == elf_mod._MAX_ENTROPY_TOTAL_BYTES)
+        assert (macho_mod._MAX_ENTROPY_SECTIONS
+                == elf_mod._MAX_ENTROPY_SECTIONS)
+        assert macho_mod._MAX_SEEK_OFFSET == elf_mod._MAX_SEEK_OFFSET
+        assert (macho_mod._MAX_TOTAL_NAME_BYTES
+                == elf_mod._MAX_TOTAL_NAME_BYTES)
+
+    def test_entropy_primitive_is_the_elf_tiers(self):
+        from core.binary import elf as elf_mod
+        assert macho_mod._shannon_entropy is elf_mod._shannon_entropy
+
+
+# ---------------------------------------------------------------------------
+# Evidence record + serialization
+# ---------------------------------------------------------------------------
+
+
+class TestEvidence:
+    def test_header_backed_record(self, tmp_path):
+        import json
+
+        from core.evidence import EvidenceTier
+        from packages.binary_analysis.macho import macho_facts_evidence
+
+        p = _write(tmp_path, build_thin([
+            uuid_cmd(), dylib_cmd(b"/usr/lib/libSystem.B.dylib")]))
+        facts = extract_macho_facts(p)
+        assert facts is not None
+        record = macho_facts_evidence("ab" * 32, p, facts)
+        assert record.kind == "macho_facts"
+        assert record.tier == EvidenceTier.HEADER_BACKED
+        payload = record.data["facts"]
+        assert payload["slices"][0]["uuid"] == bytes(range(16)).hex()
+        json.dumps(payload)                  # JSON-serializable
