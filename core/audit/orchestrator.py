@@ -116,6 +116,7 @@ from .gaps import (
     hydrate_live_gaps_for_detectors,
     load_checklist,
     load_context_map,
+    merge_rereview_pins,
     truncate_gaps_to_budget,
     write_gaps,
 )
@@ -939,6 +940,23 @@ class OrchestratorConfig:
     # findings; the bookmarks bridge stays the only
     # pre-identified-finding lane.
     hypothesis_seed_paths: list[Path] | None = None
+    # ``--seed-rereview`` (default OFF — operator consent to re-open
+    # spend on covered functions): a seed that resolves to a
+    # checklist function the coverage/journal/reuse folds would
+    # suppress is scheduled for a FRESH review instead — hoisted
+    # through the --pin mechanism (ahead of the --budget cut with
+    # inherited --pin semantics: on a bounded run scheduled
+    # re-reviews claim slots first and can displace never-reviewed
+    # gaps into not-attempted.json; excess scheduled items beyond
+    # the budget are themselves cut and recorded; plus the pinned
+    # triage-skip override), seed context injected at the same
+    # review seam as matched gaps, verdict-reuse import refused for
+    # it, journal row marked ``seed_rereview`` — which also caps the
+    # consent at ONE fresh review: later segments of the same run
+    # see the marker row and do not re-schedule. Never mints
+    # findings and never bypasses --max-cost/--budget; a seed for a
+    # function absent from the checklist stays a miss.
+    seed_rereview: bool = False
     # Derived at run start (never set by callers): ``file:function`` →
     # newest-first finding-grade journal entries, consumed by
     # ``_build_context`` as prior claims. Kind-gated OUT of coverage
@@ -2271,11 +2289,30 @@ def review_one_function(
         # triage skips entirely. Loud: the operator asked for this
         # function by name; silently recording a classifier skip as
         # "clean" is how a pinned real finding got dropped.
-        logger.warning(
-            "--pin override: %s:%s was triage-SKIP (%s) — operator pin "
-            "forces LLM review",
-            gap["file"], gap["name"], ", ".join(triage.reasons),
+        # Attribution branches on the pin's ORIGIN (a --seed-rereview
+        # gap rides the same pinned mechanism but is not an operator
+        # pin), and file/name are escaped+bounded at site: the seed
+        # lane routes checklist-derived (target-controlled) names
+        # through this line, where operator pins were operator-typed.
+        from core.security.log_sanitisation import (
+            sanitise_for_terminal as _pin_st,
         )
+        if gap.get("seed_rereview"):
+            logger.warning(
+                "seed re-review override: %s:%s was triage-SKIP (%s) "
+                "— seed-scheduled re-review forces LLM review",
+                _pin_st(gap["file"], max_len=256),
+                _pin_st(gap["name"], max_len=256),
+                ", ".join(triage.reasons),
+            )
+        else:
+            logger.warning(
+                "--pin override: %s:%s was triage-SKIP (%s) — "
+                "operator pin forces LLM review",
+                _pin_st(gap["file"], max_len=256),
+                _pin_st(gap["name"], max_len=256),
+                ", ".join(triage.reasons),
+            )
         triage = None
     if triage and triage.bucket == TriageBucket.SKIP and not gap.get("force_review"):
         _increment_tier(result, "triage_skip", "confirmed")
@@ -5400,6 +5437,23 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         )
     except Exception:
         logger.debug("inventory-diff materialisation failed", exc_info=True)
+    # ``--seed-rereview`` resolution pass: resolve this run's seed
+    # files against the FULL checklist inventory so compute_gaps can
+    # un-suppress covered functions the seeds name (fresh review;
+    # reuse import refused). Flag-gated and best-effort — with the
+    # flag off compute_gaps sees None and behaves byte-identically.
+    _seed_rereview_keys: set | None = None
+    if getattr(config, "seed_rereview", False):
+        try:
+            from .hypothesis_intake import rereview_candidate_keys
+            _seed_rereview_keys = rereview_candidate_keys(
+                checklist, config.out_dir,
+                getattr(config, "hypothesis_seed_paths", None),
+            )
+        except Exception:  # noqa: BLE001 — enrichment, never a gate
+            logger.warning(
+                "--seed-rereview resolution skipped", exc_info=True,
+            )
     gaps = compute_gaps(
         checklist,
         [] if config.force else coverage_records,
@@ -5414,6 +5468,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         current_model=_primary_model,
         own_run_reuse=_same_run_reuse,
         reuse_stats=reuse_blocked_stats,
+        seed_rereview_keys=_seed_rereview_keys,
     )
 
     _joern_last_activity = (
@@ -5718,15 +5773,23 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     # review context block. Like the graph sibling, the bump lands
     # after the budget-cut sort: it steers review ORDER and the
     # spec-inference gate, never cut membership (both-directions
-    # rationale at the constant). Placed with its sibling: after the
-    # mechanical re-sorts, before rank_gaps/hoist_pins/budget.
-    # Best-effort by design — a hostile or malformed seed file must
-    # cost only its own records, never prep.
+    # rationale at the constant). ONE consented exception, and it is
+    # not the boost: under --seed-rereview the SCHEDULED RE-REVIEW
+    # lane rides the pin hoist below, and on a bounded run those
+    # pinned re-reviews claim budget slots first — never-reviewed
+    # gaps can be displaced into not-attempted.json (flag-gated,
+    # operator-consented, bounded by MAX_SEED_RECORDS). Placed with
+    # its sibling: after the mechanical re-sorts, before
+    # rank_gaps/hoist_pins/budget. Best-effort by design — a hostile
+    # or malformed seed file must cost only its own records, never
+    # prep.
     try:
         from .hypothesis_intake import apply_hypothesis_seeds
         apply_hypothesis_seeds(
             gaps, config.out_dir,
             getattr(config, "hypothesis_seed_paths", None),
+            rereview=getattr(config, "seed_rereview", False),
+            checklist=checklist,
         )
     except Exception as _sexc:  # noqa: BLE001 — enrichment, never a gate
         logger.warning("hypothesis-seed intake skipped: %s", _sexc)
@@ -5751,8 +5814,16 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     # Operator pins (``--pin file:function``): guaranteed review slots,
     # hoisted ahead of the budget cut. See gaps.hoist_pins. The
     # checklist classifies any unmatched pin's cause in the warning.
+    # ``--seed-rereview`` gaps ride the SAME mechanism: their keys
+    # join the pin list (gaps.merge_rereview_pins), so a seed-forced
+    # re-review gets the identical guarantees a --pin does (hoist
+    # ahead of the --budget cut, ``pinned`` triage-skip override)
+    # without a second scheduling path. Flag off → no gap carries the
+    # marker → the pin list is exactly the operator's.
     gaps = hoist_pins(
-        gaps, getattr(config, "pins", None), checklist=checklist,
+        gaps,
+        merge_rereview_pins(getattr(config, "pins", None), gaps),
+        checklist=checklist,
     )
 
     if config.budget and config.budget > 0:

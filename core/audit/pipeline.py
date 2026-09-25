@@ -225,6 +225,11 @@ class AuditPipelineOpts:
     # co-located sibling-hypotheses.json in the run dir is discovered
     # without this. Hint-tier only — seeds never mint findings.
     hypothesis_seed_paths: list[Path] | None = None
+    # --seed-rereview (default OFF — operator consent): seeds naming
+    # already-covered checklist functions are scheduled for a fresh
+    # review through the --pin hoist instead of recording as
+    # no_matching_gap misses. See OrchestratorConfig.seed_rereview.
+    seed_rereview: bool = False
     # Per-function cap on prior finding-grade claims in review context
     # (--prior-claims; 0 disables) and the per-claim body excerpt.
     prior_claims_per_function: int = 3
@@ -416,6 +421,7 @@ def _build_orchestrator_config(
         resume_segment=opts.resume_segment,
         prior_journal_dirs=opts.prior_journal_dirs,
         hypothesis_seed_paths=opts.hypothesis_seed_paths,
+        seed_rereview=opts.seed_rereview,
         prior_claims_per_function=opts.prior_claims_per_function,
         prior_claim_excerpt_chars=opts.prior_claim_excerpt_chars,
         llm_budget_client=client,
