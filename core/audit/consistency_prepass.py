@@ -16,8 +16,12 @@ detectors (§2.3/§2.4):
    comparators;
 4. assembles capped checklist leads (``MAX_CONSISTENCY_LEADS``/run,
    ``MAX_LEADS_PER_FILE``/file, ranked by contract strength →
-   security relevance → ratio) and fail-open handoff hypotheses (the
-   acknowledged-discard premise split);
+   security relevance → ratio, then by the lead-strength score
+   within each dimension × formation stratum — the score is the
+   Wilson lower bound of the lead's conforming/n, a monotone
+   shrinkage for small-N ranking and NOT a confidence claim; see
+   :mod:`core.audit.consistency_stats`) and fail-open handoff
+   hypotheses (the acknowledged-discard premise split);
 5. emits per-dimension telemetry (counts, contract-source histogram,
    inconclusive-reason histogram, wall time, budget state).
 
@@ -48,7 +52,9 @@ from .consistency_dimensions import DIMENSION_ORDERING
 from .consistency_stats import (
     Floors,
     floor_overrides_from_run_config,
+    lead_strength_score,
     resolve_floors,
+    stratified_lead_sort_key,
 )
 from .consistency_verify import (
     DIMENSION_CLEANUP,
@@ -214,6 +220,12 @@ def _lead_from_result(res: Any, *, file: str, function: str,
             "n": pe.n,
             "conforming": pe.conforming,
             "ratio": pe.ratio,
+            # Lead-strength ranking score: the Wilson lower bound of
+            # this lead's own conforming/n (monotone shrinkage for
+            # small-N ranking — never a confidence claim; see
+            # consistency_stats).
+            "score": round(lead_strength_score(pe.conforming, pe.n), 4),
+            "formation": pe.formation,
             "contract_source": pe.contract_source,
             "sites": [
                 f"{e.file}:{e.line} {e.snippet}".strip()
@@ -224,18 +236,19 @@ def _lead_from_result(res: Any, *, file: str, function: str,
 
 
 def _rank_leads(leads: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rank by (contract strength, security_relevant, ratio) and apply
-    the run/file caps (§2.4.2)."""
-    ranked = sorted(
-        leads,
-        key=lambda ld: (
-            ld.get("contract_source", "none") == "majority",
-            not ld.get("security_relevant", False),
-            -float(ld.get("ratio") or 0.0),
-            ld.get("file", ""),
-            ld.get("line", 0),
-        ),
-    )
+    """Rank by (contract strength, security_relevant, ratio), then —
+    within a (dimension × formation) stratum only — by the
+    lead-strength score, and apply the run/file caps (§2.4.2).
+
+    The chain is unchanged; the score takes effect exclusively where
+    the ranking was previously an arbitrary file/line tie among
+    chain-equal leads, so at equal ratio a 27/30 family now precedes
+    a 3/3 one. Strata are never interleaved by score (the stratum id
+    sorts ahead of it): per-stratum precision is unmeasured, so a
+    flag-mode score and a return-check score have no comparable
+    scale. See consistency_stats.stratified_lead_sort_key.
+    """
+    ranked = sorted(leads, key=stratified_lead_sort_key)
     per_file: dict[str, int] = {}
     capped: list[dict[str, Any]] = []
     for lead in ranked:
@@ -641,6 +654,13 @@ def run_consistency_prepass(
                 "n": dev.n,
                 "conforming": dev.conforming,
                 "ratio": dev.ratio,
+                "score": round(
+                    lead_strength_score(dev.conforming, dev.n), 4,
+                ),
+                "formation": (
+                    dev.peer_evidence.formation
+                    if dev.peer_evidence else ""
+                ),
                 "contract_source": "majority",
                 "sites": [
                     f"{e.file}:{e.line} {e.snippet}".strip()
@@ -903,6 +923,13 @@ def run_consistency_prepass(
                 "n": dev.n,
                 "conforming": dev.conforming,
                 "ratio": dev.ratio,
+                "score": round(
+                    lead_strength_score(dev.conforming, dev.n), 4,
+                ),
+                "formation": (
+                    dev.peer_evidence.formation
+                    if dev.peer_evidence else ""
+                ),
                 "contract_source": "majority",
                 "sites": [
                     f"{e.file}:{e.line} {e.snippet}".strip()
@@ -962,6 +989,13 @@ def run_consistency_prepass(
                     "n": dev.n,
                     "conforming": dev.conforming,
                     "ratio": dev.ratio,
+                    "score": round(
+                        lead_strength_score(dev.conforming, dev.n), 4,
+                    ),
+                    "formation": (
+                        dev.peer_evidence.formation
+                        if dev.peer_evidence else ""
+                    ),
                     "contract_source": "majority",
                     "sites": [
                         f"{e.file}:{e.line} {e.snippet}".strip()
@@ -1093,6 +1127,11 @@ def run_consistency_prepass(
                 "n": 2,
                 "conforming": 1,
                 "ratio": dev.similarity,
+                "score": round(lead_strength_score(1, 2), 4),
+                "formation": (
+                    dev.peer_evidence.formation
+                    if dev.peer_evidence else ""
+                ),
                 "contract_source": "majority",
                 "sites": [
                     f"{e.file}:{e.line} {e.snippet}".strip()
