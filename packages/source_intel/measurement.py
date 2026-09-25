@@ -311,7 +311,7 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description=__doc__.split("\n")[0],
+        description=__doc__.split("\n")[0],  # line-model: module docstring, RAPTOR-owned
     )
     parser.add_argument("--count", type=int, default=10)
     parser.add_argument("--output", type=Path, default=None)

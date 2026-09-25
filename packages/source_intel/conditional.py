@@ -91,7 +91,7 @@ def _index_file_stat(
 
     blocks: list[ConditionalBlock] = []
     open_stack: list[tuple[int, str, str]] = []  # (line, directive, condition)
-    for n, line in enumerate(text.split("\n"), start=1):
+    for n, line in enumerate(text.split("\n"), start=1):  # line-model: universal-newline read_text_capped above
         m = _DIRECTIVE_RE.match(line)
         if not m:
             continue
