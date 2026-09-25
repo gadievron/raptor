@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parents[3]))  # repo root
 
 from packages.openant.config import OPENANT_PINNED_COMMIT
 from packages.openant.resume import (
+    SEED_MAX_DEPTH,
     OpenAntResumeError,
     assess_remaining,
     completed_unit_ids,
@@ -582,6 +583,45 @@ class TestSeedScanDir(unittest.TestCase):
         # partial seed must still be removed wholesale.
         os.symlink(self.base / "nope", self.prior / "zzz-last-link")
         self._assert_refuses_and_leaves_nothing("symlink")
+
+    # -- nesting depth is child-authored too: beyond the cap refuses
+    # -- residue-free, while legitimately deep state still seeds.
+
+    def _nest(self, levels: int) -> Path:
+        d = self.prior
+        for _ in range(levels):
+            d = d / "d"
+        d.mkdir(parents=True)
+        return d
+
+    def test_seed_refuses_pathological_nesting_without_residue(self):
+        self._nest(SEED_MAX_DEPTH + 5)
+        self._assert_refuses_and_leaves_nothing("deeper than")
+
+    def test_seed_copies_deep_but_legal_nesting(self):
+        leaf_dir = self._nest(SEED_MAX_DEPTH - 2)
+        (leaf_dir / "leaf.json").write_text("{}")
+        new = self.base / "new_scan"
+        seed_scan_dir(self.prior, new)
+        rel = Path(*(["d"] * (SEED_MAX_DEPTH - 2))) / "leaf.json"
+        self.assertTrue((new / rel).is_file())
+
+    def test_walk_never_consumes_a_stack_frame_per_level(self):
+        # A nesting depth well under the cap must seed even when the
+        # interpreter's recursion headroom is smaller than the depth —
+        # the walk may not recurse per directory level.
+        import inspect
+        leaf_dir = self._nest(40)
+        (leaf_dir / "leaf.json").write_text("{}")
+        limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(len(inspect.stack()) + 30)
+        try:
+            new = self.base / "new_scan"
+            seed_scan_dir(self.prior, new)
+        finally:
+            sys.setrecursionlimit(limit)
+        rel = Path(*(["d"] * 40)) / "leaf.json"
+        self.assertTrue((new / rel).is_file())
 
 
 def _canonical_digest(key: dict) -> str:

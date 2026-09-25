@@ -444,6 +444,47 @@ class TestResumeRefusalExitPath(unittest.TestCase):
             self.assertEqual(report["outcome"], "resume_refused")
 
 
+class TestResumeUnexpectedFailureRefusesCleanly(unittest.TestCase):
+    """An unexpected exception out of resume validation/seeding is a
+    clean refusal — exit 2 with an outcome=resume_refused report —
+    never an unhandled traceback that leaves no report behind."""
+
+    def test_unexpected_seed_error_exits_two_with_report(self):
+        import raptor_openant
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            src = _make_repo(base)
+            core = _make_fake_core(src, _FAKE_MAIN_CLEAN)
+            prior = base / "prior"
+            scan = prior / "openant_scan"
+            ck = scan / "analyze_checkpoints"
+            ck.mkdir(parents=True)
+            (scan / "dataset.json").write_text(json.dumps({"units": []}))
+            (ck / "u0.json").write_text(json.dumps(
+                {"id": "a",
+                 "result": {"verdict": "ERROR", "finding": "error"}}))
+            (prior / "raptor_openant_report.json").write_text(json.dumps({
+                "repository": str(src),
+                "config": {},
+                "phases": {"openant_scan": {"completed": False}},
+            }))
+            out_dir = base / "out"
+            out_dir.mkdir()
+            argv = ["raptor_openant.py", "--repo", str(src),
+                    "--out", str(out_dir), "--resume", str(prior),
+                    "--openant-core", str(core),
+                    "--openant-core-unpinned"]
+            with patch.object(sys, "argv", argv), \
+                    patch("packages.openant.resume.seed_scan_dir",
+                          side_effect=RuntimeError("boom")):
+                rc = raptor_openant.main()
+            self.assertEqual(rc, 2)
+            report = json.loads(
+                (out_dir / "raptor_openant_report.json").read_text())
+            self.assertEqual(report["outcome"], "resume_refused")
+            self.assertIn("boom", report["error"])
+
+
 _FAKE_MAIN_HANG = """\
 import json
 import os
