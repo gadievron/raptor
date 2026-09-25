@@ -176,7 +176,9 @@ class TestWslAdvisories:
             return "/usr/bin/rr" if name == "rr" else "/usr/bin/docker"
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
-             mock.patch("shutil.which", which):
+             mock.patch("shutil.which", which), \
+             mock.patch.object(wsl, "fs_is_drvfs_or_9p",
+                               return_value=False):
             lines = wsl.wsl_advisories(landlock_ok=True)
         assert lines == [
             "rr requires CPU perf counters, typically unavailable "
@@ -186,7 +188,9 @@ class TestWslAdvisories:
 
     def test_docker_absent_gets_desktop_integration_hint(self):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
-             mock.patch("shutil.which", return_value=None):
+             mock.patch("shutil.which", return_value=None), \
+             mock.patch.object(wsl, "fs_is_drvfs_or_9p",
+                               return_value=False):
             lines = wsl.wsl_advisories(landlock_ok=True)
         assert len(lines) == 1
         assert "Docker Desktop" in lines[0]
@@ -196,8 +200,43 @@ class TestWslAdvisories:
             return "/usr/bin/docker" if name == "docker" else None
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
-             mock.patch("shutil.which", which):
+             mock.patch("shutil.which", which), \
+             mock.patch.object(wsl, "fs_is_drvfs_or_9p",
+                               return_value=False):
             assert wsl.wsl_advisories(landlock_ok=True) == []
+
+    def test_temp_root_on_interop_mount_gets_tmpdir_line(self):
+        def which(name: str):
+            return "/usr/bin/docker" if name == "docker" else None
+
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch("shutil.which", which), \
+             mock.patch.object(wsl, "fs_is_drvfs_or_9p",
+                               return_value=True), \
+             mock.patch("tempfile.gettempdir",
+                        return_value="/mnt/c/Temp"):
+            lines = wsl.wsl_advisories(landlock_ok=True)
+        assert len(lines) == 1
+        assert "temp root" in lines[0]
+        assert "/mnt/c/Temp" in lines[0]
+        assert "TMPDIR" in lines[0]
+        assert "export TMPDIR=/tmp" in lines[0]
+        assert "docs/wsl.md" in lines[0]
+
+    def test_temp_root_advisory_escapes_hostile_tmpdir(self):
+        def which(name: str):
+            return "/usr/bin/docker" if name == "docker" else None
+
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch("shutil.which", which), \
+             mock.patch.object(wsl, "fs_is_drvfs_or_9p",
+                               return_value=True), \
+             mock.patch("tempfile.gettempdir",
+                        return_value="/mnt/c/\x1b]0;pwned\x07tmp"):
+            lines = wsl.wsl_advisories(landlock_ok=True)
+        assert len(lines) == 1
+        assert "\x1b" not in lines[0]
+        assert "\x07" not in lines[0]
 
 
 class TestWarnWindowsInteropMount:
@@ -238,3 +277,94 @@ class TestWarnWindowsInteropMount:
         with mock.patch.object(wsl, "is_wsl",
                                side_effect=RuntimeError("boom")):
             wsl.warn_windows_interop_mount(tmp_path, "default target")
+
+    def test_default_remedy_without_detail(self, tmp_path, capsys):
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "fs_is_drvfs_or_9p",
+                               return_value=True):
+            wsl.warn_windows_interop_mount(tmp_path, "default target")
+        err = capsys.readouterr().err
+        assert "Prefer a path on the distro's Linux filesystem." in err
+
+    def test_detail_replaces_default_remedy(self, tmp_path, capsys):
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "fs_is_drvfs_or_9p",
+                               return_value=True):
+            wsl.warn_windows_interop_mount(
+                tmp_path, "temp root", detail="Do the specific thing.",
+            )
+        err = capsys.readouterr().err
+        assert "Do the specific thing." in err
+        assert "Prefer a path on the distro's Linux filesystem." not in err
+        assert "See docs/wsl.md." in err
+
+
+class TestWarnTmpdirWindowsInterop:
+    @pytest.fixture(autouse=True)
+    def reset_tmpdir_latch(self):
+        """The advisory latches once per process; tests exercise the
+        latch itself, so it is reset around each test."""
+        wsl._tmpdir_warned = False
+        yield
+        wsl._tmpdir_warned = False
+
+    def test_warns_once_per_process(self, capsys):
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "fs_is_drvfs_or_9p",
+                               return_value=True), \
+             mock.patch("tempfile.gettempdir",
+                        return_value="/mnt/c/Temp"):
+            wsl.warn_tmpdir_windows_interop()
+            wsl.warn_tmpdir_windows_interop()
+            wsl.warn_tmpdir_windows_interop()
+        err = capsys.readouterr().err
+        assert err.count("WARNING") == 1
+        assert "temp root (TMPDIR/RAPTOR_WORK_DIR)" in err
+        assert "/mnt/c/Temp" in err
+        assert "FIFO" in err
+        assert "export TMPDIR=/tmp" in err
+        assert "docs/wsl.md" in err
+
+    def test_explicit_base_probed_instead_of_gettempdir(self, capsys):
+        probed: list[str] = []
+
+        def probe(path):
+            probed.append(str(path))
+            return True
+
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "fs_is_drvfs_or_9p", probe):
+            wsl.warn_tmpdir_windows_interop("/mnt/c/work-root")
+        err = capsys.readouterr().err
+        assert probed == ["/mnt/c/work-root"]
+        assert "/mnt/c/work-root" in err
+
+    def test_silent_off_wsl(self, capsys):
+        with mock.patch.object(wsl, "is_wsl", return_value=False):
+            wsl.warn_tmpdir_windows_interop()
+        assert capsys.readouterr().err == ""
+
+    def test_silent_on_linux_temp_root(self, capsys):
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "fs_is_drvfs_or_9p",
+                               return_value=False):
+            wsl.warn_tmpdir_windows_interop()
+        assert capsys.readouterr().err == ""
+
+    def test_latch_closes_even_when_silent(self, capsys):
+        # gettempdir() caches process-wide, so a silent first call
+        # settles the question for the process's whole life.
+        with mock.patch.object(wsl, "is_wsl", return_value=False):
+            wsl.warn_tmpdir_windows_interop()
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "fs_is_drvfs_or_9p",
+                               return_value=True):
+            wsl.warn_tmpdir_windows_interop()
+        assert capsys.readouterr().err == ""
+
+    def test_never_raises(self):
+        # The emission path's own catch-all is the advisory contract;
+        # the wrapper adds no raise surface of its own.
+        with mock.patch.object(wsl, "is_wsl",
+                               side_effect=RuntimeError("boom")):
+            wsl.warn_tmpdir_windows_interop()

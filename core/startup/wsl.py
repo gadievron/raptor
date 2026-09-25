@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "fs_is_drvfs_or_9p",
     "is_wsl",
+    "warn_tmpdir_windows_interop",
     "warn_windows_interop_mount",
     "wsl_advisories",
 ]
@@ -146,8 +147,9 @@ def wsl_advisories(landlock_ok: bool) -> list[str]:
 
     Empty off-WSL. Reuses probe results the caller already gathered
     (*landlock_ok* from ``core.sandbox.check_landlock_available``);
-    its own lookups are ``shutil.which`` presence checks only — no
-    new probes, and no probe result is changed. Never raises.
+    its own lookups are ``shutil.which`` presence checks plus one
+    ``statfs`` of the temp root (WSL hosts only) — no probe result
+    is changed. Never raises.
     """
     if not is_wsl():
         return []
@@ -180,10 +182,25 @@ def wsl_advisories(landlock_ok: bool) -> list[str]:
             "integration for this distro or install Docker Engine "
             "inside it (see docs/wsl.md)"
         )
+    import tempfile
+    tmp_root = tempfile.gettempdir()
+    if fs_is_drvfs_or_9p(tmp_root):
+        from core.security.log_sanitisation import sanitise_for_terminal
+        out.append(
+            "the temp root "
+            f"{sanitise_for_terminal(str(tmp_root), max_len=256)} is on "
+            "a Windows-interop mount (drvfs/9p): FIFO/named-pipe "
+            "creation fails there and many-small-file scratch work is "
+            "drastically slower. Point TMPDIR at a path on the "
+            "distro's Linux filesystem (e.g. `export TMPDIR=/tmp`) "
+            "before launching (see docs/wsl.md)"
+        )
     return out
 
 
-def warn_windows_interop_mount(path: str | os.PathLike, role: str) -> None:
+def warn_windows_interop_mount(
+    path: str | os.PathLike, role: str, *, detail: str = "",
+) -> None:
     """Warn-only advisory when *path* is on a Windows-interop mount.
 
     One line naming what degrades there — file I/O speed and flock
@@ -192,7 +209,11 @@ def warn_windows_interop_mount(path: str | os.PathLike, role: str) -> None:
     WSL hosts (cached :func:`is_wsl` short-circuits everywhere else,
     so non-WSL runs never pay the statfs). *role* is a caller-owned
     constant naming which path this is ("default target", "output
-    directory", ...). Advisory only: never raises, never refuses.
+    directory", ...); *detail*, when given, is a caller-owned
+    constant sentence replacing the generic "prefer a Linux
+    filesystem path" remedy with role-specific breakage/remediation
+    text (never external/target-derived — only *path* is escaped).
+    Advisory only: never raises, never refuses.
     """
     try:
         if not is_wsl() or not fs_is_drvfs_or_9p(path):
@@ -202,16 +223,67 @@ def warn_windows_interop_mount(path: str | os.PathLike, role: str) -> None:
         # bytes, and the bare stderr print (unlike the logger lane)
         # has no console formatter to escape them.
         from core.security.log_sanitisation import sanitise_for_terminal
+        remedy = detail or (
+            "Prefer a path on the distro's Linux filesystem."
+        )
         line = (
             f"WARNING: {role} "
             f"{sanitise_for_terminal(str(path), max_len=256)} is on a "
             f"Windows-interop mount (drvfs/9p): file I/O is "
             f"substantially slower there and flock locks are "
             f"client-local (not shared with Windows or other "
-            f"distros). Prefer a path on the distro's Linux "
-            f"filesystem. See docs/wsl.md."
+            f"distros). {remedy} See docs/wsl.md."
         )
         logger.warning("%s", line)
         print(line, file=sys.stderr)
     except Exception:  # noqa: BLE001 — advisory must never break a run
         logger.debug("windows-interop mount advisory failed", exc_info=True)
+
+
+#: Role + remedy constants for the temp-root advisory. Caller-owned
+#: constants by the ``warn_windows_interop_mount`` contract; the
+#: remedy names what BREAKS on a 9p temp root (not just what slows
+#: down): FIFO/named-pipe creation is unsupported there, and scratch
+#: workloads are many-small-file by nature — the worst shape for
+#: per-file 9p round-trips. See docs/wsl.md.
+_TMPDIR_ROLE = "temp root (TMPDIR/RAPTOR_WORK_DIR)"
+_TMPDIR_DETAIL = (
+    "Temp-backed features break there, not just slow down: "
+    "FIFO/named-pipe creation fails on 9p, and many-small-file "
+    "scratch work is drastically slower. Point TMPDIR (and "
+    "RAPTOR_WORK_DIR, when set) at a path on the distro's Linux "
+    "filesystem (e.g. `export TMPDIR=/tmp`) before launching."
+)
+
+_tmpdir_warned = False
+
+
+def warn_tmpdir_windows_interop(
+    base: str | os.PathLike | None = None,
+) -> None:
+    """At most one strong advisory per process when the temp root the
+    caller resolved is on a drvfs/9p mount.
+
+    THE latch for the scratch/temp-root chokepoints
+    (:func:`core.run.scratch.scratch_dir`,
+    :func:`core.run.workdir.exec_workdir`): each may call this on
+    every lane/resolution, and at most one warning per process is
+    emitted. *base* is the chokepoint's own RESOLVED root when it
+    honours more than ``TMPDIR`` (workdir's ``RAPTOR_WORK_DIR``
+    precedence); ``None`` probes :func:`tempfile.gettempdir`. The
+    latch closes on first call regardless of outcome — the first
+    chokepoint reached decides for the process (gettempdir() itself
+    caches process-wide, so the plain-TMPDIR verdict cannot change
+    later). Off-WSL the first call costs one cached ``is_wsl()``
+    check and every later call is a single boolean test. Advisory
+    only: never raises, never refuses, never changes where scratch
+    is created.
+    """
+    global _tmpdir_warned
+    if _tmpdir_warned:
+        return
+    _tmpdir_warned = True
+    if base is None:
+        import tempfile
+        base = tempfile.gettempdir()
+    warn_windows_interop_mount(base, _TMPDIR_ROLE, detail=_TMPDIR_DETAIL)
