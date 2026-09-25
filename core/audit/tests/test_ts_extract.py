@@ -28,6 +28,43 @@ from core.audit.ts_extract import (  # noqa: E402
 from core.testing.treesitter import requires_ts  # noqa: E402
 
 
+def _nested_switch_tower(depth: int) -> str:
+    out = ["void f(int a) {\n"]
+    for d in range(depth):
+        out.append('switch (a) { case %d: g("K%d"); ' % (d, d))
+    out.append("h();")
+    for d in range(depth):
+        out.append(' case %d: g("L%d"); break; }' % (d + 1, d))
+    out.append("\n}\n")
+    return "".join(out)
+
+
+class TestDispatchDepthGrowth:
+    @requires_ts("c")
+    def test_extraction_stays_near_linear_in_nesting_depth(self):
+        # Growth-ratio pin, twin of the enum extractor's: the
+        # per-case ancestor re-attribution here measured the same
+        # cubic wall-clock on a switch-per-level tower (an
+        # unbudgeted prep phase pays it). Single-pass nearest-switch
+        # attribution is ~linear; cubic fails by an order even with
+        # the parse-noise slack.
+        import time
+
+        from core.audit.ts_extract import _PARSE_CACHE
+
+        def cost(depth: int) -> float:
+            src = _nested_switch_tower(depth)
+            _PARSE_CACHE.clear()
+            t0 = time.process_time()
+            extract_dispatch_tables(f"d{depth}.c", src)
+            return time.process_time() - t0
+
+        cost(50)  # warm-up
+        small = max(cost(300), 0.005)
+        large = cost(600)
+        assert large <= 4 * small + 0.05, (small, large)
+
+
 # ---------------------------------------------------------------
 # 1. Return semantics
 # ---------------------------------------------------------------

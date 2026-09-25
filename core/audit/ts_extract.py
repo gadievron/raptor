@@ -1034,42 +1034,35 @@ def extract_dispatch_tables(
     string_types = _STRING_TYPES.get(lang, ())
     results: list[DispatchTable] = []
 
-    for node in _walk_descendants(tree.root_node):
-        if node.type not in switch_types:
-            continue
-
-        func_node = _find_enclosing_function(node, lang)
+    # Single-pass nearest-switch attribution (see _switch_case_map):
+    # the previous per-switch descendant walk re-attributed every
+    # case by climbing ``.parent``, which was cubic in nesting depth
+    # — the same shape the enum extractor fixed, applied here because
+    # this extractor measures identically on a switch-per-level tower.
+    for node, func_node, case_nodes in _switch_case_map(
+        tree.root_node, lang, switch_types, case_types,
+    ):
         func_name = _get_func_name(func_node, lang, src) if func_node else "<module>"
 
         keys: list[str] = []
-        for desc in _walk_descendants(node):
-            if desc.type in case_types:
-                # Skip case nodes belonging to a nested switch
-                ancestor = desc.parent
-                while ancestor is not None and not _same_node(ancestor, node):
-                    if ancestor.type in switch_types:
-                        break
-                    ancestor = ancestor.parent
-                if not _same_node(ancestor, node):
-                    continue
-
-                # Only the case LABEL may contribute a key — a string
-                # in the case BODY is data, not a dispatch value.
-                found = False
-                for label_node in _case_label_nodes(desc):
-                    if found:
-                        break
-                    candidates = [label_node] if label_node.type in string_types \
-                        else _walk_descendants(label_node)
-                    for child in candidates:
-                        if child.type in string_types:
-                            val = _strip_string_delimiters(
-                                _node_text(child, src), lang,
-                            )
-                            if val:
-                                keys.append(val)
-                                found = True
-                                break
+        for desc in case_nodes:
+            # Only the case LABEL may contribute a key — a string
+            # in the case BODY is data, not a dispatch value.
+            found = False
+            for label_node in _case_label_nodes(desc):
+                if found:
+                    break
+                candidates = [label_node] if label_node.type in string_types \
+                    else _walk_descendants(label_node)
+                for child in candidates:
+                    if child.type in string_types:
+                        val = _strip_string_delimiters(
+                            _node_text(child, src), lang,
+                        )
+                        if val:
+                            keys.append(val)
+                            found = True
+                            break
 
         if len(keys) >= 2:
             results.append(DispatchTable(
