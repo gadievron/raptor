@@ -6,6 +6,7 @@ import hashlib
 import os
 import sqlite3
 import sys
+from itertools import islice
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -671,6 +672,191 @@ def _ingest_journal_row(conn, snap_id: str, entry: Any, provenance: str) -> int:
         for hyp_id in hyp_ids:
             _upsert_edge(conn, snap_id, "TESTED_BY", hyp_id, tv_id)
     return minted
+
+
+#: Producer name for mechanical call-edge snapshots.
+CALLGRAPH_PRODUCER = "callgraph"
+
+# executemany slice for the call-edge batch lanes. Larger slices make
+# fewer executemany calls but hold a bigger transient row-tuple buffer
+# (each row carries a minted token); smaller slices bound the buffer
+# but pay more per-call overhead. 50k keeps the buffer in the tens of
+# MB at 10^6-edge scale while the call count stays in the dozens.
+_EDGE_EXECUTEMANY_CHUNK = 50_000
+
+
+def ingest_call_edges(
+    run_dir: Path,
+    target_path: Optional[str],
+    edges: Iterable[dict[str, Any]],
+    *,
+    checklist_hash: str = "",
+    graph_path: Optional[Path] = None,
+) -> Optional[dict[str, Any]]:
+    """Batch-ingest mechanical call edges into the graph store.
+
+    THE lean substrate write for the context-map call-edge routing:
+    the in-JSON edge array caps out on very large targets, while the
+    store's indexed edges table holds the full 10^5-10^6-edge set.
+    Row shape is deliberately lean — ``CALLS`` edges carry NO per-edge
+    evidence/props payload (``'{}'``), because at this scale the
+    evidence blob dominates store size and the consumers only walk
+    endpoint names. Writes are executemany-batched; the per-row
+    ``_upsert_edge`` (per-edge hashing plus one execute each) does not
+    scale to this lane.
+
+    Trust posture: every edge row is ``provenance='mechanical'`` and
+    carries a run-bound integrity token; the snapshot row's token pins
+    the minted edge COUNT (deletion witness). When no usable key
+    exists the rows persist unstamped — hint tier, never a verdict
+    input (``verified_mechanical_call_edges`` returns no lane).
+
+    ``edges`` yields ``{"caller_file", "caller", "callee",
+    "callee_file"}`` dicts (the context-map ``call_edges`` shape);
+    duplicates collapse to one row. ``checklist_hash`` keys the
+    snapshot identity when given; otherwise a digest of the deduped
+    edge set is used, so re-ingesting identical edges supersedes the
+    same snapshot in place (INSERT OR REPLACE + FK cascade).
+
+    Returns ``{"graph_path", "snapshot", "edges", "stamped"}`` on
+    success, ``None`` when nothing ingested (empty input, unresolvable
+    target, or a skipped ingest — same containment contract as every
+    other lane).
+    """
+    from . import integrity
+
+    run_dir = Path(run_dir)
+    target = _resolve_ingest_target(run_dir, target_path, CALLGRAPH_PRODUCER)
+    if not target:
+        return None
+    if graph_path is None:
+        graph_path = graph_path_for_run(run_dir, target or None)
+
+    # Pass 1 (outside the write txn): dedupe + digest. The deduped
+    # tuple list is needed for the count the snapshot token pins, and
+    # building it here keeps multi-second work off the write lock.
+    seen: dict[tuple[str, str, str, str], None] = {}
+    digest = hashlib.sha256()
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        caller = str(edge.get("caller") or "")
+        callee = str(edge.get("callee") or "")
+        if not caller or not callee:
+            continue
+        key = (
+            str(edge.get("caller_file") or ""), caller,
+            str(edge.get("callee_file") or ""), callee,
+        )
+        if key in seen:
+            continue
+        seen[key] = None
+        digest.update(
+            "\x1f".join(key).encode("utf-8", "surrogateescape") + b"\n")
+    if not seen:
+        return None
+
+    edge_count = len(seen)
+    snap_id = make_snapshot_id(
+        target,
+        f"callgraph:{checklist_hash or digest.hexdigest()}",
+        str(run_dir.resolve()),
+    )
+
+    stamper = integrity.edge_stamper(graph_path)
+    created_at = utc_now_iso()
+    snap_token = integrity.snapshot_stamper(graph_path).mint(
+        integrity.snapshot_payload(
+            snap_id, target, checklist_hash, CALLGRAPH_PRODUCER, edge_count,
+            created_at,
+        )
+    ) or ""
+
+    # Node rows for the unique endpoints (name/file are what the
+    # reachability consumers read back; the edge tokens cover the
+    # function_ref forms, so a rewritten node row demotes its edges).
+    node_ids: dict[tuple[str, str], str] = {}
+    node_rows: list[tuple[str, str, str, str, str]] = []
+
+    def _node_id(file: str, name: str) -> str:
+        nid = node_ids.get((file, name))
+        if nid is None:
+            ref = function_ref(file, name)
+            nid = stable_node_id("function", snap_id, ref)
+            node_ids[(file, name)] = nid
+            node_rows.append(
+                (nid, stable_key("function", ref), name, file, snap_id))
+        return nid
+
+    def _edge_rows() -> Iterable[tuple[str, str, str, str, str, str]]:
+        for (caller_file, caller, callee_file, callee) in seen:
+            src_id = _node_id(caller_file, caller)
+            dst_id = _node_id(callee_file, callee)
+            token = stamper.mint(integrity.edge_payload(
+                snap_id,
+                caller_file, caller,
+                callee_file, callee,
+            )) or ""
+            yield (
+                stable_edge_id("CALLS", src_id, dst_id),
+                src_id, dst_id, snap_id, "mechanical", token,
+            )
+
+    try:
+        with graph_write_txn(graph_path) as conn:
+            # INSERT OR REPLACE + ON DELETE CASCADE: re-ingesting the
+            # same snapshot id supersedes its previous node/edge rows
+            # wholesale (the within-run rebuild path).
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO snapshots
+                (id, target_path, target_hash, git_sha, checklist_hash,
+                 created_at, producer_run, props_json, producer, integrity)
+                VALUES (?, ?, '', '', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snap_id, target, checklist_hash, created_at,
+                    str(run_dir.resolve()),
+                    json_dumps({"edge_count": edge_count}),
+                    CALLGRAPH_PRODUCER, snap_token,
+                ),
+            )
+            rows_iter = iter(_edge_rows())
+            while True:
+                chunk = list(islice(rows_iter, _EDGE_EXECUTEMANY_CHUNK))
+                if not chunk:
+                    break
+                # node_rows was filled while list() above generated the
+                # chunk; flush the accumulated endpoints alongside it.
+                if node_rows:
+                    conn.executemany(
+                        """
+                        INSERT OR IGNORE INTO nodes
+                        (id, kind, stable_key, name, file, snapshot_id,
+                         props_json)
+                        VALUES (?, 'function', ?, ?, ?, ?, '{}')
+                        """,
+                        node_rows,
+                    )
+                    node_rows.clear()
+                conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO edges
+                    (id, src_id, dst_id, kind, confidence, snapshot_id,
+                     evidence_json, props_json, provenance, integrity)
+                    VALUES (?, ?, ?, 'CALLS', '', ?, '{}', '{}', ?, ?)
+                    """,
+                    chunk,
+                )
+    except INGEST_SKIP_EXCEPTIONS as exc:
+        print(f"graph: callgraph ingest skipped ({exc})", file=sys.stderr)
+        return None
+    return {
+        "graph_path": graph_path,
+        "snapshot": snap_id,
+        "edges": edge_count,
+        "stamped": stamper.usable,
+    }
 
 
 # ---------------------------------------------------------------------------
