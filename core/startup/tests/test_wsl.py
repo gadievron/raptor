@@ -255,6 +255,7 @@ class TestWslAdvisories:
 
     def test_landlock_missing_names_the_remedies(self):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch("shutil.which", return_value=None), \
              mock.patch("core.sandbox.host_consent.applied_consent",
                         return_value=None):
@@ -275,6 +276,7 @@ class TestWslAdvisories:
             floor="ns-only", granted_at="2026-09-24T10:00:00+00:00",
             kernel_identity="5.15.167.4-microsoft-standard-WSL2")
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch("shutil.which", return_value=None), \
              mock.patch("core.sandbox.host_consent.applied_consent",
                         return_value=consent):
@@ -296,6 +298,7 @@ class TestWslAdvisories:
             raise RuntimeError("marker store exploded")
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch("shutil.which", return_value=None), \
              mock.patch("core.sandbox.host_consent.applied_consent",
                         _boom):
@@ -310,6 +313,7 @@ class TestWslAdvisories:
             floor="ns-only", granted_at="2026-09-24T10:00:00+00:00",
             kernel_identity="5.15.167.4-microsoft-standard-WSL2")
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch("shutil.which", return_value="/usr/bin/tool"), \
              mock.patch("core.sandbox.host_consent.applied_consent",
                         return_value=consent):
@@ -318,6 +322,7 @@ class TestWslAdvisories:
 
     def test_landlock_present_no_landlock_line(self):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch("shutil.which", return_value="/usr/bin/tool"):
             lines = wsl.wsl_advisories(landlock_ok=True)
         assert not any("Landlock" in ln for ln in lines)
@@ -327,6 +332,7 @@ class TestWslAdvisories:
             return "/usr/bin/rr" if name == "rr" else "/usr/bin/docker"
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch("shutil.which", which), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=False):
@@ -339,6 +345,7 @@ class TestWslAdvisories:
 
     def test_docker_absent_gets_desktop_integration_hint(self):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch("shutil.which", return_value=None), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=False):
@@ -351,6 +358,7 @@ class TestWslAdvisories:
             return "/usr/bin/docker" if name == "docker" else None
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch("shutil.which", which), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=False):
@@ -361,6 +369,7 @@ class TestWslAdvisories:
             return "/usr/bin/docker" if name == "docker" else None
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch("shutil.which", which), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=True), \
@@ -379,6 +388,7 @@ class TestWslAdvisories:
             return "/usr/bin/docker" if name == "docker" else None
 
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch("shutil.which", which), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=True), \
@@ -389,10 +399,36 @@ class TestWslAdvisories:
         assert "\x1b" not in lines[0]
         assert "\x07" not in lines[0]
 
+    def test_wsl1_line_replaces_wsl2_advisories(self):
+        # On WSL1 every WSL2-specific advisory would mislead (the
+        # .wslconfig kernel recipe, ns-only consent, rr/docker
+        # notes); the single flavour line replaces them and names
+        # the refusal plus the WSL2 upgrade.
+        def which(name: str):
+            return "/usr/bin/rr" if name == "rr" else None
+
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=False), \
+             mock.patch("shutil.which", which):
+            lines = wsl.wsl_advisories(landlock_ok=False)
+        assert len(lines) == 1
+        assert "WSL1" in lines[0]
+        assert "sandboxed execution refuses" in lines[0]
+        assert "wsl --set-version" in lines[0]
+        assert "docs/wsl.md" in lines[0]
+
+    def test_wsl1_line_absent_on_wsl2(self):
+        with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
+             mock.patch("shutil.which", return_value=None):
+            lines = wsl.wsl_advisories(landlock_ok=False)
+        assert not any("WSL1" in ln for ln in lines)
+
 
 class TestWarnWindowsInteropMount:
     def test_warns_on_interop_mount(self, tmp_path, capsys):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=True):
             wsl.warn_windows_interop_mount(tmp_path, "default target")
@@ -408,6 +444,7 @@ class TestWarnWindowsInteropMount:
 
     def test_silent_on_linux_filesystem(self, tmp_path, capsys):
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=False):
             wsl.warn_windows_interop_mount(tmp_path, "output directory")
@@ -416,6 +453,7 @@ class TestWarnWindowsInteropMount:
     def test_hostile_path_bytes_escaped(self, capsys):
         hostile = "/mnt/c/\x1b]0;pwned\x07repo"
         with mock.patch.object(wsl, "is_wsl", return_value=True), \
+             mock.patch.object(wsl, "is_wsl2", return_value=True), \
              mock.patch.object(wsl, "fs_is_drvfs_or_9p",
                                return_value=True):
             wsl.warn_windows_interop_mount(hostile, "default target")

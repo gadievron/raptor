@@ -221,6 +221,20 @@ def wsl_advisories(landlock_ok: bool) -> list[str]:
     import shutil
 
     out: list[str] = []
+    if is_wsl1():
+        # WSL1: no Linux kernel at all — the WSL2-specific advisories
+        # below (custom-kernel Landlock recipe, ns-only consent, rr
+        # perf counters, Docker integration) would all mislead here,
+        # so the flavour line replaces them.
+        out.append(
+            "WSL1 detected — sandboxed execution refuses on this "
+            "host: WSL1 emulates Linux syscalls (no namespaces, "
+            "Landlock, or seccomp), so no containment layer can "
+            "engage. Upgrade the distro to WSL2 (from Windows: "
+            "`wsl --set-version <distro> 2`, then `wsl --shutdown`); "
+            "see docs/wsl.md."
+        )
+        return out
     if not landlock_ok:
         # Host-consent posture: when the operator's standing marker
         # (core/sandbox/host_consent.py) currently APPLIES, the

@@ -3744,6 +3744,33 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             code under a reduced contract, and an operator watching a
             long run must see every instance, not just the first.
             """
+            # WSL1 refusal, at the same chokepoint the floor contract
+            # holds: WSL1 emulates Linux syscalls on the NT kernel —
+            # no namespaces, no Landlock, no seccomp — so there is no
+            # containment tier to deliver and nothing to degrade TO;
+            # every lane would run effectively bare behind a sandbox-
+            # shaped call. Refuse with the real remedy (WSL2) instead
+            # of the generic floor message. The operator-explicit
+            # disable stays authoritative (a disabled run asked for
+            # no sandbox — refusing it would only remove the escape
+            # this message names). Inert off-WSL1: two cached boolean
+            # probes, fail-toward-False.
+            if not effectively_disabled:
+                _wsl_m = _startup_wsl()
+                if _wsl_m is not None and _wsl_m.is_wsl1():
+                    raise _errors.SandboxSetupError(
+                        "sandboxed execution is unsupported on WSL1: "
+                        "WSL1 emulates Linux syscalls on the NT "
+                        "kernel — no namespaces, Landlock, or seccomp "
+                        "exist there, so no containment layer can "
+                        "engage and there is nothing to degrade to.",
+                        "Upgrade the distro to WSL2 (from Windows: "
+                        "`wsl --set-version <distro> 2`, then "
+                        "`wsl --shutdown`) — see docs/wsl.md. Running "
+                        "with NO sandbox at all remains the operator-"
+                        "explicit global disable (--sandbox none / "
+                        "--no-sandbox).",
+                    )
             delivered = _LANE_TIERS[lane]
             if cap is not None and cap < delivered:
                 delivered = cap
