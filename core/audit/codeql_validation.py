@@ -414,6 +414,47 @@ def _exit_only_body(body: str) -> bool:
 _RAW_STRING_RE = re.compile(r'\b(?:u8|[uUL])?R"')
 
 
+#: C line splice (translation phase 2): a backslash ending the
+#: physical line joins it with the next — BEFORE comments, literals,
+#: and tokens exist.  ``\r?`` covers CRLF sources (the \n-model
+#: split leaves the ``\r`` on the line); ``[ \t]*`` accepts blanks
+#: between the backslash and the newline — ISO C wants the backslash
+#: immediately before the newline, but GCC and Clang both splice the
+#: blank-padded form (with a warning), so the joined text is what
+#: the compiler actually built.  A trailing backslash has no other
+#: reading in C source, so joining never mis-reads well-formed code.
+_LINE_SPLICE_RE = re.compile(r"\\[ \t]*\r?$")
+
+
+def _splice_c_lines(parts: list[str]) -> list[str] | None:
+    """Join backslash-newline-spliced physical lines into the logical
+    lines the compiler parses (C translation phase 2): the splice is
+    removed and the texts concatenate DIRECTLY — a splice can split a
+    single token (``ret\\`` + ``urn;`` is one ``return;``) or carry a
+    ``//`` comment over the next physical line.
+
+    Returns ``None`` when the window's LAST physical line ends in a
+    splice: the next physical line — the step's own, which is not
+    part of this window — is then a mid-logical-line continuation,
+    and no faithful text for the arm/step judgement exists.
+    """
+    out: list[str] = []
+    carry = ""
+    open_splice = False
+    for text in parts:
+        m = _LINE_SPLICE_RE.search(text)
+        if m:
+            carry += text[:m.start()]
+            open_splice = True
+        else:
+            out.append(carry + text)
+            carry = ""
+            open_splice = False
+    if open_splice:
+        return None
+    return out
+
+
 def _blank_c_literals(parts: list[str]) -> tuple[list[str], bool]:
     """Blank C string/char literals and comments out of source-line
     texts (single linear pass, comment state carried across lines;
@@ -513,6 +554,16 @@ def _step_guard_polarity(
     inside ``log("{")`` or a comment is data, and counting it
     re-mints the inverted-polarity assertion); a region that cannot
     be blanked faithfully is not censused — it abstains.
+
+    The tail+between window is first normalised for C line splices
+    (translation phase 2: backslash-newline joins physical lines
+    before comments, literals, or tokens exist), so a splice-hidden
+    ``{``, a ``//`` comment spliced over the next physical line, or
+    a splice-split token is judged from the joined text the compiler
+    actually parsed — unjoined, a spliced-out ``return;`` read as
+    code minted a false NEGATED assertion (the suppress direction).
+    A splice off the window's last line runs INTO the step line;
+    that window has no faithful text, so it abstains.
     """
     if any(_LABEL_RE.match(ln) for ln in between):
         # A label between the guard and the step is a goto target:
@@ -530,7 +581,13 @@ def _step_guard_polarity(
         # line-start label check, but it is still a goto target:
         # another path reaches the step with the guard TRUE.
         return None
-    blanked, censusable = _blank_c_literals([tail, *between])
+    window = _splice_c_lines([tail, *between])
+    if window is None:
+        # The window's last line splices into the step's physical
+        # line: the step line is a mid-logical-line continuation —
+        # neither its prefix nor this window is faithful text.
+        return None
+    blanked, censusable = _blank_c_literals(window)
     if not censusable:
         # Raw string / unterminated literal / comment running past
         # the region: the brace census would count data as code.
