@@ -159,18 +159,48 @@ class CompactStats:
 def _refuse_live_run(out_dir: Path) -> None:
     """Refuse when the run's recorded worker is still alive — a live
     appender racing the rewrite could land a row on the pre-swap
-    inode (the backup) instead of the compacted journal."""
+    inode (the backup) instead of the compacted journal.
+
+    The metadata read fails CLOSED: a ``.raptor-run.json`` that exists
+    but cannot be read or parsed refuses compaction — the file is
+    run-dir content any writer can corrupt, and corrupting it must not
+    disable this refusal. An ABSENT file stays permissive: legacy and
+    foreign directories carry no run metadata and must remain
+    compactable.
+    """
+    from core.json import load_json
+    from core.run.metadata import (
+        RUN_METADATA_FILE,
+        RUN_METADATA_MAX_BYTES,
+        STATUS_RUNNING,
+        worker_liveness_for_meta,
+    )
+    meta_path = Path(out_dir) / RUN_METADATA_FILE
     try:
-        from core.run.metadata import (
-            STATUS_RUNNING,
-            load_run_metadata,
-            worker_liveness_for_meta,
+        # Strict spelling of load_run_metadata's read (same file, same
+        # byte budget). ``None`` is ambiguous — absent file OR a file
+        # containing JSON ``null`` — so the object check below
+        # re-consults the path before taking the permissive arm.
+        meta = load_json(meta_path, strict=True,
+                         max_bytes=RUN_METADATA_MAX_BYTES)
+    except (OSError, ValueError, RecursionError) as exc:
+        from core.security.log_sanitisation import sanitise_for_terminal
+        raise CompactRefused(
+            f"run metadata at {meta_path} exists but cannot be read "
+            f"({sanitise_for_terminal(str(exc), max_len=200)}) — "
+            "refusing to compact: an unreadable record cannot prove "
+            "the run is not in flight. Repair or remove the file, "
+            "then retry."
+        ) from exc
+    if meta is None and not meta_path.exists():
+        return
+    if not isinstance(meta, dict):
+        raise CompactRefused(
+            f"run metadata at {meta_path} is not a JSON object — "
+            "refusing to compact: a malformed record cannot prove "
+            "the run is not in flight. Repair or remove the file, "
+            "then retry."
         )
-        meta = load_run_metadata(Path(out_dir))
-    except Exception:  # noqa: BLE001 — metadata read is best-effort
-        return
-    if not meta:
-        return
     if meta.get("status") != STATUS_RUNNING:
         return
     # Full-identity liveness (pid + recorded starttime; pid<=1 never
