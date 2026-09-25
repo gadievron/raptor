@@ -275,14 +275,19 @@ def _detect_parent_chain() -> str:
     """Comma-joined comm names of up to ``_PARENT_CHAIN_DEPTH``
     ancestors (nearest first), or ``unknown`` where /proc is
     unavailable. Audit-trail first: names are attacker-renameable,
-    so readers only key on the stock ``script`` wrapper; the rest
-    exists so a forged stamp records the chain that produced it.
+    so readers only key on the verdict-bearing names — the stock
+    ``script`` wrapper and the known agent comms
+    (:func:`_is_agent_comm`); the rest exists so a forged stamp
+    records the chain that produced it.
 
     The scan continues past the recorded window (to
-    ``_PARENT_SCAN_DEPTH``) looking for ``script``: stacking fork
-    intermediaries under ``script -qec`` pushed the verdict-bearing
-    name off a fixed-depth record, so a deeper occurrence is
-    appended to the recorded chain. A walk that ends WITHOUT
+    ``_PARENT_SCAN_DEPTH``) looking for the verdict-bearing names:
+    stacking fork intermediaries pushed them off a fixed-depth
+    record, so a deeper occurrence is appended to the recorded
+    chain — ``script`` if seen, plus the first agent comm when the
+    window recorded none (one representative name; every reader
+    demotes on ANY agent comm, and the cap keeps the value inside
+    the stamp grammar's length bound). A walk that ends WITHOUT
     reaching the session root — scan window exhausted, or an
     ancestor unreadable mid-walk — appends ``PARENTS_TRUNCATED``:
     grading stays fail-open on truncation (a deep stack alone
@@ -293,6 +298,7 @@ def _detect_parent_chain() -> str:
         return _PARENTS_UNKNOWN
     names: list[str] = []
     deep_script = False
+    deep_agent: str | None = None
     pid = os.getppid()
     depth = 0
     while pid > 1 and depth < _PARENT_SCAN_DEPTH:
@@ -303,6 +309,8 @@ def _detect_parent_chain() -> str:
             names.append(name)
         elif name == "script":
             deep_script = True
+        elif deep_agent is None and _is_agent_comm(name):
+            deep_agent = name
         depth += 1
         try:
             stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
@@ -313,6 +321,8 @@ def _detect_parent_chain() -> str:
             break
     if deep_script and "script" not in names:
         names.append("script")
+    if deep_agent is not None and not any(_is_agent_comm(c) for c in names):
+        names.append(deep_agent)
     if names and pid > 1:
         # Walk ended before the session root: record the truncation.
         names.append(PARENTS_TRUNCATED)
@@ -360,14 +370,33 @@ _OPERATOR_SHELL_COMMS = frozenset({
 #: interactive chain contains a bare version number.
 _VERSION_COMM = re.compile(r"[0-9]+(?:\.[0-9]+)+")
 
+#: Runtimes the agent CLI ships under: when the CLI runs as a
+#: JavaScript entry point the ancestor comm is the interpreter, not
+#: an agent-named binary. ``node`` is also a legitimate non-agent
+#: comm (editor terminal hosts, dev servers), so listing it here
+#: trades a false DEMOTION — the safe direction for a rule whose only
+#: consumer refuses an elevated grant: a wrongly-demoted context
+#: falls to the ordinary tier, while not listing it lets the stock
+#: agent shape grant. The trade is cheap in practice because every
+#: node-hosted terminal invocation of the consuming CLIs also
+#: carries a dispatch environment marker, which refuses the grant on
+#: its own leg; any future consumer of :func:`_is_agent_comm` that
+#: does not sit behind that leg must re-adjudicate this entry.
+_AGENT_RUNTIME_COMMS = frozenset({"node"})
+
 
 def _is_agent_comm(comm: str) -> bool:
     """Whether an ancestor comm names a known agent binary: the agent
-    CLI's own name, or the version-named binary its launcher execs.
-    comm is prctl-settable by the process itself — this catches the
-    STOCK shapes, not a renamed binary (see the tier statement in
+    CLI's own name, the version-named binary its launcher execs, or
+    the runtime interpreter it ships under. comm is prctl-settable by
+    the process itself — this catches the STOCK shapes, not a renamed
+    binary (see the tier statement in
     :func:`live_context_grants_operator`)."""
-    return comm.startswith("claude") or bool(_VERSION_COMM.fullmatch(comm))
+    return (
+        comm.startswith("claude")
+        or comm in _AGENT_RUNTIME_COMMS
+        or bool(_VERSION_COMM.fullmatch(comm))
+    )
 
 
 def live_context_grants_operator(
@@ -406,26 +435,33 @@ def live_context_grants_operator(
     * a well-formed ancestry whose NEAREST ancestor is a shell (an
       operator types the command), containing no ``unknown`` entry
       (broken walk), no stock ``script`` wrapper, no known
-      agent-binary comm (the agent CLI name or a version-named
-      binary), and not ENDING at a shell (an interactive shell has a
-      live parent — sshd, a terminal, tmux, login; a chain that
-      stops at the shell is the orphaned/reparented launder shape).
-      A trailing ``ancestry-truncated`` token stays fail-open per
-      the module doctrine (recorded, not demoting).
+      agent-binary comm (the agent CLI name, a version-named
+      binary, or the runtime interpreter the CLI ships under — see
+      :func:`_is_agent_comm`; the recording walk scans past the
+      4-name window and appends a deeper occurrence, so the rule
+      sees agent ancestors a fork stack pushed off the record), and
+      not ENDING at a shell (an interactive shell has a live parent
+      — sshd, a terminal, tmux, login; a chain that stops at the
+      shell is the orphaned/reparented launder shape). A trailing
+      ``ancestry-truncated`` token stays fail-open per the module
+      doctrine (recorded, not demoting).
 
     TIER STATEMENT (read before granting this any weight): the grant
     is heuristic against a determined same-user agent — comm names
     are prctl-settable, environments are the caller's own, and a pty
     makes ``isatty`` true by design. This is the same bar as
     /annotate's layered stamp (module docstring: "no silent forgery,
-    not impossibility"): the STOCK laundering shapes demote, every
-    residual forgery must curate sid, environment markers AND a
-    renamed ancestor chain — and the mark writer records the full
-    context into the journaled row body, so a laundered grant leaves
-    an auditable trail instead of silence. It is NOT an
-    unforgeability claim; direct journal writes by a key-holding
-    same-user process bypass this check entirely (that trust tier is
-    bounded by the journal MAC's own documentation).
+    not impossibility"): the STOCK laundering shapes demote, and a
+    residual forgery must curate sid and environment markers AND
+    either rename its ancestor chain or stack forks past the
+    32-deep ancestry scan — which stamps the visible
+    ``ancestry-truncated`` token instead of a clean-looking chain.
+    The mark writer records the full context into the journaled row
+    body, so a laundered grant leaves an auditable trail instead of
+    silence. It is NOT an unforgeability claim; direct journal
+    writes by a key-holding same-user process bypass this check
+    entirely (that trust tier is bounded by the journal MAC's own
+    documentation).
 
     *ctx* defaults to :func:`detect_invocation_context`. Passing an
     explicit context is the DOCUMENTED test seam: production cannot
