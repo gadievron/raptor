@@ -96,7 +96,15 @@ _TOKEN_RE = re.compile(
     r"[A-Za-z_]\w*|\d+|==|!=|<=|>=|&&|\|\||->|"
     r"[-+*/%<>=!&|^~.;,(){}\[\]]",
 )
-_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"' + r"|'(?:[^'\\]|\\.)*'")
+# Openers pinned to UNESCAPED delimiters ((?<!\\)): an unterminated
+# literal whose interior repeats escaped delimiters (`"` + `\"`*n)
+# otherwise makes every embedded delimiter a fresh match attempt that
+# re-scans to the end of the body — quadratic on hostile source
+# (measured exp 1.99; pinned, exp 1.0). On a well-formed token stream
+# no string opens at an escaped delimiter, so the collapse is
+# unchanged; dropping the pin re-opens the quadratic.
+_STRING_RE = re.compile(
+    r'(?<!\\)"(?:[^"\\]|\\.)*"' + r"|(?<!\\)'(?:[^'\\]|\\.)*'")
 _LINE_COMMENT_RE = re.compile(r"//[^\n]*|#[^\n]*")
 _GUARD_LINE_RE = re.compile(r"^\s*(?:if|while|elif|else\s+if)\b")
 _CALL_NAME_RE = re.compile(r"\b([A-Za-z_]\w{1,})\s*\(")
