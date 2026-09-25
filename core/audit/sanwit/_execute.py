@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Callable
 
 from core.run.workdir import exec_workdir
+from core.security.env_sanitisation import safe_subprocess_env
 from core.source import read_text_capped
 
 logger = logging.getLogger(__name__)
@@ -123,9 +124,16 @@ class ExecOutcome:
 
 
 def _safe_env() -> dict[str, str]:
-    from core.config import RaptorConfig
-
-    return RaptorConfig.get_safe_env()
+    """Child-process environment for every spawn the witness makes
+    (php probes, docker client, cleanup belt): the shared fail-closed
+    sanitised base (``safe_subprocess_env`` — allowlist parity with
+    ``RaptorConfig.get_safe_env``, minimal allowlist rather than
+    parent inherit when core.config is broken), minus the
+    target-facing RAPTOR markers: the native tier's interpreter
+    executes target-derived (grammar-validated) chain code, and no
+    witness child consumes RAPTOR runtime variables, so nothing is
+    re-added."""
+    return safe_subprocess_env(strip_target_markers=True)
 
 
 def _probe_native(php: str) -> tuple[str, str]:
