@@ -1695,6 +1695,19 @@ def cmd_run(args: argparse.Namespace) -> int:
         str(_RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"),
         "start", "audit", "--target", str(target_path),
     ]
+    # Thread an explicit --project across the process boundary: main()
+    # records it via set_process_project, but that override is an
+    # IN-PROCESS global — the lifecycle stub is a child process and
+    # re-resolves the session/symlink layers unless the argv carries
+    # the pin (core/run/pin.py: children receive the value by explicit
+    # argv threading, never ambiently). Pre-fix the flag was parsed and
+    # then silently dropped here, so the child pinned the run to the
+    # stale session project and refused with an error message that
+    # recommended the very flag being ignored. '-' (explicitly
+    # projectless) forwards verbatim; validation stays in the child
+    # (a hard error surfaces as "lifecycle start failed").
+    if getattr(args, "project", None) is not None:
+        lifecycle_cmd += ["--project", args.project]
     if args.out:
         out_dir = Path(args.out)
         out_dir.mkdir(parents=True, exist_ok=True)
