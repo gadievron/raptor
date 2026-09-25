@@ -677,6 +677,55 @@ def _ingest_journal_row(conn, snap_id: str, entry: Any, provenance: str) -> int:
 #: Producer name for mechanical call-edge snapshots.
 CALLGRAPH_PRODUCER = "callgraph"
 
+# Retained callgraph snapshots per target (keep-N retention; older
+# snapshots and their cascaded node/edge rows are deleted on ingest).
+# Each callgraph snapshot carries the FULL mechanical edge set —
+# 10^5-10^6 rows at large-target scale — so N multiplies store size
+# directly (a multi-GB store after a handful of runs was the failure
+# mode this bounds). The retained older generation is FORENSIC only:
+# the verdict-feeding view accepts nothing but the latest generation
+# for a target. Higher N keeps more of that inspection history at
+# edge-set-sized cost per generation; 1 keeps no history at all. 2 =
+# the current set plus exactly one superseded generation to diff
+# against when a fresh ingest surprises.
+CALLGRAPH_SNAPSHOT_KEEP = 2
+
+
+def _gc_callgraph_snapshots(
+    conn, target: str, current_snap_id: str, *, keep: int | None = None,
+) -> int:
+    """Delete superseded callgraph snapshots for *target* beyond the
+    keep-N retention (:data:`CALLGRAPH_SNAPSHOT_KEEP`).
+
+    Scoped to ``producer='callgraph'`` rows only: the other lanes'
+    snapshots are small and their cross-run memory semantics are not
+    this GC's to change. The just-written snapshot is always kept
+    regardless of timestamp ties. Row deletes cascade to the
+    snapshot's node/edge/artifact rows (FK ON DELETE CASCADE). Runs
+    inside the ingest's write transaction. Returns the number of
+    snapshots removed.
+    """
+    if keep is None:
+        keep = CALLGRAPH_SNAPSHOT_KEEP
+    rows = conn.execute(
+        """
+        SELECT id FROM snapshots
+        WHERE producer=? AND target_path=? AND id != ?
+        ORDER BY created_at DESC, id
+        """,
+        (CALLGRAPH_PRODUCER, target, current_snap_id),
+    ).fetchall()
+    victims = [row["id"] for row in rows[max(keep - 1, 0):]]
+    for victim in victims:
+        conn.execute("DELETE FROM snapshots WHERE id=?", (victim,))
+    if victims:
+        print(
+            f"graph: callgraph retention removed {len(victims)} superseded "
+            f"snapshot(s) (keep={keep})",
+            file=sys.stderr,
+        )
+    return len(victims)
+
 # executemany slice for the call-edge batch lanes. Larger slices make
 # fewer executemany calls but hold a bigger transient row-tuple buffer
 # (each row carries a minted token); smaller slices bound the buffer
@@ -848,6 +897,7 @@ def ingest_call_edges(
                     """,
                     chunk,
                 )
+            _gc_callgraph_snapshots(conn, target, snap_id)
     except INGEST_SKIP_EXCEPTIONS as exc:
         print(f"graph: callgraph ingest skipped ({exc})", file=sys.stderr)
         return None
