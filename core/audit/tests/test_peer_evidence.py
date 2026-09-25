@@ -61,6 +61,39 @@ class TestReceiptShape:
         assert d["contract_source"] == "wur"
         assert d["rule_id"] == "consistency:return-check"
 
+    def test_score_recorded_and_matches_canonical_wilson(self):
+        from core.dataflow.sanitizer_cut_parity import wilson_interval
+        pe = _pe("majority")
+        assert pe.score == wilson_interval(9, 10)[0]
+        d = pe.to_dict()
+        assert d["score"] == round(pe.score, 4)
+        # Shrinkage: the recorded score sits below the raw ratio.
+        assert d["score"] < d["ratio"]
+
+    def test_weighted_fields_unset_by_default(self):
+        pe = _pe("majority")
+        assert pe.weighted_n is None
+        assert pe.weighted_conforming is None
+        d = pe.to_dict()
+        # Additive serialization: absent when unset, so existing
+        # readers see the exact prior shape plus new keys only.
+        assert "weighted_n" not in d
+        assert "weighted_conforming" not in d
+
+    def test_weighted_fields_serialized_when_set(self):
+        pe = _pe("majority")
+        pe.weighted_n = 7.25
+        pe.weighted_conforming = 6.5
+        d = pe.to_dict()
+        assert d["weighted_n"] == 7.25
+        assert d["weighted_conforming"] == 6.5
+        # Integer fields and the score stay computed from the
+        # integers — weighted scoring has no producer yet.
+        assert d["n"] == 10 and d["conforming"] == 9
+        assert d["score"] == round(pe.score, 4)
+        from core.dataflow.sanitizer_cut_parity import wilson_interval
+        assert pe.score == wilson_interval(9, 10)[0]
+
     def test_exhibits_capped(self):
         pe = PeerEvidence(
             dimension="flag-mode",

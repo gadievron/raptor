@@ -730,9 +730,9 @@
     "kind": "literal"
   },
   "core/audit/peer_evidence.py::d": {
-    "count": 11,
+    "count": 12,
     "kind": "literal",
-    "note": "framework-internal enum/namespace vocabulary (not target API names)"
+    "note": "PeerEvidence receipt serializer key manifest (persistence schema keys, not a learned name vocabulary; grown by the lead-strength score key — reviewed)"
   },
   "core/audit/pipeline.py::HYPOTHESIS_CLASS_KW": {
     "count": 11,
