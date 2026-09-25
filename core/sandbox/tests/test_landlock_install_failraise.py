@@ -143,6 +143,59 @@ def test_fail_raise_message_truthful_when_probe_failed():
     assert "SYS_landlock_create_ruleset failed post-fork" in r.stderr
 
 
+def test_fail_closed_message_names_the_wsl_consent_on_wsl():
+    """On a WSL host the fail-closed create-failure message
+    additionally names the standing host-scoped consent ceremony —
+    the refusal is the boundary where a WSL operator learns the
+    documented way out. The hint is resolved in the PARENT at build
+    time (fork-safety), so patching the detection before the builder
+    runs is exactly the real WSL shape."""
+    r = _run_driver("""
+        import core.startup.wsl as _wsl
+        _wsl.is_wsl = lambda kernel_id=None: True
+        from core.sandbox import state as _state
+        from core.sandbox.landlock import (
+            LandlockInstallError, _make_landlock_preexec,
+        )
+        _state._landlock_cache = -1
+        fn = _make_landlock_preexec(["/tmp"], fail_raise=True)
+        try:
+            fn()
+        except LandlockInstallError as e:
+            msg = str(e)
+            assert "wsl-consent grant" in msg, msg
+            assert "TTY-gated" in msg, msg
+            assert "docs/wsl.md" in msg, msg
+            print("WSL-HINT-PRESENT")
+    """)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "WSL-HINT-PRESENT" in r.stdout
+
+
+def test_fail_closed_message_has_no_wsl_hint_off_wsl():
+    """Off WSL the message keeps its exact generic shape — no
+    misdirecting consent hint on ordinary Landlock-less hosts."""
+    r = _run_driver("""
+        import core.startup.wsl as _wsl
+        _wsl.is_wsl = lambda kernel_id=None: False
+        from core.sandbox import state as _state
+        from core.sandbox.landlock import (
+            LandlockInstallError, _make_landlock_preexec,
+        )
+        _state._landlock_cache = -1
+        fn = _make_landlock_preexec(["/tmp"], fail_raise=True)
+        try:
+            fn()
+        except LandlockInstallError as e:
+            msg = str(e)
+            assert "wsl-consent" not in msg, msg
+            assert msg.endswith("admits the ns-only tier."), msg
+            print("NO-WSL-HINT")
+    """)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "NO-WSL-HINT" in r.stdout
+
+
 def test_default_mode_keeps_fork_safe_exit():
     """fail_raise omitted (preexec_fn lane): the same failure keeps the
     documented os._exit(126) + one-line stderr shape."""
