@@ -2476,6 +2476,11 @@
     "kind": "literal",
     "note": "forecast result-document field names (an artifact schema the report embeds), not a learned name vocabulary"
   },
+  "packages/openant/recovery.py::_recovered_record": {
+    "count": 12,
+    "kind": "literal",
+    "note": "finding-dict field names of the recovered-checkpoint-verdict record builder (same RAPTOR finding schema as translator._translate_finding, whose entry this mirrors), not a name vocabulary"
+  },
   "packages/openant/translator.py::_translate_finding": {
     "count": 12,
     "kind": "literal",

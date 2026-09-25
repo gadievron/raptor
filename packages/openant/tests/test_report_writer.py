@@ -186,5 +186,81 @@ class TestUnknownLevelRendered(unittest.TestCase):
         self.assertIn("openant:V1", out)
 
 
+class TestRecoveredVerdictSection(unittest.TestCase):
+    """Recovered checkpoint verdicts render in their OWN section with
+    their own header count — never blended into the findings count —
+    and every hostile-influenced slot stays escaped."""
+
+    @staticmethod
+    def _recovered(i: int = 0, **overrides) -> dict:
+        rec = {
+            "finding_id": f"openant-recovered:app/db.py:q{i}",
+            "cwe_id": "CWE-89",
+            "file": "app/db.py",
+            "level": "note",
+            "message": "reasoning text",
+            "snippet": "",
+            "metadata": {
+                "function": f"q{i}",
+                "vuln_name": "SQL Injection",
+                "stage1_verdict": "vulnerable",
+                "stage2_verdict": "",
+                "provenance_tier": "recovered_checkpoint_verdict",
+                "recovery_source": "dedup_rederivation",
+                "deduplicated_into": "app/api.py:handle",
+            },
+        }
+        rec.update(overrides)
+        return rec
+
+    def _render(self, findings, recovered, max_findings=None) -> str:
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td)
+            raptor_openant._write_markdown_report(
+                out_dir, findings, Path("/repo"), 1.0,
+                max_findings=max_findings, recovered=recovered)
+            return (out_dir / "openant-report.md").read_text()
+
+    def test_section_and_header_count_separately(self):
+        f = {"finding_id": "openant:V1", "cwe_id": "CWE-78",
+             "file": "a.py", "level": "warning", "message": "m",
+             "snippet": "", "metadata": {"function": "f",
+                                         "vuln_name": "n",
+                                         "stage1_verdict": "vulnerable",
+                                         "stage2_verdict": ""}}
+        out = self._render([f], [self._recovered()])
+        self.assertIn("**Findings:** 1", out)
+        self.assertIn("**Recovered checkpoint verdicts:** 1", out)
+        self.assertIn("## Recovered checkpoint verdicts (1)", out)
+        self.assertIn("openant-recovered:app/db.py:q0", out)
+        self.assertIn("**Deduplicated into:**", out)
+        # The recovered record renders ONLY in its section, not in the
+        # level sections.
+        self.assertNotIn("## Low/Informational", out)
+
+    def test_zero_recovered_renders_nothing(self):
+        out = self._render([], [])
+        self.assertNotIn("Recovered checkpoint verdicts", out)
+
+    def test_recovered_slots_are_escaped(self):
+        hostile = self._recovered(
+            message="![beacon](https://evil.example/x)\n# FORGED",
+            file="app/ev\x1bil.py",
+        )
+        hostile["metadata"]["vuln_name"] = "bad\n# forged"
+        hostile["metadata"]["deduplicated_into"] = "x\x1b[31m:y"
+        out = self._render([], [hostile])
+        self.assertNotIn("\x1b", out)
+        self.assertNotIn("![beacon](", out)
+        self.assertNotIn("\n# FORGED", out)
+        self.assertNotIn("\n# forged", out)
+
+    def test_recovered_section_truncates_with_stated_cut(self):
+        recovered = [self._recovered(i) for i in range(5)]
+        out = self._render([], recovered, max_findings=2)
+        self.assertIn("## Recovered checkpoint verdicts (5)", out)
+        self.assertIn("showing 2 of 5 recovered", out)
+
+
 if __name__ == "__main__":
     unittest.main()
