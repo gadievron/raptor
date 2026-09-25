@@ -166,6 +166,7 @@ def _show() -> None:
         ("codeql_max_disk_cache_mb", t.codeql_max_disk_cache_mb, "MB"),
         ("joern_enabled", t.joern_enabled, ""),
         ("joern_heap_mb", t.joern_heap_mb, "MB"),
+        ("joern_heap_ceiling_mb", t.joern_heap_ceiling_mb, "MB"),
         ("joern_cpg_timeout_s", t.joern_cpg_timeout_s, "s"),
         ("joern_query_timeout_s", t.joern_query_timeout_s, "s"),
         ("max_semgrep_workers", t.max_semgrep_workers, ""),
@@ -180,6 +181,10 @@ def _show() -> None:
             shown = value
             if name == "codeql_threads" and value == 0:
                 shown = f"all {info['cpus']}" if info["cpus"] else "all"
+            if name == "joern_cpg_timeout_s" and value == 0:
+                # The auto sentinel: the number is derived from the
+                # in-scope source size at CPG-build time, not here.
+                shown, unit = "derived at build time", ""
             display = f"auto ({shown}{' ' + unit if unit else ''})"
         else:
             display = f"{value}{' ' + unit if unit else ''}"
