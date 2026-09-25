@@ -160,22 +160,30 @@ class BridgeArtifacts:
 # Discovery (understand_bridge's 3-tier precedence, anchor-gated)
 # ---------------------------------------------------------------------------
 
-def _map_anchor(map_path: Path) -> str | None:
-    """The candidate map's recorded content anchor, or ``None``.
+def _map_identity(map_path: Path) -> tuple[str | None, str | None]:
+    """The candidate map's recorded ``(content anchor, identity
+    kind)``; ``(None, None)`` when unreadable.
 
-    Routed through :func:`core.binary.addrmap.module_anchor` so a
-    junk/degraded value collapses to ``None`` instead of comparing
-    equal to another junk value.
+    The anchor routes through
+    :func:`core.binary.addrmap.module_anchor` so a junk/degraded
+    value collapses to ``None`` instead of comparing equal to
+    another junk value; the kind is honoured only when it names a
+    known identity kind (the field is artifact-declared text).
     """
     from core.binary.addrmap import module_anchor
+    from core.binary.identity import IDENTITY_KINDS
     from core.json import load_json
     try:
         data = load_json(map_path, max_bytes=_MAX_ARTIFACT_BYTES)
     except (OSError, ValueError):
-        return None
+        return None, None
     if not isinstance(data, dict):
-        return None
-    return module_anchor(build_id=str(data.get("content_anchor") or ""))
+        return None, None
+    anchor = module_anchor(build_id=str(data.get("content_anchor") or ""))
+    kind = data.get("identity_kind")
+    if not isinstance(kind, str) or kind not in IDENTITY_KINDS:
+        kind = None
+    return anchor, kind
 
 
 def _hunt_paths_beside(directory: Path) -> list[Path]:
@@ -218,6 +226,7 @@ def find_binary_artifacts(
     study_dir: Path,
     *,
     expected_anchor: str | None,
+    expected_kind: str | None = None,
 ) -> BridgeArtifacts | None:
     """Locate the best map (+ hunt) artifacts for a binary study.
 
@@ -237,19 +246,32 @@ def find_binary_artifacts(
     adversary who can already forge artifacts there (that run-dir
     trust domain is the same one every bridge and cache reader
     inhabits; seeds remain attention hints, never verdicts).
+
+    Kind-mismatch witness: every ACCEPTED anchor match additionally
+    compares the two sides' declared identity kinds when both are
+    known; an anchor equality across DIFFERENT kinds (a cross-format
+    module wearing another module's identity hex) is recorded in the
+    study dir's ``join-anomalies.json``. Witness, not gate — the
+    join behaviour is unchanged, the collision just stops being
+    invisible.
     """
     study_dir = Path(study_dir)
 
     # Tier 1: co-located.
     local_map = study_dir / _MAP_FILENAME
     if local_map.is_file():
-        found = _map_anchor(local_map)
+        found, found_kind = _map_identity(local_map)
         if expected_anchor and found and found != expected_anchor:
             logger.warning(
                 "binary_study_bridge: co-located %s is for a different "
                 "binary (anchor mismatch) — ignoring it", _MAP_FILENAME,
             )
         else:
+            if expected_anchor and found == expected_anchor:
+                _witness_kind_mismatch(
+                    study_dir, local_map, found,
+                    expected_kind, found_kind,
+                )
             return BridgeArtifacts(
                 map_path=local_map,
                 hunt_paths=_hunt_paths_beside(study_dir),
@@ -263,7 +285,12 @@ def find_binary_artifacts(
 
     # Tier 2: project sibling run dirs.
     for d in _candidate_dirs(study_dir.parent, exclude=study_dir):
-        if _map_anchor(d / _MAP_FILENAME) == expected_anchor:
+        anchor, kind = _map_identity(d / _MAP_FILENAME)
+        if anchor == expected_anchor:
+            _witness_kind_mismatch(
+                study_dir, d / _MAP_FILENAME, anchor,
+                expected_kind, kind,
+            )
             return BridgeArtifacts(
                 map_path=d / _MAP_FILENAME,
                 hunt_paths=_hunt_paths_beside(d),
@@ -277,13 +304,43 @@ def find_binary_artifacts(
     except Exception:  # noqa: BLE001 — tier 3 is an aid, never a gate
         return None
     for d in _candidate_dirs(Path(out_root), exclude=study_dir):
-        if _map_anchor(d / _MAP_FILENAME) == expected_anchor:
+        anchor, kind = _map_identity(d / _MAP_FILENAME)
+        if anchor == expected_anchor:
+            _witness_kind_mismatch(
+                study_dir, d / _MAP_FILENAME, anchor,
+                expected_kind, kind,
+            )
             return BridgeArtifacts(
                 map_path=d / _MAP_FILENAME,
                 hunt_paths=_hunt_paths_beside(d),
                 tier="global_out",
             )
     return None
+
+
+def _witness_kind_mismatch(
+    study_dir: Path,
+    map_path: Path,
+    anchor: str | None,
+    expected_kind: str | None,
+    found_kind: str | None,
+) -> None:
+    """Record an anchor match whose sides declare different identity
+    kinds. Best-effort witness only: absent kinds (legacy artifacts,
+    fid-derived expectations) witness nothing, and recording never
+    fails the discovery that triggered it."""
+    if not anchor or not expected_kind or not found_kind:
+        return
+    if expected_kind == found_kind:
+        return
+    from core.binary.addrmap import record_join_anomalies
+    record_join_anomalies(study_dir, "binary-study-bridge", [{
+        "reason": "identity_kind_mismatch",
+        "anchor": anchor,
+        "expected_kind": expected_kind,
+        "found_kind": found_kind,
+        "artifact": str(map_path),
+    }])
 
 
 # ---------------------------------------------------------------------------
@@ -529,26 +586,52 @@ def translate_candidates(
 # Top-level entry
 # ---------------------------------------------------------------------------
 
-def _db_anchor(db: Any) -> str | None:
-    """The study database's module content anchor, if derivable.
+def _db_identity(db: Any) -> tuple[str | None, str | None]:
+    """The study database's module ``(content anchor, identity
+    kind)``, if derivable.
 
-    A stamped fid's anchor half first (already normalised), else a
-    fresh probe of the on-disk binary. ``None`` when neither exists —
-    discovery then confines itself to the co-located tier.
+    A stamped fid's anchor half first (already normalised); fids
+    carry no kind, so the kind is attested by a front-door probe of
+    the on-disk binary — WITHOUT it the witness would be blind on
+    exactly the common path (import parsers stamp fids at parse
+    time, so almost every real database takes the fid leg). The
+    probe's kind counts only when its anchor AGREES with the fid's:
+    a probe of a different build, or of an unselected fat container,
+    must not attest a kind for an anchor it did not mint. Databases
+    without fids fall to the probe for both halves. ``(None, None)``
+    when neither exists — discovery then confines itself to the
+    co-located tier.
     """
-    from core.binary.addrmap import content_anchor, from_fid
+    from core.binary.addrmap import from_fid
     for fn in getattr(db, "functions", None) or []:
         parsed = from_fid(getattr(fn, "fid", None))
         if parsed is not None:
-            return parsed[0]
+            probed = _probe_identity(db)
+            if probed is not None and probed[0] == parsed[0]:
+                return parsed[0], probed[1]
+            return parsed[0], None
+    probed = _probe_identity(db)
+    if probed is not None:
+        return probed
+    return None, None
+
+
+def _probe_identity(db: Any) -> tuple[str, str] | None:
+    """Front-door ``(anchor, kind)`` probe of the database's on-disk
+    binary; ``None`` when there is no path or the probe fails."""
     binary_path = getattr(db, "binary_path", None)
-    if binary_path:
-        try:
-            return content_anchor(binary_path)
-        except Exception:  # noqa: BLE001 — anchor probe is best-effort
-            logger.debug("bridge: content-anchor probe failed",
-                         exc_info=True)
-    return None
+    if not binary_path:
+        return None
+    try:
+        from core.binary.identity import content_identity
+        ident = content_identity(Path(binary_path))
+    except Exception:  # noqa: BLE001 — anchor probe is best-effort
+        logger.debug("bridge: content-identity probe failed",
+                     exc_info=True)
+        return None
+    if ident is None:
+        return None
+    return ident.anchor_hex, ident.kind
 
 
 def build_bridge_seeds(
@@ -574,8 +657,10 @@ def build_bridge_seeds(
 
     output_dir = Path(output_dir)
     try:
+        expected_anchor, expected_kind = _db_identity(db)
         artifacts = find_binary_artifacts(
-            output_dir, expected_anchor=_db_anchor(db),
+            output_dir, expected_anchor=expected_anchor,
+            expected_kind=expected_kind,
         )
     except Exception:  # noqa: BLE001 — discovery is enrichment
         logger.debug("bridge: artifact discovery failed", exc_info=True)

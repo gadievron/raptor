@@ -76,6 +76,7 @@ _FID_RE = re.compile(r"^([0-9a-f]{8,64}):0x([0-9a-f]{1,16})$")
 _OPERATION_RE = re.compile(r"^[a-z0-9_.-]{1,64}$")
 
 MISSES_FILENAME = "fid-misses.json"
+JOIN_ANOMALIES_FILENAME = "join-anomalies.json"
 
 # Sentinel distinguishing "attribute absent" (shapes without the
 # recorded marker, e.g. REDatabase/BinaryManifest) from a present
@@ -589,10 +590,43 @@ def record_fid_misses(
     produced it — but failures are logged loudly, because a lost
     miss record is itself the silent-drop failure mode.
     """
+    return _record_join_events(out_dir, operation, misses,
+                               MISSES_FILENAME, "misses")
+
+
+def record_join_anomalies(
+    out_dir: str | Path,
+    operation: str,
+    anomalies: list[dict[str, Any]],
+) -> Path | None:
+    """Append join ANOMALIES to ``join-anomalies.json``.
+
+    The mirror of :func:`record_fid_misses` for the opposite failure
+    mode: a miss is a join that did not happen; an anomaly is a join
+    that DID happen on evidence that disagrees with itself — the
+    canonical case is an anchor match whose two sides declare
+    different identity kinds (a cross-format module wearing another
+    module's identity hex). Misses were always recorded; collisions
+    were invisible — this file converts them into recorded events at
+    near-zero cost. Same caps, same lock, same never-raises contract;
+    the per-operation entries live under an ``anomalies`` array (the
+    ledger is not a miss log and must not read like one).
+    """
+    return _record_join_events(out_dir, operation, anomalies,
+                               JOIN_ANOMALIES_FILENAME, "anomalies")
+
+
+def _record_join_events(
+    out_dir: str | Path,
+    operation: str,
+    misses: list[dict[str, Any]],
+    filename: str,
+    entries_key: str,
+) -> Path | None:
     if not misses:
         return None
     out_path = Path(out_dir)
-    target = out_path / MISSES_FILENAME
+    target = out_path / filename
     if not _OPERATION_RE.fullmatch(operation or ""):
         operation = "unknown"
     entries = []
@@ -616,7 +650,7 @@ def record_fid_misses(
         "operation": operation,
         "count": len(misses),
         "recorded": len(entries),
-        "misses": entries,
+        entries_key: entries,
     }
     try:
         import contextlib
@@ -642,8 +676,8 @@ def record_fid_misses(
                         document = existing
                 except (OSError, ValueError):
                     logger.warning(
-                        "fid-misses: existing %s unreadable — starting a "
-                        "fresh document", target,
+                        "join events: existing %s unreadable — starting "
+                        "a fresh document", target,
                     )
             operations = document.get("operations")
             if not isinstance(operations, list):
@@ -671,8 +705,9 @@ def record_fid_misses(
             save_json(target, document)
     except OSError:
         logger.warning(
-            "fid-misses: could not record %d miss(es) for %s in %s",
-            len(misses), operation, out_path, exc_info=True,
+            "join events: could not record %d entry(ies) in %s for %s "
+            "in %s", len(misses), filename, operation, out_path,
+            exc_info=True,
         )
         return None
     return target
@@ -680,6 +715,7 @@ def record_fid_misses(
 
 __all__ = [
     "FID_FUZZY_WINDOW_BYTES",
+    "JOIN_ANOMALIES_FILENAME",
     "MISSES_FILENAME",
     "FidIndex",
     "FidMatch",
@@ -691,6 +727,7 @@ __all__ = [
     "normalise_fid",
     "passthrough_fid",
     "record_fid_misses",
+    "record_join_anomalies",
     "stamp_redb_fids",
     "to_fid",
     "translate",
