@@ -121,12 +121,57 @@ scanning them in place. RAPTOR warns (warn-only — the run proceeds)
 when a resolved default target, output directory, or project
 target/output sits on such a mount.
 
+### Artifact semantics on drvfs/9p
+
+What "client-local" means for RAPTOR's durable artifacts (run
+metadata, the coverage store, annotations, project registry state):
+every `flock`-guarded read-modify-write stays fully correct among
+processes **within one distro** — one 9p client behaves like a local
+filesystem for its own processes. What silently disappears is the
+cross-context guarantee: a Windows-side process, or a second WSL
+distro mounting the same drive, is a different client and is not
+excluded — concurrent cross-context writers degrade to
+last-writer-wins. File mtimes behave the same way: another client's
+writes can surface with stale attributes (the 9p attribute cache),
+which skews mtime-based staleness/activity signals across contexts
+while same-distro views stay coherent. Practical rule: artifacts on
+the distro filesystem keep every guarantee; artifacts on `/mnt/<drive>`
+are fine so long as exactly one distro touches them.
+
+### Temp root (`TMPDIR`)
+
+Do not point `TMPDIR` (or `RAPTOR_WORK_DIR`) at a drvfs/9p path.
+This is the placement that breaks features rather than just
+degrading them:
+
+* **FIFO/named-pipe creation fails** on 9p — temp-backed plumbing
+  that creates special files errors out instead of running slowly.
+* **Many-small-file scratch work is drastically slower** — scratch
+  lanes, sandbox staging, and extraction trees are exactly that
+  shape, so per-file 9p round-trips dominate.
+
+RAPTOR emits one strong warning per process (at the scratch/workdir
+chokepoints, plus a banner/doctor line) when the temp root resolves
+to such a mount. The remedy is to point the temp root back at the
+distro filesystem before launching:
+
+```bash
+export TMPDIR=/tmp        # or any other Linux-filesystem path
+```
+
 Case sensitivity: drvfs directories are case-insensitive by default
 (per-directory `case=` attributes can change this). RAPTOR's path
 containment fails closed under case-spelling mismatches; the visible
 effect of a case-insensitive checkout is cosmetic — two case-variant
 spellings of one file can appear as distinct entries in inventories
-and reports.
+and reports. When an inventory build over a target on such a mount
+finds paths differing only by case, it logs an informational note
+listing bounded example groups (`Foo.c / foo.c`): those entries may
+be one on-disk file counted twice — duplicate-identity noise in
+inventories, SARIF results, and suppression keys. The fail direction
+is safe (duplicate analysis, split coverage marks — never a masked
+finding) and keying is deliberately unchanged; deduplicate the
+checkout (or clone into the distro filesystem) if the noise matters.
 
 The launcher's PATH scrub drops the Windows-interop PATH entries
 that WSL appends by default (they are world-writable under the
