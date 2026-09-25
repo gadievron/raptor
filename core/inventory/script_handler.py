@@ -319,9 +319,26 @@ def _atomize(part: str) -> list[tuple[str, str]]:
         atoms: list[tuple[str, str]] = []
         pos = 0
         for m in _INTERP_VAR_RE.finditer(body):
-            # An escaped ``\$`` is literal, not a hole.
-            if m.start() > 0 and body[m.start() - 1] == "\\":
-                continue
+            # ``\$`` escapes the hole opener — but only under an ODD
+            # run of preceding backslashes. Counting a single char
+            # read PHP's ``"\\$x"`` (escaped backslash, then a LIVE
+            # interpolation) as an escaped hole, so a PHP-dynamic
+            # include laundered into a pure-literal read: shape
+            # ``literal`` grants wiring AND fabricates a resolvable
+            # literal edge for the include walk. Parity over the
+            # whole run is the PHP tokenizer's rule (each ``\\``
+            # consumes both chars; only a leftover ``\`` escapes the
+            # ``$``). ``{$`` holes are never escapable: ``\{`` is not
+            # a PHP escape, so the backslash is literal text and the
+            # hole stays live.
+            if body[m.start()] == "$":
+                run = 0
+                k = m.start() - 1
+                while k >= 0 and body[k] == "\\":
+                    run += 1
+                    k -= 1
+                if run % 2 == 1:
+                    continue
             if m.start() > pos:
                 atoms.append(
                     ("lit", _unescape_double_literal(body[pos:m.start()])))

@@ -66,6 +66,31 @@ class TestClassifyIncludeArgument:
         assert got.shape == "literal"
         assert got.literal_tail == "it's.php"
 
+    def test_escaped_dollar_parity(self):
+        # ``\$`` suppresses the hole only under an ODD backslash run:
+        # in PHP ``"\\$x"`` the backslashes escape each other and the
+        # interpolation is LIVE — reading it as literal launders a
+        # dynamic include into wiring plus a fake resolvable edge.
+        assert classify_include_argument(
+            r'"\$x/e.php"').shape == "literal"          # \$  escaped
+        assert classify_include_argument(
+            r'"\\$x/e.php"').shape == "dynamic"         # \\$ live
+        assert classify_include_argument(
+            r'"\\\$x/e.php"').shape == "literal"        # \\\$ escaped
+        assert classify_include_argument(
+            r'"\\\\$x/e.php"').shape == "dynamic"       # \\\\$ live
+        # The escaped-dollar text survives into the literal value.
+        got = classify_include_argument(r'"\$x/e.php"')
+        assert got.literal_tail == "$x/e.php"
+
+    def test_curly_dollar_hole_is_never_escapable(self):
+        # ``\{`` is not a PHP escape: the backslash is literal text
+        # and the ``{$`` hole stays live.
+        assert classify_include_argument(
+            r'"\{$x}/e.php"').shape == "dynamic"
+        assert classify_include_argument(
+            '"{$x}/e.php"').shape == "dynamic"
+
     def test_dot_inside_string_is_not_concat(self):
         got = classify_include_argument("'a.b.php'")
         assert got.shape == "literal"
