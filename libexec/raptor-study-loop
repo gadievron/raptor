@@ -785,7 +785,7 @@ def _score_doc_relevance(filepath: str, identifiers: set[str]) -> float:
     if not content.strip():
         return 0.0
 
-    lines = content.split("\n")
+    lines = content.split("\n")  # line-model: universal-newline read above
     score = 0.0
 
     # Title / first heading (lines 0-5)

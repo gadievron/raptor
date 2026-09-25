@@ -578,7 +578,7 @@ def _extract_struct_blocks(
 def _extract_fields(block: str) -> list[str]:
     """Extract field names from a struct/union block."""
     fields = []
-    for line in block.split("\n"):
+    for line in block.split("\n"):  # line-model: universal-newline read_text upstream
         line = line.strip()
         if line.startswith(("//", "/*", "*")):
             continue
@@ -2246,7 +2246,7 @@ def _llm_seed_concepts_from_names(
         text = resp.content if isinstance(resp.content, str) else str(resp.content)
         text = text.strip()
         if text.startswith("```"):
-            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()  # line-model: LLM response fence parsing
         seeded = loads(text, max_bytes=_MAX_STUDY_ARTIFACT_BYTES)
         if isinstance(seeded, list):
             name_set = set(all_names)
@@ -2335,7 +2335,7 @@ def _discover_docs(
             snippet_lower = snippet.lower()
             # Extract document title from RST heading
             doc_title = ""
-            lines = snippet.split("\n")
+            lines = snippet.split("\n")  # line-model: universal-newline read_text above
             for i, line in enumerate(lines):
                 stripped = line.strip()
                 if (not stripped

@@ -188,7 +188,7 @@ def _stamp_lines(body: str) -> list[str]:
     text sections (see capture_boot_payload in raptor-sage-setup) —
     belt and braces, this scanner is the load-bearing defence.
     """
-    lines = body.split("\n")
+    lines = body.split("\n")  # line-model: deliberate \n-only byte model over raw stamp payload (newline="" read)
     if lines and lines[-1] == "":
         # Mirror splitlines() on \n-terminated text: no phantom last line.
         lines.pop()
