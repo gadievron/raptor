@@ -31,6 +31,8 @@ import random
 import struct
 import time
 
+import pytest
+
 from core.binary import pe as pe_mod
 from core.binary.pe import PeFacts, extract_pe_facts
 from core.security.log_sanitisation import (
@@ -110,9 +112,16 @@ def _collect_strings(facts: PeFacts) -> list[str]:
 
 
 class TestMutationFuzz:
+    @pytest.mark.slow
     def test_thirty_thousand_seeded_mutations_never_raise(
             self, tmp_path):
-        """The never-raises contract under random damage, across
+        """Nightly tier: 30,000 full parses are genuine multi-second
+        CPU (several seconds unloaded; several times that on a
+        contended runner) — far past the default-tier budget. The
+        default tier keeps this file's no-fabrication mutation probe
+        and the cap/boundary suites for per-PR coverage.
+
+        The never-raises contract under random damage, across
         THREE independent seeds (30,000 mutations total — every
         run replays the identical corpus). Flips are biased
         toward the headers and the table sections (the bytes

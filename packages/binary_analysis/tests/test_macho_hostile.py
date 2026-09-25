@@ -31,6 +31,8 @@ import io
 import random
 import time
 
+import pytest
+
 from core.security.log_sanitisation import (
     escape_nonprintable,
     has_nonprintable,
@@ -454,8 +456,15 @@ def _worst_shape() -> bytes:
 
 
 class TestWorstCraftedShape:
+    @pytest.mark.slow
     def test_wall_clock_and_op_count_at_the_real_caps(self, tmp_path):
-        """The worst shape this parser can be handed structurally,
+        """Nightly tier: parsing the worst shape at the REAL caps
+        twice is genuine multi-second CPU that breaches the
+        default-tier budget under loaded-runner variance (its own
+        wall bound below is 30s); the default tier keeps the seeded
+        mutation fuzz and the per-cap suites for per-PR coverage.
+
+        The worst shape this parser can be handed structurally,
         measured — this is the two-direction regression bound for
         anyone raising the caps (raise a cap, re-measure, re-pin).
         Wall clock alone is not the pin: the op count asserts the
