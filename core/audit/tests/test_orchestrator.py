@@ -7793,3 +7793,30 @@ class TestReReviewCostBooking:
         )
         assert result.outcomes[0].status == "suspicious"
         self._assert_booked(result)
+
+
+class TestCallEdgesBootstrapPredicate:
+    """The in-memory call-edge bootstrap fires for maps that carry no
+    usable edges: never enriched, or shed by the size budget."""
+
+    def _pred(self, cm):
+        from core.audit.orchestrator import _call_edges_need_bootstrap
+        return _call_edges_need_bootstrap(cm)
+
+    def test_absent_key_bootstraps(self):
+        assert self._pred({}) is True
+
+    def test_shed_empty_list_with_marker_bootstraps(self):
+        assert self._pred({
+            "call_edges": [],
+            "call_edges_shed": "shed by the context-map size budget",
+        }) is True
+
+    def test_populated_edges_do_not_bootstrap(self):
+        assert self._pred({
+            "call_edges": [{"caller": "f", "callee": "g"}],
+        }) is False
+
+    def test_genuinely_empty_without_marker_does_not_bootstrap(self):
+        # The enricher ran and found no edges; re-running finds none.
+        assert self._pred({"call_edges": []}) is False

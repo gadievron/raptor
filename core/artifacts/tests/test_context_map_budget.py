@@ -321,3 +321,104 @@ def test_llm_sinks_never_dropped():
     cmb.enforce_context_map_budget(m, budget_bytes=tiny)
     assert m["sink_details"] == before
     assert len(m["sinks"]) == 50
+
+
+# ---------------------------------------------------------------------------
+# whole regenerable enricher payloads (call_edges / transitive_reach)
+# ---------------------------------------------------------------------------
+
+
+def _bulk_map(n_edges: int = 200, n_reach: int = 400,
+              n_llm: int = 2) -> dict[str, Any]:
+    """LLM narrative entries + the two unstamped mechanical bulk keys."""
+    return {
+        "entry_points": [_llm_entry(i) for i in range(n_llm)],
+        "call_edges": [
+            {"caller_file": "src/a.c", "caller": f"fn_{i}",
+             "callee": f"callee_{i}", "callee_file": "src/b.c"}
+            for i in range(n_edges)
+        ],
+        "sink_discovery": {
+            "direct_sinks": [],
+            "transitive_reach": [
+                {"file": "src/a.c", "function": f"fn_{i}", "distance": 2,
+                 "reachable_sinks": ["memcpy", "system"]}
+                for i in range(n_reach)
+            ],
+        },
+    }
+
+
+def _size_without_bulk(m: dict[str, Any]) -> int:
+    hollow = copy.deepcopy(m)
+    hollow["call_edges"] = []
+    hollow["sink_discovery"]["transitive_reach"] = []
+    return cmb._serialized_size(hollow)
+
+
+def test_sheds_mechanical_bulk_never_narrative():
+    m = _bulk_map()
+    narrative_before = copy.deepcopy(m["entry_points"])
+    # Budget fits the map once BOTH bulk payloads are shed (plus room
+    # for the markers), but not before.
+    budget = _size_without_bulk(m) + 1_000
+    assert cmb._serialized_size(m) > budget
+
+    applied = cmb.enforce_context_map_budget(m, budget_bytes=budget)
+
+    assert cmb._serialized_size(m) <= budget
+    # Mechanical keys shed, markers name the regeneration commands.
+    assert m["call_edges"] == []
+    assert "raptor-enrich-context-map-callgraph" in m["call_edges_shed"]
+    assert m["call_edges_truncated"] is True
+    sd = m["sink_discovery"]
+    assert sd["transitive_reach"] == []
+    assert "raptor-enrich-context-map-sinks" in sd["transitive_reach_shed"]
+    # Narrative entries byte-identical.
+    assert m["entry_points"] == narrative_before
+    # Applied descriptions surface the loss and the remedy.
+    assert any("call_edges" in a and "raptor-enrich-context-map-callgraph"
+               in a for a in applied)
+    assert any("transitive_reach" in a and "raptor-enrich-context-map-sinks"
+               in a for a in applied)
+
+
+def test_sheds_largest_payload_first_and_stops_when_fitting():
+    # transitive_reach is by far the larger payload; a budget that fits
+    # once it alone is shed must leave call_edges intact.
+    m = _bulk_map(n_edges=20, n_reach=2_000)
+    edges_before = copy.deepcopy(m["call_edges"])
+    hollow = copy.deepcopy(m)
+    hollow["sink_discovery"]["transitive_reach"] = []
+    budget = cmb._serialized_size(hollow) + 1_000
+    assert cmb._serialized_size(m) > budget
+
+    cmb.enforce_context_map_budget(m, budget_bytes=budget)
+
+    assert cmb._serialized_size(m) <= budget
+    assert m["sink_discovery"]["transitive_reach"] == []
+    assert "transitive_reach_shed" in m["sink_discovery"]
+    assert m["call_edges"] == edges_before
+    assert "call_edges_shed" not in m
+    assert "call_edges_truncated" not in m
+
+
+def test_shed_is_idempotent():
+    m = _bulk_map()
+    budget = _size_without_bulk(m) + 1_000
+    cmb.enforce_context_map_budget(m, budget_bytes=budget)
+    after_first = copy.deepcopy(m)
+    applied_again = cmb.enforce_context_map_budget(m, budget_bytes=budget)
+    assert applied_again == []
+    assert m == after_first
+
+
+def test_still_over_budget_warning_states_consumer_consequence(caplog):
+    # Pure LLM narrative overage: nothing degradable — the warning must
+    # say what the consumer side does with the artifact.
+    m = {"entry_points": [_llm_entry(i) for i in range(20)]}
+    with caplog.at_level("WARNING", logger="core.artifacts.context_map_budget"):
+        cmb.enforce_context_map_budget(m, budget_bytes=100)
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("refuse the WHOLE artifact" in msg for msg in messages)
+    assert any("proceeds mapless" in msg for msg in messages)

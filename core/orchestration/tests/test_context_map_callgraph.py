@@ -318,3 +318,18 @@ class TestCallEdgeCap:
             cm, checklist=self._big_checklist(3))
         assert n == 6
         assert "call_edges_truncated" not in cm
+
+    def test_rebuild_clears_stale_shed_marker(self):
+        # A map whose call_edges were shed by the size budget carries
+        # `[]` + `call_edges_shed`; a rebuild replaces the payload, so
+        # the shed marker must not outlive it (mirror of the
+        # truncated-flag clear above).
+        from core.orchestration import context_map_callgraph as cmc
+        cm: dict = {
+            "call_edges": [],
+            "call_edges_shed": "shed by the context-map size budget",
+        }
+        n = cmc.enrich_with_call_edges(
+            cm, checklist=self._big_checklist(3))
+        assert n == 6
+        assert "call_edges_shed" not in cm
