@@ -278,28 +278,33 @@ def _load_suppression_records(
 
 def _load_readjudication_records(
     out_dir: Path | None, file: str, function: str,
-) -> list[dict]:
+) -> tuple[list[dict], int]:
     """Re-adjudication queue records for this function from
-    readjudication-queue.jsonl (core.project.readjudication).
+    readjudication-queue.jsonl (core.project.readjudication), plus
+    the queue's GLOBAL suppressed count from its truncation marker.
 
     A record means a recorded disproof at this site was contradicted
     by a later independent signal — queued, never auto-overturned.
-    Same tolerant-reader + hostile-artifact discipline as
-    :func:`_load_suppression_records` (the queue lives in the same
-    agent-writable run dir).
+    The suppressed count is surfaced even when this function has no
+    records: a capped queue may have refused exactly this function's
+    contradiction, so silence would be dishonest. Same tolerant-reader
+    + hostile-artifact discipline as :func:`_load_suppression_records`
+    (the queue lives in the same agent-writable run dir; only
+    positive int-typed suppressed fields count).
     """
     if not out_dir:
-        return []
+        return [], 0
     path = out_dir / "readjudication-queue.jsonl"
     if not path.is_file():
-        return []
+        return [], 0
     records = []
+    suppressed = 0
     try:
         import os as _os
         import stat as _stat
         _st = _os.stat(path)
         if not _stat.S_ISREG(_st.st_mode) or _st.st_size > 64 * 1024 * 1024:
-            return []
+            return [], 0
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
@@ -308,15 +313,23 @@ def _load_readjudication_records(
                 rec = loads(line)
             except ValueError:
                 continue
-            if not isinstance(rec, dict) or rec.get("action") != "queued":
+            if not isinstance(rec, dict):
+                continue
+            if rec.get("action") == "truncated":
+                value = rec.get("suppressed")
+                if (isinstance(value, int) and not isinstance(value, bool)
+                        and value > 0):
+                    suppressed += value
+                continue
+            if rec.get("action") != "queued":
                 continue
             site = rec.get("site")
             site = site if isinstance(site, dict) else {}
             if site.get("file") == file and site.get("function") == function:
                 records.append(rec)
     except OSError:
-        return []
-    return records
+        return [], 0
+    return records, suppressed
 
 
 def _annotations_dir(out_dir: Path | None) -> Path | None:
@@ -454,7 +467,8 @@ def _show_function(file, function, cm, entries, index, ann_dir, args, out_dir=No
             if reason:
                 print(f"      {_line(reason, max_chars=160)}")
 
-    readjudication = _load_readjudication_records(out_dir, file, function)
+    readjudication, readj_suppressed = _load_readjudication_records(
+        out_dir, file, function)
     if readjudication:
         print()
         print("  Re-adjudication queued (recorded disproof contradicted "
@@ -475,6 +489,14 @@ def _show_function(file, function, cm, entries, index, ann_dir, args, out_dir=No
                       f"{_line(reconsider, max_chars=160)}")
             if rec.get("mechanism_match") is False:
                 print(f"      {_line(str(rec.get('mechanism_note', 'mechanism mismatch')), max_chars=160)}")
+    if readj_suppressed:
+        # The queue is capped and the caps are global — a truncated
+        # queue may have refused THIS function's contradiction, so the
+        # marker surfaces here even with no per-function records.
+        print()
+        print(f"  Re-adjudication queue truncated: {readj_suppressed} "
+              f"further contradiction(s) not recorded (record caps) — "
+              f"this function may have unrecorded contradictions.")
 
     if ann:
         print()

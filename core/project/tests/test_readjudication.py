@@ -17,6 +17,7 @@ from core.project.merge import merge_findings, merge_runs
 from core.project.readjudication import (
     QUEUE_FILENAME,
     RECORD_CAP,
+    SITE_RECORD_CAP,
     build_queue_record,
     contradicted_disproof_count,
     detect_contradictions,
@@ -24,6 +25,7 @@ from core.project.readjudication import (
     is_disproof,
     queued_count,
     site_key,
+    suppressed_count,
     write_queue,
 )
 
@@ -192,7 +194,75 @@ class TestDetectContradictions:
         assert queued_count(records) == RECORD_CAP
         marker = records[-1]
         assert marker["action"] == "truncated"
+        assert marker["suppressed"] == 3
         assert "3" in marker["note"]
+        assert suppressed_count(records) == 3
+
+    def test_site_cap_flood_cannot_evict_other_sites(self):
+        # One matching site flooded with mechanism-varied claims
+        # (vuln_type is attacker-influenced free text) must never
+        # occupy the global cap: real contradictions at OTHER sites,
+        # arriving in a LATER source, must survive.
+        disproofs = [
+            _disproof(id="D-h", file="hostile.c", function="h"),
+            _disproof(id="D-1", file="real_1.c", function="f1"),
+            _disproof(id="D-2", file="real_2.c", function="f2"),
+        ]
+        flood = [
+            _claim(id=f"H-{i}", file="hostile.c", function="h",
+                   vuln_type=f"vt-{i}", cwe_id=None)
+            for i in range(10_000)
+        ]
+        real = [
+            _claim(id="R-1", file="real_1.c", function="f1"),
+            _claim(id="R-2", file="real_2.c", function="f2"),
+        ]
+        records = detect_contradictions([
+            ("run-old", disproofs), ("run-hostile", flood),
+            ("run-new", real),
+        ])
+        survivors = {
+            r["new_claim"]["id"] for r in records
+            if r.get("action") == "queued"
+        }
+        assert {"R-1", "R-2"} <= survivors
+        # The flooded site holds exactly its sub-cap of slots.
+        hostile = [r for r in records if r.get("action") == "queued"
+                   and r["site"]["file"] == "hostile.c"]
+        assert len(hostile) == SITE_RECORD_CAP
+        # Every refused record is counted, loudly.
+        assert suppressed_count(records) == 10_000 - SITE_RECORD_CAP
+
+    def test_mechanism_entries_capped(self):
+        # Uncapped mechanism strings were the one field that bypassed
+        # _TEXT_CAP — a 10MB vuln_type must not bloat the record (or
+        # the pair-dedup key, which is built from the same set).
+        rec = build_queue_record(
+            _claim(vuln_type="v" * 10_000_000, cwe_id="CWE-" + "9" * 100_000),
+            "s1", _disproof(), "s0",
+        )
+        assert all(len(m) <= 100 for m in rec["new_claim"]["mechanism"])
+        assert len(json.dumps(rec)) < 10_000
+
+    def test_suppressed_count_tolerant_of_hostile_markers(self):
+        assert suppressed_count([
+            {"action": "truncated", "suppressed": 2},
+            {"action": "truncated", "suppressed": "999"},   # str: ignored
+            {"action": "truncated", "suppressed": True},    # bool: ignored
+            {"action": "truncated"},                        # absent: ignored
+            {"action": "queued", "suppressed": 50},         # wrong action
+            "junk",
+        ]) == 2
+
+    def test_claim_summary_covers_validate_row_fields(self):
+        # Real /validate rows carry candidate_reasoning /
+        # dataflow_summary, not title/description/message — the
+        # summary chain must not render empty on the actual corpus.
+        claim = _claim(description=None, title=None)
+        del claim["description"]
+        claim["candidate_reasoning"] = "unchecked memcpy length"
+        rec = build_queue_record(claim, "s1", _disproof(), "s0")
+        assert rec["new_claim"]["summary"] == "unchecked memcpy length"
 
     def test_non_dict_rows_tolerated(self):
         records = detect_contradictions([
@@ -255,9 +325,34 @@ class TestWriteQueue:
         records = [build_queue_record(_claim(), "s1", _disproof(), "s0")]
         assert write_queue(tmp_path, records) is None
         assert victim.read_text() == "keep"  # never written through
+        assert link.is_symlink()             # plant left as evidence
         # Empty detection must not unlink through the symlink either.
         assert write_queue(tmp_path, []) is None
         assert victim.read_text() == "keep"
+
+    def test_fifo_queue_path_refused_without_blocking(self, tmp_path):
+        # A pre-planted FIFO is a plantable hang: an open on it blocks
+        # until a peer appears. The lstat gate must refuse WITHOUT
+        # opening — if this regresses, the test itself hangs, which is
+        # the loudest possible signal.
+        fifo = tmp_path / QUEUE_FILENAME
+        os.mkfifo(fifo)
+        records = [build_queue_record(_claim(), "s1", _disproof(), "s0")]
+        assert write_queue(tmp_path, records) is None
+        assert fifo.exists()  # plant left as evidence, never opened
+        # Empty-records arm: same gate, no unlink through the special.
+        assert write_queue(tmp_path, []) is None
+        assert fifo.exists()
+
+    def test_write_is_atomic_no_tempfile_debris(self, tmp_path):
+        # Atomic tempfile+rename: concurrent merged-view regenerations
+        # replace the file whole. The visible contract here: the write
+        # lands complete and no tempfile debris survives.
+        records = [build_queue_record(_claim(), "s1", _disproof(), "s0")]
+        path = write_queue(tmp_path, records)
+        assert path is not None
+        assert len(load_jsonl(path)) == 1
+        assert not list(tmp_path.glob(".~readj-*"))
 
 
 def _make_run(base: Path, name: str, findings: list) -> Path:
@@ -331,6 +426,19 @@ class TestReportSection:
                 "re-adjudication queue") in md
         assert "a second entry path bypasses the clamp" in md
         assert QUEUE_FILENAME in md
+
+    def test_truncation_restated_in_report_section(self):
+        from core.project.report import render_grouped_findings_markdown
+        records = detect_contradictions([
+            ("run-1", [_disproof()]), ("run-2", [_claim()]),
+        ])
+        records.append({"kind": "readjudication", "action": "truncated",
+                        "suppressed": 7, "note": "caps"})
+        md = render_grouped_findings_markdown(
+            [_claim()], "proj", readjudication=records)
+        # A capped queue must never render as complete.
+        assert "7 further contradiction(s) not recorded" in md
+        assert "bounded sample" in md
 
     def test_no_section_without_records(self):
         from core.project.report import render_grouped_findings_markdown

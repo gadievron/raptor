@@ -273,8 +273,9 @@ def test_show_renders_readjudication_queue_records(tmp_path, capsys):
             },
             "mechanism_match": True,
         }) + "\n"
-        # Non-queued marker rows and junk lines are skipped.
-        + json.dumps({"action": "truncated", "note": "cap"}) + "\n"
+        # Truncation markers surface as a count; junk lines skipped.
+        + json.dumps({"action": "truncated", "suppressed": 4,
+                      "note": "caps"}) + "\n"
         + "not json\n",
         encoding="utf-8",
     )
@@ -284,7 +285,30 @@ def test_show_renders_readjudication_queue_records(tmp_path, capsys):
     assert "nothing auto-overturned" in out
     assert "scan-run" in out and "audit-run" in out
     assert "would reconsider if" in out
+    # The queue's global truncation is restated wherever counts render.
+    assert "4 further contradiction(s) not recorded" in out
     assert "\x1b" not in out  # record bytes escaped at render
+
+
+def test_show_surfaces_truncation_even_without_records(tmp_path, capsys):
+    """The caps are global — a truncated queue may have refused THIS
+    function's contradiction, so the marker shows even when the
+    function has no queued records."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_journal(run_dir, [_entry("src/a.c", "foo", verdict="clean")])
+    (run_dir / "readjudication-queue.jsonl").write_text(
+        json.dumps({"action": "queued",
+                    "site": {"file": "other.c", "function": "bar"},
+                    "new_claim": {}, "disproof": {}}) + "\n"
+        + json.dumps({"action": "truncated", "suppressed": 9}) + "\n",
+        encoding="utf-8",
+    )
+    _cli.cmd_show(_ns(file="src/a.c", function="foo", out=str(run_dir)))
+    out = capsys.readouterr().out
+    assert "Re-adjudication queued" not in out  # other.c's record
+    assert "9 further contradiction(s) not recorded" in out
+    assert "may have unrecorded contradictions" in out
 
 
 def test_show_no_readjudication_section_without_records(tmp_path, capsys):
