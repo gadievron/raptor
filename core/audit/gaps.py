@@ -1493,11 +1493,15 @@ def _site_script_handler(
     resolved = safe_join(Path(target_path), file_info.get("path") or "")
     if resolved is None:
         return False
-    from core.source import read_text_capped
+    from core.source import read_text_capped, split_lines
     got = read_text_capped(resolved, _MAX_HYDRATED_FILE_BYTES)
     if got is None or got[1]:
         return False
-    lines = got[0].splitlines()
+    # \n-model split: the checklist's line numbers count \n only, and
+    # str.splitlines() also breaks on plantable bytes (\f, \x85, ...)
+    # in this hostile file — one such byte would shift the recomputed
+    # span onto substitute lines.
+    lines = split_lines(got[0])
     end = line_end if (isinstance(line_end, int)
                        and not isinstance(line_end, bool)
                        and line_end) else line_start
