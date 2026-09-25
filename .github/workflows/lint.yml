@@ -305,3 +305,6 @@ jobs:
 
       - name: Run console-chokepoint closure gate
         run: python3 .github/scripts/check_console_chokepoint.py
+
+      - name: Run workflow pipefail lint against baseline
+        run: python3 .github/scripts/check_workflow_pipefail.py
