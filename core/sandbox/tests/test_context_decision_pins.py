@@ -231,8 +231,10 @@ def test_disabled_info_vs_unavailable_warning(
     WARNING. Neither may borrow the other's condition."""
     _Driver(monkeypatch, _SpawnRecorder(), mount=False, net=False,
             seccomp=False, landlock=False)
-    state._warned_flags.discard("_sandbox_unavailable_warned") \
-        if hasattr(state, "_warned_flags") else None
+    # A fresh latch keeps the negative assertion meaningful: with the
+    # once-per-process flag already tripped by an earlier test on this
+    # worker, "no unavailable warning" would pass vacuously.
+    monkeypatch.setattr(state, "_sandbox_unavailable_warned", False)
     with caplog.at_level("INFO"):
         with context.sandbox(disabled=True):
             pass
@@ -792,6 +794,9 @@ def test_landlock_only_mode_warns_for_target_alone(
     the call has a target OR an output — a target-only scan is exactly
     the shape whose repo contents are at stake."""
     _Driver(monkeypatch, _SpawnRecorder(), mount=False)
+    # Same once-per-process latch exposure as the unavailable warning
+    # above — reset so the assertion holds regardless of worker order.
+    monkeypatch.setattr(state, "_sandbox_landlock_only_warned", False)
     with caplog.at_level("WARNING"):
         with context.sandbox(target=str(tmp_path)):
             pass
