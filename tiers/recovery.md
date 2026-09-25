@@ -109,6 +109,34 @@
 
 ---
 
+### Interrupted runs (resume)
+
+An externally-killed run leaves coherent artifacts — do not restart
+from zero when a resume surface exists:
+
+**/understand (multi-model `--hunt`/`--trace`):**
+- Each model's finished result is checkpointed as produced
+  (`understand-checkpoints/` in the run dir); the run's options are
+  pinned in `understand-run-config.json`
+- Re-enter: `libexec/raptor-understand --resume <run-dir>` —
+  checkpointed models carry over at no new cost, only the remainder
+  dispatches; cost accounting stays continuous across segments
+- Drift refusal ("target tree drifted since this run's checkpoints"):
+  re-run fresh, or pass `--allow-drift` to carry the older-tree
+  results loudly
+- Status `completed` but no `*-result.json`: a step that did not own
+  the run stamped it — pass `--reopen`
+
+**/audit:**
+- Re-enter: `libexec/raptor-audit resume <run-dir>` (journal verdicts
+  re-import at $0; see docs/audit.md for the gates)
+
+A SIGTERM/Ctrl-C exit marks the run `interrupted`; a hard kill
+(SIGKILL/OOM) leaves it `running` with a dead worker — both resume.
+A run still in flight (live worker) refuses to resume.
+
+---
+
 ### Sandbox containment-floor refusal (`SandboxFloorError`)
 
 A run that stops with "sandbox containment floor violated" or "the

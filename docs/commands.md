@@ -628,6 +628,7 @@ evidence).
 | `--out <dir>` | Output directory |
 | `--model <name>` | LLM model (repeatable) |
 | `--rank` | Multi-model `--hunt`: reorder the merged items most-promising-first before `hunt-result.json` is written (ordering only; head- and budget-capped) |
+| `--resume <run-dir>` | Re-enter an interrupted multi-model `--hunt`/`--trace` run as the same run: checkpointed models return their persisted results at no new cost, only the remainder dispatches. Configuration comes from the run's pinned `understand-run-config.json` (never fresh flags); `--allow-drift` carries checkpoints whose referenced files changed since (listed loudly, stamped into the payload); `--reopen` recovers a run wrongly stamped `completed` without a `*-result.json` |
 | `--target <path>` | Target path |
 | `--runtime-dir <dir>` | Runtime data directory |
 | `--fuzz-dir <dir>` | Fuzz data directory |
