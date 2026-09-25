@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Callable
 
 from core.run.workdir import exec_workdir
+from core.source import read_text_capped
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,13 @@ NATIVE_TIMEOUT_S = 30
 DOCKER_TIMEOUT_S = 90
 
 _STDOUT_CAP = 64 * 1024
+
+#: Bounded-read cap for the daemon-written cidfile. A container id
+#: is 12-64 hex chars (+ trailing newline); anything larger than
+#: this generous margin is not a cid and the cleanup belt treats it
+#: like a missing file. Larger buys nothing; smaller risks refusing
+#: a legitimate cid spelling with daemon-added whitespace.
+_CIDFILE_CAP = 256
 
 #: Container-side RLIMIT_FSIZE (bytes) for the docker tier. Scope
 #: stated precisely: it bounds REGULAR-FILE writes by the
@@ -177,11 +185,19 @@ def _cleanup_container(docker: str, cidfile: str) -> None:
     the container at the daemon, whatever happened to the client. A
     normally-exited --rm container is already gone; the error is
     suppressed.
+
+    The cidfile PATH is RAPTOR-created but its CONTENT is written by
+    the docker daemon, so the read is bounded
+    (``core.source.read_text_capped``: non-regular files refuse
+    instead of blocking, undecodable bytes land in the charset check
+    rather than raising through the cleanup belt) and an oversized
+    or off-charset file means "not a daemon-written cid" — belt out,
+    same as a missing file.
     """
-    try:
-        cid = Path(cidfile).read_text(encoding="utf-8").strip()
-    except OSError:
+    got = read_text_capped(cidfile, _CIDFILE_CAP)
+    if got is None or got[1]:
         return
+    cid = got[0].strip()
     if not re.fullmatch(r"[0-9a-f]{12,64}", cid):
         return
     # kill first: the daemon-side SIGKILL stops a flooding process

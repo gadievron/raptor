@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -772,6 +774,69 @@ class TestFileBindingHazard:
         res = self._run_on(tmp_path, monkeypatch, head)
         assert res.outcome == "confirmed"
 
+    @pytest.mark.skipif(
+        not hasattr(os, "mkfifo"), reason="no mkfifo on this platform",
+    )
+    def test_fifo_target_degrades_source_only_without_blocking(
+        self, tmp_path, monkeypatch,
+    ):
+        # A planted FIFO at the target path must land in the same
+        # source-only arm as an unreadable file — and must not block
+        # the scan (a raw open() on a reader-less FIFO hangs; the
+        # bounded-read seam refuses non-regular files at the fd).
+        _stub_execution(monkeypatch)
+        (tmp_path / "web").mkdir(exist_ok=True)
+        os.mkfifo(tmp_path / "web" / "a.php")
+        box: dict[str, SanwitResult] = {}
+
+        def run() -> None:
+            box["res"] = run_sanwit_check(
+                tmp_path, "web/a.php", "f", self._HYP,
+                source=self._FN_SRC, cwe="CWE-79",
+            )
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        t.join(timeout=20)
+        assert not t.is_alive(), "binding scan blocked on a FIFO"
+        assert box["res"].outcome == "confirmed"  # source-only mode
+
+    def test_symlink_escape_is_not_scanned(self, tmp_path, monkeypatch):
+        # The target-relative path symlinks OUT of the target root:
+        # containment refuses the read and the check degrades to
+        # source-only (the resolve-prefix spelling before the seam
+        # behaved the same way — pinned here so it stays put).
+        _stub_execution(monkeypatch)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "evil.php").write_text("<?php\nnamespace App;\n")
+        root = tmp_path / "root"
+        (root / "web").mkdir(parents=True)
+        (root / "web" / "a.php").symlink_to(outside / "evil.php")
+        res = run_sanwit_check(
+            root, "web/a.php", "f", self._HYP,
+            source=self._FN_SRC, cwe="CWE-79",
+        )
+        assert res.outcome == "confirmed"  # escaped content never read
+
+    def test_inroot_symlink_still_scanned(self, tmp_path, monkeypatch):
+        # In-root symlinks keep working: containment resolves them,
+        # and the resolved file's declarations still refuse.
+        _stub_execution(monkeypatch)
+        (tmp_path / "web").mkdir(exist_ok=True)
+        (tmp_path / "web" / "real.php").write_text(
+            self._NS_SRC + self._FN_SRC,
+        )
+        (tmp_path / "web" / "a.php").symlink_to(
+            tmp_path / "web" / "real.php",
+        )
+        res = run_sanwit_check(
+            tmp_path, "web/a.php", "f", self._HYP,
+            source=self._FN_SRC, cwe="CWE-79",
+        )
+        assert res.outcome == "skipped"
+        assert "namespace" in res.reason
+
 
 class TestCanAdjudicate:
     def test_mirrors_the_refusal_ladder(self, tmp_path, monkeypatch):
@@ -1106,6 +1171,48 @@ class TestDockerCaptureBounds:
         bad.write_text("a1b2c3d4e5f6\n")
         sanwit_execute._cleanup_container(str(fake_docker), str(bad))
         assert calls.exists()
+
+    def test_cleanup_refuses_an_oversized_cidfile(self, tmp_path):
+        # All-hex but far beyond any cid spelling: the bounded read
+        # marks it truncated and the belt treats it like a missing
+        # file — the hex PREFIX must never be forwarded to docker.
+        calls = tmp_path / "calls"
+        fake_docker = tmp_path / "fake-docker"
+        fake_docker.write_text(
+            f"#!/bin/sh\necho called >> \"{calls}\"\n",
+        )
+        fake_docker.chmod(0o755)
+        bad = tmp_path / "cid"
+        bad.write_text("a" * (sanwit_execute._CIDFILE_CAP + 64))
+        sanwit_execute._cleanup_container(str(fake_docker), str(bad))
+        assert not calls.exists()
+
+    @pytest.mark.skipif(
+        not hasattr(os, "mkfifo"), reason="no mkfifo on this platform",
+    )
+    def test_cleanup_refuses_a_nonregular_cidfile_promptly(
+        self, tmp_path,
+    ):
+        # A FIFO where the cidfile should be: the bounded-read seam
+        # refuses at the fd instead of blocking the cleanup belt on
+        # a reader-less open.
+        calls = tmp_path / "calls"
+        fake_docker = tmp_path / "fake-docker"
+        fake_docker.write_text(
+            f"#!/bin/sh\necho called >> \"{calls}\"\n",
+        )
+        fake_docker.chmod(0o755)
+        fifo = tmp_path / "cid"
+        os.mkfifo(fifo)
+        t = threading.Thread(
+            target=sanwit_execute._cleanup_container,
+            args=(str(fake_docker), str(fifo)),
+            daemon=True,
+        )
+        t.start()
+        t.join(timeout=20)
+        assert not t.is_alive(), "cleanup belt blocked on a FIFO"
+        assert not calls.exists()
 
 
 class TestNativeExecutionSeam:
