@@ -153,6 +153,125 @@ def test_allow_unsafe_path_keeps_with_warning(tmp_path):
     assert "dropped unsafe PATH entry" not in r.stderr
 
 
+def _wsl_proc_version(tmp_path: Path, *, wsl: bool = True) -> Path:
+    """A /proc/version fixture for the launcher's WSL message check."""
+    fixture = tmp_path / "proc-version"
+    release = (
+        "5.15.167.4-microsoft-standard-WSL2" if wsl else "6.8.0-generic"
+    )
+    fixture.write_text(f"Linux version {release} (gcc 11)\n",
+                       encoding="utf-8")
+    return fixture
+
+
+def _interop_ww_dirs(tmp_path: Path, count: int) -> tuple[Path, list[Path]]:
+    """World-writable dirs under a fake interop automount root."""
+    root = tmp_path / "mnt"
+    dirs = []
+    for name in ("c", "d", "e")[:count]:
+        d = root / name / "Windows"
+        d.mkdir(parents=True)
+        d.chmod(0o777)
+        dirs.append(d)
+    return root, dirs
+
+
+def test_wsl_interop_drops_aggregate_to_one_summary_line(tmp_path):
+    """On a WSL kernel, multiple world-writable interop-mount PATH
+    entries collapse to one summary line — same drops, less spam."""
+    root, dirs = _interop_ww_dirs(tmp_path, 2)
+    r = _run_launcher(
+        tmp_path, "-h",
+        path_entries=[str(d) for d in dirs],
+        extra_env={
+            "RAPTOR_TEST_PROC_VERSION": str(_wsl_proc_version(tmp_path)),
+            "RAPTOR_TEST_INTEROP_ROOT": str(root),
+        },
+    )
+    assert r.returncode == 0, r.stderr
+    assert (
+        "raptor: 2 Windows-interop PATH entries dropped (world-writable "
+        "under default drvfs automount); RAPTOR_ALLOW_UNSAFE_PATH=1 "
+        "keeps them"
+    ) in r.stderr
+    assert "dropped unsafe PATH entry" not in r.stderr
+
+
+def test_wsl_single_interop_drop_keeps_per_entry_line(tmp_path):
+    root, dirs = _interop_ww_dirs(tmp_path, 1)
+    r = _run_launcher(
+        tmp_path, "-h",
+        path_entries=[str(dirs[0])],
+        extra_env={
+            "RAPTOR_TEST_PROC_VERSION": str(_wsl_proc_version(tmp_path)),
+            "RAPTOR_TEST_INTEROP_ROOT": str(root),
+        },
+    )
+    assert r.returncode == 0, r.stderr
+    assert f"dropped unsafe PATH entry (world-writable dir): {dirs[0]}" \
+        in r.stderr
+    assert "Windows-interop" not in r.stderr
+
+
+def test_non_wsl_kernel_keeps_per_entry_lines(tmp_path):
+    root, dirs = _interop_ww_dirs(tmp_path, 2)
+    r = _run_launcher(
+        tmp_path, "-h",
+        path_entries=[str(d) for d in dirs],
+        extra_env={
+            "RAPTOR_TEST_PROC_VERSION": str(
+                _wsl_proc_version(tmp_path, wsl=False)),
+            "RAPTOR_TEST_INTEROP_ROOT": str(root),
+        },
+    )
+    assert r.returncode == 0, r.stderr
+    for d in dirs:
+        assert f"dropped unsafe PATH entry (world-writable dir): {d}" \
+            in r.stderr
+    assert "Windows-interop" not in r.stderr
+
+
+def test_wsl_drop_outside_interop_root_keeps_per_entry_line(tmp_path):
+    root, dirs = _interop_ww_dirs(tmp_path, 1)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    outside.chmod(0o777)
+    r = _run_launcher(
+        tmp_path, "-h",
+        path_entries=[str(dirs[0]), str(outside)],
+        extra_env={
+            "RAPTOR_TEST_PROC_VERSION": str(_wsl_proc_version(tmp_path)),
+            "RAPTOR_TEST_INTEROP_ROOT": str(root),
+        },
+    )
+    assert r.returncode == 0, r.stderr
+    # The non-interop drop stays a per-entry line; the single interop
+    # drop stays per-entry too (no summary for one).
+    assert f"dropped unsafe PATH entry (world-writable dir): {outside}" \
+        in r.stderr
+    assert f"dropped unsafe PATH entry (world-writable dir): {dirs[0]}" \
+        in r.stderr
+    assert "Windows-interop" not in r.stderr
+
+
+def test_wsl_allow_unsafe_path_keeps_per_entry_warnings(tmp_path):
+    """The keep-with-warning lane is untouched by the aggregation —
+    the operator opted in per entry and sees each kept entry."""
+    root, dirs = _interop_ww_dirs(tmp_path, 2)
+    r = _run_launcher(
+        tmp_path, "-h",
+        path_entries=[str(d) for d in dirs],
+        extra_env={
+            "RAPTOR_TEST_PROC_VERSION": str(_wsl_proc_version(tmp_path)),
+            "RAPTOR_TEST_INTEROP_ROOT": str(root),
+            "RAPTOR_ALLOW_UNSAFE_PATH": "1",
+        },
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stderr.count("keeping unsafe PATH entry") == 2
+    assert "Windows-interop" not in r.stderr
+
+
 def test_opt_out_skips_all_hardening(tmp_path):
     ww = tmp_path / "ww"
     ww.mkdir()

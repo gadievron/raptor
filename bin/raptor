@@ -151,9 +151,25 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
     # sticky — sticky doesn't stop planting a NEW binary). Skip
     # nonexistent dirs silently. RAPTOR_ALLOW_UNSAFE_PATH=1 keeps
     # flagged entries, with a warning each.
+    #
+    # WSL aggregation (message shape only — the drop decision is
+    # identical): Windows interop appends every Windows PATH dir as
+    # /mnt/<drive>/... entries, world-writable under the default
+    # drvfs automount, so a stock WSL launch would print one drop
+    # line per Windows dir. Multiple such drops on a WSL kernel
+    # collapse into one summary line after the loop; a single drop
+    # keeps its per-entry line. RAPTOR_TEST_PROC_VERSION and
+    # RAPTOR_TEST_INTEROP_ROOT point the kernel-identity read and the
+    # interop-mount prefix at fixtures (tests only — either can only
+    # trade per-entry lines for the summary, never keep an entry).
     _scrubbed=""
     _rest="${PATH:-}"
     _last=""
+    _wsl_drops=0
+    _wsl_first_line=""
+    _wsl_host=""
+    _wsl_checked=""
+    _interop_root="${RAPTOR_TEST_INTEROP_ROOT:-/mnt}"
     while [ -z "$_last" ]; do
         case "$_rest" in
             *:*) _entry="${_rest%%:*}"; _rest="${_rest#*:}" ;;
@@ -191,15 +207,39 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
                 echo "raptor: WARNING: keeping unsafe PATH entry ($_drop_reason; RAPTOR_ALLOW_UNSAFE_PATH set): $_shown" >&2
                 _scrubbed="$_scrubbed$_entry:"
             else
-                echo "raptor: dropped unsafe PATH entry ($_drop_reason): $_shown" >&2
+                case "$_entry" in
+                    "$_interop_root"/*)
+                        # Windows-interop candidate — check the kernel
+                        # identity once, lazily (non-WSL hosts with no
+                        # interop-root PATH entries never run grep here).
+                        if [ -z "$_wsl_checked" ]; then
+                            _wsl_checked=1
+                            if _rp grep -qi microsoft "${RAPTOR_TEST_PROC_VERSION:-/proc/version}" 2>/dev/null; then
+                                _wsl_host=1
+                            fi
+                        fi
+                        ;;
+                esac
+                if [ -n "$_wsl_host" ] && [ "${_entry#"$_interop_root"/}" != "$_entry" ]; then
+                    _wsl_drops=$((_wsl_drops + 1))
+                    _wsl_first_line="raptor: dropped unsafe PATH entry ($_drop_reason): $_shown"
+                else
+                    echo "raptor: dropped unsafe PATH entry ($_drop_reason): $_shown" >&2
+                fi
             fi
         else
             _scrubbed="$_scrubbed$_entry:"
         fi
     done
+    if [ "$_wsl_drops" -eq 1 ]; then
+        echo "$_wsl_first_line" >&2
+    elif [ "$_wsl_drops" -gt 1 ]; then
+        echo "raptor: $_wsl_drops Windows-interop PATH entries dropped (world-writable under default drvfs automount); RAPTOR_ALLOW_UNSAFE_PATH=1 keeps them" >&2
+    fi
     PATH="${_scrubbed%:}"
     export PATH
     unset _scrubbed _rest _last _entry _shown _drop_reason _perm
+    unset _wsl_drops _wsl_first_line _wsl_host _wsl_checked _interop_root
 
     # Warn (don't drop) when claude resolves under a world-writable
     # ANCESTOR — the per-entry check above can't see parents.
