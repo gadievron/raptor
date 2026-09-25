@@ -1,0 +1,17 @@
+{
+  "ci-deps-image.yml::build-push::Log in to GHCR": {
+    "note": "left side is an env-var echo (cannot fail); the pipeline's exit code is docker login's own, which already propagates"
+  },
+  "dockerhub-publish.yml::build-push::Log in to Docker Hub": {
+    "note": "left side is an env-var echo (cannot fail); the pipeline's exit code is docker login's own, which already propagates"
+  },
+  "release.yml::release::Validate tag": {
+    "note": "pipe feeds a grep whose verdict is the tested condition (if ! echo | grep); the env-var echo cannot fail and pipefail would not change the branch taken"
+  },
+  "sandbox-matrix-image.yml::build-push::Log in to GHCR": {
+    "note": "left side is an env-var echo (cannot fail); the pipeline's exit code is docker login's own, which already propagates"
+  },
+  "sca-pr-gate.yml::diff::Post PR comment": {
+    "note": "step is continue-on-error by design (fork PRs get a read-only token); a swallowed pipe stage cannot turn a gating verdict green because the step never gates"
+  }
+}
