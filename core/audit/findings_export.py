@@ -599,7 +599,7 @@ def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
     from types import SimpleNamespace
 
     from core.coverage import journal_mac
-    from core.coverage.journal import latest_entries
+    from core.coverage.journal import RUN_ID_UNATTRIBUTED, latest_entries
 
     outcomes = []
     unverified_rows = 0
@@ -661,11 +661,25 @@ def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
         # another run, export receipt-less — the grading caps their
         # confidence at the LLM-only tier instead of shipping a
         # replayed or forged receipt. Verified rows with NO run
-        # attribution (legacy writers) are grandfathered WITH a
-        # marker: stripping every legacy receipt would regress
-        # honest old exports, and the grandfather is visible per
-        # record (``provenance.receipt_scope: install``) and per
-        # container (``derivation.unscoped_run_rows``).
+        # attribution are grandfathered WITH a marker: stripping
+        # every legacy receipt would regress honest old exports, and
+        # the grandfather is visible per record
+        # (``provenance.receipt_scope: install``) and per container
+        # (``derivation.unscoped_run_rows``). No-attribution has two
+        # equivalent spellings: ``run_id=""`` (legacy writers that
+        # never stamped one) and the record CLI's documented
+        # ``RUN_ID_UNATTRIBUTED`` sentinel (stamped whenever no dir
+        # basename was available — including every relative ``--out``
+        # spelling before the CLI resolved it). Both say "this row
+        # names no run", never "this row names another run", so both
+        # take the marked install tier — grading the sentinel foreign
+        # stripped honest rows with an accusatory replay warning. The
+        # tier's exposure is unchanged by admitting the sentinel: a
+        # sibling-run copy of a sentinel row verifies here exactly
+        # like a sibling-run copy of a ``run_id=""`` row always did,
+        # and both stay visibly install-scoped, never run-scoped.
+        # Exact match only: any other value is a run attribution and
+        # fails toward the foreign arm.
         verified = (
             journal_mac.entry_provenance(entry)
             == journal_mac.ROW_VERIFIED
@@ -675,7 +689,7 @@ def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
             unverified_rows += 1
         elif run_identity and entry.run_id == run_identity:
             receipt_scope = "run"
-        elif not entry.run_id:
+        elif not entry.run_id or entry.run_id == RUN_ID_UNATTRIBUTED:
             receipt_scope = "install"
             unscoped_run_rows += 1
         else:

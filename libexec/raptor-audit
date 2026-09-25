@@ -289,7 +289,12 @@ def cmd_context(args: argparse.Namespace) -> int:
 
 
 def cmd_record(args: argparse.Namespace) -> int:
-    from core.audit.journal import ReviewJournalEntry, append_entry, now_iso
+    from core.audit.journal import (
+        RUN_ID_UNATTRIBUTED,
+        ReviewJournalEntry,
+        append_entry,
+        now_iso,
+    )
     from core.audit.record import (
         _compute_hash,
         append_audit_log,
@@ -732,9 +737,21 @@ def cmd_record(args: argparse.Namespace) -> int:
     if args.hypothesis:
         hypotheses_list = [{"claim": args.hypothesis, "status": args.status}]
 
+    # Run attribution uses the same identity the graded export
+    # compares receipts against — the RESOLVED basename. Unresolved,
+    # a relative --out spelling ("." from inside the run dir, the
+    # natural in-session form) has name == "", so the row stamped the
+    # no-attribution sentinel and the export could never match the
+    # run's own record back to it. A still-empty resolved name (the
+    # filesystem root) or a resolution failure falls back to the
+    # sentinel, which the export grades at the marked install tier.
+    try:
+        run_identity = out_dir.resolve().name
+    except OSError:
+        run_identity = out_dir.name
     entry = ReviewJournalEntry(
         ts=now_iso(),
-        run_id=out_dir.name if out_dir.name else "cli-record",
+        run_id=run_identity or RUN_ID_UNATTRIBUTED,
         file=args.file,
         function=args.function,
         verdict=args.status,
