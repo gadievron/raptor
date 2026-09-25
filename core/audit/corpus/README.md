@@ -281,8 +281,12 @@ after-the-change delta is attributable to the change:
    `RAPTOR_LLM_TRANSCRIPT=record:<out>/llm-transcript.jsonl` (see
    docs/llm.md) — so the run's model behaviour is frozen alongside
    its results and pipeline-side changes can later be re-run against
-   it hermetically (`replay:` mode). Scan-profile recall runs are
-   LLM-free and need no transcript.
+   it hermetically (`replay:` mode). Verify the recorder is present
+   in the running checkout first (the variable appears in
+   docs/environment.md when it is) — an unknown variable is silently
+   ignored, and a baseline believed recorded but not is
+   unreproducible. Scan-profile recall runs are LLM-free and need no
+   transcript.
 3. **Freeze the artifacts**: `results.json` / `report.json`, the
    transcript, and the run-history record, together with the
    identity stamps that make them comparable — the pipeline tree
