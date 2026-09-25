@@ -1115,7 +1115,17 @@ class FfufRunner:
             )
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        output_file = self.out_dir / "ffuf_results.json"
+        # The child's artifacts (and its sandbox WRITE GRANT below)
+        # live in a dedicated subdir, never the run root: the run root
+        # holds parent-tier state — coverage-*.json records above all,
+        # which the coverage load chokepoint trusts at parent tier
+        # (core/coverage/record.py) — and ffuf parses hostile server
+        # bytes; a root-granted child could plant a top-level
+        # coverage-llm.json and mint review credit. Same subdir-grant
+        # pattern as the nuclei/AFL/crash-replay lanes.
+        work_dir = self.out_dir / "ffuf"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        output_file = work_dir / "ffuf_results.json"
         # A reused output dir (routine with project runs) may hold a
         # previous run's report; ffuf only writes on graceful exit, so a
         # stale file would be silently misattributed to this run on the
@@ -1123,7 +1133,7 @@ class FfufRunner:
         output_file.unlink(missing_ok=True)
         config_content = self.build_config_file_content(config)
         config_file = (
-            self.out_dir / "ffuf_config.toml" if config_content is not None else None
+            work_dir / "ffuf_config.toml" if config_content is not None else None
         )
         cmd = self.build_command(config, output_file, config_file=config_file)
         # build_command uses the operator-facing name; swap in the
@@ -1143,7 +1153,7 @@ class FfufRunner:
         stderr_text = ""
         try:
             if config_file is not None and config_content is not None:
-                # out_dir is the sandbox's WRITABLE scope, so a hostile
+                # work_dir is the sandbox's WRITABLE scope, so a hostile
                 # child from a PREVIOUS run could have left this path
                 # behind as a symlink aimed anywhere on disk; O_EXCL
                 # after the unlink refuses to follow anything and
@@ -1179,7 +1189,9 @@ class FfufRunner:
             ))
             completed = run_untrusted_networked(
                 cmd,
-                output=str(self.out_dir),
+                # The child's write grant is its work subdir, NOT the
+                # run root (see work_dir above).
+                output=str(work_dir),
                 readable_paths=wordlist_files,
                 proxy_hosts=[target_host],
                 fake_home=True,
