@@ -63,6 +63,13 @@ class TestNames:
         with pytest.raises(ChannelCorpusError, match="invalid channel"):
             validate_channel_name(bad)
 
+    @pytest.mark.parametrize("bad", ["smt\n", "smt\napi", "\nsmt"])
+    def test_newline_carrying_names_refused(self, bad):
+        # fullmatch regression: a $-anchored re.match accepts a
+        # trailing newline
+        with pytest.raises(ChannelCorpusError, match="invalid channel"):
+            validate_channel_name(bad)
+
 
 class TestListChannels:
     def test_absent_dir_is_empty(self, tmp_path):

@@ -18,8 +18,12 @@ from core.json import load_json
 
 
 # Channel tags share the mechanism-token charset (the ``[a-z0-9_]``
-# vocabulary attribution's gate markers use).
-_CHANNEL_RE = re.compile(r"^[a-z0-9_]+$")
+# vocabulary attribution's gate markers use). One compiled pattern is
+# shared with ``core.audit.corpus.channels`` so the two validators
+# cannot drift; both apply it with ``fullmatch`` — ``re.match`` with a
+# ``$`` anchor still accepts a trailing newline, which a directory or
+# JSON-sourced name can carry.
+CHANNEL_RE = re.compile(r"[a-z0-9_]+")
 
 
 SCHEMA_VERSION = 1
@@ -187,10 +191,10 @@ class FunctionLabel:
                     f"must be one of {sorted(VALID_EXPECTED_STATUSES)}"
                 )
                 raise ValueError(msg)
-        if self.channel and not _CHANNEL_RE.match(self.channel):
+        if self.channel and not CHANNEL_RE.fullmatch(self.channel):
             msg = (
-                f"Invalid channel {self.channel!r}; must match "
-                f"{_CHANNEL_RE.pattern} (lowercase mechanism-token "
+                f"Invalid channel {self.channel!r}; must fully match "
+                f"{CHANNEL_RE.pattern} (lowercase mechanism-token "
                 "charset)"
             )
             raise ValueError(msg)
