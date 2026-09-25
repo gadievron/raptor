@@ -32,7 +32,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, NoReturn, TYPE_CHECKING
+from typing import Any, Callable, NoReturn, TYPE_CHECKING
 
 from core.analysis.reachability_gates import (
     GUARD_UNAVAILABLE,
@@ -4594,6 +4594,131 @@ def _call_edges_need_bootstrap(context_map: dict[str, Any]) -> bool:
             and "call_edges_shed" in context_map)
 
 
+# Single-slot memo for the resolved store path: the precondition
+# gates call per outcome and resolution scans the project registry.
+# One (out_dir, target) pair is live per run; a stale slot only costs
+# a recompute.
+_GRAPH_STORE_MEMO: dict[tuple[str, str], Path | None] = {}
+
+
+def _graph_store_for_config(config) -> Path | None:
+    """The graph-store path this run's consumers query, or None when
+    resolution fails. Resolution rides ``graph_path_for_run`` (project
+    store when the run belongs to a project, run-local otherwise); a
+    missing store file is fine — every consumer treats it as
+    no-lane."""
+    key = (str(config.out_dir), str(config.target_path or ""))
+    if key in _GRAPH_STORE_MEMO:
+        return _GRAPH_STORE_MEMO[key]
+    try:
+        from core.understand_graph.store import graph_path_for_run
+
+        resolved = graph_path_for_run(
+            Path(config.out_dir),
+            str(config.target_path) if config.target_path else None,
+        )
+    except Exception:
+        logger.debug("graph store resolution failed", exc_info=True)
+        resolved = None
+    _GRAPH_STORE_MEMO.clear()  # single slot
+    _GRAPH_STORE_MEMO[key] = resolved
+    return resolved
+
+
+def _load_call_edges_from_store(
+    context_map: dict[str, Any],
+    config,
+    *,
+    bootstrap: Callable[[], Any] | None = None,
+) -> bool:
+    """Load the graph store's verified mechanical call-edge set into
+    the in-memory map (in-memory only — the on-disk map is not
+    re-saved, mirroring the checklist bootstrap).
+
+    The map's ``call_edges_store`` marker (written by the call-edge
+    enricher's project-mode routing, small enough to survive the
+    size-budget shed) names the snapshot; only
+    ``provenance='mechanical'`` rows whose run-bound token verifies
+    are loaded. A COMPLETE verified set replaces the map's list (the
+    in-artifact list is a capped prefix view of the same mechanical
+    set — note the full set is 10^5-10^6 edge dicts in memory at
+    very-large-target scale; whole-run consumer RSS is measured-first
+    scalability work, not this seam's) and lifts the truncation/shed
+    markers. An INCOMPLETE set (tampered/deleted rows) first runs
+    *bootstrap* (the caller's pre-existing checklist bootstrap) when
+    the map still needs one — so the hint-tier coverage today's
+    shed-map path derives is never LOST to a degraded lane — then
+    unions the verified rows in and keeps ``call_edges_truncated``:
+    negative reachability stays inconclusive. Returns True when the
+    store supplied edges; False (store absent, no marker, unverifiable
+    lane) leaves the map untouched and the caller falls through to
+    today's paths — the store-absent → inconclusive floor: absence
+    asserts nothing.
+    """
+    marker = context_map.get("call_edges_store")
+    if not isinstance(marker, dict):
+        return False
+    snapshot = marker.get("snapshot")
+    if not isinstance(snapshot, str) or not snapshot:
+        return False
+    graph_store = _graph_store_for_config(config)
+    if graph_store is None:
+        return False
+    try:
+        from core.understand_graph.queries import (
+            verified_mechanical_call_edges,
+        )
+
+        lane = verified_mechanical_call_edges(
+            graph_store, snapshot,
+            str(config.target_path) if config.target_path else None,
+        )
+    except Exception:
+        logger.debug("call-edge store lane unavailable", exc_info=True)
+        return False
+    if not lane or not lane.get("edges"):
+        return False
+    if lane.get("complete"):
+        context_map["call_edges"] = lane["edges"]
+        context_map.pop("call_edges_truncated", None)
+        context_map.pop("call_edges_shed", None)
+        logger.info(
+            "call edges: %d verified mechanical edge(s) loaded from the "
+            "project graph store (complete set)", len(lane["edges"]),
+        )
+    else:
+        if bootstrap is not None and _call_edges_need_bootstrap(context_map):
+            try:
+                bootstrap()
+            except Exception:
+                logger.debug(
+                    "call-edge bootstrap under incomplete store lane "
+                    "failed", exc_info=True,
+                )
+            # The bootstrap rebuilds the edge array and clears the
+            # routing markers like any rebuild; restore the store
+            # marker — it still names the snapshot this union's
+            # verified rows came from (in-memory only, as above).
+            context_map["call_edges_store"] = marker
+        # Union, never replace: an incomplete verified subset may be
+        # smaller than the map's own hint-tier list, and negative
+        # reachability stays inconclusive under the truncation marker
+        # regardless — dropping hint edges would only cost the
+        # non-verdict consumers.
+        existing = context_map.get("call_edges") or []
+        context_map["call_edges"] = list(existing) + list(lane["edges"])
+        context_map["call_edges_truncated"] = True
+        logger.warning(
+            "call edges: only %d of %d minted mechanical edge row(s) "
+            "verified from the project graph store (%d failed "
+            "verification) — treating the set as truncated; negative "
+            "reachability stays inconclusive",
+            len(lane["edges"]), lane.get("total", 0),
+            lane.get("unverified", 0),
+        )
+    return True
+
+
 def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
                         presweep_future=None, presweep_activity=None,
                         presweep_abort=None, cost_ledger=None):
@@ -4715,6 +4840,27 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         context_map = _try_understand_bridge(config)
     if context_map is None:
         context_map = {}
+    if not binary_mode and (
+        _call_edges_need_bootstrap(context_map)
+        or context_map.get("call_edges_truncated")
+    ):
+        # Store lane first: the project graph store holds the FULL
+        # verified mechanical edge set beyond the in-artifact cap.
+        # No lane -> the map is untouched and the pre-existing paths
+        # below run unchanged (store absent asserts nothing). An
+        # incomplete lane runs the same checklist bootstrap as below
+        # (via the callback) before unioning, so degraded-lane runs
+        # keep today's hint coverage.
+        from core.orchestration.context_map_callgraph import (
+            enrich_with_call_edges as _enrich_call_edges,
+        )
+
+        _load_call_edges_from_store(
+            context_map, config,
+            bootstrap=lambda: _enrich_call_edges(
+                context_map, checklist=checklist,
+            ),
+        )
     if _call_edges_need_bootstrap(context_map) and not binary_mode:
         from core.orchestration.context_map_callgraph import enrich_with_call_edges
 
@@ -20875,6 +21021,7 @@ def _check_preconditions(
             preconditions,
             target_path=config.target_path,
             context_map=context_map,
+            graph_store=_graph_store_for_config(config),
         )
 
         if verdict.any_contradicted:
@@ -25051,6 +25198,7 @@ def _promote_suspicious_preconditions(
                 preconditions,
                 target_path=config.target_path,
                 context_map=context_map,
+                graph_store=_graph_store_for_config(config),
             )
         except Exception:
             logger.debug(
