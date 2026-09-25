@@ -143,7 +143,8 @@ wins):
 
 ```
 --sandbox-floor <tier>  >  /project set sandbox-floor <tier>
-                        >  RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1  >  default (refuse)
+                        >  RAPTOR_ALLOW_DEGRADED_UNTRUSTED=1
+                        >  WSL host-consent marker  >  default (refuse)
 ```
 
 * **`--sandbox-floor {mount-ns,mountless-ns,ns-only,landlock,none}`**
@@ -174,6 +175,16 @@ wins):
   `landlock` on Linux (it never reaches `none` there; on macOS it
   keeps its documented rlimits-only acceptance). All new consent
   semantics ship only on the explicit surfaces.
+* **WSL host-consent marker** — a standing, host-scoped consent to
+  exactly the `ns-only` tier for the one situation where that tier
+  is the deliverable maximum: a WSL kernel without Landlock. Granted
+  only through the TTY-gated `bin/raptor wsl-consent grant` ceremony
+  and conditional at read time (inert off WSL, inert the moment the
+  kernel gains Landlock, inert across a kernel-flavour change or on
+  another machine, fail-closed on a corrupt record). Lowest
+  precedence: it only ever replaces the default refusal — a floor
+  any other surface chose, higher or lower, is never moved by it.
+  Full semantics in [wsl.md](wsl.md).
 
 When surfaces disagree, the explicit surface wins and a banner names
 both sides and both values (e.g. a paranoid `--sandbox-floor

@@ -40,7 +40,7 @@ RAPTOR's untrusted-execution contract floors at the `mount-ns` tier,
 whose Landlock layer needs kernel support ([sandbox](sandbox.md),
 "Containment floor"). Stock WSL2 kernels ship without Landlock, so
 on an unmodified WSL2 install untrusted-exec runs refuse (fail
-closed) with a message naming the remedies. There are two:
+closed) with a message naming the remedies. There are three:
 
 ### Option A — custom kernel with Landlock
 
@@ -96,6 +96,96 @@ every time the consent takes effect — the project setting prints a
 banner line on each run it affects, and floor-related warnings name
 the downgraded tier. Consent semantics, precedence, and the exact
 guarantees of each tier are in [sandbox.md](sandbox.md).
+
+### Option C — standing host-scoped consent
+
+If this machine will stay on a stock (Landlock-less) WSL2 kernel,
+you can record the ns-only consent once for the whole host instead
+of repeating it per run or per project:
+
+```bash
+bin/raptor wsl-consent grant     # operator ceremony, at your terminal
+bin/raptor wsl-consent status    # is the marker present? does it apply?
+bin/raptor wsl-consent revoke    # remove it (floor returns to default)
+```
+
+`grant` is an operator ceremony: it shows exactly what will change
+and the evidence it was granted against, requires the tier label
+typed back, and **hard-refuses a non-TTY stdin** — an agent, script,
+or pasted instruction cannot self-grant. `revoke` is deliberately
+not gated (removing consent only raises the floor, so unattended
+sessions may always revoke).
+
+The marker (`~/.local/share/raptor/wsl-host-consent.json`,
+machine-scoped, outside every sandbox-readable tree) is
+**conditional, not a blanket downgrade**. It applies only while all
+of these hold, and is inert otherwise:
+
+* the running kernel identifies as WSL (inert on any other host);
+* Landlock is unavailable — a kernel that gains Landlock makes the
+  marker inert and the floor rises automatically (nothing to revoke);
+* the kernel stays in the identity family the grant recorded
+  (version updates within the family keep the consent; a
+  kernel-flavour change makes it inert until re-granted);
+* the marker validates: it is bound to this machine's identity (a
+  copied marker is inert elsewhere), and a corrupt, tampered, or
+  future-dated record is inert with one warning — failing closed to
+  the normal refusal.
+
+Precedence: the marker is the **lowest** consent surface — a per-run
+`--sandbox-floor` or a project `sandbox-floor` setting always
+overrides it (a project-set higher floor is never lowered by it),
+and it never changes what `RAPTOR_ALLOW_DEGRADED_UNTRUSTED` means
+where that is set. It only ever replaces the default refusal with
+`ns-only`.
+
+Visibility: while the marker applies, the startup banner's WSL
+section and each affected run print one posture line ("untrusted
+floor ns-only by host consent, granted <date> — Landlock unavailable
+on this kernel"), and the per-call degraded-containment warnings
+collapse to a single notice per process — the posture is a host
+property, not per-call news.
+
+**Residual exposure below the `mount-ns` tier on WSL** (applies to
+any consented below-`mount-ns` floor — Option B and Option C alike):
+without the mount tree, parts of the Windows-interop plumbing stay
+reachable from sandboxed code — `/usr/lib/wsl` remains visible
+through the wholesale `/usr` read grant, `binfmt_misc` remains
+visible through `/proc`, and a `connect()` to the Windows-interop
+pathname socket is not Landlock-governed at any current Landlock ABI
+(ABI 6 scopes abstract sockets only). For hostile targets, set
+`interop=false` in `/etc/wsl.conf` (`[interop]` section) to close
+the Windows-side process channel at the source. The `/mnt` read
+denial is part of the Landlock read allowlist and still applies on
+the landlock-tier lanes.
+
+### The refusal-boundary offer (interactive sessions)
+
+When an untrusted-exec run refuses on a WSL host because the floor
+requires the Landlock layer, the refusal message itself names the
+remedies, including the grant command — that is the complete
+non-interactive behaviour. An interactive session may additionally
+put the decision in front of the operator as a structured choice,
+per the INTERACTIVE PROMPTS doctrine in the root `CLAUDE.md`: run
+`libexec/raptor-may-ask` first and ask only when it prints
+`interactive` AND AskUserQuestion is available; ask at the run
+boundary, after the refusal — never mid-pipeline. Quote the refusal
+text with non-printables escaped. Options:
+
+1. **Keep the refusal (Recommended)** — no consent; fix the kernel
+   instead (Option A) for the full contract.
+2. **Grant the standing host consent** — tell the operator to run
+   `bin/raptor wsl-consent grant` **at their own terminal**. The CLI
+   hard-refuses a non-TTY stdin, so the session cannot run it for
+   them — never offer to. Once granted, re-run the refused command.
+3. **Consent for this run / project only** — re-run with
+   `--sandbox-floor ns-only`, or set the standing project consent
+   with `/project set sandbox-floor ns-only` (Option B).
+
+Non-interactive fallback (may-ask says `non-interactive`, errors, or
+the tool is absent): do not ask — the refusal text plus the named
+grant command already printed is the complete behaviour; report it
+and stop. Never select a floor on the operator's behalf.
 
 
 ## Windows-interop mounts (`/mnt/c`)

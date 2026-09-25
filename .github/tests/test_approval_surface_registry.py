@@ -219,6 +219,7 @@ MEMBER_IDS = (
     "M15-validation-recovery-fork",
     "M16-crash-fetch-host-consent",
     "M17-wsl-consent-grant-ceremony",
+    "M18-wsl-floor-refusal-offer",
 )
 
 
@@ -411,6 +412,20 @@ REGISTRY: dict[str, Entry] = {
              "non-interactive fallback keeps the denial",
         wire_tokens=("with non-printables escaped",
                      "Gate with `libexec/raptor-may-ask`",
+                     "Non-interactive fallback",),
+    ),
+    "docs/wsl.md": Entry(
+        lane="instruction", status="clean",
+        members=("M18-wsl-floor-refusal-offer",),
+        note="refusal-boundary offer quotes the floor refusal text "
+             "(carries kernel-derived detail); the option commands "
+             "are RAPTOR-authored constants, the grant is executed "
+             "only by the operator at their own TTY, and the "
+             "non-interactive fallback is the already-printed "
+             "refusal",
+        wire_tokens=("Quote the refusal",
+                     "non-printables escaped",
+                     "libexec/raptor-may-ask",
                      "Non-interactive fallback",),
     ),
     # ── instruction lane: adjudicated clean (no external content) ─
