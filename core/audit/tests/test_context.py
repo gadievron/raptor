@@ -2265,6 +2265,24 @@ class TestIdentifierHostileCharacterClasses:
         assert len(out) <= 64 + len("...[truncated]")
         assert "\u202e" not in out
 
+    def test_input_prebound_two_directions(self):
+        from core.audit.context import _defend_identifier
+        # Direction 1: the bound must not change any printable
+        # input's rendering — output identical to the plain
+        # output-cap computation.
+        long_printable = "a" * 100_000
+        out = _defend_identifier(long_printable, max_length=64)
+        assert out == "a" * 64 + "...[truncated]"
+        # An escape-heavy input inside the headroom still fills the
+        # output cap before the input bound can bite.
+        out = _defend_identifier("\u202e" * 512, max_length=64)
+        assert len(out) <= 64 + len("...[truncated]")
+        assert out.startswith("\\u202e")
+        # Direction 2: the bound actually limits work — a huge input
+        # is cut to input_cap before the pipeline runs.
+        out = _defend_identifier("b" * 5_000_000, max_length=64)
+        assert out == "b" * 64 + "...[truncated]"
+
     def test_benign_identifiers_byte_faithful(self):
         from core.audit.context import _defend_identifier
         for ident in (
