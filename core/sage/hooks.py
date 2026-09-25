@@ -1043,16 +1043,32 @@ def store_finding_verdict(
     function: str,
     source_hash: str,
     verdict: str,
+    *,
+    note: str = "",
+    client: SageClient | None = None,
 ) -> bool:
     """Store a finding verdict to SAGE for cross-run FP suppression.
 
     All verdicts are stored (building the knowledge base), but only
     ``false_positive`` and ``not_exploitable`` trigger suppression on
     future recall.
+
+    ``note`` is free-form audit text appended AFTER the marker fields
+    (the operator verdict CLI records its provenance stamp there).
+    Delimiter-sanitised so it can never forge a ``||key=value||``
+    marker; deliberately OUTSIDE the MAC'd decision-field set — the
+    recall side's mechanical decision never reads it, so it carries
+    hint/audit authority only and pipeline-minted rows verify
+    unchanged.
+
+    ``client`` overrides the pipeline singleton — the operator CLI
+    passes :func:`operator_client` (no GPU gate; a one-off verdict on
+    a CPU-only box is fine), the pipeline keeps the gated default.
     """
     if not source_hash:
         return False
-    client = _get_client()
+    if client is None:
+        client = _get_client()
     if client is None:
         return False
     try:
@@ -1065,6 +1081,8 @@ def store_finding_verdict(
             f"||src={_s(source_hash)}|| ||verdict={_s(verdict)}|| "
             f"||ts={ts}||"
         )
+        if note:
+            content += f" {_s(note)}"
         content = _stamp_row(
             "finding_verdict",
             content,
@@ -1088,6 +1106,261 @@ def store_finding_verdict(
     except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
         logger.debug("SAGE FP store failed: %s", e)
         return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding verdict — operator verbs (the /review verdict CLI)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# The pipeline hooks above are write-once/recall-only: they have no way
+# to CLEAR a wrong prior verdict (the semantic query deliberately drops
+# memory ids). The operator verbs below enumerate the repo's fp domain
+# through the id-bearing listing so a human can overturn a stored
+# verdict. They live beside the store/recall pair because the row
+# shape (content grammar + MAC field set) is owned by this section —
+# a second module parsing it would drift.
+
+_OPERATOR_LIST_PAGE = 200
+_OPERATOR_LIST_MAX_PAGES = 200
+
+_VERDICT_ROW_RE = re.compile(
+    r"\|\|src=([^|]+)\|\| \|\|verdict=([^|]+)\|\| \|\|ts=(\d+)\|\|")
+
+
+class VerdictWalkTruncated(RuntimeError):
+    """The verdict-row enumeration could not cover the whole store.
+
+    Raised — never swallowed into a partial result — because the
+    operator verbs act on the enumeration: a ``retest`` that clears
+    only the rows a truncated walk happened to see would report
+    success while a suppressing row survives. Fail closed; the caller
+    reports and clears nothing.
+    """
+
+
+def operator_client() -> SageClient | None:
+    """A SAGE client for one-off operator verbs, or ``None``.
+
+    Unlike :func:`_get_client` this skips the GPU probe — the gate
+    exists because pipeline hooks fire per-finding inside automated
+    runs where CPU embedding latency is prohibitive; a single
+    operator-invoked verdict is fine on CPU. No singleton either:
+    operator CLIs are short-lived processes and a fresh client avoids
+    the pipeline cache's staleness after a forget.
+    """
+    try:
+        config = SageConfig.from_env()
+        candidate = SageClient(config)
+        if candidate.is_available():
+            return candidate
+    except Exception as exc:  # noqa: BLE001 — absence is a normal state
+        logger.debug("SAGE operator client init failed: %s", exc)
+    return None
+
+
+def _iter_verdict_rows(
+    client: SageClient,
+    repo_path: str,
+    rule_id: str,
+    file_path: str,
+    function: str,
+    *,
+    strict: bool = False,
+):
+    """Yield ``(memory_id, verdict, source_hash, ts, mac_verified,
+    note)`` for every finding-verdict row stored for one finding
+    (``note`` = the free-form audit text after the marker fields —
+    the operator provenance stamp).
+
+    Deterministic enumeration (bounded id-bearing listing filtered on
+    the repo's fp domain + the finding fingerprint), NOT semantic
+    recall — an operator clearing a verdict must see every row, not
+    the top-k nearest. Bounded like raptor-sage's memory walk (page
+    cap plus per-id dedupe), but incompleteness raises
+    :class:`VerdictWalkTruncated` instead of ending quietly: the
+    walk's consumers CLEAR rows, and a partial enumeration reported
+    as success would leave a suppressing row alive. The server's
+    ``has_more`` drives continuation when present (a server-capped
+    page smaller than our limit must not end the walk); on servers
+    that predate it, a short page ends the walk — the same
+    convention raptor-sage's fetch applies. ``strict=True`` (the
+    CLEARING verbs) additionally raises on a legacy full-page stall
+    instead of returning the partial view.
+    """
+    domain = _fp_domain(repo_path)
+    fp = _finding_fingerprint(rule_id, file_path, function)
+    binding = f"Finding verdict: fp={fp} "
+    seen: set[str] = set()
+    offset = 0
+    for _ in range(_OPERATOR_LIST_MAX_PAGES):
+        resp = client.list_memories(limit=_OPERATOR_LIST_PAGE, offset=offset)
+        if resp is None:
+            raise VerdictWalkTruncated(
+                "SAGE memory listing failed mid-walk")
+        memories = getattr(resp, "memories", None) or []
+        has_more = bool(getattr(resp, "has_more", False))
+        if not memories:
+            if has_more:
+                raise VerdictWalkTruncated(
+                    "server returned an empty page with has_more set")
+            return
+        new_rows = 0
+        for m in memories:
+            mid = getattr(m, "memory_id", None)
+            if not isinstance(mid, str) or mid in seen:
+                continue
+            seen.add(mid)
+            new_rows += 1
+            if getattr(m, "domain_tag", None) != domain:
+                continue
+            text, token = rowmac.strip(str(getattr(m, "content", "") or ""))
+            if not text.startswith(binding):
+                continue
+            match = _VERDICT_ROW_RE.search(text)
+            if not match:
+                continue
+            src, verdict, ts = match.groups()
+            fields = {
+                "kind": "finding_verdict",
+                "repo": _repo_key(repo_path),
+                "fp": fp,
+                "verdict": verdict,
+                "src": src,
+                "ts": ts,
+            }
+            mac_ok = _row_mac_ok("finding_verdict", fields, token)
+            note = text[match.end():].strip()
+            yield (mid, verdict, src, ts, mac_ok, note)
+        offset += len(memories)
+        if new_rows == 0:
+            if has_more:
+                raise VerdictWalkTruncated(
+                    "pagination stalled (pages of only already-seen "
+                    "rows with has_more set)")
+            if strict and len(memories) >= _OPERATOR_LIST_PAGE:
+                # A FULL page of only already-seen rows from a server
+                # that does not report has_more: indistinguishable
+                # from a broken/legacy pager repeating itself. The
+                # read path tolerates the partial view (raptor-sage's
+                # own fetch convention); a CLEARING verb must not —
+                # it would then report "cleared" while unseen rows
+                # survive.
+                raise VerdictWalkTruncated(
+                    "pagination stalled on a full page (legacy server "
+                    "without has_more)")
+            return
+        if not has_more and len(memories) < _OPERATOR_LIST_PAGE:
+            return
+    raise VerdictWalkTruncated(
+        f"page cap reached ({_OPERATOR_LIST_MAX_PAGES} pages) before "
+        "the server said stop")
+
+
+def list_finding_verdict_rows(
+    repo_path: str,
+    rule_id: str,
+    file_path: str,
+    function: str,
+    *,
+    client: SageClient | None = None,
+) -> list[dict[str, Any]] | None:
+    """Every stored verdict row for one finding, with memory ids.
+
+    Returns ``None`` when SAGE is unavailable (distinct from ``[]`` =
+    reachable but no rows). Each row:
+    ``{memory_id, verdict, source_hash, ts, mac_verified, note}`` —
+    ``note`` carries the row's free-form audit text (the operator
+    provenance stamp), so where a verdict came from is inspectable.
+    Raises :class:`VerdictWalkTruncated` when the enumeration could
+    not cover the store — callers must report, never treat the
+    partial view as the store's contents. (Read path: a legacy
+    server's full-page stall ends the walk quietly, like
+    raptor-sage's own fetch — the clearing verbs use the strict
+    walk.)
+    """
+    if client is None:
+        client = operator_client()
+    if client is None:
+        return None
+    try:
+        return [
+            {
+                "memory_id": mid,
+                "verdict": verdict,
+                "source_hash": src,
+                "ts": ts,
+                "mac_verified": mac_ok,
+                "note": note,
+            }
+            for mid, verdict, src, ts, mac_ok, note
+            in _iter_verdict_rows(
+                client, repo_path, rule_id, file_path, function)
+        ]
+    except VerdictWalkTruncated:
+        raise
+    except Exception as e:  # noqa: BLE001 — operator verbs degrade, never crash the CLI
+        logger.debug("SAGE verdict listing failed: %s", e)
+        return None
+
+
+def forget_finding_verdicts(
+    repo_path: str,
+    rule_id: str,
+    file_path: str,
+    function: str,
+    *,
+    verdicts: frozenset[str] | set[str] | None = None,
+    reason: str = "",
+    client: SageClient | None = None,
+) -> tuple[int, int] | None:
+    """Deprecate stored verdict rows for one finding.
+
+    ``verdicts`` restricts which verdict values are cleared (pass
+    :data:`_SUPPRESS_VERDICTS` for the tp verb — clear only the rows
+    that would suppress); ``None`` clears every verdict row (the
+    retest verb). MAC-unverified rows are cleared too: they never
+    mechanically suppress, but "clear the stored verdict" means the
+    whole record, and deprecation is the server's reversible
+    soft-delete.
+
+    Returns ``(cleared, failed)`` — rows deprecated, and rows the
+    server REFUSED to deprecate. Callers must fail loudly on any
+    ``failed``: a surviving suppressing row reported as cleared is
+    exactly the false-success the fail-closed walk exists to prevent.
+    Returns ``None`` when SAGE is unavailable. Raises
+    :class:`VerdictWalkTruncated` when the store could not be fully
+    enumerated — a STRICT walk (a legacy server's full-page stall
+    truncates too) that completes BEFORE any forget call, so nothing
+    is cleared on that path.
+    """
+    if client is None:
+        client = operator_client()
+    if client is None:
+        return None
+    try:
+        rows = list(_iter_verdict_rows(
+            client, repo_path, rule_id, file_path, function,
+            strict=True))
+    except VerdictWalkTruncated:
+        raise
+    except Exception as e:  # noqa: BLE001 — operator verbs degrade, never crash the CLI
+        logger.debug("SAGE verdict enumeration failed: %s", e)
+        return None
+    cleared = 0
+    failed = 0
+    for mid, verdict, _src, _ts, _mac_ok, _note in rows:
+        if verdicts is not None and verdict not in verdicts:
+            continue
+        if client.forget(mid, reason=reason):
+            cleared += 1
+        else:
+            failed += 1
+    return cleared, failed
+
+
+# Public alias — CLI consumers name the suppressing set without
+# reaching into a privately-named constant.
+SUPPRESS_VERDICTS = _SUPPRESS_VERDICTS
 
 
 # ─────────────────────────────────────────────────────────────────────────────

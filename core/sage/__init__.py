@@ -3,9 +3,16 @@
 from .client import SageClient
 from .config import SageConfig
 from .hooks import (
+    SUPPRESS_VERDICTS,
+    VerdictWalkTruncated,
     compute_finding_source_hash,
     finding_source_hashes,
+    finding_verdict_source_hash,
+    # Finding verdict — operator verbs (/review verdict)
+    forget_finding_verdicts,
     infer_codeql_build_from_sage_recall_row,
+    list_finding_verdict_rows,
+    operator_client,
     parse_rule_metadata,
     recall_concepts_for_study,
     recall_concepts_for_teach,
@@ -32,11 +39,17 @@ from .hooks import (
 )
 
 __all__ = [
+    "SUPPRESS_VERDICTS",
     "SageClient",
     "SageConfig",
+    "VerdictWalkTruncated",
     "compute_finding_source_hash",
     "finding_source_hashes",
+    "finding_verdict_source_hash",
+    "forget_finding_verdicts",
     "infer_codeql_build_from_sage_recall_row",
+    "list_finding_verdict_rows",
+    "operator_client",
     "parse_rule_metadata",
     "recall_concepts_for_study",
     "recall_concepts_for_teach",
