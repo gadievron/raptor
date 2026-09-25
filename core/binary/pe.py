@@ -64,7 +64,10 @@ import os
 import struct
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import TYPE_CHECKING, Any, BinaryIO
+
+if TYPE_CHECKING:
+    from core.evidence import BinaryEvidenceRecord
 
 # ONE entropy primitive repo-wide — deliberately shared with the ELF
 # tier so the number means the same thing on every facts record. Its
@@ -211,6 +214,39 @@ _MAX_ENTROPY_SECTIONS = 2_048
 # facts — everything this module consumes sits at index 14 or
 # below.
 _MAX_DATA_DIRS = 16
+# Debug-directory entries walked. The directory Size is an attacker
+# u32 driving a size/28 walk; real images carry under ~10 entries
+# (CodeView, POGO, VC feature, repro, extended-dllcharacteristics).
+# 64 truncates nothing real; higher only sells iterations and
+# resolver reads to a crafted directory.
+_MAX_DEBUG_DIR_ENTRIES = 64
+# CodeView blob read bound: 24 fixed bytes (magic + GUID + age) plus
+# the NUL-terminated pdb path. SizeOfData is an attacker u32 that
+# would otherwise price the read; real pdb paths are a few hundred
+# bytes, so 4 KB truncates nothing real while an unterminated path
+# inside the window is malformed, marker-visibly.
+_MAX_PDB_PATH_BYTES = 4_096
+# pdb BASENAME bytes retained on the record (counted on the raw
+# bytes — what is actually retained). Real basenames are tens of
+# bytes; the record must not become the amplifier for a crafted
+# 4 KB path whose last component is the whole path. Hostile text
+# either way — consumers escape at render.
+_MAX_PDB_BASENAME_BYTES = 256
+
+# Data-directory indices consumed (spec order). The security entry
+# holds a FILE OFFSET (not an RVA) to the certificate table; only
+# its PRESENCE is read here — certificate parsing is a separate,
+# deliberately-unimplemented surface.
+_DIR_SECURITY = 4
+_DIR_DEBUG = 6
+_DIR_CLR = 14
+
+# One debug-directory entry: Characteristics(I) TimeDateStamp(I)
+# MajorVersion(H) MinorVersion(H) Type(I) SizeOfData(I)
+# AddressOfRawData(I) PointerToRawData(I)
+_DEBUG_DIR_ENTRY = struct.Struct("<IIHHIIII")
+_IMAGE_DEBUG_TYPE_CODEVIEW = 2
+_RSDS_MAGIC = b"RSDS"
 
 
 @dataclass(frozen=True)
@@ -291,11 +327,86 @@ class PeFacts:
     overlay_present: bool = False
     overlay_offset: int | None = None
     overlay_size: int = 0
+    # Security (certificate table) directory PRESENCE only — a
+    # nonzero entry means the image CLAIMS an Authenticode blob.
+    # Nothing here verifies, parses, or trusts it.
+    authenticode_present: bool = False
+    # CLR runtime header directory presence — the .NET bit.
+    dotnet_present: bool = False
+    # Signing-facts slot, pre-declared so the record schema stays
+    # stable across phases: populated by the signing-facts
+    # extraction when it lands; empty string means UNEXAMINED.
+    # ``authenticode_present`` above is the only signing fact this
+    # extractor asserts.
+    claimed_signer: str = ""
+    # Debug-directory RSDS (CodeView) identity: the raw 16 GUID
+    # bytes in file order as lowercase hex, the age, the pdb path's
+    # last component (hostile text — capped at capture, escape at
+    # render), and the canonical symbol-server serialization from
+    # :func:`canonical_pe_identity`. An all-zero GUID is recorded
+    # verbatim — degenerate-identity screening is a CONSUMER
+    # policy, not an extraction fact.
+    debug_guid: str | None = None
+    debug_age: int | None = None
+    pdb_basename: str | None = None
+    debug_identity: str | None = None
     caps_hit: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-ready dict (nested dataclasses included)."""
         return asdict(self)
+
+
+def canonical_pe_identity(guid: bytes, age: int) -> str:
+    """Canonical PE debug-identity serialization — the Microsoft
+    symbol-server text convention, lowercased.
+
+    The GUID renders as ``%08x%04x%04x`` from the little-endian
+    Data1/Data2/Data3 fields of the raw 16 RSDS bytes, then the 8
+    Data4 bytes as raw hex, then the age in UNPADDED lowercase hex
+    (symsrv keys never zero-pad the age). Lowercase throughout so
+    one identity has exactly one spelling.
+
+    Helper contract (unlike the extractor): ``guid`` must be the 16
+    raw bytes as stored in the RSDS record and ``age`` a
+    non-negative integer — anything else raises ``ValueError``
+    (programming error, not hostile input; the extractor always
+    passes a fixed-width slice and an unpacked u32).
+    """
+    if len(guid) != 16:
+        msg = f"RSDS GUID must be 16 raw bytes, got {len(guid)}"
+        raise ValueError(msg)
+    if age < 0:
+        msg = f"RSDS age must be non-negative, got {age}"
+        raise ValueError(msg)
+    data1, data2, data3 = struct.unpack_from("<IHH", guid)
+    return (f"{data1:08x}{data2:04x}{data3:04x}"
+            f"{guid[8:].hex()}{age:x}")
+
+
+def canonical_pe_identity_from_guid_string(guid: str, age: int) -> str:
+    """Dashed / braced / uppercase GUID TEXT → the same canonical
+    hex as :func:`canonical_pe_identity`.
+
+    The dashed rendering is already field-order
+    (``Data1-Data2-Data3-Data4[0:2]-Data4[2:8]``), so stripping
+    separators and lowercasing yields the ``%08x%04x%04x`` + Data4
+    form directly — no byte swapping (that only applies to the RAW
+    little-endian bytes the other helper takes). Raises
+    ``ValueError`` on non-GUID text or a negative age.
+    """
+    cleaned = guid.strip()
+    if cleaned.startswith("{") and cleaned.endswith("}"):
+        cleaned = cleaned[1:-1]
+    cleaned = cleaned.replace("-", "")
+    if len(cleaned) != 32:
+        msg = f"GUID text must carry 32 hex digits, got {len(cleaned)}"
+        raise ValueError(msg)
+    int(cleaned, 16)          # ValueError on non-hex text
+    if age < 0:
+        msg = f"RSDS age must be non-negative, got {age}"
+        raise ValueError(msg)
+    return cleaned.lower() + f"{age:x}"
 
 
 def is_pe(path: Path | str) -> bool:
@@ -532,6 +643,7 @@ def _extract_facts_stream(f: BinaryIO, file_size: int) -> PeFacts | None:
     caps: set[str] = set()
 
     # --- Optional header ----------------------------------------
+    data_dirs: dict[int, tuple[int, int]] = {}
     if size_of_optional == 0:
         # A COFF object shape, not an image — header facts survive,
         # everything optional-derived is a recorded gap.
@@ -540,7 +652,15 @@ def _extract_facts_stream(f: BinaryIO, file_size: int) -> PeFacts | None:
         opt = f.read(size_of_optional)
         if len(opt) < size_of_optional:
             caps.add("optional_header_truncated")
-        _parse_optional_header(opt, facts, caps)
+        data_dirs = _parse_optional_header(opt, facts, caps)
+
+    # Directory PRESENCE bits: a nonzero (address, size) pair is the
+    # claim. The security entry is never dereferenced here at all;
+    # the CLR entry only as a bit.
+    sec_dir = data_dirs.get(_DIR_SECURITY, (0, 0))
+    facts.authenticode_present = sec_dir[0] != 0 and sec_dir[1] != 0
+    clr_dir = data_dirs.get(_DIR_CLR, (0, 0))
+    facts.dotnet_present = clr_dir[0] != 0 and clr_dir[1] != 0
 
     # --- Section table ------------------------------------------
     # Located directly after the optional header — at the DECLARED
@@ -559,10 +679,145 @@ def _extract_facts_stream(f: BinaryIO, file_size: int) -> PeFacts | None:
     if resolver.has_overlaps():
         caps.add("overlapping_sections")
 
+    debug_va, debug_size = data_dirs.get(_DIR_DEBUG, (0, 0))
+    _read_debug_identity(f, resolver, debug_va, debug_size,
+                         facts, caps)
+
     _compute_overlay(facts, file_size)
 
     facts.caps_hit = sorted(caps)
     return facts
+
+
+def _read_debug_identity(
+    f: BinaryIO, resolver: _RvaResolver, debug_va: int,
+    debug_size: int, facts: PeFacts, caps: set[str],
+) -> None:
+    """Walk the debug directory for the RSDS (CodeView) identity.
+
+    Named rules: the FIRST RSDS entry in directory order wins;
+    later RSDS entries that parse to a DIFFERENT identity are a
+    ``conflicting_debug_entries`` marker (a doctored second entry
+    must not silently steer the identity, and its existence must
+    not be silent either). Within one entry, ``PointerToRawData``
+    (a file offset) is preferred over ``AddressOfRawData`` (an RVA)
+    whenever it is present — the two can be made to disagree and
+    the file offset is what a symbol-server consumer reads.
+    Non-CodeView entry types are skipped without markers: POGO /
+    repro / VC-feature entries are normal, not gaps.
+    """
+    if debug_va == 0 or debug_size == 0:
+        return
+    count = debug_size // _DEBUG_DIR_ENTRY.size
+    if count > _MAX_DEBUG_DIR_ENTRIES:
+        count = _MAX_DEBUG_DIR_ENTRIES
+        caps.add("debug_entries_capped")
+    first: tuple[bytes, int, str | None] | None = None
+    for i in range(count):
+        raw = resolver.read(f, debug_va + i * _DEBUG_DIR_ENTRY.size,
+                            _DEBUG_DIR_ENTRY.size)
+        if raw is None or len(raw) < _DEBUG_DIR_ENTRY.size:
+            caps.add("debug_directory_unreadable")
+            break
+        (_chars, _ts, _major, _minor, dtype, size_of_data,
+         addr_of_raw, ptr_to_raw) = _DEBUG_DIR_ENTRY.unpack(raw)
+        if dtype != _IMAGE_DEBUG_TYPE_CODEVIEW:
+            continue
+        blob = _read_codeview_blob(f, resolver, size_of_data,
+                                   addr_of_raw, ptr_to_raw)
+        if blob is None or len(blob) < 24 or blob[:4] != _RSDS_MAGIC:
+            # A CodeView entry that yields no identity — unreadable
+            # data, both pointers zero, a blob shorter than
+            # magic + GUID + age, or a non-RSDS CodeView format
+            # (NB10). No identity claim to record or conflict with,
+            # but marked: "no identity + this marker" must stay
+            # distinguishable from "no CodeView entry at all".
+            caps.add("debug_codeview_unparsed")
+            continue
+        guid = blob[4:20]
+        (age,) = struct.unpack_from("<I", blob, 20)
+        basename, name_caps = _pdb_basename(blob[24:])
+        if first is None:
+            first = (guid, age, basename)
+            facts.debug_guid = guid.hex()
+            facts.debug_age = age
+            facts.pdb_basename = basename
+            facts.debug_identity = canonical_pe_identity(guid, age)
+            # Name-shape markers describe only the RECORDED identity.
+            caps |= name_caps
+        elif (guid, age, basename) != first:
+            caps.add("conflicting_debug_entries")
+
+
+def _read_codeview_blob(
+    f: BinaryIO, resolver: _RvaResolver, size_of_data: int,
+    addr_of_raw: int, ptr_to_raw: int,
+) -> bytes | None:
+    """Fetch one CodeView entry's data, bounded by
+    ``min(SizeOfData, the RSDS fixed part + the pdb-path cap)`` —
+    SizeOfData is attacker-priced and never a read budget on its
+    own. ``PointerToRawData`` preferred; ``AddressOfRawData``
+    resolves through the chokepoint."""
+    length = min(size_of_data, 24 + _MAX_PDB_PATH_BYTES)
+    if length <= 0:
+        return None
+    if ptr_to_raw:
+        if ptr_to_raw > _MAX_SEEK_OFFSET:
+            return None
+        try:
+            f.seek(ptr_to_raw)
+            return f.read(length)
+        except OSError:
+            return None
+    if addr_of_raw:
+        return resolver.read(f, addr_of_raw, length)
+    return None
+
+
+def _pdb_basename(payload: bytes) -> tuple[str | None, set[str]]:
+    """Last path component of the NUL-terminated pdb path.
+
+    ``None`` + marker when no terminator exists inside the capped
+    window (the path is hostile text; an unterminated one must not
+    materialise the tail of the read). The basename itself is
+    byte-capped at retention — still hostile text, escape at
+    render."""
+    nul = payload.find(b"\x00")
+    if nul < 0:
+        return None, {"pdb_name_malformed"}
+    raw = payload[:nul]
+    # Both separators: pdb paths are conventionally Windows-style
+    # but a crafted path can mix.
+    for sep in (b"\\", b"/"):
+        raw = raw.rsplit(sep, 1)[-1]
+    caps: set[str] = set()
+    if len(raw) > _MAX_PDB_BASENAME_BYTES:
+        raw = raw[:_MAX_PDB_BASENAME_BYTES]
+        caps.add("pdb_name_truncated")
+    return raw.decode("utf-8", errors="replace"), caps
+
+
+def pe_facts_evidence(
+    binary_sha256: str, path: Path, facts: PeFacts,
+) -> BinaryEvidenceRecord:
+    """Wrap one facts record as HEADER_BACKED evidence (the
+    ``make_evidence`` shape the Mach-O intake uses). Imported
+    lazily so this module's import surface stays light for hot
+    consumers that only ever parse."""
+    from core.evidence import EvidenceTier, make_evidence
+    return make_evidence(
+        binary_sha256,
+        kind="pe_facts",
+        source="pe_header",
+        summary=(f"PE header facts: {facts.pe_format or 'pe'}, "
+                 f"{len(facts.sections)} section(s)"),
+        tier=EvidenceTier.HEADER_BACKED,
+        confidence="confirmed",
+        reproducible=True,
+        tool="binary-intake",
+        location=str(path),
+        data={"facts": facts.to_dict()},
+    )
 
 
 def _compute_overlay(facts: PeFacts, file_size: int) -> None:
@@ -593,28 +848,34 @@ def _compute_overlay(facts: PeFacts, file_size: int) -> None:
         facts.overlay_size = file_size - end
 
 
-def _parse_optional_header(opt: bytes, facts: PeFacts,
-                           caps: set[str]) -> None:
+def _parse_optional_header(
+    opt: bytes, facts: PeFacts, caps: set[str],
+) -> dict[int, tuple[int, int]]:
     """Decode the optional header into ``facts`` — per-field
     degradation: a short buffer marks ``optional_header_truncated``
-    once and leaves the unreachable fields at their defaults."""
+    once and leaves the unreachable fields at their defaults.
+    Returns the data-directory table as ``{index: (address,
+    size)}`` (empty when the layout is unknown or the table is out
+    of reach)."""
     if len(opt) < 2:
         caps.add("optional_header_truncated")
-        return
+        return {}
     (magic,) = struct.unpack_from("<H", opt, 0)
     facts.optional_magic = magic
     if magic == _PE32_MAGIC:
         facts.bits, facts.pe_format = 32, "pe32"
         image_base_fmt, image_base_off = "<I", 28
+        dirs_count_off, dirs_off = 92, 96
     elif magic == _PE32PLUS_MAGIC:
         facts.bits, facts.pe_format = 64, "pe32+"
         image_base_fmt, image_base_off = "<Q", 24
+        dirs_count_off, dirs_off = 108, 112
     else:
         # Fail open on unknown magic (ROM images, hostile values):
         # the raw value is recorded above; the layout is unknown so
         # no optional field beyond it can be trusted to decode.
         caps.add("optional_magic_unknown")
-        return
+        return {}
 
     def _u32(offset: int) -> int | None:
         if offset + 4 > len(opt):
@@ -648,6 +909,24 @@ def _parse_optional_header(opt: bytes, facts: PeFacts,
             dll_chars & _DLLCHAR_HIGH_ENTROPY_VA)
         facts.dep = bool(dll_chars & _DLLCHAR_NX_COMPAT)
         facts.cfg = bool(dll_chars & _DLLCHAR_GUARD_CF)
+
+    # --- Data directories ---------------------------------------
+    claimed = _u32(dirs_count_off)
+    if claimed is None:
+        return {}
+    n_dirs = claimed
+    if n_dirs > _MAX_DATA_DIRS:
+        n_dirs = _MAX_DATA_DIRS
+        caps.add("data_directories_capped")
+    dirs: dict[int, tuple[int, int]] = {}
+    for idx in range(n_dirs):
+        entry_off = dirs_off + 8 * idx
+        if entry_off + 8 > len(opt):
+            caps.add("optional_header_truncated")
+            break
+        address, size = struct.unpack_from("<II", opt, entry_off)
+        dirs[idx] = (address, size)
+    return dirs
 
 
 def _read_section_table(
@@ -739,6 +1018,9 @@ def _read_section_table(
 __all__ = [
     "PeFacts",
     "PeSection",
+    "canonical_pe_identity",
+    "canonical_pe_identity_from_guid_string",
     "extract_pe_facts",
     "is_pe",
+    "pe_facts_evidence",
 ]
