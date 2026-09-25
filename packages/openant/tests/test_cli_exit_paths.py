@@ -444,6 +444,202 @@ class TestResumeRefusalExitPath(unittest.TestCase):
             self.assertEqual(report["outcome"], "resume_refused")
 
 
+class TestCostLedgerBounding(unittest.TestCase):
+    """Cost figures read from child-writable run-dir ledgers must come
+    out finite, bounded, and non-negative — a planted non-finite would
+    otherwise reach save_json (allow_nan=False) and destroy the report
+    it rides in."""
+
+    def _reconcile(self, gateway_payload: str,
+                   token_usage: dict | None = None) -> dict:
+        import raptor_openant
+        with tempfile.TemporaryDirectory() as td:
+            oa_out = Path(td)
+            (oa_out / "openant-gateway-spend.json").write_text(
+                gateway_payload)
+            return raptor_openant._reconcile_run_cost(
+                oa_out, token_usage or {})
+
+    def test_nonfinite_gateway_figure_books_zero(self):
+        # stdlib json parses 1e309 to inf (orjson is optional); the
+        # literal Infinity spelling must book the same $0.
+        for payload in ('{"dispatcher_spent_usd": 1e309}',
+                        '{"dispatcher_spent_usd": -1e309}'):
+            cost = self._reconcile(payload)
+            self.assertEqual(cost["gateway_ledger_usd"], 0.0, payload)
+            self.assertEqual(cost["total_usd"], 0.0, payload)
+
+    def test_negative_and_garbage_book_zero(self):
+        self.assertEqual(
+            self._reconcile('{"dispatcher_spent_usd": -5.0}')["total_usd"],
+            0.0)
+        self.assertEqual(
+            self._reconcile('{"dispatcher_spent_usd": "junk"}')["total_usd"],
+            0.0)
+
+    def test_absurd_finite_figure_clamps_to_ceiling(self):
+        import raptor_openant
+        cost = self._reconcile('{"dispatcher_spent_usd": 1e12}')
+        self.assertEqual(cost["gateway_ledger_usd"],
+                         raptor_openant._MAX_LEDGER_USD)
+
+    def test_oversize_int_books_zero_not_overflow(self):
+        # The integer spelling of the plant: stdlib json parses a
+        # hundreds-digit int literal to an exact Python int, which
+        # OVERFLOWS float() rather than parsing to inf — the clamp
+        # must book $0, never raise.
+        import raptor_openant
+        self.assertEqual(
+            raptor_openant._bounded_usd(10 ** 400, source="test"), 0.0)
+        self.assertEqual(
+            raptor_openant._bounded_usd(-(10 ** 400), source="test"), 0.0)
+
+    def test_nonfinite_tracker_figure_books_zero(self):
+        cost = self._reconcile('{}',
+                               token_usage={"total_cost_usd": float("inf")})
+        self.assertEqual(cost["openant_reported_usd"], 0.0)
+        self.assertEqual(cost["total_usd"], 0.0)
+
+    def test_genuine_figures_unchanged(self):
+        cost = self._reconcile('{"dispatcher_spent_usd": 3.25}',
+                               token_usage={"total_cost_usd": 2.5})
+        self.assertEqual(cost["gateway_ledger_usd"], 3.25)
+        self.assertEqual(cost["openant_reported_usd"], 2.5)
+        self.assertEqual(cost["total_usd"], 3.25)
+
+
+_FAKE_MAIN_FAIL_PLANT_INF = """\
+import sys
+
+out = None
+for i, a in enumerate(sys.argv):
+    if a == "--output" and i + 1 < len(sys.argv):
+        out = sys.argv[i + 1]
+if out:
+    with open(out + "/openant-gateway-spend.json", "w") as f:
+        f.write('{"dispatcher_spent_usd": 1e309}')
+sys.exit(3)
+"""
+
+# Integer spelling of the same plant: stdlib json parses the literal to
+# an exact Python int (no inf at parse time — the float lane never
+# engages), and float() overflows instead.
+_FAKE_MAIN_FAIL_PLANT_BIGINT = _FAKE_MAIN_FAIL_PLANT_INF.replace(
+    "1e309", "1" + "0" * 400)
+
+
+def _stub_no_orjson(base: Path) -> dict:
+    """Env overlay simulating a host without orjson: core.json's
+    optional import hits ImportError and falls back to stdlib json —
+    the path on which 1e309 parses to inf."""
+    stub = base / "no-orjson"
+    stub.mkdir()
+    (stub / "orjson.py").write_text(
+        'raise ImportError("simulated host without orjson")\n')
+    return {"PYTHONPATH": str(stub)}
+
+
+class TestPlantedNonFiniteCostReports(unittest.TestCase):
+    """A child-planted 1e309 gateway ledger must not destroy the
+    failure-lane reports on stdlib-json hosts: the scan_failed report
+    still writes (with $0 booked for that ledger) and the interrupted
+    lane keeps its 130/report/lifecycle contract."""
+
+    def test_scan_failed_report_survives_inf_plant(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            src = _make_repo(base)
+            core = _make_fake_core(src, _FAKE_MAIN_FAIL_PLANT_INF)
+            out_dir = base / "out"
+            proc = _run(
+                [sys.executable, str(_REPO_ROOT / "raptor_openant.py"),
+                 "--repo", str(src), "--out", str(out_dir),
+                 "--openant-core", str(core),
+                 "--openant-core-unpinned"],
+                _stub_no_orjson(base),
+            )
+            self.assertEqual(proc.returncode, 1,
+                             f"stdout={proc.stdout}\nstderr={proc.stderr}")
+            report = json.loads(
+                (out_dir / "raptor_openant_report.json").read_text())
+            self.assertEqual(report["outcome"], "scan_failed")
+            self.assertEqual(report["cost"]["total_usd"], 0.0)
+            self.assertEqual(report["cost"]["gateway_ledger_usd"], 0.0)
+
+    def test_scan_failed_report_survives_bigint_plant(self):
+        # Integer spelling: parses to an exact int on the stdlib path
+        # and OVERFLOWS float() instead of arriving as inf — the report
+        # must still write with $0 booked for that ledger.
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            src = _make_repo(base)
+            core = _make_fake_core(src, _FAKE_MAIN_FAIL_PLANT_BIGINT)
+            out_dir = base / "out"
+            proc = _run(
+                [sys.executable, str(_REPO_ROOT / "raptor_openant.py"),
+                 "--repo", str(src), "--out", str(out_dir),
+                 "--openant-core", str(core),
+                 "--openant-core-unpinned"],
+                _stub_no_orjson(base),
+            )
+            self.assertEqual(proc.returncode, 1,
+                             f"stdout={proc.stdout}\nstderr={proc.stderr}")
+            report = json.loads(
+                (out_dir / "raptor_openant_report.json").read_text())
+            self.assertEqual(report["outcome"], "scan_failed")
+            self.assertEqual(report["cost"]["total_usd"], 0.0)
+            self.assertEqual(report["cost"]["gateway_ledger_usd"], 0.0)
+
+    @unittest.skipUnless(os.name == "posix",
+                         "signal-driven test is POSIX-only")
+    def test_interrupted_report_survives_inf_plant(self):
+        fake_main = _FAKE_MAIN_HANG.replace(
+            'if out:\n',
+            'if out:\n'
+            '    with open(out + "/openant-gateway-spend.json", "w") as f:\n'
+            "        f.write('{\"dispatcher_spent_usd\": 1e309}')\n",
+        )
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            src = _make_repo(base)
+            core = _make_fake_core(src, fake_main)
+            out_dir = base / "out"
+            out_dir.mkdir()
+            env = {**os.environ, "_RAPTOR_TRUSTED": "1",
+                   **_stub_no_orjson(base)}
+            proc = subprocess.Popen(
+                [sys.executable, str(_REPO_ROOT / "raptor_openant.py"),
+                 "--repo", str(src), "--out", str(out_dir),
+                 "--openant-core", str(core),
+                 "--openant-core-unpinned"],
+                cwd=str(_REPO_ROOT), env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            marker = out_dir / "openant_scan" / "dataset.json"
+            out = err = ""
+            try:
+                deadline = time.time() + 120
+                while not marker.exists():
+                    if proc.poll() is not None or time.time() > deadline:
+                        out, err = proc.communicate(timeout=30)
+                        self.fail(
+                            f"scan child never started:\n{out}\n{err}")
+                    time.sleep(0.2)
+                time.sleep(1.0)
+                proc.send_signal(signal.SIGTERM)
+                out, err = proc.communicate(timeout=120)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.communicate(timeout=30)
+            self.assertEqual(proc.returncode, 130, f"{out}\n{err}")
+            report = json.loads(
+                (out_dir / "raptor_openant_report.json").read_text())
+            self.assertEqual(report["outcome"], "interrupted")
+            self.assertEqual(report["cost"]["total_usd"], 0.0)
+            self.assertEqual(_run_status(out_dir), "interrupted")
+
+
 class TestResumeUnexpectedFailureRefusesCleanly(unittest.TestCase):
     """An unexpected exception out of resume validation/seeding is a
     clean refusal — exit 2 with an outcome=resume_refused report —
