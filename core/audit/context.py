@@ -22,6 +22,7 @@ from typing import Any
 from core.json import load_json
 from core.paths import confine
 from core.source.lines import split_lines
+from core.security.log_sanitisation import escape_nonprintable
 from core.security.prompt_envelope import neutralize_tag_forgery, wrap_untrusted
 
 from .run_memo import BoundedMemo
@@ -459,17 +460,48 @@ _IDENT_FLATTEN_RE = re.compile(r"[\x00-\x1f\x7f]+")
 
 
 def _defend_identifier(value: Any, max_length: int = 200) -> str:
-    """Render a repo/LLM-derived identifier safely for a trusted
+    r"""Render a repo/LLM-derived identifier safely for a trusted
     prompt region: newlines and control chars flatten to a single
-    space, envelope-tag/heading shapes are neutralised in place, and
-    the length is bounded. Purely a RENDER-time transform — ctx fields
-    keep their original values for lookups."""
+    space, envelope-tag/heading shapes are neutralised in place,
+    every remaining non-printable becomes a visible ``\xHH``/
+    ``\uHHHH`` escape, backticks become ``\x60``, and the length is
+    bounded. Purely a RENDER-time transform — ctx fields keep their
+    original values for lookups.
+
+    Printable identifiers stay byte-faithful (escaping, never
+    rejection: an identifier must remain renderable and recognisable
+    in the prompt). Two hostile classes get escaped rather than
+    passed through:
+
+    - **Non-printables beyond C0/DEL** (the log-sanitisation
+      contract's classifier): bidi overrides/embeddings/isolates
+      enable visual-reorder deception in rendered prompts and
+      reports, zero-width characters enable homoglyph-adjacent
+      spoofing, and C1 controls are terminal-live. All of Unicode
+      Cc/Cf/Cn/Co/Cs/Zl/Zp escapes to the contract's literal form.
+    - **Backticks**: most call sites wrap the returned identifier in
+      a single-backtick code span; a backtick INSIDE the identifier
+      closes that span early and the identifier's remainder renders
+      as live prompt prose (instruction/heading forgery without any
+      newline). Escaping at the shared helper keeps every wrapping
+      site's span intact; no legitimate identifier grammar needs a
+      live backtick.
+    """
     text = _IDENT_FLATTEN_RE.sub(" ", str(value))
     try:
         from core.security.prompt_envelope import neutralize_tag_forgery
         text = neutralize_tag_forgery(text)
     except Exception:
         logger.debug("identifier defence degraded", exc_info=True)
+    # AFTER tag-forgery neutralisation on purpose: the pass above
+    # breaks forged shapes by inserting zero-width spaces, and this
+    # escape materialises those (plus any attacker-supplied Cf/C1
+    # character) as literal escape text — the forged shape stays
+    # broken while the returned identifier is 100% printable. For a
+    # short inline identifier, a visible escape beats an invisible
+    # zero-width space.
+    text = escape_nonprintable(text)
+    text = text.replace("`", "\\x60")
     if len(text) > max_length:
         text = text[:max_length] + "...[truncated]"
     return text
