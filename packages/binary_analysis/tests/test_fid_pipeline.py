@@ -369,3 +369,90 @@ class TestContextAnchorAlignment:
         ctx.content_anchor = ANCHOR16       # the same probe result
         _align_context_anchor(ctx, manifest)
         assert ctx.content_anchor == ANCHOR16
+
+
+class TestIdentityKindCompat:
+    """Schema-compat pins for the additive identity_kind field."""
+
+    def test_roundtrip_preserves_identity_kind(self):
+        manifest = BinaryManifest(
+            schema_version=1, binary_path="/bin/t",
+            binary_sha256="ab" * 32, size_bytes=1, executable=True,
+            target_kind="pe-exe", arch="x86", bits=64,
+            binary_format="pe", build_id="c" * 33,
+            identity_kind="pe_guid_age", image_base=0x400000,
+        )
+        loaded = BinaryManifest.from_dict(manifest.to_dict())
+        assert loaded.identity_kind == "pe_guid_age"
+        assert loaded.build_id == "c" * 33
+
+    def test_old_reader_shape_tolerates_new_field(self):
+        # A record written by THIS schema (identity_kind present,
+        # plus a future unknown key) loads through the .get-tolerant
+        # from_dict without error — additive fields stay additive.
+        record = {
+            "schema_version": 1, "binary_path": "/bin/t",
+            "binary_sha256": "ab" * 32, "size_bytes": 1,
+            "executable": True, "target_kind": "elf-linux",
+            "arch": "x86", "bits": 64, "binary_format": "elf",
+            "build_id": BUILD_ID, "identity_kind": "elf_build_id",
+            "some_future_field": {"nested": True},
+        }
+        loaded = BinaryManifest.from_dict(record)
+        assert loaded.build_id == BUILD_ID
+        assert loaded.identity_kind == "elf_build_id"
+
+    def test_new_reader_treats_kind_absent_as_elf_or_unknown(self):
+        # Old records (build_id set, kind absent) anchor by the
+        # historical prefix rule — never an error, never a refusal.
+        from core.binary.addrmap import to_fid
+        old = BinaryManifest.from_dict({
+            "schema_version": 1, "binary_path": "/bin/t",
+            "binary_sha256": "ab" * 32, "size_bytes": 1,
+            "executable": True, "target_kind": "elf-linux",
+            "arch": "x86", "bits": 64, "binary_format": "elf",
+            "build_id": BUILD_ID, "image_base": 0x400000,
+        })
+        assert old.identity_kind == ""
+        assert to_fid(0x401000, old) == f"{ANCHOR16}:0x1000"
+
+    def test_no_reader_assumes_build_id_is_gnu(self):
+        # Pin: a non-ELF identity value in build_id (kind sha256)
+        # anchors exactly as the legacy empty-build_id + sha256 leg
+        # did — byte-identical fids, no GNU/readelf assumption.
+        from core.binary.addrmap import to_fid
+        sha = "ab" * 32
+        legacy = BinaryManifest.from_dict({
+            "schema_version": 1, "binary_path": "/bin/t",
+            "binary_sha256": sha, "size_bytes": 1,
+            "executable": True, "target_kind": "pe-exe",
+            "arch": "x86", "bits": 64, "binary_format": "pe",
+            "build_id": "", "image_base": 0x400000,
+        })
+        current = BinaryManifest.from_dict({
+            **legacy.to_dict(), "build_id": sha,
+            "identity_kind": "sha256",
+        })
+        assert to_fid(0x401000, legacy) == to_fid(0x401000, current) \
+            == f"{sha[:16]}:0x1000"
+
+    def test_pe_kind_manifest_mints_hashed_anchor(self):
+        # The keystone hazard: a PE manifest's build_id (canonical
+        # GUID+age) must anchor HASHED through every fid chokepoint,
+        # never as a value prefix.
+        import hashlib
+
+        from core.binary.addrmap import to_fid
+        canonical = "a1b2c3d4e5f6071890abcdef012345672a"
+        hashed = hashlib.sha256(canonical.encode()).hexdigest()[:16]
+        manifest = BinaryManifest.from_dict({
+            "schema_version": 1, "binary_path": "/bin/t.exe",
+            "binary_sha256": "cd" * 32, "size_bytes": 1,
+            "executable": True, "target_kind": "pe-exe",
+            "arch": "x86", "bits": 64, "binary_format": "pe",
+            "build_id": canonical, "identity_kind": "pe_guid_age",
+            "image_base": 0x400000,
+        })
+        fid = to_fid(0x401000, manifest)
+        assert fid == f"{hashed}:0x1000"
+        assert fid is not None and not fid.startswith(canonical[:16])

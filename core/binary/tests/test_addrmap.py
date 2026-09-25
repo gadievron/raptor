@@ -554,6 +554,46 @@ class TestPassthroughFid:
         assert passthrough_fid({}) == {}
 
 
+class TestJoinAnomalyRecording:
+    """record_join_anomalies mirrors the miss-recording idiom into
+    its own ledger (join-anomalies.json)."""
+
+    def test_records_into_own_file(self, tmp_path):
+        from core.binary.addrmap import record_join_anomalies
+        target = record_join_anomalies(tmp_path, "test-join", [{
+            "reason": "identity_kind_mismatch",
+            "anchor": "ab" * 8,
+            "expected_kind": "elf_build_id",
+            "found_kind": "pe_guid_age",
+        }])
+        assert target == tmp_path / "join-anomalies.json"
+        doc = json.loads(target.read_text())
+        assert doc["schema_version"] == 1
+        op = doc["operations"][0]
+        assert op["operation"] == "test-join"
+        # Entries live under "anomalies", never "misses" — the
+        # ledger is not a miss log and must not read like one.
+        assert "misses" not in op
+        assert op["anomalies"][0]["reason"] == "identity_kind_mismatch"
+        # The miss ledger is untouched — anomalies are a different
+        # failure mode and must not masquerade as misses.
+        assert not (tmp_path / "fid-misses.json").exists()
+
+    def test_empty_list_writes_nothing(self, tmp_path):
+        from core.binary.addrmap import record_join_anomalies
+        assert record_join_anomalies(tmp_path, "test-join", []) is None
+        assert not (tmp_path / "join-anomalies.json").exists()
+
+    def test_hostile_values_escaped_like_misses(self, tmp_path):
+        from core.binary.addrmap import record_join_anomalies
+        target = record_join_anomalies(tmp_path, "test-join", [{
+            "found_kind": "evil\x1b[31mkind",
+        }])
+        text = target.read_text()
+        assert "\x1b" not in text
+        assert "\\x1b" in text
+
+
 @pytest.mark.parametrize("name", sorted(addrmap.__all__))
 def test_public_api_exists(name):
     assert hasattr(addrmap, name)

@@ -1131,6 +1131,10 @@ def _context_map(
         "content_anchor": str(
             getattr(context, "content_anchor", "") or "",
         ),
+        # The anchor's declared identity kind (additive): joiners
+        # comparing anchors can witness cross-format kind mismatches
+        # (core.binary.addrmap.record_join_anomalies).
+        "identity_kind": manifest.identity_kind,
         "binary_slices": [item.to_dict() for item in manifest.slices],
         "analysis_scope": {
             "selected_arch": manifest.analysed_slice.arch if manifest.analysed_slice else manifest.arch,
