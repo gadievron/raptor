@@ -1764,7 +1764,7 @@ def _format_summary(report: dict[str, Any]) -> str:
             )
 
     cpg_build = report.get("joern_cpg_build")
-    if cpg_build:
+    if cpg_build and (cpg_build.get("failed") or cpg_build.get("retried")):
         lines.append("")
         first_heap = cpg_build.get("first_heap_mb")
         first_wall = cpg_build.get("first_timeout_s")
@@ -1794,9 +1794,11 @@ def _format_summary(report: dict[str, Any]) -> str:
                 f"joern_heap_ceiling_mb / joern_cpg_timeout_s in "
                 f"tuning.json, or narrow --scope."
             )
-        else:
+        elif cpg_build.get("retried"):
             # Rescued by the derived-max retry — worth one line so
-            # the doubled wall is attributable.
+            # the doubled wall is attributable. A plain success
+            # (failed=False, retried=False — written to retire a
+            # prior segment's stale failure record) prints nothing.
             lines.append(
                 f"Joern CPG build succeeded on the derived-max retry "
                 f"({attempts})."

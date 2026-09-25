@@ -280,3 +280,93 @@ class TestRootAliasParity:
             if scope == ["webapp"]:
                 assert len(gaps) == 3
                 assert excluded == set()
+
+
+class TestDotArmParity:
+    """The complement mirrors the gap selector's ``sc + "."`` arm
+    (core/audit/gaps.py ``_in_scope``): scope "ipc" reviews files
+    under a sibling dir ``ipc.d/`` too, so the graph must keep it —
+    otherwise joern silence over a graph that lacks those functions
+    can satisfy ``is_class_covered`` and flip suspicious → clean."""
+
+    def test_dot_sibling_of_scope_leaf_kept(self, tmp_path):
+        target = _tree(tmp_path, ["ipc", "ipc.d", "ipcz", "other"])
+        got = scope_complement_exclude_dirs(target, ["ipc"], target)
+        # ipc.d matches the selector's dot arm — kept. ipcz does NOT
+        # ("ipcz/x.c".startswith("ipc.") is False) — still excluded.
+        assert got == tuple(sorted(
+            [str(target / "ipcz"), str(target / "other")],
+        ))
+
+    def test_dot_arm_applies_only_at_scope_leaf(self, tmp_path):
+        target = _tree(tmp_path, [
+            "fs/ext4", "fs/ext4.old", "fs/jbd", "fs.d/ext4", "other",
+        ])
+        got = scope_complement_exclude_dirs(target, ["fs/ext4"], target)
+        # fs/ext4.old is reviewed ("fs/ext4.old/x.c".startswith(
+        # "fs/ext4.")) — kept. fs.d is NOT reviewed (the selector's
+        # dot arm never matches an intermediate segment) — excluded,
+        # as are the plain siblings.
+        assert got == tuple(sorted([
+            str(target / "fs.d"),
+            str(target / "fs" / "jbd"),
+            str(target / "other"),
+        ]))
+
+
+class TestTerminalNesting:
+    def test_nested_scope_under_terminal_never_over_excludes(
+            self, tmp_path):
+        # --scope fs --scope fs/ext4 --scope net: "fs" is terminal AND
+        # a prefix of a deeper entry. The selector reviews ALL of fs/*
+        # and fs.-siblings; emptiness-as-terminality collapsed that and
+        # over-excluded fs/jbd + fs.d (wrong direction).
+        target = _tree(tmp_path, [
+            "fs/ext4", "fs/jbd", "fs.d", "net", "other",
+        ])
+        got = scope_complement_exclude_dirs(
+            target, ["fs", "fs/ext4", "net"], target)
+        assert got == (str(target / "other"),)
+
+
+class TestJoernTargetNarrowing:
+    @staticmethod
+    def _cfg(target: Path, scope):
+        return types.SimpleNamespace(target_path=target, scope=scope)
+
+    def test_single_scope_narrows_without_dot_sibling(self, tmp_path):
+        from core.audit.orchestrator import _joern_target
+        target = _tree(tmp_path, ["ipc", "mm"])
+        assert _joern_target(self._cfg(target, ["ipc"])) == target / "ipc"
+
+    def test_dot_sibling_dir_defeats_narrowing(self, tmp_path):
+        # scope "ipc" with sibling ipc.d/: narrowing to target/ipc puts
+        # ipc.d outside the graph while the selector reviews it — the
+        # narrowed root must back off so the complement owns the call.
+        from core.audit.orchestrator import _joern_target
+        target = _tree(tmp_path, ["ipc", "ipc.d", "mm"])
+        assert _joern_target(self._cfg(target, ["ipc"])) == target
+
+    def test_dot_sibling_file_defeats_narrowing(self, tmp_path):
+        # The selector's arm matches the FILE ipc.c too.
+        from core.audit.orchestrator import _joern_target
+        target = _tree(tmp_path, ["ipc", "mm"])
+        (target / "ipc.c").write_text("int x;\n")
+        assert _joern_target(self._cfg(target, ["ipc"])) == target
+
+    def test_common_prefix_above_all_leaves_still_narrows(self, tmp_path):
+        # No scope entry EQUALS the common prefix, so the dot arm never
+        # applies at the narrowed root: fs.d being a sibling of fs is
+        # irrelevant (the selector never matches an intermediate seg).
+        from core.audit.orchestrator import _joern_target
+        target = _tree(tmp_path, ["fs/ext4", "fs/jbd", "fs.d"])
+        got = _joern_target(self._cfg(target, ["fs/ext4", "fs/jbd"]))
+        assert got == target / "fs"
+
+    def test_backoff_recurses_to_root(self, tmp_path):
+        # scope "fs/ext4" with BOTH ext4.old under fs and fs.d at root:
+        # first backoff lands on "fs", which is not itself a scope
+        # entry, so narrowing stops there (fs.d is never reviewed).
+        from core.audit.orchestrator import _joern_target
+        target = _tree(tmp_path, ["fs/ext4", "fs/ext4.old", "fs.d"])
+        assert _joern_target(self._cfg(target, ["fs/ext4"])) == target / "fs"
