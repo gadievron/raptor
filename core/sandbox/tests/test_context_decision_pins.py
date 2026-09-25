@@ -771,6 +771,11 @@ def test_unavailable_host_warns_and_does_not_claim_disabled(
     WARNING; the 'disabled for this call' INFO belongs exclusively to
     a deliberate disabled=True."""
     _Driver(monkeypatch, _SpawnRecorder(), mount=False, net=False)
+    # The latch is once-per-PROCESS: any earlier sandbox() on this
+    # worker that found the host unavailable already consumed it, and
+    # the conftest state guard restores the PRE-test value — reset so
+    # the assertion is order-independent (see reset_warn_once).
+    state.reset_warn_once("_sandbox_unavailable_warned")
     with caplog.at_level("INFO"):
         with context.sandbox():
             pass
