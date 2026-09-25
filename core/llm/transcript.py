@@ -130,6 +130,7 @@ __all__ = [
     "TranscriptReplayer",
     "active_transcript",
     "build_llm_client",
+    "fence_bare_client_construction",
     "fence_unadopted_dispatch",
     "reset_active_transcript",
     "transcript_replay_active",
@@ -813,6 +814,43 @@ def fence_unadopted_dispatch(surface: str) -> None:
     )
 
 
+def fence_bare_client_construction(caller: str) -> None:
+    """Constructor-level honesty fence for BARE ``LLMClient``
+    constructions (called from ``LLMClient.__init__`` for every
+    instance that is not the seam's own client).
+
+    A plain client built while a transcript session is active bypasses
+    the record/replay seam, so record mode silently under-records and
+    replay mode dispatches live — the exact failure class
+    :func:`fence_unadopted_dispatch` exists for, enforced structurally
+    at the one place every future bare construction must pass through.
+    Same semantics: hard refusal under replay, loud warning under
+    record, no-op when no session is active.
+
+    ``caller`` is the constructing module's ``__name__`` (repo-derived,
+    printable by construction; never target-derived text).
+    """
+    session = active_transcript()
+    if session is None:
+        return
+    if session.mode == "replay":
+        raise TranscriptError(
+            f"{caller} constructs a plain LLMClient outside the "
+            "transcript seam — under RAPTOR_LLM_TRANSCRIPT=replay:… "
+            "its calls would dispatch live (network + cost) instead "
+            "of replaying. Construct through "
+            "core.llm.transcript.build_llm_client (or "
+            "core.llm.factory.get_client), or unset the transcript "
+            "variable."
+        )
+    logger.warning(
+        "%s constructs a plain LLMClient outside the transcript seam "
+        "— its calls will NOT be recorded to %s (the transcript will "
+        "under-record this run). Construct through "
+        "core.llm.transcript.build_llm_client.", caller, session.path,
+    )
+
+
 def transcript_replay_active() -> bool:
     """True when this process runs in transcript-replay mode.
 
@@ -844,6 +882,10 @@ class TranscriptLLMClient(LLMClient):
     the failure, afterwards. Replay mode serves recorded responses
     before model resolution and never reaches a provider.
     """
+
+    # The seam's own client: exempt from the bare-construction fence
+    # in ``LLMClient.__init__`` (see fence_bare_client_construction).
+    _transcript_seam_construction: bool = True
 
     def __init__(
         self,
