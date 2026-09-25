@@ -26,6 +26,7 @@ Usage:
                                            # (fp requires an interactive terminal;
                                            #  tp/retest work non-interactively —
                                            #  they only cause re-analysis)
+  raptor-review digest [run-dir]           # ranked end-of-run summary
 
 Common options:
   --out DIR       Run output directory (default: active project's latest)
@@ -1229,6 +1230,28 @@ def cmd_compact(args) -> None:
             print(f"  Index already compact ({before} entries).")
 
 
+def cmd_digest(args) -> None:
+    """Ranked end-of-run summary for one run (shared digest reader)."""
+    run_dir = Path(args.run_dir) if getattr(args, "run_dir", None) \
+        else _resolve_out_dir(args)
+    if not run_dir:
+        print("  No run found — pass a run dir or activate a project.",
+              file=sys.stderr)
+        sys.exit(1)
+    if not (Path(run_dir) / ".raptor-run.json").is_file():
+        print(f"  {_line(str(run_dir), max_chars=200)} is not a run "
+              "directory (no .raptor-run.json).", file=sys.stderr)
+        sys.exit(2)
+    from core.run.digest import read_run_digest, render_run_digest
+    digest = read_run_digest(Path(run_dir))
+    if getattr(args, "raw", False):
+        print(json.dumps(digest.to_dict(), indent=2, ensure_ascii=True,
+                         default=str))
+        return
+    # Renderer output is escaped at render (core/run/digest.py).
+    print(render_run_digest(digest))
+
+
 def _verdict_run_dirs(args) -> list:
     """Run dirs the verdict verb resolves finding ids against:
     the explicit ``--out`` run, else every run in the governing
@@ -1794,6 +1817,11 @@ def main():
     p_cov = sub.add_parser("coverage", parents=[common], help="Mechanical tool coverage")
     p_cov.add_argument("file", nargs="?", default=None)
 
+    p_dig = sub.add_parser(
+        "digest", parents=[common],
+        help="Ranked end-of-run summary for a run")
+    p_dig.add_argument("run_dir", nargs="?", default=None)
+
     p_verd = sub.add_parser(
         "verdict", parents=[common],
         help="Record a human FP/TP/retest verdict on a finding "
@@ -1813,7 +1841,7 @@ def main():
     known_commands = {
         "show", "findings", "gaps", "history", "stats", "notes",
         "note", "edit", "stale", "compact", "coverage", "diff", "live",
-        "edges", "verdict",
+        "edges", "verdict", "digest",
     }
     argv_rest = sys.argv[1:]
     first_positional = _first_positional(argv_rest)
@@ -1842,6 +1870,7 @@ def main():
         "live": cmd_live,
         "edges": cmd_edges,
         "verdict": cmd_verdict,
+        "digest": cmd_digest,
     }
 
     handler = dispatch.get(args.command)
