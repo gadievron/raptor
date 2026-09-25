@@ -170,6 +170,43 @@ class TestUnpackArchiveTarget(unittest.TestCase):
             extracted_dirs = [p for p in (d / "proj" / "_sources").iterdir() if p.is_dir()]
             self.assertEqual(len(extracted_dirs), 1)
 
+    def test_unsafe_member_drop_count_printed(self):
+        """Hostile members must not vanish silently: the unpack line
+        carries the drop count when the safety filter rejected any."""
+        import contextlib
+        import io
+
+        import raptor
+        with TemporaryDirectory() as d:
+            d = Path(d)
+            ap = d / "hostile.zip"
+            _zip(ap, {"src/ok.py": b"x=1\n", "../evil.txt": b"pwn"})
+            out_dir = d / "proj" / "scan"
+            out_dir.mkdir(parents=True)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                res = raptor._unpack_archive_target(
+                    str(ap), ["--repo", str(ap)], out_dir)
+            self.assertIsNotNone(res)
+            self.assertIn("(1 unsafe members dropped)", buf.getvalue())
+
+    def test_clean_archive_prints_no_drop_note(self):
+        import contextlib
+        import io
+
+        import raptor
+        with TemporaryDirectory() as d:
+            d = Path(d)
+            ap = d / "clean.zip"
+            _zip(ap, {"src/ok.py": b"x=1\n"})
+            out_dir = d / "proj" / "scan"
+            out_dir.mkdir(parents=True)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertIsNotNone(raptor._unpack_archive_target(
+                    str(ap), ["--repo", str(ap)], out_dir))
+            self.assertNotIn("unsafe members dropped", buf.getvalue())
+
     def test_corrupt_archive_returns_none(self):
         import raptor
         with TemporaryDirectory() as d:
