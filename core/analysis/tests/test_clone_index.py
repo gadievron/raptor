@@ -118,36 +118,129 @@ class TestBuild:
 
 class TestCostRails:
     @requires_ts("c")
-    def test_clone_flood_stays_inside_the_pair_budget(self):
+    def test_bucket_flood_engages_survivor_sampling(self):
         # A saturated tree of near-identical functions is the LSH
-        # worst case: every function lands in the same buckets. The
-        # verified-pair budget and per-bucket survivor sampling keep
-        # verification bounded and mark the degradation in-band.
-        n = 90  # 90 identical clones -> 4005 raw pairs per band
+        # worst case: every function lands in the same buckets.
+        # 90 > MAX_BUCKET_MEMBERS, so sampling must engage (the
+        # observable counter — reverting the per-bucket cap zeroes
+        # it) and mark the index degraded in-band.
+        n = 90
+        sources = {"flood.c": "".join(
+            _clone_fn(f"copy_{i:03d}") for i in range(n)
+        )}
+        index = build_clone_index(sources, seed=b"t")
+        assert index is not None
+        assert index.stats["bucket_cap_events"] > 0
+        assert index.caps_hit is True
+
+    @requires_ts("c")
+    def test_pair_budget_binds_on_a_large_flood(self):
+        # 350 identical clones = 61075 raw pairs, WELL above the
+        # budget even after per-bucket sampling thins the per-band
+        # candidate sets: the verified-pair count must stop at the
+        # rail (reverting the budget check fails here — the rail is
+        # load-bearing at this size, not vacuously satisfied).
+        n = 350
+        assert n * (n - 1) // 2 > 2 * MAX_VERIFY_PAIRS
         sources = {"flood.c": "".join(
             _clone_fn(f"copy_{i:03d}") for i in range(n)
         )}
         index = build_clone_index(sources, seed=b"t")
         assert index is not None
         assert index.stats["verified_pairs"] <= MAX_VERIFY_PAIRS
-        # 90 > MAX_BUCKET_MEMBERS: sampling engaged and was marked.
+        assert index.caps_hit is True
+
+
+class TestRailPins:
+    """Load-bearing pins for the remaining build rails (the flood
+    pins above cover the bucket cap and the pair budget): each rail
+    is forced to bind with a monkeypatched bound, so deleting the
+    rail's check fails the pin instead of leaving it vacuously
+    green."""
+
+    @requires_ts("c")
+    def test_index_function_cap_binds(self, monkeypatch):
+        from core.analysis import clone_index as ci
+
+        monkeypatch.setattr(ci, "MAX_INDEX_FUNCTIONS", 3)
+        sources = {"a.c": "".join(
+            _clone_fn(f"copy_{i}") for i in range(4)
+        )}
+        index = build_clone_index(sources, seed=b"t")
+        assert index is not None
+        assert index.stats["functions"] <= 3
         assert index.caps_hit is True
 
     @requires_ts("c")
-    def test_verification_work_bounded_under_doubling(self):
-        # Growth pin: doubling a saturated flood must not square the
-        # verified-pair count past the budget (the rails' whole
-        # point — reverting the bucket cap or the budget fails here).
-        def pairs_for(n: int) -> int:
-            sources = {"flood.c": "".join(
-                _clone_fn(f"copy_{i:03d}") for i in range(n)
-            )}
-            index = build_clone_index(sources, seed=b"t")
-            assert index is not None
-            return index.stats["verified_pairs"]
+    def test_family_count_cap_binds(self, monkeypatch):
+        from core.analysis import clone_index as ci
 
-        assert pairs_for(80) <= MAX_VERIFY_PAIRS
-        assert pairs_for(160) <= MAX_VERIFY_PAIRS
+        monkeypatch.setattr(ci, "MAX_CLONE_FAMILIES", 1)
+        sources = {"a.c": (
+            _clone_fn("alpha_a") + _clone_fn("alpha_b")
+            + _unrelated_fn("beta_a") + _unrelated_fn("beta_b")
+        )}
+        index = build_clone_index(sources, seed=b"t")
+        assert index is not None
+        assert len(index.families) == 1
+        assert index.stats["eligible_families"] == 2
+        assert index.caps_hit is True
+
+    @requires_ts("c")
+    def test_family_member_cap_binds(self, monkeypatch):
+        from core.analysis import clone_index as ci
+
+        monkeypatch.setattr(ci, "MAX_CLONE_FAMILY_MEMBERS", 2)
+        sources = {"a.c": "".join(
+            _clone_fn(f"copy_{i}") for i in range(4)
+        )}
+        index = build_clone_index(sources, seed=b"t")
+        assert index is not None
+        assert len(index.families[0]["members"]) == 2
+        assert index.caps_hit is True
+
+
+class TestTargetedEviction:
+    """Candidate admission is bucket-granular seeded-random: with
+    first-come admission in file order, decoy clone clusters in
+    early-sorting files exhausted the pair budget before a
+    late-sorting victim's bucket was reached — 0/N survival. The
+    randomized order gives the victim an unchoosable admission slot."""
+
+    @requires_ts("c")
+    def test_victim_pair_survives_decoy_budget_exhaustion(
+        self, monkeypatch,
+    ):
+        from core.analysis import clone_index as ci
+
+        # 10 decoy clusters x 12 clones = 660 unique pairs, budget
+        # 500: first-come admission in sorted-file order never
+        # reaches the zz victim (the revert-probe direction, 0/20).
+        # Randomized bucket order admits it with p ~ 0.5 per seed;
+        # >= 1 hit over 20 seeds (miss probability ~3e-7).
+        monkeypatch.setattr(ci, "MAX_VERIFY_PAIRS", 500)
+        sources = {}
+        for c in range(10):
+            sources[f"aa_decoys_{c}.c"] = "".join(
+                _clone_fn(f"decoy{c}_n{i}") for i in range(12)
+            )
+        sources["zz_victim.c"] = (
+            _unrelated_fn("check_pkt")
+            + _unrelated_fn("check_pkt_v2")
+        )
+        hits = 0
+        for i in range(20):
+            index = build_clone_index(
+                sources, seed=f"evict-{i}".encode(),
+            )
+            assert index is not None
+            assert index.stats["verified_pairs"] <= 500
+            for fam in index.families:
+                names = {m["function"] for m in fam["members"]}
+                if {"check_pkt", "check_pkt_v2"} <= names:
+                    hits += 1
+                    break
+        assert hits >= 1, hits
 
 
 class TestCache:
