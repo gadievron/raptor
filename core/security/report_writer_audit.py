@@ -539,6 +539,11 @@ _REPORT_WRITER_FILES = (
     # sanitise_for_terminal grade at construction.
     "core/project/annotations_diff.py",
     "core/reporting/renderer.py",
+    # tp-harvest operator CLI: harvest summaries and label-flip
+    # errors interpolate target-derived text (statuses, skip reasons,
+    # label paths embedding function names, gate messages). Terminal
+    # writer — sanitise_for_terminal grade via its _term() helper.
+    "core/tp_harvest/cli.py",
     # Default-target resolution: the volatile-target refusal banner
     # interpolates the active project's name/target (adopt-inferred
     # from child-writable run metadata, or import-restored) into a

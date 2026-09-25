@@ -91,6 +91,25 @@ def check_provenance(
         )
 
 
+def derive_target_pin(target_path: str) -> dict[str, Any] | None:
+    """Target VCS snapshot for pin derivation (hardened git probes).
+
+    Thin wrapper over ``core.run.provenance.target_snapshot`` — every
+    git call it makes treats the target as untrusted. Returns
+    ``{"commit", "dirty", "branch", ...}`` or None.
+    """
+    from core.run.provenance import target_snapshot
+
+    return target_snapshot(target_path)
+
+
+def default_labels_base() -> Path:
+    """The local private label store the corpus loader reads."""
+    import core.audit.corpus.label as corpus_label
+
+    return Path(corpus_label.__file__).parent / "labels"
+
+
 def _function_id(record: HarvestRecord) -> str:
     """Corpus ``function_id`` convention: ``<file>:<function>``."""
     if record.function:
