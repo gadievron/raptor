@@ -92,6 +92,20 @@ class TestBugClassCweSeeds:
             BUG_CLASS_CWES["concurrency"]
         )
 
+    def test_consistency_class_covers_operator_families(self):
+        # One CWE family per mutation operator: unchecked return,
+        # missing release / improper locking, dropped null guard,
+        # bounds / off-by-one, and call-order deviants.
+        assert {
+            "CWE-252", "CWE-401", "CWE-667", "CWE-476",
+            "CWE-125", "CWE-787", "CWE-193", "CWE-696", "CWE-367",
+        } == BUG_CLASS_CWES["consistency"]
+
+    def test_consistency_class_fallback_targets(self):
+        label = _label(cwe="", bug_class="consistency")
+        rule = _rule(rule_id="unchecked_return", cwes=("CWE-252",))
+        assert rule_targets_label(rule, label)
+
     def test_every_finding_label_is_targetable(self):
         """Tripwire over the committed labels: every ``finding`` label
         must be reachable by CWE targeting — an explicit ``cwe``, an
@@ -109,6 +123,26 @@ class TestBugClassCweSeeds:
             and lb.bug_class not in BUG_CLASS_CWES
         ]
         assert untargetable == []
+
+
+class TestSyntheticMutantSkip:
+    def test_main_skips_mutant_labels(self, monkeypatch, capsys):
+        # rule_eval never applies mutation specs: a synthetic label
+        # must land in the skip taxonomy (exit 0), never run engines
+        # over the clean code with a defect expectation.
+        import core.audit.corpus.label as label_mod
+        from core.audit.corpus import rule_eval as re_mod
+
+        mutant = _label(bug_class="consistency", cwe="")
+        mutant.provenance_kind = "synthetic_mutant"
+        monkeypatch.setattr(
+            label_mod, "load_all_labels",
+            lambda bug_class=None: [mutant],
+        )
+        rc = re_mod.main(["--dry-run"])
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert "synthetic_mutant" in captured.out + captured.err
 
 
 class TestNormaliseCwe:

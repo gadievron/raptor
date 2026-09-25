@@ -88,6 +88,16 @@ BUG_CLASS_CWES: dict[str, frozenset[str]] = {
                        "CWE-863"}),
     "concurrency": frozenset({"CWE-362", "CWE-366", "CWE-367", "CWE-413",
                               "CWE-667", "CWE-833"}),
+    # Peer-census deviance labels (one CWE family per mutation
+    # operator / dimension): unchecked return (CWE-252), missing
+    # release — leak / improper locking (CWE-401 / CWE-667), dropped
+    # null guard (CWE-476), dropped/flipped bounds — OOB read/write
+    # and off-by-one (CWE-125 / CWE-787 / CWE-193), call-order
+    # deviants — incorrect behavior order / TOCTOU shape (CWE-696 /
+    # CWE-367).
+    "consistency": frozenset({"CWE-125", "CWE-193", "CWE-252",
+                              "CWE-367", "CWE-401", "CWE-476",
+                              "CWE-667", "CWE-696", "CWE-787"}),
     "fail_open": frozenset({"CWE-636", "CWE-703"}),
     "integer": frozenset({"CWE-190", "CWE-191", "CWE-192", "CWE-197",
                           "CWE-681"}),
@@ -1301,6 +1311,44 @@ def main(argv: list[str] | None = None) -> int:
         print("No labels found.", file=sys.stderr)
         return 1
 
+    # Synthetic mutants pin the UNMUTATED upstream; rule_eval scans
+    # the pinned sources as-is and never applies mutation specs, so
+    # running rules over a mutant label would score the CLEAN code
+    # against a defect expectation.  Skip taxonomy, never a failure —
+    # mutants evaluate through run_corpus's mutation-application step.
+    from .mutation import PROVENANCE_SYNTHETIC_MUTANT, label_kind
+
+    mutant_skips = [
+        {
+            "function_id": lb.function_id,
+            "reason": (
+                "synthetic_mutant label — rule_eval never applies "
+                "mutation specs (would score the clean code); "
+                "evaluate through run_corpus"
+            ),
+        }
+        for lb in labels
+        if label_kind(lb) == PROVENANCE_SYNTHETIC_MUTANT
+    ]
+    if mutant_skips:
+        skipped_ids = {s["function_id"] for s in mutant_skips}
+        labels = [
+            lb for lb in labels if lb.function_id not in skipped_ids
+        ]
+        print(
+            f"Skipping {len(mutant_skips)} synthetic_mutant label(s) "
+            f"(mutation application is a run_corpus step)",
+        )
+        if not labels:
+            print(
+                "All labels skipped (synthetic mutants) — nothing "
+                "to run.", file=sys.stderr,
+            )
+            for s in mutant_skips:
+                print(f"  {s['function_id']}: {s['reason']}",
+                      file=sys.stderr)
+            return 0
+
     engines = list(dict.fromkeys(args.engines)) or list(DEFAULT_ENGINES)
     print(f"Loaded {len(labels)} label(s); engines: {', '.join(engines)}")
 
@@ -1345,7 +1393,7 @@ def main(argv: list[str] | None = None) -> int:
           f"({len(discovery_errors)} discovery error(s))")
 
     evaluable: list[Any] = []
-    skipped_rows: list[dict[str, str]] = []
+    skipped_rows: list[dict[str, str]] = list(mutant_skips)
     for label in labels:
         status, detail = _label_source_status(label, source_dirs)
         if status == "ok":
