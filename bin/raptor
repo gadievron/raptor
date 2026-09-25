@@ -510,6 +510,17 @@ if [[ "${1:-}" == "sage-setup" ]]; then
     exec "$RAPTOR_DIR/libexec/raptor-sage-setup" "$@"
 fi
 
+# Route wsl-consent directly (no Claude needed) - the WSL host-consent
+# ceremony is TTY-gated and must run at the operator's own terminal
+# (the grant hard-refuses a non-TTY stdin); resolving it must not
+# launch a Claude session.
+if [[ "${1:-}" == "wsl-consent" ]]; then
+    shift
+    export RAPTOR_DIR
+    export _RAPTOR_TRUSTED=1
+    exec "$RAPTOR_DIR/libexec/raptor-wsl-consent" "$@"
+fi
+
 # Claude required for everything else
 if ! command -v claude >/dev/null 2>&1; then
     echo "raptor: claude not found. Install Claude Code:" >&2
