@@ -552,3 +552,43 @@ def test_workflow_read_is_bounded_and_no_follow(tmp_path) -> None:
         tracemalloc.stop()
     assert result.changes == []
     assert peak < 10 * 1024 * 1024
+
+
+def test_crlf_workflow_pins_equivalently(monkeypatch, tmp_path: Path) -> None:
+    """A CRLF checkout of a workflow pins the same refs as its LF twin,
+    and every line keeps its original terminator byte-for-byte."""
+    body_lf = (
+        "jobs:\n  t:\n    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "      - uses: actions/setup-node@v3  # tooling\n"
+    )
+    mapping = {
+        ("actions/checkout", "v4"): "0" * 40,
+        ("actions/setup-node", "v3"): "1" * 40,
+    }
+    results = {}
+    for name, data in (
+        ("lf", body_lf.encode()),
+        ("crlf", body_lf.replace("\n", "\r\n").encode()),
+    ):
+        root = tmp_path / name
+        workflows = root / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        (workflows / "ci.yml").write_bytes(data)
+        _patch_ls_remote(monkeypatch, mapping)
+        results[name] = hash_pin_workflows(root, write=True)
+        rewritten = (workflows / "ci.yml").read_bytes()
+        assert rewritten.count(b"@" + b"0" * 40) == 1
+        assert rewritten.count(b"@" + b"1" * 40) == 1
+        assert b"# was v4" in rewritten
+        # Comment on the pinned line survives (stripped of any \r).
+        assert b"# tooling" in rewritten
+        if name == "crlf":
+            # Terminators preserved: still a pure-CRLF file.
+            assert rewritten.count(b"\r\n") == rewritten.count(b"\n")
+            assert b"\r\r" not in rewritten
+    assert (
+        [(c.action, c.old_ref, c.new_sha) for c in results["lf"].changes]
+        == [(c.action, c.old_ref, c.new_sha) for c in results["crlf"].changes]
+    )
+    assert results["crlf"].skipped == results["lf"].skipped == []
