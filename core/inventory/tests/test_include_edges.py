@@ -215,6 +215,45 @@ class TestPhpIncludeEdges:
     def test_inert_wrappers_with_inert_bodies_stay_recorded(self, src):
         assert self._edges(src).direct_access_guard is not None
 
+    def test_braced_namespace_guard_records(self):
+        # The anonymous `{` token is not a statement — classifying it
+        # would close the prologue at the opening brace and blind
+        # every braced-namespace guard.
+        src = ("<?php\nnamespace A {\n"
+               "  if (!defined('IN_APP')) die();\n"
+               "  process($x);\n}\n")
+        assert self._edges(src).direct_access_guard is not None
+
+    def test_braced_namespace_payload_still_closes(self):
+        # Two-direction: payload before the guard inside the braces
+        # still closes eligibility.
+        src = ("<?php\nnamespace A {\n  echo 'x';\n"
+               "  if (!defined('IN_APP')) die();\n}\n")
+        assert self._edges(src).direct_access_guard is None
+
+    def test_dynamic_include_before_guard_closes(self):
+        # A dynamic include's target carries no
+        # role/census attention of its own — the pre-guard dispatcher
+        # risk stays on this file, so it closes guard eligibility.
+        for src in (
+            "<?php\ninclude $page;\nif (!defined('IN_APP')) die();\n",
+            "<?php\ninclude APP_PATH . $dir . 'x.php';\n"
+            "if (!defined('IN_APP')) die();\n",
+        ):
+            assert self._edges(src).direct_access_guard is None
+
+    def test_resolvable_include_before_guard_stays_recorded(self):
+        # Two-direction: literal and const-prefix includes keep the
+        # adjudicated inertness (their targets keep their own
+        # attention in the graph).
+        for src in (
+            "<?php\nrequire 'inc/boot.php';\n"
+            "if (!defined('IN_APP')) die();\n",
+            "<?php\nrequire_once(APP_PATH . 'inc/boot.php');\n"
+            "if (!defined('IN_APP')) die();\n",
+        ):
+            assert self._edges(src).direct_access_guard is not None
+
     def test_deep_concat_extraction_stays_linear(self):
         # A per-node parent probe made extraction quadratic in
         # expression depth (tens of seconds at 16k concat parts);
