@@ -101,11 +101,19 @@ def verify_preconditions(
     preconditions: list[dict[str, Any]],
     target_path: Path,
     context_map: dict[str, Any] | None = None,
+    graph_store: Path | None = None,
 ) -> PreconditionVerdict:
     """Run mechanical checks on LLM-stated preconditions.
 
     Each precondition dict has: assumption, check_type, location,
     expect_absent, and optionally parameter.
+
+    ``graph_store`` (optional) is the project graph store path; when
+    the context map's own call-edge list is capped or shed, the
+    attacker-control reachability walk resolves the map's
+    ``call_edges_store`` marker against it (verified mechanical rows
+    only). A missing/unverifiable store changes nothing — store
+    absent is the inconclusive floor, never a verdict input.
     """
     verdict = PreconditionVerdict()
 
@@ -165,7 +173,7 @@ def verify_preconditions(
         elif check_type == "attacker_controls_input":
             result = _check_attacker_control(
                 source, loc_file, loc_func, parameter,
-                expect_absent, context_map,
+                expect_absent, context_map, graph_store, target_path,
             )
         elif check_type == "function_reaches_sink":
             result = _check_reaches_sink(
@@ -568,14 +576,76 @@ def _edge_node_keys(raw: str, file_hint: str) -> tuple[str, ...]:
     return (name,)
 
 
+# Single-slot memo for the store's verified call-edge lane: the
+# precondition gate runs per finding, and a verified read re-derives
+# one HMAC per row (seconds at the 10^5-10^6-row scale the lane exists
+# for). Exactly one (store, snapshot, target) triple is live per run
+# stage, so one slot suffices; a concurrent recompute is merely
+# wasted work.
+_STORE_LANE_MEMO: dict[tuple[str, str, str], dict[str, Any] | None] = {}
+
+
+def _store_call_edges(
+    context_map: dict[str, Any],
+    graph_store: Path,
+    target_path: Path | str | None,
+) -> dict[str, Any] | None:
+    """Resolve the map's ``call_edges_store`` marker against the graph
+    store's verdict-feeding view (verified mechanical rows only —
+    ``core.understand_graph.queries.verified_mechanical_call_edges``).
+
+    Returns the lane dict (``{"edges", "complete", ...}``) or None
+    when there is no verified lane (no marker, store absent, snapshot
+    unverifiable). None is the store-absent → inconclusive floor: the
+    caller behaves exactly as it does today, and the store's absence
+    is never itself evidence.
+    """
+    marker = context_map.get("call_edges_store")
+    if not isinstance(marker, dict):
+        return None
+    snapshot = marker.get("snapshot")
+    if not isinstance(snapshot, str) or not snapshot:
+        return None
+    # Target-scoped: the marker is artifact-writable, and a shared
+    # project store can hold OTHER targets' verified callgraph
+    # snapshots — those must never feed this target's walk. A spelling
+    # mismatch merely drops the lane (today's behavior).
+    target = str(target_path) if target_path else None
+    key = (str(graph_store), snapshot, target or "")
+    if key in _STORE_LANE_MEMO:
+        return _STORE_LANE_MEMO[key]
+    try:
+        from pathlib import Path as _Path
+
+        from core.understand_graph.queries import (
+            verified_mechanical_call_edges,
+        )
+
+        lane = verified_mechanical_call_edges(
+            _Path(graph_store), snapshot, target)
+    except Exception:  # noqa: BLE001 — a broken store is the floor, never an error into the gate
+        lane = None
+    _STORE_LANE_MEMO.clear()  # single slot
+    _STORE_LANE_MEMO[key] = lane
+    return lane
+
+
 def _check_attacker_control(
     _source: str, file: str, func: str,
     _parameter: str, expect_absent: bool,
     context_map: dict[str, Any] | None = None,
+    graph_store: Path | None = None,
+    target_path: Path | str | None = None,
 ) -> CheckResult:
     """Check if a function's input is attacker-controlled.
 
     Uses the context map's entry_points to determine reachability.
+    When the map's own edge list is degraded (capped or shed) and a
+    graph store is given, the walk upgrades to the store's verified
+    mechanical edge set: a COMPLETE verified set lifts the truncation
+    (the full graph is present), an incomplete one — tampered or
+    deleted rows — forces truncation semantics, so no llm-tier or
+    MAC-failing row can ever flip a reachable function to unreachable.
     """
     if context_map is None:
         return CheckResult(
@@ -619,9 +689,32 @@ def _check_attacker_control(
     # "file:func" form (see _edge_node_keys): context maps mix the two
     # shapes edge-by-edge, and a frontier of bare names walked over
     # combined-form keys reads real edges as missing.
+    # Edge universe: the in-map list, upgraded to the graph store's
+    # verified mechanical set when the map's own list is degraded
+    # (capped or shed) and a store is available. A COMPLETE verified
+    # set is the full graph — the truncation lifts; an INCOMPLETE one
+    # (rows tampered, deleted, or minted under a foreign key) is the
+    # same epistemic state as a truncated walk, so truncation is
+    # forced: excluded rows can hide paths, and a hidden path must
+    # never mint an unreachability verdict. No lane (store absent,
+    # no marker, snapshot unverifiable) leaves today's behavior
+    # untouched — the store-absent → inconclusive floor.
+    map_edges = context_map.get("call_edges", [])
+    reach_truncated_flag = bool(context_map.get("call_edges_truncated"))
+    edge_source: Any = map_edges
+    if graph_store is not None and (reach_truncated_flag or not map_edges):
+        lane = _store_call_edges(context_map, graph_store, target_path)
+        if lane is not None and lane.get("edges"):
+            if lane.get("complete"):
+                edge_source = lane["edges"]
+                reach_truncated_flag = False
+            else:
+                edge_source = list(map_edges) + list(lane["edges"])
+                reach_truncated_flag = True
+
     callers_by_callee: dict[str, set[str]] = {}
     edge_nodes: set[str] = set()
-    for edge in context_map.get("call_edges", []):
+    for edge in edge_source:
         caller_keys = _edge_node_keys(
             edge.get("caller") or "", edge.get("caller_file") or "",
         )
@@ -644,7 +737,8 @@ def _check_attacker_control(
     # is the same epistemic state as a truncated walk: paths may exist
     # beyond what the map records, so a no-path outcome degrades to
     # inconclusive, never to contradicted/supported-unreachable.
-    reach_truncated = bool(context_map.get("call_edges_truncated"))
+    # (Computed above so the store lane can lift or force it.)
+    reach_truncated = reach_truncated_flag
     if not reachable:
         seen = set(start_keys)
         frontier = list(start_keys)
