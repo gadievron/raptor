@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Synthetic call-edge ingest benchmark for the graph store.
+
+Dev-time measurement harness (subsystem scripts dir — never on the
+libexec dispatch surface): generates N synthetic call edges in the
+context-map ``call_edges`` shape, batch-ingests them with
+``ingest_call_edges`` (dedupe + per-row token mint + executemany), and
+reads them back through the suppression-capable view
+(``verified_mechanical_call_edges``, one HMAC verify per row). Prints
+wall times, rows/s, and the resulting store size.
+
+Usage: callgraph-ingest-bench [--edges N] [--functions F] [--store DIR]
+
+By default everything (store, MAC key via XDG_DATA_HOME) lives in a
+temporary directory that is removed afterwards, so a bench run leaves
+no state and never touches the operator's real graph key.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+
+def _edge_gen(n_edges: int, n_functions: int):
+    fanout = 10
+    for i in range(n_edges):
+        a = (i // fanout) % n_functions
+        b = (a + 1 + i % fanout) % n_functions
+        yield {
+            "caller_file": f"src/mod{a % 97}.c",
+            "caller": f"fn_{a}",
+            "callee_file": f"src/mod{b % 97}.c",
+            "callee": f"fn_{b}",
+        }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="callgraph-ingest-bench")
+    parser.add_argument("--edges", type=int, default=1_000_000)
+    parser.add_argument(
+        "--functions", type=int, default=100_000,
+        help="unique function count the synthetic edges span",
+    )
+    parser.add_argument(
+        "--store", type=Path, default=None,
+        help="directory for the store (default: fresh temp dir)",
+    )
+    args = parser.parse_args()
+
+    with tempfile.TemporaryDirectory(prefix="cg-bench-") as td:
+        base = args.store or Path(td)
+        base.mkdir(parents=True, exist_ok=True)
+        # Plain assignment, never setdefault: with XDG_DATA_HOME
+        # already set the bench would mint against the operator's real
+        # graph key, contradicting the leave-no-state contract above.
+        os.environ["XDG_DATA_HOME"] = str(Path(td) / "xdg")
+
+        from core.understand_graph.ingest import ingest_call_edges
+        from core.understand_graph.queries import (
+            verified_mechanical_call_edges,
+        )
+
+        run_dir = base / "run"
+        run_dir.mkdir(exist_ok=True)
+        graph_path = base / "graph" / "raptor.graph.sqlite"
+
+        t0 = time.monotonic()
+        result = ingest_call_edges(
+            run_dir, "/bench/target",
+            _edge_gen(args.edges, args.functions),
+            graph_path=graph_path,
+        )
+        t_ingest = time.monotonic() - t0
+        if not result:
+            print("bench: ingest produced nothing", file=sys.stderr)
+            return 1
+
+        n = result["edges"]
+        db_bytes = graph_path.stat().st_size
+        for sidecar in ("-wal", "-shm"):
+            p = graph_path.with_name(graph_path.name + sidecar)
+            if p.exists():
+                db_bytes += p.stat().st_size
+        print(
+            f"ingest: {n} unique edge(s) (of {args.edges} generated) in "
+            f"{t_ingest:.2f}s = {n / t_ingest:,.0f} rows/s "
+            f"(dedupe + mint + executemany); stamped={result['stamped']}"
+        )
+        print(f"store:  {db_bytes / (1024 * 1024):.1f} MiB on disk")
+
+        t0 = time.monotonic()
+        lane = verified_mechanical_call_edges(
+            graph_path, result["snapshot"], "/bench/target",
+        )
+        t_read = time.monotonic() - t0
+        if lane is None:
+            print("bench: no verified lane on read-back", file=sys.stderr)
+            return 1
+        print(
+            f"read:   {len(lane['edges'])} verified row(s) in {t_read:.2f}s "
+            f"= {len(lane['edges']) / max(t_read, 1e-9):,.0f} rows/s "
+            f"(complete={lane['complete']}, unverified={lane['unverified']})"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

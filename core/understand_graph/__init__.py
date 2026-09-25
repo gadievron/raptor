@@ -8,6 +8,7 @@ than querying SQLite directly.
 from .ingest import (
     ingest_annotations,
     ingest_audit_hypotheses,
+    ingest_call_edges,
     ingest_codeql_sarif,
     ingest_run,
     ingest_scan_findings,
@@ -30,6 +31,7 @@ from .queries import (
     sca_reachability,
     scan_dedup_chains,
     threat_model_graph_context,
+    verified_mechanical_call_edges,
 )
 from .store import (
     GRAPH_FILENAME,
@@ -53,6 +55,7 @@ __all__ = [
     "hypothesis_seeds",
     "ingest_annotations",
     "ingest_audit_hypotheses",
+    "ingest_call_edges",
     "ingest_codeql_sarif",
     "ingest_run",
     "ingest_scan_findings",
@@ -67,4 +70,5 @@ __all__ = [
     "sca_reachability",
     "scan_dedup_chains",
     "threat_model_graph_context",
+    "verified_mechanical_call_edges",
 ]
