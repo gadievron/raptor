@@ -138,6 +138,25 @@ class TestPlantedSymlinkDefense:
         assert not dict_path.is_symlink()
         assert "smt_magic" in dict_path.read_text()
 
+    def test_planted_witness_dict_directory_contained(
+        self, tmp_path, caplog,
+    ):
+        """A directory planted at the predictable smt-witness.dict
+        name is the one non-regular shape ``os.replace`` cannot swap —
+        the dictionary write raised ``IsADirectoryError`` up through
+        the bare /fuzz CLI handler. Contained: one warning, seeds and
+        manifest still produced, no dictionary file recorded, plant
+        left in place (never removed)."""
+        plant = tmp_path / "smt-witness.dict"
+        plant.mkdir()
+        with caplog.at_level("WARNING", logger="packages.fuzzing.smt_seed"):
+            manifest = synthesize_seeds([_record({"magic": 0x41})], tmp_path)
+        assert manifest["dict_file"] is None
+        assert manifest["seed_count"] >= 1
+        assert plant.is_dir()  # never removed
+        assert any("witness dictionary not written" in r.getMessage()
+                   for r in caplog.records)
+
     def test_merge_replaces_planted_dangling_symlink(self, tmp_path):
         seed_dir = tmp_path / "seeds"
         seed_dir.mkdir()
@@ -311,6 +330,60 @@ class TestMergeWitnessDict:
         assert not (tmp_path / "fuzz.dict").exists()
         assert any("dictionary bound" in r.message for r in caplog.records)
 
+    def test_planted_fuzz_dict_directory_refused_not_crashed(
+        self, tmp_path, caplog,
+    ):
+        """A planted DIRECTORY at the predictable fuzz.dict name is the
+        one non-regular shape ``os.replace`` cannot swap — the write
+        raised ``IsADirectoryError`` up through the CLI. The merge must
+        refuse with one warning and skip the write: the directory is a
+        target-planted object and removing a whole tree from the
+        unsandboxed parent is a destructive step the merge never
+        takes."""
+        seed_dir = tmp_path / "smt-seeds"
+        seed_dir.mkdir()
+        (seed_dir / "smt-witness.dict").write_text('smt_a="\\x01"\n')
+        plant = tmp_path / "fuzz.dict"
+        plant.mkdir()
+        (plant / "occupant").write_text("inside\n")
+
+        with caplog.at_level("WARNING", logger="packages.fuzzing.smt_seed"):
+            assert merge_witness_dict(seed_dir, tmp_path) is None
+
+        # Plant left in place — never removed, never written through.
+        assert plant.is_dir()
+        assert (plant / "occupant").read_text() == "inside\n"
+        # Exactly one loud refusal, and no stray atomic tempfiles.
+        refusals = [
+            r for r in caplog.records
+            if "refusing witness-dict merge" in r.message
+        ]
+        assert len(refusals) == 1
+        assert "directory" in refusals[0].getMessage()
+        assert not list(tmp_path.glob(".atomic-*"))
+
+    def test_write_failure_contained_not_crashed(
+        self, tmp_path, caplog, monkeypatch,
+    ):
+        """Re-plant race containment: a directory that appears at
+        fuzz.dict between the shape check and the atomic write makes
+        ``os.replace`` raise — the merge must warn and skip, never
+        propagate out of ``merge_witness_dict``."""
+        import packages.fuzzing.smt_seed as smt_seed
+
+        seed_dir = tmp_path / "smt-seeds"
+        seed_dir.mkdir()
+        (seed_dir / "smt-witness.dict").write_text('smt_a="\\x01"\n')
+
+        def _boom(path, content):
+            raise IsADirectoryError(21, "Is a directory", str(path))
+
+        monkeypatch.setattr(smt_seed, "write_text_atomically", _boom)
+        with caplog.at_level("WARNING", logger="packages.fuzzing.smt_seed"):
+            assert merge_witness_dict(seed_dir, tmp_path) is None
+        assert any("merge skipped" in r.getMessage()
+                   for r in caplog.records)
+
 
 class TestEndToEnd:
     def test_dir_scan_to_artifacts(self, tmp_path):
@@ -327,6 +400,26 @@ class TestEndToEnd:
         assert (seed_dir / MANIFEST_NAME).is_file()
         assert manifest["merged_dict"] == str(run_out / "fuzz.dict")
         assert (run_out / "fuzz.dict").is_file()
+
+    def test_planted_fuzz_dict_directory_run_completes(self, tmp_path):
+        """CLI-path regression: ``synthesize_from_run_dir`` (bare call
+        at raptor_fuzzing's --from-smt-witness handler) must complete —
+        seeds and manifest still produced, merge recorded as skipped —
+        when a directory squats the fuzz.dict name in the reused run
+        dir."""
+        source = tmp_path / "validate_run"
+        source.mkdir()
+        (source / "attack-paths.json").write_text(json.dumps([
+            {"id": "AP-001", "smt_model": {"buf_len": 24, "magic": 0x41}},
+        ]))
+        run_out = tmp_path / "fuzz_run"
+        run_out.mkdir()
+        (run_out / "fuzz.dict").mkdir()
+        manifest = synthesize_from_run_dir(source, run_out)
+        assert manifest["seed_count"] >= 2
+        assert (run_out / "smt-seeds" / MANIFEST_NAME).is_file()
+        assert manifest["merged_dict"] is None
+        assert (run_out / "fuzz.dict").is_dir()  # plant left in place
 
     def test_flag_is_plumbed(self):
         repo_root = Path(__file__).resolve().parents[3]
