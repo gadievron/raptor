@@ -202,6 +202,33 @@ class TestValidatePriorRun(unittest.TestCase):
         with self.assertRaisesRegex(OpenAntResumeError, "target drift"):
             _validate(prior, self.repo)
 
+    @unittest.skipIf(shutil.which("git") is None, "git not available")
+    def test_dirty_worktree_warns_never_refuses(self):
+        import time
+        _git(self.repo, "init", "-q")
+        (self.repo / "a.txt").write_text("one")
+        # Backdate the file so the fresh index is deterministically
+        # newer (no racily-clean smudge in the stat-only probe).
+        past = time.time() - 10
+        os.utime(self.repo / "a.txt", (past, past))
+        _git(self.repo, "add", "a.txt")
+        _git(self.repo, "commit", "-q", "-m", "one")
+        prior = _mk_prior(self.base, self.repo,
+                          tfp=target_fingerprint(self.repo))
+        # Clean worktree at the same HEAD: no dirty warning.
+        result = _validate(prior, self.repo)
+        self.assertFalse(
+            any("uncommitted" in w for w in result.warnings),
+            result.warnings)
+        # Uncommitted edit to a tracked unit: HEAD is unchanged, so
+        # the refusal gate cannot see it — the validation must WARN
+        # (and only warn).
+        (self.repo / "a.txt").write_text("edited, not committed")
+        result = _validate(prior, self.repo)
+        self.assertTrue(
+            any("uncommitted" in w for w in result.warnings),
+            result.warnings)
+
     def test_unverifiable_target_drift_warns_not_refuses(self):
         prior = _mk_prior(self.base, self.repo)  # no fingerprint recorded
         result = _validate(prior, self.repo)
