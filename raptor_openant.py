@@ -28,6 +28,7 @@ Exit codes:
 """
 
 import argparse
+import math
 import os
 import sys
 import time
@@ -305,13 +306,22 @@ def _interrupted_exit(ctx: dict) -> int:
     and --resume refused it as "not an /openant run directory". Also
     marks the lifecycle run interrupted (ownership-gated) so the
     in-flight resume guard reads a dead, resumable run. Every step is
-    best-effort: nothing here may mask the exit."""
+    best-effort: nothing here may mask the exit or the 130 code."""
+    try:
+        # A repeat SIGTERM mid-handler must not abort the report write
+        # or skip the lifecycle mark — ignore it while finalising (the
+        # caller's finally restores the original disposition after).
+        import signal
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    except (ValueError, OSError):
+        pass
     out_dir = ctx.get("out_dir")
     repo_path = ctx.get("repo_path")
     if out_dir is None or repo_path is None:
         return 130
     report_path = out_dir / "raptor_openant_report.json"
-    if not report_path.exists():
+    report_ok = report_path.exists()
+    if not report_ok:
         config_block = None
         oa_config = ctx.get("oa_config")
         if oa_config is not None:
@@ -338,8 +348,12 @@ def _interrupted_exit(ctx: dict) -> int:
                 config=config_block,
                 cost=_reconcile_run_cost(out_dir / "openant_scan", {}),
             )
-        except OSError:
-            return 130
+            report_ok = True
+        except Exception:  # noqa: BLE001 — the 130 contract and the
+            # lifecycle mark below hold even when the report cannot be
+            # written (encoder refusals on hostile run-dir content
+            # included, not just OSError).
+            pass
     try:
         from core.run.metadata import interrupt_run
         interrupt_run(out_dir, "raptor_openant interrupted",
@@ -347,7 +361,10 @@ def _interrupted_exit(ctx: dict) -> int:
     except Exception:  # noqa: BLE001 — marking must never mask the exit
         return 130
     print(f"Run marked interrupted: {out_dir}", file=sys.stderr)
-    print(f"Resume with: /openant --resume {out_dir}", file=sys.stderr)
+    if report_ok:
+        # Only a written report makes the dir a --resume candidate.
+        print(f"Resume with: /openant --resume {out_dir}",
+              file=sys.stderr)
     return 130
 
 
@@ -838,6 +855,53 @@ def _main_body(parser: argparse.ArgumentParser, args: argparse.Namespace,
     return 0
 
 
+#: Plausibility ceiling for any single cost-ledger figure read out of
+#: the run dir — same policy shape (and value) as the resume
+#: substrate's spend-evidence clamp: orders of magnitude above any
+#: real run's spend, so it never clips genuine evidence; its job is
+#: keeping planted absurd figures out of the reports and the resume
+#: cost accounting, not modelling budgets.
+_MAX_LEDGER_USD = 1e7
+
+
+def _bounded_usd(value: object, *, source: str) -> float:
+    """A finite, bounded, non-negative USD figure from a run-dir cost
+    ledger — $0 for anything else, loudly.
+
+    Both ledgers the reconciliation reads live at child-writable names
+    inside the scan dir. A planted non-finite (``1e309`` parses to
+    ``inf`` under the stdlib JSON fallback; orjson is optional and its
+    absence must not change the failure surface) would otherwise reach
+    ``save_json`` (``allow_nan=False``) and DESTROY the report it
+    rides in — the scan_failed / interrupted record a later --resume
+    needs. The INTEGER spelling of the same plant (a hundreds-digit
+    int literal) parses to an exact Python int on the stdlib path and
+    overflows ``float()`` instead — same crash lane, different
+    exception, hence OverflowError in the tuple. Non-finite and
+    negative figures book $0 with a warning; a finite figure above the
+    plausibility ceiling clamps to it.
+    """
+    try:
+        v = float(value or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if not math.isfinite(v):
+        logger.warning(
+            "openant cost: %s ledger figure is non-finite — booking "
+            "$0 for that ledger (planted or corrupt run-dir JSON)",
+            source)
+        return 0.0
+    if v < 0.0:
+        return 0.0
+    if v > _MAX_LEDGER_USD:
+        logger.warning(
+            "openant cost: %s ledger figure %.6g exceeds the "
+            "plausibility ceiling — clamping to %.0f",
+            source, v, _MAX_LEDGER_USD)
+        return _MAX_LEDGER_USD
+    return v
+
+
 def _reconcile_run_cost(oa_out: Path, token_usage: dict) -> dict:
     """The run's LLM cost, max-of-ledgers across the two sides that
     can each under-report.
@@ -849,21 +913,18 @@ def _reconcile_run_cost(oa_out: Path, token_usage: dict) -> dict:
     credential runs, where the child's ledger is the only one). Same
     max-not-sum contract as the CC child reconciliation — both
     ledgers measure the SAME calls from opposite ends of the wire.
+    Every figure passes :func:`_bounded_usd`: the ledgers are
+    child-writable, and the numbers land in reports the encoder
+    refuses non-finite values for.
     """
-    try:
-        openant_usd = max(float(token_usage.get("total_cost_usd") or 0.0),
-                          0.0)
-    except (TypeError, ValueError):
-        openant_usd = 0.0
+    openant_usd = _bounded_usd(token_usage.get("total_cost_usd"),
+                               source="openant tracker")
     gateway_usd = 0.0
     from core.json import load_json
     data = load_json(oa_out / "openant-gateway-spend.json")
     if isinstance(data, dict):
-        try:
-            gateway_usd = max(
-                float(data.get("dispatcher_spent_usd") or 0.0), 0.0)
-        except (TypeError, ValueError):
-            gateway_usd = 0.0
+        gateway_usd = _bounded_usd(data.get("dispatcher_spent_usd"),
+                                   source="gateway settlement")
     return {
         "total_usd": max(openant_usd, gateway_usd),
         "openant_reported_usd": openant_usd,
