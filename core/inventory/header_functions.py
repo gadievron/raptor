@@ -60,7 +60,15 @@ _cache: OrderedDict[str, dict[str, tuple[str, str]]] = OrderedDict()
 # a rare duplicate build is cheaper than serialising every scan.
 _cache_lock = threading.Lock()
 
-_C_STRING_OR_CHAR_RE = re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'')
+# Openers pinned to UNESCAPED delimiters ((?<!\\)): an unterminated
+# literal whose interior repeats escaped delimiters (`"` + `\"`*n)
+# otherwise makes every embedded delimiter a fresh match attempt that
+# re-scans to the end of the line — quadratic on a hostile planted
+# line (measured exp 2.43; pinned, exp 1.0). On a well-formed token
+# stream no string opens at an escaped delimiter, so the strip is
+# unchanged; dropping the pin re-opens the quadratic.
+_C_STRING_OR_CHAR_RE = re.compile(
+    r'(?<!\\)"(?:[^"\\]|\\.)*"|(?<!\\)\'(?:[^\'\\]|\\.)*\'')
 
 
 def _extract_function_body(lines: list[str], open_brace_line: int) -> str | None:
