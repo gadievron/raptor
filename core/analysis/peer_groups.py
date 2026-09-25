@@ -9,6 +9,9 @@ layers run over the full input (see the hierarchy below).
 
 Layer hierarchy:
 
+  L10 Route family groups        — framework route registrations from
+                                    the route-models artifact
+                                    (mechanical, definitive)
   L0  Joern co-callee groups     — CPG call graph (definitive)
   L1  r2 binary co-callee groups — binary call edges (definitive)
       Binary anchor families     — hunt string-xref co-occurrence
@@ -30,11 +33,22 @@ Layer hierarchy:
 
 Exclusive layers claim (a function in a higher layer is removed from
 lower exclusive layers' input); the independent layers never claim.
+
+L10 placement: route families join the exclusive chain FIRST. Their
+membership is mechanically certain — the route-models extractor
+recognises registrations by import-joined framework structure, the
+same grade as dispatch-table extraction — and handlers of the same
+HTTP surface are the strongest peer notion available for them: a
+mechanically-certain interface-shaped family must not lose members
+to a weaker co-callee grouping (functions that merely share a
+caller), so it claims before L0/L1.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import random
 import re
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
@@ -57,6 +71,34 @@ _TYPE_COHORT = "type_cohort"
 _ANCHOR_FAMILY = "binary_anchor_family"
 _CALLEE_SIGNATURE = "shared_callee_signature"
 _DECOMP_SIMILARITY = "decomp_similarity"
+
+# Layer / group-type RESERVATION: layer id L10, group-type string
+# "route_family". L7 (interface-slot census), L8 (enum×switch
+# completeness) and L9 (clone families) are reserved for planned
+# family-builder layers, and binary-substrate layers are added
+# independently — a new layer must pick an unclaimed number and
+# group-type string and note it here.
+# Public: the interface dimension admits this group type by string
+# (consistency_dimensions._INTERFACE_GROUP_TYPES) and tests pin the
+# two against each other.
+GROUP_TYPE_ROUTE_FAMILY = "route_family"
+
+# Property key the route layer attaches to every family member:
+# True when the member's recorded middleware chain carries an
+# auth-matching decorator, explicit False when it does not (members
+# whose chains were truncated never reach a family — see the layer's
+# join contract). Two-valued and voted as its OWN property by the
+# interface comparator on route-family groups: a DECORATION fact,
+# never folded into ``auth_check`` (body evidence keeps that vote to
+# itself — decorator presence must never be able to mask a
+# body-evidence lead) and never a protection claim (chain entries do
+# not prove wrapping — the route-models position caveat; an entry
+# above the registration decorator may not wrap the registered
+# callable. Position recording is a route-models follow-up that will
+# tighten this fact). The peer-census consumer that votes raw group
+# properties (``negative_space``) reads ``convention_*`` keys only,
+# so the property is inert outside the interface dimension.
+ROUTE_AUTH_PROPERTY = "route_auth_decorator_present"
 
 # ── Binary-layer bounds ───────────────────────────────────────────────
 #
@@ -110,6 +152,35 @@ DECOMP_SIMILARITY_THRESHOLD = 0.7
 #: the layer report, never silent.
 MAX_DECOMP_PAIRWISE = 10_000
 
+# ── Route-family bounds ───────────────────────────────────────────────
+
+#: Route families emitted per run. Both directions: route patterns
+#: are attacker-authored text, so a generated mega-API can mint one
+#: path prefix per route and flood the exclusive chain (and the
+#: downstream interface comparator) with single-purpose families;
+#: fewer hides real surface breadth on large services. 64 — twice
+#: the binary layer cap — because source route surfaces are
+#: legitimately wider than binary review clusters.
+MAX_ROUTE_FAMILIES = 64
+
+#: Members per route family. Both directions: larger turns one
+#: prefix into a whole-app blob where a single deviant among
+#: hundreds of members is noise for the N-vs-K comparison; smaller
+#: splits genuinely wide handler groups. 32 mirrors the binary
+#: layers' group-size ceiling class.
+MAX_ROUTE_FAMILY_MEMBERS = 32
+
+#: Comparator-capability floor: a family CLAIMS (and emits) only
+#: with at least this many joined members. The layer is exclusive,
+#: so a family too small for the interface comparator to vote on
+#: (its ≥3-member floor) would remove its handlers from the later
+#: exclusive layers while producing nothing itself — pure lead
+#: suppression, and a hostile artifact could mint 2-member families
+#: on purpose to strip handlers out of dispatch/type groups. Literal
+#: by this module's convention; pinned against
+#: ``consistency_dimensions.INTERFACE_MIN_GROUP`` by test.
+MIN_ROUTE_FAMILY_MEMBERS = 3
+
 
 # ── Top-level resolver ────────────────────────────────────────────────
 
@@ -126,6 +197,7 @@ def resolve_peer_groups(
     anchor_families: list[dict[str, Any]] | None = None,
     binary_callees: dict[str, set[str]] | None = None,
     decomp_texts: dict[str, str] | None = None,
+    route_models: Any | None = None,
     notes: list[str] | None = None,
 ) -> list[SiblingGroup]:
     """Build peer groups from all available signals.
@@ -156,6 +228,12 @@ def resolve_peer_groups(
       tier-labelled decompiler-inferred (pseudo-code is approximate
       — lower confidence than the xref-backed layers above), via the
       similarity seam (``packages.ghidra.similarity``).
+    * ``route_models`` — a ``core.analysis.route_models.RouteModels``
+      (the :func:`route_models_for_prep` producer builds/loads one).
+      Exclusive L10 layer, claiming first — see the module docstring
+      for the placement argument and :func:`_route_family_groups`
+      for the join contract (CBV exclusion, truncated-chain
+      exclusion, claim floor, two-valued auth-decoration property).
 
     When ``checklist`` is supplied, every layer sees the functions
     enriched with the checklist items' ``metadata`` (parameters,
@@ -189,6 +267,21 @@ def resolve_peer_groups(
         for g in new_groups:
             for s in g.siblings:
                 claimed.add((s.file, s.function))
+
+    # L10: route families (exclusive, first — mechanically-certain
+    # interface-shaped families must not lose members to the weaker
+    # co-callee groupings below; see the module docstring).
+    if route_models is not None:
+        lr, lr_note = _route_family_groups(route_models, _remaining())
+        _claim(lr)
+        groups.extend(lr)
+        layer_report.append(
+            f"route-family {len(lr)}"
+            + (f" ({lr_note})" if lr_note else ""))
+        if lr_note and notes is not None:
+            notes.append(f"route-family: {lr_note}")
+    else:
+        layer_report.append("route-family skipped (no route models)")
 
     # L0: Joern co-callee (exclusive)
     if joern_server is not None:
@@ -373,6 +466,86 @@ def binary_edge_index_from_inventory(
     return merged
 
 
+def route_models_for_prep(
+    *inventories: Any,
+    out_dir: Path | None = None,
+) -> Any | None:
+    """L10 producer: route models for the run's target.
+
+    A co-located ``route-models.json`` in *out_dir* wins (a prior
+    run on the same output directory already extracted); otherwise
+    the models are built from the first inventory-shaped dict whose
+    file records carry ``call_graph`` registration facts (the
+    checklist/inventory the audit prep already holds — building is a
+    linear pass, no parsing). Returns ``None`` when neither source
+    yields any route, so the L10 layer stays empty and resolver
+    behaviour is unchanged (equivalence pin).
+    """
+    try:
+        from core.analysis.route_models import (
+            ROUTE_MODELS_FILENAME,
+            build_route_models,
+            load_route_models,
+        )
+    except ImportError:  # pragma: no cover - trimmed deployment
+        return None
+
+    if out_dir is not None:
+        artifact = Path(out_dir) / ROUTE_MODELS_FILENAME
+        if artifact.is_file():
+            try:
+                models = load_route_models(artifact)
+                if models.routes:
+                    logger.info(
+                        "peer groups L10: %d routes from %s",
+                        len(models.routes), ROUTE_MODELS_FILENAME,
+                    )
+                    return models
+            except Exception:
+                logger.debug(
+                    "peer groups L10: route-models artifact load "
+                    "failed, falling back to inventory build",
+                    exc_info=True,
+                )
+
+    def _python_facts(f: Any) -> bool:
+        # Only Python records populate the registration facts the
+        # route builder reads; other languages carry call_graph
+        # blocks too, and gating on the pair avoids building a
+        # package callgraph per prep on targets that can never
+        # yield a route.
+        return (
+            isinstance(f, dict)
+            and isinstance(f.get("call_graph"), dict)
+            and (f.get("language") == "python"
+                 or str(f.get("path") or "").endswith((".py", ".pyi")))
+        )
+
+    for inv in inventories:
+        if not isinstance(inv, dict):
+            continue
+        files = inv.get("files")
+        if not isinstance(files, list):
+            continue
+        if not any(_python_facts(f) for f in files):
+            continue
+        try:
+            models = build_route_models(inv)
+        except Exception:
+            logger.debug(
+                "peer groups L10: route-model build failed",
+                exc_info=True,
+            )
+            continue
+        if models.routes:
+            logger.info(
+                "peer groups L10: %d routes built from inventory "
+                "registration facts", len(models.routes),
+            )
+            return models
+    return None
+
+
 # Types too ubiquitous to define a peer cohort.  Merged across
 # languages — a lowercase match in ANY language's primitive set
 # disqualifies the token (cross-language collisions like ``string``
@@ -535,6 +708,290 @@ def type_ref_index_from_inventory(
         len(result),
     )
     return result
+
+
+# ── L10: Route family groups ─────────────────────────────────────────
+
+
+# Group-key segment for patterns whose first path segment is itself a
+# parameter (``/<int:id>/...`` / ``/{item}/...`` / a regex group) —
+# they share no literal prefix, so they family together explicitly.
+_ROUTE_DYNAMIC_SEGMENT = "<dynamic>"
+
+# Display bound for one escaped route pattern quoted in a group's
+# shared context (patterns are attacker-authored text; the record
+# needs recognisability, not the full 1024-char cap).
+_MAX_ROUTE_PATTERN_DISPLAY = 128
+
+
+def _parse_handler_id(handler: str) -> tuple[str, str, int] | None:
+    """Split a ``<file>::<name>@<line>`` handler id (both the
+    package-callgraph node-id form and the fallback form use it).
+    None for anything else — an unparsable id contributes no member,
+    never a guess."""
+    head, sep, tail = handler.rpartition("@")
+    if not sep or not tail.isdigit():
+        return None
+    file_part, sep2, name = head.rpartition("::")
+    if not sep2 or not name:
+        return None
+    return file_part, name, int(tail)
+
+
+def _route_prefix(pattern: str) -> str:
+    """First path segment of a route pattern — the family key.
+    Regex anchors and leading slashes are stripped; a parameterised
+    first segment maps to :data:`_ROUTE_DYNAMIC_SEGMENT`."""
+    seg = pattern.lstrip("^/").split("/", 1)[0]
+    if any(c in seg for c in "<{("):
+        return _ROUTE_DYNAMIC_SEGMENT
+    return seg
+
+
+def _elide(s: str, limit: int) -> str:
+    """Display-bound with an explicit elision marker — a silently
+    cut excerpt misreads as the whole value."""
+    return s if len(s) <= limit else s[:limit] + "…[truncated]"
+
+
+def _capped_route_members(
+    member_keys: list[tuple[str, str]],
+    members: dict[tuple[str, str], dict[str, Any]],
+    cap: int,
+) -> tuple[list[tuple[str, str]], bool]:
+    """Survivor selection under the member cap.
+
+    Property-MINORITY members are retained first (their votes are
+    the ones a truncation could erase — member names are
+    attacker-chosen text, so deterministic first-N would let a
+    hostile repo name the deviant to sort past the cut), then the
+    remaining slots fill from the majority by seeded-random sample
+    (majority members are interchangeable for the vote; random fill
+    keeps the surviving exhibit set unchoosable too). An exact tie
+    has no majority — nothing can vote — so the whole pool samples
+    randomly. Returns ``(kept_name_sorted, truncated)``.
+    """
+    if len(member_keys) <= cap:
+        return member_keys, False
+    true_keys = [k for k in member_keys if members[k]["auth"]]
+    false_keys = [k for k in member_keys if not members[k]["auth"]]
+    if len(true_keys) == len(false_keys):
+        first: list[tuple[str, str]] = []
+        rest = member_keys
+    elif len(true_keys) < len(false_keys):
+        first, rest = true_keys, false_keys
+    else:
+        first, rest = false_keys, true_keys
+    kept = first[:cap]
+    remaining = cap - len(kept)
+    if remaining > 0:
+        rnd = random.Random(os.urandom(16))
+        kept.extend(rnd.sample(rest, remaining))
+    return sorted(kept), True
+
+
+def _route_family_groups(
+    route_models: Any,
+    functions: list[dict[str, Any]],
+) -> tuple[list[SiblingGroup], str]:
+    """L10: handlers of the same route surface, from the route-models
+    artifact.
+
+    Families group by (framework, registration style, first path
+    segment) — mechanical facts of the registration, no naming
+    heuristics. Returns ``(groups, note)``; the note reports the
+    family cap evicting candidate families (degradation is said,
+    never silent — the decomp layer's pattern).
+
+    Join contract (the route-models consumer caveats, enforced here
+    so no downstream consumer has to re-learn them):
+
+    * **CBV exclusion** — ``handler_kind == "class"`` records are
+      skipped: their middleware chains are unwalked method-decorator
+      stacks, so an empty chain is not an unprotected peer. Defense
+      in depth: a class name also never joins a function record.
+    * **Truncated chains poison the member** — a route with
+      ``middleware_truncated`` removes its handler from the family
+      (noted in the group context): a cut chain must never be read
+      as "no auth decorator", so the member cannot vote either way.
+    * **Auth decoration is a two-valued fact** — every member gets
+      :data:`ROUTE_AUTH_PROPERTY` (True when an auth-matching
+      decorator is recorded, explicit False when not), voted as its
+      own property by the interface comparator. It is a DECORATION
+      fact, never a protection claim: chain entries do not prove
+      wrapping (an entry above the registration decorator may not
+      protect the registered callable), so identical chains are
+      treated identically regardless of source position, and the
+      fact is never folded into the body-evidence ``auth_check``
+      vote.
+    * **Claim floor** — families below
+      :data:`MIN_ROUTE_FAMILY_MEMBERS` joined members neither claim
+      nor emit: an exclusive claim by a family the comparator
+      cannot vote on would only strip its handlers out of the later
+      exclusive layers (see the constant's comment).
+    * ``http_methods`` is never consulted: empty means "not
+      constrained at registration" (Django function views), and
+      methods are prioritization hints, not grouping facts.
+
+    Handler-id joins are (file, name) exact first; the bare-name
+    rescue (path-root normalization differences) additionally
+    requires the candidate's file BASENAME to match the handler
+    id's — a same-named function in an unrelated file must not be
+    pulled into (and claimed out of) its real groups.
+
+    Pattern text, framework and style strings ride in from the
+    artifact (target-derived) — everything quoted in ids,
+    descriptions or contexts is escaped first, with an explicit
+    elision marker when display-truncated.
+    """
+    if not functions:
+        return [], ""
+    try:
+        routes = route_models.all_routes()
+    except AttributeError:
+        routes = getattr(route_models, "routes", ()) or ()
+    if not routes:
+        return [], ""
+    from core.security.log_sanitisation import escape_nonprintable
+
+    # The auth matcher for decorator names — the same in-tree
+    # property regex the interface dimension applies to bodies
+    # (imported, not twinned: "auth-shaped" must mean one thing in
+    # both voters). No project vocabulary.
+    from core.audit.sibling_analysis import _AUTH_CHECK_RE
+
+    func_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for f in functions:
+        key = (f.get("file", ""), f.get("name", ""))
+        if key[1]:
+            func_by_key.setdefault(key, f)
+    func_by_name = _name_index(functions)
+
+    families: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for r in routes:
+        if getattr(r, "handler_kind", "") == "class":
+            continue
+        parsed = _parse_handler_id(str(getattr(r, "handler", "") or ""))
+        if parsed is None:
+            continue
+        hfile, hname, _hline = parsed
+        bare = hname.rsplit(".", 1)[-1]
+        record = (
+            func_by_key.get((hfile, hname))
+            or func_by_key.get((hfile, bare))
+        )
+        if record is None:
+            candidate = func_by_name.get(bare)
+            # Bare-name rescue is for path-ROOT normalization
+            # differences only, so the file basename must agree — a
+            # same-named function in an unrelated file must not be
+            # pulled into (and exclusively claimed out of) its real
+            # groups.
+            if candidate is not None and PurePosixPath(
+                    str(candidate.get("file", ""))).name \
+                    == PurePosixPath(hfile).name:
+                record = candidate
+        if record is None:
+            continue
+        member_key = (record.get("file", ""), record.get("name", ""))
+        fam_key = (
+            str(getattr(r, "framework", "") or ""),
+            str(getattr(r, "style", "") or ""),
+            _route_prefix(str(getattr(r, "route_pattern", "") or "")),
+        )
+        fam = families.setdefault(fam_key, {
+            "members": {}, "excluded": set(), "patterns": [],
+        })
+        if len(fam["patterns"]) < 3:
+            fam["patterns"].append(
+                str(getattr(r, "route_pattern", "") or ""))
+        if getattr(r, "middleware_truncated", False):
+            fam["excluded"].add(member_key)
+            continue
+        entry = fam["members"].setdefault(
+            member_key, {"record": record, "auth": False})
+        if any(
+            _AUTH_CHECK_RE.search(str(getattr(m, "name", "") or ""))
+            for m in getattr(r, "middleware_chain", ()) or ()
+        ):
+            entry["auth"] = True
+
+    groups: list[SiblingGroup] = []
+    eligible = 0
+    for fam_key in sorted(families):
+        fam = families[fam_key]
+        member_keys = sorted(
+            k for k in fam["members"] if k not in fam["excluded"]
+        )
+        # Claim floor: below the comparator's group floor the family
+        # can produce no vote, so an exclusive claim would only strip
+        # its handlers out of the later layers (see the constant).
+        if len(member_keys) < MIN_ROUTE_FAMILY_MEMBERS:
+            continue
+        eligible += 1
+        if len(groups) >= MAX_ROUTE_FAMILIES:
+            # Keep counting eligible families so the eviction is
+            # reported in-band (caps never degrade partial-silent).
+            continue
+        kept, truncated = _capped_route_members(
+            member_keys, fam["members"], MAX_ROUTE_FAMILY_MEMBERS,
+        )
+        framework, style, prefix = (
+            escape_nonprintable(part) for part in fam_key
+        )
+        siblings: list[SiblingPath] = []
+        for key in kept:
+            entry = fam["members"][key]
+            rec = entry["record"]
+            siblings.append(SiblingPath(
+                label=rec.get("name", ""),
+                file=rec.get("file", ""),
+                function=rec.get("name", ""),
+                line=rec.get("line", 0),
+                # Two-valued decoration fact — see ROUTE_AUTH_PROPERTY.
+                properties={ROUTE_AUTH_PROPERTY: bool(entry["auth"])},
+            ))
+        context = "Registered routes: " + "; ".join(
+            _elide(escape_nonprintable(p), _MAX_ROUTE_PATTERN_DISPLAY)
+            for p in fam["patterns"]
+        )
+        n_excluded = len(fam["excluded"])
+        if n_excluded:
+            # In-band, like the binary layers' cap labels — a
+            # silently shrunk family misreads as the whole family.
+            context += (
+                f" [{n_excluded} member(s) excluded: middleware "
+                f"chain truncated, presence facts unknown]"
+            )
+        if truncated:
+            context += (
+                f" [group capped at {MAX_ROUTE_FAMILY_MEMBERS} of "
+                f"{len(member_keys)} members, minority-preserving "
+                f"selection]"
+            )
+        groups.append(SiblingGroup(
+            group_id=f"route_family:{framework}:{style}:{prefix}",
+            # Plain string by the module-header convention (SiblingType
+            # is a str enum; consumers compare by value).
+            sibling_type=GROUP_TYPE_ROUTE_FAMILY,  # type: ignore[arg-type]
+            description=(
+                f"{framework} {style} route handlers under "
+                f"/{_elide(prefix, 64)}"
+            ),
+            siblings=siblings,
+            shared_context=context,
+        ))
+
+    note = ""
+    if eligible > len(groups):
+        note = (
+            f"family cap: {eligible} comparator-capable families, "
+            f"kept {len(groups)} (first {MAX_ROUTE_FAMILIES} in "
+            f"key order)"
+        )
+        logger.info("route-family layer: %s", note)
+    logger.info("L10 route-family: %d groups", len(groups))
+    return groups, note
 
 
 # ── L0: Joern co-callee groups ────────────────────────────────────────
