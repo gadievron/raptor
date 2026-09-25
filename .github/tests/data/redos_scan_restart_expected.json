@@ -2171,6 +2171,20 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "core/tp_harvest/candidates.py\u001flines[3]": {
+   "digests": [
+    "890f9e60c72c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/tp_harvest/candidates.py\u001flines[4]": {
+   "digests": [
+    "02ec1ad5e955"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "libexec/raptor-lifecycle-hook\u001f_RAPTOR_INVOCATION_RE": {
    "digests": [
     "a7dfcf17837f"

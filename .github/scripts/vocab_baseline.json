@@ -1772,6 +1772,11 @@
     "count": 29,
     "kind": "literal"
   },
+  "core/tp_harvest/candidates.py::_KEYWORDS": {
+    "count": 75,
+    "kind": "literal",
+    "note": "closed language-grammar keyword set (C/C++/Python/JS/Java/Go/PHP/Ruby/Rust reserved words) that must stay concrete during metavariable-ization - grammar constants, not a learned API/sink vocabulary; over-inclusion only keeps a token concrete (tighter candidate), never looser"
+  },
   "core/trajectories/test_store.py::base": {
     "count": 10,
     "kind": "literal"
