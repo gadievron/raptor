@@ -473,6 +473,29 @@ def _forward_max_cost_args(command: str, args: list,
     return args + ["--max-cost-usd", str(max_cost_usd)]
 
 
+# Modes whose child script defines --project in its own argparse —
+# the same class as _MAX_COST_FORWARD_COMMANDS above: every child uses
+# a strict parse_args, so re-injecting the flag unconditionally made a
+# flag-less child (raptor_openant.py) exit 2 on the unknown flag AFTER
+# archive extraction had run and the run dir was sealed with the
+# OUTPUT_DIR sentinel printed — a guaranteed failed run for any
+# --project openant invocation.
+_PROJECT_FORWARD_COMMANDS = frozenset({"scan", "agentic", "codeql",
+                                       "fuzz", "web"})
+
+
+def _forward_project_args(command: str, args: list,
+                          project_arg: str | None) -> list:
+    """Re-inject --project so the child's own override agrees with the
+    pin the parent just sealed, but only when the ``command``'s child
+    parser defines the flag (see ``_PROJECT_FORWARD_COMMANDS``).
+    Flag-less children still agree with the pin: every child
+    bootstraps from the run marker start_run sealed."""
+    if project_arg is None or command not in _PROJECT_FORWARD_COMMANDS:
+        return args
+    return args + ["--project", project_arg]
+
+
 # Name-shaped archive suffixes for the stray-positional gate below —
 # a token like `app.zip` deserves the `--repo` hint even when the path
 # doesn't exist (typo'd path); everything else nonexistent is left to
@@ -785,9 +808,9 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     # Re-inject --project so the child's own override agrees with the
     # pin the parent just sealed (children also bootstrap from the run
     # marker; the argv keeps direct-invocation and wrapper flows on
-    # one code path).
-    if project_arg is not None:
-        args = args + ["--project", project_arg]
+    # one code path). Only for children whose parser defines the flag
+    # (see _forward_project_args).
+    args = _forward_project_args(command, args, project_arg)
 
     # ``flush=True``: when stdout is piped (e.g. operator's ``| tee
     # run.log``) Python switches to block-buffering, so the banner
