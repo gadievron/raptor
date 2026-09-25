@@ -140,7 +140,10 @@ def run_autonomous_workflow(args: argparse.Namespace) -> None:
     build_commands = None
     if args.build_command:
         if not languages or len(languages) != 1:
-            logger.error("--build-command requires exactly one language")
+            logger.error(
+                "--build-command requires exactly one language — pass "
+                "--languages <lang> to pin the traced language"
+            )
             sys.exit(1)
         build_commands = {languages[0]: args.build_command}
     # PHASE 1: CodeQL Scanning
