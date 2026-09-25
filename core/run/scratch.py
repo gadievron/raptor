@@ -281,6 +281,13 @@ def scratch_dir(
         # start_run sweep can reclaim strays with this prefix.
         from core.run import tmp_reaper
         tmp_reaper.register_dir_prefix(prefix)
+        # Temp-root placement advisory (WSL): a drvfs/9p temp root
+        # breaks FIFO creation and crawls on many-small-file work —
+        # this consolidated entry point is where system-tmp scratch
+        # is minted, so it carries the once-per-process warning
+        # (latched in core.startup.wsl; free off WSL).
+        from core.startup.wsl import warn_tmpdir_windows_interop
+        warn_tmpdir_windows_interop()
     path = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
     if parent is None:
         # Keepalive for the reaper-swept shape: a live-but-quiet
