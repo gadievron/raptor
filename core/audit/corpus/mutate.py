@@ -108,6 +108,17 @@ _CALL_STMT_RE = re.compile(
 _REL_OP_RE = re.compile(r"(?<![<>=!&|-])(<=|>=|<(?![<=])|>(?![>=]))")
 _FLIP = {"<": "<=", "<=": "<", ">": ">=", ">=": ">"}
 
+# Single-line case arm: `case IDENT: return ...;` / `case IDENT:
+# break;` / `case IDENT: goto err;`.  Same fold as _DROP_RETURN_RE:
+# `[^;]*` subsumes the whitespace before the `;` (identical language,
+# no overlapping adjacent repeats).  Multi-line arms are refused —
+# a mutation is one narrow mechanical shape, never an improvised
+# region delete.
+_CASE_ARM_RE = re.compile(
+    r"^\s*case\s+(?P<label>[A-Za-z_]\w*)\s*:\s*"
+    r"(?:return\b[^;]*|(?:goto\s+\w+|break|continue)\s*);\s*$",
+)
+
 
 def _candidate_lines(span: tuple[int, int], line: int | None) -> range:
     if line is not None:
@@ -155,7 +166,19 @@ def find_site(
             + (f" for callee {callee!r}" if callee else "")
         )
 
-    if operator == "drop-guard":
+    if operator == "drop-case-arm":
+        for i in _candidate_lines(span, line):
+            m = _CASE_ARM_RE.match(_line_at(i))
+            if not m or (callee and m.group("label") != callee):
+                continue
+            return [(i, i, [])], i
+        raise MutationError(
+            "no-matching-site: no single-line `case IDENT: "
+            "return/break ...;` arm in the span"
+            + (f" for label {callee!r}" if callee else "")
+        )
+
+    if operator in ("drop-guard", "drop-slot-guard"):
         for i in _candidate_lines(span, line):
             m = _NULL_GUARD_HEAD_RE.match(_line_at(i))
             if not m:
@@ -245,7 +268,39 @@ _DIMENSION_DETECTORS = {
     "cleanup": {"cleanup_deviation"},
     "return-check": set(),
     "guard-predicate": set(),
+    "interface": {"interface_deviation"},
+    "enum-switch": {"enum_switch_deviation"},
 }
+
+
+def _peer_groups_for_texts(
+    texts: dict[str, str],
+) -> list[Any] | None:
+    """Peer groups for the detection harness's prepass runs.
+
+    The interface dimension only votes over resolver-formed groups;
+    the harness forms them the same way prep does — the L7 census
+    over the fixture texts, joined to the texts' own function spans.
+    Returns ``None`` when no family forms (every other operator's
+    fixtures), leaving prior operators' outcomes byte-identical.
+    """
+    try:
+        from core.analysis.interface_slots import (
+            interface_slot_families,
+        )
+        from core.analysis.peer_groups import _interface_slot_groups
+        from core.audit.consistency_dimensions import _function_spans
+    except ImportError:  # pragma: no cover - trimmed deployment
+        return None
+
+    families = interface_slot_families(texts)
+    if not families:
+        return None
+    functions = [
+        {"name": name, "file": file_path, "line": start}
+        for file_path, name, start, _lines in _function_spans(texts)
+    ]
+    return _interface_slot_groups(families, functions) or None
 
 
 def _dimension_hits(
@@ -297,9 +352,11 @@ def check_detection(
     dimension = OPERATOR_INFO[operator][0]
     pre = run_consistency_prepass(
         clean_texts, domain_model=domain_model,
+        peer_groups=_peer_groups_for_texts(clean_texts),
     )
     post = run_consistency_prepass(
         mutated_texts, domain_model=domain_model,
+        peer_groups=_peer_groups_for_texts(mutated_texts),
     )
     pre_hits = _dimension_hits(
         pre, dimension=dimension, file=file, function=function,
@@ -430,7 +487,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--callee", default=None,
         help="Restrict the site to this callee (required for "
-             "remove-pair-release)",
+             "remove-pair-release; for drop-case-arm it names the "
+             "case label)",
     )
     parser.add_argument(
         "--line", type=int, default=None,
