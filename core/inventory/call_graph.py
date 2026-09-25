@@ -4777,7 +4777,7 @@ class _PhpCallGraph:
         # first payload statement is already ineligible.
         if node.type == "program":
             for c in node.children:
-                if (self._guard_prologue_open
+                if (self._guard_prologue_open and c.is_named
                         and not self._prologue_inert(c)):
                     self._guard_prologue_open = False
                 yield c
@@ -4798,11 +4798,15 @@ class _PhpCallGraph:
             # Braced-body children are file-scope statements: they
             # get the same prologue classification as program
             # children (yielded directly — the compound wrapper has
-            # no handler of its own).
+            # no handler of its own). Only NAMED children classify:
+            # the anonymous `{` / `}` brace tokens are not statements,
+            # and classifying them would close the prologue at the
+            # opening brace — every guard inside a braced namespace
+            # would go blind.
             for c in node.children:
                 if c.type == "compound_statement":
                     for s in c.children:
-                        if (self._guard_prologue_open
+                        if (self._guard_prologue_open and s.is_named
                                 and not self._prologue_inert(s)):
                             self._guard_prologue_open = False
                         yield s
@@ -5231,7 +5235,8 @@ class _PhpCallGraph:
         if expr is None:
             return True  # bare ';'
         if expr.type in self._INCLUDE_EXPRS:
-            # Adjudication: an include with an inert ARGUMENT stays
+            # Adjudication: an include with an inert ARGUMENT of a
+            # RESOLVABLE shape (literal / const_prefix) stays
             # prologue-inert even though the INCLUDED file's payload
             # executes before the guard on a direct request. Scoped
             # precisely, guard evidence claims "THIS file's own
@@ -5241,10 +5246,38 @@ class _PhpCallGraph:
             # hidden behind this file's guard — and refusing
             # includes would void guard evidence on the dominant
             # honest idiom (bootstrap requires before the guard).
-            # A side-effectful ARGUMENT is different: it is this
-            # statement's own execution (a call computing the path
-            # runs right here), so it closes the prologue.
-            return self._include_arg_side_effect_free(expr)
+            # Two shapes DO close the prologue: a side-effectful
+            # argument (this statement's own execution — a call
+            # computing the path runs right here), and a DYNAMIC
+            # include shape: its target carries no
+            # role/census attention of its own, so the
+            # "included file keeps its own attention" rationale has
+            # nothing to attach to — the pre-guard dispatcher risk
+            # must stay on THIS file.
+            if not self._include_arg_side_effect_free(expr):
+                return False
+            from core.inventory.script_handler import (
+                classify_include_argument,
+            )
+            arg = None
+            for c in expr.children:
+                if c.is_named:
+                    arg = c
+                    break
+            while (arg is not None
+                    and arg.type == "parenthesized_expression"):
+                nxt = None
+                for c in arg.children:
+                    if c.is_named:
+                        nxt = c
+                        break
+                if nxt is None:
+                    break
+                arg = nxt
+            raw = (arg.text.decode("utf-8", errors="replace")
+                   if arg is not None else "")
+            return classify_include_argument(raw).shape in (
+                "literal", "const_prefix")
         if expr.type == self._FUNCTION_CALL:
             return self._is_literal_define(expr)
         if expr.type == "binary_expression":
