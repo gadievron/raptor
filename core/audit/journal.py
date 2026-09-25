@@ -4,6 +4,7 @@ from core.coverage.journal import (  # noqa: F401
     INDEX_FILENAME,
     INDEX_SCHEMA_VERSION,
     JOURNAL_FILENAME,
+    RUN_ID_UNATTRIBUTED,
     VALID_VERDICTS,
     JournalIncomplete,
     JournalLoad,

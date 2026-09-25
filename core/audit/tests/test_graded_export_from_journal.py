@@ -262,6 +262,124 @@ def test_unattributed_verified_row_grandfathers_with_marker(tmp_path):
     assert rec["provenance"]["receipt_scope"] == "install"
 
 
+def test_unattributed_sentinel_row_grandfathers_at_install_tier(tmp_path):
+    # The record CLI's documented no-attribution sentinel is the
+    # OTHER spelling of run_id="": rows stamped before the CLI
+    # resolved a relative --out spelling all carry it. It says "this
+    # row names no run", not "this row names another run" — the
+    # marked install tier, never the foreign arm's receipt strip and
+    # replay warning.
+    from core.coverage.journal import RUN_ID_UNATTRIBUTED
+
+    _journal(tmp_path, [
+        _entry("a.c", "f", "suspicious", run_id=RUN_ID_UNATTRIBUTED,
+               line_start=5, evidence_tools=["semgrep"]),
+    ])
+    graded = export_graded_from_journal(tmp_path)
+    assert graded["derivation"]["foreign_run_rows"] == 0
+    assert graded["derivation"]["unscoped_run_rows"] == 1
+    rec = graded["findings"][0]
+    assert rec["discovery"]["evidence_tool"] == "semgrep"
+    # Never run-scoped either: the grandfather stays visibly marked.
+    assert rec["provenance"]["receipt_scope"] == "install"
+
+
+def test_tampered_sentinel_row_still_demotes_to_unverified(tmp_path):
+    # The sentinel tier sits BEHIND the integrity check: an edited
+    # sentinel row demotes to the unverified arm, receipts stripped —
+    # the grandfather never launders a tampered row.
+    from core.coverage.journal import RUN_ID_UNATTRIBUTED
+
+    _journal(tmp_path, [
+        _entry("a.c", "f", "suspicious", run_id=RUN_ID_UNATTRIBUTED,
+               line_start=5, evidence_tools=["semgrep"]),
+    ])
+    journal = tmp_path / "review-journal.jsonl"
+    row = json.loads(journal.read_text())
+    row["line_start"] = 999
+    journal.write_text(json.dumps(row) + "\n")
+    graded = export_graded_from_journal(tmp_path)
+    assert graded["derivation"]["unverified_rows"] == 1
+    assert graded["derivation"]["unscoped_run_rows"] == 0
+    assert graded["findings"][0]["discovery"]["evidence_tool"] == "none"
+
+
+def test_sentinel_lookalike_run_id_stays_foreign(tmp_path):
+    # Exact match only: anything that is not the sentinel (or empty)
+    # is a run attribution, and one that does not name THIS run keeps
+    # failing toward the foreign arm — the grandfather widens nothing
+    # for named runs.
+    _journal(tmp_path, [
+        _entry("a.c", "f", "suspicious", run_id="cli-record-2",
+               line_start=5, evidence_tools=["semgrep"]),
+    ])
+    graded = export_graded_from_journal(tmp_path)
+    assert graded["derivation"]["foreign_run_rows"] == 1
+    assert graded["derivation"]["unscoped_run_rows"] == 0
+    assert graded["findings"][0]["discovery"]["evidence_tool"] == "none"
+
+
+def _load_record_cli():
+    loader = SourceFileLoader(
+        "raptor_audit_cli_export_roundtrip",
+        str(REPO_ROOT / "libexec" / "raptor-audit"))
+    spec = importlib.util.spec_from_loader(
+        "raptor_audit_cli_export_roundtrip", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def test_record_out_dot_round_trips_with_receipts(tmp_path, monkeypatch):
+    # Producer↔consumer identity pin: `record --out .` from inside
+    # the run dir must stamp the RESOLVED basename — the exact
+    # identity the export compares against — so the run's own record
+    # round-trips run-scoped with receipts intact (no install marker,
+    # no foreign arm). Unresolved, the producer stamped the
+    # no-attribution sentinel for every relative --out spelling.
+    from types import SimpleNamespace
+
+    from core.audit.record import append_audit_log
+
+    mod = _load_record_cli()
+    out_dir = tmp_path / "runQ"
+    out_dir.mkdir()
+    target = tmp_path / "target"
+    (target / "src").mkdir(parents=True)
+    (target / "src" / "a.c").write_text(
+        "int foo(char *p) { return p[0]; }\n")
+    append_audit_log(out_dir, {
+        "action": "context", "key": "src/a.c:foo",
+        "file": "src/a.c", "function": "foo",
+    })
+    append_audit_log(out_dir, {
+        "action": "sweep", "key": "src/a.c:foo",
+        "file": "src/a.c", "function": "foo",
+        "tool": "dynamic:crash", "outcome": "confirmed",
+    })
+    monkeypatch.chdir(out_dir)
+    rc = mod.cmd_record(SimpleNamespace(
+        out=".", target=str(target), file="src/a.c", function="foo",
+        status="finding", body="dynamic crash replay output",
+        line_start=None, line_end=None, cwe=None, strategies=None,
+        evidence_tool="dynamic:crash",
+        hypothesis="if input reaches memcpy unbounded, CWE-787",
+        vuln_type="buffer_overflow", related_to=None,
+        reach_via="exported API",
+    ))
+    assert rc == 0
+    row = json.loads(
+        (out_dir / "review-journal.jsonl").read_text().splitlines()[-1])
+    assert row["run_id"] == "runQ"
+    graded = export_graded_from_journal(Path("."))
+    assert graded["derivation"]["foreign_run_rows"] == 0
+    assert graded["derivation"]["unscoped_run_rows"] == 0
+    rec = graded["findings"][0]
+    assert rec["discovery"]["evidence_tool"] == "dynamic:crash"
+    # Run-scoped, not grandfathered: no install marker.
+    assert "receipt_scope" not in rec["provenance"]
+
+
 @pytest.fixture(scope="module")
 def helper_module():
     """Import the validate helper CLI (no .py suffix)."""

@@ -39,6 +39,18 @@ JOURNAL_FILENAME = "review-journal.jsonl"
 INDEX_FILENAME = "review-journal-index.json"
 INDEX_SCHEMA_VERSION = 1
 
+#: Run-attribution sentinel: stamped into ``run_id`` by the record
+#: CLI when the run dir's resolved basename is empty (the filesystem
+#: root) or resolution fails. Rows written before the CLI resolved
+#: its ``--out`` argument carry it for EVERY relative spelling
+#: (``Path(".").name == ""``), so the sentinel is a standing part of
+#: the install base, not only the pathological cases. By construction
+#: it never names a run: readers that scope receipts by run identity
+#: must grade it like an empty ``run_id`` (the marked
+#: install-grandfather tier), never as an attribution to a foreign
+#: run.
+RUN_ID_UNATTRIBUTED = "cli-record"
+
 # Byte budget for the journal loader's RETAINED entries and for the
 # index document (which is read whole). Both files can arrive via a
 # /project archive import, so the loader's memory must stay bounded —
