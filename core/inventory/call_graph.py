@@ -7945,11 +7945,40 @@ def iter_call_graph_candidates(
     return candidates
 
 
+# Checklist-mode file-cap ceiling. Both directions: LOWER re-creates
+# the kernel-scale truncation this exists to fix (a 6,002-file scoped
+# checklist ran cross-function detectors on a third of its files —
+# measured cost of the full set: ~8 ms and ~15 KiB per kernel file,
+# i.e. ~49 s wall / ~87 MiB retained, once per run and cached);
+# HIGHER widens the retained-mapping exposure — ~300 MiB at this
+# ceiling on the MEASURED KERNEL AVERAGE (~15 KiB/file), which is an
+# extrapolation, not a bound: max_bytes gates INPUT size only, and a
+# pathological call-dense file near the input gate was measured
+# retaining ~71 MB alone. The mapping lives in the orchestrator's
+# module-level cache for the whole run. Checklist mode only: the
+# checklist already bounds candidates to the run's own reviewed
+# inventory, so the ceiling is a memory guard, not a work bound; the
+# bare tree walk keeps the conservative 2000 default (an unbounded
+# monorepo walk earns no such trust).
+_CHECKLIST_MAX_FILES = 20_000
+
+
+def _derive_max_files(checklist: "dict[str, Any] | None") -> int:
+    """Default file cap: the checklist's own file count up to the
+    checklist-mode ceiling (candidates never exceed the checklist, so
+    below the ceiling the whole checklist is covered); 2000 for a
+    bare tree walk."""
+    if checklist is None:
+        return 2000
+    n_files = len(checklist.get("files") or [])
+    return min(max(n_files, 2000), _CHECKLIST_MAX_FILES)
+
+
 def load_call_graphs(
     target_path: Any,
     checklist: dict[str, Any] | None = None,
     *,
-    max_files: int = 2000,
+    max_files: int | None = None,
     max_bytes: int = CALL_GRAPH_MAX_FILE_BYTES,
 ) -> dict[str, FileCallGraph]:
     """Extract per-file call graphs for a target tree.
@@ -7967,7 +7996,11 @@ def load_call_graphs(
             tree is walked (common exclusions pruned) and keys are
             POSIX relative paths.
         max_files: Cap on extracted files (checklist order / walk
-            order wins; the rest are skipped with a log line).
+            order wins; the rest are skipped with a log line). None —
+            the default — derives the cap: 2000 for a bare tree walk,
+            the checklist's own file count up to
+            ``_CHECKLIST_MAX_FILES`` when a checklist bounds the
+            candidates. An explicit int is honoured verbatim.
         max_bytes: Per-file size cap — larger sources are skipped.
 
     Returns:
@@ -7975,6 +8008,9 @@ def load_call_graphs(
         fail to read or parse are skipped (extraction is best-effort
         by design); an empty dict when nothing was extractable.
     """
+    derived = max_files is None
+    if derived:
+        max_files = _derive_max_files(checklist)
     candidates = iter_call_graph_candidates(target_path, checklist)
 
     graphs: dict[str, FileCallGraph] = {}
@@ -8017,15 +8053,20 @@ def load_call_graphs(
     if skipped:
         # Hitting the cap means cross-function context is INCOMPLETE
         # for every consumer of this mapping — loud, not info-level.
-        # Callers with a checklist rarely get here (in-scope files
-        # bound the candidate set); a bare tree walk on a large target
-        # is the case that overflows.
+        # Checklist mode only overflows past _CHECKLIST_MAX_FILES (the
+        # derived cap covers the whole checklist below it); a bare
+        # tree walk on a large target overflows at the 2000 default.
         logger.warning(
             "load_call_graphs: file cap (%d) reached — %d candidates "
             "skipped; cross-function detectors run with partial "
-            "call-graph context (pass the run checklist to bound "
-            "extraction to in-scope files)",
+            "call-graph context (%s)",
             max_files, skipped,
+            "checklist exceeds the checklist-mode ceiling"
+            if derived and checklist is not None else
+            "explicit max_files caller"
+            if checklist is not None else
+            "pass the run checklist to bound extraction to in-scope "
+            "files",
         )
     return graphs
 

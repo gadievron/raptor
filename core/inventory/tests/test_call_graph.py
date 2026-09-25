@@ -806,3 +806,56 @@ def test_registration_facts_omitted_from_dict_when_empty():
     assert "string_ref_calls" not in d
     assert all("decorator_args" not in df
                for df in d["decorated_functions"])
+
+
+class TestDerivedFileCap:
+    """max_files=None derivation: checklist mode covers the whole
+    checklist up to _CHECKLIST_MAX_FILES; walk mode keeps 2000; an
+    explicit int is honoured verbatim. Two-direction pins per the
+    churn-prone-limits doctrine."""
+
+    @staticmethod
+    def _many_files(tmp_path, n):
+        files = []
+        for i in range(n):
+            p = tmp_path / f"f{i}.c"
+            p.write_text(f"int fn{i}(void) {{ return {i}; }}\n")
+            files.append({"path": p.name})
+        return {"files": files}
+
+    def test_derivation_covers_beyond_walk_default(self):
+        # The headline regression: a kernel-scale checklist must
+        # derive its own size, not the 2000 walk default (pinned on
+        # the derivation helper directly — minting 6k files to prove
+        # it via extraction is what made the previous form vacuous).
+        import core.inventory.call_graph as cg
+        ck = {"files": [{"path": f"f{i}.c"} for i in range(6002)]}
+        assert cg._derive_max_files(ck) == 6002
+
+    def test_derivation_directions(self):
+        import core.inventory.call_graph as cg
+        assert cg._derive_max_files(None) == 2000        # bare walk
+        assert cg._derive_max_files({"files": []}) == 2000
+        big = {"files": [{"path": "x"}] * (cg._CHECKLIST_MAX_FILES + 5)}
+        assert cg._derive_max_files(big) == cg._CHECKLIST_MAX_FILES
+
+    def test_checklist_mode_ceiling_binds(self, tmp_path, monkeypatch):
+        import core.inventory.call_graph as cg
+        monkeypatch.setattr(cg, "_CHECKLIST_MAX_FILES", 10)
+        checklist = self._many_files(tmp_path, 15)
+        graphs = cg.load_call_graphs(tmp_path, checklist)
+        assert len(graphs) == 10  # ceiling respected
+
+    def test_small_checklist_fully_extracted(self, tmp_path):
+        # Candidates never exceed the checklist, so the derived cap
+        # (floored at 2000) can never truncate a small checklist.
+        import core.inventory.call_graph as cg
+        checklist = self._many_files(tmp_path, 3)
+        graphs = cg.load_call_graphs(tmp_path, checklist)
+        assert len(graphs) == 3
+
+    def test_explicit_max_files_honoured_verbatim(self, tmp_path):
+        import core.inventory.call_graph as cg
+        checklist = self._many_files(tmp_path, 5)
+        graphs = cg.load_call_graphs(tmp_path, checklist, max_files=2)
+        assert len(graphs) == 2
