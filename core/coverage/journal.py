@@ -81,6 +81,19 @@ _READ_BUDGET_MULTIPLIER = 4
 # domain-model.json is a small RAPTOR-written study artifact.
 _MAX_DOMAIN_MODEL_BYTES = 64 * 1024 * 1024
 
+# Per-run merge cap on the project-index merge: journals live inside
+# sandbox write grants, and per-journal size caps alone let a hostile
+# run push the INDEX past its own read budget across several subdir
+# journals — after which (pre-guard) the next load read it as empty
+# and the next merge destroyed all accumulated history. Applied to
+# DISTINCT index identities (``merge_into_index`` collapses to the
+# newest row per ``index_key`` first — a lossless step, since the
+# merge is latest-wins per key). Trade-off, both directions: too low
+# and a legitimate mega-run's oldest identities silently never reach
+# the index; too high and the index write refuses over budget
+# (``IndexWriteOverBudget``), freezing merges for the whole project.
+_MAX_MERGE_ENTRIES = 20_000
+
 # Per-load cap on detailed row-quarantine warnings. A hostile journal
 # is millions of refused rows; one warning per row is its own flood
 # (the refusals themselves stay counted and summarised). High enough
@@ -1516,16 +1529,31 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
     run_entries = load_entries(run_dir)
     if not run_entries:
         return 0
-    # Per-run merge cap: journals live inside sandbox write grants,
-    # and per-journal size caps alone let a hostile run push the
-    # INDEX past its own read budget across several subdir journals —
-    # after which (pre-guard) the next load read it as empty and the
-    # next merge destroyed all accumulated history.
-    _MAX_MERGE_ENTRIES = 20_000
+    if len(run_entries) > _MAX_MERGE_ENTRIES:
+        # Collapse to the newest row per index_key BEFORE the cap:
+        # the merge below is latest-wins per index_key, so a
+        # non-latest sibling can never change the outcome — dropping
+        # it here is lossless. The previous raw newest-N truncation
+        # let duplicate re-emission rows (newest, per-segment
+        # completeness) crowd distinct identities' ONLY rows out of
+        # the window, so their verdicts silently never reached the
+        # project index. Tie on ts keeps the first-in-file row,
+        # matching the merge's strict-``>`` convention.
+        collapsed: dict[str, ReviewJournalEntry] = {}
+        for e in run_entries:
+            k = e.index_key
+            prev = collapsed.get(k)
+            if prev is None or e.ts > prev.ts:
+                collapsed[k] = e
+        run_entries = list(collapsed.values())
     if len(run_entries) > _MAX_MERGE_ENTRIES:
         logger.warning(
-            "journal: run %s carries %d entries — merging only the "
-            "newest %d", run_dir, len(run_entries), _MAX_MERGE_ENTRIES)
+            "journal: run %s carries %d distinct entry identities — "
+            "merging only the newest %d; the OLDEST %d identities' "
+            "verdicts will NOT reach the project index (the run "
+            "journal keeps every row)",
+            run_dir, len(run_entries), _MAX_MERGE_ENTRIES,
+            len(run_entries) - _MAX_MERGE_ENTRIES)
         run_entries = sorted(run_entries,
                              key=lambda e: e.ts)[-_MAX_MERGE_ENTRIES:]
 
