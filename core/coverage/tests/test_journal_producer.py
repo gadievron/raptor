@@ -29,6 +29,7 @@ def _entry(
     ts=None,
     strategies=None,
     edge_callee=None,
+    body=None,
 ) -> ReviewJournalEntry:
     return ReviewJournalEntry(
         ts=ts or now_iso(),
@@ -40,6 +41,7 @@ def _entry(
         producer=producer,
         strategies=strategies or [],
         edge_callee=edge_callee,
+        body=body,
     )
 
 
@@ -235,3 +237,34 @@ class TestEntryEarnsFunctionCoverage:
         for verdict in ("clean", "suspicious", "finding", "dormant"):
             assert entry_earns_function_coverage(
                 _entry(verdict=verdict)), verdict
+
+    def test_mechanical_echo_rows_never_earn(self):
+        # Post-loop pattern-scan echo rows carry producer=audit and a
+        # settled verdict, but no review examined the function — a
+        # mark would read never-reviewed functions as reviewed in
+        # every store-derived view. Both echo spellings screened: the
+        # strategy tag and the body prefix.
+        from core.coverage.journal import entry_earns_function_coverage
+        assert not entry_earns_function_coverage(_entry(
+            verdict="suspicious",
+            strategies=["post-loop-mechanical", "decomp-sweep"],
+        ))
+        assert not entry_earns_function_coverage(_entry(
+            verdict="suspicious",
+            body="[mechanical] pattern match in f",
+        ))
+
+    def test_consistency_census_rows_never_earn(self):
+        # The consistency census's LLM-free synthesized outcomes are
+        # the second mechanically-minted row kind — they carry
+        # NEITHER pattern-echo marker, so the screen must recognise
+        # their own tag and body prefix. Both spellings pinned.
+        from core.coverage.journal import entry_earns_function_coverage
+        assert not entry_earns_function_coverage(_entry(
+            verdict="suspicious",
+            strategies=["consistency-census"],
+        ))
+        assert not entry_earns_function_coverage(_entry(
+            verdict="finding",
+            body="[consistency:handler-outcome] census-confirmed",
+        ))
