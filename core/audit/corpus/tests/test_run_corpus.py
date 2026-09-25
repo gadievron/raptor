@@ -2512,6 +2512,7 @@ def _run_stamp(**overrides):
         "triage": "off",
         "prefilter": "off",
         "scope": "excerpt",
+        "label_kind": "real",
     }
     stamp.update(overrides)
     return stamp
