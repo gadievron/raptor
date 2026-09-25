@@ -23,7 +23,7 @@ operator annotations.
 /review history <file> <fn>         # all reviews over time
 /review stats                       # entry counts, costs, coverage %
 /review compact                     # compact project journal index
-/review verdict <id> fp|tp|retest   # record a human FP/TP/retest verdict on a finding (-m "reason", --target <repo>)
+/review verdict <id> fp|tp|retest   # record a human FP/TP/retest verdict on a finding (-m "reason", --target <repo>; fp --ceremony = typed operator consent at the operator's own terminal)
 /review digest [run-dir]            # ranked end-of-run summary (default: latest run)
 ```
 
@@ -34,10 +34,24 @@ in SAGE (future runs skip the finding while its source is unchanged),
 stored finding records (future passes force it through), `retest`
 clears the stored verdict so the next run re-analyzes.
 
-Interactivity asymmetry: `fp` REFUSES non-interactive invocations —
-its row carries pipeline-grade suppression authority for 30 days, so
-it is reserved for human terminal judgment; do not attempt it from a
-dispatched session (relay the command to the operator instead).
+Interactivity asymmetry: `fp` REFUSES any context that fails the
+live-context operator grant — its row carries pipeline-grade
+suppression authority for 30 days, so it is reserved for human
+terminal judgment, and every shipped launcher route carries a
+dispatch trust marker the grant refuses. The sanctioned production
+route is the typed-consent ceremony, which only works at the
+operator's own terminal: every standard fd must be a real TTY (a
+dispatched session's tool calls run with piped fds and are refused),
+and the mint requires the confirmation phrase naming the finding id
+typed back. Do not attempt `fp` or the ceremony from a dispatched
+session — relay this command to the operator instead:
+
+```
+raptor review verdict <id> fp --ceremony
+```
+
+`retest` revokes a ceremony mint at any time (non-interactive
+allowed — it only causes re-analysis).
 `tp`/`retest` stay available non-interactively — they are fail-safe
 (their only effect is re-analysis). Verdict source defaults to
 `human` on an interactive TTY, `agent` otherwise — never pass

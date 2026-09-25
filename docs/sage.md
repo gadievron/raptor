@@ -340,10 +340,21 @@ the stored verdict entirely so the next run re-analyzes.  `fp` is
 gated on the live-context operator grant (its row suppresses with
 pipeline-grade authority, so it is reserved for human judgment) —
 and the grant refuses the dispatch trust markers every shipped
-launcher route carries, so in practice `fp` does not mint in
-production: the CLI standing-suppression mint is retired pending an
-operator decision on a sanctioned terminal ceremony.  Record
-operator FP assertions with `/annotate` instead (human grade,
+launcher route carries, so a plain `fp` does not mint in
+production.  The sanctioned production route is the typed-consent
+ceremony at the operator's own terminal,
+`raptor review verdict <finding-id> fp --ceremony`: every standard
+fd must be a terminal, the CLI shows what is being suppressed
+(finding, effect, TTL, the recorded invocation context), and the
+mint happens only after the operator types the confirmation phrase
+naming that finding id.  Ceremony-minted rows are stamped
+`minted=ceremony` with the operator-grant result and invocation
+context recorded alongside — MAC-bound into the row's verified
+decision fields, so the mint authority cannot be silently edited
+after the fact (rows stored before the mint markers existed keep
+verifying) — and they stay distinguishable from grant-minted rows;
+`retest` revokes them at any time.  Record operator FP assertions
+without a standing suppression with `/annotate` (human grade,
 production-reachable); `tp`/`retest` work non-interactively — they
 only cause re-analysis.
 

@@ -306,10 +306,19 @@ with a verdict naming the check, and per-check counters join the report:
   row carries pipeline-grade suppression authority). In practice the
   grant refuses the dispatch trust markers every shipped launcher
   route carries (`bin/raptor` exports `_RAPTOR_TRUSTED=1`; the
-  libexec preamble requires a marker), so `fp` does not mint in
-  production: the CLI standing-suppression mint is retired pending
-  an operator decision on a sanctioned terminal ceremony. Record
-  operator FP assertions with `/annotate` (human grade,
+  libexec preamble requires a marker), so a plain `fp` does not mint
+  in production. The sanctioned production route is the typed-consent
+  ceremony at the operator's own terminal --
+  `raptor review verdict <finding-id> fp --ceremony` -- which
+  requires every standard fd to be a terminal, shows what is being
+  suppressed (finding, effect, TTL, the recorded invocation
+  context), and mints only after the operator types the confirmation
+  phrase naming that finding id; the row is stamped
+  `minted=ceremony` with the grant result and invocation context
+  recorded alongside — MAC-bound into the row's verified fields, so
+  the mint authority cannot be edited after the fact — and
+  `retest` revokes it at any time. Record operator FP assertions
+  without a standing suppression with `/annotate` (human grade,
   production-reachable); `tp` clears prior suppression and sets
   `manual_override` on the stored records, `retest` clears the
   stored verdict so the next run re-analyzes (both work

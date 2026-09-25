@@ -167,6 +167,168 @@ class TestStoreNoteRideAlong(unittest.TestCase):
         gate.assert_not_called()
 
 
+class TestMintFieldBinding(unittest.TestCase):
+    """The fp mint provenance (minted/grant/mintctx) is MAC-bound.
+
+    Adversarial review confirmed the pre-binding residual: the mint
+    markers lived in free note text, so a stored row's authority
+    could be EDITED after the fact (ceremony → grant) without failing
+    verification. The markers now join the rowmac'd decision-field
+    set on rows that carry them — self-describing versioning, so
+    pre-mint rows (and every pipeline row) keep verifying — and any
+    post-hoc edit, strip, or graft fails MAC and demotes to hint
+    (fail direction: re-test). Honest bound: a same-user process that
+    can read rowmac.key re-mints at will; the binding raises forgery
+    from text-editing to key compromise, it is not unforgeability.
+    """
+
+    SRC = "abc123def456"
+    MINT = {"minted": "ceremony", "grant": "refused",
+            "mintctx": "tty=stdin,stdout,stderr;sid=inherited;"
+                       "envm=trusted;parents=bash,sshd"}
+
+    def _store(self, mint):
+        from core.sage.hooks import store_finding_verdict
+        client = FakeOperatorClient([])
+        ok = store_finding_verdict(
+            REPO, RULE, FILE, FN, self.SRC, "false_positive",
+            note="operator-verdict source=human", mint=mint,
+            client=client)
+        return ok, client
+
+    def _recall(self, content):
+        from core.sage.hooks import recall_prior_finding_verdict
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"content": content, "confidence": 0.9},
+        ]
+        with patch("core.sage.hooks._get_client",
+                   return_value=mock_client):
+            return recall_prior_finding_verdict(
+                REPO, RULE, FILE, FN, self.SRC)
+
+    def test_mint_markers_stored_and_row_verifies(self):
+        ok, client = self._store(self.MINT)
+        self.assertTrue(ok)
+        content = client.proposed[0]["content"]
+        self.assertIn("||minted=ceremony||", content)
+        self.assertIn("||grant=refused||", content)
+        self.assertIn("||mintctx=", content)
+        self.assertIsNotNone(self._recall(content))
+
+    def test_posthoc_authority_edit_fails_mac(self):
+        # The confirmed tamper residual: rewrite a ceremony row as a
+        # grant row (or flip the recorded grant result). Both now
+        # fail verification.
+        _, client = self._store(self.MINT)
+        content = client.proposed[0]["content"]
+        self.assertIsNone(self._recall(
+            content.replace("||minted=ceremony||", "||minted=grant||")))
+        self.assertIsNone(self._recall(
+            content.replace("||grant=refused||", "||grant=granted||")))
+        self.assertIsNone(self._recall(
+            content.replace("envm=trusted", "envm=ssh")))
+
+    def test_stripping_the_markers_fails_mac(self):
+        # Downgrade attempt: remove the markers so the verifier
+        # rebuilds the ORIGINAL field set — the token was minted over
+        # more fields, so verification still fails.
+        _, client = self._store(self.MINT)
+        content = client.proposed[0]["content"]
+        stripped = content
+        for key in ("minted", "grant", "mintctx"):
+            import re as _re
+            stripped = _re.sub(
+                r" \|\|" + key + r"=[^|]+\|\|", "", stripped)
+        self.assertNotIn("||minted=", stripped)
+        self.assertIsNone(self._recall(stripped))
+
+    def test_duplicate_marker_append_fails_mac(self):
+        # The r2 re-verify shape: append a SECOND, contradictory
+        # marker after the legit row body, keeping the legit token.
+        # A first-match rebuild verified it while the row displayed
+        # both markers; duplicates are now tamper evidence.
+        _, client = self._store(self.MINT)
+        content = client.proposed[0]["content"]
+        clean, token = rowmac.strip(content)
+        appended = f"{clean} ||minted=grant|| [mac:{token}]"
+        self.assertIsNone(self._recall(appended))
+        # Same for the other two keys.
+        self.assertIsNone(self._recall(
+            f"{clean} ||grant=granted|| [mac:{token}]"))
+        self.assertIsNone(self._recall(
+            f"{clean} ||mintctx=envm=ssh|| [mac:{token}]"))
+        # Prepend variant stays failing too.
+        prepended = clean.replace(
+            "||minted=ceremony||",
+            "||minted=grant|| ||minted=ceremony||")
+        self.assertIsNone(self._recall(f"{prepended} [mac:{token}]"))
+
+    def test_duplicate_marker_row_flagged_in_listing(self):
+        from core.sage.hooks import list_finding_verdict_rows
+        _, store_client = self._store(self.MINT)
+        content = store_client.proposed[0]["content"]
+        clean, token = rowmac.strip(content)
+        dup = f"{clean} ||minted=grant|| [mac:{token}]"
+        client = FakeOperatorClient([_Memory("m-dup", dup, _domain())])
+        rows = list_finding_verdict_rows(
+            REPO, RULE, FILE, FN, client=client)
+        self.assertFalse(rows[0]["mac_verified"])
+
+    def test_grafting_markers_onto_premint_row_fails_mac(self):
+        row = _stored_row("m1", "false_positive", src=self.SRC)
+        clean, token = rowmac.strip(row.content)
+        grafted = (clean + " ||minted=ceremony|| ||grant=granted||"
+                   + f" [mac:{token}]")
+        self.assertIsNone(self._recall(grafted))
+
+    def test_premint_rows_still_verify(self):
+        # Versioning: rows without mint markers reconstruct the
+        # original field set — existing stores keep their effect.
+        row = _stored_row("m1", "false_positive", src=self.SRC)
+        self.assertIsNotNone(self._recall(row.content))
+
+    def test_malformed_mint_refuses_store(self):
+        from core.sage.hooks import store_finding_verdict
+        client = FakeOperatorClient([])
+        for bad in ({}, {"minted": ""}, {"bogus": "x"},
+                    {"minted": "ceremony", "bogus": "x"}):
+            ok = store_finding_verdict(
+                REPO, RULE, FILE, FN, self.SRC, "false_positive",
+                mint=bad, client=client)
+            self.assertFalse(ok, f"mint={bad!r} must refuse")
+        self.assertEqual(client.proposed, [])
+
+    def test_mint_values_delim_sanitised(self):
+        ok, client = self._store(
+            {"minted": "cere||mony", "grant": "refused"})
+        self.assertTrue(ok)
+        content = client.proposed[0]["content"]
+        self.assertIn("||minted=ceremony||", content)
+        self.assertIsNotNone(self._recall(content))
+
+    def test_listing_flags_tampered_mint_row(self):
+        from core.sage.hooks import list_finding_verdict_rows
+        _, store_client = self._store(self.MINT)
+        content = store_client.proposed[0]["content"]
+        tampered = content.replace(
+            "||minted=ceremony||", "||minted=grant||")
+        client = FakeOperatorClient([
+            _Memory("m-ok", content, _domain()),
+            _Memory("m-bad", tampered, _domain()),
+        ])
+        rows = list_finding_verdict_rows(
+            REPO, RULE, FILE, FN, client=client)
+        by_id = {r["memory_id"]: r for r in rows}
+        self.assertTrue(by_id["m-ok"]["mac_verified"])
+        self.assertFalse(by_id["m-bad"]["mac_verified"])
+
+
+def _domain():
+    from core.sage.hooks import _fp_domain
+    return _fp_domain(REPO)
+
+
 class TestListAndForget(unittest.TestCase):
     def test_list_returns_rows_with_ids(self):
         from core.sage.hooks import list_finding_verdict_rows

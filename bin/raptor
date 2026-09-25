@@ -521,6 +521,18 @@ if [[ "${1:-}" == "wsl-consent" ]]; then
     exec "$RAPTOR_DIR/libexec/raptor-wsl-consent" "$@"
 fi
 
+# Route review directly (no Claude needed) - the review CLI is the
+# operator's query/verdict surface, and its fp --ceremony typed
+# consent is TTY-gated on every standard fd and must run at the
+# operator's own terminal (like wsl-consent); resolving it must not
+# launch a Claude session.
+if [[ "${1:-}" == "review" ]]; then
+    shift
+    export RAPTOR_DIR
+    export _RAPTOR_TRUSTED=1
+    exec "$RAPTOR_DIR/libexec/raptor-review" "$@"
+fi
+
 # Claude required for everything else
 if ! command -v claude >/dev/null 2>&1; then
     echo "raptor: claude not found. Install Claude Code:" >&2

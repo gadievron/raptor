@@ -20,6 +20,7 @@ import os
 import re
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -929,6 +930,7 @@ def recall_prior_finding_verdict(
                         "verdict": v,
                         "src": source_hash,
                         "ts": ts,
+                        **_mint_fields_from_content(content),
                     }
                     if not _row_mac_ok("finding_verdict", fields, token):
                         break
@@ -1017,6 +1019,7 @@ def recall_prior_fp_verdicts(
                     "verdict": v,
                     "src": src,
                     "ts": ts,
+                    **_mint_fields_from_content(content),
                 }
                 if not _row_mac_ok("finding_verdict", fields, token):
                     break
@@ -1045,6 +1048,7 @@ def store_finding_verdict(
     verdict: str,
     *,
     note: str = "",
+    mint: Mapping[str, str] | None = None,
     client: SageClient | None = None,
 ) -> bool:
     """Store a finding verdict to SAGE for cross-run FP suppression.
@@ -1061,6 +1065,21 @@ def store_finding_verdict(
     hint/audit authority only and pipeline-minted rows verify
     unchanged.
 
+    ``mint`` (operator CLI fp verb only) carries the mint-provenance
+    facts — the restricted key set :data:`_MINT_FIELD_KEYS`
+    (``minted``/``grant``/``mintctx``) — which land as explicit
+    ``||key=value||`` markers AND join the MAC'd decision-field set,
+    so a stored row's mint authority cannot be silently edited after
+    the fact: readers rebuild the field set from the row's own
+    markers (self-describing versioning — rows without mint markers
+    verify over the original field set, so existing rows keep
+    verifying), and any post-hoc marker edit, strip, or graft changes
+    the reconstructed field set and fails MAC verification. Honest
+    bound, same as the rest of the row MAC: the binding is only as
+    strong as the key file — a same-user process that can read
+    ``rowmac.key`` can re-mint whatever fields it likes (that trust
+    tier is bounded by the rowmac module's own documentation).
+
     ``client`` overrides the pipeline singleton — the operator CLI
     passes :func:`operator_client` (no GPU gate; a one-off verdict on
     a CPU-only box is fine), the pipeline keeps the gated default.
@@ -1070,6 +1089,15 @@ def store_finding_verdict(
     if client is None:
         client = _get_client()
     if client is None:
+        return False
+    if mint is not None and (
+        not mint
+        or any(k not in _MINT_FIELD_KEYS or not str(v)
+               for k, v in mint.items())
+    ):
+        # Fail closed on a malformed mint set: silently dropping the
+        # keys would store an unmarked row that reads as pre-mint.
+        logger.debug("SAGE finding_verdict: malformed mint fields %r", mint)
         return False
     try:
         fp = _finding_fingerprint(rule_id, file_path, function)
@@ -1081,20 +1109,25 @@ def store_finding_verdict(
             f"||src={_s(source_hash)}|| ||verdict={_s(verdict)}|| "
             f"||ts={ts}||"
         )
+        fields = {
+            "kind": "finding_verdict",
+            "repo": _repo_key(repo_path),
+            "fp": fp,
+            "verdict": verdict,
+            "src": source_hash,
+            "ts": ts,
+        }
+        if mint:
+            for key in _MINT_FIELD_KEYS:
+                value = mint.get(key)
+                if value is None:
+                    continue
+                clean = _s(str(value))
+                content += f" ||{key}={clean}||"
+                fields[key] = clean
         if note:
             content += f" {_s(note)}"
-        content = _stamp_row(
-            "finding_verdict",
-            content,
-            {
-                "kind": "finding_verdict",
-                "repo": _repo_key(repo_path),
-                "fp": fp,
-                "verdict": verdict,
-                "src": source_hash,
-                "ts": ts,
-            },
-        )
+        content = _stamp_row("finding_verdict", content, fields)
         return _propose_redacted(
             client=client,
             content=content,
@@ -1125,6 +1158,57 @@ _OPERATOR_LIST_MAX_PAGES = 200
 
 _VERDICT_ROW_RE = re.compile(
     r"\|\|src=([^|]+)\|\| \|\|verdict=([^|]+)\|\| \|\|ts=(\d+)\|\|")
+
+# Mint-provenance markers the operator CLI's fp verb stores (HOW the
+# standing suppression was authorised): ``minted`` (grant | ceremony),
+# ``grant`` (the operator-grant result at mint time), ``mintctx``
+# (compact invocation-context stamp). Fixed order, restricted set —
+# they join the MAC'd decision-field set on rows that carry them, so
+# they are tamper-evident, never free audit text.
+_MINT_FIELD_KEYS = ("minted", "grant", "mintctx")
+_MINT_FIELD_RES = {
+    key: re.compile(r"\|\|" + key + r"=([^|]+)\|\|")
+    for key in _MINT_FIELD_KEYS
+}
+# Reserved field injected by the reader when a row carries a mint
+# marker key MORE THAN ONCE. Never a member of _MINT_FIELD_KEYS, so
+# no store can ever mint a token covering it — verification of a
+# duplicate-marker row necessarily fails (demote to hint).
+_MINT_DUP_SENTINEL = "mintdup"
+
+
+def _mint_fields_from_content(content: str) -> dict[str, str]:
+    """Mint-provenance fields a stored row itself declares.
+
+    Self-describing versioning for the row MAC: the store side puts
+    each mint fact in the content as an explicit ``||key=value||``
+    marker AND in the MAC'd field set, so the verifier rebuilds the
+    field set from the markers the row carries. Rows without markers
+    (every pre-mint row, and every pipeline row) reconstruct the
+    original field set and keep verifying. Any edit is caught by the
+    MAC: stripping a marker (the token was minted over more fields),
+    grafting one onto an old row (the token was minted over fewer),
+    changing a value (field mismatch), or DUPLICATING a marker all
+    fail verification and demote the row to hint tier — the fail
+    direction is re-test.
+
+    The duplicate rule closes the append shape adversarial re-verify
+    found: a first-match rebuild let ``<legit row> ||minted=grant||``
+    verify under the legit token while displaying two contradictory
+    markers. No store writes a mint key twice
+    (:data:`_MINT_FIELD_KEYS` is validated unique at store time), so
+    any repeated key is tamper evidence — the rebuild then injects
+    the reserved :data:`_MINT_DUP_SENTINEL` field, which no minted
+    token ever covers, and verification fails.
+    """
+    fields: dict[str, str] = {}
+    for key in _MINT_FIELD_KEYS:
+        values = _MINT_FIELD_RES[key].findall(content)
+        if len(values) > 1:
+            return {_MINT_DUP_SENTINEL: "duplicate-markers"}
+        if values:
+            fields[key] = values[0]
+    return fields
 
 
 class VerdictWalkTruncated(RuntimeError):
@@ -1227,6 +1311,7 @@ def _iter_verdict_rows(
                 "verdict": verdict,
                 "src": src,
                 "ts": ts,
+                **_mint_fields_from_content(text),
             }
             mac_ok = _row_mac_ok("finding_verdict", fields, token)
             note = text[match.end():].strip()

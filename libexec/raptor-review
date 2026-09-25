@@ -27,11 +27,28 @@ Usage:
                                            #  operator grant, which refuses the
                                            #  dispatch trust markers every
                                            #  shipped launcher route carries —
-                                           #  fp does not mint in production;
+                                           #  a plain fp does not mint in
+                                           #  production; the sanctioned
+                                           #  production route is the
+                                           #  typed-consent ceremony below;
                                            #  use /annotate for operator FP
-                                           #  assertions, tp/retest for
+                                           #  assertions without a standing
+                                           #  suppression, tp/retest for
                                            #  re-analysis — both work
                                            #  non-interactively)
+  raptor-review verdict <id> fp --ceremony # typed operator consent: at the
+                                           # operator's own terminal (every
+                                           # std fd a TTY), shows what is
+                                           # being suppressed, requires the
+                                           # confirmation phrase
+                                           # 'suppress <finding-id>' typed
+                                           # back, and mints the standing
+                                           # suppression recorded as
+                                           # minted=ceremony with the grant
+                                           # result and the full invocation
+                                           # context. Revoke with the retest
+                                           # verb. Run via:
+                                           #   raptor review verdict <id> fp --ceremony
   raptor-review digest [run-dir]           # ranked end-of-run summary
 
 Common options:
@@ -44,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -60,6 +78,49 @@ if not (os.environ.get("CLAUDECODE")
     sys.exit(2)
 # fmt: on
 # ─── end trust-marker check ─────────────────────────────────
+
+# ─── interpreter-env hardening (fp-mint surface) ─────────────
+# fmt: off
+# This CLI can mint a standing cross-run suppression (verdict fp).
+# PYTHONPATH / PYTHONSTARTUP / PYTHONHOME / PYTHONUSERBASE let a
+# caller-controlled sitecustomize / usercustomize / .pth / startup
+# module run BEFORE this file's first line and forge the provenance
+# the mint records (demonstrated in adversarial review: one piped
+# command minted the ideal operator row, via PYTHONPATH and again
+# via a PYTHONUSERBASE-redirected user site), so their presence
+# refuses outright — the same variables the launcher's
+# dangerous-env strip removes. Honest bounds — the in-process rule:
+# (1) this check runs AFTER any such hook already ran, so it
+# defeats the STOCK shape (variable still present), not a hook that
+# scrubs its own variable; (2) a .pth/usercustomize planted in the
+# DEFAULT user site (~/.local/lib/pythonX.Y/site-packages) runs
+# with ZERO of these variables set and is undetectable by ANY env
+# check — the general closure for consent-surface launchers is
+# interpreter isolated mode (-I / -s -P), tracked as a fleet
+# follow-up. The MAC-bound mint markers and the session transcript
+# are the durable evidence layers. Shipped launcher routes strip
+# the interpreter variables, so production invocations never carry
+# them; an operator with a legitimate global PYTHONPATH re-runs
+# with it unset.
+_env_hazards = [
+    k for k in ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME",
+                "PYTHONUSERBASE")
+    if os.environ.get(k)
+]
+if _env_hazards:
+    sys.stderr.write(
+        f"{sys.argv[0]}: refusing to run with "
+        f"{', '.join(_env_hazards)} set.\n"
+        "  This CLI records verdict provenance, and interpreter-"
+        "startup hooks\n"
+        "  (sitecustomize et al.) can forge it before any check "
+        "here can fire.\n"
+        "  Re-run with the variable(s) unset, e.g.:\n"
+        f"    env -u {' -u '.join(_env_hazards)} raptor review ...\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end interpreter-env hardening ───────────────────────────
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
@@ -1442,7 +1503,7 @@ def _verdict_repo_root(args, ref) -> Path | None:
 
 
 def _operator_provenance(args) -> tuple:
-    """``(source, note, warning, operator)`` for the verdict row.
+    """``(source, note, warning, operator, ctx)`` for the verdict row.
 
     Same doctrine as /annotate: ``source`` defaults to ``human`` when
     the invocation is interactive-TTY, else ``agent``; an explicit
@@ -1460,6 +1521,8 @@ def _operator_provenance(args) -> tuple:
     terminal while carrying the dispatch environment marker — the
     exact shapes the grant demotes. Both facts come from ONE detected
     context so the gate can never disagree with the audited stamp.
+    ``ctx`` is that detected context — the fp ceremony's own gates
+    read it too, for the same single-detection reason.
     """
     from core.annotations.provenance import (
         ENV_MARKERS_KEY,
@@ -1489,14 +1552,190 @@ def _operator_provenance(args) -> tuple:
             f"tty={ctx[TTY_KEY]} provenance={ctx[PROVENANCE_KEY]} "
             f"sid={ctx[SID_KEY]} envm={ctx[ENV_MARKERS_KEY]} "
             f"parents={ctx[PARENTS_KEY]}")
-    return source, note, warning, operator
+    return source, note, warning, operator, ctx
 
 
-def _record_operator_verdict(run_dir, finding, verdict, reason, source):
+# ── fp ceremony (typed operator consent) ────────────────────────────
+#
+# The sanctioned production route for the fp mint. The operator grant
+# above refuses the dispatch trust markers every shipped launcher
+# route carries, so a plain fp cannot mint in production; the ceremony
+# is the DIFFERENT, stronger authority the retirement decision named:
+# a typed confirmation at the operator's own terminal, precedent-shaped
+# on raptor-wsl-consent grant and raptor-sage-setup review --approve.
+# It does not bypass the grant silently — the grant result AND the
+# ceremony evidence are both recorded into the minted row.
+
+# Every standard fd must be a TTY — stricter than the any-fd
+# interactive stamp, and read from the SAME detected context the
+# audited note records, so the gate can never disagree with the stamp.
+_CEREMONY_ALL_FDS = frozenset({"stdin", "stdout", "stderr"})
+# A finding id admitted into the typed phrase must be one the
+# operator can verify BY EYE, so the charset is conservative-ASCII
+# and bounded (ids come from findings files — attacker bytes, and
+# printable-Unicode confusables like the U+2011 non-breaking hyphen
+# would otherwise render indistinguishably from the ASCII form while
+# comparing unequal). Cross-form phrases already abort (fail-safe);
+# the charset closes the confusable channel at the authority object
+# itself. Refusal direction: /annotate.
+_CEREMONY_MAX_ID_CHARS = 120
+_CEREMONY_ID_RE = re.compile(
+    r"[A-Za-z0-9._:/-]{1,%d}" % _CEREMONY_MAX_ID_CHARS)
+
+
+def _ceremony_context_refusal(ctx) -> str | None:
+    """Why the typed-consent ceremony refuses this invocation context
+    (None = proceed to the typed confirmation).
+
+    Refused shapes: any non-TTY std fd (an agent tool-call or script
+    runs this CLI with piped fds — measured: the agent harness pipes
+    all three), the process being its own session leader, and the
+    stock ``script(1)`` wrapper in the recorded ancestry (the
+    corroboration demote set). Dispatch environment markers are
+    deliberately NOT refused: every shipped launcher route exports
+    one, so refusing them would retire the ceremony exactly the way
+    it retired the grant — ``envm=trusted`` with ``grant=refused``
+    is the EXPECTED legitimate production shape, never a tell.
+
+    TIER STATEMENT (adversarially verified, read before granting
+    these gates any weight): on this substrate every in-process
+    authority check bounds at "same-user code execution defeats
+    it" — a curated pty with an interposed shell, a prctl-renamed
+    ancestor, or an interpreter-startup hook can each produce a
+    passing context. These gates catch the DRIVE-BY shapes (a piped
+    tool call, a bare ``script -qec``, a stock wrapper), not a
+    determined forger. The ceremony's surviving defenses are
+    OUT-OF-PROCESS: the typed exchange lands in the driving
+    session's transcript, the mint provenance is MAC-bound into the
+    stored row (post-hoc editing fails verification; forging it
+    in-process still leaves the transcript), and ``retest`` revokes
+    instantly. This is the same tier as both precedent ceremonies
+    (raptor-wsl-consent gates on a single ``isatty``; sage-setup
+    review --approve on ``[ -t 0 ]``): no silent forgery, not
+    impossibility.
+    """
+    from core.annotations.provenance import (
+        PARENTS_KEY,
+        SID_INHERITED,
+        SID_KEY,
+        TTY_KEY,
+    )
+    tty = str(ctx.get(TTY_KEY) or "")
+    if set(tty.split(",")) != _CEREMONY_ALL_FDS:
+        return ("stdin, stdout and stderr must all be terminals "
+                f"(found: tty={_line(tty, max_chars=40)}) — an agent "
+                "or script invocation runs with piped fds and stops "
+                "here")
+    if ctx.get(SID_KEY) != SID_INHERITED:
+        return ("the process is its own session leader — the "
+                "script(1)/pty-wrapper launder shape, not a "
+                "shell-launched command")
+    parents = str(ctx.get(PARENTS_KEY) or "").split(",")
+    if "script" in parents:
+        return ("the stock script(1) wrapper appears in the recorded "
+                "ancestry")
+    return None
+
+
+def _ceremony_confirm(ref, ctx, operator) -> None:
+    """Show WHAT is being suppressed, then require the confirmation
+    phrase ``suppress <finding-id>`` typed back (the sage-setup
+    review shape: evidence first, decision second; no bare y/n — the
+    phrase names THIS finding, so a phrase copy-pasted for another
+    finding cannot confirm it).
+
+    Exits without returning on refusal or abort — nothing stored.
+    Every finding-derived value shown here is attacker bytes
+    (findings files, scanner output) and renders through ``_line``.
+    """
+    from core.annotations.provenance import (
+        ENV_MARKERS_KEY,
+        PARENTS_KEY,
+        SID_KEY,
+        TTY_KEY,
+    )
+    from core.sage.hooks import SUPPRESS_TTL_DAYS
+
+    fid = str(ref.finding_id)
+    if not _CEREMONY_ID_RE.fullmatch(fid):
+        # A phrase the operator cannot verify by eye must not become
+        # the authority object: conservative ASCII charset, bounded
+        # (see _CEREMONY_ID_RE — confusables and non-printables both
+        # refuse here). Fail toward /annotate.
+        print("  Ceremony refused: the resolved finding id is outside "
+              "the ceremony charset ([A-Za-z0-9._:/-], at most "
+              f"{_CEREMONY_MAX_ID_CHARS} chars) — a confirmation "
+              "phrase the operator can verify by eye cannot be built "
+              "(non-printables, markup, and printable Unicode "
+              "confusables all refuse). Record the review via "
+              "/annotate instead. Nothing was stored or changed.",
+              file=sys.stderr)
+        sys.exit(2)
+    title = ref.finding.get("title") or ref.finding.get("message") \
+        or ref.finding.get("description") or ""
+    print()
+    print("  Ceremony:  standing false-positive suppression "
+          "(typed operator consent)")
+    print("  This mints a SAGE verdict row with pipeline-grade "
+          "suppression authority:")
+    print("  future /agentic and /codeql runs on this repo skip the "
+          "LLM call for this")
+    print(f"  finding while its source is unchanged, for "
+          f"{SUPPRESS_TTL_DAYS} days.")
+    if title:
+        # Display-integrity note: _line escapes non-printables to
+        # visible \xHH/\uHHHH forms, EXCEPT bidi override characters
+        # (U+202A-U+202E, U+2066-U+2069), which its autofetch-markup
+        # pass DROPS silently (pre-existing sanitiser behaviour,
+        # shared with every report writer). Dropped is inert — the
+        # display cannot be reordered — but an auditor comparing this
+        # line to the raw finding must know removal, not escaping, is
+        # the bidi treatment here.
+        print(f"  Title:     {_line(title, max_chars=200)}")
+    if operator:
+        print("  Grant:     the live-context operator grant also "
+              "grants this context")
+    else:
+        print("  Grant:     the live-context operator grant refuses "
+              "this context — the")
+        print("             refusal is recorded with the mint "
+              "(grant=refused), not bypassed")
+    print("  Context:   recorded into the minted row — "
+          f"tty={_line(str(ctx.get(TTY_KEY) or ''), max_chars=40)} "
+          f"sid={_line(str(ctx.get(SID_KEY) or ''), max_chars=20)} "
+          f"envm={_line(str(ctx.get(ENV_MARKERS_KEY) or ''), max_chars=40)}")
+    print("             "
+          f"parents={_line(str(ctx.get(PARENTS_KEY) or ''), max_chars=120)}")
+    envm = set(str(ctx.get(ENV_MARKERS_KEY) or "").split(","))
+    if envm & {"claudecode", "trusted"}:
+        print("  Note:      a dispatch environment marker is present "
+              "— this ceremony run")
+        print("             is recorded as such for the auditor.")
+    print(f"  Revoke:    raptor-review verdict {fid} retest "
+          "(works non-interactively)")
+    print()
+    try:
+        answer = input(f"  Type the confirmation phrase "
+                       f"'suppress {fid}' to mint, or anything "
+                       "else to abort: ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        print("  Aborted — nothing stored or changed.")
+        sys.exit(3)
+    if answer.strip() != f"suppress {fid}":
+        print("  Aborted — the phrase does not match "
+              "'suppress <finding-id>' for THIS finding. Nothing was "
+              "stored or changed.")
+        sys.exit(3)
+
+
+def _record_operator_verdict(run_dir, finding, verdict, reason, source,
+                             extra=None):
     """Disk-side audit record for the verb, via the suppressions
     single-writer (dropped=false — an operator verdict never drops a
     finding from THIS run; it steers future ones). Best-effort like
-    every other producer."""
+    every other producer. ``extra`` merges additional audit fields
+    (the fp mint provenance: ``minted``, ``operator_grant``)."""
     from core.analysis.reach_chokepoint import record_suppression
     record_suppression(
         run_dir,
@@ -1504,7 +1743,7 @@ def _record_operator_verdict(run_dir, finding, verdict, reason, source):
         verdict=f"operator_{verdict}",
         reason=reason or "operator verdict (no reason given)",
         dropped=False,
-        extra={"source": source},
+        extra={"source": source, **(extra or {})},
     )
 
 
@@ -1563,7 +1802,12 @@ def cmd_verdict(args) -> None:
     (``live_context_grants_operator`` — not a bare TTY check: a pty
     makes ``isatty`` true by design) — its row suppresses the finding
     cross-run with pipeline authority, so it is reserved for human
-    terminal judgment. ``tp`` and ``retest`` stay available
+    terminal judgment. ``fp --ceremony`` is the sanctioned production
+    route: the grant refuses every shipped launcher route's dispatch
+    marker, so the ceremony substitutes a stronger, recorded
+    authority — all std fds TTYs, a typed confirmation phrase naming
+    the finding id, and a mint stamped ``minted=ceremony`` with the
+    grant result. ``tp`` and ``retest`` stay available
     non-interactively: they are fail-safe (their only effect is that
     the finding gets RE-analyzed), and their provenance stamp records
     the invocation context either way.
@@ -1596,10 +1840,18 @@ def cmd_verdict(args) -> None:
     rel, fn, line = finding_coords(ref.finding)
     rule = finding_rule_id(ref.finding)
     reason = (args.reason or "").strip()
-    source, prov_note, prov_warning, operator = \
+    source, prov_note, prov_warning, operator, ctx = \
         _operator_provenance(args)
     if prov_warning:
         print(f"  ⚠️  {prov_warning}", file=sys.stderr)
+
+    ceremony = bool(getattr(args, "ceremony", False))
+    if ceremony and verb != "fp":
+        print("  --ceremony applies to the fp verb only (tp and "
+              "retest never need it — they are fail-safe and work "
+              "in any context). Nothing was stored or changed.",
+              file=sys.stderr)
+        sys.exit(2)
 
     from core.sage.hooks import SUPPRESS_TTL_DAYS
 
@@ -1614,10 +1866,11 @@ def cmd_verdict(args) -> None:
     # chokepoint (live_context_grants_operator, same as the coverage
     # --mark writer), not a bare isatty check: an in-session agent on
     # the launcher's pty IS interactive-TTY and could otherwise mint
-    # the standing suppression itself. tp/retest stay available
-    # non-interactively (fail-safe asymmetry: they only ever cause
-    # RE-analysis).
-    if verb == "fp" and not operator:
+    # the standing suppression itself. The --ceremony route below is
+    # the sanctioned substitute authority for the contexts the grant
+    # refuses. tp/retest stay available non-interactively (fail-safe
+    # asymmetry: they only ever cause RE-analysis).
+    if verb == "fp" and not ceremony and not operator:
         print("  Refused: the fp verb requires an operator context "
               "(the live-context grant discipline: an interactive "
               "terminal at an operator shell, no agent-session or "
@@ -1632,13 +1885,65 @@ def cmd_verdict(args) -> None:
               "session's own terminal makes isatty true by design). "
               "Nothing was stored or changed. Use 'tp'/'retest' "
               "(both stay available non-interactively — they only "
-              "cause re-analysis), or record the review via "
-              "/annotate.",
+              "cause re-analysis), record the review via /annotate, "
+              "or — for a standing suppression — run the "
+              "typed-consent ceremony at your own terminal:\n"
+              "    raptor review verdict "
+              f"{_line(args.finding_id, max_chars=120)} fp "
+              "--ceremony",
               file=sys.stderr)
         sys.exit(2)
 
-    note = prov_note + (f" reason={_line(reason, max_chars=200)}"
-                        if reason else "")
+    # Ceremony context gate — decided up front with zero mutation,
+    # from the SAME detected context the audited stamp records. The
+    # typed confirmation itself happens later, after the fp
+    # preconditions (source hash, SAGE reachability) are known good:
+    # never ask the operator to consent to a mint that then fails.
+    if verb == "fp" and ceremony:
+        refusal = _ceremony_context_refusal(ctx)
+        if refusal:
+            print(f"  Ceremony refused: {refusal}. The typed consent "
+                  "must come from the operator at their own terminal "
+                  "— run:\n"
+                  "    raptor review verdict "
+                  f"{_line(args.finding_id, max_chars=120)} fp "
+                  "--ceremony\n"
+                  "  Nothing was stored or changed.",
+                  file=sys.stderr)
+            sys.exit(2)
+
+    # fp mint provenance — HOW the mint was authorised
+    # (minted=grant|ceremony), what the operator grant said
+    # (grant=granted|refused), and the detected invocation context
+    # (mintctx), so ceremony-minted rows stay distinguishable from
+    # grant-minted ones and the ceremony never silently bypasses the
+    # grant. MAC-BOUND: store_finding_verdict puts these in the row's
+    # ||key=value|| markers AND the rowmac'd decision-field set, so a
+    # stored row's mint authority cannot be edited after the fact
+    # (the note stamp stays free audit text; readers rebuild the
+    # field set from the row's own markers, so pre-mint rows keep
+    # verifying). Same-user key-read bound applies — see the rowmac
+    # module.
+    mint = None
+    if verb == "fp":
+        from core.annotations.provenance import (
+            ENV_MARKERS_KEY,
+            PARENTS_KEY,
+            SID_KEY,
+            TTY_KEY,
+        )
+        mint = {
+            "minted": "ceremony" if ceremony else "grant",
+            "grant": "granted" if operator else "refused",
+            "mintctx": (
+                f"tty={ctx.get(TTY_KEY, '')};"
+                f"sid={ctx.get(SID_KEY, '')};"
+                f"envm={ctx.get(ENV_MARKERS_KEY, '')};"
+                f"parents={ctx.get(PARENTS_KEY, '')}"
+            ),
+        }
+    note = prov_note + (
+        f" reason={_line(reason, max_chars=200)}" if reason else "")
 
     from core.sage.hooks import (
         SUPPRESS_TTL_DAYS,
@@ -1694,13 +1999,18 @@ def cmd_verdict(args) -> None:
         if client is None:
             print(f"  {sage_absent_msg}", file=sys.stderr)
             sys.exit(1)
+        if ceremony:
+            # Preconditions are known good — evidence display and
+            # typed confirmation now, mint immediately after (exits
+            # without returning on abort/mismatch; nothing stored).
+            _ceremony_confirm(ref, ctx, operator)
         # SAGE store FIRST — if it refuses, the command fails with
         # zero disk mutation (a cleared force-through beside a failed
         # store would silently re-enable suppression the operator
         # never consented to lose).
         ok = store_finding_verdict(
             str(repo_root), rule, rel, fn, src_hash, "false_positive",
-            note=note, client=client,
+            note=note, mint=mint, client=client,
         )
         if not ok:
             print("  Store failed — SAGE refused the row (see logs). "
@@ -1710,9 +2020,12 @@ def cmd_verdict(args) -> None:
         # operator FP — clear it so the new verdict actually takes.
         cleared_paths, failed_paths = set_manual_override(matches, False)
         _record_operator_verdict(
-            ref.run_dir, ref.finding, "false_positive", reason, source)
+            ref.run_dir, ref.finding, "false_positive", reason, source,
+            extra={"minted": "ceremony" if ceremony else "grant",
+                   "operator_grant": operator})
         print(f"  Stored:   false_positive verdict row "
-              f"(source={source})")
+              f"(source={source}, "
+              f"minted={'ceremony' if ceremony else 'grant'})")
         if cleared_paths:
             print(f"  Cleared:  manual_override on "
                   f"{len(cleared_paths)} findings file(s)")
@@ -1955,11 +2268,14 @@ def main():
         help="Record a human FP/TP/retest verdict on a finding. "
              "fp gates on the live-context operator grant, which "
              "refuses the dispatch trust markers every shipped "
-             "launcher route carries — fp does not mint in "
+             "launcher route carries — a plain fp does not mint in "
              "production (setting _RAPTOR_TRUSTED=1 to reach this "
              "CLI is itself a refused marker, so the preamble's "
-             "bypass hint does not help here); use /annotate for "
-             "operator FP assertions, tp/retest for re-analysis")
+             "bypass hint does not help here); the sanctioned "
+             "production route is 'raptor review verdict <id> fp "
+             "--ceremony' at the operator's own terminal; use "
+             "/annotate for operator FP assertions without a "
+             "standing suppression, tp/retest for re-analysis")
     p_verd.add_argument("finding_id")
     p_verd.add_argument("verdict", choices=["fp", "tp", "retest"])
     p_verd.add_argument("-m", "--reason", default=None,
@@ -1971,6 +2287,16 @@ def main():
                         choices=["human", "agent"],
                         help="verdict source (default: human on an "
                              "interactive TTY, else agent)")
+    p_verd.add_argument("--ceremony", action="store_true",
+                        default=False,
+                        help="fp only: typed operator consent at the "
+                             "operator's own terminal (every std fd "
+                             "a TTY; the confirmation phrase "
+                             "'suppress <finding-id>' typed back). "
+                             "Mints the standing suppression as "
+                             "minted=ceremony with the grant result "
+                             "and full invocation context recorded. "
+                             "Revoke with the retest verb")
 
     known_commands = {
         "show", "findings", "gaps", "history", "stats", "notes",
