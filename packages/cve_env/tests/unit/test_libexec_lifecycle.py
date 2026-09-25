@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 from importlib.machinery import SourceFileLoader
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,8 +27,35 @@ def _load_shim():
     loader = SourceFileLoader("raptor_cve_env_lifecycle", str(LIBEXEC))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
+    # The shim's import-time path setup (sys.path.insert of the repo
+    # root / its package dir) must not leak process-wide: a leaked
+    # packages/<pkg> prepend shadows the sibling package's bare
+    # 'tests' test-package for every LATER fresh import in this
+    # process — including multiprocessing forkserver children, which
+    # freeze sys.path at first pool use (an unpickle in the child then
+    # fails with ModuleNotFoundError on the victim's test module).
+    # The shim's own imports resolve during exec; nothing needs the
+    # leaked entries afterwards (pytest.ini pythonpath + the root
+    # conftest already pin the canonical entries).
+    path_before = list(sys.path)
+    try:
+        loader.exec_module(mod)
+    finally:
+        sys.path[:] = path_before
     return mod
+
+
+def test_shim_load_leaves_sys_path_unchanged() -> None:
+    """Fence for the leak class above: loading the shim in-process
+    must not change sys.path. The packages/cve_env prepend the shim
+    performs for its own imports shadowed cve_diff's bare 'tests'
+    test-package in forkserver children whenever this file ran first
+    on the worker (cve_env has tests/unit but no tests/unit/infra —
+    the child's unpickle import fails there instead of falling
+    through), which only orderings like the shuffled tier produce."""
+    before = list(sys.path)
+    _load_shim()
+    assert sys.path == before
 
 
 def _recorder(calls, run_dir):
