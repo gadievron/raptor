@@ -146,10 +146,11 @@ def forecast_scan_cost(
     direct). An uncataloged model yields ``priced: False`` and
     token-only figures instead of a fabricated $0.
     """
+    app_calls = max(0, int(app_context_calls))
     phases = {
         "enhance": _enhance_tokens(list(enhance_sizes)),
         "analyze": _analyze_tokens(list(analyze_sizes)),
-        "app_context": _app_context_tokens(max(0, int(app_context_calls))),
+        "app_context": _app_context_tokens(app_calls),
     }
     totals = {
         k: sum(p[k] for p in phases.values())
@@ -166,6 +167,7 @@ def forecast_scan_cost(
         "model_id": model_id,
         "units": {"enhance": len(enhance_sizes),
                   "analyze": len(analyze_sizes)},
+        "app_context_calls": app_calls,
         "phases": {
             name: {k: round(v) for k, v in p.items()}
             for name, p in phases.items()
@@ -203,7 +205,9 @@ def format_forecast_line(fc: dict[str, Any]) -> str:
     units = fc.get("units") or {}
     parts = (f"enhance {units.get('enhance', 0)} unit(s), "
              f"analyze {units.get('analyze', 0)} unit(s), "
-             f"app-context 1 call")
+             # Older forecast documents predate the census key; they
+             # were all built with the default single call.
+             f"app-context {fc.get('app_context_calls', 1)} call(s)")
     if fc.get("priced"):
         body = (f"${fc['usd_low']:.2f}-${fc['usd_high']:.2f} "
                 f"(central ~${fc['usd_central']:.2f}) — {parts}")

@@ -138,6 +138,21 @@ class TestForecastShape(unittest.TestCase):
         self.assertIn("not a cap", line)
         self.assertIn("enhance 7 unit(s)", line)
         self.assertIn("analyze 9 unit(s)", line)
+        self.assertIn("app-context 1 call(s)", line)
+
+    def test_line_renders_actual_app_context_call_count(self):
+        # The census accepts a variable call count — the line must
+        # render it, not a hardcoded 1.
+        with patch(*_PRICED):
+            fc = _forecast(enhance=[3000], analyze=[3000],
+                           app_context_calls=3)
+        self.assertEqual(fc["app_context_calls"], 3)
+        self.assertIn("app-context 3 call(s)", format_forecast_line(fc))
+        # A forecast document predating the census key reads as the
+        # single call every such document was built with.
+        legacy = {k: v for k, v in fc.items() if k != "app_context_calls"}
+        self.assertIn("app-context 1 call(s)",
+                      format_forecast_line(legacy))
 
 
 if __name__ == "__main__":
