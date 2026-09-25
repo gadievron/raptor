@@ -7,11 +7,11 @@ or stores. A ``fid`` normalises the identity::
 
     fid = <content-anchor>:<rel-vaddr>
 
-where the content anchor identifies the MODULE (its GNU build-id,
-else a SHA-256 content-hash prefix — the
-:func:`packages.binary_analysis.function_cfg` cache-key family) and
-the rel-vaddr is the function entry minus the module's RECORDED
-image base.
+where the content anchor identifies the MODULE via the kind-aware
+identity front door (:mod:`core.binary.identity`: GNU build-id for
+ELF, LC_UUID for the analysed Mach-O slice, hashed RSDS GUID+age
+for PE, else a SHA-256 content-hash prefix) and the rel-vaddr is
+the function entry minus the module's RECORDED image base.
 
 Policy (fail-closed throughout):
 
@@ -50,6 +50,12 @@ logger = logging.getLogger(__name__)
 # bytes are attacker-chosen (a hostile module can copy another's
 # build-id verbatim), so deliberate collision is out of scope for
 # the anchor and is handled by provenance gates on the producers.
+# The kind-aware front door widens WHO can choose: a hostile PE or
+# Mach-O now CHOOSES its identity (RSDS record / LC_UUID) where
+# before it was pinned to a content hash — same producer-provenance
+# trust class, newly reachable for those formats; anchor matches
+# whose identity KINDS disagree are additionally recorded as join
+# anomalies (see :func:`record_join_anomalies`).
 _ANCHOR_HEX_LEN = 16
 
 # Nearest-entry tolerance for fuzzy fid joins, in bytes; the
@@ -130,48 +136,24 @@ def content_anchor(
 ) -> str | None:
     """Derive the module anchor for ``binary_path``.
 
-    Build-id via the existing extractor
-    (:func:`core.analysis.binary_oracle.read_build_id`, sandboxed
-    binutils), else the streamed content hash, else a caller-supplied
-    known digest, else ``None``.
+    Routed through the kind-aware identity front door
+    (:func:`core.binary.identity.content_identity`): format sniff
+    first, then the per-format extractor — the ELF build-id probe
+    (sandboxed readelf, with the loud sandbox-refusal degradation)
+    only ever runs on actual ELF bytes.  An unreadable / absent file
+    falls back to a caller-supplied known digest, else ``None``.
     """
-    build_id: str | None = None
-    sha: str | None = None
     if binary_path is not None:
         path = Path(binary_path)
-        # is_file() gate: read_build_id spawns a sandboxed readelf,
-        # and the sandbox refuses (BaseException, by design) rather
-        # than degrade when asked to pin a nonexistent target — an
-        # absent binary is an anchor miss here, not a sandbox event.
+        # is_file() gate kept for the same reason the front door
+        # refuses unreadable paths: an absent binary is an anchor
+        # miss here, never a probe event.
         if path.is_file():
-            from core.sandbox.errors import SandboxSetupError
-            try:
-                from core.analysis.binary_oracle import read_build_id
-                build_id = read_build_id(path)
-            except SandboxSetupError as exc:
-                # Named explicitly (the sandbox errors are
-                # BaseException so blanket handlers cannot silently
-                # swallow them): the anchor probe is enrichment, and
-                # the sha256 fallback below needs no subprocess — a
-                # sandbox-refusing host degrades loudly to the
-                # content-hash anchor instead of aborting the run.
-                logger.warning(
-                    "content_anchor: sandboxed build-id probe refused "
-                    "(%s) — falling back to the content hash", exc,
-                )
-                build_id = None
-            except Exception:  # noqa: BLE001 — build-id is an optimisation; the content hash is the fallback identity
-                build_id = None
-            if build_id is None:
-                try:
-                    from core.hash import sha256_file
-                    sha = sha256_file(path)
-                except OSError:
-                    sha = None
-    return module_anchor(
-        build_id=build_id,
-        binary_sha256=sha or binary_sha256,
-    )
+            from core.binary.identity import content_identity
+            ident = content_identity(path)
+            if ident is not None:
+                return ident.anchor_hex
+    return module_anchor(binary_sha256=binary_sha256)
 
 
 # ---------------------------------------------------------------------------
@@ -291,21 +273,17 @@ def to_fid(
 
     The anchor and base default from ``manifest_or_db`` (recorded
     values only — see :func:`image_base`); explicit keyword values
-    win, letting hot loops resolve them once.
+    win, letting hot loops resolve them once.  The defaulted anchor
+    is KIND-aware (:func:`core.binary.identity.manifest_anchor`): a
+    manifest whose ``build_id`` carries a PE GUID+age must anchor by
+    the hashed rule, never by a value prefix — records without a
+    kind keep the historical prefix behaviour exactly.
     """
     if base is None:
         base = image_base(manifest_or_db)
     if anchor is None and manifest_or_db is not None:
-        if isinstance(manifest_or_db, dict):
-            anchor = module_anchor(
-                build_id=manifest_or_db.get("build_id"),
-                binary_sha256=manifest_or_db.get("binary_sha256"),
-            )
-        else:
-            anchor = module_anchor(
-                build_id=getattr(manifest_or_db, "build_id", None),
-                binary_sha256=getattr(manifest_or_db, "binary_sha256", None),
-            )
+        from core.binary.identity import manifest_anchor
+        anchor = manifest_anchor(manifest_or_db)
     return make_fid(anchor, addr, base)
 
 

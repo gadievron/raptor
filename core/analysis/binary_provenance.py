@@ -118,6 +118,10 @@ def probe_binary(binary_path: "Path | str") -> Dict[str, Any]:
         {
           "probe": "readelf" | "unavailable" | "not_elf" | "error",
           "build_id": str | None,       # .note.gnu.build-id hex
+          "identity_kind": str | None,  # front-door identity kind
+                                        # (elf_build_id | macho_uuid |
+                                        # pe_guid_age | sha256)
+          "identity_value": str | None, # front-door identity value
           "has_dwarf": bool | None,     # non-empty .debug_info AND
                                         # .debug_abbrev, with a sane
                                         # leading CU header
@@ -128,10 +132,16 @@ def probe_binary(binary_path: "Path | str") -> Dict[str, Any]:
 
     ``None`` means the probe could not tell — callers must not treat
     an unprobed binary as any particular provenance class.
+    ``build_id`` stays the ELF GNU build-id only (the DWARF/symbol
+    verdict lane is ELF by design); the ``identity_*`` pair is the
+    kind-aware module identity every format gets
+    (:func:`core.binary.identity.content_identity`).
     """
     unknown: Dict[str, Any] = {
         "probe": "unavailable",
         "build_id": None,
+        "identity_kind": None,
+        "identity_value": None,
         "has_dwarf": None,
         "has_symtab": None,
         "has_dynsym": None,
@@ -143,15 +153,22 @@ def probe_binary(binary_path: "Path | str") -> Dict[str, Any]:
         st = path.stat()
     except OSError:
         return unknown
-    if not _is_elf(path):
-        return {**unknown, "probe": "not_elf"}
-    if shutil.which("readelf") is None:
-        return unknown
 
     key = (str(path.resolve()), st.st_size, st.st_mtime_ns)
     cached = _probe_cache.get(key)
     if cached is not None:
         return dict(cached)
+
+    if not _is_elf(path):
+        # Non-ELF targets still get a kind-aware module identity
+        # (PE GUID+age, Mach-O LC_UUID, else the content hash) —
+        # cached like the readelf block: the identity probe may hash
+        # the whole file.
+        block = {**unknown, "probe": "not_elf", **_identity_values(path)}
+        _cache_probe(key, block)
+        return dict(block)
+    if shutil.which("readelf") is None:
+        return unknown
 
     from core.analysis.binary_oracle import _run_status, read_build_id
 
@@ -201,19 +218,63 @@ def probe_binary(binary_path: "Path | str") -> Dict[str, Any]:
         )
     )
 
+    build_id = read_build_id(path)
     result: Dict[str, Any] = {
         "probe": "readelf",
-        "build_id": read_build_id(path),
+        "build_id": build_id,
+        # Front-door-equivalent identity without a second sandboxed
+        # readelf spawn: a plausible build-id IS the elf_build_id
+        # identity; an ELF without one identifies by content hash.
+        **_elf_identity_values(path, build_id),
         "has_dwarf": has_dwarf,
         "has_symtab": sizes.get(".symtab", 0) > 0,
         "has_dynsym": sizes.get(".dynsym", 0) > 0,
         "stripped": sizes.get(".symtab", 0) == 0,
     }
 
-    _probe_cache[key] = dict(result)
+    _cache_probe(key, result)
+    return result
+
+
+def _cache_probe(key: tuple, block: Dict[str, Any]) -> None:
+    _probe_cache[key] = dict(block)
     if len(_probe_cache) > _PROBE_CACHE_MAX:
         _probe_cache.pop(next(iter(_probe_cache)))
-    return result
+
+
+def _identity_values(path: Path) -> Dict[str, Any]:
+    """``identity_kind`` / ``identity_value`` via the front door;
+    ``None``s when the file cannot be identified at all."""
+    try:
+        from core.binary.identity import content_identity
+        ident = content_identity(path)
+    except Exception:  # noqa: BLE001 — identity is enrichment; the probe block stays honest with Nones
+        logger.debug("identity probe failed for %s", path, exc_info=True)
+        ident = None
+    if ident is None:
+        return {"identity_kind": None, "identity_value": None}
+    return {"identity_kind": ident.kind, "identity_value": ident.value}
+
+
+def _elf_identity_values(
+    path: Path, build_id: "str | None",
+) -> Dict[str, Any]:
+    from core.binary.identity import (
+        KIND_ELF_BUILD_ID,
+        KIND_SHA256,
+        identity_anchor,
+    )
+    if build_id and identity_anchor(KIND_ELF_BUILD_ID, build_id):
+        return {
+            "identity_kind": KIND_ELF_BUILD_ID,
+            "identity_value": build_id.strip().lower(),
+        }
+    try:
+        from core.hash import sha256_file
+        value = sha256_file(path)
+    except OSError:
+        return {"identity_kind": None, "identity_value": None}
+    return {"identity_kind": KIND_SHA256, "identity_value": value}
 
 
 _FORTIFIED_LIST_CAP = 32
@@ -248,6 +309,8 @@ def binary_provenance_block(
         block: Dict[str, Any] = {
             "probe": "unavailable",
             "build_id": None,
+            "identity_kind": None,
+            "identity_value": None,
             "has_dwarf": None,
             "has_symtab": None,
             "has_dynsym": None,

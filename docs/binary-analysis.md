@@ -136,7 +136,8 @@ binary analyser uses radare2 for:
 On deep runs (`extract_cfgs=True` on the analyser API; the `/binary`
 pipeline passes it automatically — quick mode stays metadata-only and
 skips it), radare2 also recovers each interesting function's
-basic-block CFG (`afbj`, cached per build-id) and surfaces its
+basic-block CFG (`afbj`, cached per content identity — build-id for
+ELF, per-format identity for PE/Mach-O) and surfaces its
 complexity as a `cyclomatic` field on the function records in the
 context map. Cyclomatic complexity is the
 metric of record here because it won a head-to-head evaluation against
@@ -343,7 +344,7 @@ tree.
 | (default, no flags) | Auto-detect locally-built binaries; soft hint when nothing found. When auto-detect AND the project binary store both miss and the project `build` trust marker authorises it, the oracle builds a debug binary on demand (operator `build-command` slot first, detector synthesis second; network-isolated container; run-local artifact + `/project binary add` persist hint). |
 | `--binary <path>` | Explicit debug binary. Repeatable for hybrid targets. Bypasses the git-tracked filter (operator asserts trust). Suppresses default auto-detect. |
 | `--binary-auto` | Same auto-detect + git-filter logic as default, with louder "nothing found" message. Honours `--target-kind`. Warns at result cap (8). |
-| `--binary-edges` | Extract direct call edges and vtable resolution via r2 (single-invocation script-file mode; cached per build-id with cross-target collision check). Required for the `binary_call_edge` REACHABLE promote witness. Slow (~10-30s per binary, then cached). |
+| `--binary-edges` | Extract direct call edges and vtable resolution via r2 (single-invocation script-file mode; cached per content identity with cross-target collision check). Required for the `binary_call_edge` REACHABLE promote witness. Slow (~10-30s per binary, then cached). |
 | `--no-binary-oracle` | Disable binary-oracle filtering entirely. Use for library-only targets, runs where every finding should be unfiltered, or build-mismatch scenarios. Overrides `--binary`/`--binary-auto` with a warning if combined. |
 
 For `--target-kind=hybrid` deployments (library + application both

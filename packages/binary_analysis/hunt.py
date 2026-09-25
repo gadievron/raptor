@@ -45,7 +45,6 @@ from core.binary.addrmap import (
     FidIndex,
     from_fid,
     make_fid,
-    module_anchor,
     record_fid_misses,
 )
 from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
@@ -710,10 +709,10 @@ def _fid_for(manifest: BinaryManifest, address: int) -> str | None:
     """
     if manifest.image_base is None:
         return None
-    anchor = module_anchor(
-        build_id=manifest.build_id or None,
-        binary_sha256=manifest.binary_sha256 or None,
-    )
+    from core.binary.identity import manifest_anchor
+    # Kind-aware anchor: a PE manifest's build_id (canonical
+    # GUID+age) anchors hashed, never as a value prefix.
+    anchor = manifest_anchor(manifest)
     return make_fid(anchor, address, manifest.image_base)
 
 
