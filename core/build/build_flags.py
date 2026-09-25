@@ -435,7 +435,16 @@ _CFLAGS_LINE_RE = re.compile(
 # Backslash-newline continuations join before the line scan (make
 # splices them with a single space) — a CFLAGS assignment continued
 # across lines used to contribute only its first physical line.
-_MAKE_CONTINUATION_RE = re.compile(r"\\\n[ \t]*")
+# ``\r?\n``: modern GNU make folds a ``\``+CRLF continuation too, and
+# because the per-command extractors are LAST-WINS, an UN-folded CRLF
+# continuation is not conservative — it truncates the flag stream at
+# the first physical line, so a later ``-fno-stack-protector`` /
+# ``-D_FORTIFY_SOURCE=0`` on the continued line is dropped and the
+# harvest reports STRONGER hardening than the real build has.  That
+# evidence is suppression-grade on the trust-gated corpus-runner
+# lane, so folding like make itself does is the verdict-integrity
+# direction, not a tolerance trade-off.
+_MAKE_CONTINUATION_RE = re.compile(r"\\\r?\n[ \t]*")
 
 
 def _from_makefile(path: Path) -> BuildFlagsContext:
