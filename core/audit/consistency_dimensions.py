@@ -1238,13 +1238,17 @@ def detect_argument_shape_deviations(
 #
 # "n implementors of the same interface validate, 1 doesn't." Peer
 # groups are NOT formed here — they come from the layered resolver
-# (``core.analysis.peer_groups``): dispatch-table members (L2) and
-# same-type cohorts (L4), the two layers whose membership is a
-# mechanical fact rather than a naming heuristic. The comparator is
-# the existing property-vector majority vote
+# (``core.analysis.peer_groups``): dispatch-table members (L2),
+# same-type cohorts (L4) and route families (L10), the layers whose
+# membership is a mechanical fact rather than a naming heuristic.
+# The comparator is the existing property-vector majority vote
 # (``sibling_analysis.find_asymmetries``) over structural safety
 # properties (auth check, null guard, bounds guard, error handling —
-# the in-tree property regexes, no project vocabulary).
+# the in-tree property regexes, no project vocabulary). Route-family
+# members additionally vote their recorded auth-decorator presence
+# as its OWN two-valued property — a decoration fact, deliberately
+# NEVER folded into the body-evidence ``auth_check`` vote (see the
+# adapter note in :func:`detect_interface_deviations`).
 #
 # Escalation-only (§3.8): interface members legitimately differ (a
 # read-only op skipping the write-permission check is correct), so
@@ -1258,8 +1262,23 @@ DIMENSION_INTERFACE = "interface"
 INTERFACE_MIN_GROUP = MIN_GROUP_SITES
 
 # Peer-group layers whose membership is mechanical (L2 dispatch-site
-# extraction, L4 type-cohort index).
-_INTERFACE_GROUP_TYPES = frozenset({"dispatch_site", "type_cohort"})
+# extraction, L4 type-cohort index, L10 route families). Literal
+# strings by convention here; the route entry is pinned against
+# ``peer_groups.GROUP_TYPE_ROUTE_FAMILY`` by test so drift dies
+# loudly instead of the frozenset silently missing the layer.
+_INTERFACE_GROUP_TYPES = frozenset({
+    "dispatch_site", "type_cohort", "route_family",
+})
+
+_ROUTE_FAMILY_GROUP_TYPE = "route_family"
+
+# The route layer's two-valued auth-decoration property (literal for
+# the same reason; pinned against peer_groups.ROUTE_AUTH_PROPERTY by
+# test). Voted as its own property on route-family groups only — a
+# DECORATION fact ("carries the auth decorator"), never a protection
+# claim (chain entries do not prove wrapping) and never an input to
+# the body-evidence ``auth_check`` vote.
+_ROUTE_AUTH_PRESENCE_PROPERTY = "route_auth_decorator_present"
 
 # Property → CWE, per the §3.8 set (auth omission is CWE-862; the
 # validation-shaped properties map to the broad input-validation
@@ -1267,6 +1286,7 @@ _INTERFACE_GROUP_TYPES = frozenset({"dispatch_site", "type_cohort"})
 # is prepass-lead-only and must not widen the CWE dispatch surface).
 _INTERFACE_PROPERTY_CWE = {
     "auth_check": "CWE-862",
+    _ROUTE_AUTH_PRESENCE_PROPERTY: "CWE-862",
     "null_guard": "CWE-20",
     "bounds_guard": "CWE-20",
     "error_handling": "CWE-20",
@@ -1308,6 +1328,16 @@ class InterfaceDeviation:
 
     @property
     def description(self) -> str:
+        # Decoration facts get decoration wording: the lead claims a
+        # DIFFERENCE in decoration, never that the peers perform (or
+        # are protected by) an auth check — a recorded decorator may
+        # not wrap the registered callable.
+        if self.property_name == _ROUTE_AUTH_PRESENCE_PROPERTY:
+            return (
+                f"{self.conforming}/{self.n} implementors in "
+                f"{self.group_id} carry the auth decorator; "
+                f"{self.enclosing_function} does not"
+            )
         return (
             f"{self.conforming}/{self.n} implementors in "
             f"{self.group_id} perform {self.property_name}; "
@@ -1374,6 +1404,30 @@ def detect_interface_deviations(
         if len(resolved) < min_group:
             continue
 
+        def _member_properties(
+            s: Any, body: str,
+        ) -> dict[str, bool]:
+            props = _interface_properties(body)
+            # Route-family adapter: the L10 layer stamps every
+            # member with a two-valued auth-DECORATION fact; it is
+            # voted as its own property so a decoration deviant
+            # surfaces ("peers carry the auth decorator, this one
+            # doesn't"). Deliberately NOT folded into ``auth_check``:
+            # chain entries do not prove wrapping (a decorator above
+            # the registration decorator protects nothing), so
+            # target-authored decorator text must never be able to
+            # raise a member's ``auth_check`` and mask a
+            # body-evidence lead. Body evidence keeps that vote to
+            # itself, in both directions. Truncated/unknown chains
+            # were excluded at family formation; a member without
+            # the stamp simply does not vote on it.
+            if gtype == _ROUTE_FAMILY_GROUP_TYPE:
+                sp = getattr(s, "properties", None) or {}
+                stamped = sp.get(_ROUTE_AUTH_PRESENCE_PROPERTY)
+                if isinstance(stamped, bool):
+                    props[_ROUTE_AUTH_PRESENCE_PROPERTY] = stamped
+            return props
+
         from .sibling_analysis import SiblingPath
         voting = SiblingGroup(
             group_id=group.group_id,
@@ -1385,7 +1439,7 @@ def detect_interface_deviations(
                     file=s.file,
                     function=s.function,
                     line=line,
-                    properties=_interface_properties(body),
+                    properties=_member_properties(s, body),
                 )
                 for s, line, body in resolved
             ],
@@ -1401,10 +1455,21 @@ def detect_interface_deviations(
                 continue
             if asym.confidence < ratio:
                 continue
+            def _phrase(fn: str, *, positive: bool) -> str:
+                # Decoration wording for the decoration fact (see
+                # the InterfaceDeviation.description note).
+                if asym.property_name == _ROUTE_AUTH_PRESENCE_PROPERTY:
+                    return (f"{fn} carries the auth decorator"
+                            if positive else
+                            f"{fn} does not carry the auth decorator")
+                return (f"{fn} performs {asym.property_name}"
+                        if positive else
+                        f"{fn} lacks {asym.property_name}")
+
             exhibits = [
                 PeerExhibit(
                     file_of.get(fn, ""), line_of.get(fn, 0),
-                    f"{fn} performs {asym.property_name}",
+                    _phrase(fn, positive=True),
                 )
                 for fn in sorted(
                     line_of.keys() - set(asym.minority_siblings),
@@ -1432,7 +1497,7 @@ def detect_interface_deviations(
                         ratio=asym.confidence,
                         deviant=PeerExhibit(
                             file_of.get(fn, ""), line_of.get(fn, 0),
-                            f"{fn} lacks {asym.property_name}",
+                            _phrase(fn, positive=False),
                         ),
                         exhibits=exhibits,
                         contract_source="majority",
