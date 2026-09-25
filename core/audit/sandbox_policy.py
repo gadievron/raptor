@@ -139,6 +139,15 @@ _TOOL_POLICIES: dict[str, ToolPolicy] = {
         timeout_seconds=300,
         memory_limit_mb=4096,
     ),
+    "php": ToolPolicy(
+        tool="php", profile=SandboxProfile.FULL,
+        reason=(
+            "interpreter executing grammar-validated sanitizer chains "
+            "extracted from attacker-controlled source (sanwit witness)"
+        ),
+        timeout_seconds=30,
+        memory_limit_mb=256,
+    ),
 }
 
 
