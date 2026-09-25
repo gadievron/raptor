@@ -668,9 +668,16 @@ def _normalise_call_site(site: str) -> str:
     # string arg used to truncate the call-site (losing the closing
     # quote), so f("a #b", x) and f("a #c", y) collided in
     # dedup_callers and a differently-argumented caller vanished from
-    # the review prompt.
+    # the review prompt.  String openers pinned to UNESCAPED
+    # delimiters ((?<!\\)): an unterminated literal whose interior
+    # repeats escaped delimiters (`"` + `\"`*n) otherwise makes every
+    # embedded delimiter a fresh match attempt that re-scans to the
+    # end of the snippet — quadratic on a hostile call site (measured
+    # exp 2.04; pinned, exp 1.0).  On a well-formed token stream no
+    # string opens at an escaped delimiter, so the strip is
+    # unchanged; dropping the pin re-opens the quadratic.
     text = re.sub(
-        r'("(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')|#.*$',
+        r'((?<!\\)"(?:[^"\\]|\\.)*"|(?<!\\)\'(?:[^\'\\]|\\.)*\')|#.*$',
         lambda m: m.group(1) or "",
         text,
         flags=re.MULTILINE,
