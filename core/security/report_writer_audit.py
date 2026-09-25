@@ -745,19 +745,6 @@ class AllowlistEntry:
 # the test suite: empty / TODO notes are rejected).
 _ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry(
-        file="libexec/raptor-understand",
-        func_name="_main_body",
-        kind="unsanitised_exception_text",
-        detail="e",
-        audit_note=(
-            "broad-handler exception relay at the top-level entry "
-            "point (mechanism residual): _main_body drives the "
-            "multi-model hunt/trace dispatch, so exception text can "
-            "quote provider/tool content; triaged as a burn-down "
-            "residual — sanitise + register on next functional touch"
-        ),
-    ),
-    AllowlistEntry(
         file="packages/cve_diff/cve_diff/cli/bench.py",
         func_name="_render_html",
         kind="unsanitised_llm_value",

@@ -12,6 +12,8 @@ Usage:
     libexec/raptor-understand --trace traces.json --target /code \\
         --model claude-opus-4-7
 
+    libexec/raptor-understand --resume /path/to/run-dir
+
 This is the libexec shim. Source-tree ``--map`` still lives in the skill-based
 flow because it is a full in-session investigation. A single compiled
 artefact can be mapped mechanically here: the binary substrate writes its
@@ -22,6 +24,12 @@ Output is written to ``<out>/map-result.json``, ``<out>/hunt-result.json`` or
 ``<out>/trace-result.json`` plus a small summary printed to stdout for the
 operator/skill to relay. Returns non-zero exit status on dispatch errors so
 the skill can detect failure.
+
+``--hunt``/``--trace`` runs pin their resolved options and checkpoint
+each model's finished result as produced; ``--resume <run-dir>``
+re-enters an interrupted run as the same run — checkpointed models
+return at no new cost, only the remainder dispatches (see the Resume
+machinery section below).
 """
 
 from __future__ import annotations
@@ -126,10 +134,24 @@ def _build_parser() -> argparse.ArgumentParser:
             "model (reachable / not_reachable / uncertain)."
         ),
     )
+    mode.add_argument(
+        "--resume", metavar="RUN_DIR",
+        help=(
+            "Re-enter an interrupted --hunt/--trace run AS THE SAME "
+            "RUN: checkpointed models return their persisted results "
+            "at no new cost, only the remainder dispatches. "
+            "Configuration comes from the run's pinned "
+            "understand-run-config.json — do not pass --target, --out "
+            "or --model."
+        ),
+    )
 
     p.add_argument(
-        "--target", required=True, metavar="TARGET_PATH",
-        help="Target repository for --hunt/--trace, or compiled artefact for --map.",
+        "--target", metavar="TARGET_PATH",
+        help=(
+            "Target repository for --hunt/--trace, or compiled artefact "
+            "for --map. Required except with --resume."
+        ),
     )
     p.add_argument(
         "--model", action="append", default=[], metavar="MODEL",
@@ -140,16 +162,41 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--out", required=True, metavar="OUT_DIR",
-        help="Output directory. Created if missing. Result JSON is written here.",
+        "--out", metavar="OUT_DIR",
+        help=(
+            "Output directory. Created if missing. Result JSON is "
+            "written here. Required except with --resume (the run dir "
+            "is the output dir)."
+        ),
     )
     p.add_argument(
-        "--max-cost", type=_positive_float, default=5.0, metavar="USD",
+        "--max-cost", type=_positive_float, default=None, metavar="USD",
         help=(
             "Total cost cap across all models (default: $5.00). "
             "Per-model cap is max($0.50, max_cost/N) — i.e. the $0.50 "
             "floor can push total spend above this cap when many models "
-            "are configured."
+            "are configured. With --resume, overrides the run's pinned "
+            "cap for this segment only (booked spend still counts "
+            "against it)."
+        ),
+    )
+    p.add_argument(
+        "--allow-drift", action="store_true",
+        help=(
+            "For --resume: proceed even when target files referenced "
+            "by prior-segment checkpoints have changed since they were "
+            "produced. The carried results then describe an older "
+            "tree; the drift is listed loudly and stamped into the "
+            "result payload."
+        ),
+    )
+    p.add_argument(
+        "--reopen", action="store_true",
+        help=(
+            "For --resume: when the run's status is 'completed' but no "
+            "*-result.json exists (a step that did not own the run "
+            "stamped it), flip it back to 'interrupted' and resume. A "
+            "completed run WITH its result stays final."
         ),
     )
     p.add_argument(
@@ -683,9 +730,13 @@ def _do_hunt(args: argparse.Namespace) -> dict:
     # Per-model budget = total / N, with a small per-model floor.
     # The cocci backend uses far less of this (1 LLM call to write
     # the rule, then spatch does the work) but the floor still
-    # applies as a safety cap.
+    # applies as a safety cap. A resume overrides with its
+    # remaining-budget-derived cap (booked spend already deducted).
     n = len(models)
     per_model_cost = max(_PER_MODEL_COST_FLOOR_USD, args.max_cost / n)
+    resume_state = getattr(args, "_resume_state", None)
+    if resume_state is not None and resume_state.per_model_cost is not None:
+        per_model_cost = resume_state.per_model_cost
 
     cost_by_model, verbose_logger = _build_cost_and_verbose_helpers(args.verbose)
 
@@ -716,11 +767,23 @@ def _do_hunt(args: argparse.Namespace) -> dict:
     if graph_seeds and not use_slopsquat:
         hunt_pattern = _hunt_pattern_with_seeds(args.hunt, graph_seeds)
 
+    # Per-model checkpointing (skipped for slopsquat — offline,
+    # deterministic and free, nothing worth resuming). The task key is
+    # the OPERATOR pattern, not the seed-enriched one: graph seeds are
+    # informational context that varies across segments by design.
+    dispatch_fn = _bound_dispatch
+    if not use_slopsquat:
+        dispatch_fn = _checkpoint_wrap(
+            _bound_dispatch, args, out_dir, mode="hunt",
+            task_key=args.hunt, target=target,
+            cost_by_model=cost_by_model,
+        )
+
     result = hunt(
         pattern=hunt_pattern,
         repo_path=str(target),
         models=models,
-        dispatch_fn=_bound_dispatch,
+        dispatch_fn=dispatch_fn,
         cost_gate=_build_cost_gate(),
         max_parallel=args.max_parallel,
     )
@@ -748,7 +811,21 @@ def _do_hunt(args: argparse.Namespace) -> dict:
     }
     if graph_seeds:
         payload["graph_seeds"] = graph_seeds
+    _stamp_resume_payload(payload, resume_state)
     return payload
+
+
+def _stamp_resume_payload(payload: dict, resume_state) -> None:
+    """Mark a resumed segment's result: which segment, which models
+    were carried from checkpoints (their recorded cost is already in
+    ``model_costs_usd``), and whether --allow-drift carried results
+    that describe an older tree."""
+    if resume_state is None:
+        return
+    payload["resumed_segment"] = resume_state.segment
+    payload["carried_models"] = sorted(resume_state.checkpoints)
+    if resume_state.drift_count:
+        payload["resumed_with_drift"] = resume_state.drift_count
 
 
 def _do_trace(args: argparse.Namespace) -> dict:
@@ -760,6 +837,11 @@ def _do_trace(args: argparse.Namespace) -> dict:
         raise FileNotFoundError(f"target is not a directory: {target}")
 
     traces = _load_traces(args.trace)
+    # Checkpoint task identity: the traces AS LOADED, before the graph
+    # seeding below mutates them (seeds are informational context that
+    # varies across segments by design, not task identity).
+    from packages.code_understanding.checkpoint import traces_task_key
+    task_key = traces_task_key(traces)
 
     # Graph seeding: enrich traces with prior graph knowledge.
     out_dir = Path(args.out).resolve()
@@ -789,6 +871,9 @@ def _do_trace(args: argparse.Namespace) -> dict:
 
     n = len(models)
     per_model_cost = max(_PER_MODEL_COST_FLOOR_USD, args.max_cost / n)
+    resume_state = getattr(args, "_resume_state", None)
+    if resume_state is not None and resume_state.per_model_cost is not None:
+        per_model_cost = resume_state.per_model_cost
 
     cost_by_model, verbose_logger = _build_cost_and_verbose_helpers(args.verbose)
 
@@ -800,11 +885,17 @@ def _do_trace(args: argparse.Namespace) -> dict:
             verbose_logger=verbose_logger,
         )
 
+    dispatch_fn = _checkpoint_wrap(
+        _bound_dispatch, args, out_dir, mode="trace",
+        task_key=task_key, target=target,
+        cost_by_model=cost_by_model,
+    )
+
     result = trace(
         traces=traces,
         repo_path=str(target),
         models=models,
-        dispatch_fn=_bound_dispatch,
+        dispatch_fn=dispatch_fn,
         cost_gate=_build_cost_gate(),
         max_parallel=args.max_parallel,
     )
@@ -823,6 +914,7 @@ def _do_trace(args: argparse.Namespace) -> dict:
     }
     if graph_seeds:
         payload["graph_seeds"] = graph_seeds
+    _stamp_resume_payload(payload, resume_state)
     return payload
 
 
@@ -945,6 +1037,480 @@ def _print_summary(payload: dict, output_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Resume machinery
+# ---------------------------------------------------------------------------
+# Fresh --hunt/--trace runs pin their resolved options
+# (understand-run-config.json) and checkpoint each model's finished
+# result as produced (packages.code_understanding.checkpoint), so an
+# interrupted run re-enters AS THE SAME RUN: checkpointed models
+# return at no new cost, only the remainder dispatches, and the cost
+# accounting stays continuous across segments. Gates ride the shared
+# substrate (core.run.resume): eligibility, the drift gate against
+# the tree NOW, and max-of-evidence spend booking.
+
+
+class _ResumeState:
+    """Per-resume context threaded into _do_hunt/_do_trace via args."""
+
+    def __init__(self, store, checkpoints, per_model_cost, segment,
+                 drift_count=0):
+        self.store = store
+        self.checkpoints = checkpoints          # {model_name: Checkpoint}
+        self.per_model_cost = per_model_cost    # float | None
+        self.segment = segment
+        self.drift_count = drift_count
+
+
+def _install_sigterm_interrupt():
+    """Route SIGTERM through the KeyboardInterrupt path so a
+    supervisor stop marks the run interrupted (resumable) instead of
+    leaving it stuck 'running'. Main-thread only (in-process test
+    callers included); returns a restore token or None."""
+    import signal
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        return None
+
+    def _raise(_signum, _frame):
+        raise KeyboardInterrupt
+
+    try:
+        return (signal.SIGTERM, signal.signal(signal.SIGTERM, _raise))
+    except (ValueError, OSError):
+        return None
+
+
+def _restore_sigterm(token) -> None:
+    if token is None:
+        return
+    import signal
+    signum, prior = token
+    try:
+        signal.signal(signum, prior if prior is not None
+                      else signal.SIG_DFL)
+    except (ValueError, OSError, TypeError):
+        pass
+
+
+def _mark_run_interrupted(args, out_dir: Path) -> None:
+    """Best-effort lifecycle transition on interruption.
+
+    Only fires when *out_dir* is a run directory owned by
+    /understand (``expected_command`` gate) — a bare ``--out`` with no
+    lifecycle, or another command's run dir (e.g. the /audit mapping
+    phase), is left untouched.
+    """
+    try:
+        from core.run.metadata import interrupt_run
+        interrupt_run(out_dir, "raptor-understand interrupted",
+                      expected_command="understand")
+    except Exception:  # noqa: BLE001 — marking must never mask the exit
+        return
+    print(f"Run marked interrupted: {out_dir}", file=sys.stderr)
+    if args.hunt is not None or args.trace is not None:
+        print(
+            "Resume with: libexec/raptor-understand --resume "
+            f"{out_dir}",
+            file=sys.stderr,
+        )
+
+
+def _pin_run_config(args, out_dir: Path) -> None:
+    """Persist the run's resolved options (fresh --hunt/--trace only).
+
+    For --trace the traces content is also pinned into the run dir
+    (understand-traces-pin.json) with its SHA-256 recorded in the
+    config, so resume classifies the ORIGINAL traces even if the
+    operator's file changed or vanished. Best-effort: a persist
+    failure costs resumability, never the run.
+    """
+    if getattr(args, "_resume_state", None) is not None:
+        return
+    try:
+        import hashlib
+
+        from packages.code_understanding.checkpoint import (
+            TRACES_PIN_FILENAME,
+            save_understand_run_config,
+        )
+        config: dict[str, Any] = {
+            "version": 1,
+            "mode": "hunt" if args.hunt is not None else "trace",
+            "target_path": str(Path(args.target).resolve()),
+            "models": list(args.model),
+            "max_cost_usd": args.max_cost,
+            "max_parallel": args.max_parallel,
+            "hunt_tool": args.hunt_tool,
+            "rank": bool(getattr(args, "rank", False)),
+        }
+        if args.hunt is not None:
+            config["pattern"] = args.hunt
+        else:
+            traces = _load_traces(args.trace)
+            pin_path = Path(out_dir) / TRACES_PIN_FILENAME
+            save_json(pin_path, traces)
+            config["traces_pin_sha256"] = hashlib.sha256(
+                pin_path.read_bytes()).hexdigest()
+        save_understand_run_config(Path(out_dir), config)
+    except Exception:  # noqa: BLE001 — resumability is best-effort
+        logging.getLogger(__name__).warning(
+            "understand-run-config.json persist failed — this run "
+            "will not be resumable", exc_info=True,
+        )
+
+
+def _checkpoint_wrap(dispatch_fn, args, out_dir: Path, *, mode: str,
+                     task_key: str, target: Path, cost_by_model):
+    """Wrap a bound dispatch with per-model checkpointing.
+
+    Fresh runs write a checkpoint after each model finishes (skipping
+    failed results — a raised task or an all-error list must re-run,
+    not replay). Resumed runs return the carried checkpoint for
+    models that already finished, booking the recorded cost into this
+    segment's accounting, and dispatch only the remainder.
+    """
+    from packages.code_understanding.checkpoint import (
+        CheckpointStore,
+        task_fingerprint,
+    )
+
+    resume_state = getattr(args, "_resume_state", None)
+    if resume_state is not None:
+        store = resume_state.store
+        carried = resume_state.checkpoints
+    else:
+        store = CheckpointStore(
+            Path(out_dir), mode=mode,
+            fingerprint=task_fingerprint(mode, task_key, target),
+            target=target,
+        )
+        carried = {}
+
+    def _wrapped(model, task_arg, repo_path):
+        name = model.model_name
+        cached = carried.get(name)
+        if cached is not None:
+            # Carried result: no dispatch, and the prior segment's
+            # recorded cost joins this segment's ledger so the run's
+            # accounting is continuous.
+            cost_by_model[name] = cached.cost_usd
+            return cached.items
+        results = dispatch_fn(model, task_arg, repo_path)
+        failed = (
+            isinstance(results, list) and bool(results)
+            and all(isinstance(r, dict) and "error" in r for r in results)
+        )
+        if isinstance(results, list) and not failed:
+            store.save(name, results, cost_by_model.get(name, 0.0))
+            store.bump_spend_floor(sum(cost_by_model.values()))
+        return results
+
+    return _wrapped
+
+
+#: Completion artifacts a genuinely finished /understand run leaves
+#: behind — 'completed' with none of these present is a contradiction
+#: --reopen may flip back to 'interrupted'.
+_RESULT_ARTIFACTS = ("map-result.json", "hunt-result.json",
+                     "trace-result.json")
+
+
+def _do_resume(args) -> int:
+    """Re-enter an interrupted --hunt/--trace run as the same run."""
+    import hashlib
+
+    from core.run.metadata import load_run_metadata, resume_run
+    from core.run.resume import (
+        max_of_evidence,
+        remaining_budget_usd,
+        resume_ineligibility,
+        spans_drift,
+        spend_floor_usd,
+    )
+    from packages.code_understanding.checkpoint import (
+        TRACES_PIN_FILENAME,
+        CheckpointStore,
+        load_understand_run_config,
+        task_fingerprint,
+        traces_task_key,
+    )
+
+    out_dir = Path(args.resume).resolve()
+    if not out_dir.is_dir():
+        print(f"error: {out_dir} is not a directory", file=sys.stderr)
+        return 1
+
+    err = resume_ineligibility(
+        out_dir,
+        completion_artifacts=_RESULT_ARTIFACTS,
+        reopen=args.reopen,
+        completed_hint="Start a new /understand run instead.",
+        contradiction_example=(
+            " (e.g. another command's lifecycle complete on this dir)"
+        ),
+    )
+    if err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+
+    config = load_understand_run_config(out_dir)
+    if config is None:
+        print(
+            f"error: no understand-run-config.json in {out_dir} — "
+            "this run predates resumable /understand (or the config "
+            "persist failed). Binary --map runs are mechanical and "
+            "carry no LLM spend — re-run those. Otherwise start a "
+            "new run.",
+            file=sys.stderr,
+        )
+        return 1
+    mode = config.get("mode")
+    if mode not in ("hunt", "trace"):
+        print(
+            f"error: pinned config mode {mode!r} is not resumable",
+            file=sys.stderr,
+        )
+        return 1
+    if config.get("hunt_tool") == "slopsquat":
+        print(
+            "error: slopsquat hunts are offline, deterministic and "
+            "free — re-run the original command instead of resuming",
+            file=sys.stderr,
+        )
+        return 1
+
+    meta = load_run_metadata(out_dir) or {}
+    target_str = meta.get("target_path") or config.get("target_path")
+    if not target_str:
+        print("error: run records no target_path", file=sys.stderr)
+        return 1
+    target = Path(target_str).resolve()
+    if not target.is_dir():
+        print(f"error: target not found: {target}", file=sys.stderr)
+        return 1
+
+    models = config.get("models")
+    if (not isinstance(models, list) or not models
+            or not all(isinstance(m, str) and m.strip() for m in models)):
+        print(
+            "error: pinned config carries no usable model list — "
+            "start a new run",
+            file=sys.stderr,
+        )
+        return 1
+    models = [m.strip() for m in models]
+
+    # --- task identity: the ORIGINAL pattern / pinned traces ---
+    pattern = None
+    trace_arg = None
+    if mode == "hunt":
+        pattern = config.get("pattern")
+        if not isinstance(pattern, str) or not pattern.strip():
+            print("error: pinned config carries no hunt pattern",
+                  file=sys.stderr)
+            return 1
+        pattern = pattern.strip()
+        task_key = pattern
+    else:
+        pin_path = out_dir / TRACES_PIN_FILENAME
+        expected_sha = config.get("traces_pin_sha256")
+        if not pin_path.is_file() or not isinstance(expected_sha, str):
+            print(
+                f"error: no traces pin in {out_dir} — the run died "
+                "before its input was pinned; start a new run",
+                file=sys.stderr,
+            )
+            return 1
+        actual_sha = hashlib.sha256(pin_path.read_bytes()).hexdigest()
+        if actual_sha != expected_sha:
+            print(
+                "error: understand-traces-pin.json does not match the "
+                "pinned config's SHA-256 — the run dir was modified; "
+                "start a new run",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            traces = _load_traces(str(pin_path))
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        task_key = traces_task_key(traces)
+        trace_arg = str(pin_path)
+
+    store = CheckpointStore(
+        out_dir, mode=mode,
+        fingerprint=task_fingerprint(mode, task_key, target),
+        target=target,
+    )
+    checkpoints = store.load_all(models)
+    remainder = [m for m in models if m not in checkpoints]
+
+    # --- drift gate: checkpoint-referenced files vs the tree NOW ---
+    drifted, checked = spans_drift(target, store.drift_records(checkpoints))
+    if drifted and not args.allow_drift:
+        print(
+            f"error: target tree drifted since this run's checkpoints "
+            f"— {len(drifted)} of {checked} recorded file hashes no "
+            "longer match the source:",
+            file=sys.stderr,
+        )
+        for d in drifted[:10]:
+            cur = d.current_hash or "missing"
+            print(
+                f"  {d.file} [{d.label}] (hash {d.stored_hash} → {cur})",
+                file=sys.stderr,
+            )
+        if len(drifted) > 10:
+            print(f"  ... and {len(drifted) - 10} more", file=sys.stderr)
+        print(
+            "Refusing to resume. Pass --allow-drift to carry the "
+            "checkpointed results anyway (they describe the older "
+            "tree; the drift is stamped into the result payload), or "
+            "start a new run.",
+            file=sys.stderr,
+        )
+        return 1
+    if drifted:
+        print(
+            f"--allow-drift: {len(drifted)} of {checked} recorded "
+            "file hashes drifted — carried results describe the "
+            "older tree:",
+            flush=True,
+        )
+        for d in drifted:
+            cur = d.current_hash or "missing"
+            print(
+                f"  drift: {d.file} [{d.label}] "
+                f"(hash {d.stored_hash} → {cur})",
+                flush=True,
+            )
+
+    # --- spend carry-forward: max-of-evidence booking ---
+    carried_cost = sum(c.cost_usd for c in checkpoints.values())
+    booked, note = max_of_evidence([
+        (carried_cost, "checkpoint cost ledger"),
+        (spend_floor_usd(out_dir),
+         "incremental spend floor — the prior segment died before "
+         "its checkpoints landed"),
+    ])
+    original_cap = config.get("max_cost_usd")
+    cap = (
+        args.max_cost if args.max_cost is not None
+        else (float(original_cap)
+              if isinstance(original_cap, (int, float))
+              and not isinstance(original_cap, bool)
+              else None)
+    )
+    if args.max_cost is not None:
+        _orig_s = (
+            f"${float(original_cap):.2f}"
+            if isinstance(original_cap, (int, float)) else "none"
+        )
+        print(
+            f"--max-cost override for THIS segment: cap "
+            f"${cap:.2f} (original run cap: {_orig_s}; booked spend "
+            "still counts against the new cap; the persisted config "
+            "is unchanged)",
+            flush=True,
+        )
+    remaining = remaining_budget_usd(cap, booked)
+    print(
+        f"Resume: {len(checkpoints)} of {len(models)} model(s) "
+        f"checkpointed; booked ${booked:.2f} ({note}); "
+        f"{len(remainder)} model(s) to dispatch",
+        flush=True,
+    )
+    if cap is not None:
+        print(
+            f"Resume budget: cap ${cap:.2f}, remaining "
+            f"${max(0.0, cap - booked):.2f}",
+            flush=True,
+        )
+    per_model_cost = None
+    if remaining is not None and remainder:
+        per_model_cost = max(
+            _PER_MODEL_COST_FLOOR_USD, remaining / len(remainder),
+        )
+
+    # --- lifecycle: interrupted/failed → running, segment row ---
+    try:
+        segment = resume_run(out_dir, note="raptor-understand resume")
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    store.set_segment(segment)
+    store.bump_spend_floor(booked)
+    print(f"Resuming {out_dir} as segment {segment}", flush=True)
+
+    # --- rebuild the namespace from the ORIGINAL run config ---
+    max_parallel = config.get("max_parallel")
+    if not isinstance(max_parallel, int) or max_parallel < 1:
+        max_parallel = 3
+    hunt_tool = config.get("hunt_tool")
+    if hunt_tool not in ("auto", "llm", "cocci", "slopsquat"):
+        hunt_tool = "auto"
+    ns = argparse.Namespace(
+        map=False,
+        resume=None,
+        hunt=pattern,
+        trace=trace_arg,
+        target=str(target),
+        out=str(out_dir),
+        model=models,
+        max_cost=(remaining if remaining is not None else 5.0),
+        max_parallel=max_parallel,
+        rank=bool(config.get("rank")),
+        verbose=bool(args.verbose),
+        hunt_tool=hunt_tool,
+        quick=False,
+        max_decompile=20,
+        decompile_all=False,
+        slice_arch=None,
+        runtime_dir=None,
+        fuzz_dir=None,
+        constraint_file=None,
+        compare=None,
+        allow_drift=args.allow_drift,
+        reopen=False,
+    )
+    ns._resume_state = _ResumeState(
+        store=store, checkpoints=checkpoints,
+        per_model_cost=per_model_cost, segment=segment,
+        drift_count=len(drifted),
+    )
+
+    rc = _run_modes(ns, out_dir)
+
+    # The fresh path leaves lifecycle completion to its launcher (the
+    # /understand skill); a resume has no launcher, so it finalises
+    # its own segment. Best-effort with the ownership claim — a
+    # failed transition is reported, never masks the result.
+    if rc == 0:
+        try:
+            from core.run.metadata import complete_run
+            complete_run(out_dir, expected_command="understand")
+        except Exception as e:  # noqa: BLE001 — CLI boundary
+            print(
+                f"warning: lifecycle complete failed: "
+                f"{sanitise_for_terminal(str(e), max_len=200)}",
+                file=sys.stderr,
+            )
+    elif rc != 130:
+        # 130 = interrupted again (already marked by _run_modes);
+        # everything else failed after the run flipped to 'running' —
+        # leaving it there would block the advertised resume until
+        # the pid check ages out.
+        try:
+            from core.run.metadata import fail_run
+            fail_run(out_dir, "understand resume failed",
+                     expected_command="understand")
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+    return rc
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -957,10 +1523,26 @@ def main() -> int:
     # --model would gate nothing. --hunt-tool has no effect on --trace,
     # which always needs a model.
     slopsquat_hunt = args.hunt is not None and args.hunt_tool == "slopsquat"
-    if not args.map and not args.model and not slopsquat_hunt:
-        parser.error("--model is required for --hunt and --trace")
-    if args.map and args.model:
-        parser.error("--model is not used for binary --map")
+    if args.resume is not None:
+        # Resume takes its configuration from the run's pinned
+        # understand-run-config.json — fresh flags that would steer
+        # the task identity are refused, never silently merged.
+        if args.target or args.out or args.model:
+            parser.error(
+                "--resume reads --target/--out/--model from the run's "
+                "pinned understand-run-config.json; do not pass them"
+            )
+    else:
+        if not args.target:
+            parser.error("--target is required (except with --resume)")
+        if not args.out:
+            parser.error("--out is required (except with --resume)")
+        if args.max_cost is None:
+            args.max_cost = 5.0
+        if not args.map and not args.model and not slopsquat_hunt:
+            parser.error("--model is required for --hunt and --trace")
+        if args.map and args.model:
+            parser.error("--model is not used for binary --map")
 
     # ``_do_hunt`` / ``_do_trace`` pin the operator's --model via
     # ``set_operator_primary_override`` so every downstream
@@ -989,11 +1571,24 @@ def main() -> int:
 
 
 def _main_body(args) -> int:
+    if args.resume is not None:
+        return _do_resume(args)
     try:
         # Path resolution can raise ValueError on NUL bytes in the
-        # operator-supplied path. Keep inside try so all errors get
-        # the clean-exit treatment.
+        # operator-supplied path.
         out_dir = Path(args.out).resolve()
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    return _run_modes(args, out_dir)
+
+
+def _run_modes(args, out_dir: Path) -> int:
+    """Dispatch + result write + summary — shared by the fresh path
+    and ``--resume`` (which hands in a namespace rebuilt from the
+    run's pinned config)."""
+    prior_sigterm = _install_sigterm_interrupt()
+    try:
         # Opt the hunt/trace dispatch into trajectory persistence —
         # writes <out>/trajectories/<run_id>/trajectory.json so
         # operators can see per-turn tool calls after the run. The
@@ -1008,8 +1603,10 @@ def _main_body(args) -> int:
         if args.map:
             payload = _do_map(args)
         elif args.hunt is not None:
+            _pin_run_config(args, out_dir)
             payload = _do_hunt(args)
         else:
+            _pin_run_config(args, out_dir)
             payload = _do_trace(args)
     except FileNotFoundError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -1019,6 +1616,7 @@ def _main_body(args) -> int:
         return 1
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
+        _mark_run_interrupted(args, out_dir)
         return 130
     except SystemExit:
         # _resolve_models uses raise SystemExit(...) for clean error
@@ -1030,6 +1628,8 @@ def _main_body(args) -> int:
             f"{sanitise_for_terminal(str(e), max_len=300)}", file=sys.stderr,
         )
         return 1
+    finally:
+        _restore_sigterm(prior_sigterm)
 
     try:
         output_path = _write_result(out_dir, payload["mode"], payload)
@@ -1048,7 +1648,14 @@ def _main_body(args) -> int:
         if graph_path:
             print(f"Graph: {graph_path}")
     except Exception as e:
-        print(f"warning: graph ingest skipped: {e}", file=sys.stderr)
+        # Broad handler: ingest failures can quote content from the
+        # analysed tree or LLM-derived payloads, so the text goes
+        # through the terminal sanitiser like the other relays here.
+        print(
+            "warning: graph ingest skipped: "
+            f"{sanitise_for_terminal(str(e), max_len=300)}",
+            file=sys.stderr,
+        )
     _print_summary(payload, output_path)
 
     # SAGE store: persist results for cross-run learning.
