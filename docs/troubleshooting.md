@@ -41,6 +41,25 @@ RAPTOR session (or with the libexec trust marker set, as for any
 libexec script).
 
 
+## Run introspection
+
+To diagnose a run that looks stuck, slow, or expensive, point the
+read-only status viewer at it — it reads existing artifacts only and
+is safe against an in-flight run:
+
+```bash
+libexec/raptor-run-status <run-dir>       # one run
+libexec/raptor-run-status --project       # every run of the active project
+```
+
+It shows the lifecycle status, heartbeat age (artifact mtime
+freshness — stale on a `running` run means no progress), booked spend
+vs the run's cap, LLM call / failed-attempt / timeout counts, breaker
+trips, and the newest call class as a phase hint.  `--raw` prints the
+same as JSON.  After completion, `raptor-review digest <run-dir>`
+gives the ranked what-matters summary (verified findings first).
+
+
 ## Sandbox
 
 ### Exit code 3: sandbox cannot engage
