@@ -1358,9 +1358,10 @@ def forget_finding_verdicts(
     return cleared, failed
 
 
-# Public alias — CLI consumers name the suppressing set without
-# reaching into a privately-named constant.
+# Public aliases — CLI consumers name the suppressing set and the
+# TTL without reaching into privately-named constants.
 SUPPRESS_VERDICTS = _SUPPRESS_VERDICTS
+SUPPRESS_TTL_DAYS = _SUPPRESS_TTL_DAYS
 
 
 # ─────────────────────────────────────────────────────────────────────────────

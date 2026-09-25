@@ -22,6 +22,10 @@ Usage:
   raptor-review diff [run1 run2]           # verdict changes between two runs
   raptor-review live                       # tail-follow a running audit's journal
   raptor-review compact                    # compact project journal index
+  raptor-review verdict <id> fp|tp|retest  # record a human verdict on a finding
+                                           # (fp requires an interactive terminal;
+                                           #  tp/retest work non-interactively —
+                                           #  they only cause re-analysis)
 
 Common options:
   --out DIR       Run output directory (default: active project's latest)
@@ -156,36 +160,22 @@ def _project_dir_for(args) -> Path | None:
     return _resolve_project_dir(None)
 
 
-def _run_started_key(d: Path) -> str:
-    """Ordering key for "latest run" selection.
-
-    The run's own recorded start timestamp (ISO-8601 UTC in
-    .raptor-run.json, lexicographically ordered), NOT directory
-    mtime: a touched or restored old run directory would otherwise
-    win the selection. Legacy/corrupt metadata falls back to mtime
-    rendered in the same ISO shape so the keys stay comparable.
-    """
-    meta = load_json(d / ".raptor-run.json", max_bytes=_MAX_META_BYTES)
-    ts = meta.get("timestamp") if isinstance(meta, dict) else None
-    if isinstance(ts, str) and ts:
-        return ts
-    from datetime import datetime, timezone
-    return datetime.fromtimestamp(
-        d.stat().st_mtime, tz=timezone.utc).isoformat()
+# Shared ordering key (core/run/locate.py) — the run's recorded start
+# timestamp, mtime fallback, vanished-dir safe. One home with
+# raptor-run-status so the two CLIs cannot drift on "latest run".
+from core.run.locate import run_started_key as _run_started_key  # noqa: E402
 
 
 def _resolve_out_dir(args) -> Path | None:
-    """Resolve output directory: explicit --out, or latest in project."""
+    """Resolve output directory: explicit --out, or latest in project
+    (shared newest-first discovery: core/run/locate.py)."""
     if getattr(args, "out", None):
         return Path(args.out)
     project = _project_dir_for(args)
     if not project:
         return None
-    runs = sorted(
-        [d for d in project.iterdir() if d.is_dir() and (d / ".raptor-run.json").is_file()],
-        key=_run_started_key,
-        reverse=True,
-    )
+    from core.run.locate import run_dirs_newest_first
+    runs = run_dirs_newest_first(project)
     return runs[0] if runs else None
 
 
@@ -1239,6 +1229,454 @@ def cmd_compact(args) -> None:
             print(f"  Index already compact ({before} entries).")
 
 
+def _verdict_run_dirs(args) -> list:
+    """Run dirs the verdict verb resolves finding ids against:
+    the explicit ``--out`` run, else every run in the governing
+    project, newest first (same enumeration as the latest-run
+    resolver)."""
+    out = getattr(args, "out", None)
+    if out:
+        return [Path(out)]
+    project = _project_dir_for(args)
+    if not project:
+        return []
+    from core.run.locate import run_dirs_newest_first
+    return run_dirs_newest_first(project)
+
+
+def _project_registry_target(args, run_dir) -> Path | None:
+    """The governing project's registered target tree, when the run
+    actually BELONGS to that project (run dir inside its output dir —
+    an ambient active project must not veto an unrelated --out run).
+    Best-effort — None means no cross-check possible."""
+    project_dir = _project_dir_for(args)
+    if not project_dir:
+        return None
+    try:
+        if not Path(run_dir).resolve().is_relative_to(
+                Path(project_dir).resolve()):
+            return None
+    except (OSError, ValueError):
+        return None
+    try:
+        from core.startup import PROJECTS_DIR
+        for reg in Path(PROJECTS_DIR).glob("*.json"):
+            data = load_json(reg, max_bytes=_MAX_META_BYTES)
+            if not isinstance(data, dict):
+                continue
+            out = data.get("output_dir")
+            if not (isinstance(out, str) and out):
+                continue
+            if Path(out).resolve() != Path(project_dir).resolve():
+                continue
+            target = data.get("target")
+            if isinstance(target, str) and target \
+                    and Path(target).is_dir():
+                return Path(target)
+            return None
+    except Exception:  # noqa: BLE001 — registry problems mean "no cross-check"
+        pass
+    return None
+
+
+def _verdict_repo_root(args, ref) -> Path | None:
+    """Source tree the verdict's source hash is computed against:
+    explicit ``--target`` first, else the ``target_path`` sealed in
+    the finding's run manifest — corroborated against the governing
+    project's registered target when one is known (the manifest sits
+    in the child-writable run dir; a swapped target_path must not
+    silently steer which tree gets hashed)."""
+    explicit = getattr(args, "target", None)
+    if explicit:
+        p = Path(explicit)
+        if not p.is_dir():
+            print(f"raptor-review: --target {_line(explicit)} is not a "
+                  "directory", file=sys.stderr)
+            sys.exit(2)
+        return p
+    try:
+        from core.run import load_run_metadata
+        meta = load_run_metadata(ref.run_dir) or {}
+        tp = meta.get("target_path")
+        if isinstance(tp, str) and tp and Path(tp).is_dir():
+            resolved = Path(tp)
+            project_target = _project_registry_target(args, ref.run_dir)
+            if project_target is not None and \
+                    project_target.resolve() != resolved.resolve():
+                print("  ⚠️  the run manifest's target_path "
+                      f"({_line(tp, max_chars=200)}) disagrees with "
+                      "the project's registered target — pass "
+                      "--target <repo> to name the tree explicitly.",
+                      file=sys.stderr)
+                return None
+            return resolved
+    except Exception:  # noqa: BLE001 — manifest problems fall to "unknown"
+        pass
+    return None
+
+
+def _operator_provenance(args) -> tuple:
+    """``(source, note, warning, interactive)`` for the verdict row.
+
+    Same doctrine as /annotate: ``source`` defaults to ``human`` when
+    the invocation is interactive-TTY, else ``agent``; an explicit
+    ``--source human`` from a non-TTY invocation is demoted to
+    ``agent`` with a warning (the non-tty stamp would contradict it —
+    readers demote such records anyway). The note records the full
+    invocation-context stamp for the auditor. ``interactive`` feeds
+    the fp verb's TTY gate.
+    """
+    from core.annotations.provenance import (
+        ENV_MARKERS_KEY,
+        INTERACTIVE_TTY,
+        PARENTS_KEY,
+        PROVENANCE_KEY,
+        SID_KEY,
+        TTY_KEY,
+        detect_invocation_context,
+    )
+    ctx = detect_invocation_context()
+    interactive = ctx[PROVENANCE_KEY] == INTERACTIVE_TTY
+    requested = getattr(args, "source", None)
+    warning = None
+    if requested == "human" and not interactive:
+        source = "agent"
+        warning = ("--source human requested from a non-TTY invocation — "
+                   "recording source=agent (a non-tty stamp contradicts "
+                   "the human claim; readers demote such records)")
+    elif requested:
+        source = requested
+    else:
+        source = "human" if interactive else "agent"
+    note = (f"operator-verdict source={source} "
+            f"tty={ctx[TTY_KEY]} provenance={ctx[PROVENANCE_KEY]} "
+            f"sid={ctx[SID_KEY]} envm={ctx[ENV_MARKERS_KEY]} "
+            f"parents={ctx[PARENTS_KEY]}")
+    return source, note, warning, interactive
+
+
+def _record_operator_verdict(run_dir, finding, verdict, reason, source):
+    """Disk-side audit record for the verb, via the suppressions
+    single-writer (dropped=false — an operator verdict never drops a
+    finding from THIS run; it steers future ones). Best-effort like
+    every other producer."""
+    from core.analysis.reach_chokepoint import record_suppression
+    record_suppression(
+        run_dir,
+        finding=finding,
+        verdict=f"operator_{verdict}",
+        reason=reason or "operator verdict (no reason given)",
+        dropped=False,
+        extra={"source": source},
+    )
+
+
+def _report_failed_edits(failed_paths) -> bool:
+    """Surface findings files a manual_override edit could NOT
+    rewrite. Returns True when any failed — callers exit nonzero: an
+    edit that silently did not happen reads as success."""
+    if not failed_paths:
+        return False
+    print(f"  ⚠️  could not rewrite {len(failed_paths)} findings "
+          "file(s) (unreadable, over the byte budget, or write "
+          "failure):", file=sys.stderr)
+    for p in failed_paths:
+        print(f"        {_line(str(p), max_chars=200)}", file=sys.stderr)
+    return True
+
+
+def _forget_or_report(forget_fn, *args, **kwargs) -> int:
+    """Run a verdict-row clear, failing CLOSED on every partial
+    outcome: a truncated store walk, an enumeration failure, or a
+    server that refused some deprecations must never report
+    'cleared' while a suppressing row survives. Exits 1 before any
+    disk edit; returns the cleared count on full success."""
+    from core.sage.hooks import VerdictWalkTruncated
+    try:
+        result = forget_fn(*args, **kwargs)
+    except VerdictWalkTruncated as e:
+        print(f"  Could not enumerate the SAGE verdict store "
+              f"({_line(str(e), max_chars=200)}) — nothing was "
+              "cleared or changed. Re-run when the store is "
+              "reachable end to end.", file=sys.stderr)
+        sys.exit(1)
+    if result is None:
+        # Reachable client, failed enumeration (non-truncation) —
+        # never fall through as if the store held nothing.
+        print("  Could not enumerate the SAGE verdict store (listing "
+              "failed — see debug logs) — nothing was cleared or "
+              "changed.", file=sys.stderr)
+        sys.exit(1)
+    cleared, failed = result
+    if failed:
+        print(f"  ⚠️  {failed} verdict row(s) could not be deprecated "
+              f"(server refused; {cleared} cleared). The surviving "
+              "row(s) keep suppressing this finding — re-run when "
+              "the store accepts deprecations. No disk records were "
+              "changed.", file=sys.stderr)
+        sys.exit(1)
+    return cleared
+
+
+def cmd_verdict(args) -> None:
+    """Record a human FP/TP/retest verdict on a finding.
+
+    Interactivity asymmetry: ``fp`` is refused from non-interactive
+    invocations — its row suppresses the finding cross-run with
+    pipeline authority, so it is reserved for human terminal
+    judgment. ``tp`` and ``retest`` stay available non-interactively:
+    they are fail-safe (their only effect is that the finding gets
+    RE-analyzed), and their provenance stamp records the
+    non-interactive context either way.
+    """
+    from core.run.verdicts import (
+        finding_coords,
+        finding_rule_id,
+        resolve_finding,
+        set_manual_override,
+    )
+
+    run_dirs = _verdict_run_dirs(args)
+    if not run_dirs:
+        print("  No runs found — pass --out <run-dir> or activate a "
+              "project.", file=sys.stderr)
+        sys.exit(1)
+
+    matches, suggestions = resolve_finding(run_dirs, args.finding_id)
+    if not matches:
+        print(f"  No finding with id {_line(args.finding_id, max_chars=120)!r} "
+              f"in {len(run_dirs)} run(s).", file=sys.stderr)
+        if suggestions:
+            print("  Did you mean:", file=sys.stderr)
+            for s in suggestions:
+                print(f"    {_line(s, max_chars=120)}", file=sys.stderr)
+        sys.exit(2)
+
+    verb = args.verdict
+    ref = matches[0]  # newest run first — SAGE keys are run-agnostic
+    rel, fn, line = finding_coords(ref.finding)
+    rule = finding_rule_id(ref.finding)
+    reason = (args.reason or "").strip()
+    source, prov_note, prov_warning, interactive = \
+        _operator_provenance(args)
+    if prov_warning:
+        print(f"  ⚠️  {prov_warning}", file=sys.stderr)
+
+    from core.sage.hooks import SUPPRESS_TTL_DAYS
+
+    # TTY gate — fp only, decided BEFORE anything touches SAGE or
+    # disk. A CLI fp row is MAC-identical to a pipeline row and
+    # suppresses this finding cross-run for the whole TTL; the
+    # pipeline's own agent-authored rows are minted at a governed
+    # chokepoint behind an actual analysis verdict, while this verb
+    # is an id-addressed assertion channel on the preapproved libexec
+    # surface — interactive human judgment is the gate that keeps it
+    # operator-tier. tp/retest stay available non-interactively
+    # (fail-safe asymmetry: they only ever cause RE-analysis).
+    if verb == "fp" and not interactive:
+        print("  Refused: the fp verb requires an interactive "
+              "operator terminal. A false-positive verdict "
+              "suppresses this finding on future runs for "
+              f"{SUPPRESS_TTL_DAYS} days — that standing "
+              "suppression is reserved for human judgment (the "
+              "annotation provenance doctrine). Nothing was "
+              "stored or changed. Re-run from a terminal, or use "
+              "'tp'/'retest' (both stay available "
+              "non-interactively — they only cause re-analysis).",
+              file=sys.stderr)
+        sys.exit(2)
+
+    note = prov_note + (f" reason={_line(reason, max_chars=200)}"
+                        if reason else "")
+
+    from core.sage.hooks import (
+        SUPPRESS_TTL_DAYS,
+        SUPPRESS_VERDICTS,
+        finding_verdict_source_hash,
+        forget_finding_verdicts,
+        operator_client,
+        store_finding_verdict,
+    )
+
+    client = operator_client()
+    sage_absent_msg = (
+        "SAGE is not reachable — the cross-run verdict store requires "
+        "the SAGE sidecar (there is no disk-side verdict store). "
+        "Install/start it with libexec/raptor-sage-setup, then re-run."
+    )
+
+    # Source hash: needs the repo and the pipeline's raw coordinates.
+    repo_root = _verdict_repo_root(args, ref)
+    src_hash = ""
+    hash_note = None
+    if repo_root and rel and fn and rule:
+        # Validate the record's path stays inside the tree before any
+        # read — findings files are attacker bytes and a traversal rel
+        # must not turn the hash into an arbitrary-file oracle. The
+        # STORE still uses the record's raw strings (the pipeline
+        # fingerprints on them).
+        from core.paths import to_repo_relative
+        if to_repo_relative(rel, repo_root, outside_root="none") is None:
+            hash_note = "finding path escapes the target tree"
+        else:
+            src_hash = finding_verdict_source_hash(repo_root, rel, line)
+            if not src_hash:
+                hash_note = "source file unreadable under the target tree"
+    elif not repo_root:
+        hash_note = ("target tree unknown — pass --target <repo> "
+                     "(no target_path in the run manifest)")
+    else:
+        hash_note = "finding record lacks rule/file/function coordinates"
+
+    header = {"fp": "False Positive", "tp": "True Positive",
+              "retest": "Retest"}[verb]
+    loc = f"{_line(rel or '?', max_chars=120)}:{line}"
+    print(f"  Verdict:  {header}")
+    print(f"  Finding:  {_line(ref.finding_id, max_chars=120)}  "
+          f"{loc}  {_line(fn or '?', max_chars=80)}"
+          + (f"  [{_line(rule, max_chars=80)}]" if rule else ""))
+
+    if verb == "fp":
+        if not src_hash:
+            print(f"  Cannot record: {hash_note}.", file=sys.stderr)
+            sys.exit(1)
+        if client is None:
+            print(f"  {sage_absent_msg}", file=sys.stderr)
+            sys.exit(1)
+        # SAGE store FIRST — if it refuses, the command fails with
+        # zero disk mutation (a cleared force-through beside a failed
+        # store would silently re-enable suppression the operator
+        # never consented to lose).
+        ok = store_finding_verdict(
+            str(repo_root), rule, rel, fn, src_hash, "false_positive",
+            note=note, client=client,
+        )
+        if not ok:
+            print("  Store failed — SAGE refused the row (see logs). "
+                  "Nothing was changed.", file=sys.stderr)
+            sys.exit(1)
+        # A standing manual_override force-through contradicts an
+        # operator FP — clear it so the new verdict actually takes.
+        cleared_paths, failed_paths = set_manual_override(matches, False)
+        _record_operator_verdict(
+            ref.run_dir, ref.finding, "false_positive", reason, source)
+        print(f"  Stored:   false_positive verdict row "
+              f"(source={source})")
+        if cleared_paths:
+            print(f"  Cleared:  manual_override on "
+                  f"{len(cleared_paths)} findings file(s)")
+        if _report_failed_edits(failed_paths):
+            print("  The false_positive row IS stored; re-run fp "
+                  "once the findings file is writable to clear the "
+                  "remaining force-through.", file=sys.stderr)
+            sys.exit(1)
+        if line > 0:
+            print(f"  Effect:   future /agentic and /codeql runs on this "
+                  f"repo skip the LLM call for this finding while its "
+                  f"source is unchanged (TTL {SUPPRESS_TTL_DAYS} days). "
+                  f"Undo with: raptor-review verdict "
+                  f"{_line(ref.finding_id, max_chars=120)} retest")
+        else:
+            print("  Effect:   recorded for the knowledge base only — "
+                  "line-less findings never auto-suppress.")
+        return
+
+    if verb == "tp":
+        cleared = None
+        stored = False
+        if client is not None:
+            # The SAGE domain is repo-scoped — without a known target
+            # tree there is nothing addressable to clear; say so
+            # rather than reporting a normal-looking "Cleared: 0".
+            if rule and rel and fn and repo_root:
+                cleared = _forget_or_report(
+                    forget_finding_verdicts,
+                    str(repo_root), rule, rel, fn,
+                    verdicts=SUPPRESS_VERDICTS,
+                    reason="operator true_positive verdict",
+                    client=client,
+                )
+            else:
+                print("  ⚠️  target tree unknown or coordinates "
+                      "missing — prior suppressing SAGE verdict rows "
+                      "(if any) were NOT cleared; pass --target "
+                      "<repo>.", file=sys.stderr)
+            if src_hash:
+                stored = store_finding_verdict(
+                    str(repo_root), rule, rel, fn, src_hash,
+                    "true_positive", note=note, client=client,
+                )
+        changed, failed_paths = set_manual_override(
+            matches, True, reason or "operator true_positive verdict")
+        _record_operator_verdict(
+            ref.run_dir, ref.finding, "true_positive", reason, source)
+        if client is None:
+            print(f"  ⚠️  {sage_absent_msg} Any prior suppressing SAGE "
+                  "verdict rows were NOT cleared.", file=sys.stderr)
+        else:
+            if cleared is not None:
+                print(f"  Cleared:  {cleared} prior suppressing SAGE "
+                      "verdict row(s)")
+            if stored:
+                print(f"  Stored:   true_positive verdict row "
+                      f"(source={source})")
+            elif hash_note:
+                print(f"  Note:     no verdict row stored ({hash_note})")
+        if changed:
+            print(f"  Set:      manual_override on {len(changed)} "
+                  "findings file(s):")
+            for p in changed:
+                print(f"              {_line(str(p), max_chars=200)}")
+        elif not any(m.editable for m in matches):
+            print("  Note:     this finding only appears in analysis "
+                  "reports (no editable findings file) — the cleared "
+                  "SAGE verdict alone makes the next run re-analyze it")
+        elif not failed_paths:
+            print("  Note:     no findings file needed a manual_override "
+                  "change")
+        if _report_failed_edits(failed_paths):
+            sys.exit(1)
+        print("  Effect:   future runs re-analyze this finding; passes "
+              "that consume these findings files (/validate, /analyze, "
+              "project views) bypass reachability, guard-dominance, and "
+              "SAGE prior-verdict suppression for it.")
+        return
+
+    # retest — clear everything back to neutral.
+    cleared = None
+    if client is not None and rule and rel and fn:
+        key_root = str(repo_root) if repo_root else None
+        if key_root:
+            cleared = _forget_or_report(
+                forget_finding_verdicts,
+                key_root, rule, rel, fn,
+                reason="operator retest verdict", client=client,
+            )
+        else:
+            print("  ⚠️  target tree unknown — cannot address the "
+                  "repo-scoped SAGE domain; pass --target <repo> to "
+                  "clear stored rows.", file=sys.stderr)
+    elif client is None:
+        print(f"  ⚠️  {sage_absent_msg} Stored SAGE verdict rows (if "
+              "any) were NOT cleared.", file=sys.stderr)
+    else:
+        print("  ⚠️  finding record lacks rule/file/function "
+              "coordinates — stored SAGE verdict rows (if any) were "
+              "NOT cleared.", file=sys.stderr)
+    changed, failed_paths = set_manual_override(matches, False)
+    _record_operator_verdict(
+        ref.run_dir, ref.finding, "retest", reason, source)
+    if cleared is not None:
+        print(f"  Cleared:  {cleared} stored SAGE verdict row(s)")
+    if changed:
+        print(f"  Cleared:  manual_override on {len(changed)} findings "
+              "file(s)")
+    if _report_failed_edits(failed_paths):
+        sys.exit(1)
+    print("  Effect:   the next run re-analyzes this finding from "
+          "scratch (no stored verdict, no force-through).")
+
+
 # ── Argument parsing ─────────────────────────────────────────────────
 
 # Flags that consume a following value. The default-subcommand sniffer
@@ -1356,10 +1794,26 @@ def main():
     p_cov = sub.add_parser("coverage", parents=[common], help="Mechanical tool coverage")
     p_cov.add_argument("file", nargs="?", default=None)
 
+    p_verd = sub.add_parser(
+        "verdict", parents=[common],
+        help="Record a human FP/TP/retest verdict on a finding "
+             "(fp requires an interactive terminal)")
+    p_verd.add_argument("finding_id")
+    p_verd.add_argument("verdict", choices=["fp", "tp", "retest"])
+    p_verd.add_argument("-m", "--reason", default=None,
+                        help="why (recorded with the verdict)")
+    p_verd.add_argument("--target", default=None,
+                        help="source tree root (default: the run "
+                             "manifest's target_path)")
+    p_verd.add_argument("--source", default=None,
+                        choices=["human", "agent"],
+                        help="verdict source (default: human on an "
+                             "interactive TTY, else agent)")
+
     known_commands = {
         "show", "findings", "gaps", "history", "stats", "notes",
         "note", "edit", "stale", "compact", "coverage", "diff", "live",
-        "edges",
+        "edges", "verdict",
     }
     argv_rest = sys.argv[1:]
     first_positional = _first_positional(argv_rest)
@@ -1387,6 +1841,7 @@ def main():
         "diff": cmd_diff,
         "live": cmd_live,
         "edges": cmd_edges,
+        "verdict": cmd_verdict,
     }
 
     handler = dispatch.get(args.command)
