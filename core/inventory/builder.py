@@ -597,6 +597,71 @@ def default_cache_dir(
     return _DEFAULT_INVENTORY_CACHE_ROOT / target_hash
 
 
+#: Bounds for the case-collision note: at most this many collided
+#: groups are listed (with a "+N more" tail), at most 3 spellings per
+#: group — the note is awareness, not an exhaustive report.
+_CASE_COLLISION_EXAMPLE_CAP = 5
+
+
+def _note_case_collisions(
+    target_path: str, files_info: list[dict],
+) -> None:
+    """Informational note when inventory paths differ only by case and
+    the tree sits on a case-insensitive-suspect mount (WSL drvfs/9p).
+
+    Duplicate-identity awareness ONLY — inventory keying is
+    deliberately unchanged: on a case-insensitive checkout,
+    case-variant spellings of one on-disk file can enter the inventory
+    (and downstream SARIF / suppression keys) as distinct entries. The
+    fail direction is safe noise — duplicate analysis, split coverage
+    marks — never a masked finding, so this stays a note rather than a
+    dedup. Cost discipline: the cached ``is_wsl()`` boolean gates
+    everything (free off WSL), one ``statfs`` of the target root
+    answers the mount question, and the collision scan is a casefold
+    post-pass over the already-built path list — no per-file
+    filesystem probes. ``str.casefold`` APPROXIMATES the mount's own
+    folding table (NTFS ``$UpCase``): it can over-report pairs the
+    mount keeps distinct (``ß``/``ẞ`` casefold together) and miss
+    pairs the mount folds differently — acceptable for an
+    awareness-only note. Example paths come from the scanned tree, so
+    they are terminal-escaped and bounded. Best-effort: never raises.
+    """
+    try:
+        from core.startup.wsl import fs_is_drvfs_or_9p, is_wsl
+        if not is_wsl() or not fs_is_drvfs_or_9p(target_path):
+            return
+        buckets: dict[str, list[str]] = {}
+        for f in files_info:
+            p = f.get('path')
+            if isinstance(p, str):
+                buckets.setdefault(p.casefold(), []).append(p)
+        collided = sorted(
+            (group for group in buckets.values() if len(group) > 1),
+            key=lambda g: g[0],
+        )
+        if not collided:
+            return
+        from core.security.log_sanitisation import sanitise_for_terminal
+        examples = "; ".join(
+            " / ".join(
+                sanitise_for_terminal(p, max_len=120) for p in group[:3]
+            )
+            for group in collided[:_CASE_COLLISION_EXAMPLE_CAP]
+        )
+        more = len(collided) - _CASE_COLLISION_EXAMPLE_CAP
+        logger.info(
+            "inventory: %d path group(s) differ only by case and the "
+            "target is on a case-insensitive-suspect mount (drvfs/9p) "
+            "— case-variant spellings of one on-disk file appear as "
+            "distinct inventory entries (duplicate-identity noise; "
+            "keying unchanged): %s%s. See docs/wsl.md.",
+            len(collided), examples,
+            f" (+{more} more)" if more > 0 else "",
+        )
+    except Exception:  # noqa: BLE001 — awareness note must never break a build
+        logger.debug("case-collision note failed", exc_info=True)
+
+
 def build_inventory(
     target_path: str,
     output_dir: str | None = None,
@@ -981,6 +1046,10 @@ def build_inventory(
     # Sort for consistent output
     files_info.sort(key=lambda x: x['path'])
     excluded_files.sort(key=lambda x: x['path'])
+
+    # Case-collision awareness on case-insensitive-suspect mounts
+    # (WSL drvfs/9p) — informational note only, keying unchanged.
+    _note_case_collisions(target_path, files_info)
 
     # Count functions specifically for backwards-compatible field
     total_functions = sum(
