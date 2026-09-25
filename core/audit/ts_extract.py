@@ -1,9 +1,10 @@
 """Tree-sitter extraction layer for bugshape detectors.
 
 Provides structured extraction of return semantics, call chains,
-string literals, dispatch tables, loop caps, and function bodies
-across all languages tree-sitter supports.  Each function degrades
-gracefully to ``None`` when tree-sitter is unavailable.
+string literals, dispatch tables, enum definitions and enum-labelled
+switches (C/C++), loop caps, and function bodies across all languages
+tree-sitter supports.  Each function degrades gracefully to ``None``
+when tree-sitter is unavailable.
 
 Consumers: sentinel_collapse, transform_sequence, fail_open_detector,
 value_space_checker, dispatch_completeness, sibling_analysis.
@@ -134,6 +135,31 @@ class LoopCap:
     file: str
     line: int
     signals_truncation: bool = False
+
+
+@dataclass
+class EnumDefinition:
+    """One enum definition (C/C++ census)."""
+
+    name: str            # "<anon>@file:line" for anonymous enums
+    file: str
+    line: int
+    members: list[str] = field(default_factory=list)
+    #: True when the per-definition member cap dropped enumerators —
+    #: consumers must treat the member set as partial, never as the
+    #: whole enum (an absence claim over a capped definition lies).
+    caps_hit: bool = False
+
+
+@dataclass
+class EnumSwitch:
+    """A switch whose case labels are bare identifiers (enum-shaped)."""
+
+    function: str
+    file: str
+    line: int
+    labels: list[str] = field(default_factory=list)
+    has_default: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -922,6 +948,50 @@ _CASE_BODY_TYPES = frozenset({
 })
 
 
+def _switch_case_map(
+    root: Any,
+    lang: str,
+    switch_types: tuple[str, ...],
+    case_types: tuple[str, ...],
+) -> list[tuple[Any, Any, list[Any]]]:
+    """One pre-order pass attributing each case to its NEAREST
+    enclosing switch (and each switch to its nearest enclosing
+    function).
+
+    Replaces the per-switch descendant walk whose per-case ancestor
+    re-attribution was cubic in nesting depth (each of d switches
+    re-walked its whole subtree and climbed ``.parent`` per case —
+    ~d^3 on a switch-per-level tower; a 49KB depth-800 file cost
+    ~100s of CPU in an unbudgeted prep phase), and the per-switch
+    ``_find_enclosing_function`` climb that stayed quadratic after
+    it. The nesting semantics are identical: a case belongs to the
+    innermost switch above it (nested switches keep their own
+    cases), a switch to the innermost function above it.
+
+    Returns ``[(switch_node, func_node_or_None, [case_node, ...])]``
+    in pre-order; cases per switch are in document order.
+    """
+    func_types = _FUNCTION_TYPES.get(lang, ())
+    switches: list[tuple[Any, Any, list[Any]]] = []
+    # (node, nearest switch index or -1, nearest function node)
+    stack: list[tuple[Any, int, Any]] = [(root, -1, None)]
+    while stack:
+        node, nearest, func = stack.pop()
+        child_func = node if node.type in func_types else func
+        if node.type in switch_types:
+            switches.append((node, child_func, []))
+            child_nearest = len(switches) - 1
+        else:
+            if node.type in case_types and nearest != -1:
+                switches[nearest][2].append(node)
+            child_nearest = nearest
+        stack.extend(
+            (child, child_nearest, child_func)
+            for child in reversed(node.children)
+        )
+    return switches
+
+
 def _case_label_nodes(case_node: Any) -> list[Any]:
     """Nodes forming a case's LABEL — never its body.
 
@@ -1010,6 +1080,143 @@ def extract_dispatch_tables(
                 table_type="switch" if "switch" in node.type else "match",
             ))
 
+    return results
+
+
+# ---------------------------------------------------------------------------
+# 4b. Enum-definition and enum-switch extraction (C/C++ first)
+# ---------------------------------------------------------------------------
+#
+# The dispatch-table extractor above collects STRING-literal case
+# labels only; enum dispatch (integer identifiers) needs its own
+# label collection plus an enum-definition census to cross-reference
+# against. C/C++ first: the motivating defect evidence is C-shaped,
+# Java exhaustiveness is increasingly compiler-covered, and Go's
+# iota-enums are a noisier later target. Both extractors return
+# ``None`` when tree-sitter is unavailable and ``[]`` for supported
+# files without matches — the same contract as every extract_* API.
+
+# Languages this pass supports (enum_specifier / enumerator node
+# shapes; other languages are a named residual, never a silent claim).
+_ENUM_LANGUAGES = frozenset({"c", "cpp"})
+
+#: Enumerators kept per definition. Both directions: X-macro floods
+#: can generate enums with thousands of members and turn the census's
+#: member-major matrix into an attacker-sized workload; too few
+#: truncates real protocol enums (the largest common command sets sit
+#: in the low hundreds). 256 — over-cap definitions carry ``caps_hit``
+#: so no consumer reads a partial member set as the whole enum.
+MAX_ENUM_MEMBERS = 256
+
+
+def extract_enum_definitions(
+    file_path: str,
+    source: str,
+) -> list[EnumDefinition] | None:
+    """Extract enum definitions (name + member identifiers).
+
+    Returns None if tree-sitter is unavailable for this file type,
+    ``[]`` for supported files without enum definitions. Anonymous
+    enums get a positional synthetic name — their members still join
+    the census (typedef'd anonymous enums are the common C idiom).
+    """
+    parsed = _parse_file(file_path, source)
+    if parsed is None:
+        return None
+    tree, lang, src = parsed
+    if lang not in _ENUM_LANGUAGES:
+        return None
+
+    results: list[EnumDefinition] = []
+    for node in _walk_descendants(tree.root_node):
+        if node.type != "enum_specifier":
+            continue
+        body = node.child_by_field_name("body")
+        if body is None:
+            # A bare ``enum foo`` reference, not a definition.
+            continue
+        name_node = node.child_by_field_name("name")
+        line = _node_line(node)
+        name = (
+            _node_text(name_node, src) if name_node is not None
+            else f"<anon>@{file_path}:{line}"
+        )
+        members: list[str] = []
+        caps_hit = False
+        for child in body.named_children:
+            if child.type != "enumerator":
+                continue
+            m_name = child.child_by_field_name("name")
+            if m_name is None:
+                continue
+            if len(members) >= MAX_ENUM_MEMBERS:
+                caps_hit = True
+                break
+            members.append(_node_text(m_name, src))
+        if members:
+            results.append(EnumDefinition(
+                name=name,
+                file=file_path,
+                line=line,
+                members=members,
+                caps_hit=caps_hit,
+            ))
+    return results
+
+
+def extract_enum_switches(
+    file_path: str,
+    source: str,
+) -> list[EnumSwitch] | None:
+    """Extract switches whose case labels are bare identifiers.
+
+    Returns None if tree-sitter is unavailable for this file type,
+    ``[]`` for supported files without identifier-labelled switches.
+    A ``default:`` arm is recorded as ``has_default`` — the census
+    treats it as an enumerated non-exhaustive idiom, never as a
+    handled member. Case labels that are not bare identifiers
+    (integer literals, expressions) contribute nothing; a switch
+    needs >= 2 identifier labels to be enum-shaped at all (mirrors
+    the string dispatch extractor's floor).
+    """
+    parsed = _parse_file(file_path, source)
+    if parsed is None:
+        return None
+    tree, lang, src = parsed
+    if lang not in _ENUM_LANGUAGES:
+        return None
+
+    switch_types = _SWITCH_TYPES.get(lang, ())
+    case_types = _CASE_TYPES.get(lang, ())
+    results: list[EnumSwitch] = []
+    # Single-pass nearest-switch attribution (see _switch_case_map)
+    # — nested-switch cases stay with their own switch, without the
+    # depth-cubic per-case ancestor walk.
+    for node, func_node, case_nodes in _switch_case_map(
+        tree.root_node, lang, switch_types, case_types,
+    ):
+        func_name = (
+            _get_func_name(func_node, lang, src) if func_node
+            else "<module>"
+        )
+        labels: list[str] = []
+        has_default = False
+        for desc in case_nodes:
+            value = desc.child_by_field_name("value")
+            if value is None:
+                # ``default:`` — a case_statement without a value.
+                has_default = True
+                continue
+            if value.type == "identifier":
+                labels.append(_node_text(value, src))
+        if len(labels) >= 2:
+            results.append(EnumSwitch(
+                function=func_name,
+                file=file_path,
+                line=_node_line(node),
+                labels=labels,
+                has_default=has_default,
+            ))
     return results
 
 
