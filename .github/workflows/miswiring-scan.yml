@@ -206,3 +206,25 @@ jobs:
       - name: Run console-chokepoint closure gate
         run: |
           python3 .github/scripts/check_console_chokepoint.py
+
+  # Workflow pipefail lint: run: steps carrying a shell pipeline must
+  # be pipefail-protected (or baselined with a note). Same
+  # belt-and-braces parity with lint's repo-invariants job; the
+  # baseline's stale warn lane surfaces here on a calm cadence.
+  workflow-pipefail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run workflow pipefail lint against baseline
+        run: |
+          python3 .github/scripts/check_workflow_pipefail.py
