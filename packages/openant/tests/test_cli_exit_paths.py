@@ -18,9 +18,11 @@ empty pipeline_output.json.
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -440,6 +442,92 @@ class TestResumeRefusalExitPath(unittest.TestCase):
             report = json.loads(
                 (out_dir / "raptor_openant_report.json").read_text())
             self.assertEqual(report["outcome"], "resume_refused")
+
+
+_FAKE_MAIN_HANG = """\
+import json
+import os
+import sys
+import time
+
+out = None
+for i, a in enumerate(sys.argv):
+    if a == "--output" and i + 1 < len(sys.argv):
+        out = sys.argv[i + 1]
+if out:
+    with open(out + "/dataset.json", "w") as f:
+        json.dump({"units": [
+            {"id": "app.py:f", "code": {"primary_code": "x" * 200}},
+        ]}, f)
+    ck = out + "/analyze_checkpoints"
+    os.makedirs(ck, exist_ok=True)
+    with open(ck + "/u0.json", "w") as f:
+        json.dump({"id": "app.py:f",
+                   "result": {"verdict": "ERROR", "finding": "error"}}, f)
+time.sleep(45)
+sys.exit(1)
+"""
+
+
+@unittest.skipUnless(os.name == "posix", "signal-driven test is POSIX-only")
+class TestInterruptedRunLane(unittest.TestCase):
+    """SIGTERM mid-scan: exit 130, an outcome=interrupted report
+    carrying the resume-gate fields, lifecycle status interrupted —
+    and the interrupted dir validates as a resumable prior run."""
+
+    def test_sigterm_writes_resumable_report(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            src = _make_repo(base)
+            core = _make_fake_core(src, _FAKE_MAIN_HANG)
+            out_dir = base / "out"
+            out_dir.mkdir()
+            env = {**os.environ, "_RAPTOR_TRUSTED": "1"}
+            proc = subprocess.Popen(
+                [sys.executable, str(_REPO_ROOT / "raptor_openant.py"),
+                 "--repo", str(src), "--out", str(out_dir),
+                 "--openant-core", str(core),
+                 "--openant-core-unpinned"],
+                cwd=str(_REPO_ROOT), env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            marker = out_dir / "openant_scan" / "dataset.json"
+            out = err = ""
+            try:
+                deadline = time.time() + 120
+                while not marker.exists():
+                    if proc.poll() is not None or time.time() > deadline:
+                        out, err = proc.communicate(timeout=30)
+                        self.fail(
+                            f"scan child never started:\n{out}\n{err}")
+                    time.sleep(0.2)
+                time.sleep(1.0)  # let the child settle into its wait
+                proc.send_signal(signal.SIGTERM)
+                out, err = proc.communicate(timeout=120)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.communicate(timeout=30)
+            self.assertEqual(proc.returncode, 130, f"{out}\n{err}")
+            report = json.loads(
+                (out_dir / "raptor_openant_report.json").read_text())
+            self.assertEqual(report["outcome"], "interrupted")
+            # The resume-gate fields ride the interrupted report too.
+            self.assertIn("target_fingerprint", report)
+            self.assertEqual(report["config"]["model"], "sonnet")
+            self.assertIn("core_provenance", report["config"])
+            self.assertIn("total_usd", report["cost"])
+            self.assertEqual(_run_status(out_dir), "interrupted")
+            self.assertFalse(
+                (out_dir / "openant_findings.json").exists(),
+                "an interrupted run must not leave a findings file")
+            # The dead interrupted run is eligible for --resume.
+            from packages.openant.config import OPENANT_PINNED_COMMIT
+            from packages.openant.resume import validate_prior_run
+            result = validate_prior_run(
+                out_dir, src, pinned_commit=OPENANT_PINNED_COMMIT,
+                current_core_head=None)
+            self.assertTrue(result.remaining["resumable"])
 
 
 class TestScannerResultShape(unittest.TestCase):

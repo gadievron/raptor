@@ -148,6 +148,13 @@ applies unchanged.
   seeding refuses anything but regular files/dirs (a planted symlink,
   FIFO, or device in the prior scan state refuses the whole resume
   and leaves nothing behind).
+- An interrupted run (Ctrl-C / SIGTERM) writes an
+  `outcome=interrupted` report from its signal handler — with the
+  same fingerprint/config/cost fields the gates read — and marks the
+  run interrupted, so it resumes like any truncated run (exit 130).
+- A prior run whose lifecycle still reads `running` with its recorded
+  worker alive refuses ("still in flight") — resuming would seed from
+  a scan dir mid-write and double-pay the remainder.
 - Resuming a COMPLETE run refuses with "nothing to resume".
 - The resumed run's report records `resume.resumed_from`, the prior
   cost, this run's cost, and the combined figure. Note the small
