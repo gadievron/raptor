@@ -172,11 +172,40 @@ def enrich_with_forward_reachable(
     return enriched_count
 
 
+def _iter_checklist_call_edges(
+    checklist: dict[str, Any],
+    func_to_file: dict[str, str],
+):
+    """Yield every checklist call edge in the context-map
+    ``call_edges`` dict shape. One walk order for the capped
+    in-artifact list and the store routing, so both views derive from
+    the same stream."""
+    for fi in checklist.get("files", []):
+        path = fi.get("path", "")
+        cg = fi.get("call_graph")
+        if not isinstance(cg, dict):
+            continue
+        for call in cg.get("calls", []):
+            caller = call.get("caller", "")
+            if not caller:
+                continue
+            for callee in call.get("chain", []):
+                yield {
+                    "caller_file": path,
+                    "caller": caller,
+                    "callee": callee,
+                    "callee_file": func_to_file.get(callee, ""),
+                }
+
+
 def enrich_with_call_edges(
     context_map: dict[str, Any],
     checklist_path: Path | None = None,
     *,
     checklist: dict[str, Any] | None = None,
+    graph_store: Path | None = None,
+    run_dir: Path | None = None,
+    target_path: str = "",
 ) -> int:
     """Add a ``call_edges`` array to the context map from checklist call graphs.
 
@@ -185,8 +214,20 @@ def enrich_with_call_edges(
     reachability without loading the full checklist separately.
 
     Provide either ``checklist_path`` (loaded from disk) or ``checklist``
-    (pre-loaded dict).  Returns the number of edges added.  Idempotent —
-    overwrites any prior ``call_edges``.
+    (pre-loaded dict).  Returns the number of edges added to the map.
+    Idempotent — overwrites any prior ``call_edges``.
+
+    Store routing (project mode): when ``graph_store``, ``run_dir`` and
+    ``target_path`` are all given, the FULL mechanical edge set —
+    uncapped — is additionally batch-ingested into the graph store
+    (``core.understand_graph.ingest.ingest_call_edges``: lean rows,
+    mechanical provenance, run-bound tokens) and the map gains a small
+    ``call_edges_store`` marker (``{"snapshot", "edges"}``) that
+    store-capable consumers resolve for reachability beyond the
+    in-artifact cap. The capped in-artifact list is still written —
+    it stays the storeless compatibility path, and the size-budget
+    shed (``core.artifacts.context_map_budget``) already handles it on
+    very large maps while the marker survives the shed.
     """
     if checklist is None:
         if checklist_path is None or not checklist_path.exists():
@@ -204,31 +245,22 @@ def enrich_with_call_edges(
             if name:
                 func_to_file[name] = path
 
+    route_to_store = (
+        graph_store is not None and run_dir is not None and bool(target_path)
+    )
+    if graph_store is not None and not route_to_store:
+        logger.debug(
+            "context_map_callgraph: store routing skipped (graph_store "
+            "given without run_dir/target_path)",
+        )
+
     edges: list = []
     truncated = False
-    for fi in checklist.get("files", []):
-        if truncated:
+    for edge in _iter_checklist_call_edges(checklist, func_to_file):
+        if len(edges) >= _MAX_CALL_EDGES:
+            truncated = True
             break
-        path = fi.get("path", "")
-        cg = fi.get("call_graph")
-        if not isinstance(cg, dict):
-            continue
-        for call in cg.get("calls", []):
-            if truncated:
-                break
-            caller = call.get("caller", "")
-            if not caller:
-                continue
-            for callee in call.get("chain", []):
-                if len(edges) >= _MAX_CALL_EDGES:
-                    truncated = True
-                    break
-                edges.append({
-                    "caller_file": path,
-                    "caller": caller,
-                    "callee": callee,
-                    "callee_file": func_to_file.get(callee, ""),
-                })
+        edges.append(edge)
 
     context_map["call_edges"] = edges
     # The marker rides the map so NEGATIVE consumers (the
@@ -236,20 +268,64 @@ def enrich_with_call_edges(
     # than reading a capped edge list as proof of unreachability.
     # Cleared on rebuild (idempotent overwrite) so a stale flag never
     # outlives the edge set it described. Same for the size-budget
-    # shed marker (`call_edges_shed`, core.artifacts.context_map_budget):
-    # a rebuild replaces the shed payload, so a stale marker must not
-    # describe edges that are present again. Note the rebuild is only
+    # shed marker (`call_edges_shed`, core.artifacts.context_map_budget)
+    # and the store-routing marker (`call_edges_store`): a rebuild
+    # replaces the shed payload / re-routes the store snapshot, so a
+    # stale marker must not describe edges that are present again (or
+    # a snapshot this rebuild superseded). Note the rebuild is only
     # durable if the map now fits its size budget — a re-save of a
     # still-over-budget map re-sheds.
     context_map.pop("call_edges_truncated", None)
     context_map.pop("call_edges_shed", None)
+    context_map.pop("call_edges_store", None)
+
+    stored: dict[str, Any] | None = None
+    if route_to_store:
+        try:
+            from core.understand_graph.ingest import ingest_call_edges
+
+            stored = ingest_call_edges(
+                run_dir, target_path,
+                _iter_checklist_call_edges(checklist, func_to_file),
+                graph_path=graph_store,
+            )
+        except Exception:  # noqa: BLE001 — routing is additive; the artifact path must survive a broken store
+            logger.debug(
+                "context_map_callgraph: store routing failed", exc_info=True,
+            )
+            stored = None
+        if stored:
+            context_map["call_edges_store"] = {
+                "snapshot": stored["snapshot"],
+                "edges": stored["edges"],
+            }
+            logger.info(
+                "context_map_callgraph: routed %d mechanical call edge(s) "
+                "to the project graph store (%s)",
+                stored["edges"],
+                "stamped" if stored.get("stamped")
+                else "unstamped — hint tier only",
+            )
+
     if truncated:
         context_map["call_edges_truncated"] = True
-        logger.warning(
-            "context_map_callgraph: call-edge cap (%d) reached — edge "
-            "list truncated and marked; negative reachability "
-            "conclusions degrade to inconclusive", _MAX_CALL_EDGES,
-        )
+        if stored:
+            logger.warning(
+                "context_map_callgraph: call-edge cap (%d) reached — "
+                "in-artifact edge list truncated and marked; the full "
+                "set (%d edges) is persisted in the project graph "
+                "store, which store-capable consumers read; storeless "
+                "negative reachability degrades to inconclusive",
+                _MAX_CALL_EDGES, stored["edges"],
+            )
+        else:
+            logger.warning(
+                "context_map_callgraph: call-edge cap (%d) reached — edge "
+                "list truncated and marked; negative reachability "
+                "conclusions degrade to inconclusive. Remedy: run with an "
+                "active project so the full edge set routes to the "
+                "project graph store", _MAX_CALL_EDGES,
+            )
     if edges:
         logger.info(
             "context_map_callgraph: added %d call edges from checklist",

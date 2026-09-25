@@ -108,9 +108,24 @@ def main() -> int:
         )
         return 1
 
+    # Project mode: route the FULL (uncapped) mechanical edge set into
+    # the project graph store alongside the capped in-artifact list. A
+    # project-owned store resolves OUTSIDE the run dir; a run-local
+    # graph path means no project — storeless compatibility path.
+    graph_store = None
+    try:
+        from core.understand_graph.store import graph_path_for_run
+        candidate = graph_path_for_run(understand_dir, str(target_path))
+        if not candidate.resolve().is_relative_to(understand_dir):
+            graph_store = candidate
+    except Exception:  # noqa: BLE001 — routing is additive; enrichment must survive resolution failure
+        graph_store = None
+
     checklist_path = understand_dir / "checklist.json"
     edge_count = enrich_with_call_edges(
         context_map, checklist_path, checklist=checklist,
+        graph_store=graph_store, run_dir=understand_dir,
+        target_path=str(target_path),
     )
 
     # Reuse the checklist as the inventory — no re-parse of the
