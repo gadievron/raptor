@@ -1,0 +1,149 @@
+{
+  "_comment": "Accepted transcript-seam census findings. Keys are arm:file::qualname (no line numbers); count = accepted constructions at that site. Add an entry ONLY with a note explaining why the site is accepted; prefer routing construction through core.llm.transcript.build_llm_client / core.llm.factory.get_client, or fencing the surface with fence_unadopted_dispatch. check_transcript_seam.py fails CI on any site not listed here, fails when a listed site's count grows, and warns on stale entries.",
+  "entries": {
+    "llm_client:core/analysis/patch_localize.py::localize": {
+      "count": 2,
+      "note": "patch-localisation helper on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:core/audit/checker_synthesis.py::_build_llm_callable": {
+      "count": 2,
+      "note": "audit checker-synthesis client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:core/audit/corpus/run_corpus.py::_run_phase2_classify": {
+      "count": 1,
+      "note": "corpus-runner phase client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:core/audit/corpus/run_corpus.py::_run_phase2b_chains": {
+      "count": 1,
+      "note": "corpus-runner phase client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:core/audit/corpus/run_corpus.py::_run_probe": {
+      "count": 1,
+      "note": "corpus-runner probe client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:core/audit/gap_ranking.py::rank_gap_queue": {
+      "count": 2,
+      "note": "gap-queue ranking client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:core/audit/llm_review.py::call_llm_for_rule_refinement": {
+      "count": 1,
+      "note": "audit rule-refinement client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:core/audit/llm_summaries.py::run_llm_summary_pass": {
+      "count": 1,
+      "note": "audit summary-pass client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:core/audit/orchestrator.py::_run_llm_client": {
+      "count": 2,
+      "note": "audit orchestrator run client (per-run cost ledger requires a fresh client); adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:core/audit/pipeline.py::_make_llm_client": {
+      "count": 2,
+      "note": "audit pipeline client constructor; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:core/audit/spec_inference.py::infer_spec_with_llm_sync": {
+      "count": 1,
+      "note": "spec-inference client on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:core/dataflow/barrier_synth.py::default_completer": {
+      "count": 1,
+      "note": "barrier-synthesis default completer on the session transport; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:core/dataflow/barrier_synth.py::model_completer": {
+      "count": 1,
+      "note": "barrier-synthesis pinned-model completer; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:libexec/raptor-compile-invariants::main": {
+      "count": 2,
+      "note": "operator CLI entry point; launcher-invoked interactive tooling, not a replayed detection-pipeline surface"
+    },
+    "llm_client:libexec/raptor-llm-ask::main": {
+      "count": 2,
+      "note": "operator free-form ask CLI; deliberately live by design, not a replayed detection-pipeline surface"
+    },
+    "llm_client:libexec/raptor-study-loop::_overview_from_directory": {
+      "count": 1,
+      "note": "study-loop overview synthesis; launcher-invoked pipeline stage, seam adoption tracked per-surface"
+    },
+    "llm_client:libexec/raptor-study-loop::_synthesise_overview": {
+      "count": 1,
+      "note": "study-loop overview synthesis; launcher-invoked pipeline stage, seam adoption tracked per-surface"
+    },
+    "llm_client:libexec/raptor-synthesise-checker::main": {
+      "count": 1,
+      "note": "checker-synthesis CLI entry point; launcher-invoked tooling, seam adoption tracked per-surface"
+    },
+    "llm_client:libexec/raptor-understand::_rank_hunt_items": {
+      "count": 1,
+      "note": "understand hunt-ranking helper; launcher-invoked pipeline stage, seam adoption tracked per-surface"
+    },
+    "llm_client:libexec/raptor-validation-helper::_rank_priority_targets": {
+      "count": 1,
+      "note": "validation-helper ranking stage; launcher-invoked pipeline stage, seam adoption tracked per-surface"
+    },
+    "llm_client:libexec/raptor-validation-helper::_run_witness_execution": {
+      "count": 1,
+      "note": "validation-helper witness stage; launcher-invoked pipeline stage, seam adoption tracked per-surface"
+    },
+    "llm_client:packages/checker_synthesis/cve_bridge.py::_build_llm": {
+      "count": 1,
+      "note": "cve-bridge checker synthesis client; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:packages/codeql/evidence_validator.py::_construct_default_llm_client": {
+      "count": 1,
+      "note": "evidence-validator default client (tests inject mocks); adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:packages/exploitability_validation/scripts/measure_stage_e_empirical_influence.py::main": {
+      "count": 1,
+      "note": "dev-time measurement harness (subsystem scripts/ dir), runs outside the launcher pipelines"
+    },
+    "llm_client:packages/fuzzing/crash_ranking.py::rank_crash_queue": {
+      "count": 1,
+      "note": "crash-queue ranking client; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:packages/llm_analysis/crash_agent.py::CrashAnalysisAgent.__init__": {
+      "count": 1,
+      "note": "crash-analysis agent external-LLM branch; adjudicated at census baseline cut, seam adoption tracked per-surface"
+    },
+    "llm_client:packages/source_intel/measurement.py::main": {
+      "count": 2,
+      "note": "source-intel measurement CLI; dev/measurement tooling, runs outside the launcher pipelines"
+    },
+    "llm_client:packages/strategy_eval/efficacy.py::default_completer": {
+      "count": 1,
+      "note": "strategy-eval efficacy completer; measurement tooling, adjudicated at census baseline cut"
+    },
+    "provider:packages/code_understanding/dispatch/hunt_cocci_dispatch.py::translate_pattern_to_cocci_rule": {
+      "count": 1,
+      "note": "multi-model /understand dispatch builds per-model providers directly; dedicated transport stack, adjudicated at census baseline cut"
+    },
+    "provider:packages/code_understanding/dispatch/hunt_dispatch.py::default_hunt_dispatch": {
+      "count": 1,
+      "note": "multi-model /understand dispatch builds per-model providers directly; dedicated transport stack, adjudicated at census baseline cut"
+    },
+    "provider:packages/code_understanding/dispatch/trace_dispatch.py::default_trace_dispatch": {
+      "count": 1,
+      "note": "multi-model /understand dispatch builds per-model providers directly; dedicated transport stack, adjudicated at census baseline cut"
+    },
+    "provider:packages/cve_diff/cve_diff/agent/loop.py::AgentLoop.run": {
+      "count": 1,
+      "note": "cve-diff agent loop resolves its provider per model id; dedicated transport stack with its own auth resolution, adjudicated at census baseline cut"
+    },
+    "provider:packages/cve_diff/cve_diff/llm/client.py::_provider_for_model": {
+      "count": 1,
+      "note": "ResilientLLMClient's provider factory; cve-diff's dedicated transport stack, adjudicated at census baseline cut"
+    },
+    "provider:packages/cve_env/cve_env/agent/core_loop.py::_resolve_provider": {
+      "count": 1,
+      "note": "cve-env agent loop resolves its provider per model id; dedicated transport stack, adjudicated at census baseline cut"
+    },
+    "provider:packages/llm_analysis/agent.py::AutonomousSecurityAgentV2.__init__": {
+      "count": 2,
+      "note": "in-session claudecode transport fallback (ClaudeCodeProvider talks to the hosting session, no wire dispatch); the external-LLM branch of the same constructor is seam-adopted via build_llm_client"
+    },
+    "provider:packages/llm_analysis/crash_agent.py::CrashAnalysisAgent.__init__": {
+      "count": 1,
+      "note": "in-session claudecode transport fallback (ClaudeCodeProvider talks to the hosting session, no wire dispatch)"
+    }
+  }
+}
