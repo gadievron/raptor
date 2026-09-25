@@ -146,6 +146,136 @@ class TestImportFindingsFile:
         assert "no recognisable findings/variants" in captured.err
 
 
+def _graded(fid: str, status: str, **overrides) -> dict:
+    """A findings-graded.json-shaped row (audit graded export)."""
+    base = {
+        "id": fid,
+        "file": "src/auth.c",
+        "function": "check_token",
+        "line": 12,
+        "vuln_type": "auth_bypass",
+        "cwe_id": "CWE-287",
+        "status": status,
+        "hypothesis": "token compare skips expiry",
+        "evidence_tool": "smt",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestDarkImportPolicy:
+    """Dark rows are a witness-acquisition backlog by default;
+    --include-dark restores candidacy. Two directions pinned."""
+
+    def test_default_routes_dark_to_witness_backlog(self, tmp_path, capsys):
+        mod = _load_helper()
+        src = tmp_path / "findings-graded.json"
+        src.write_text(json.dumps({"findings": [
+            _graded("EXT-1", "finding"),
+            _graded("EXT-2", "suspicious", function="parse_len",
+                    cwe_id="CWE-190", vuln_type="integer_overflow"),
+            _graded("EXT-3", "dark"),
+            _graded("EXT-4", "dark", function="handle_req",
+                    cwe_id="CWE-862"),
+        ]}))
+        dest = tmp_path / "findings.json"
+        mod._import_findings_file(src, dest, target="/t")
+
+        saved = load_json(dest)
+        # Dark rows excluded from stage-A candidacy; finding AND
+        # suspicious rows keep the same contract as scanner findings.
+        assert len(saved["findings"]) == 2
+        assert all(f.get("source_status") != "dark"
+                   for f in saved["findings"])
+        suspicious = [f for f in saved["findings"]
+                      if f.get("source_status") == "suspicious"]
+        assert len(suspicious) == 1
+
+        backlog = load_json(tmp_path / "witness-backlog.json")
+        assert backlog["total"] == 2
+        classes = {c["class"]: c["count"] for c in backlog["clusters"]}
+        # Per-class clustering: which CWE classes need new witnesses.
+        assert classes == {"CWE-287": 1, "CWE-862": 1}
+        # Backlog rows keep the producer's own ids and grade — no
+        # verdict is rewritten on the routed rows.
+        sites = [s for c in backlog["clusters"] for s in c["sites"]]
+        assert {s["id"] for s in sites} == {"EXT-3", "EXT-4"}
+
+        out = capsys.readouterr().out
+        assert ("2 dark item(s) routed to the witness backlog — not "
+                "validated; --include-dark to override") in out
+        # Honest import count excludes the routed rows.
+        assert "Pre-existing findings: 2 from findings-graded.json" in out
+        marker = load_json(tmp_path / "findings-import.json")
+        assert marker["imported"] == 2
+        assert marker["dark_routed"] == 2
+
+    def test_include_dark_restores_candidacy(self, tmp_path, capsys):
+        mod = _load_helper()
+        src = tmp_path / "findings-graded.json"
+        src.write_text(json.dumps({"findings": [
+            _graded("EXT-1", "finding"),
+            _graded("EXT-3", "dark"),
+        ]}))
+        dest = tmp_path / "findings.json"
+        mod._import_findings_file(src, dest, target="/t",
+                                  include_dark=True)
+        saved = load_json(dest)
+        # Opt-in restores the pre-policy behaviour: every row is a
+        # stage-A candidate, dark grade preserved as source_status.
+        assert len(saved["findings"]) == 2
+        assert any(f.get("source_status") == "dark"
+                   for f in saved["findings"])
+        assert not (tmp_path / "witness-backlog.json").exists()
+        out = capsys.readouterr().out
+        assert "1 dark item(s) included in stage-A candidacy" in out
+        assert "Pre-existing findings: 2 from findings-graded.json" in out
+        marker = load_json(tmp_path / "findings-import.json")
+        assert marker["dark_routed"] == 0
+
+    def test_audit_status_shape_detected(self, tmp_path):
+        # validate-selection.json rows carry audit_status="dark" with a
+        # pipeline-entry status, not status="dark".
+        mod = _load_helper()
+        src = tmp_path / "selection.json"
+        src.write_text(json.dumps({"findings": [
+            _graded("FIND-001", "pending", audit_status="dark",
+                    needs_validation=True),
+            _graded("FIND-002", "pending"),
+        ]}))
+        dest = tmp_path / "findings.json"
+        mod._import_findings_file(src, dest, target="/t")
+        saved = load_json(dest)
+        assert len(saved["findings"]) == 1
+        backlog = load_json(tmp_path / "witness-backlog.json")
+        assert backlog["total"] == 1
+
+    def test_no_dark_rows_no_backlog(self, tmp_path):
+        mod = _load_helper()
+        src = tmp_path / "scan.json"
+        src.write_text(json.dumps([_finding("FIND-1")]))
+        dest = tmp_path / "findings.json"
+        mod._import_findings_file(src, dest, target="/t")
+        assert not (tmp_path / "witness-backlog.json").exists()
+        saved = load_json(dest)
+        assert len(saved["findings"]) == 1
+
+    def test_cluster_site_listing_capped_counts_exact(self, tmp_path):
+        mod = _load_helper()
+        cap = mod._BACKLOG_SITES_PER_CLUSTER
+        rows = [_graded(f"EXT-{i}", "dark", function=f"fn{i}")
+                for i in range(cap + 5)]
+        src = tmp_path / "findings-graded.json"
+        src.write_text(json.dumps({"findings": rows}))
+        mod._import_findings_file(src, tmp_path / "findings.json",
+                                  target="/t")
+        backlog = load_json(tmp_path / "witness-backlog.json")
+        cluster = backlog["clusters"][0]
+        assert cluster["count"] == cap + 5      # counts stay honest
+        assert len(cluster["sites"]) == cap     # listing bounded
+        assert cluster["sites_truncated"] is True
+
+
 class TestImportReadjudicationCrossCheck:
     """The --findings import cross-checks incoming rows against
     disproofs already recorded in the run dir BEFORE overwriting them

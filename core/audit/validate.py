@@ -209,11 +209,16 @@ def _followup_command(target_path: Path, out_dir: Path) -> str:
     ``/validate`` accepts ``--findings <file>`` imports (see
     ``.claude/commands/validate.md``; ``libexec/raptor-validation-helper``
     stage 0 parses the flag), and findings-graded.json carries every
-    dark row with ``needs_validation: true``.
+    dark row with ``needs_validation: true``. ``--include-dark`` is
+    required: the import chokepoint routes dark rows to the witness
+    backlog by default, and THIS command's whole purpose is the
+    explicit opt-in — running it IS the operator's decision to spend
+    validation budget on tool-blind rows.
     """
     return (
         f"/validate {target_path} "
-        f"--findings {Path(out_dir) / 'findings-graded.json'}"
+        f"--findings {Path(out_dir) / 'findings-graded.json'} "
+        f"--include-dark"
     )
 
 
@@ -539,12 +544,20 @@ def _build_audit_validate_prompt(
     threat_model = _threat_model_prompt_block(target)
     dark_block = ""
     if dark_count:
+        # The selection deliberately carries these dark rows (they won
+        # cap slots at selection time) — if the child stages them via
+        # a `--findings` import it must opt in with --include-dark,
+        # because the import chokepoint otherwise routes dark rows to
+        # the witness backlog by default.
         dark_block = f"""
 {dark_count} of the findings carry audit_status "dark": the audit's
 mechanical tools had NO channel to confirm or refute them (tool-blind
 class). Treat them as unverified hypotheses — they need concrete
 reachability and impact verification from first principles, not tool
-corroboration.
+corroboration. If you import the selection file with
+`raptor-validation-helper 0 --findings ...`, pass `--include-dark` —
+these dark rows were deliberately selected for validation and must not
+be routed to the witness backlog.
 """
     return f"""You are running the /validate post-pass for the /audit security
 review. The audit loop has finished and produced {findings_count} findings

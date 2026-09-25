@@ -1259,9 +1259,13 @@ def _annotate_dark_awaiting(
     # target (the main report path — libexec/raptor-audit's finalise —
     # does not pass target_path), and the findings path is fixed.
     target = str(target_path) if target_path else _run_meta_target(out_dir)
+    # --include-dark: the validate import routes dark rows to the
+    # witness backlog by default — this follow-up exists precisely to
+    # adjudicate them, so it carries the explicit opt-in.
     followup = (
         f"/validate {target or '<target>'} "
-        f"--findings {out_dir / 'findings-graded.json'}"
+        f"--findings {out_dir / 'findings-graded.json'} "
+        f"--include-dark"
     )
     completeness["dark_awaiting"] = awaiting
     completeness["dark_followup"] = followup
@@ -1299,9 +1303,14 @@ def _annotate_validate_postpass(
     # writable file and renders as an operator-facing exact re-run
     # line, and the local derivation is what the writer used anyway.
     target = str(target_path) if target_path else _run_meta_target(out_dir)
+    # --include-dark: the skipped post-pass would have carried its
+    # selected dark rows into candidacy; the equivalent re-run must
+    # opt in the same way (the import chokepoint otherwise routes
+    # them to the witness backlog).
     followup = (
         f"/validate {target or '<target>'} "
-        f"--findings {out_dir / 'findings-graded.json'}"
+        f"--findings {out_dir / 'findings-graded.json'} "
+        f"--include-dark"
     )
     completeness["validate_postpass_followup"] = followup
 

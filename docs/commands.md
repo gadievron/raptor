@@ -556,6 +556,7 @@ exploitable.  Stages run in order: 0 (inventory) through A--F (LLM stages) to
 |------|-------------|
 | `--vuln-type <type>` | Restrict to a specific vulnerability class |
 | `--findings <file>` | Findings file to validate |
+| `--include-dark` | Import audit dark-grade rows into stage-A candidacy (default: routed to the witness backlog `witness-backlog.json`, counted, not validated) |
 | `--binary <path>` | Debug binary for feasibility analysis |
 | `--skip-feasibility` | Skip binary feasibility stage |
 | `--rank` | Stage 0: LLM re-rank of the bridge's priority targets most-promising-first before persistence (ordering only; head- and budget-capped) |
