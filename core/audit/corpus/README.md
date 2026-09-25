@@ -285,8 +285,15 @@ after-the-change delta is attributable to the change:
    in the running checkout first (the variable appears in
    docs/environment.md when it is) — an unknown variable is silently
    ignored, and a baseline believed recorded but not is
-   unreproducible. Scan-profile recall runs are LLM-free and need no
-   transcript.
+   unreproducible. The corpus runner's own LLM passes (probe,
+   phase 2 / 2b) and the audit pipeline construct their clients
+   through the transcript seam, so record mode covers the whole run;
+   a `constructs a plain LLMClient outside the transcript seam`
+   warning in the run log means some surface under-recorded — treat
+   the transcript as incomplete. After the run, confirm the
+   transcript is non-empty (`wc -l <out>/llm-transcript.jsonl`)
+   before freezing it. Scan-profile recall runs are LLM-free and
+   need no transcript.
 3. **Freeze the artifacts**: `results.json` / `report.json`, the
    transcript, and the run-history record, together with the
    identity stamps that make them comparable — the pipeline tree
