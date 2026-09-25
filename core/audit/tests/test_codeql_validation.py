@@ -658,6 +658,196 @@ class TestGuardPolarity:
         assert (kept, pruned) == (1, 0)
         assert receipts == []
 
+    def test_splice_hidden_open_brace_exit_arm_harvests_negated(
+        self, tmp_path: Path,
+    ):
+        # C line splice (translation phase 2): the guard line ends in
+        # `\` and the arm-opening `{` lands on the continuation line.
+        # The physical tail's dangling `\` defeated startswith("{")
+        # and the exit-statement match, so the exit-only arm's
+        # negation was dropped; the window is judged from the joined
+        # logical text.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) \\\n"                   # 2
+            "    {\n"                                 # 3
+            "        return;\n"                       # 4
+            "    } memcpy(d, s, len);\n"              # 5  <- step
+            "}\n",
+        )
+        conds = _path_conditions([("src/vuln.c", 5)], target, {})
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("len < 0", True),
+        ]
+
+    def test_splice_hidden_open_brace_step_inside_arm_positive(
+        self, tmp_path: Path,
+    ):
+        # Inside-arm variant of the same splice: the step sits in the
+        # still-open arm, and the provable positive assertion (a true
+        # prune input) must survive the hidden `{`.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int n) {\n"                       # 1
+            "    if (n > 0) \\\n"                     # 2
+            "    {\n"                                 # 3
+            "        sink(n);\n"                      # 4  <- step
+            "    }\n"                                 # 5
+            "}\n",
+        )
+        conds = _path_conditions([("src/vuln.c", 4)], target, {})
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("n > 0", False),
+        ]
+
+    def test_comment_splice_does_not_mint_negation(self, tmp_path: Path):
+        # `// reject \` splices the next physical line INTO the
+        # comment: the real arm is EMPTY and the step falls through
+        # for ANY len.  Reading the commented-out `return;` as code
+        # judged the arm exit-only and asserted len<0 NEGATED — the
+        # false-suppression direction.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) {  // reject \\\n"      # 2
+            "        return;\n"                       # 3 (comment!)
+            "    }\n"                                 # 4
+            "    memcpy(d, s, len);\n"                # 5  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 5)], target, {}) == []
+
+    def test_token_splitting_splice_does_not_mint_exit(
+        self, tmp_path: Path,
+    ):
+        # `return\` + `_flag = 1;` is ONE token — an assignment, not
+        # an exit.  The space-joined physical window read
+        # `return\ _flag` and `^return\b` matched at the backslash
+        # boundary, asserting a false negation.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "int return_flag;\n"                      # 1
+            "void g(char *d, char *s, int len) {\n"   # 2
+            "    if (len < 0) { return\\\n"           # 3
+            "_flag = 1; }\n"                          # 4
+            "    memcpy(d, s, len);\n"                # 5  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 5)], target, {}) == []
+
+    def test_splice_crlf_variant_harvests_negated(self, tmp_path: Path):
+        # CRLF source: the \n-model split leaves the `\r` on the
+        # line, so the splice is `\` + `\r` at line end.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\r\n"  # 1
+            "    if (len < 0) \\\r\n"                  # 2
+            "    {\r\n"                                # 3
+            "        return;\r\n"                      # 4
+            "    } memcpy(d, s, len);\r\n"             # 5  <- step
+            "}\r\n",
+            newline="",
+        )
+        conds = _path_conditions([("src/vuln.c", 5)], target, {})
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("len < 0", True),
+        ]
+
+    def test_splice_with_trailing_blank_harvests_negated(
+        self, tmp_path: Path,
+    ):
+        # Backslash + blanks + newline: not a splice to ISO C, but
+        # GCC and Clang both join it (with a warning) — judge the
+        # text the compiler actually built.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) \\ \n"                  # 2
+            "    {\n"                                 # 3
+            "        return;\n"                       # 4
+            "    } memcpy(d, s, len);\n"              # 5  <- step
+            "}\n",
+        )
+        conds = _path_conditions([("src/vuln.c", 5)], target, {})
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("len < 0", True),
+        ]
+
+    def test_splice_into_step_line_abstains(self, tmp_path: Path):
+        # The window's last line splices INTO the step's physical
+        # line: the step line is a mid-logical-line continuation, so
+        # neither its prefix nor the window is faithful text — no
+        # polarity is assertable.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int len) {\n"                     # 1
+            "    if (len < 0) {\n"                    # 2
+            "        return; } \\\n"                  # 3
+            "    sink(len);\n"                        # 4  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 4)], target, {}) == []
+
+    def test_comment_spliced_live_flow_survives_real_smt_prune(
+        self, tmp_path: Path,
+    ):
+        # The suppress-direction consequence, end to end: the
+        # comment-splice hides that the arm is empty, the false
+        # NEGATED harvest pairs with the downstream positive guard,
+        # and z3 minted a proof-grade smt_path_infeasible on a path
+        # that is LIVE for any len < 0.  The finding must be kept.
+        pytest.importorskip("z3")
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) {  // reject \\\n"      # 2
+            "        return;\n"                       # 3 (comment!)
+            "    }\n"                                 # 4
+            "    memcpy(d, s, len);\n"                # 5  <- step
+            "    if (len < 0) {\n"                    # 6
+            "        memcpy(d, s, len);\n"            # 7  <- step
+            "    }\n"                                 # 8
+            "}\n",
+        )
+        sarif = _sarif_with_flow([("src/vuln.c", 5), ("src/vuln.c", 7)])
+        kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
+        assert (kept, pruned) == (1, 0)
+        assert receipts == []
+
+    def test_spliced_negation_still_feeds_true_prunes(
+        self, tmp_path: Path,
+    ):
+        # No over-correction: the negation recovered from the
+        # splice-hidden exit arm still combines with a later positive
+        # guard into a genuinely infeasible — prunable — path.
+        pytest.importorskip("z3")
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) \\\n"                   # 2
+            "    {\n"                                 # 3
+            "        return;\n"                       # 4
+            "    } log(len);\n"                       # 5  <- step
+            "    if (len < 0) {\n"                    # 6
+            "        memcpy(d, s, len);\n"            # 7  <- step
+            "    }\n"                                 # 8
+            "}\n",
+        )
+        sarif = _sarif_with_flow([("src/vuln.c", 5), ("src/vuln.c", 7)])
+        kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
+        assert (kept, pruned) == (0, 1)
+        assert receipts[0]["verdict"] == "smt_path_infeasible"
+
 
 def _stub_validate_path(feasible, *, calls=None):
     def stub(conditions, profile="uint64", timeout_ms=None, **kw):
