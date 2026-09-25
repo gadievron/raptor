@@ -363,7 +363,7 @@ class TestStartJoernServerCpgTiming:
         )
 
         def fake_ensure(srv, target_path, tunables=None, exclude_dirs=(),
-                        scope_exclude_dirs=()):
+                        scope_exclude_dirs=(), out_dir=None):
             state["now"] += clock_step
             return True
 

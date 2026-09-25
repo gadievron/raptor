@@ -585,6 +585,11 @@
     "count": 47,
     "kind": "literal"
   },
+  "core/audit/joern_backend.py::_status": {
+    "count": 10,
+    "kind": "literal",
+    "note": "joern-cpg-status.json record field keys (failed, phase, retried, first_heap_mb, ...) — a serialization schema the report summary consumes verbatim, not an API vocabulary"
+  },
   "core/audit/joern_verify.py::_STOP_WORDS": {
     "count": 42,
     "kind": "literal"

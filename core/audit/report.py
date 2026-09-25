@@ -287,6 +287,19 @@ def generate_report(
     if presweep:
         report["joern_presweep"] = presweep
 
+    # CPG build outcome (failed → the Joern channel was lost for the
+    # run; retried → it was rescued at derived-max limits): channel
+    # loss must be named in the report, not just a mid-run log line —
+    # zero joern receipts otherwise read as "tool found nothing".
+    try:
+        from .joern_backend import load_cpg_build_status
+        cpg_build = load_cpg_build_status(out_dir)
+    except Exception:  # noqa: BLE001 — reporting must not fail the run
+        logger.debug("CPG build status load failed", exc_info=True)
+        cpg_build = None
+    if cpg_build:
+        report["joern_cpg_build"] = cpg_build
+
     # Mid-run channel-health trips (the joern gate): a tripped channel
     # skipped its remaining dispatches for the run — its zero-receipt
     # tiers mean "channel went down", not "tool found nothing", and
@@ -1736,6 +1749,45 @@ def _format_summary(report: dict[str, Any]) -> str:
                 f"(functions read as 'no flows' rather than "
                 f"'not swept'). Re-run /audit or /agentic to "
                 f"regenerate the sweep."
+            )
+
+    cpg_build = report.get("joern_cpg_build")
+    if cpg_build:
+        lines.append("")
+        first_heap = cpg_build.get("first_heap_mb")
+        first_wall = cpg_build.get("first_timeout_s")
+        retry_heap = cpg_build.get("retry_heap_mb")
+        retry_wall = cpg_build.get("retry_timeout_s")
+        attempts = (
+            f"first attempt heap="
+            f"{first_heap if first_heap else 'default'} MB / "
+            f"timeout={first_wall}s"
+        )
+        if cpg_build.get("retried"):
+            attempts += (
+                f"; derived-max retry heap={retry_heap} MB / "
+                f"timeout={retry_wall}s"
+            )
+        if cpg_build.get("failed"):
+            lines.append("### ⚠️ Joern channel lost — CPG build failed")
+            what = (
+                "The CPG built but failed to import into the server"
+                if cpg_build.get("phase") == "import"
+                else "The CPG build failed"
+            )
+            lines.append(
+                f"{what} ({attempts}), so this run carries NO Joern "
+                f"receipts — hypotheses read as 'not looked at', "
+                f"never as refuted. Remedies: raise "
+                f"joern_heap_ceiling_mb / joern_cpg_timeout_s in "
+                f"tuning.json, or narrow --scope."
+            )
+        else:
+            # Rescued by the derived-max retry — worth one line so
+            # the doubled wall is attributable.
+            lines.append(
+                f"Joern CPG build succeeded on the derived-max retry "
+                f"({attempts})."
             )
 
     channel_health = report.get("channel_health")

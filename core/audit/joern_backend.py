@@ -319,7 +319,8 @@ def start_joern_server(target_path, joern_overrides=None, tunables=None,
     _cpg_start = time.monotonic()
     _cpg_ok = _ensure_cpg_loaded(srv, target_path, tunables,
                                  exclude_dirs=exclude_dirs,
-                                 scope_exclude_dirs=scope_exclude_dirs)
+                                 scope_exclude_dirs=scope_exclude_dirs,
+                                 out_dir=out_dir)
     if timings_out is not None:
         timings_out["cpg_build_s"] = time.monotonic() - _cpg_start
     if not _cpg_ok:
@@ -386,10 +387,95 @@ def install_flow_semantics(srv, target_path, out_dir=None) -> int:
     return installed
 
 
+# Scope-size threshold (estimated SLOC) arming the retry-at-derived-
+# max path. Below it a failed CPG build is rarely resource-shaped
+# (parse errors, missing frontend helpers) and a retry only doubles
+# the wall spent on a hopeless build; above it, resource kills
+# (heap / timeout) are the observed failure mode and ONE bounded
+# retry at the derivation's maxima rescues the channel for the run.
+_CPG_RETRY_MIN_SLOC = 500_000
+
+#: Run-dir artifact recording the audit CPG build outcome when it
+#: failed (channel lost) or was rescued by the derived-max retry.
+#: Read by the report summary so the channel loss is named in the
+#: run REPORT, not just a mid-run log line.
+JOERN_CPG_STATUS_FILENAME = "joern-cpg-status.json"
+
+
+def _write_cpg_build_status(out_dir, status: dict) -> None:
+    """Persist the CPG build outcome record. Best-effort."""
+    if not out_dir:
+        return
+    try:
+        from datetime import datetime, timezone
+
+        from core.json import save_json
+        record = dict(status)
+        record["ts"] = datetime.now(timezone.utc).isoformat()
+        save_json(Path(out_dir) / JOERN_CPG_STATUS_FILENAME, record)
+    except Exception:  # noqa: BLE001 — bookkeeping must not cost the run
+        logger.debug("CPG build status write failed", exc_info=True)
+
+
+def load_cpg_build_status(out_dir) -> dict | None:
+    """Read the CPG build outcome record, or None when absent."""
+    if not out_dir:
+        return None
+    path = Path(out_dir) / JOERN_CPG_STATUS_FILENAME
+    if not path.is_file():
+        return None
+    data = load_json(path, max_bytes=_MAX_RUN_META_BYTES)
+    return data if isinstance(data, dict) else None
+
+
+def _derived_max_retry_limits(
+    target_path,
+    exclude_dirs: tuple[str, ...],
+    first_heap_mb: int | None,
+    first_heap_is_derived: bool,
+    first_timeout_s: int,
+) -> tuple[int | None, int, int] | None:
+    """(heap_mb, timeout_s, estimated_sloc) for a derived-max retry.
+
+    None when the retry is not armed: scope below the size threshold,
+    the estimate unavailable, or the first attempt already ran at the
+    derivation's maxima (retrying with identical limits is pure wall
+    loss). The retry heap honors the same ceiling every derivation
+    does (:func:`core.tuning.derived_max_joern_heap_mb`) — and it
+    honors explicitness BOTH directions: only a DERIVED (or absent)
+    first heap is raised; an explicit operator heap is an assertion
+    and keeps its value exactly (the retry may then only extend the
+    timeout).
+    """
+    try:
+        from core.tuning import (
+            derive_joern_cpg_timeout_s,
+            derived_max_joern_heap_mb,
+        )
+        from packages.joern.runner import estimate_in_scope_sloc
+        sloc = estimate_in_scope_sloc(
+            Path(target_path), exclude_dirs=exclude_dirs,
+        )
+    except Exception:  # noqa: BLE001 — retry arming must not cost the run
+        logger.debug("derived-max retry arming failed", exc_info=True)
+        return None
+    if sloc < _CPG_RETRY_MIN_SLOC:
+        return None
+    if first_heap_mb is None or first_heap_is_derived:
+        heap: int | None = max(first_heap_mb or 0,
+                               derived_max_joern_heap_mb())
+    else:
+        heap = first_heap_mb
+    timeout = max(first_timeout_s, derive_joern_cpg_timeout_s(sloc))
+    if heap == first_heap_mb and timeout <= first_timeout_s:
+        return None
+    return heap, timeout, sloc
+
+
 def _ensure_cpg_loaded(srv, target_path, tunables=None,
                        exclude_dirs: tuple[str, ...] = (),
                        scope_exclude_dirs: tuple[str, ...] = (),
-                       ) -> bool | None:
+                       out_dir=None) -> bool | None:
     """Build and import the CPG for *target_path* into *srv*.
 
     Returns True if the CPG was loaded (or already was), False on failure.
@@ -397,6 +483,12 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
     set (key/analysis parity). ``scope_exclude_dirs`` (the scope
     complement) additionally keys the cache slot — see
     :func:`packages.joern.runner.build_cpg_cached`.
+
+    Proportionate failure: a failed build on a scope above
+    :data:`_CPG_RETRY_MIN_SLOC` is retried ONCE at derived-max limits
+    (heap at the tuning ceiling, timeout from the SLOC curve). The
+    outcome — channel lost, or rescued by the retry — is persisted to
+    :data:`JOERN_CPG_STATUS_FILENAME` for the run report.
     """
     if getattr(srv, "_cpg_loaded", False):
         return True
@@ -414,29 +506,100 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
     # the scope's source-size estimate; non-auto tunables pass
     # through unchanged.
     from packages.joern.tunables import resolve_cpg_timeout_s
+    combined_excludes = tuple(exclude_dirs) + tuple(scope_exclude_dirs)
     cpg_timeout = resolve_cpg_timeout_s(
-        tunables, target_path,
-        exclude_dirs=tuple(exclude_dirs) + tuple(scope_exclude_dirs),
+        tunables, target_path, exclude_dirs=combined_excludes,
     )
     import_timeout = (
         getattr(tunables, "import_timeout_s", None) if tunables else None
     )
+    # The parse frontend heap follows the tunables like the query
+    # server's: a retry at derived-max heap is meaningless if the
+    # first attempt never carried a heap at all.
+    heap_mb = getattr(tunables, "heap_mb", None) if tunables else None
+    heap_is_derived = bool(
+        getattr(tunables, "heap_is_derived", False)) if tunables else False
 
     cache_dir = Path.home() / ".cache" / "raptor" / "joern-cpg"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    retried = False
+    retry_heap: int | None = None
+    retry_timeout: int | None = None
+    est_sloc: int | None = None
+
+    def _status(*, failed: bool, phase: str) -> dict:
+        return {
+            "target": str(target_path),
+            "failed": failed,
+            "phase": phase,
+            "retried": retried,
+            "first_heap_mb": heap_mb,
+            "first_timeout_s": cpg_timeout,
+            "retry_heap_mb": retry_heap,
+            "retry_timeout_s": retry_timeout,
+            "estimated_sloc": est_sloc,
+            "scope_excluded_dirs": len(scope_exclude_dirs),
+        }
+
     try:
         cpg = build_cpg_cached(Path(target_path), cache_dir,
                                timeout=cpg_timeout,
+                               heap_mb=heap_mb,
                                exclude_dirs=exclude_dirs,
                                scope_exclude_dirs=scope_exclude_dirs)
-        if cpg.exists():
-            srv.import_cpg(cpg.path, timeout=import_timeout)
-            return True
-        return False
+        if not cpg.exists() or getattr(cpg, "build_failed", False):
+            retry = _derived_max_retry_limits(
+                target_path, combined_excludes,
+                heap_mb, heap_is_derived, cpg_timeout,
+            )
+            if retry is not None:
+                retry_heap, retry_timeout, est_sloc = retry
+                logger.warning(
+                    "Joern CPG build for %s failed (heap=%s MB, "
+                    "timeout=%ds) — retrying once at derived-max "
+                    "limits: heap=%s MB, timeout=%ds (worst-case "
+                    "wall across both attempts %ds)",
+                    target_path, heap_mb if heap_mb else "default",
+                    cpg_timeout, retry_heap, retry_timeout,
+                    cpg_timeout + retry_timeout,
+                )
+                retried = True
+                cpg = build_cpg_cached(
+                    Path(target_path), cache_dir,
+                    timeout=retry_timeout,
+                    heap_mb=retry_heap,
+                    exclude_dirs=exclude_dirs,
+                    scope_exclude_dirs=scope_exclude_dirs,
+                )
+        ok = cpg.exists() and not getattr(cpg, "build_failed", False)
     except Exception:
-        logger.debug("CPG build/import failed for %s", target_path, exc_info=True)
+        logger.debug("CPG build failed for %s", target_path, exc_info=True)
+        # An exception is a channel loss like any failed build — it
+        # must reach the run report, not just this debug line.
+        _write_cpg_build_status(out_dir, _status(
+            failed=True, phase="build"))
         return False
+    if not ok:
+        _write_cpg_build_status(out_dir, _status(
+            failed=True, phase="build"))
+        return False
+    try:
+        srv.import_cpg(cpg.path, timeout=import_timeout)
+    except Exception:
+        logger.debug("CPG import failed for %s", target_path, exc_info=True)
+        # A built-but-unimported graph is still a lost channel: the
+        # record must never claim a rescue the server can't serve.
+        _write_cpg_build_status(out_dir, _status(
+            failed=True, phase="import"))
+        return False
+    if retried:
+        # Success record only AFTER the import: a rescue claim for a
+        # graph that failed to import would report a channel the run
+        # never had.
+        _write_cpg_build_status(out_dir, _status(
+            failed=False, phase="complete"))
+    return True
 
 
 def stop_joern_server(server) -> None:
