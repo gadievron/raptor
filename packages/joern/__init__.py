@@ -55,8 +55,15 @@ def joern_session(
     tunables: JoernTunables | None = None,
     register_reach_audit: bool = True,
     exclude_dirs: tuple[str, ...] = (),
+    scope_exclude_dirs: tuple[str, ...] = (),
 ) -> Iterator[JoernServer | None]:
     """Context manager for a cross-tool Joern session.
+
+    ``exclude_dirs``: freshness-neutral run-artifact exclusions (a
+    run's output dir inside the target). ``scope_exclude_dirs``: the
+    caller's scope COMPLEMENT — semantic coverage exclusions that key
+    the CPG cache slot (see
+    :func:`packages.joern.runner.build_cpg_cached`).
 
     Boots a Joern server, builds/loads the CPG, imports it into
     the server, and optionally registers the server with
@@ -103,8 +110,9 @@ def joern_session(
         # target is known — from_tuning only holds the unknown-scope
         # fallback.
         from .tunables import resolve_cpg_timeout_s
+        combined_excludes = tuple(exclude_dirs) + tuple(scope_exclude_dirs)
         build_timeout = resolve_cpg_timeout_s(
-            tunables, target_path, exclude_dirs=exclude_dirs,
+            tunables, target_path, exclude_dirs=combined_excludes,
         )
         if cache_dir is not None:
             cpg = build_cpg_cached(
@@ -113,6 +121,7 @@ def joern_session(
                 timeout=build_timeout,
                 heap_mb=tunables.heap_mb,
                 exclude_dirs=exclude_dirs,
+                scope_exclude_dirs=scope_exclude_dirs,
             )
         else:
             cpg = build_cpg(
@@ -120,7 +129,9 @@ def joern_session(
                 languages=parse_langs,
                 timeout=build_timeout,
                 heap_mb=tunables.heap_mb,
-                exclude_dirs=exclude_dirs,
+                # No cache slot to key on the uncached path — scope
+                # exclusions still shape the graph (analysis parity).
+                exclude_dirs=combined_excludes,
             )
         if cpg.exists():
             srv.import_cpg(cpg.path, timeout=tunables.import_timeout_s)
