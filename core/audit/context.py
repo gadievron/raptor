@@ -486,8 +486,42 @@ def _defend_identifier(value: Any, max_length: int = 200) -> str:
       newline). Escaping at the shared helper keeps every wrapping
       site's span intact; no legitimate identifier grammar needs a
       live backtick.
+
+    Known limitations (documented by design, not gaps this helper
+    closes):
+
+    - Escaping is NOT injective — an attacker writing the literal
+      text ``\x60`` produces the same rendered bytes as a real
+      escaped backtick. The security property (nothing live) holds
+      either way; forensic consumers needing byte fidelity read the
+      ctx fields, never the rendered prompt. A model that decodes
+      and re-quotes an escape when regenerating text is a
+      second-order consumer concern, same as for the log contract.
+    - Homoglyph/fullwidth respellings of tag vocabulary (e.g.
+      fullwidth brackets) pass byte-faithful: printable, semantic
+      layer — ownership documented at ``_ENVELOPE_TAG_RE``'s
+      spelling note (a confusable fold belongs in the character
+      layer there, one home for all arms).
+    - The ``...[truncated]`` marker is plain text an attacker can
+      also write — cosmetic; truncation grants nothing.
     """
-    text = _IDENT_FLATTEN_RE.sub(" ", str(value))
+    text = str(value)
+    # Bound WORK before the pipeline, not just output after it: the
+    # pipeline is linear but a multi-megabyte "identifier" still pays
+    # flatten+neutralise+escape over the whole input to keep 200
+    # chars. 8x the output cap leaves every printable input's final
+    # rendering identical (flatten never shrinks printable text and
+    # the later passes only insert/expand, so the first max_length
+    # output chars come from well inside the bound); outputs can
+    # differ only for inputs whose first 8*max_length chars are
+    # dominated by control-run padding that flatten would collapse —
+    # hostile by shape. Do not lower toward max_length: escape
+    # expansion (up to 10 chars per input char) plus run-collapse
+    # need the headroom for legitimate escape-heavy identifiers.
+    input_cap = max_length * 8
+    if len(text) > input_cap:
+        text = text[:input_cap]
+    text = _IDENT_FLATTEN_RE.sub(" ", text)
     try:
         from core.security.prompt_envelope import neutralize_tag_forgery
         text = neutralize_tag_forgery(text)
