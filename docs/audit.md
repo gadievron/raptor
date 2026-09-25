@@ -367,6 +367,24 @@ against the target tree — any drift refuses the resume with the drifted
 functions named, or `--allow-drift` proceeds and re-reviews those
 functions instead of reusing them.
 
+Mutual exclusion: `run` and `resume` take an exclusive,
+orchestrator-lifetime lock on the run directory (`.audit-run.lock`) at
+startup. A second `run`/`resume` against a directory whose orchestrator
+is still alive — including one draining after SIGTERM, which keeps the
+lock through salvage until the process actually exits — refuses with a
+non-zero exit, naming the holder pid and start time. If verification
+shows the named pid is not an audit orchestrator working that directory
+(a forged or wrong stamp), delete the lock file and retry — but only
+after verifying: removing the file under a genuinely live holder splits
+lockers across two inodes. A crashed holder's
+stale lock is reclaimed automatically when its stamped identity is
+provably dead (pid gone, recycled pid, or a prior boot of this
+machine); a holder whose liveness cannot be verified fails closed with
+the manual remedy named; a lock path occupied by a symlink, directory,
+or other non-regular artifact refuses outright until the planted
+artifact is removed. Read-only consumers (`report`, `/review`,
+coverage readers) and the lifecycle stubs never take the lock.
+
 ## Post-run Workflows
 
 ### Feedback loop

@@ -1664,6 +1664,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     # "call start_run() first", and the supervisor-advertised
     # `raptor-audit resume <dir>` refused the directory as "not a run
     # directory" — an explicit-out run was silently unresumable.
+    # --- orchestrator run-dir lock (--out shape) ---
+    # An explicit --out can name a directory a LIVE orchestrator still
+    # owns (e.g. a SIGTERM-drained run mid-salvage), and lifecycle
+    # start below rewrites that directory's .raptor-run.json — so the
+    # exclusive lock is taken BEFORE lifecycle start here. The handle
+    # is process-lifetime by design (module-registered fd, released
+    # only at actual process exit, salvage drain included); a refusal
+    # is loud and non-zero, never a queue.
+    from core.audit.run_lock import AuditRunLocked, acquire_run_lock
+    run_lock = None
     lifecycle_cmd = [
         str(_RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"),
         "start", "audit", "--target", str(target_path),
@@ -1671,6 +1681,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.out:
         out_dir = Path(args.out)
         out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            run_lock = acquire_run_lock(out_dir, "run")
+        except AuditRunLocked as exc:
+            print(f"error: {sanitise_for_terminal(str(exc), max_len=1000)}",
+                  file=sys.stderr)
+            return 1
         lifecycle_cmd += ["--out", str(out_dir)]
     try:
         lifecycle = subprocess.run(
@@ -1698,6 +1714,22 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
     for line in lifecycle.stdout.strip().splitlines():
         print(line)
+
+    # --- orchestrator run-dir lock (resolved-dir shape) ---
+    # No --out: the directory is only known after lifecycle start
+    # resolved it. Freshly-minted dirs acquire trivially; a project-
+    # resolved reuse is refused like any other contention. On refusal,
+    # deliberately NO _lifecycle_fail: the directory belongs to the
+    # live holder, and stamping failed over its metadata is the exact
+    # interference this lock exists to prevent.
+    if run_lock is None or run_lock.lock_path.parent.resolve() != \
+            out_dir.resolve():
+        try:
+            acquire_run_lock(out_dir, "run")
+        except AuditRunLocked as exc:
+            print(f"error: {sanitise_for_terminal(str(exc), max_len=1000)}",
+                  file=sys.stderr)
+            return 1
 
     # --- build checklist ---
     checklist_path = out_dir / "checklist.json"
@@ -2472,6 +2504,23 @@ def cmd_resume(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir).resolve()
     if not out_dir.is_dir():
         print(f"error: {out_dir} is not a directory", file=sys.stderr)
+        return 1
+
+    # --- orchestrator run-dir lock ---
+    # FIRST, before any eligibility read or mutation: the motivating
+    # incident is a resume issued while a SIGTERM-drained orchestrator
+    # was still alive in salvage — its run status already read
+    # interrupted, so a status gate alone can never catch it. A live
+    # holder refuses loudly; a crashed holder's stale lock is
+    # reclaimed on proven-dead identity (recycled pids never read
+    # live); unverifiable holders fail closed with the manual remedy.
+    # Held (module-registered fd) until this process actually exits.
+    from core.audit.run_lock import AuditRunLocked, acquire_run_lock
+    try:
+        acquire_run_lock(out_dir, "resume")
+    except AuditRunLocked as exc:
+        print(f"error: {sanitise_for_terminal(str(exc), max_len=1000)}",
+              file=sys.stderr)
         return 1
 
     err = resume_ineligibility(out_dir, reopen=getattr(args, "reopen", False))
