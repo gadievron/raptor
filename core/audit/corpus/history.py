@@ -1015,6 +1015,23 @@ def import_results(results_path: Path, store: Path) -> str:
         msg = f"{results_path}: results is not a list"
         raise ValueError(msg)
 
+    # Kind integrity: rows carrying an explicit label_kind must agree
+    # with the file's meta (a re-wrapped or hand-edited artifact must
+    # carry the kind verbatim, and a mismatch is refused — never
+    # silently defaulted).  Kind-less rows inherit the meta kind so a
+    # synthetic file's rows are never recorded as real.
+    meta_kind = meta.get("label_kind") or "real"
+    for row in rows:
+        row_kind = row.get("label_kind")
+        if row_kind and row_kind != meta_kind:
+            msg = (
+                f"{results_path}: row {row.get('function_id', '?')!r} "
+                f"has label_kind={row_kind!r} but meta says "
+                f"{meta_kind!r} — refusing a mixed-kind import"
+            )
+            raise ValueError(msg)
+        row["label_kind"] = meta_kind
+
     modes = sorted({r.get("mode", "") for r in rows if r.get("mode")})
     config = {
         "mode": "+".join(modes) if modes else None,
