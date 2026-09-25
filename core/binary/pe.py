@@ -12,7 +12,8 @@ One entry point:
   inventory / triage consumers: DOS/COFF/optional headers,
   machine / arch / bits, subsystem, characteristics and
   DLL-characteristics mitigation bits as named booleans, the
-  section table, ``SizeOfHeaders``, and the entrypoint RVA.
+  section table, ``SizeOfHeaders``, the entrypoint RVA, and the
+  import / delay-import tables.
 
 Scope
 - PE32 + PE32+ images (little-endian by format definition)
@@ -20,10 +21,14 @@ Scope
   COFF machine field: the machine value is a family label and a
   crafted header can disagree with the actual image layout — the
   magic is what selects the layout actually parsed.
+- Import + delay-import tables: per-DLL name and function list
+  (hint/name or ordinal), thunk width and ordinal-flag bit
+  selected PER FORMAT from the optional-header magic.
 
 Out of scope
-- Import / delay-import / export tables (a follow-up extension of
-  this module; nothing here walks a thunk array or name table)
+- The export table (the next extension of this module)
+- The bound-import table (a pre-Vista binding optimisation; its
+  facts duplicate the import table's DLL list)
 - The resource tree INCLUDING version-info (canonical PE
   hostile-recursion surface — deliberately not parsed)
 - TE (Terse Executable) images — no DOS/COFF header, different
@@ -54,11 +59,18 @@ Its named invariants:
       offsets, bounded by ``SizeOfHeaders``;
   (d) every resolved read is bounded by ``min(remaining raw bytes,
       the caller's named cap)`` — ``VirtualSize`` is never a read
-      budget, and a read never crosses a section boundary.
+      budget, and a read never crosses a section boundary;
+  (e) every count- or terminator-driven walk (import descriptors,
+      thunk arrays, export slots, name strings) runs under a NAMED
+      cap with a ``caps_hit`` marker on breach — declared counts
+      are attacker u32s and terminators are attacker-optional, so
+      no walk trusts either for its budget.
 """
 
 from __future__ import annotations
 
+import bisect
+import heapq
 import logging
 import os
 import struct
@@ -232,14 +244,94 @@ _MAX_PDB_PATH_BYTES = 4_096
 # 4 KB path whose last component is the whole path. Hostile text
 # either way — consumers escape at render.
 _MAX_PDB_BASENAME_BYTES = 256
+# ---- Import / delay-import walk caps (invariant e).
+#
+# Import descriptors walked (one per DLL). The descriptor array is
+# null-descriptor terminated — its length is attacker-shaped, not
+# declared — and each descriptor prices a 20-byte resolver read
+# plus a name read and a thunk walk. Real images link tens of
+# DLLs; plugin-heavy monsters reach the low hundreds. 1024
+# truncates nothing real; higher only sells resolver reads to a
+# crafted array whose terminator never comes (the walk would
+# otherwise run to the section's virtual end).
+_MAX_IMPORT_DESCRIPTORS = 1_024
+# Delay-load descriptors walked. The linker emits one ImgDelayDescr
+# per /delayload'd DLL — real images carry a handful, heavyweight
+# suites tens. 256 is an order above anything real; the cost model
+# per entry is the regular-import one (32-byte descriptor + name +
+# thunk walk), so a higher cap only resells the same hostile walk.
+_MAX_DELAY_DESCRIPTORS = 256
+# Thunks walked per DLL. A thunk array is null-terminated (length
+# attacker-shaped again); the largest real per-DLL import lists
+# (statically-imported CRT, mega-DLLs) stay under ~2k entries.
+# 4096 truncates nothing real; an uncapped walk would hand an
+# unterminated array a read loop across its whole section extent.
+_MAX_IMPORT_THUNKS_PER_DLL = 4_096
+# Whole-walk thunk budget across every import AND delay-import
+# DLL. Bounds the aggregate when a crafted directory maxes
+# descriptors x per-DLL thunks (1024 x 4096 would otherwise price
+# ~4M resolver reads plus a name read each). Real images total a
+# few thousand imports across all DLLs; lower would truncate
+# extreme-but-real aggregates, higher just sells CPU.
+_MAX_IMPORT_THUNKS_TOTAL = 16_384
+# Longest name string a table lookup will materialise — same value
+# and rationale as the ELF tier's strtab lookup
+# (core.binary.elf._MAX_STRTAB_NAME_BYTES): deeply nested C++
+# manglings genuinely reach a few KB, so lower drops real import /
+# export names. A string unterminated inside the window (past the
+# cap OR running into the section's virtual end) is retained as a
+# CAPPED PREFIX with a marker — capture is capped, never a section
+# dump. Hostile text either way — consumers escape at render.
+_MAX_TABLE_NAME_BYTES = 4_096
+# Total name bytes the whole tables walk (imports + delay-imports
+# + exports) may retain — the record-size backstop, same value and
+# rationale as the ELF import walk's _MAX_TOTAL_NAME_BYTES: real
+# name volumes stay under a few hundred KB, and the worst crafted
+# case (every entry at the per-name cap) must not turn the facts
+# record itself into the amplifier. On breach, names degrade to
+# None with a marker AND further name/forwarder READS stop — a
+# spent budget must not keep selling chokepoint reads (tens of
+# thousands across a max-shape table) for text that can no longer
+# be retained; counts stay honest, the walk itself continues.
+# The budget prices the RAW bytes retained; the record stores
+# DECODED text, and errors="replace" expands an invalid byte to
+# one U+FFFD (3 UTF-8 bytes) — a bounded x3 constant factor on
+# top of the budget, not a bypass.
+_MAX_TABLE_NAME_TOTAL_BYTES = 8 * 1024 * 1024
 
 # Data-directory indices consumed (spec order). The security entry
 # holds a FILE OFFSET (not an RVA) to the certificate table; only
 # its PRESENCE is read here — certificate parsing is a separate,
 # deliberately-unimplemented surface.
+_DIR_IMPORT = 1
 _DIR_SECURITY = 4
 _DIR_DEBUG = 6
+_DIR_DELAY_IMPORT = 13
 _DIR_CLR = 14
+
+# One import descriptor: OriginalFirstThunk(I) TimeDateStamp(I)
+# ForwarderChain(I) Name(I) FirstThunk(I)
+_IMPORT_DESCRIPTOR = struct.Struct("<IIIII")
+# One delay-load descriptor (ImgDelayDescr): Attributes(I)
+# DllNameRVA(I) ModuleHandleRVA(I) IATRVA(I) ImportNameTableRVA(I)
+# BoundIATRVA(I) UnloadIATRVA(I) TimeStamp(I)
+_DELAY_DESCRIPTOR = struct.Struct("<IIIIIIII")
+# ImgDelayDescr.grAttrs bit 0: SET = the descriptor's address
+# fields are RVAs (the form every post-VC6 linker emits); CLEAR =
+# the legacy form whose fields are absolute virtual addresses.
+_DELAY_ATTR_RVA = 0x1
+# Thunk width and ordinal-flag bit are selected PER FORMAT from the
+# optional-header magic — the classic import-walk bug is applying
+# the 32-bit flag to 64-bit thunks (or vice versa): 0x80000000 in
+# a PE32+ thunk is NOT an ordinal import, it is a value inside the
+# hint/name RVA field's u64 slot.
+_THUNK_STRUCTS = {32: struct.Struct("<I"), 64: struct.Struct("<Q")}
+_ORDINAL_FLAGS = {32: 0x8000_0000, 64: 0x8000_0000_0000_0000}
+# Bits 30:0 of a non-ordinal thunk hold the hint/name RVA; the
+# non-flag bits above them must be zero per spec and are ignored
+# by masking (fail open — a doctored high bit must not invent a
+# giant RVA and must not flip the import's shape).
+_THUNK_RVA_MASK = 0x7FFF_FFFF
 
 # One debug-directory entry: Characteristics(I) TimeDateStamp(I)
 # MajorVersion(H) MinorVersion(H) Type(I) SizeOfData(I)
@@ -275,6 +367,69 @@ class PeSection:
     characteristics: int
     entropy: float | None = None
     sampled: int = 0
+
+
+@dataclass(frozen=True)
+class PeImportedFunction:
+    """One import thunk, in its ground-truth shape: a hint/name
+    import carries ``name`` (hostile text — capped at capture,
+    escape at render) plus the loader ``hint``; an ordinal import
+    carries ``ordinal`` only. A thunk whose hint/name data was
+    unreadable, unterminated, or dropped by the name budget keeps
+    whatever was recovered (possibly ``hint`` alone, possibly
+    nothing) — the owning DLL's ``caps_hit`` says why."""
+
+    name: str | None = None
+    hint: int | None = None
+    ordinal: int | None = None
+
+
+@dataclass
+class PeImportedDll:
+    """One import-directory descriptor's facts.
+
+    ``name`` is the DLL-name string from the hostile file — capped
+    at capture, stored as data, escape at render. ``thunk_count``
+    counts thunks WALKED (== ``len(functions)``; entries are
+    recorded even when their names degrade), split by shape into
+    ``named_count`` / ``ordinal_count``. ``used_first_thunk``
+    records the OriginalFirstThunk = 0 fallback (see the walk).
+    ``caps_hit`` carries this DLL's own walk markers; every marker
+    is mirrored into ``PeFacts.caps_hit`` so record-level "empty =
+    complete" stays true.
+    """
+
+    name: str | None = None
+    functions: list[PeImportedFunction] = field(default_factory=list)
+    thunk_count: int = 0
+    named_count: int = 0
+    ordinal_count: int = 0
+    used_first_thunk: bool = False
+    caps_hit: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PeDelayImportedDll:
+    """One delay-load descriptor's facts (ImgDelayDescr).
+
+    ``rva_addressed`` mirrors attribute bit 0 (``_DELAY_ATTR_RVA``).
+    When False — the legacy pre-VC7 form — every address field
+    including the DLL name is an absolute virtual address, which
+    this extractor deliberately does NOT chase: rebasing VAs
+    through ImageBase would be a second resolution path beside the
+    RVA chokepoint. The descriptor is recorded with its raw
+    ``attributes`` and a ``delay_import_va_form`` marker instead.
+    All other fields follow :class:`PeImportedDll`.
+    """
+
+    name: str | None = None
+    attributes: int = 0
+    rva_addressed: bool = True
+    functions: list[PeImportedFunction] = field(default_factory=list)
+    thunk_count: int = 0
+    named_count: int = 0
+    ordinal_count: int = 0
+    caps_hit: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -350,6 +505,13 @@ class PeFacts:
     debug_age: int | None = None
     pdb_basename: str | None = None
     debug_identity: str | None = None
+    # Import / delay-import table facts. Empty lists mean the
+    # corresponding directory is absent or empty; an unreadable
+    # directory leaves a marker, so absence and degradation stay
+    # distinguishable.
+    imports: list[PeImportedDll] = field(default_factory=list)
+    delay_imports: list[PeDelayImportedDll] = field(
+        default_factory=list)
     caps_hit: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -493,12 +655,72 @@ class _RvaTarget:
 class _RvaResolver:
     """RVA → file-offset chokepoint. See the module docstring for
     the named invariants (a)-(d); every RVA-addressed read in this
-    module goes through :meth:`read`."""
+    module goes through :meth:`read`.
+
+    Resolution is served from a segment index built ONCE at
+    construction: the section table is swept into disjoint sorted
+    ``(start, end, section)`` segments whose owner is the FIRST
+    section in table order covering them — invariant (b),
+    precomputed. The pricing rationale: the table walks issue tens
+    of thousands of chokepoint reads per image and
+    ``NumberOfSections`` is attacker-chosen up to
+    ``_MAX_SECTIONS``, so a per-READ linear scan hands a crafted
+    image a sections x reads product (measured in the tens of
+    seconds from a sub-MB file). Bisect over the index makes every
+    read O(log n) while resolution stays a pure function of the
+    table.
+    """
 
     def __init__(self, sections: list[PeSection],
                  size_of_headers: int) -> None:
         self._sections = sections
         self._size_of_headers = max(0, size_of_headers)
+        self._seg_starts: list[int] = []
+        self._seg_ends: list[int] = []
+        self._seg_secs: list[PeSection] = []
+        self._build_index()
+
+    def _build_index(self) -> None:
+        """Sweep the (possibly overlapping) section spans into the
+        disjoint segment index. A lazy-deletion heap keyed on table
+        index makes the winner at every elementary interval the
+        live section with the LOWEST table index — exactly the
+        first-match rule the per-RVA scan implemented, paid once
+        instead of per read."""
+        spans = [
+            (sec.virtual_address,
+             sec.virtual_address + self._virtual_extent(sec),
+             idx, sec)
+            for idx, sec in enumerate(self._sections)
+            if self._virtual_extent(sec) > 0
+        ]
+        if not spans:
+            return
+        points = sorted({p for start, end, _idx, _sec in spans
+                         for p in (start, end)})
+        by_start = sorted(spans, key=lambda s: s[0])
+        # Heap entries: (table_index, end, section) — table_index
+        # is unique, so the section never participates in ordering.
+        heap: list[tuple[int, int, PeSection]] = []
+        si = 0
+        for k in range(len(points) - 1):
+            p = points[k]
+            while si < len(by_start) and by_start[si][0] == p:
+                _start, end, idx, sec = by_start[si]
+                heapq.heappush(heap, (idx, end, sec))
+                si += 1
+            while heap and heap[0][1] <= p:      # lazy deletion
+                heapq.heappop(heap)
+            if not heap:
+                continue                         # gap between spans
+            sec = heap[0][2]
+            if (self._seg_secs and self._seg_secs[-1] is sec
+                    and self._seg_ends[-1] == p):
+                self._seg_ends[-1] = points[k + 1]
+            else:
+                self._seg_starts.append(p)
+                self._seg_ends.append(points[k + 1])
+                self._seg_secs.append(sec)
 
     @staticmethod
     def _virtual_extent(sec: PeSection) -> int:
@@ -527,19 +749,18 @@ class _RvaResolver:
         it and it is outside the header region)."""
         if rva < 0:
             return None
-        for sec in self._sections:            # table order — (b)
+        i = bisect.bisect_right(self._seg_starts, rva) - 1
+        if i >= 0 and rva < self._seg_ends[i]:
+            sec = self._seg_secs[i]           # table-order winner — (b)
             extent = self._virtual_extent(sec)
-            if extent <= 0:
-                continue
-            if sec.virtual_address <= rva < sec.virtual_address + extent:
-                delta = rva - sec.virtual_address
-                raw_avail = sec.raw_size - delta if delta < sec.raw_size else 0
-                return _RvaTarget(
-                    file_offset=(sec.raw_offset + delta)
-                    if raw_avail > 0 else None,
-                    raw_available=raw_avail,
-                    virtual_available=extent - delta,
-                )
+            delta = rva - sec.virtual_address
+            raw_avail = sec.raw_size - delta if delta < sec.raw_size else 0
+            return _RvaTarget(
+                file_offset=(sec.raw_offset + delta)
+                if raw_avail > 0 else None,
+                raw_available=raw_avail,
+                virtual_available=extent - delta,
+            )
         if rva < self._size_of_headers:       # header region — (c)
             remaining = self._size_of_headers - rva
             return _RvaTarget(
@@ -683,6 +904,26 @@ def _extract_facts_stream(f: BinaryIO, file_size: int) -> PeFacts | None:
     _read_debug_identity(f, resolver, debug_va, debug_size,
                          facts, caps)
 
+    # Table walks share ONE name-retention budget (and the import
+    # walks one thunk budget): the caps bound the whole record, not
+    # one directory at a time. A populated directory table implies
+    # a decoded optional-header layout, so ``facts.bits`` is 32/64
+    # here whenever a walk runs — the membership check is
+    # belt-and-braces against future layout additions, not a
+    # reachable branch today.
+    name_budget = _Budget(_MAX_TABLE_NAME_TOTAL_BYTES)
+    thunk_budget = _Budget(_MAX_IMPORT_THUNKS_TOTAL)
+    if facts.bits in _THUNK_STRUCTS:
+        import_va, import_size = data_dirs.get(_DIR_IMPORT, (0, 0))
+        if import_va and import_size:
+            _read_imports(f, resolver, import_va, facts, caps,
+                          name_budget, thunk_budget)
+        delay_va, delay_size = data_dirs.get(_DIR_DELAY_IMPORT,
+                                             (0, 0))
+        if delay_va and delay_size:
+            _read_delay_imports(f, resolver, delay_va, facts, caps,
+                                name_budget, thunk_budget)
+
     _compute_overlay(facts, file_size)
 
     facts.caps_hit = sorted(caps)
@@ -795,6 +1036,280 @@ def _pdb_basename(payload: bytes) -> tuple[str | None, set[str]]:
         raw = raw[:_MAX_PDB_BASENAME_BYTES]
         caps.add("pdb_name_truncated")
     return raw.decode("utf-8", errors="replace"), caps
+
+
+# ---------------------------------------------------------------------------
+# Import / delay-import tables
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _Budget:
+    """One mutable walk budget (name bytes retained / thunks
+    walked), shared across every table walk of one extraction so
+    the caps bound the RECORD, not one directory at a time."""
+
+    remaining: int
+
+
+def _take_cstring(window: bytes, budget: _Budget, caps: set[str],
+                  marker_prefix: str) -> str | None:
+    """Capped NUL-terminated capture from an already-read window
+    (the window itself is one chokepoint read of the name cap + 1,
+    possibly shorter where the section's virtual extent ends).
+
+    No terminator inside the window — the string overruns the cap
+    or its section — keeps the CAPPED PREFIX with a
+    ``<prefix>_truncated`` marker: capture is capped, never a
+    section dump, and the retained text is still honest file data.
+    Retention is priced against the whole-walk name budget on the
+    RAW bytes (what is actually kept); a name that would overdraw
+    it degrades to ``None`` + ``<prefix>_budget_exhausted`` —
+    whole-or-absent, never a silently partial name — and the
+    overdraw SPENDS the remaining budget (ordered-fill), arming
+    the spent-budget read-stop."""
+    nul = window.find(b"\x00")
+    if nul < 0:
+        raw = window[:_MAX_TABLE_NAME_BYTES]
+        caps.add(marker_prefix + "_truncated")
+    else:
+        raw = window[:nul]
+    if len(raw) > budget.remaining:
+        caps.add(marker_prefix + "_budget_exhausted")
+        # Ordered-fill: the FIRST overdraw spends the whole
+        # budget. Leaving the remainder unspent would park it just
+        # under one name stride, and the spent-budget read-stop
+        # (which fires only at remaining <= 0) could then never
+        # engage except on an exact drain — inert exactly on the
+        # max-shape tables it exists for. Real images never come
+        # near the budget, and a hostile image controls its own
+        # name order, so which names survive an overdraw was
+        # attacker-chosen either way — zeroing arms the read-stop
+        # without changing any honest outcome.
+        budget.remaining = 0
+        return None
+    budget.remaining -= len(raw)
+    return raw.decode("utf-8", errors="replace")
+
+
+def _read_table_string(
+    f: BinaryIO, resolver: _RvaResolver, rva: int, budget: _Budget,
+    caps: set[str], marker_prefix: str,
+) -> str | None:
+    """One NUL-terminated string at ``rva`` through the chokepoint
+    — ``None`` + ``<prefix>_unreadable`` when the RVA is unmapped
+    or its raw bytes are truncated; otherwise the
+    :func:`_take_cstring` contract."""
+    if budget.remaining <= 0:
+        # A spent retention budget stops the READ, not just the
+        # retention: with the record full, issuing more window
+        # reads only sells chokepoint work to a max-shape table.
+        caps.add(marker_prefix + "_budget_exhausted")
+        return None
+    window = resolver.read(f, rva, _MAX_TABLE_NAME_BYTES + 1)
+    if not window:
+        caps.add(marker_prefix + "_unreadable")
+        return None
+    return _take_cstring(window, budget, caps, marker_prefix)
+
+
+def _walk_thunk_array(
+    f: BinaryIO, resolver: _RvaResolver, thunk_va: int, bits: int,
+    dll_caps: set[str], name_budget: _Budget, thunk_budget: _Budget,
+    marker_prefix: str,
+) -> tuple[list[PeImportedFunction], int, int]:
+    """Walk one null-terminated thunk array (an import name table).
+
+    Thunk width and ordinal-flag bit come from ``bits`` — i.e.
+    from the optional-header magic, per format (see
+    ``_THUNK_STRUCTS`` / ``_ORDINAL_FLAGS``). The walk ends at the
+    first zero thunk; note the zero-fill rule (resolver invariant
+    a) hands an array whose raw bytes end before its terminator a
+    zero terminator for free — exactly what the loader maps — so
+    ``<prefix>_thunks_unterminated`` fires only when the array
+    runs out its section's VIRTUAL extent (or was unmapped),
+    which no loadable image does. The slot AT the per-DLL cap may
+    only hold the terminator: a full-cap array with its
+    terminator right behind is complete, one more real thunk is a
+    ``<prefix>_thunks_capped`` breach.
+
+    Returns ``(functions, named_count, ordinal_count)``.
+    """
+    functions: list[PeImportedFunction] = []
+    named = 0
+    ordinals = 0
+    thunk_struct = _THUNK_STRUCTS[bits]
+    flag = _ORDINAL_FLAGS[bits]
+    width = thunk_struct.size
+    for i in range(_MAX_IMPORT_THUNKS_PER_DLL + 1):
+        raw = resolver.read(f, thunk_va + i * width, width)
+        if raw is None or len(raw) < width:
+            dll_caps.add(marker_prefix + "_thunks_unterminated")
+            break
+        (value,) = thunk_struct.unpack(raw)
+        if value == 0:
+            break                    # null terminator — clean end
+        if i == _MAX_IMPORT_THUNKS_PER_DLL:
+            dll_caps.add(marker_prefix + "_thunks_capped")
+            break
+        if thunk_budget.remaining <= 0:
+            dll_caps.add(marker_prefix + "_thunk_budget_exhausted")
+            break
+        thunk_budget.remaining -= 1
+        if value & flag:
+            # Ordinal import: bits 15:0 are the ordinal by spec;
+            # the bits between them and the flag are ignored by
+            # masking (fail open, same posture as the RVA mask).
+            functions.append(
+                PeImportedFunction(ordinal=value & 0xFFFF))
+            ordinals += 1
+            continue
+        hint: int | None = None
+        name: str | None = None
+        if name_budget.remaining <= 0:
+            # Spent retention budget: the hint/name entry read is
+            # skipped entirely (same posture as
+            # _read_table_string) — the thunk is recorded
+            # shape-degraded and the counts stay honest.
+            dll_caps.add(marker_prefix + "_name_budget_exhausted")
+        else:
+            entry = resolver.read(f, value & _THUNK_RVA_MASK,
+                                  2 + _MAX_TABLE_NAME_BYTES + 1)
+            if entry is None or len(entry) < 2:
+                dll_caps.add(marker_prefix + "_name_unreadable")
+            else:
+                (hint,) = struct.unpack_from("<H", entry)
+                name = _take_cstring(entry[2:], name_budget,
+                                     dll_caps,
+                                     marker_prefix + "_name")
+        functions.append(PeImportedFunction(name=name, hint=hint))
+        if name is not None:
+            named += 1
+    return functions, named, ordinals
+
+
+def _read_imports(
+    f: BinaryIO, resolver: _RvaResolver, import_va: int,
+    facts: PeFacts, caps: set[str], name_budget: _Budget,
+    thunk_budget: _Budget,
+) -> None:
+    """Walk the import-descriptor array.
+
+    The directory SIZE is deliberately not a walk budget — it is
+    an attacker u32 that real linkers already disagree about, so
+    the walk is bounded by the array's own terminator plus the
+    named caps, and an under- or over-claimed size steers nothing.
+    Termination mirrors the Windows loader: a descriptor with
+    ``Name == 0`` or ``FirstThunk == 0`` ends the walk (the loader
+    stops there too, so descriptors behind such an entry never
+    load); a terminating descriptor whose other fields are nonzero
+    is surfaced as ``import_terminator_nonzero`` — doctored dead
+    claims end the walk, but never silently. The slot AT the
+    descriptor cap may only hold the terminator (cap descriptors
+    + terminator = complete; one more is a breach).
+
+    ``OriginalFirstThunk`` is the import name table; some linkers
+    (old Borland, hand-crafted stubs) emit ``OFT == 0``, in which
+    case the loader — and therefore this walk — reads the
+    hint/name RVAs from ``FirstThunk``, which holds the same
+    values on disk and is only overwritten with resolved addresses
+    at load time. ``used_first_thunk`` records that fallback.
+    """
+    for i in range(_MAX_IMPORT_DESCRIPTORS + 1):
+        raw = resolver.read(f, import_va + i * _IMPORT_DESCRIPTOR.size,
+                            _IMPORT_DESCRIPTOR.size)
+        if raw is None or len(raw) < _IMPORT_DESCRIPTOR.size:
+            caps.add("import_directory_unreadable")
+            break
+        (oft, _ts, _fwd_chain, name_rva,
+         ft) = _IMPORT_DESCRIPTOR.unpack(raw)
+        if name_rva == 0 or ft == 0:
+            if raw != b"\x00" * _IMPORT_DESCRIPTOR.size:
+                caps.add("import_terminator_nonzero")
+            break
+        if i == _MAX_IMPORT_DESCRIPTORS:
+            caps.add("import_descriptors_capped")
+            break
+        dll_caps: set[str] = set()
+        name = _read_table_string(f, resolver, name_rva, name_budget,
+                                  dll_caps, "import_dll_name")
+        functions, named, ordinals = _walk_thunk_array(
+            f, resolver, oft if oft else ft, facts.bits, dll_caps,
+            name_budget, thunk_budget, "import")
+        facts.imports.append(PeImportedDll(
+            name=name,
+            functions=functions,
+            thunk_count=len(functions),
+            named_count=named,
+            ordinal_count=ordinals,
+            used_first_thunk=(oft == 0),
+            caps_hit=sorted(dll_caps),
+        ))
+        caps |= dll_caps
+
+
+def _read_delay_imports(
+    f: BinaryIO, resolver: _RvaResolver, delay_va: int,
+    facts: PeFacts, caps: set[str], name_budget: _Budget,
+    thunk_budget: _Budget,
+) -> None:
+    """Walk the delay-load descriptor array (ImgDelayDescr).
+
+    Same walk doctrine as :func:`_read_imports` (size never a
+    budget; zero-DllName terminates, nonzero remainder marked;
+    the slot at the cap may only terminate). Only the all-RVA
+    form (attribute bit 0 set) is walked; the legacy all-VA form
+    is recorded + marked, never chased (see
+    :class:`PeDelayImportedDll`). The function walk reads the
+    import NAME table (``ImportNameTableRVA``) — the delay IAT
+    holds loader-stub addresses, not names, even on disk.
+    """
+    for i in range(_MAX_DELAY_DESCRIPTORS + 1):
+        raw = resolver.read(f, delay_va + i * _DELAY_DESCRIPTOR.size,
+                            _DELAY_DESCRIPTOR.size)
+        if raw is None or len(raw) < _DELAY_DESCRIPTOR.size:
+            caps.add("delay_import_directory_unreadable")
+            break
+        (attributes, name_rva, _hmod, _iat, int_rva, _bound,
+         _unload, _ts) = _DELAY_DESCRIPTOR.unpack(raw)
+        if name_rva == 0:
+            if raw != b"\x00" * _DELAY_DESCRIPTOR.size:
+                caps.add("delay_import_terminator_nonzero")
+            break
+        if i == _MAX_DELAY_DESCRIPTORS:
+            caps.add("delay_import_descriptors_capped")
+            break
+        dll_caps: set[str] = set()
+        if not attributes & _DELAY_ATTR_RVA:
+            dll_caps.add("delay_import_va_form")
+            facts.delay_imports.append(PeDelayImportedDll(
+                name=None,
+                attributes=attributes,
+                rva_addressed=False,
+                caps_hit=sorted(dll_caps),
+            ))
+            caps |= dll_caps
+            continue
+        name = _read_table_string(f, resolver, name_rva, name_budget,
+                                  dll_caps, "delay_import_dll_name")
+        functions: list[PeImportedFunction] = []
+        named = 0
+        ordinals = 0
+        if int_rva:
+            functions, named, ordinals = _walk_thunk_array(
+                f, resolver, int_rva, facts.bits, dll_caps,
+                name_budget, thunk_budget, "delay_import")
+        facts.delay_imports.append(PeDelayImportedDll(
+            name=name,
+            attributes=attributes,
+            rva_addressed=True,
+            functions=functions,
+            thunk_count=len(functions),
+            named_count=named,
+            ordinal_count=ordinals,
+            caps_hit=sorted(dll_caps),
+        ))
+        caps |= dll_caps
 
 
 def pe_facts_evidence(
@@ -1016,7 +1531,10 @@ def _read_section_table(
 
 
 __all__ = [
+    "PeDelayImportedDll",
     "PeFacts",
+    "PeImportedDll",
+    "PeImportedFunction",
     "PeSection",
     "canonical_pe_identity",
     "canonical_pe_identity_from_guid_string",
