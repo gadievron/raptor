@@ -626,6 +626,31 @@ class TestRunActivePhaseStreaming:
         assert "partial diagnostics" in text
         assert "TimeoutExpired" in text
 
+    def test_failure_record_survives_hostile_log_shape(self, tmp_path, capsys):
+        """The failure-recording handler must not itself raise: a
+        hostile object occupying the predictable log names (planted
+        by a previous phase's sandboxed child in the shared output
+        dir) makes both the exclusive create and the hardened append
+        refuse with OSError. The refusal is correct — but it must be
+        noted and contained, not escape _run_active_phase and abort
+        the run: callers consume the returned record inline to keep
+        the static map useful."""
+        from packages.binary_analysis.cli import _run_active_phase
+
+        out_dir = tmp_path / "phase"
+        out_dir.mkdir()
+        (out_dir / "stdout.log").mkdir()  # directory: EISDIR on open
+        (out_dir / "stderr.log").mkdir()
+
+        phase = _run_active_phase(
+            kind="probe", cmd=["/bin/true"], output_dir=out_dir,
+        )
+
+        assert phase["status"] == "failed"
+        assert phase["kind"] == "probe"
+        assert "IsADirectoryError" in phase["error"]
+        assert "failure log not written" in capsys.readouterr().err
+
     def test_failure_message_scrubs_target_influenced_bytes(self, tmp_path):
         """Exception text echoes the child's argv/paths — a hostile
         filename rides e.g. TimeoutExpired's message, so the appended

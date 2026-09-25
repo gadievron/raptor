@@ -428,10 +428,27 @@ def _run_active_phase(
         # Hardened append (O_NOFOLLOW + FIFO refusal): the failure
         # path can run before the exclusive create above (spawn
         # refused), so the append must not trust the name either.
-        with os.fdopen(
-            open_hardened_append(stderr_path), "a", encoding="utf-8",
-        ) as err_fh:
-            err_fh.write(error_line + "\n")
+        # The refusal itself must not escape this record-and-return
+        # containment: a hostile object occupying stderr.log (a
+        # planted directory -> EISDIR, a symlink/FIFO re-planted in
+        # the unlink->O_EXCL window of the creates above -> ELOOP/
+        # ENXIO) raises from the hardened append. Note it on OUR
+        # stderr and still return the failure record — losing the
+        # record would abort the whole run and lose the static map
+        # this handler exists to keep useful.
+        try:
+            with os.fdopen(
+                open_hardened_append(stderr_path), "a", encoding="utf-8",
+            ) as err_fh:
+                err_fh.write(error_line + "\n")
+        except OSError as log_exc:
+            print(
+                f"warning: phase '{kind}' failure log not written "
+                f"({type(log_exc).__name__}: "
+                f"{sanitise_for_terminal(str(log_exc), max_len=200)}); "
+                "recording the phase failure without it",
+                file=sys.stderr,
+            )
         return {
             "kind": kind,
             "status": "failed",
