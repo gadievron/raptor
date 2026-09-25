@@ -83,6 +83,13 @@ def coverage_store_lock(coverage_path):
     Locks a sibling ``.lock`` file (not ``coverage.json`` itself, which
     ``save()`` atomically replaces). No-op without fcntl (non-POSIX) —
     degrades to the prior last-writer-wins, no regression.
+
+    Client-locality caveat (WSL drvfs/9p, no behaviour change): on a
+    Windows-interop mount this flock is client-local — snapshot
+    writers within one distro stay serialised, but Windows-side
+    processes and other distros mounting the same drive are not
+    excluded and degrade to last-writer-wins. A store on the distro's
+    Linux filesystem keeps the full guarantee. See docs/wsl.md.
     """
     if not _HAS_FCNTL:
         yield

@@ -35,6 +35,23 @@ Caller TTL semantics:
   effectively shorten the TTL of pre-existing entries (e.g.
   ``--offline`` mode might decide that a 24h-old entry is now
   stale even though it was written with a 7d TTL).
+
+mtime caveat (WSL drvfs/9p, no behaviour change):
+  TTL freshness is judged from the envelope's ``written_at`` field
+  (``CacheEnvelope.is_fresh``), never from mtimes — 9p attribute
+  staleness cannot expire or revive an entry (cross-client
+  ``written_at`` disagreement is ordinary clock skew, not the
+  attribute cache). The module's actual mtime readers are the
+  in-process memo revalidation (stat mtime/size), the tempfile
+  reaper's is-someone-still-writing freshness window, and the
+  reap-sentinel rate limit. On a Windows-interop mount those mtimes
+  pass through the 9p attribute cache: same-distro views stay
+  coherent, while ANOTHER client's writes (Windows side, another
+  distro) can surface late — the memo may serve its memoised copy of
+  an externally rewritten entry for the cache window (bounded extra
+  staleness only; disk re-reads still parse the new bytes), and the
+  reaper's freshness window loses precision against cross-client
+  in-flight writers. See docs/wsl.md.
 """
 
 from __future__ import annotations

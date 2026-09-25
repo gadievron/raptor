@@ -416,6 +416,19 @@ def _run_recently_active(run_dir: Path) -> bool:
     its real completion. Scan errors read as active (fail toward
     keeping: a wrongly-kept abandon is relabelled by a later sweep; a
     wrongly-failed live run misfiles paid results).
+
+    mtime caveat (WSL drvfs/9p, no behaviour change): on a
+    Windows-interop mount the mtimes read here pass through the 9p
+    attribute cache — same-client writes stay coherent, but another
+    client's writes (Windows side, another distro) can surface late,
+    which would read a cross-client-active run as quiet. Every caller
+    of this probe (the same-session abandon sweep, the foreign-holder
+    contention ceiling, project clean's liveness check) runs in the
+    same distro — one 9p client — as the run's usual writers, so the
+    signal holds; the one caller that contemplates writers elsewhere
+    (the foreign-holder ceiling's cross-machine leg) already fails
+    open on activity-probe imprecision by its own doctrine. See
+    docs/wsl.md.
     """
     import time
 
@@ -487,6 +500,14 @@ def _metadata_lock(meta_path: Path):
     lifecycle finaliser (complete/fail/interrupt/resume block forever
     on a bare FIFO open). Same discipline as the coverage journal's
     append open one package over.
+
+    Client-locality caveat (WSL drvfs/9p, no behaviour change): on a
+    Windows-interop mount this flock — like the project op lock and
+    every sibling ``.lock`` idiom — is client-local: it serialises
+    processes within one distro but excludes nothing on the Windows
+    side or in other distros mounting the same drive. A run dir on
+    such a mount keeps same-distro update integrity and silently
+    loses the cross-context guarantee. See docs/wsl.md.
     """
     if not _HAS_FCNTL:
         yield

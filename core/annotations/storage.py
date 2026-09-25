@@ -558,6 +558,15 @@ def _file_lock(path: Path):
     On non-POSIX (Windows): no-op. The substrate's typical deployment
     is Linux/macOS dev or CI; Windows operators get last-writer-wins
     semantics — same as before this commit, no regression.
+
+    Client-locality caveat (WSL drvfs/9p, no behaviour change): on a
+    Windows-interop mount this flock is client-local — it serialises
+    writers within one distro (the documented two-operator scenario
+    inside one distro still holds) but excludes nothing on the
+    Windows side or in other distros mounting the same drive; those
+    contexts degrade to the same last-writer-wins as non-POSIX. An
+    annotation base on the distro's Linux filesystem keeps the full
+    guarantee. See docs/wsl.md.
     """
     if not _HAS_FCNTL:
         yield
