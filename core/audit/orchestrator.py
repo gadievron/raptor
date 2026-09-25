@@ -6140,6 +6140,19 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             exc_info=True,
         )
 
+    # L8: enum-switch cohorts from the enum census (C/C++ sources).
+    # Nothing joins → None → the layer stays empty (equivalence pin).
+    prep_enum_cohorts = None
+    try:
+        from .enum_switch import enum_switch_cohorts
+
+        prep_enum_cohorts = enum_switch_cohorts(_gap_source_texts())
+    except Exception:
+        logger.debug(
+            "enum-switch cohorts for peer groups failed",
+            exc_info=True,
+        )
+
     # Fail-soft like the sibling prep blocks above: the resolver
     # consumes producer-controlled inputs (checklist metadata is
     # LLM-enrichable), and peer groups are an enrichment layer — one
@@ -6155,6 +6168,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             checklist=checklist,
             route_models=prep_route_models,
             interface_slots=prep_interface_slots,
+            enum_cohorts=prep_enum_cohorts,
         )
     except Exception:
         peer_groups = []

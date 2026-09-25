@@ -154,6 +154,7 @@ class TestFloorsRegistry:
         from core.audit import clone_drift as clone
         from core.audit import consistency_dimensions as cd
         from core.audit import consistency_verify as cv
+        from core.audit import enum_switch as es
         expected = {
             "return-check.lead_min_sites": cc.MIN_CALL_SITES,
             "return-check.lead_majority_threshold":
@@ -180,6 +181,8 @@ class TestFloorsRegistry:
             "guard-presence.min_sites": cd.MIN_GROUP_SITES,
             "guard-presence.ratio": cd.CONSISTENCY_RATIO,
             "guard-presence.promote_ratio": cd.RATIO_PROMOTE,
+            "enum-switch.min_switches": es.ENUM_SWITCH_MIN_GROUP,
+            "enum-switch.ratio": es.ENUM_SWITCH_RATIO,
             "clone-drift.similarity": clone.CLONE_SIMILARITY,
             "clone-drift.fix_anchor_similarity":
                 clone.FIX_ANCHOR_SIMILARITY,
