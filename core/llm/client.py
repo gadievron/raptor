@@ -18,6 +18,7 @@ import json
 import logging as _logging
 import math
 import re
+import sys
 import threading
 import time
 from collections import OrderedDict
@@ -1484,6 +1485,17 @@ class LLMClient:
     _paid_test_ctxs: set[str]
     _fired_schema: dict[str, dict[str, int]]
 
+    # Transcript-seam construction marker. A PLAIN client constructed
+    # while a RAPTOR_LLM_TRANSCRIPT session is active bypasses the
+    # record/replay seam: record mode silently under-records, replay
+    # mode dispatches live. __init__ therefore fences bare
+    # constructions (see core.llm.transcript.
+    # fence_bare_client_construction). The seam's own client
+    # (TranscriptLLMClient) overrides this to True; every other
+    # consumer constructs through core.llm.transcript.build_llm_client
+    # or core.llm.factory.get_client.
+    _transcript_seam_construction: bool = False
+
     def __init__(self, config: LLMConfig | None = None,
                  *, pinned_model: str | None = None) -> None:
         """Construct the LLM client.
@@ -1500,6 +1512,21 @@ class LLMClient:
         ``config`` takes precedence over ``pinned_model`` when both are
         passed (caller knows what they want).
         """
+        # Transcript honesty fence FIRST — before any construction
+        # side effect (egress proxy bring-up, transport banners): a
+        # bare construction under an active RAPTOR_LLM_TRANSCRIPT
+        # session bypasses the record/replay seam — record mode would
+        # silently under-record this client's calls, replay mode
+        # would dispatch live (network + cost) while the operator
+        # believes the run is hermetic. Loud warning under record,
+        # hard refusal under replay, no-op otherwise. The seam's own
+        # client overrides _transcript_seam_construction; lazy import
+        # because core.llm.transcript imports this module at its top.
+        if not type(self)._transcript_seam_construction:
+            from .transcript import fence_bare_client_construction
+            caller = sys._getframe(1).f_globals.get("__name__", "<unknown>")
+            fence_bare_client_construction(caller)
+
         if config is not None:
             self.config = config
         elif pinned_model is not None:

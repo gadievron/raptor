@@ -578,3 +578,68 @@ class TestLoadBoundsAndLeftovers:
         assert len(subjects) == 1
         assert "\x1b" not in subjects[0]  # escaped
         assert "unconsumed_subjects_by_class" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Bare-construction fence (LLMClient.__init__ honesty fence)
+# ---------------------------------------------------------------------------
+
+class TestBareConstructionFence:
+    """A plain ``LLMClient(...)`` built outside the seam must fail
+    loudly under an active transcript session — warning under record
+    (the run would silently under-record), refusal under replay (the
+    run would dispatch live). This is the revert-probe for transcript
+    adoption: un-adopting any call site re-creates exactly the bare
+    construction these tests pin."""
+
+    def test_no_session_is_a_no_op(self, caplog):
+        with caplog.at_level("WARNING", logger="core.llm.transcript"):
+            client = LLMClient(_stub_config())
+        assert type(client) is LLMClient
+        assert "outside the transcript seam" not in caplog.text
+
+    def test_record_mode_bare_construction_warns(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        monkeypatch.setenv(
+            "RAPTOR_LLM_TRANSCRIPT", f"record:{tmp_path / 't.jsonl'}",
+        )
+        reset_active_transcript()
+        with caplog.at_level("WARNING", logger="core.llm.transcript"):
+            LLMClient(_stub_config())
+        assert "outside the transcript seam" in caplog.text
+        assert "will NOT be recorded" in caplog.text
+        # The warning names the constructing module.
+        assert __name__ in caplog.text
+
+    def test_replay_mode_bare_construction_refuses(
+        self, tmp_path, monkeypatch,
+    ):
+        path = tmp_path / "t.jsonl"
+        rec_client, _ = _record_client(path)
+        rec_client.generate("hello", task_type="analyse")
+
+        monkeypatch.setenv("RAPTOR_LLM_TRANSCRIPT", f"replay:{path}")
+        reset_active_transcript()
+        with pytest.raises(TranscriptError, match="dispatch live"):
+            LLMClient(_stub_config())
+
+    def test_seam_construction_is_exempt(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        monkeypatch.setenv(
+            "RAPTOR_LLM_TRANSCRIPT", f"record:{tmp_path / 't.jsonl'}",
+        )
+        reset_active_transcript()
+        with caplog.at_level("WARNING", logger="core.llm.transcript"):
+            client = build_llm_client(_stub_config())
+        assert isinstance(client, TranscriptLLMClient)
+        assert "outside the transcript seam" not in caplog.text
+
+    def test_marker_pins(self):
+        # Vacuousness pins: the fence keys on this exact marker pair.
+        # A rename or flag flip on either class silently disables the
+        # fence (every construction exempt) or fences the seam's own
+        # client (every adopted run refuses).
+        assert LLMClient._transcript_seam_construction is False
+        assert TranscriptLLMClient._transcript_seam_construction is True
