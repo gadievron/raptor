@@ -4,11 +4,13 @@ census, roles-from-evidence, artifact discipline, consumer queries."""
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
-
+from core.inventory import include_graph
 from core.inventory.include_graph import (
     ARTIFACT_NAME,
+    REF_BASIS_VALUES,
     bootstrap_context_for_file,
     build_include_graph,
     census_qualifier,
@@ -828,3 +830,94 @@ class TestConsumerQueries:
     def test_dotslash_prefix_normalised(self):
         facts = include_facts_for_file(self._graph(), "./lib/x.php")
         assert facts is not None
+
+
+class TestBasisVocabulary:
+    """Producer↔consumer basis-vocabulary contract.
+
+    The build writes ``basis`` at literal write sites; the one query
+    every consumer goes through (:func:`include_facts_for_file`)
+    re-validates against ``REF_BASIS_VALUES``. Together these pins
+    make a NEW producer basis fail HERE instead of silently rendering
+    ``""`` (indistinguishable from a forged value) in every consumer:
+    the write-site census forces the new value into the declared
+    vocabulary, and the render pin proves declared values survive the
+    consumer query verbatim.
+    """
+
+    _WRITE_SITE_PATTERNS = (
+        # _resolve_to(target, "<basis>", includer, edge)
+        re.compile(r"_resolve_to\(\s*[^,]+,\s*\"([^\"]+)\""),
+        # ref["basis"] = "<basis>"  /  {"basis": "<basis>"}
+        re.compile(r"[\"']basis[\"']\s*\]?\s*[:=]\s*[\"']([^\"']+)[\"']"),
+    )
+
+    @classmethod
+    def _written_bases(cls, source: str) -> set[str]:
+        found: set[str] = set()
+        for pat in cls._WRITE_SITE_PATTERNS:
+            found.update(pat.findall(source))
+        return found
+
+    def test_write_sites_match_declared_vocabulary(self):
+        # Set-EQUALITY, both directions: a write site whose basis is
+        # missing from the declared vocabulary would render "" through
+        # every consumer; a declared value nothing writes is a stale
+        # allowlist entry.
+        source = Path(include_graph.__file__).read_text()
+        assert self._written_bases(source) == set(REF_BASIS_VALUES)
+
+    def test_write_site_census_sees_new_bases(self):
+        # Tripwire direction: a hypothetical fourth producer basis, in
+        # each write shape the module uses, is visible to the census —
+        # so a new write site cannot hide from the set-equality pin.
+        double = (
+            "_resolve_to(target, \"walk_guessed\", path, e)\n"
+            "old[1][\"basis\"] = \"sibling_probe\"\n"
+            "ref = {\"basis\": \"manifest_pinned\"}\n"
+        )
+        assert self._written_bases(double) == {
+            "walk_guessed", "sibling_probe", "manifest_pinned"}
+
+    def test_every_declared_basis_renders_verbatim(self):
+        # Producer ⊆ consumer, behaviourally: each declared basis
+        # survives the consumer query; anything outside still blanks.
+        for basis in (*REF_BASIS_VALUES, "forged_basis"):
+            graph = {
+                "census": {"unresolved_edge_count": 0,
+                           "unwalked_target_count": 0},
+                "files": {"lib/x.php": {
+                    "role": "library", "includer_count": 1,
+                    "included_by": [{
+                        "includer": "entry.php", "line": 3,
+                        "keyword": "require_once", "conditional": False,
+                        "position": "file_scope", "basis": basis}],
+                }},
+                "unresolved_edges": [], "unwalked_targets": [],
+            }
+            facts = include_facts_for_file(graph, "lib/x.php")
+            [inc] = facts["includers"]
+            expected = basis if basis in REF_BASIS_VALUES else ""
+            assert inc["basis"] == expected
+
+    def test_env_resolved_basis_renders_end_to_end(self):
+        # Walk-grounded resolution through the REAL producer: a
+        # const-prefix edge whose tail is ambiguous for the 1a suffix
+        # rule (two dup.php) resolves via the environment walk; the
+        # strongest basis must reach consumers intact, not blank.
+        inv = _inventory_dict([
+            _php_file("src/e1.php", includes=[
+                _edge(3, "require", "const_prefix",
+                      const_name="APP", literal_tail="dup.php"),
+            ], defines=[{"line": 2, "name": "APP", "value": "../",
+                         "conditional": False, "fallback": False,
+                         "position": "file_scope"}]),
+            _php_file("dup.php"),
+            _php_file("a/dup.php"),
+        ])
+        g = build_include_graph(inv)
+        refs = g["files"]["dup.php"]["included_by"]
+        assert [r["basis"] for r in refs] == ["env_resolved"]
+        facts = include_facts_for_file(g, "dup.php")
+        [inc] = facts["includers"]
+        assert inc["basis"] == "env_resolved"

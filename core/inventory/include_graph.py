@@ -69,6 +69,19 @@ ARTIFACT_NOTE = (
     "census (unresolved_edges + unwalked_targets)."
 )
 
+#: Every ``basis`` value the build writes on an includer ref: phase
+#: 1a's per-file resolutions (``relative_literal``, ``tail_unique``)
+#: plus phase 1b's environment-grounded ``env_resolved`` (written on
+#: walk resolutions and by the supersede that upgrades 1a bases).
+#: :func:`include_facts_for_file` — the one query every consumer goes
+#: through — re-validates artifact refs against exactly this
+#: vocabulary; a basis missing here renders ``""``, indistinguishable
+#: from an unknown/forged value. When adding a write site, extend
+#: this tuple — the vocabulary test pins the module's write sites
+#: against it.
+REF_BASIS_VALUES: tuple[str, ...] = (
+    "relative_literal", "tail_unique", "env_resolved")
+
 # Bounds — the graph derives from hostile content; every list a
 # planted tree can grow is capped, with full counts kept beside the
 # truncated lists.
@@ -1190,8 +1203,7 @@ def include_facts_for_file(
             "conditional": bool(ref.get("conditional", False)),
             "position": position if position in (
                 "file_scope", "function_body") else "file_scope",
-            "basis": basis if basis in (
-                "tail_unique", "relative_literal") else "",
+            "basis": basis if basis in REF_BASIS_VALUES else "",
         })
     count = entry.get("includer_count")
     count = (count if isinstance(count, int)
