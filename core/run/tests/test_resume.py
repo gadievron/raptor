@@ -106,6 +106,14 @@ class TestEligibility(unittest.TestCase):
             out = Path(d) / "run"
             start_run(out, "example")
             complete_run(out)
+            # Hermetic worker record: whether start_run stamped a
+            # worker depends on the launch shape of the TEST process
+            # (session-bound runs record the live parent shell). Model
+            # the motivating incident — the real worker was killed —
+            # so the reopen decision under test is the dead-worker
+            # path in every environment.
+            self._set_worker(out, 2 ** 22 + 12345,  # beyond pid_max
+                             tool_pid_start=None)
             self.assertIsNone(self._check(out, reopen=True))
             meta = load_json(out / RUN_METADATA_FILE)
             self.assertEqual(meta["status"], "interrupted")
@@ -119,6 +127,110 @@ class TestEligibility(unittest.TestCase):
             complete_run(out)
             msg = self._check(out, reopen=True)
             self.assertIn("never resumed", msg)
+
+    def _set_worker(self, out, tool_pid, tool_pid_start=...):
+        """Rewrite ONLY the worker record (status untouched).
+
+        Same stamp semantics as :meth:`_mark_running`:
+        ``tool_pid_start=...`` (default) records the pid's real
+        starttime (a coherent, live-if-the-pid-is identity); ``None``
+        strips the stamp (legacy bare-pid record); any other value
+        models the recycled-pid mismatch.
+        """
+        from core.json import load_json, save_json
+        from core.project.sessions import proc_starttime
+        from core.run import RUN_METADATA_FILE
+        meta_path = Path(out) / RUN_METADATA_FILE
+        meta = load_json(meta_path)
+        meta["tool_pid"] = tool_pid
+        if tool_pid_start is ...:
+            tool_pid_start = (proc_starttime(tool_pid)
+                              if isinstance(tool_pid, int)
+                              and tool_pid > 0 else None)
+        if tool_pid_start is None:
+            meta.pop("tool_pid_start", None)
+        else:
+            meta["tool_pid_start"] = tool_pid_start
+        save_json(meta_path, meta)
+
+    def _contradicted_completed_run(self, d):
+        """A run whose 'completed' status is contradicted (no
+        completion artifact) — the shape --reopen exists for."""
+        from core.run import complete_run, start_run
+        out = Path(d) / "run"
+        start_run(out, "example")
+        complete_run(out)
+        return out
+
+    def test_reopen_with_live_worker_refused(self):
+        """The double-spend shape: a step that did not own the run
+        stamped it 'completed' while the recorded worker was still
+        mid-flight (complete_run never clears the worker stamp).
+        Reopening then would start a second segment against the
+        in-flight run — refuse loudly, naming the pid, and mutate
+        NOTHING (the status stays 'completed', no reopen row)."""
+        import subprocess
+
+        from core.json import load_json
+        from core.run import RUN_METADATA_FILE
+        with TemporaryDirectory() as d:
+            out = self._contradicted_completed_run(d)
+            worker = subprocess.Popen(["sleep", "300"])
+            try:
+                self._set_worker(out, worker.pid)  # live + coherent
+                msg = self._check(out, reopen=True)
+                self.assertIsNotNone(msg)
+                self.assertIn("still alive", msg)
+                self.assertIn(str(worker.pid), msg)
+                self.assertIn("double-drive", msg)
+                meta = load_json(out / RUN_METADATA_FILE)
+                self.assertEqual(meta["status"], "completed")
+                self.assertNotIn("reopens", meta.get("extra") or {})
+            finally:
+                worker.kill()
+                worker.wait()
+
+    def test_reopen_with_dead_worker_proceeds(self):
+        from core.json import load_json
+        from core.run import RUN_METADATA_FILE
+        with TemporaryDirectory() as d:
+            out = self._contradicted_completed_run(d)
+            self._set_worker(out, 2 ** 22 + 12345,  # beyond pid_max
+                             tool_pid_start=None)
+            self.assertIsNone(self._check(out, reopen=True))
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "interrupted")
+
+    def test_reopen_with_recycled_worker_proceeds(self):
+        """Pid alive but identity mismatched (a different process
+        recycled the pid): the original worker is dead — reopen
+        proceeds. Same identity semantics as the running-status
+        guard."""
+        from unittest import mock
+
+        from core.json import load_json
+        from core.project import sessions
+        from core.run import RUN_METADATA_FILE
+        with TemporaryDirectory() as d:
+            out = self._contradicted_completed_run(d)
+            self._set_worker(out, os.getpid(), tool_pid_start="1")
+            with mock.patch.object(sessions, "proc_starttime",
+                                   lambda pid: "777"):
+                self.assertIsNone(self._check(out, reopen=True))
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "interrupted")
+
+    def test_reopen_with_legacy_bare_pid_live_refused(self):
+        """Legacy record (no start-time stamp) with the pid alive:
+        the running-status guard refuses these (identity unverified,
+        err toward not double-driving) — the reopen path keeps the
+        same behaviour."""
+        with TemporaryDirectory() as d:
+            out = self._contradicted_completed_run(d)
+            self._set_worker(out, os.getpid(), tool_pid_start=None)
+            msg = self._check(out, reopen=True)
+            self.assertIn("still alive", msg)
+            self.assertIn("legacy record", msg)
 
     def test_interrupted_eligible(self):
         from core.run import interrupt_run, start_run

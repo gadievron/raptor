@@ -11,7 +11,9 @@ pipeline owned it:
 * **eligibility** — refuse to resume a completed run (its results are
   final) or a run whose recorded worker is still alive; ``--reopen``
   handles the contradicted-completion case (status ``completed`` with
-  no completion artifact on disk);
+  no completion artifact on disk) under the SAME worker-liveness
+  guard — a non-owning step can stamp ``completed`` over a run whose
+  worker is still mid-flight;
 * **the drift gate** — compare hashes recorded while the run was
   alive against the target tree NOW (``core.staleness`` span hashing,
   common-prefix comparison), so a resume never silently reuses state
@@ -106,6 +108,9 @@ def resume_ineligibility(
     * no run metadata — not a run directory;
     * status ``completed`` — final results (*completed_hint* is
       appended so the pipeline can point at its own new-run path);
+    * status ``completed`` contradicted (no completion artifact) with
+      ``reopen=True`` while the recorded worker is still alive — same
+      double-drive refusal as the ``running`` case below;
     * status ``running`` with the recorded worker still alive — the
       run is actually in flight, resuming would double-drive it.
       Worker liveness is the full identity check
@@ -121,7 +126,11 @@ def resume_ineligibility(
     ``reopen=True`` that contradiction — and only that contradiction —
     flips the run back to ``interrupted`` and the resume proceeds; a
     completed run WITH its artifact stays final regardless of the
-    flag.
+    flag. The reopen runs under the same worker-liveness guard as the
+    ``running`` case: a foreign completion stamp never clears the
+    worker record, so the recorded worker may still be mid-flight —
+    reopening then would double-drive (and double-spend) the run, so
+    a live worker refuses instead, without mutating the status.
     """
     from core.run.metadata import (
         RESUMABLE_STATUSES,
@@ -142,6 +151,26 @@ def resume_ineligibility(
             (out_dir / name).is_file() for name in completion_artifacts
         )
         if contradicted and reopen:
+            # Same worker-liveness discipline as the STATUS_RUNNING
+            # guard below, and for the same reason: complete_run never
+            # clears the worker stamp, so a completion stamped by a
+            # step that did not own the run leaves the real worker's
+            # (pid, starttime) record intact — and possibly still
+            # mid-flight. Reopening past a live worker starts a second
+            # segment against an in-flight run (double-driving the
+            # work and the spend), so a live worker refuses BEFORE
+            # reopen_run mutates anything; a dead or recycled-pid
+            # record proceeds as before.
+            alive, detail = worker_liveness_for_meta(meta)
+            if alive:
+                return (
+                    f"run status is 'completed' with no {names} (a "
+                    "contradicted completion), but the recorded "
+                    f"worker is still alive ({detail}) — reopening "
+                    "now would double-drive the in-flight run. Wait "
+                    "for it to stop, or kill it first, then re-run "
+                    "with --reopen."
+                )
             reopen_run(
                 out_dir,
                 note="resume --reopen: completed status contradicted "
