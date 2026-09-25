@@ -702,7 +702,8 @@ def _reap(now: float | None) -> list[Path]:
     return reaped
 
 
-def reap_dead_pid_dirs(root: Path, prefix: str, *, keep: int = 0) -> list[Path]:
+def reap_dead_pid_dirs(root: Path, prefix: str, *, keep: int = 0,
+                       pid_suffix: bool = False) -> list[Path]:
     """Remove ``<prefix><pid>`` dirs under *root* whose pid is dead.
 
     For scratch families whose name embeds the owning pid as THE
@@ -718,21 +719,33 @@ def reap_dead_pid_dirs(root: Path, prefix: str, *, keep: int = 0) -> list[Path]:
     for post-mortem inspection, mirroring pytest's own retention
     semantics at the per-pid level.
 
+    ``pid_suffix=True`` widens the exact ``prefix + digits`` name rule
+    to ``prefix + digits + "-" + anything`` — the shape mkdtemp-minted
+    per-session scratch gets when its caller embeds the owning pid in
+    the mkdtemp prefix (``raptor-pytest-<pid>-<rand>``). The pid
+    segment stays digits-anchored between the literal prefix and the
+    literal ``-``, so sibling families that put WORDS there
+    (``raptor-pytest-emu-<pid>``) never match a widened sweep of the
+    shorter prefix, and a planted name cannot smuggle a live pid past
+    the check by decoration — the decoration is never parsed.
+
     Safety posture matches the launcher's dead-session sweep: lstat
     only (a symlink squatting on the name is never followed), dirs
-    only, same-euid only, exact ``prefix + digits`` names, live pids
-    always kept (EPERM reads as live; pid reuse merely delays
-    reclamation one cycle — the safe direction). Best-effort by
-    contract — never raises.
+    only, same-euid only, exact-shape names, live pids always kept
+    (EPERM reads as live; pid reuse merely delays reclamation one
+    cycle — the safe direction). Best-effort by contract — never
+    raises.
     """
     try:
-        return _reap_dead_pid_dirs(root, prefix, keep)
+        return _reap_dead_pid_dirs(root, prefix, keep,
+                                   pid_suffix=pid_suffix)
     except Exception as exc:  # noqa: BLE001 — sweep must never block a run
         logger.debug("dead-pid dir sweep aborted: %s", exc)
         return []
 
 
-def _reap_dead_pid_dirs(root: Path, prefix: str, keep: int) -> list[Path]:
+def _reap_dead_pid_dirs(root: Path, prefix: str, keep: int, *,
+                        pid_suffix: bool = False) -> list[Path]:
     try:
         names = os.listdir(root)
     except OSError:
@@ -740,10 +753,30 @@ def _reap_dead_pid_dirs(root: Path, prefix: str, keep: int) -> list[Path]:
     euid = os.geteuid()
     dead: list[tuple[float, Path]] = []
     for name in names:
-        rest = name[len(prefix):]
-        if not (name.startswith(prefix) and rest.isdigit()):
+        if not name.startswith(prefix):
             continue
-        pid = int(rest)
+        rest = name[len(prefix):]
+        if pid_suffix:
+            digits, sep, tail = rest.partition("-")
+            if not (sep and tail):
+                continue
+        else:
+            digits = rest
+        # ASCII-only, then a guarded parse: str.isdigit() accepts
+        # non-ASCII digits int() rejects (a planted `²` name would
+        # raise and — through the wrapper's blanket except — silently
+        # abort the WHOLE sweep, a one-dir DoS any local user can
+        # place in sticky /tmp). pid 0 is never a reapable owner
+        # (kill(0,0) probes the caller's own process group — reads
+        # eternally live — and no real scratch embeds it).
+        if not (digits.isascii() and digits.isdigit()):
+            continue
+        try:
+            pid = int(digits)
+        except ValueError:
+            continue
+        if pid == 0:
+            continue
         if pid == os.getpid():
             continue
         path = root / name

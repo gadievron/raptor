@@ -340,12 +340,18 @@ def _contained_system_tmp(tmp_path_factory: pytest.TempPathFactory):
     # redirect below can capture it.
     tmp_path_factory.getbasetemp()
     # Reclaim orphans of earlier killed sessions (age-gated, liveness-
-    # probed, own-prefixes-only, never raises).
+    # probed, own-prefixes-only, never raises). The dead-owner sweep
+    # for pid-keyed session scratch runs in pytest_configure — a
+    # session FIXTURE never executes on an xdist controller, so a
+    # sweep here would be inert in exactly the -n runs that leak
+    # biggest (each worker minting its own pid-keyed dir below).
     tmp_reaper.reap_stale_tmp()
 
     prior_env = os.environ.get("TMPDIR")
     prior_cached = tempfile.tempdir
-    with scratch_dir("raptor-pytest-", env=os.environ) as session_tmp:
+    with scratch_dir(
+        f"raptor-pytest-{os.getpid()}-", env=os.environ,
+    ) as session_tmp:
         tempfile.tempdir = str(session_tmp)
         try:
             yield
@@ -899,6 +905,7 @@ def pytest_configure(config):
     SIGKILL-leak case (normal exits remove it in sessionfinish).
     """
     _apply_platform_emulation(config)
+    _sweep_dead_session_scratch(config)
     global _egress_leak_dir, _egress_leak_dir_owner
     if getattr(config, "workerinput", None) is not None:
         _egress_leak_dir = os.environ.get(_EGRESS_LEAK_DIR_ENV)
@@ -907,6 +914,35 @@ def pytest_configure(config):
         _egress_leak_dir = _tempfile.mkdtemp(prefix="raptor-pytest-egress-")
         os.environ[_EGRESS_LEAK_DIR_ENV] = _egress_leak_dir
         _egress_leak_dir_owner = True
+
+
+def _sweep_dead_session_scratch(config) -> None:
+    """Dead-owner sweep for pid-keyed session scratch dirs
+    (``raptor-pytest-<pid>-<rand>``, minted per PROCESS by the
+    ``_contained_system_tmp`` fixture — under xdist every worker mints
+    its own; the controller mints none).
+
+    The emu-root sweep's sibling, same rationale: a KILLED session (or
+    worker) never runs the fixture's teardown, and the age-gated
+    stale-tmp sweep's 24h floor is far too slow for the worst leaks —
+    one killed session left a multi-million-inode build tree that
+    exhausted the tmp filesystem's inode table before the gate could
+    fire. The pid in the name is proof of death; sweep immediately.
+
+    Runs from ``pytest_configure`` on the CONTROLLER only —
+    worker-ness decided from ``config.workerinput`` per this file's
+    standing doctrine (a session fixture never executes on an xdist
+    controller, and the PYTEST_XDIST_WORKER env var is inheritable by
+    nested sessions), and swept over every distinct system tmp root
+    (the launcher points tempfile.gettempdir() at a per-session
+    TMPDIR, but bare-session leaks live in the real /tmp)."""
+    if getattr(config, "workerinput", None) is not None:
+        return
+    from core.run.tmp_reaper import reap_dead_pid_dirs
+    roots = {Path(tempfile.gettempdir()), Path("/tmp")}
+    for root in roots:
+        if root.is_dir():
+            reap_dead_pid_dirs(root, "raptor-pytest-", pid_suffix=True)
 
 
 def _check_egress_leak(session):

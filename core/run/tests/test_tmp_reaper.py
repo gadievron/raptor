@@ -963,3 +963,109 @@ class TestMultiRootSweep:
             (str(session.parent / "absent"),))
         stray = _make_old_dir(session, "raptor-pytest-onlyhere")
         assert reap_stale_tmp() == [stray]
+
+
+class TestPidSuffixDirReaping:
+    """reap_dead_pid_dirs(pid_suffix=True) — mkdtemp-minted session
+    scratch whose caller embeds the owning pid in the prefix
+    (``raptor-pytest-<pid>-<rand>``). A killed session's scratch must
+    reclaim on the NEXT session's start, not after the 24h age gate
+    (one leaked multi-million-inode tree exhausted /tmp's inodes)."""
+
+    @staticmethod
+    def _sfx_dir(root, pid, tail="aB3xZ0"):
+        d = root / f"raptor-pytest-{pid}-{tail}"
+        d.mkdir()
+        (d / "litter").write_text("x")
+        return d
+
+    def _dead_pid(self):
+        proc = subprocess.Popen(["true"])
+        proc.wait(timeout=10)
+        return proc.pid
+
+    def test_dead_suffixed_dir_reaped_live_kept(self, tmp_path):
+        from core.run.tmp_reaper import reap_dead_pid_dirs
+        dead = self._sfx_dir(tmp_path, self._dead_pid())
+        live = self._sfx_dir(tmp_path, os.getppid())
+        got = reap_dead_pid_dirs(
+            tmp_path, "raptor-pytest-", pid_suffix=True)
+        assert got == [dead]
+        assert not dead.exists() and live.is_dir()
+
+    def test_suffix_shape_is_strict(self, tmp_path):
+        from core.run.tmp_reaper import reap_dead_pid_dirs
+        dead_pid = self._dead_pid()
+        # No suffix separator / no tail / word segment: never matched
+        # by the widened rule (the emu family and legacy random-only
+        # names stay with their own sweeps).
+        bare = tmp_path / f"raptor-pytest-{dead_pid}"
+        bare.mkdir()
+        emptytail = tmp_path / f"raptor-pytest-{dead_pid}-"
+        emptytail.mkdir()
+        emu = tmp_path / f"raptor-pytest-emu-{dead_pid}"
+        emu.mkdir()
+        legacy = tmp_path / "raptor-pytest-aB3xZ0"
+        legacy.mkdir()
+        assert reap_dead_pid_dirs(
+            tmp_path, "raptor-pytest-", pid_suffix=True) == []
+        for d in (bare, emptytail, emu, legacy):
+            assert d.is_dir()
+
+    def test_without_flag_suffixed_names_untouched(self, tmp_path):
+        from core.run.tmp_reaper import reap_dead_pid_dirs
+        d = self._sfx_dir(tmp_path, self._dead_pid())
+        assert reap_dead_pid_dirs(tmp_path, "raptor-pytest-") == []
+        assert d.is_dir()
+
+    def test_symlink_squat_never_followed(self, tmp_path):
+        from core.run.tmp_reaper import reap_dead_pid_dirs
+        victim = tmp_path / "victim"
+        victim.mkdir()
+        (victim / "keep").write_text("x")
+        link = tmp_path / f"raptor-pytest-{self._dead_pid()}-sq"
+        link.symlink_to(victim)
+        got = reap_dead_pid_dirs(
+            tmp_path, "raptor-pytest-", pid_suffix=True)
+        # The lstat gate must refuse the squat OUTRIGHT — pin the
+        # return value and the link's survival, not just the victim's
+        # content (rmtree's own symlink refusal would mask a gate
+        # regression otherwise).
+        assert got == []
+        assert link.is_symlink()
+        assert (victim / "keep").exists()
+
+    def test_poison_digit_name_never_aborts_the_sweep(self, tmp_path):
+        # str.isdigit() accepts non-ASCII digits int() rejects: a
+        # planted `raptor-pytest-²-x` once raised ValueError and —
+        # through the never-raises wrapper — silently no-op'd the
+        # ENTIRE sweep (one-dir DoS, plantable by any local user in
+        # sticky /tmp). The legit dead sibling must still reap.
+        from core.run.tmp_reaper import reap_dead_pid_dirs
+        poison = tmp_path / "raptor-pytest-²-x"
+        poison.mkdir()
+        dead = self._sfx_dir(tmp_path, self._dead_pid())
+        got = reap_dead_pid_dirs(
+            tmp_path, "raptor-pytest-", pid_suffix=True)
+        assert got == [dead]
+        assert not dead.exists() and poison.is_dir()
+
+    def test_poison_digit_name_never_aborts_emu_sweep(self, tmp_path):
+        # Same latent idiom on the exact-name branch (emu family).
+        from core.run.tmp_reaper import reap_dead_pid_dirs
+        poison = tmp_path / "raptor-pytest-emu-²"
+        poison.mkdir()
+        dead = tmp_path / f"raptor-pytest-emu-{self._dead_pid()}"
+        dead.mkdir()
+        got = reap_dead_pid_dirs(tmp_path, "raptor-pytest-emu-")
+        assert got == [dead]
+        assert poison.is_dir()
+
+    def test_pid_zero_never_reaped(self, tmp_path):
+        # kill(0, 0) probes the caller's own process group — pid 0
+        # reads eternally live; exclude it outright.
+        from core.run.tmp_reaper import reap_dead_pid_dirs
+        d = self._sfx_dir(tmp_path, 0)
+        assert reap_dead_pid_dirs(
+            tmp_path, "raptor-pytest-", pid_suffix=True) == []
+        assert d.is_dir()
