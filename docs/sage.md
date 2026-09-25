@@ -331,6 +331,16 @@ ruled `false_positive` or `not_exploitable` are suppressed on later runs
 as long as the surrounding source is unchanged (hash-checked) and the row
 verifies.
 
+Operators record or overturn verdicts by hand with
+`raptor-review verdict <finding-id> fp|tp|retest [-m reason]`:
+`fp` stores a suppressing false-positive row, `tp` clears prior
+suppressing rows and sets `manual_override` on the stored finding
+records so future passes force the finding through, `retest` clears
+the stored verdict entirely so the next run re-analyzes.  `fp`
+requires an interactive terminal (its row suppresses with
+pipeline-grade authority, so it is reserved for human judgment);
+`tp`/`retest` work non-interactively — they only cause re-analysis.
+
 ### CodeQL build reliability
 
 Successful build commands and failure modes are remembered per repo;

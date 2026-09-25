@@ -300,7 +300,13 @@ with a verdict naming the check, and per-check counters join the report:
 - **SAGE prior verdicts** -- with SAGE installed, cross-run
   false-positive verdicts for the same finding (source unchanged) skip
   re-analysis (`sage_<verdict>`).  Set `manual_override` on a finding to
-  force it through to fresh review.
+  force it through to fresh review.  The operator surface for both is
+  `raptor-review verdict <finding-id> fp|tp|retest` -- `fp` records a
+  suppressing verdict (interactive terminal required -- the row
+  carries pipeline-grade suppression authority), `tp` clears prior
+  suppression and sets `manual_override` on the stored records,
+  `retest` clears the stored verdict so the next run re-analyzes
+  (both work non-interactively; they only cause re-analysis).
 
 
 ## Output

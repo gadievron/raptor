@@ -23,7 +23,24 @@ operator annotations.
 /review history <file> <fn>         # all reviews over time
 /review stats                       # entry counts, costs, coverage %
 /review compact                     # compact project journal index
+/review verdict <id> fp|tp|retest   # record a human FP/TP/retest verdict on a finding (-m "reason", --target <repo>)
 ```
+
+`verdict` resolves the finding id against this session's project runs
+(or `--out <run-dir>`): `fp` stores a suppressing false-positive verdict
+in SAGE (future runs skip the finding while its source is unchanged),
+`tp` clears prior suppressing verdicts AND sets `manual_override` on the
+stored finding records (future passes force it through), `retest`
+clears the stored verdict so the next run re-analyzes.
+
+Interactivity asymmetry: `fp` REFUSES non-interactive invocations —
+its row carries pipeline-grade suppression authority for 30 days, so
+it is reserved for human terminal judgment; do not attempt it from a
+dispatched session (relay the command to the operator instead).
+`tp`/`retest` stay available non-interactively — they are fail-safe
+(their only effect is re-analysis). Verdict source defaults to
+`human` on an interactive TTY, `agent` otherwise — never pass
+`--source human` from a non-interactive call.
 
 ## Execution
 
