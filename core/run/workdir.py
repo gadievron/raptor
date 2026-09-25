@@ -180,6 +180,20 @@ def exec_workdir() -> Path | None:
     session dir per process, like the launcher's one per session).
     """
     global _resolved, _cached
+    # Temp-root placement advisory (WSL): every executed-artifact
+    # temp resolution funnels through here, making it the second
+    # entry chokepoint (with core.run.scratch.scratch_dir) for the
+    # per-process drvfs/9p temp-root warning. Probes the base THIS
+    # module resolves — RAPTOR_WORK_DIR when set, else gettempdir()
+    # (the same precedence _create_session_dir applies) — so a
+    # WORK_DIR pointed at a Windows-interop mount warns even when
+    # TMPDIR is clean. Latched in core.startup.wsl; free off WSL.
+    # Fires whether or not the launcher family dir is in play —
+    # either way the resolved base is the root artifacts land on.
+    from core.startup.wsl import warn_tmpdir_windows_interop
+    warn_tmpdir_windows_interop(
+        os.environ.get(_ENV_VAR, "").strip() or None,
+    )
     with _lock:
         # A cached dir someone removed mid-run must not surface as a
         # tempfile failure downstream — drop the cache and re-resolve.

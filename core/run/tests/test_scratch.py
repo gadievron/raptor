@@ -452,3 +452,50 @@ class TestInodeCeilingAdvisory:
             with scratch_dir("x-", dir=tmp_path / "out"):
                 pass
         assert "inode usage" not in caplog.text
+
+
+class TestTempRootInteropAdvisory:
+    """System-tmp lane creation is a temp-root advisory chokepoint."""
+
+    pytestmark = pytest.mark.wsl
+
+    @pytest.fixture(autouse=True)
+    def _reset_latch(self):
+        from core.startup import wsl
+        wsl._tmpdir_warned = False
+        yield
+        wsl._tmpdir_warned = False
+
+    def test_system_tmp_shape_fires_advisory_once(
+        self, tmp_root, monkeypatch, capsys,
+    ):
+        from core.startup import wsl
+        monkeypatch.setattr(wsl, "is_wsl", lambda kernel_id=None: True)
+        monkeypatch.setattr(wsl, "fs_is_drvfs_or_9p", lambda path: True)
+        with scratch_dir("raptor-scratch-test-"):
+            pass
+        with scratch_dir("raptor-scratch-test-"):
+            pass
+        err = capsys.readouterr().err
+        assert err.count("temp root (TMPDIR/RAPTOR_WORK_DIR)") == 1
+        assert "export TMPDIR=/tmp" in err
+
+    def test_silent_off_wsl(self, tmp_root, monkeypatch, capsys):
+        from core.startup import wsl
+        monkeypatch.setattr(wsl, "is_wsl", lambda kernel_id=None: False)
+        with scratch_dir("raptor-scratch-test-"):
+            pass
+        assert "temp root" not in capsys.readouterr().err
+
+    def test_run_output_shape_not_a_chokepoint(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        # dir=... scratch does not live under the temp root, so it
+        # must not spend the once-per-process advisory.
+        from core.startup import wsl
+        monkeypatch.setattr(wsl, "is_wsl", lambda kernel_id=None: True)
+        monkeypatch.setattr(wsl, "fs_is_drvfs_or_9p", lambda path: True)
+        with scratch_dir("x-", dir=tmp_path / "out"):
+            pass
+        assert "temp root" not in capsys.readouterr().err
+        assert wsl._tmpdir_warned is False
