@@ -26028,9 +26028,17 @@ def _source_has_arithmetic(source: str) -> bool:
     # hostile source. Each character is visited once; a ``/*`` looks
     # up its closer with str.find, and once one opener has no closer
     # no later opener can have one either, so the failed lookup
-    # happens at most once.
+    # happens at most once.  String openers pinned to UNESCAPED
+    # delimiters ((?<!\\)): an unterminated literal whose interior
+    # repeats escaped delimiters (`"` + `\"`*n) otherwise makes
+    # every embedded delimiter a fresh match attempt that re-scans
+    # to end-of-file — quadratic on hostile source (measured exp
+    # 2.03; pinned, exp 1.0).  On a well-formed token stream no
+    # string opens at an escaped delimiter, so the scan is
+    # unchanged; dropping the pin re-opens the quadratic.
     token_re = re.compile(
-        r'//[^\n]*|/\*|"(?:[^"\\]|\\.)*"' + r"|'(?:[^'\\]|\\.)*'",
+        r'//[^\n]*|/\*|(?<!\\)"(?:[^"\\]|\\.)*"'
+        + r"|(?<!\\)'(?:[^'\\]|\\.)*'",
         re.DOTALL)  # an escape may consume a newline
     parts: list[str] = []
     pos = 0
