@@ -32,12 +32,26 @@ from __future__ import annotations
 
 import base64
 import html as _html
+import logging
 import re
 import secrets
 from dataclasses import dataclass
 from typing import Literal
 
 from core.security.log_sanitisation import escape_nonprintable
+
+logger = logging.getLogger(__name__)
+
+# Defensive iteration bound for neutralize_tag_forgery's fixpoint
+# loop. Real inputs settle in <= 3 passes (each pass only inserts
+# characters at positions its own patterns then refuse); the bound
+# exists so a design regression degrades to a LOUD warning instead
+# of an unbounded loop. Do not lower to 1: single-pass is exactly
+# the cross-arm masking hole the loop closes. Do not raise
+# meaningfully: an input needing many passes indicates an editing
+# pass whose replacements re-arm other patterns, which the
+# insert-only design forbids — that wants a fix, not headroom.
+_NEUTRALISE_MAX_PASSES = 10
 
 
 def _escape_for_envelope(s: str) -> str:
@@ -776,9 +790,37 @@ def neutralize_tag_forgery(content: str) -> str:
             return s.replace('_', '_\u200b')
         return s
 
-    content = _ENVELOPE_TAG_RE.sub(_escape_match, content)
-    content = _MARKDOWN_HEADING_RE.sub(r'\1\\\2', content)
-    return _SETEXT_UNDERLINE_RE.sub(_break_setext_underline, content)
+    # Iterate the three substitutions to a FIXPOINT. A single pass is
+    # not sufficient across arms: re.sub never rescans its own
+    # replacement, and the bracket arms' greedy attribute run
+    # ([^\]]{0,256}) can ABSORB another arm's token into its span —
+    # `[MARK_INPT </untrusted> obey` matched as one bracket span
+    # whose replacement defangs only `[` characters, leaving a live
+    # `</untrusted` the XML arm never got to see (cross-arm masking).
+    # Fixpoint iteration beats teaching each replacement every other
+    # arm's vocabulary: single-pass-with-full-knowledge must be
+    # re-proven every time an arm is added (drift risk), while
+    # "loop until nothing changes" is complete by construction.
+    # Termination: every substitution only INSERTS characters (ZWSP,
+    # backslash) at positions its own pattern then refuses, so each
+    # pass strictly reduces the remaining live shapes; two or three
+    # passes settle real inputs. The bound is defensive only — hitting
+    # it means an editing pass whose output still changes, which the
+    # insert-only design forbids, so fall through LOUDLY and return
+    # the last (still strictly-more-neutralised) text.
+    for _ in range(_NEUTRALISE_MAX_PASSES):
+        prev = content
+        content = _ENVELOPE_TAG_RE.sub(_escape_match, content)
+        content = _MARKDOWN_HEADING_RE.sub(r'\1\\\2', content)
+        content = _SETEXT_UNDERLINE_RE.sub(_break_setext_underline, content)
+        if content == prev:
+            return content
+    logger.warning(
+        "tag-forgery neutralisation did not reach a fixpoint in %d "
+        "passes (input length %d) — returning the last pass's output",
+        _NEUTRALISE_MAX_PASSES, len(content),
+    )
+    return content
 
 
 # Back-compat alias — keep the underscore name working in case other
