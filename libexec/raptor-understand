@@ -1202,7 +1202,9 @@ def _checkpoint_wrap(dispatch_fn, args, out_dir: Path, *, mode: str,
         )
         if isinstance(results, list) and not failed:
             store.save(name, results, cost_by_model.get(name, 0.0))
-            store.bump_spend_floor(sum(cost_by_model.values()))
+            # dict() snapshot: sibling workers mutate cost_by_model
+            # concurrently, and iterating a mutating dict raises.
+            store.bump_spend_floor(sum(dict(cost_by_model).values()))
         return results
 
     return _wrapped
@@ -1355,10 +1357,16 @@ def _do_resume(args) -> int:
             "longer match the source:",
             file=sys.stderr,
         )
+        # File names and stored hashes come from checkpoints (model
+        # output over a hostile tree) — escape before the terminal.
         for d in drifted[:10]:
-            cur = d.current_hash or "missing"
+            cur = sanitise_for_terminal(d.current_hash, max_len=16) \
+                if d.current_hash else "missing"
             print(
-                f"  {d.file} [{d.label}] (hash {d.stored_hash} → {cur})",
+                f"  {sanitise_for_terminal(d.file, max_len=200)} "
+                f"[{sanitise_for_terminal(d.label, max_len=80)}] "
+                f"(hash {sanitise_for_terminal(d.stored_hash, max_len=16)}"
+                f" → {cur})",
                 file=sys.stderr,
             )
         if len(drifted) > 10:
@@ -1379,10 +1387,13 @@ def _do_resume(args) -> int:
             flush=True,
         )
         for d in drifted:
-            cur = d.current_hash or "missing"
+            cur = sanitise_for_terminal(d.current_hash, max_len=16) \
+                if d.current_hash else "missing"
             print(
-                f"  drift: {d.file} [{d.label}] "
-                f"(hash {d.stored_hash} → {cur})",
+                f"  drift: {sanitise_for_terminal(d.file, max_len=200)} "
+                f"[{sanitise_for_terminal(d.label, max_len=80)}] "
+                f"(hash {sanitise_for_terminal(d.stored_hash, max_len=16)}"
+                f" → {cur})",
                 flush=True,
             )
 
