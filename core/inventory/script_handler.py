@@ -26,12 +26,15 @@ site.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, NamedTuple
 
 from core.source.lines import split_lines
 
 from .languages import SCRIPT_PER_FILE_LANGUAGES
+
+logger = logging.getLogger(__name__)
 
 #: The additive checklist-item field carrying the classification.
 #: Stamped by the inventory builder on every ``interstitial`` item of
@@ -611,6 +614,12 @@ def stamp_script_handler_items(
     classifier) converges back to the content's truth on the next
     build instead of persisting indefinitely; content is identical by
     construction, so the re-derivation equals the original parse's.
+    The heal covers the stamp FIELD given the item's recorded span —
+    the slice is taken at the recorded ``line_start``/``line_end``,
+    coordinates that live in the same writable directory, so the
+    reuse path reconciles interstitial geometry first
+    (:func:`reconcile_interstitial_items`); without that step a
+    shifted span makes this function classify the wrong bytes.
     Returns True when any item was stamped (informational — the
     builder call sites don't branch on it; the record dicts are
     mutated in place either way).
@@ -637,3 +646,85 @@ def stamp_script_handler_items(
         item[SCRIPT_HANDLER_FIELD] = interstitial_is_handler(language, span)
         stamped = True
     return stamped
+
+
+def _span_key(line_start: Any, line_end: Any) -> tuple[int, int]:
+    """Comparable (start, end) with the gap-side type guard: bools and
+    non-ints read as 0 / start, matching what the hydration and stamp
+    slicers would actually use."""
+    start = (line_start if isinstance(line_start, int)
+             and not isinstance(line_start, bool) else 0)
+    end = (line_end if isinstance(line_end, int)
+           and not isinstance(line_end, bool) else start)
+    return (start, end)
+
+
+def reconcile_interstitial_items(
+    items: list[dict[str, Any]],
+    language: str,
+    content: str,
+) -> bool:
+    """Re-derive one file record's interstitial geometry from
+    ``content`` on the builder's SHA-256 reuse path. Mutates ``items``
+    in place; returns True when the cached interstitial set was
+    replaced.
+
+    :func:`stamp_script_handler_items` heals the stamp FIELD, but it
+    slices content by the item's recorded ``line_start``/``line_end``
+    — sibling coordinates in the same writable run/cache directory.
+    A shifted span makes the stamp re-derivation classify the wrong
+    bytes and durably persist a False verdict on a real handler span
+    (the SHA match means a fresh parse never recomputes the truth).
+    Interstitial geometry is pure line arithmetic over the record's
+    OTHER items' spans (``compute_interstitial_items`` — no tree
+    parse), and script-per-file
+    languages take the identity translation view, so on byte-identical
+    content the recomputation equals the original parse's. Matching
+    geometry keeps the cached items untouched; a disagreement replaces
+    the interstitial set loudly and lets the stamps and span hashes
+    re-derive over the healed spans. A record with no interstitial
+    items (written before the interstitial layer) backfills the same
+    way — the carried-gap rule the include-edge backfill follows.
+
+    Residual, by design: the non-interstitial spans are inputs of this
+    reconciliation, not outputs — a rewritten function span shifts the
+    derived geometry consistently with it. Those items carry their own
+    ``span_hash`` staleness evidence, and re-deriving them needs the
+    full parse the SHA gate exists to skip.
+    """
+    if (language or "").lower() not in SCRIPT_PER_FILE_LANGUAGES:
+        return False
+    from core.inventory.extractors import (
+        KIND_INTERSTITIAL,
+        CodeItem,
+        compute_interstitial_items,
+    )
+    others: list[CodeItem] = []
+    cached: list[tuple[int, int]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = _span_key(item.get("line_start"), item.get("line_end"))
+        if item.get("kind") == KIND_INTERSTITIAL:
+            cached.append(key)
+        else:
+            others.append(CodeItem(
+                name="", kind=str(item.get("kind") or ""),
+                line_start=key[0], line_end=key[1]))
+    fresh = compute_interstitial_items(others, content)
+    fresh_spans = [(it.line_start, it.line_end
+                    if it.line_end is not None else it.line_start)
+                   for it in fresh]
+    if sorted(cached) == sorted(fresh_spans):
+        return False
+    logger.warning(
+        "inventory: cached interstitial spans disagree with the "
+        "content-derived geometry (%d cached, %d derived) — replacing "
+        "them; stamps and span hashes re-derive over the healed spans",
+        len(cached), len(fresh_spans),
+    )
+    items[:] = [it for it in items
+                if not (isinstance(it, dict)
+                        and it.get("kind") == KIND_INTERSTITIAL)]
+    items.extend(it.to_dict() for it in fresh)
+    return True
