@@ -1239,7 +1239,8 @@ def detect_argument_shape_deviations(
 # "n implementors of the same interface validate, 1 doesn't." Peer
 # groups are NOT formed here — they come from the layered resolver
 # (``core.analysis.peer_groups``): dispatch-table members (L2),
-# same-type cohorts (L4) and route families (L10), the layers whose
+# same-type cohorts (L4), route families (L10) and interface slots
+# (L7 — ops-struct slot / subclass-override census), the layers whose
 # membership is a mechanical fact rather than a naming heuristic.
 # The comparator is the existing property-vector majority vote
 # (``sibling_analysis.find_asymmetries``) over structural safety
@@ -1262,12 +1263,14 @@ DIMENSION_INTERFACE = "interface"
 INTERFACE_MIN_GROUP = MIN_GROUP_SITES
 
 # Peer-group layers whose membership is mechanical (L2 dispatch-site
-# extraction, L4 type-cohort index, L10 route families). Literal
-# strings by convention here; the route entry is pinned against
-# ``peer_groups.GROUP_TYPE_ROUTE_FAMILY`` by test so drift dies
+# extraction, L4 type-cohort index, L10 route families, L7
+# interface-slot census). Literal strings by convention here; the
+# route and interface-slot entries are pinned against
+# ``peer_groups.GROUP_TYPE_ROUTE_FAMILY`` /
+# ``interface_slots.GROUP_TYPE_INTERFACE_SLOT`` by test so drift dies
 # loudly instead of the frozenset silently missing the layer.
 _INTERFACE_GROUP_TYPES = frozenset({
-    "dispatch_site", "type_cohort", "route_family",
+    "dispatch_site", "type_cohort", "route_family", "interface_slot",
 })
 
 _ROUTE_FAMILY_GROUP_TYPE = "route_family"

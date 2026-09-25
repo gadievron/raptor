@@ -12,6 +12,8 @@ Layer hierarchy:
   L10 Route family groups        — framework route registrations from
                                     the route-models artifact
                                     (mechanical, definitive)
+  L7  Interface-slot groups      — ops-struct slot / subclass-override
+                                    census (mechanical, definitive)
   L0  Joern co-callee groups     — CPG call graph (definitive)
   L1  r2 binary co-callee groups — binary call edges (definitive)
       Binary anchor families     — hunt string-xref co-occurrence
@@ -54,6 +56,12 @@ from collections import defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from core.analysis.interface_slots import (
+    # L7 group-type string is owned by the census module (the
+    # producer and the layer must agree by construction); imported
+    # here so consumers keep one surface for group-type names.
+    GROUP_TYPE_INTERFACE_SLOT,
+)
 from core.audit.sibling_analysis import (
     SiblingGroup,
     SiblingPath,
@@ -72,15 +80,14 @@ _ANCHOR_FAMILY = "binary_anchor_family"
 _CALLEE_SIGNATURE = "shared_callee_signature"
 _DECOMP_SIMILARITY = "decomp_similarity"
 
-# Layer / group-type RESERVATION: layer id L10, group-type string
-# "route_family". L7 (interface-slot census), L8 (enum×switch
-# completeness) and L9 (clone families) are reserved for planned
-# family-builder layers, and binary-substrate layers are added
-# independently — a new layer must pick an unclaimed number and
-# group-type string and note it here.
-# Public: the interface dimension admits this group type by string
+# Layer / group-type RESERVATION: claimed ids are L10 ("route_family"),
+# L7 ("interface_slot"), L8 ("enum_switch"), L9 ("clone_family");
+# binary-substrate layers are added independently — a new layer must
+# pick an unclaimed number and group-type string and note it here.
+# Public: the interface dimension admits "route_family" and
+# "interface_slot" by string
 # (consistency_dimensions._INTERFACE_GROUP_TYPES) and tests pin the
-# two against each other.
+# strings against each other.
 GROUP_TYPE_ROUTE_FAMILY = "route_family"
 
 # Property key the route layer attaches to every family member:
@@ -181,6 +188,22 @@ MAX_ROUTE_FAMILY_MEMBERS = 32
 #: ``consistency_dimensions.INTERFACE_MIN_GROUP`` by test.
 MIN_ROUTE_FAMILY_MEMBERS = 3
 
+# ── Interface-slot bounds (L7) ────────────────────────────────────────
+
+#: Same claim floor, same argument, for the L7 exclusive layer: an
+#: interface-slot family the parity comparator cannot vote on must
+#: not strip its implementations out of the later exclusive layers.
+#: Pinned against ``consistency_dimensions.INTERFACE_MIN_GROUP`` by
+#: test, like the route floor above.
+MIN_INTERFACE_SLOT_MEMBERS = 3
+
+#: Members per L7 group. Both directions: larger turns one hot slot
+#: (a kernel-wide ops field) into a whole-tree blob where one deviant
+#: among hundreds is noise for the majority vote; smaller splits
+#: genuinely wide slot families. 32 — the family-size ceiling class
+#: shared with the route layer.
+MAX_INTERFACE_SLOT_MEMBERS = 32
+
 
 # ── Top-level resolver ────────────────────────────────────────────────
 
@@ -198,6 +221,7 @@ def resolve_peer_groups(
     binary_callees: dict[str, set[str]] | None = None,
     decomp_texts: dict[str, str] | None = None,
     route_models: Any | None = None,
+    interface_slots: list[Any] | None = None,
     notes: list[str] | None = None,
 ) -> list[SiblingGroup]:
     """Build peer groups from all available signals.
@@ -234,6 +258,14 @@ def resolve_peer_groups(
       for the placement argument and :func:`_route_family_groups`
       for the join contract (CBV exclusion, truncated-chain
       exclusion, claim floor, two-valued auth-decoration property).
+    * ``interface_slots`` — ``core.analysis.interface_slots.
+      SlotFamily`` records (the :func:`core.analysis.interface_slots.
+      interface_slot_families` producer builds them). Exclusive L7
+      layer, mechanically-certain membership, placed with the
+      claim-first layers ahead of the co-callee groupings — see
+      :func:`_interface_slot_groups` for the join contract (name
+      resolution through the ambiguity-excluding index, claim floor,
+      minority-unchoosable member cap).
 
     When ``checklist`` is supplied, every layer sees the functions
     enriched with the checklist items' ``metadata`` (parameters,
@@ -282,6 +314,26 @@ def resolve_peer_groups(
             notes.append(f"route-family: {lr_note}")
     else:
         layer_report.append("route-family skipped (no route models)")
+
+    # L7: interface slots (exclusive, with the claim-first layers —
+    # mechanically-certain interface families must not lose members
+    # to the weaker co-callee groupings below).
+    if interface_slots:
+        l7 = _interface_slot_groups(interface_slots, _remaining())
+        _claim(l7)
+        groups.extend(l7)
+        caps_note = any(
+            getattr(f, "caps_hit", False) for f in interface_slots
+        )
+        layer_report.append(
+            f"interface-slot {len(l7)}"
+            + (" (census capped)" if caps_note else ""))
+        if caps_note and notes is not None:
+            notes.append(
+                "interface-slot: census family cap hit — families "
+                "beyond the cap were dropped")
+    else:
+        layer_report.append("interface-slot skipped (no census)")
 
     # L0: Joern co-callee (exclusive)
     if joern_server is not None:
@@ -992,6 +1044,115 @@ def _route_family_groups(
         logger.info("route-family layer: %s", note)
     logger.info("L10 route-family: %d groups", len(groups))
     return groups, note
+
+
+# ── L7: Interface-slot groups ────────────────────────────────────────
+
+
+def _interface_slot_groups(
+    slot_families: list[Any],
+    functions: list[dict[str, Any]],
+) -> list[SiblingGroup]:
+    """L7: implementations of one interface slot, from the census.
+
+    Families arrive pre-built (``core.analysis.interface_slots``); this
+    layer only JOINS them to the resolver's function records — it never
+    re-censuses, so the producer's caps and determinism carry through.
+
+    Join contract:
+
+    * Members carrying (file, function) join by exact key first
+      (override sets record their definition site); name-only members
+      (ops-slot registrations name the function, not its definition)
+      resolve through the ambiguity-excluding name index — a bare name
+      shared by several records joins nothing rather than mis-binding.
+    * **Claim floor** — families below
+      :data:`MIN_INTERFACE_SLOT_MEMBERS` joined members neither claim
+      nor emit (the route layer's argument: an exclusive claim by a
+      family the parity comparator cannot vote on only strips its
+      implementations out of the later layers).
+    * **Member cap** — groups over :data:`MAX_INTERFACE_SLOT_MEMBERS`
+      keep a seeded-random survivor sample, never deterministic
+      first-N: member names are attacker-chosen text, and a sortable
+      truncation would let a hostile repo name the deviant past the
+      cut. In-band cap label on the group context.
+
+    Slot keys and function names are target-derived — escaped before
+    entering ids, descriptions, or contexts.
+    """
+    if not slot_families or not functions:
+        return []
+    from core.security.log_sanitisation import escape_nonprintable
+
+    func_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for f in functions:
+        key = (f.get("file", ""), f.get("name", ""))
+        if key[1]:
+            func_by_key.setdefault(key, f)
+    func_by_name = _name_index(functions)
+
+    groups: list[SiblingGroup] = []
+    for fam in slot_families:
+        kind = str(getattr(fam, "kind", "") or "")
+        fam_key = str(getattr(fam, "key", "") or "")
+        matched: dict[tuple[str, str], dict[str, Any]] = {}
+        for member in getattr(fam, "members", ()) or ():
+            fn = str(getattr(member, "function", "") or "")
+            mfile = str(getattr(member, "file", "") or "")
+            if not fn:
+                continue
+            record = None
+            if mfile:
+                record = func_by_key.get((mfile, fn))
+            if record is None:
+                record = func_by_name.get(fn)
+            if record is None:
+                continue
+            rkey = (record.get("file", ""), record.get("name", ""))
+            matched.setdefault(rkey, record)
+        if len(matched) < MIN_INTERFACE_SLOT_MEMBERS:
+            continue
+        member_keys = sorted(matched)
+        truncated = len(member_keys) > MAX_INTERFACE_SLOT_MEMBERS
+        if truncated:
+            # Seeded-random survivors (unchoosable), never a sorted
+            # prefix — see the docstring's member-cap note.
+            rnd = random.Random(os.urandom(16))
+            member_keys = sorted(rnd.sample(
+                member_keys, MAX_INTERFACE_SLOT_MEMBERS,
+            ))
+        key_esc = escape_nonprintable(fam_key)
+        siblings = [
+            SiblingPath(
+                label=matched[k].get("name", ""),
+                file=matched[k].get("file", ""),
+                function=matched[k].get("name", ""),
+                line=matched[k].get("line", 0),
+            )
+            for k in member_keys
+        ]
+        kind_label = (
+            "ops-struct slot" if kind == "ops_slot"
+            else "subclass override set"
+        )
+        context = f"Interface slot: {key_esc} ({kind_label})"
+        if truncated:
+            context += (
+                f" [group capped at {MAX_INTERFACE_SLOT_MEMBERS} of "
+                f"{len(matched)} members, seeded-random selection]"
+            )
+        groups.append(SiblingGroup(
+            group_id=f"interface_slot:{kind}:{key_esc}",
+            # Plain string by the module-header convention (SiblingType
+            # is a str enum; consumers compare by value).
+            sibling_type=GROUP_TYPE_INTERFACE_SLOT,  # type: ignore[arg-type]
+            description=f"Implementations of {key_esc} ({kind_label})",
+            siblings=siblings,
+            shared_context=context,
+        ))
+
+    logger.info("L7 interface-slot: %d groups", len(groups))
+    return groups
 
 
 # ── L0: Joern co-callee groups ────────────────────────────────────────
