@@ -3691,7 +3691,20 @@ def main() -> int:
     # the sandbox-side once-per-process banner still logs the
     # in-force surface on stderr.
     from core.project.trust import apply_project_sandbox_floor
-    apply_project_sandbox_floor(args, banner=False)
+    from core.run.pin import ProjectArgvError
+    try:
+        apply_project_sandbox_floor(args, banner=False)
+    except ProjectArgvError as e:
+        # An invalid --project is a hard error by contract (never a
+        # fallback), but it must surface as the lifecycle stub's
+        # one-line ERROR form — the consent read above revalidates the
+        # argv project against the registry, and letting the error
+        # escape main() printed a raw traceback instead. The message
+        # carries the operator-supplied argv value: escape it before
+        # it reaches the terminal.
+        print(f"ERROR: {sanitise_for_terminal(str(e), max_len=500)}",
+              file=sys.stderr)
+        return 1
 
     if not args.command:
         parser.print_help()
