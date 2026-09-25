@@ -1215,6 +1215,37 @@ class TestDockerCaptureBounds:
         assert not calls.exists()
 
 
+class TestChildEnv:
+    """Every witness spawn's environment comes from the shared
+    fail-closed helper with target-facing markers stripped: the
+    native tier's interpreter executes target-derived chain code,
+    and no witness child consumes RAPTOR runtime variables."""
+
+    def test_markers_and_dangerous_vars_stripped(self, monkeypatch):
+        monkeypatch.setenv("RAPTOR_DIR", "/opt/raptor")
+        monkeypatch.setenv("LD_PRELOAD", "/tmp/evil.so")
+        env = sanwit_execute._safe_env()
+        assert not any(
+            k.startswith(("RAPTOR_", "_RAPTOR")) for k in env
+        )
+        assert "LD_PRELOAD" not in env
+        assert "PATH" in env  # two-direction: children still launch
+
+    def test_fail_closed_when_core_config_is_broken(self, monkeypatch):
+        # The re-rolled ladder this replaced raised through the
+        # cleanup belt when core.config could not import; the shared
+        # helper degrades to a minimal allowlist — never the
+        # parent-inherit sentinel, never the raw parent env.
+        import sys as _sys
+
+        monkeypatch.setenv("SUPER_SECRET_API_KEY", "hunter2")
+        monkeypatch.setitem(_sys.modules, "core.config", None)
+        env = sanwit_execute._safe_env()
+        assert env is not None
+        assert "SUPER_SECRET_API_KEY" not in env
+        assert "PATH" in env
+
+
 class TestNativeExecutionSeam:
     def test_dark_verify_helper_names_exist(self):
         """Drift fence: the native tier reuses the dark_verify script-
