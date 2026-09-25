@@ -899,7 +899,7 @@ class CrashAnalyser:
 
     def _parse_lldb_output(self, context: CrashContext, lldb_output: str) -> None:
         """Parse LLDB output to extract crash information."""
-        lines = lldb_output.split("\n")
+        lines = lldb_output.split("\n")  # line-model: debugger output captured text=True (universal-newline)
         
         # First, try to detect the signal that caused the stop
         for line in lines:
@@ -1084,7 +1084,7 @@ class CrashAnalyser:
 
     def _parse_gdb_output(self, context: CrashContext, gdb_output: str) -> None:
         """Parse GDB output to extract crash information."""
-        lines = gdb_output.split("\n")
+        lines = gdb_output.split("\n")  # line-model: debugger output captured text=True (universal-newline)
         
         # First, try to detect the signal that caused the stop
         for line in lines:
@@ -1558,7 +1558,7 @@ class CrashAnalyser:
         # Extract function names from stack trace (ignore addresses for better deduplication)
         # Format: #0  0xaddress in function_name (args) at file:line
         functions = []
-        for line in stack_trace.split('\n'):
+        for line in stack_trace.split('\n'):  # line-model: assembled from text=True debugger output (universal-newline)
             # Match GDB format: #N  0xADDR in function_name
             # Word-boundary `\bin\b` so we don't match
             # substring-`in` inside other tokens — pre-fix
@@ -1712,7 +1712,7 @@ class CrashAnalyser:
             context.crash_type = "memory_leak"
             
         # Extract stack trace (ASan provides excellent stack traces)
-        lines = asan_output.split("\n")
+        lines = asan_output.split("\n")  # line-model: runtime output captured text=True (universal-newline)
         in_stack_trace = False
         stack_trace_lines = []
         

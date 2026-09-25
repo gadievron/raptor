@@ -414,7 +414,7 @@ class FfufRunner:
         # '\n' only: ffuf reads with ReadString('\n'); Python's
         # splitlines() also splits on VT/FF/NEL/U+2028/29 — another
         # divergence class.
-        lines = text.split("\n")
+        lines = text.split("\n")  # line-model: \n-only by design, mirroring ffuf's own line reader (see comment above)
         request_line = lines[0].strip()
         parts = request_line.split(" ")
         if len(parts) < 3:
@@ -1296,7 +1296,7 @@ class FfufRunner:
         if self.reveal_secrets:
             return text
         lines = []
-        for line in text.split("\n"):
+        for line in text.split("\n"):  # line-model: ffuf stderr captured text=True (universal-newline)
             matched = self._BANNER_LINE_RE.match(line)
             if not matched:
                 lines.append(line)

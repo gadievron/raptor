@@ -86,7 +86,7 @@ def _validate_rule_body(body: str) -> str | None:
     Returns an error string on rejection, or None if OK."""
     if "\x00" in body:
         return "rule body contains null byte"
-    for i, line in enumerate(body.split("\n"), 1):
+    for i, line in enumerate(body.split("\n"), 1):  # line-model: LLM-generated rule body
         if len(line) > _RULE_BODY_MAX_LINE:
             return (
                 f"rule body line {i} exceeds {_RULE_BODY_MAX_LINE} chars "
@@ -563,7 +563,7 @@ def _fix_mutant_control(
     except OSError as e:
         return None, [f"fix-mutant: cannot read seed file: {e}"]
 
-    lines = original.split("\n")
+    lines = original.split("\n")  # line-model: universal-newline read_text above
     line_start, line_end = seed.line_start, seed.line_end
     if not (1 <= line_start <= line_end <= len(lines)):
         return None, [
@@ -571,7 +571,7 @@ def _fix_mutant_control(
              f"outside file ({len(lines)} lines) — patch not applicable"),
         ]
 
-    patch_lines = rule.fix_patch.split("\n")
+    patch_lines = rule.fix_patch.split("\n")  # line-model: LLM-generated patch text
     # Trim one trailing empty line from the patch — LLMs habitually
     # end strings with "\n", which would otherwise insert a blank.
     if patch_lines and patch_lines[-1] == "":
