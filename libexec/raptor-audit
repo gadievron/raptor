@@ -2072,6 +2072,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         validate=not args.no_validate,
         no_binary_oracle=getattr(args, "no_binary_oracle", False),
         binary_verdicts=binary_verdicts,
+        auto_siblings=not getattr(args, "no_auto_siblings", False),
         inventory=checklist_data,
         annotations_dir=Path(args.annotations_dir) if args.annotations_dir else None,
         codeql_db_path=(args.codeql_db[0] if args.codeql_db else None),
@@ -2926,6 +2927,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         validate=bool(run_cfg.get("validate", True)),
         no_binary_oracle=bool(run_cfg.get("no_binary_oracle")),
         binary_verdicts=binary_verdicts,
+        auto_siblings=_resume_auto_siblings(args, run_cfg),
         inventory=checklist_data,
         annotations_dir=(
             Path(run_cfg["annotations_dir"])
@@ -3097,6 +3099,21 @@ def _resume_max_workers(cli_value: int | None, run_cfg: dict) -> int:
         return 0
 
 
+def _resume_auto_siblings(args: argparse.Namespace,
+                          run_cfg: dict) -> bool:
+    """Auto-siblings state for a resumed segment: a run started with
+    --no-auto-siblings keeps the opt-out across segments; the resume
+    flag can also opt THIS segment out. There is deliberately no
+    turn-back-on: the persisted opt-out is standing operator intent. A
+    co-located seed file captured by an earlier segment is still
+    ingested by the intake either way — the opt-out only stops the
+    engine from running."""
+    return not (
+        bool(run_cfg.get("no_auto_siblings"))
+        or bool(getattr(args, "no_auto_siblings", False))
+    )
+
+
 def _max_workers_arg(value: str) -> int:
     """Parse --max-workers: an int >= 1, clamped to the shared worker
     cap — the same clamp derive_max_workers applies to the tuning
@@ -3148,6 +3165,7 @@ def _run_config_from_args(
         "subsystem_depth": args.subsystem_depth,
         "validate": not args.no_validate,
         "no_binary_oracle": bool(getattr(args, "no_binary_oracle", False)),
+        "no_auto_siblings": bool(getattr(args, "no_auto_siblings", False)),
         "annotations_dir": args.annotations_dir,
         "codeql_db_path": (args.codeql_db[0] if args.codeql_db else None),
         "codeql_db_paths": args.codeql_db,
@@ -3559,6 +3577,16 @@ def main() -> int:
                             "whose source is unchanged); unchanged "
                             "reviewed functions are then silently "
                             "suppressed as before")
+    p_run.add_argument("--no-auto-siblings", action="store_true",
+                       help="Binary targets only: do not auto-run the "
+                            "sibling-consistency pass over a mapped "
+                            "sibling run and capture its "
+                            "sibling-hypotheses.json into this run "
+                            "(default: on for binary targets; source "
+                            "targets never run it). The pass degrades "
+                            "loudly to an unseeded audit when no "
+                            "mapped run or call-graph substrate "
+                            "exists; seeds never mint findings")
     p_run.add_argument("--no-caller-contract-context", action="store_true",
                        help="Disable the caller-contract call-site "
                             "digest in review context (all in-repo "
@@ -3680,6 +3708,14 @@ def main() -> int:
              "audit-report.json (a step that didn't own the run "
              "stamped it), flip it back to 'interrupted' and resume. "
              "A completed run WITH a report stays final regardless.",
+    )
+    p_resume.add_argument(
+        "--no-auto-siblings", action="store_true",
+        help="Binary targets: do not auto-run the sibling-consistency "
+             "pass for THIS segment (see `run --help`). A run started "
+             "with the opt-out keeps it across segments; a co-located "
+             "sibling-hypotheses.json captured by an earlier segment "
+             "is still ingested by the seed intake",
     )
     p_resume.add_argument(
         "--max-time", type=float, default=None,
