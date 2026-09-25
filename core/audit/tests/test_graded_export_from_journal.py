@@ -304,6 +304,48 @@ def test_tampered_sentinel_row_still_demotes_to_unverified(tmp_path):
     assert graded["findings"][0]["discovery"]["evidence_tool"] == "none"
 
 
+def test_sentinel_named_run_dir_never_mints_run_scope(tmp_path):
+    # A run dir literally named like the sentinel must not become a
+    # matchable run identity: sentinel rows byte-copied into it (the
+    # install base is full of them) would otherwise grade as the
+    # run's OWN record — receipts with no install marker and no
+    # count. The run arm refuses the sentinel identity, so such rows
+    # keep the marked install-grandfather tier; rows attributed to a
+    # named run keep failing toward the foreign arm.
+    from core.coverage.journal import RUN_ID_UNATTRIBUTED
+
+    run = tmp_path / RUN_ID_UNATTRIBUTED
+    run.mkdir()
+    _journal(run, [
+        _entry("a.c", "f", "suspicious", run_id=RUN_ID_UNATTRIBUTED,
+               line_start=5, evidence_tools=["semgrep"]),
+        _entry("b.c", "g", "suspicious", run_id="other-run",
+               line_start=7, evidence_tools=["codeql"]),
+    ])
+    graded = export_graded_from_journal(run)
+    assert graded["derivation"]["unscoped_run_rows"] == 1
+    assert graded["derivation"]["foreign_run_rows"] == 1
+    by_file = {rec["file"]: rec for rec in graded["findings"]}
+    rec = by_file["a.c"]
+    assert rec["discovery"]["evidence_tool"] == "semgrep"
+    assert rec["provenance"]["receipt_scope"] == "install"
+    assert by_file["b.c"]["discovery"]["evidence_tool"] == "none"
+    # Other direction: a normally-named dir's genuine run rows still
+    # earn run scope (no marker, no counters).
+    other = tmp_path / "runZ"
+    other.mkdir()
+    _journal(other, [
+        _entry("a.c", "f", "suspicious", run_id="runZ",
+               line_start=5, evidence_tools=["semgrep"]),
+    ])
+    graded2 = export_graded_from_journal(other)
+    assert graded2["derivation"]["unscoped_run_rows"] == 0
+    assert graded2["derivation"]["foreign_run_rows"] == 0
+    rec2 = graded2["findings"][0]
+    assert rec2["discovery"]["evidence_tool"] == "semgrep"
+    assert "receipt_scope" not in rec2["provenance"]
+
+
 def test_sentinel_lookalike_run_id_stays_foreign(tmp_path):
     # Exact match only: anything that is not the sentinel (or empty)
     # is a run attribution, and one that does not name THIS run keeps

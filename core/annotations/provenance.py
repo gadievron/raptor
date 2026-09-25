@@ -372,17 +372,19 @@ _VERSION_COMM = re.compile(r"[0-9]+(?:\.[0-9]+)+")
 
 #: Runtimes the agent CLI ships under: when the CLI runs as a
 #: JavaScript entry point the ancestor comm is the interpreter, not
-#: an agent-named binary. ``node`` is also a legitimate non-agent
-#: comm (editor terminal hosts, dev servers), so listing it here
+#: an agent-named binary — ``node`` (and its ``nodejs`` distro
+#: spelling), plus the ``bun`` / ``deno`` runtimes agent CLIs also
+#: ship as entry points for. These are also legitimate non-agent
+#: comms (editor terminal hosts, dev servers), so listing them here
 #: trades a false DEMOTION — the safe direction for a rule whose only
 #: consumer refuses an elevated grant: a wrongly-demoted context
-#: falls to the ordinary tier, while not listing it lets the stock
+#: falls to the ordinary tier, while not listing them lets the stock
 #: agent shape grant. The trade is cheap in practice because every
-#: node-hosted terminal invocation of the consuming CLIs also
+#: runtime-hosted terminal invocation of the consuming CLIs also
 #: carries a dispatch environment marker, which refuses the grant on
 #: its own leg; any future consumer of :func:`_is_agent_comm` that
-#: does not sit behind that leg must re-adjudicate this entry.
-_AGENT_RUNTIME_COMMS = frozenset({"node"})
+#: does not sit behind that leg must re-adjudicate these entries.
+_AGENT_RUNTIME_COMMS = frozenset({"node", "nodejs", "bun", "deno"})
 
 
 def _is_agent_comm(comm: str) -> bool:

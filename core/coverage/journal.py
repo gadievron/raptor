@@ -48,7 +48,9 @@ INDEX_SCHEMA_VERSION = 1
 #: it never names a run: readers that scope receipts by run identity
 #: must grade it like an empty ``run_id`` (the marked
 #: install-grandfather tier), never as an attribution to a foreign
-#: run.
+#: run — and must refuse to use a run identity that EQUALS the
+#: sentinel (a dir literally named like it would otherwise match
+#: sentinel rows as the run's own record and mint run scope).
 RUN_ID_UNATTRIBUTED = "cli-record"
 
 # Byte budget for the journal loader's RETAINED entries and for the

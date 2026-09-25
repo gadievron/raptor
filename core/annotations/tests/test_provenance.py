@@ -873,17 +873,19 @@ class TestLiveContextGrantsOperator:
         assert not live_context_grants_operator(
             dict(self._BASE, parents="bash,claude"))
 
-    def test_agent_runtime_comm_in_parents_demotes(self):
+    @pytest.mark.parametrize(
+        "runtime", ["node", "nodejs", "bun", "deno"])
+    def test_agent_runtime_comm_in_parents_demotes(self, runtime):
         # The agent CLI's stock JavaScript-entry shape leaves the
         # runtime interpreter's comm in the ancestry, not an
         # agent-named binary. The rule demotes, so recognising the
-        # runtime fails toward the safe direction; the legitimate
-        # node-hosted terminal shapes it could wrongly demote all
+        # runtimes fails toward the safe direction; the legitimate
+        # runtime-hosted terminal shapes it could wrongly demote all
         # carry a dispatch environment marker, which refuses the
         # grant on its own leg anyway.
         from core.annotations.provenance import live_context_grants_operator
         assert not live_context_grants_operator(
-            dict(self._BASE, parents="bash,node,sshd"))
+            dict(self._BASE, parents=f"bash,{runtime},sshd"))
 
     def test_runtime_comm_demotion_is_scoped_to_the_live_grant(self):
         # Direction pin for the scoping: the annotation READER keys
