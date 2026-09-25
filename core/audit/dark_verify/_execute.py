@@ -229,7 +229,14 @@ def _arg_expression_error(expr_s: str) -> str | None:
 # casts, derefs, control flow, preprocessor, multiple statements — is
 # a validation error (fail closed: the witness is dropped, never run).
 
-_C_STRING_LIT_RE = re.compile(r'"(?:\\.|[^"\\])*"')
+# Opener pinned to an UNESCAPED delimiter ((?<!\\)): an unterminated
+# literal whose interior repeats escaped delimiters (`"` + `\"`*n)
+# otherwise makes every embedded delimiter a fresh match attempt that
+# re-scans to the end of the line — quadratic on a hostile setup line
+# (measured exp 2.00; pinned, exp 1.0). On a well-formed token stream
+# no string opens at an escaped delimiter, so the masking is
+# unchanged; dropping the pin re-opens the quadratic.
+_C_STRING_LIT_RE = re.compile(r'(?<!\\)"(?:\\.|[^"\\])*"')
 _C_CHAR_LIT_RE = re.compile(r"'(?:\\.|[^'\\])'")
 
 # declarator: one-or-more type words, optional pointer stars, the
