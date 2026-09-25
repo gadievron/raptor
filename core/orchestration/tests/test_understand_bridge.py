@@ -1219,6 +1219,76 @@ class TestNormalizeContextMap:
 
 
 # ---------------------------------------------------------------------------
+# unloadable / empty checklist — one skip warning, never per-entry noise
+# ---------------------------------------------------------------------------
+
+class TestNormalizeWithoutFileInventory:
+    """A checklist with no file inventory (absent, budget-refused load,
+    or empty) yields ONE validation-skipped warning — never a
+    per-entry 'not present in checklist' warning for files that exist."""
+
+    def _map_referencing(self, *files):
+        return {
+            "entry_points": [
+                {"id": f"EP-{i:03d}", "file": f, "line": 1}
+                for i, f in enumerate(files)
+            ],
+            "sink_details": [{"id": "SINK-001", "file": files[0], "line": 1}],
+        }
+
+    def test_budget_refused_checklist_single_skip_warning(self, tmp_path, caplog):
+        # Real files on disk — the map's references are NOT hallucinations.
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "a.py").write_text("x = 1\n")
+        (target / "b.py").write_text("y = 2\n")
+        # A checklist over a (tiny) read budget degrades to {} at the
+        # callers (load_json warns and returns None on budget refusal;
+        # the callers `or {}` it) — reproduce that load here.
+        checklist_path = tmp_path / "checklist.json"
+        checklist_path.write_text(json.dumps({
+            "target_path": str(target),
+            "files": [{"path": "a.py", "lines": 1},
+                      {"path": "b.py", "lines": 1}],
+        }))
+        from core.json import load_json
+        checklist = load_json(checklist_path, max_bytes=10) or {}
+        assert checklist == {}
+
+        ctx = self._map_referencing("a.py", "b.py")
+        with caplog.at_level("WARNING",
+                             logger="core.orchestration.understand_bridge"):
+            normalize_context_map(ctx, checklist, target_path=str(target))
+        messages = [r.getMessage() for r in caplog.records]
+        skip = [m for m in messages
+                if "skipping checklist-backed entry validation" in m]
+        assert len(skip) == 1
+        assert not any("not present in checklist" in m for m in messages)
+        assert not any("hallucination" in m for m in messages)
+
+    def test_populated_checklist_still_validates_per_entry(self, caplog):
+        # Ground truth present → the genuine per-entry warning survives.
+        ctx = self._map_referencing("nope.py")
+        with caplog.at_level("WARNING",
+                             logger="core.orchestration.understand_bridge"):
+            normalize_context_map(
+                ctx, {"files": [{"path": "real.py", "lines": 10}]})
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("not present in checklist" in m for m in messages)
+        assert not any("skipping checklist-backed entry validation" in m
+                       for m in messages)
+
+    def test_checklist_free_passes_still_run(self, caplog):
+        # Path normalisation does not need the checklist and must
+        # survive the skip.
+        ctx = {"entry_points": [{"file": "./src/app.py", "line": 5}]}
+        with caplog.at_level("WARNING",
+                             logger="core.orchestration.understand_bridge"):
+            normalize_context_map(ctx, {})
+        assert ctx["entry_points"][0]["file"] == "src/app.py"
+
+
+# ---------------------------------------------------------------------------
 # library-surface augmentation (target_kind consumer)
 # ---------------------------------------------------------------------------
 

@@ -710,6 +710,15 @@ def normalize_context_map(context_map: dict[str, Any], checklist: dict[str, Any]
 
     Returns the (mutated) context_map for caller convenience. Bails as a
     no-op if either input is missing or wrong-typed.
+
+    Passes 2-4 (the checklist-backed entry validation) need the
+    checklist's file inventory as ground truth: when it has none
+    (absent, unloadable — e.g. refused at its read byte-budget — or
+    empty), ONE warning states that the checklist-backed entry
+    validation is skipped, instead of a per-entry "not present in
+    checklist" warning for every (existing) file the map references.
+    Pass 5 (cross-reference ID validation) does not need the checklist
+    and always runs.
     """
     if not isinstance(context_map, dict):
         return context_map
@@ -729,6 +738,26 @@ def normalize_context_map(context_map: dict[str, Any], checklist: dict[str, Any]
         for fi in _list_at(checklist, "files")
         if isinstance(fi, dict) and fi.get("path")
     }
+    if not files_by_path:
+        # No file inventory to validate against — the checklist is
+        # absent, failed its byte-budget load (callers degrade an
+        # unloadable checklist to ``{}``), or genuinely lists no
+        # files. Per-entry validation against an empty inventory
+        # would flag EVERY referenced file as "not present in
+        # checklist (likely LLM hallucination)" — hundreds of false
+        # warnings on a large map, all actively misleading (the
+        # files exist; the ground truth is what's missing). Say so
+        # once and skip the checklist-dependent passes; the
+        # checklist-free passes (path normalisation, cross-reference
+        # ID validation) already ran above.
+        logger.warning(
+            "normalize_context_map: checklist has no file inventory "
+            "(missing, unloadable — e.g. over its read byte-budget — "
+            "or empty); skipping checklist-backed entry validation "
+            "(file-existence, line-range, name backfill)"
+        )
+        _augment_library_surface(context_map, checklist)
+        return context_map
     # The checklist records its own target_path; use it when the caller
     # didn't pass one so the on-disk-but-excluded wording still engages.
     effective_target = target_path
