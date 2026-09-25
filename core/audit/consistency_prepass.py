@@ -45,6 +45,11 @@ from .prep_cache import (
     write_prep_cache,
 )
 from .consistency_dimensions import DIMENSION_ORDERING
+from .consistency_stats import (
+    Floors,
+    floor_overrides_from_run_config,
+    resolve_floors,
+)
 from .consistency_verify import (
     DIMENSION_CLEANUP,
     DIMENSION_RETURN_CHECK,
@@ -320,6 +325,7 @@ def run_consistency_prepass(
     joern_server: Any = None,
     peer_groups: list[Any] | None = None,
     budget_s: float = PREPASS_BUDGET_S,
+    floor_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the standing pre-pass. Returns::
 
@@ -333,6 +339,30 @@ def run_consistency_prepass(
         }
     """
     t0 = time.monotonic()
+    # Per-dimension floors: registry defaults unless the audit
+    # run-config (the ONLY override surface — never tuning.json,
+    # never any file from the scanned repo) carries validated
+    # overrides. A rejected override falls back to DEFAULTS loudly:
+    # defaults are the behaviour every other consumer of this run's
+    # artifacts expects, and losing the whole prepass to a typo'd
+    # key would be a silent coverage hole.
+    overrides = (
+        dict(floor_overrides) if floor_overrides is not None
+        else (
+            floor_overrides_from_run_config(Path(out_dir))
+            if out_dir is not None else {}
+        )
+    )
+    floor_error = ""
+    try:
+        floors: Floors = resolve_floors(overrides)
+    except ValueError as exc:
+        floor_error = str(exc)
+        logger.warning(
+            "consistency floors: override rejected (%s) — "
+            "defaults apply", floor_error,
+        )
+        floors = resolve_floors(None)
     telemetry: dict[str, Any] = {
         "dimensions": {},
         "contract_sources": {},
@@ -345,6 +375,10 @@ def run_consistency_prepass(
         "promotions": 0,
         "budget_exceeded": False,
     }
+    if floors.overridden():
+        telemetry["floor_overrides"] = floors.overridden()
+    if floor_error:
+        telemetry["floor_override_error"] = floor_error[:300]
 
     def _dim(dimension: str) -> dict[str, int]:
         return telemetry["dimensions"].setdefault(
@@ -415,6 +449,20 @@ def run_consistency_prepass(
             logger.debug("consistency prepass: census build failed",
                          exc_info=True)
 
+    # Contract-majority floor overrides reach the census through the
+    # per-entry fields (majority_says_check / majority_says_discard_ok
+    # and the return-contract binder all read the entry). Stamped only
+    # when actually overridden — the default path leaves the entries
+    # exactly as built/reloaded.
+    overridden = floors.overridden()
+    if {"return-check.contract_min_sites",
+            "return-check.contract_ratio"} & set(overridden):
+        cms = int(floors.value("return-check.contract_min_sites"))
+        cr = float(floors.value("return-check.contract_ratio"))
+        for entry in census.values():
+            entry.contract_min_sites = cms
+            entry.contract_ratio = cr
+
     wur_names = harvest_wur_declarations(source_texts)
     if target_path is not None:
         try:
@@ -453,6 +501,7 @@ def run_consistency_prepass(
                     entry, site, context=ctx, inventory=inventory,
                     source_texts=source_texts,
                     joern_server=_joern_arg(),
+                    floors=floors,
                 )
                 _charge_joern(res)
             except Exception:
@@ -553,6 +602,8 @@ def run_consistency_prepass(
             )
             flag_devs = detect_flag_mode_deviations(
                 source_texts, constants=constants,
+                min_sites=int(floors.value("flag-mode.min_sites")),
+                ratio=float(floors.value("flag-mode.ratio")),
             )
         except Exception:
             _dim_failed("flag-mode")
@@ -608,7 +659,11 @@ def run_consistency_prepass(
                 detect_argument_shape_deviations,
             )
             from .consistency_verify import argument_shape_verdict
-            shape_devs = detect_argument_shape_deviations(source_texts)
+            shape_devs = detect_argument_shape_deviations(
+                source_texts,
+                min_sites=int(floors.value("argument-shape.min_sites")),
+                ratio=float(floors.value("argument-shape.ratio")),
+            )
         except Exception:
             _dim_failed("argument-shape")
             logger.debug("consistency prepass: argument shape failed",
@@ -702,7 +757,11 @@ def run_consistency_prepass(
         try:
             from .consistency_dimensions import detect_cleanup_deviations
             cleanup_devs = (
-                detect_cleanup_deviations(source_texts, learned_pairs)
+                detect_cleanup_deviations(
+                    source_texts, learned_pairs,
+                    min_group=int(floors.value("cleanup.min_group")),
+                    ratio=float(floors.value("cleanup.ratio")),
+                )
                 if learned_pairs else []
             )
         except Exception:
@@ -795,6 +854,8 @@ def run_consistency_prepass(
             )
             order_devs = detect_ordering_deviations(
                 source_texts, pairs=learned_pairs,
+                min_group=int(floors.value("ordering.min_group")),
+                ratio=float(floors.value("ordering.ratio")),
             )
         except Exception:
             _dim_failed(DIMENSION_ORDERING)
@@ -861,6 +922,8 @@ def run_consistency_prepass(
             )
             iface_devs = detect_interface_deviations(
                 source_texts, peer_groups,
+                min_group=int(floors.value("interface.min_group")),
+                ratio=float(floors.value("interface.ratio")),
             )
         except Exception:
             _dim_failed("interface")
@@ -1058,6 +1121,10 @@ def run_consistency_prepass(
             sanitize_devs = (
                 detect_sanitize_sink_deviations(
                     source_texts, sink_vocab, sanitizer_vocab,
+                    min_sites=int(
+                        floors.value("sanitize-sink.min_sites"),
+                    ),
+                    ratio=float(floors.value("sanitize-sink.ratio")),
                 )
                 if sink_vocab and sanitizer_vocab else []
             )
@@ -1141,6 +1208,10 @@ def run_consistency_prepass(
             from .consistency_verify import guard_presence_verdict
             guard_devs = detect_guard_presence_deviations(
                 source_texts,
+                min_sites=int(
+                    floors.value("guard-presence.min_sites"),
+                ),
+                ratio=float(floors.value("guard-presence.ratio")),
                 budget_s=max(
                     0.0, budget_s - (time.monotonic() - t0),
                 ),
@@ -1158,6 +1229,7 @@ def run_consistency_prepass(
                         dev, context=ctx, inventory=inventory,
                         source_texts=source_texts,
                         joern_server=_joern_arg(),
+                        floors=floors,
                     )
                     _charge_joern(res)
                 except Exception:
