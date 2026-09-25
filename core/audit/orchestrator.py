@@ -167,6 +167,9 @@ from .joern_backend import (
     run_exclude_dirs as _run_exclude_dirs,
 )
 from .joern_backend import (
+    scope_complement_exclude_dirs as _scope_complement_exclude_dirs,
+)
+from .joern_backend import (
     start_joern_server as _start_joern_server_raw,
 )
 from .joern_backend import (
@@ -1846,6 +1849,14 @@ def run_orchestrator(
         _joern_lifecycle = False
     else:
         _joern_path = _joern_target(config)
+        # The --scope complement: directories deliberately outside
+        # the audited scope are excluded from the CPG build (and key
+        # the cache slot), so a scoped audit no longer builds — and
+        # pays the wall/heap for — the full tree. Any normalisation
+        # anomaly degrades to () = today's full-tree build.
+        _joern_scope_excludes = _scope_complement_exclude_dirs(
+            _joern_path, config.scope, config.target_path,
+        )
         if _jt is not None and getattr(_jt, "cpg_timeout_auto", False):
             # A derived ("auto") CPG timeout resolves against the
             # narrowed joern target here so the post-loop build wait
@@ -1857,7 +1868,7 @@ def run_orchestrator(
                 _jt, _joern_path,
                 exclude_dirs=_run_exclude_dirs(
                     config.out_dir, _joern_path,
-                ),
+                ) + _joern_scope_excludes,
             ) + _jt.query_timeout_s
         _joern_timings: dict[str, float] = {}
         joern_server = _start_joern_server_raw(
@@ -1868,6 +1879,7 @@ def run_orchestrator(
             exclude_dirs=_run_exclude_dirs(
                 config.out_dir, _joern_path,
             ),
+            scope_exclude_dirs=_joern_scope_excludes,
             timings_out=_joern_timings,
         )
         # Cold-vs-warm start visibility: the CPG build/import wall time
@@ -1903,13 +1915,20 @@ def run_orchestrator(
                     file="", function="", status="clean", body=msg,
                 ))
 
+        _presweep_root = _joern_target(config)
         _flows_unused, joern_presweep_future = _resolve_joern_evidence_raw(
-            _joern_target(config),
+            _presweep_root,
             joern_overrides=config.joern_overrides,
             on_joern_progress=_presweep_progress,
             joern_server=joern_server,
             out_dir=config.out_dir,
             abort_event=joern_presweep_abort,
+            # Scope-complement parity with the server's CPG: the
+            # sweep's cache identity and any fallback build must
+            # describe the same coverage the run analyses.
+            scope_exclude_dirs=_scope_complement_exclude_dirs(
+                _presweep_root, config.scope, config.target_path,
+            ),
         )
 
     # Per-call LLM telemetry: one JSONL record per provider round-trip
@@ -5379,8 +5398,9 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
                     )
                     on_progress(-1, 0, placeholder)
 
+            _sweep_root = _joern_target(config)
             joern_flows, joern_future = _resolve_joern_evidence_raw(
-                _joern_target(config),
+                _sweep_root,
                 joern_overrides=config.joern_overrides,
                 on_joern_progress=_joern_progress_cb,
                 joern_server=joern_server,
@@ -5388,6 +5408,11 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
                     config, "run_deadline_monotonic", None,
                 ),
                 out_dir=config.out_dir,
+                # Scope-complement parity with the server's CPG (see
+                # the run_orchestrator submission).
+                scope_exclude_dirs=_scope_complement_exclude_dirs(
+                    _sweep_root, config.scope, config.target_path,
+                ),
             )
 
         if joern_flows is not None:

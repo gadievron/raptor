@@ -362,7 +362,8 @@ class TestStartJoernServerCpgTiming:
             jb.time, "monotonic", lambda: state["now"],
         )
 
-        def fake_ensure(srv, target_path, tunables=None, exclude_dirs=()):
+        def fake_ensure(srv, target_path, tunables=None, exclude_dirs=(),
+                        scope_exclude_dirs=()):
             state["now"] += clock_step
             return True
 
@@ -409,7 +410,7 @@ class TestPreSweepAbort:
 
         def fake_build(target_path, out_dir, joern_overrides,
                        on_progress, joern_server, abort_check=None,
-                       deadline_monotonic=None):
+                       deadline_monotonic=None, scope_exclude_dirs=()):
             captured["abort_check"] = abort_check
             return None
 
@@ -468,7 +469,8 @@ class TestPreSweepAbort:
         # A real cache identity: without the abort guard the partial
         # flows below WOULD be persisted under it.
         monkeypatch.setattr(
-            jb, "_presweep_flows_identity", lambda t: ("cpg", "sinks"),
+            jb, "_presweep_flows_identity",
+            lambda t, scope_exclude_dirs=(): ("cpg", "sinks"),
         )
         monkeypatch.setattr(
             jb, "load_presweep_flows_cache", lambda o, i: None,
