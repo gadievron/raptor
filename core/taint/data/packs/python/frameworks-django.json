@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "language": "python",
+  "framework": "django",
+  "pack": "frameworks-django",
+  "sources": [
+    {
+      "kind": "route_param",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "Binds to extracted route records: parameters captured by path()/re_path() patterns arrive as handler arguments chosen by the requester. The request object itself is a handler parameter and rides handler-parameter seeding, not a module attribute."
+    },
+    {
+      "kind": "call_return",
+      "match": "django.http.QueryDict",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "Constructing a QueryDict parses raw attacker bytes (the request.body idiom for non-form methods); the result is attacker-chosen."
+    }
+  ],
+  "sinks": [
+    {
+      "kind": "dotted_callee",
+      "match": "django.db.models.expressions.RawSQL",
+      "args": [0],
+      "sink_class": "sql-injection",
+      "cwe": "CWE-89",
+      "provenance": "framework_catalog",
+      "rationale": "RawSQL embeds its first argument into the query as written; the params argument is the only parameterised channel."
+    },
+    {
+      "kind": "method_name",
+      "match": "raw",
+      "receiver_hint": "objects",
+      "args": [0],
+      "sink_class": "sql-injection",
+      "cwe": "CWE-89",
+      "confidence": "heuristic",
+      "provenance": "framework_catalog",
+      "rationale": "Manager.raw(sql) executes the given SQL text. Name-equality match on a common method name, hence heuristic confidence with the manager-receiver hint."
+    },
+    {
+      "kind": "method_name",
+      "match": "extra",
+      "receiver_hint": "objects",
+      "kwargs": ["where", "select", "tables"],
+      "sink_class": "sql-injection",
+      "cwe": "CWE-89",
+      "confidence": "heuristic",
+      "provenance": "framework_catalog",
+      "rationale": "QuerySet.extra() splices the where/select/tables fragments into the generated SQL verbatim — Django's own docs mark it a last-resort injection surface."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "django.http.HttpResponseRedirect",
+      "args": [0],
+      "kwargs": ["redirect_to"],
+      "sink_class": "url-redirection",
+      "cwe": "CWE-601",
+      "provenance": "framework_catalog",
+      "rationale": "Redirecting to an attacker-chosen absolute URL is an open redirect."
+    }
+  ]
+}

@@ -1231,6 +1231,16 @@
    ],
    "verdict": "linear"
   },
+  "core/taint/packs.py\u001f_DOTTED_RE": {
+   "digests": [
+    "f3dee4fde615"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
+   ],
+   "verdict": "linear"
+  },
   "engine/coccinelle/vocab_renderer.py\u001f_TMPL_RE": {
    "digests": [
     "b3bc40d9fbf3"

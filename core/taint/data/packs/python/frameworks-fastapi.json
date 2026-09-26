@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "language": "python",
+  "framework": "fastapi",
+  "pack": "frameworks-fastapi",
+  "sources": [
+    {
+      "kind": "route_param",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "Binds to extracted route records: path parameters from FastAPI route patterns arrive as handler arguments chosen by the requester. Query and body parameters are injected from the handler signature and ride handler-parameter seeding (route records list path parameters only)."
+    }
+  ],
+  "sinks": [
+    {
+      "kind": "dotted_callee",
+      "match": "fastapi.responses.RedirectResponse",
+      "args": [0],
+      "kwargs": ["url"],
+      "sink_class": "url-redirection",
+      "cwe": "CWE-601",
+      "provenance": "framework_catalog",
+      "rationale": "Redirecting to an attacker-chosen absolute URL is an open redirect."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "starlette.responses.RedirectResponse",
+      "args": [0],
+      "kwargs": ["url"],
+      "sink_class": "url-redirection",
+      "cwe": "CWE-601",
+      "provenance": "framework_catalog",
+      "rationale": "The Starlette class FastAPI re-exports; either import spelling reaches the same redirect."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "fastapi.responses.FileResponse",
+      "args": [0],
+      "kwargs": ["path"],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "FileResponse serves the named filesystem path; an attacker-influenced path reads outside the intended directory."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "starlette.responses.FileResponse",
+      "args": [0],
+      "kwargs": ["path"],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "The Starlette class FastAPI re-exports; either import spelling serves the same path."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "fastapi.responses.HTMLResponse",
+      "args": [0],
+      "kwargs": ["content"],
+      "sink_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "framework_catalog",
+      "rationale": "HTMLResponse emits its body as text/html with no escaping; attacker text in the body is markup."
+    }
+  ]
+}
