@@ -19,7 +19,7 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
 ```
 /audit <target_path> [--strategy <name>] [--budget <N>] [--scope <dir>] [--out <dir>]
        [--pin <file:function>] [--scope-floor | --no-scope-floor] [--pre-scan]
-       [--codeql-db <path>] [--max-cost <USD>] [--deepen-reserve <fraction>] [--max-time <seconds>]
+       [--codeql-db <path>] [--max-cost <USD>] [--forecast] [--deepen-reserve <fraction>] [--max-time <seconds>]
        [--review-passes <N>] [--max-workers <N>] [--subsystem-depth <N>] [--batch-sloc-threshold <N>]
        [--include-kinds <list>] [--max-propagation-depth <N>] [--adversarial] [--edges]
        [--no-verdict-reuse] [--schedule {cost,priority}] [--prior-journal <run-dir>]
@@ -40,6 +40,7 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
 - `--out <dir>` — output directory (default: resolved by lifecycle)
 - `--codeql-db <path>` — CodeQL database for query dispatch and pre-sweep (repeatable — one per language for multi-language targets; per-function dispatch routes by the file's language)
 - `--max-cost <USD>` — stop after spending this many dollars on LLM calls. Also accepted by `resume` for a single segment (overrides the original cap; booked spend from prior segments still counts against it; `0` removes the cap)
+- `--forecast` — print the deepen-aware pre-spend cost forecast band (low/central/high USD with its band drivers, from the gap-queue census plus journal priors) and exit at $0 LLM spend without reviewing anything. Uncapped runs (no `--max-cost`) print the same band informationally at run start — never a gate
 - `--deepen-reserve <fraction>` — slice of `--max-cost` held back for the deepen phase so announced re-reviews can execute (default 0.15; 0 disables)
 - `--max-time <seconds>` — stop after this many wall-clock seconds
 - `--review-passes <N>` — independent review passes per function for self-consistency (default: 1)
@@ -108,7 +109,7 @@ If the operator passed `--scope`, still map the full target (the map covers the 
 libexec/raptor-audit run "$TARGET_PATH" --out "$OUTPUT_DIR"
 ```
 
-Pass through any operator flags (`--strategy`, `--budget`, `--scope`, `--pin`, `--scope-floor`, `--no-scope-floor`, `--pre-scan`, `--annotations-dir`, `--no-validate`, `--model`, `--adversarial`, `--edges`, `--max-propagation-depth`, `--codeql-db`, `--max-cost`, `--deepen-reserve`, `--max-time`, `--review-passes`, `--max-workers`, `--subsystem-depth`, `--batch-sloc-threshold`, `--include-kinds`, `--no-verdict-reuse`, `--schedule`, `--prior-journal`, `--prior-claims`, `--hypothesis-seeds`, `--seed-rereview`, `--dynamic`, `--no-dynamic`, `--binary`, `--binary-auto`, `--no-binary-oracle`, `--no-vendored-triage`).
+Pass through any operator flags (`--strategy`, `--budget`, `--scope`, `--pin`, `--scope-floor`, `--no-scope-floor`, `--pre-scan`, `--annotations-dir`, `--no-validate`, `--model`, `--adversarial`, `--edges`, `--max-propagation-depth`, `--codeql-db`, `--max-cost`, `--forecast`, `--deepen-reserve`, `--max-time`, `--review-passes`, `--max-workers`, `--subsystem-depth`, `--batch-sloc-threshold`, `--include-kinds`, `--no-verdict-reuse`, `--schedule`, `--prior-journal`, `--prior-claims`, `--hypothesis-seeds`, `--seed-rereview`, `--dynamic`, `--no-dynamic`, `--binary`, `--binary-auto`, `--no-binary-oracle`, `--no-vendored-triage`).
 
 The orchestrator handles everything from here: gap computation, context assembly, LLM review, tool chain dispatch, Joern background build, sweep validation, constraint propagation, Mode 2 checker synthesis, /validate post-pass, report generation, and lifecycle completion.
 

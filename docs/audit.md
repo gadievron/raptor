@@ -49,6 +49,7 @@ full flag table.
 | `--out <dir>` | Output directory |
 | `--codeql-db <path>` | CodeQL database for query dispatch and pre-sweep (repeatable — one per language; dispatch routes by file language) |
 | `--max-cost <USD>` | Stop after spending this many dollars on LLM calls. Also accepted by `resume` for a single segment (overrides the original cap; booked spend from prior segments still counts against it; `0` removes the cap) |
+| `--forecast` | Print the deepen-aware pre-spend cost forecast band and exit at $0 LLM spend — see [Cost forecasting](#cost-forecasting) |
 | `--deepen-reserve <fraction>` | Slice of `--max-cost` held back for the deepen phase so announced re-reviews can execute (default 0.15; 0 disables) |
 | `--max-time <seconds>` | Wall-clock time limit |
 | `--no-supervisor-bound` | Do not default a wall budget under a capped Claude subagent shell (see [Running long audits](#running-long-audits)) |
@@ -353,6 +354,47 @@ documentation.  Malformed packs are skipped with a warning -- checkers
 then run on seeds + learned vocabulary alone.
 
 
+## Cost forecasting
+
+`--forecast` prints a deepen-aware pre-spend cost band and exits at
+$0 LLM spend — no review, no model calls, not a run.  The same band
+prints informationally at the start of every uncapped run (no
+`--max-cost`) before the review loop commits.  Informational only:
+nothing about the forecast gates or caps anything — `--max-cost` is
+the enforcement surface.
+
+```bash
+libexec/raptor-audit run /path/to/code --out out/myrun --forecast
+```
+
+The forecast is a **band** (low/central/high), never a point, built
+from three phases:
+
+- **review** — first-pass reviews, per-item from the gap queue's SLOC
+  census (narrow band);
+- **deepen** — the follow-up machinery (`re_review` + `refinement`
+  ledger phases): a first-pass `suspicious` verdict spawns refinement
+  rounds, the deepen pass, and iterative caller re-review, so this
+  phase rides the queue's **predicted suspicious density**.  With
+  journal priors (a prior run on the project), the density comes from
+  per-function and per-file prior verdict rates; cold runs use a
+  measured corpus default with a wide band.  Prior suspicious/finding
+  functions outside the queue count as seeded re-review mass.  This
+  phase can be several times the first-pass cost on a
+  suspicious-dense queue — pricing first-pass economics only is the
+  miss the forecast exists to close;
+- **support** — triage, study, IRIS, checker synthesis, glances,
+  summaries, as a stable fraction of the subtotal.
+
+Each printed band names its drivers (density source and coverage,
+deepen-depth spread, seeded mass, model overrides).  At run
+completion the forecast is paired with the actual `cost-breakdown.json`
+ledger: the comparison lands in `audit-report.json`
+(`forecast_vs_actual`), on the console, and as an appended record in
+`forecast-calibration.jsonl` (run dir, plus the project dir for
+project runs) — the re-fit food for the seeded coefficients in
+`core/audit/forecast.py`.
+
 ## Running long audits
 
 Long audit runs can outlive the environment that launched them.  The
@@ -580,6 +622,8 @@ Query audit state across all four layers:
 | `fuzz-dict.json` / `fuzz.dict` | Fuzz handoff: dictionary tokens mined from constants, parse-shape literals, and dispatch keys; `fuzz.dict` is AFL format and is auto-discovered by [/fuzz](fuzzing.md#dictionary-auto-discovery) |
 | `cost-breakdown.json` | Per-phase cost ledger reconciliation (completed + failed-attempt + unattributed spend always sum to the authoritative total; the pre-loop summary pass books as the `summary` phase) |
 | `llm-telemetry.jsonl` | Per-call LLM telemetry |
+| `forecast.json` | Pre-spend cost forecast band (`pre_run` for uncapped runs, `forecast_only` for `--forecast` exits) — see [Cost forecasting](#cost-forecasting) |
+| `forecast-calibration.jsonl` | Forecast-vs-actual record appended at run completion (also appended at the project level for project runs) |
 | `promotion-alarms.jsonl` | Promotion-without-tool-evidence alarms — a `finding` that reached the journal or export without qualifying tool evidence. Empty on every legitimate run; any record means the mechanical-verdict gate was bypassed (possible injection or policy bug). The gate also enforces: a violating `finding` is demoted to `suspicious` before it ships, and the record is the alarm trail |
 | `audit-report.json` | Summary report |
 
