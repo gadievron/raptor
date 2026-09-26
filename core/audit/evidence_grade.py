@@ -47,6 +47,7 @@ class EvidenceSource(str, enum.Enum):
     COMPILATION = "mechanical:compilation"
     COMPILER_ANALYZER = "mechanical:compiler_analyzer"
     PRECONDITION = "mechanical:precondition"
+    DISASM = "mechanical:disasm"
 
 
 class Confidence(str, enum.Enum):
@@ -84,6 +85,10 @@ _SOURCE_CONFIDENCE: dict[EvidenceSource, Confidence] = {
     # never HIGH, so precondition-promoted findings grade tool-backed
     # rather than confirmed.
     EvidenceSource.PRECONDITION: Confidence.MEDIUM,
+    # Disasm cross-check receipts are corroboration-only by contract
+    # (the channel never promotes): LOW keeps the chain entry from
+    # lifting the exported confidence of the verdict it rode in on.
+    EvidenceSource.DISASM: Confidence.LOW,
 }
 
 VALID_EVIDENCE_TOOLS: frozenset = frozenset({

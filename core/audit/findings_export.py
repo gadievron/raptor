@@ -17,8 +17,10 @@ from core.json import save_json
 
 from .evidence_grade import (
     Confidence,
+    EvidenceSource,
     GradedEvidence,
     finding_confidence,
+    grade_evidence,
     grade_evidence_record,
     grade_review_result,
     is_tool_evidence,
@@ -191,6 +193,27 @@ def build_graded_finding(
         confidence = finding_confidence(chain)
     else:
         confidence = finding_confidence(review_items)
+
+    # Disasm cross-check receipt — read from the pipeline-controlled
+    # outcome ATTRIBUTE, never review_result: parsed model JSON lands
+    # there, and a fabricated key would mint a mechanical-looking
+    # chain entry (the typestate lesson in grade_review_result).
+    # Appended AFTER the confidence computation above and graded LOW:
+    # the channel is corroboration-only by contract, so its receipt
+    # is chain context and must never lift the exported confidence
+    # (finding_confidence upgrades LOW LLM entries when any
+    # mechanical:* entry is present).
+    dx = getattr(outcome, "disasm_xcheck", None)
+    if isinstance(dx, dict) and dx.get("engine") == "disasm":
+        detail = str(dx.get("excerpt") or "")[:600] or None
+        chain.append(grade_evidence(
+            EvidenceSource.DISASM,
+            (
+                f"disasm cross-check {str(dx.get('outcome'))[:24]}: "
+                f"{str(dx.get('reason'))[:150]}"
+            ),
+            detail=detail,
+        ))
 
     file_val = getattr(outcome, "file", "")
     func_val = getattr(outcome, "function", "")
