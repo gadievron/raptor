@@ -1236,6 +1236,13 @@ class TierCounters:
     # language is diagnosable at a glance.
     skipped_substrate: int = 0
     substrate_skip_languages: dict[str, int] = field(default_factory=dict)
+    # Items the tier examined and declined WITHOUT dispatching (claim
+    # outside its trigger taxonomy). Distinct from ``skipped`` (wanted
+    # to look, could not): a tier whose every eligible item lands here
+    # is engaged-but-not-matching, which must be diagnosable against
+    # a tier that never saw an eligible item at all — three binary
+    # audits shipped indistinguishable all-zero disasm_xcheck stanzas.
+    no_trigger: int = 0
     wall_time_s: float = 0.0
     cpg_build_s: float = 0.0
 

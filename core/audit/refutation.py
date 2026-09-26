@@ -234,12 +234,21 @@ def _refute_by_disasm_xcheck(
         claim,
         function_name=getattr(outcome, "function", "") or "",
     )
-    if trigger is None:
-        # Outside the taxonomy: the tier is never invoked — no
-        # subprocess, no journal row, no counter.
-        return None
 
     from .diagnostics import increment_tier_dict
+
+    if trigger is None:
+        # Outside the taxonomy: the tier is never invoked — no
+        # subprocess, no journal row. The decline is still COUNTED
+        # (no_trigger), so a binary run whose claims all speak an
+        # unmatched vocabulary shows an engaged-but-not-matching
+        # tier instead of an all-zero stanza indistinguishable from
+        # "never ran".
+        if tier_counters is not None:
+            increment_tier_dict(
+                tier_counters, "disasm_xcheck", "no_trigger",
+            )
+        return None
 
     def _tally(outcome_str: str) -> None:
         if tier_counters is None:

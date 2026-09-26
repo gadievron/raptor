@@ -1623,6 +1623,12 @@ def _process_glance_batch_inner(
                         domain_model=getattr(shared, "domain_model", None),
                         checklist=shared.checklist,
                         config=config,
+                        # Glance-batch refutations tally into the same
+                        # run-level tier counters as the main review
+                        # loop — omitting this left the disasm_xcheck
+                        # stanza all-zero on runs whose only binary
+                        # verdicts came through the glance batch.
+                        tier_counters=result.tier_counters,
                     )
                     if rv is not None:
                         from .orchestrator import append_audit_log

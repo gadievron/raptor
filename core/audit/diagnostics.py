@@ -197,7 +197,8 @@ def format_tier_diagnostics(
     lines = ["Mechanical tier effectiveness:"]
     for name, tc in tier_counters.items():
         total = tc.confirmed + tc.refuted + tc.inconclusive + tc.errors
-        if total == 0 and tc.skipped == 0:
+        if (total == 0 and tc.skipped == 0
+                and getattr(tc, "no_trigger", 0) == 0):
             continue
         parts = []
         if tc.confirmed:
@@ -210,6 +211,8 @@ def format_tier_diagnostics(
             parts.append(f"{tc.skipped} skipped")
         if tc.errors:
             parts.append(f"{tc.errors} errors")
+        if getattr(tc, "no_trigger", 0):
+            parts.append(f"{tc.no_trigger} no-trigger")
         if tc.wall_time_s > 0:
             wall_str = f"{tc.wall_time_s:.1f}s"
             if tc.cpg_build_s > 0:
@@ -273,6 +276,12 @@ def write_tier_diagnostics(
             langs = getattr(tc, "substrate_skip_languages", None)
             if langs:
                 data[name]["substrate_skip_languages"] = dict(langs)
+        # Taxonomy declines (examined, no trigger matched): written
+        # only when nonzero, same extra-keys contract as above. An
+        # all-zero tier stanza plus a nonzero no_trigger reads as
+        # "engaged, vocabulary never matched" instead of "never ran".
+        if getattr(tc, "no_trigger", 0):
+            data[name]["no_trigger"] = tc.no_trigger
     # Scoped-run slot-allocation report (see gaps.truncate_gaps_to_
     # budget): surfaced here so an operator reading tier diagnostics
     # sees which in-scope files got zero review slots.

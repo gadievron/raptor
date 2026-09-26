@@ -2162,6 +2162,69 @@ class TestRefutationGateWiring:
         assert (tc.refuted, tc.confirmed, tc.inconclusive,
                 tc.skipped, tc.errors) == (0, 0, 0, 0, 0)
 
+    def test_taxonomy_decline_tallies_no_trigger(self, monkeypatch):
+        # The decline is counted on the REAL TierCounters shape (the
+        # dataclass carries the field), while the channel itself stays
+        # un-invoked: no subprocess, no journal row.
+        from core.audit.orchestrator import _make_tier_counters
+        from core.audit.refutation import refute_hypothesis
+
+        def _boom(*a, **k):
+            raise AssertionError("channel invoked outside taxonomy")
+
+        monkeypatch.setattr(dx, "run_disasm_xcheck", _boom)
+        counters = _make_tier_counters()
+        assert refute_hypothesis(
+            _Outcome(
+                hypothesis="buffer overflow when copying attacker "
+                           "data into a stack buffer",
+            ),
+            domain_model=None, checklist=None,
+            config=_Config(), tier_counters=counters,
+        ) is None
+        tc = counters["disasm_xcheck"]
+        assert tc.no_trigger == 1
+        assert (tc.refuted, tc.confirmed, tc.inconclusive,
+                tc.skipped, tc.errors) == (0, 0, 0, 0, 0)
+
+    def test_source_items_never_tally_no_trigger(self):
+        # The other direction: an item the gate never dispatches for
+        # (source-sourced) is not an examined-and-declined claim.
+        from core.audit.orchestrator import _make_tier_counters
+        from core.audit.refutation import refute_hypothesis
+
+        counters = _make_tier_counters()
+        refute_hypothesis(
+            _Outcome(file="src/parser.c"),
+            domain_model=None, checklist=None,
+            config=_Config(), tier_counters=counters,
+        )
+        assert counters["disasm_xcheck"].no_trigger == 0
+
+    def test_matched_trigger_does_not_tally_no_trigger(
+        self, monkeypatch,
+    ):
+        from core.audit.orchestrator import _make_tier_counters
+        from core.audit.refutation import refute_hypothesis
+
+        monkeypatch.setattr(
+            dx, "run_disasm_xcheck",
+            lambda *a, **k: dx.DisasmXCheckResult(
+                outcome="inconclusive",
+                trigger=dx.TRIGGER_DROPPED_ARGUMENT,
+                reason=dx.REASON_BINARY_UNRESOLVED,
+                rule_id=dx.RULE_DROPPED_ARGUMENT,
+            ),
+        )
+        counters = _make_tier_counters()
+        refute_hypothesis(
+            _Outcome(), domain_model=None, checklist=None,
+            config=_Config(), tier_counters=counters,
+        )
+        tc = counters["disasm_xcheck"]
+        assert tc.no_trigger == 0
+        assert tc.inconclusive == 1
+
     def test_refuted_demotes_with_receipt_and_journal_row(
         self, fake_binary, monkeypatch, tmp_path,
     ):
