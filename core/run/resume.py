@@ -462,8 +462,14 @@ def max_of_evidence(
     for value, source_note in evidence:
         clamped = spend_value(value)
         v = 0.0 if clamped is None else clamped
-        if v > booked or not note:
+        if v > booked:
             booked = v
+            note = source_note
+        elif v == booked and not note:
+            # Display-only backfill: an equal-value later source may
+            # lend its note, but a smaller one must never rebind the
+            # booked figure (a noteless maximal source once lost its
+            # value to the next entry).
             note = source_note
     return booked, note
 

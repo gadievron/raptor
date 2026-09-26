@@ -503,6 +503,19 @@ class TestSpendEvidence(unittest.TestCase):
     def test_max_of_evidence_empty_books_zero(self):
         self.assertEqual(max_of_evidence([]), (0.0, ""))
 
+    def test_max_of_evidence_noteless_max_keeps_its_value(self):
+        # A maximal source carrying an empty note must keep the
+        # booked VALUE — a later, smaller source's note used to
+        # rebind both, under-booking the run's spend.
+        booked, note = max_of_evidence([(5.0, ""), (3.0, "b")])
+        self.assertEqual(booked, 5.0)
+
+    def test_max_of_evidence_equal_value_backfills_empty_note(self):
+        # Same value, later note: the note (display-only) may be
+        # backfilled, the booked figure is unchanged.
+        booked, note = max_of_evidence([(0.0, ""), (0.0, "b")])
+        self.assertEqual((booked, note), (0.0, "b"))
+
     def test_spend_floor_monotonic(self):
         with TemporaryDirectory() as d:
             out = Path(d)
