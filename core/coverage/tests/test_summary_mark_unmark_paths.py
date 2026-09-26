@@ -188,6 +188,72 @@ class TestMarkUnmarkLocking:
         assert (run / "coverage-llm.json.lock").exists()
 
 
+class TestMarkReplacesUnverifiedRow:
+    def test_operator_mark_restamps_existing_unstamped_row(
+        self, tmp_path,
+    ):
+        """An operator --mark naming a pair that already has an
+        UNVERIFIED row (planted in the writable record, or pre-MAC
+        legacy) must replace and re-stamp that row — the old code
+        silently no-oped, leaving the operator believing the mark
+        took while the store gate kept refusing the row. Only the
+        named pair is touched: the planted row's own fields are
+        discarded (re-minting around them would launder them)."""
+        from core.coverage import journal_mac
+
+        _proj, run = _project(tmp_path)
+        planted = {"file": "src/auth.c", "function": "check_pw",
+                   "status": "clean", "planted_key": "x"}
+        (run / "coverage-llm.json").write_text(json.dumps({
+            "tool": "llm", "functions_analysed": [planted]}))
+        res = _run(str(run), "--mark", "src/auth.c:check_pw",
+                   operator=True)
+        assert res.returncode == 0, res.stderr
+        assert "Marked 1 item" in res.stdout
+        record = json.loads((run / "coverage-llm.json").read_text())
+        rows = record["functions_analysed"]
+        assert len(rows) == 1
+        assert journal_mac.coverage_row_provenance(
+            rows[0], "llm") == journal_mac.ROW_VERIFIED
+        assert "planted_key" not in rows[0]
+
+    def test_operator_mark_never_restamps_other_rows(self, tmp_path):
+        """Marking one function leaves a planted row for a DIFFERENT
+        function unstamped — no blanket record re-stamp."""
+        from core.coverage import journal_mac
+
+        _proj, run = _project(tmp_path)
+        planted = {"file": "src/util.c", "function": "helper"}
+        (run / "coverage-llm.json").write_text(json.dumps({
+            "tool": "llm", "functions_analysed": [planted]}))
+        res = _run(str(run), "--mark", "src/auth.c:check_pw",
+                   operator=True)
+        assert res.returncode == 0, res.stderr
+        record = json.loads((run / "coverage-llm.json").read_text())
+        by_func = {fa["function"]: fa
+                   for fa in record["functions_analysed"]}
+        assert journal_mac.coverage_row_provenance(
+            by_func["helper"], "llm") == journal_mac.ROW_UNSTAMPED
+        assert journal_mac.coverage_row_provenance(
+            by_func["check_pw"], "llm") == journal_mac.ROW_VERIFIED
+
+    def test_operator_remark_of_verified_row_is_a_noop(self, tmp_path):
+        """A verified row re-marked stays byte-identical — no token
+        churn (re-minting is only for rows that do not verify)."""
+        _proj, run = _project(tmp_path)
+        res = _run(str(run), "--mark", "src/auth.c:check_pw",
+                   operator=True)
+        assert res.returncode == 0, res.stderr
+        first = json.loads((run / "coverage-llm.json").read_text())
+        res = _run(str(run), "--mark", "src/auth.c:check_pw",
+                   operator=True)
+        assert res.returncode == 0, res.stderr
+        assert "Marked 0 item" in res.stdout
+        second = json.loads((run / "coverage-llm.json").read_text())
+        assert (second["functions_analysed"]
+                == first["functions_analysed"])
+
+
 class TestMarkRowProvenance:
     """Journal rows stamp who actually minted the assertion.
 
@@ -220,8 +286,9 @@ class TestMarkRowProvenance:
         assert not (proj / "review-journal-index.json").exists()
         assert not (run / "coverage-llm.json").exists()
         rec = json.loads((run / "coverage-understand.json").read_text())
-        assert rec["functions_analysed"] == [
-            {"file": "src/auth.c", "function": "check_pw"}]
+        assert [(fa["file"], fa["function"])
+                for fa in rec["functions_analysed"]] == [
+            ("src/auth.c", "check_pw")]
 
     def test_non_tty_mark_drops_statuses_with_notice(self, tmp_path):
         proj, run = _project(tmp_path)

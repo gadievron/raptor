@@ -47,7 +47,17 @@ def test_map_grade_mark_records_understand_not_llm(tmp_path):
     assert "examined (map-grade)" in r.stdout
     rec = _record(run, "understand")
     assert rec is not None and rec["tool"] == "understand"
-    assert {"file": "a.c", "function": "f1"} in rec["functions_analysed"]
+    assert ("a.c", "f1") in {(fa["file"], fa["function"])
+                             for fa in rec["functions_analysed"]}
+    # The row is stamped under its OWN tool label only: a map-grade
+    # row replayed into a review-grade llm record must not verify
+    # (tool-bound domain — see core.coverage.journal_mac).
+    from core.coverage import journal_mac
+    row = rec["functions_analysed"][0]
+    assert journal_mac.coverage_row_provenance(
+        row, "understand") == journal_mac.ROW_VERIFIED
+    assert journal_mac.coverage_row_provenance(
+        row, "llm") == journal_mac.ROW_TAMPERED
     # No review-grade record and no journaled review assertion.
     assert _record(run, "llm") is None
     assert not (run / "review-journal.jsonl").exists()
@@ -107,7 +117,8 @@ def test_map_grade_mark_file_ignores_statuses(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "statuses ignored" in r.stderr
     rec = _record(run, "understand")
-    assert {"file": "a.c", "function": "f1"} in rec["functions_analysed"]
+    assert ("a.c", "f1") in {(fa["file"], fa["function"])
+                             for fa in rec["functions_analysed"]}
     assert not (run / "review-journal.jsonl").exists()
 
 
@@ -130,5 +141,6 @@ def test_map_grade_does_not_leak_into_review_unmark(tmp_path):
     assert r.returncode == 0, r.stderr
     assert _record(run, "llm")["functions_analysed"] == []
     # The map-grade examination evidence survives untouched.
-    assert {"file": "a.c", "function": "f1"} in \
-        _record(run, "understand")["functions_analysed"]
+    assert ("a.c", "f1") in {
+        (fa["file"], fa["function"])
+        for fa in _record(run, "understand")["functions_analysed"]}

@@ -20,6 +20,14 @@ def _run(*args, marker=True, operator=False):
     return run_cli(*args, operator=operator, trusted=marker)
 
 
+def _pairs(rec):
+    """(file, function) pairs of a record's functions_analysed rows —
+    rows also carry a creation-time integrity stamp, which the
+    provenance tests pin separately."""
+    return [(fa["file"], fa["function"])
+            for fa in rec["functions_analysed"]]
+
+
 def _run_dir(tmp_path):
     d = tmp_path / "scan-1"
     d.mkdir()
@@ -152,7 +160,13 @@ def test_mark_skips_unmatched_and_reports_count(tmp_path):
     assert "Marked 1 item as reviewed (1 unmatched)" in res.stdout
     assert "a.c:ghost" in res.stderr
     rec = json.loads((run / "coverage-llm.json").read_text())
-    assert rec["functions_analysed"] == [{"file": "a.c", "function": "f1"}]
+    assert _pairs(rec) == [("a.c", "f1")]
+    # Operator marks are stamped at creation, tool-bound: the row must
+    # verify under the record's own tool label (review-suppression
+    # authority in the gap fold's covered set).
+    from core.coverage import journal_mac
+    assert journal_mac.coverage_row_provenance(
+        rec["functions_analysed"][0], "llm") == journal_mac.ROW_VERIFIED
 
 
 def test_mark_file_skips_unmatched_and_reports_count(tmp_path):
@@ -203,7 +217,7 @@ def test_mark_with_zero_key_inventory_stays_unvalidated(tmp_path):
     assert "Marked 1 item as reviewed" in res.stdout
     assert "unmatched" not in res.stdout
     rec = json.loads((d / "coverage-llm.json").read_text())
-    assert rec["functions_analysed"] == [{"file": "a.c", "function": "f1"}]
+    assert _pairs(rec) == [("a.c", "f1")]
 
 
 def test_mark_items_key_supersedes_legacy_functions(tmp_path):
@@ -224,7 +238,7 @@ def test_mark_items_key_supersedes_legacy_functions(tmp_path):
     assert "Marked 1 item as reviewed (1 unmatched)" in res.stdout
     assert "a.c:legacy_f" in res.stderr
     rec = json.loads((d / "coverage-llm.json").read_text())
-    assert rec["functions_analysed"] == [{"file": "b.c", "function": "g1"}]
+    assert _pairs(rec) == [("b.c", "g1")]
 
 
 def test_mark_without_project_context_stays_record_only(tmp_path):
@@ -235,7 +249,7 @@ def test_mark_without_project_context_stays_record_only(tmp_path):
     assert "journaled" not in res.stdout
     assert not (tmp_path / "review-journal-index.json").exists()
     rec = json.loads((d / "coverage-llm.json").read_text())
-    assert rec["functions_analysed"] == [{"file": "a.c", "function": "f1"}]
+    assert _pairs(rec) == [("a.c", "f1")]
 
 
 def test_journaled_mark_suppresses_audit_gap(tmp_path):

@@ -547,10 +547,12 @@ def _cmd_mark(mark_targets: list, run_dir: Path | None,
                 "functions_analysed": [],
             }
 
-        existing_funcs = {
-            (fa.get("file"), fa.get("function"))
+        existing_rows = {
+            (fa.get("file"), fa.get("function")): fa
             for fa in llm_record.get("functions_analysed", [])
+            if isinstance(fa, dict)
         }
+        existing_funcs = set(existing_rows)
 
         # Validate marks against the inventory: a mark naming a nonexistent
         # (file, item) pair must not record phantom review credit — the store
@@ -583,12 +585,44 @@ def _cmd_mark(mark_targets: list, run_dir: Path | None,
                 unmatched.append((file_path, func_name))
                 continue
             if (file_path, func_name) not in existing_funcs:
-                llm_record.setdefault("functions_analysed", []).append(
-                    {"file": file_path, "function": func_name}
-                )
+                # Stamp at creation, tool-bound (map-grade marks mint
+                # under "understand" and never verify as review
+                # credit). Unrelated rows already in the record are
+                # copied verbatim above — this RMW never blanket
+                # re-stamps them, so a row planted in the on-disk
+                # record stays unstamped through marks of OTHER
+                # functions.
+                from core.coverage import journal_mac
+                new_row = {"file": file_path, "function": func_name}
+                token = journal_mac.mint_coverage_row(new_row, tool_label)
+                if token:
+                    new_row[journal_mac.TOKEN_KEY] = token
+                llm_record.setdefault("functions_analysed", []).append(new_row)
                 existing_funcs.add((file_path, func_name))
                 marked.append((file_path, func_name))
                 added += 1
+            else:
+                # The pair already has a row. If that row verifies,
+                # the mark is a genuine no-op. If it does NOT verify
+                # (planted in the writable record, or pre-MAC legacy),
+                # the operator is asserting the review NOW — replace
+                # the row's fields with the operator's and re-mint,
+                # instead of silently no-oping and leaving the operator
+                # believing their mark took effect while the row stays
+                # unstamped (refused by the store gate). Only the
+                # exact (file, function) the operator named is touched.
+                from core.coverage import journal_mac
+                row = existing_rows[(file_path, func_name)]
+                if (journal_mac.coverage_row_provenance(row, tool_label)
+                        != journal_mac.ROW_VERIFIED):
+                    fresh = {"file": file_path, "function": func_name}
+                    token = journal_mac.mint_coverage_row(fresh, tool_label)
+                    if token:
+                        fresh[journal_mac.TOKEN_KEY] = token
+                    row.clear()
+                    row.update(fresh)
+                    marked.append((file_path, func_name))
+                    added += 1
         for file_path, func_name in unmatched:
             _tprint(f"WARNING: no checklist item matches "
                     f"{file_path}:{func_name} — not marked", file=sys.stderr)
