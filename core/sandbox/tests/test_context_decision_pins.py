@@ -427,10 +427,10 @@ def test_private_scratch_stamped_for_context_level_scratch(
 
 def test_nproc_cap_counts_same_uid_task_threads(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The RLIMIT_NPROC ceiling is host usage + budget, where usage is
-    the same-UID TASK (thread) count summed over numeric /proc
-    entries only — non-PID entries (self, sys, ...) stat to this UID
-    and would poison the count."""
+    """The RLIMIT_NPROC ceiling is host usage + budget + fluctuation
+    headroom, where usage is the same-UID TASK (thread) count summed
+    over numeric /proc entries only — non-PID entries (self, sys, ...)
+    stat to this UID and would poison the count."""
     import os as _os
 
     real_listdir = _os.listdir
@@ -459,7 +459,359 @@ def test_nproc_cap_counts_same_uid_task_threads(
     caps = [kw.get("host_nproc_cap") for kw in drv.preexec_calls
             if "host_nproc_cap" in kw]
     assert caps, "preexec build never received host_nproc_cap"
-    assert caps[0] == my_threads + 100
+    assert caps[0] == my_threads + 100 + context._NPROC_CLAMP_HEADROOM
+
+
+def test_nproc_clamp_formula_is_exact_and_headroom_bounded(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two-direction pin on the clamp derivation.
+
+    Direction 1 (headroom present): the ceiling must sit ABOVE
+    snapshot + budget by exactly the headroom — drop it and ordinary
+    same-uid thread churn strands the child at the boundary (the
+    EAGAIN race this margin exists for). Exact equality also catches
+    the other direction at the formula level: any inflation (doubling,
+    max()-ing against a previous value) hands a fork bomb a bigger
+    allowance than the documented formula.
+
+    Direction 2 (headroom bounded): the margin must stay a small
+    fraction of the configured budget or the clamp stops binding —
+    the containment property is snapshot + budget + a SMALL constant,
+    not snapshot + 2x budget.
+    """
+    monkeypatch.setattr(context, "_count_same_uid_tasks", lambda: 5000)
+    assert context._derive_host_nproc_cap(100) == (
+        5000 + 100 + context._NPROC_CLAMP_HEADROOM)
+    # No budget → no cap; unreadable /proc → no cap (never a made-up
+    # ceiling).
+    assert context._derive_host_nproc_cap(0) is None
+    monkeypatch.setattr(context, "_count_same_uid_tasks", lambda: None)
+    assert context._derive_host_nproc_cap(100) is None
+    # Bounds: big enough to absorb transient churn, small enough that
+    # the default budget (preexec._DEFAULT_LIMITS, jittered 1024±128)
+    # still dominates the ceiling's growth allowance.
+    from core.sandbox.preexec import _DEFAULT_LIMITS
+    assert 64 <= context._NPROC_CLAMP_HEADROOM
+    assert context._NPROC_CLAMP_HEADROOM <= _DEFAULT_LIMITS["nproc"] // 3
+
+
+def test_nproc_pressure_evidence_requires_finite_limit_and_proximity(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pressure attribution is self-measured (rlimit + /proc) and
+    fires only when a finite RLIMIT_NPROC binds AND the same-uid task
+    count sits within one headroom of it — no finite limit or a count
+    comfortably below the ceiling must never attribute to pressure."""
+    import resource as _resource
+
+    real_getrlimit = _resource.getrlimit
+
+    def fake_getrlimit(which: int) -> tuple[int, int]:
+        if which == _resource.RLIMIT_NPROC:
+            return (1100, 1100)
+        return real_getrlimit(which)
+
+    monkeypatch.setattr(context.resource, "getrlimit", fake_getrlimit)
+    monkeypatch.setattr(context, "_count_same_uid_tasks", lambda: 1050)
+    evidence = context._nproc_pressure_evidence()
+    assert evidence is not None
+    assert "1050" in evidence and "1100" in evidence
+    # Count far below the ceiling → not pressure.
+    monkeypatch.setattr(
+        context, "_count_same_uid_tasks",
+        lambda: 1100 - context._NPROC_CLAMP_HEADROOM - 1)
+    assert context._nproc_pressure_evidence() is None
+    # No finite limit → never pressure, whatever the count.
+    monkeypatch.setattr(
+        context.resource, "getrlimit",
+        lambda which: (_resource.RLIM_INFINITY, _resource.RLIM_INFINITY))
+    monkeypatch.setattr(context, "_count_same_uid_tasks", lambda: 10**6)
+    assert context._nproc_pressure_evidence() is None
+
+
+def test_nproc_retry_decision_gates(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every gate of the one-retry decision, pinned directly.
+
+    The `already_retried` gate is the retry-once bound: even with
+    maximal pressure and a perfect EAGAIN shape it must return None —
+    a mutant that drops it turns sustained load into a retry storm
+    that amplifies the exhausted per-uid ceiling."""
+    eagain = "BlockingIOError: [Errno 11] Resource temporarily unavailable"
+    monkeypatch.setattr(context, "_nproc_pressure_evidence",
+                        lambda: "same-uid task count 9999 vs "
+                                "RLIMIT_NPROC soft limit 10000")
+    # Retry-once bound outranks everything.
+    assert context._nproc_eagain_retry_decision(
+        ("X", eagain), already_retried=True) is None
+    # Eligible categories: the stages with fork sites under the
+    # inherited limit.
+    for cat in ("M", "X", "U"):
+        assert context._nproc_eagain_retry_decision(
+            (cat, eagain), already_retried=False) is not None
+    # Fail-closed categories never retry (no fork race to rescue).
+    for cat in ("P", "C", "F", "L", "S", "!"):
+        assert context._nproc_eagain_retry_decision(
+            (cat, eagain), already_retried=False) is None
+    # Clean status / non-EAGAIN shape never retry.
+    assert context._nproc_eagain_retry_decision(
+        None, already_retried=False) is None
+    assert context._nproc_eagain_retry_decision(
+        ("X", "exec: file not found"), already_retried=False) is None
+    # Shape without corroborating pressure never retries — the detail
+    # text can embed target-influenced substrings.
+    monkeypatch.setattr(context, "_nproc_pressure_evidence", lambda: None)
+    assert context._nproc_eagain_retry_decision(
+        ("X", eagain), already_retried=False) is None
+
+
+_EAGAIN_DETAIL = (
+    "BlockingIOError: [Errno 11] Resource temporarily unavailable")
+_PRESSURE = "same-uid task count 4999 vs RLIMIT_NPROC soft limit 5000"
+
+
+def _pressure_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                  statuses: list, *, pressure: bool,
+                  ) -> tuple[Any, _SpawnRecorder, _Driver]:
+    """_clean_run under a simulated (or absent) NPROC-pressure verdict,
+    with the memoisation cache and both degrade warn-once latches
+    fresh so warning assertions are meaningful."""
+    monkeypatch.setattr(context, "_nproc_pressure_evidence",
+                        lambda: _PRESSURE if pressure else None)
+    monkeypatch.setattr(state, "_speculative_failure_cache", {})
+    monkeypatch.setattr(state, "_mountless_backend_warned", False)
+    monkeypatch.setattr(state, "_nproc_pressure_degrade_warned", False)
+    return _clean_run(monkeypatch, tmp_path, statuses=statuses)
+
+
+def test_nproc_pressure_eagain_retries_same_lane_once_and_rescues(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        caplog: pytest.LogCaptureFixture) -> None:
+    """The stale-snapshot race, simulated: the spawn child dies EAGAIN
+    (same-uid count grew past the setup-time snapshot), live pressure
+    corroborates → ONE retry of the SAME mount lane rescues the run.
+    No mountless degrade, no capability warning, no cache poisoning —
+    and the retry persists NO mid-call snapshot: the derivation ran
+    exactly once (context entry); a retry-time resample would be
+    load-peak-biased for every later consumer (the no-namespace lanes
+    resample at dispatch instead, `_consumption_nproc_cap`)."""
+    derivations: list[int] = []
+    real_derive = context._derive_host_nproc_cap
+
+    def spying_derive(budget: int) -> "int | None":
+        derivations.append(budget)
+        return real_derive(budget)
+
+    monkeypatch.setattr(context, "_derive_host_nproc_cap", spying_derive)
+    with caplog.at_level("INFO"):
+        result, rec, _ = _pressure_run(
+            monkeypatch, tmp_path,
+            [("X", _EAGAIN_DETAIL)], pressure=True)
+    assert result.returncode == 0
+    # Mount attempt + same-lane retry — and NOT the mountless fallback.
+    assert [kw.get("skip_mount_ns") for kw in rec.calls] == [False, False]
+    # Context-entry derivation only — the retry itself neither needs
+    # the cap (spawn children fork under the inherited limit) nor
+    # persists a peak-biased resample.
+    assert len(derivations) == 1
+    # The transient failure is not memoised against the binary.
+    assert not state._speculative_failure_cache
+    # No misattributed capability warning; the honest INFO names
+    # pressure.
+    assert not any("bind-tree isolation unavailable" in r.getMessage()
+                   for r in caplog.records)
+    assert any("process-count pressure" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_nproc_eagain_without_pressure_keeps_existing_degrade(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        caplog: pytest.LogCaptureFixture) -> None:
+    """EAGAIN shape WITHOUT self-measured pressure (the shape is
+    target-influenceable text) must change nothing: no same-lane
+    retry, the existing mountless degrade with the existing
+    capability warning, and the cache memoises as before."""
+    with caplog.at_level("DEBUG"):
+        result, rec, _ = _pressure_run(
+            monkeypatch, tmp_path,
+            [("X", _EAGAIN_DETAIL)], pressure=False)
+    assert result.returncode == 0
+    assert [kw.get("skip_mount_ns") for kw in rec.calls] == [False, True]
+    warnings = [r.getMessage() for r in caplog.records
+                if "bind-tree isolation unavailable" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "process-count pressure" not in warnings[0]
+    resolved = shutil.which("/bin/true") or "/bin/true"
+    assert state._speculative_failure_cache.get(resolved) is True
+
+
+def test_genuine_policy_failure_never_hijacked_by_pressure(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        caplog: pytest.LogCaptureFixture) -> None:
+    """Live pressure with a NON-EAGAIN child failure is a genuine
+    bind-tree/policy problem that happens to occur on a loaded host:
+    no same-lane retry, and the warning keeps the original capability
+    text — pressure alone must never rewrite the attribution."""
+    with caplog.at_level("DEBUG"):
+        result, rec, _ = _pressure_run(
+            monkeypatch, tmp_path,
+            [("X", "exec: permission denied")], pressure=True)
+    assert result.returncode == 0
+    assert [kw.get("skip_mount_ns") for kw in rec.calls] == [False, True]
+    warnings = [r.getMessage() for r in caplog.records
+                if "bind-tree isolation unavailable" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "process-count pressure" not in warnings[0]
+
+
+def test_nproc_pressure_double_eagain_degrades_with_honest_warning(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        caplog: pytest.LogCaptureFixture) -> None:
+    """Retry-once bound + honest degrade, end to end: two EAGAIN
+    failures under pressure produce exactly mount → same-lane retry →
+    mountless fallback (a looping mutant would keep re-running the
+    mount lane instead of falling back), the warning names the actual
+    cause and explicitly rules out the policy reading, and the
+    transient failure still isn't memoised against the binary."""
+    with caplog.at_level("DEBUG"):
+        result, rec, _ = _pressure_run(
+            monkeypatch, tmp_path,
+            [("X", _EAGAIN_DETAIL), ("X", _EAGAIN_DETAIL)],
+            pressure=True)
+    assert result.returncode == 0
+    assert [kw.get("skip_mount_ns") for kw in rec.calls] == [
+        False, False, True]
+    pressure_warnings = [
+        r.getMessage() for r in caplog.records
+        if r.levelname == "WARNING"
+        and "process-count pressure" in r.getMessage()]
+    assert len(pressure_warnings) == 1
+    assert "RLIMIT_NPROC" in pressure_warnings[0]
+    assert "NOT a kernel capability or policy refusal" in (
+        pressure_warnings[0])
+    assert not any("bind-tree isolation unavailable" in r.getMessage()
+                   for r in caplog.records)
+    assert not state._speculative_failure_cache
+
+
+def test_nproc_pressure_u_category_retry_and_honest_terminal_cause(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The namespace-staging forks ('U') race the same inherited limit:
+    a pressure EAGAIN there gets the one same-lane retry (rescue →
+    genuine result), and when the retry also dies the terminal 'U'
+    failure names process-count pressure in its cause chain instead of
+    sending the operator after namespace capabilities."""
+    result, rec, _ = _pressure_run(
+        monkeypatch, tmp_path, [("U", _EAGAIN_DETAIL)], pressure=True)
+    assert result.returncode == 0
+    assert [kw.get("skip_mount_ns") for kw in rec.calls] == [False, False]
+    # Floored call, retry fails too → the raised chain carries the
+    # honest cause (idiom of
+    # test_setup_status_instructions_follow_the_failed_layer).
+    monkeypatch.setattr(context, "_nproc_pressure_evidence",
+                        lambda: _PRESSURE)
+    rec2 = _SpawnRecorder([("U", _EAGAIN_DETAIL), ("U", _EAGAIN_DETAIL)])
+    _Driver(monkeypatch, rec2)
+    with pytest.raises(SandboxSetupError) as exc:
+        with context.sandbox(target=str(tmp_path), output=str(tmp_path)) \
+                as run:
+            run(["/bin/true"], capture_output=True, timeout=60,
+                require_fresh_procfs=True)
+    chain: list[BaseException] = []
+    node: BaseException | None = exc.value
+    while node is not None:
+        chain.append(node)
+        node = node.__cause__
+    assert any("process-count pressure" in str(n) for n in chain), (
+        f"no honest pressure cause in {chain!r}")
+
+
+def test_retry_policy_failure_restores_original_attribution(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        caplog: pytest.LogCaptureFixture) -> None:
+    """Retry-side twin of the genuine-policy test above: the FIRST
+    attempt is a real pressure EAGAIN, the retry then fails with a
+    non-EAGAIN policy detail. The first attempt's pressure verdict
+    must not describe the adopted terminal failure — the degrade
+    keeps the original capability warning and the cache memoises the
+    binary as before (a pressure-attributed terminal would skip
+    both)."""
+    with caplog.at_level("DEBUG"):
+        result, rec, _ = _pressure_run(
+            monkeypatch, tmp_path,
+            [("X", _EAGAIN_DETAIL), ("X", "exec: permission denied")],
+            pressure=True)
+    assert result.returncode == 0
+    assert [kw.get("skip_mount_ns") for kw in rec.calls] == [
+        False, False, True]
+    warnings = [r.getMessage() for r in caplog.records
+                if "bind-tree isolation unavailable" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "process-count pressure" not in warnings[0]
+    assert not any(
+        "NOT a kernel capability or policy refusal" in r.getMessage()
+        for r in caplog.records)
+    resolved = shutil.which("/bin/true") or "/bin/true"
+    assert state._speculative_failure_cache.get(resolved) is True
+
+
+def test_retry_landlock_failure_fail_loud_without_pressure_claim(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Pressure EAGAIN, then the retry dies at the Landlock APPLY step
+    ('L' — a genuine capability loss, fail-loud). The raised message
+    must attribute THAT failure, not append the first attempt's
+    pressure cause — 'Landlock setup failed ... not a kernel
+    capability or policy refusal' is self-contradictory."""
+    monkeypatch.setattr(context, "_nproc_pressure_evidence",
+                        lambda: _PRESSURE)
+    rec = _SpawnRecorder(
+        [("X", _EAGAIN_DETAIL), ("L", "landlock apply failed: EPERM")])
+    _Driver(monkeypatch, rec)
+    with pytest.raises(SandboxSetupError) as exc:
+        with context.sandbox(target=str(tmp_path), output=str(tmp_path)) \
+                as run:
+            run(["/bin/true"], capture_output=True, timeout=60)
+    msg = str(exc.value)
+    assert "landlock apply failed" in msg
+    assert "process-count pressure" not in msg
+    assert "not a kernel capability or policy refusal" not in msg
+
+
+def test_consumption_nproc_cap_two_directions(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dispatch-time NPROC resample, both directions pinned.
+
+    Direction 1 (freshness): when the derivation works, the fresh
+    value wins outright — no max()-ing against the setup-time cap,
+    which would ratchet the ceiling to the highest load peak the
+    context ever saw.
+
+    Direction 2 (containment): a failed resample (unreadable /proc)
+    keeps the setup-time cap — returning None would shed the
+    fork-bomb bound the context already holds. And a lane configured
+    with NO cap stays uncapped: consumption never invents a ceiling
+    setup didn't grant."""
+    monkeypatch.setattr(context, "_count_same_uid_tasks", lambda: 500)
+    fresh = 500 + 100 + context._NPROC_CLAMP_HEADROOM
+    # Fresh sample dominates, in both directions of the comparison.
+    assert context._consumption_nproc_cap(fresh + 4000, 100) == fresh
+    assert context._consumption_nproc_cap(fresh - 400, 100) == fresh
+    # Failed resample → setup-time cap survives.
+    monkeypatch.setattr(context, "_count_same_uid_tasks", lambda: None)
+    assert context._consumption_nproc_cap(1234, 100) == 1234
+    # No setup-time cap → stays uncapped, no derivation invented.
+    assert context._consumption_nproc_cap(None, 100) is None
+
+
+def test_no_namespace_consumers_resample_via_consumption_helper() -> None:
+    """Wiring pin: the demoted-lane preexec rebuild and the
+    Landlock-audit lane hand `_make_preexec_fn` a dispatch-time
+    resample (`_consumption_nproc_cap`), and only the construction-
+    time kwargs use the raw setup snapshot. Rewiring a consumer back
+    to the raw snapshot silently reintroduces the stale-/peak-biased
+    cap this helper exists to replace."""
+    src = Path(context.__file__).read_text()
+    assert src.count("host_nproc_cap=_consumption_nproc_cap(") == 2
+    assert src.count("host_nproc_cap=_host_nproc_cap") == 1
 
 
 # ---------------------------------------------------------------------------

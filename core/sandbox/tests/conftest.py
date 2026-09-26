@@ -156,6 +156,7 @@ def _sandbox_state_guard():
         "_landlock_warned_abi_v3", "_landlock_warned_abi_v2",
         "_sandbox_unavailable_warned", "_sandbox_landlock_only_warned",
         "_mountless_backend_warned",
+        "_nproc_pressure_degrade_warned",
         "_floor_lowered_banner_warned",
         "_floor_flag_banner_warned",
         "_floor_project_banner_warned",

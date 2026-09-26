@@ -13,6 +13,7 @@ import errno
 import logging
 import re
 import os
+import resource
 import shutil
 import signal
 import stat
@@ -965,6 +966,195 @@ def _split_wsl_ambient_mnt_reads(
         exempted = any(_under(real, r) for r in exempt_real)
         (kept if exempted else dropped).append(p)
     return kept, dropped
+
+
+# Headroom added on top of the same-uid task-count snapshot when
+# deriving the no-namespace RLIMIT_NPROC ceiling (snapshot + budget +
+# headroom, `_derive_host_nproc_cap`). The snapshot is taken at
+# sandbox() setup; the kernel checks the ceiling at every later
+# fork/clone in the child tree, and on a busy multi-session host the
+# same uid's task count keeps moving between those two moments.
+# Trade-off, both directions: too small and ordinary thread-count
+# fluctuation (concurrent scanners, thread pools spinning up) eats the
+# margin before the child's first fork — the child strands at the
+# boundary with EAGAIN and the lane failure gets misread as a
+# capability loss; too large and the ceiling stops binding — the cap
+# exists to contain a fork bomb from untrusted code, and every unit of
+# headroom is one more process a bomb spawns before EAGAIN, so the
+# margin must stay a small fraction of the configured budget (default
+# 1024, preexec._DEFAULT_LIMITS) or the containment scale silently
+# doubles. 256 (a quarter of the default budget) absorbs transient
+# same-uid churn without materially widening the bomb allowance.
+_NPROC_CLAMP_HEADROOM = 256
+
+#: Substrings that identify a spawn child's setup-status detail as a
+#: fork/clone EAGAIN: the Python exception line a failed os.fork()
+#: leaves as the last traceback line, the mapped errno name, and the
+#: strerror text the exec 'X' arm embeds.
+_NPROC_EAGAIN_MARKERS = (
+    "BlockingIOError",
+    "EAGAIN",
+    "Resource temporarily unavailable",
+)
+
+
+def _count_same_uid_tasks() -> "int | None":
+    """Same-uid TASK (thread) count summed over numeric /proc entries.
+
+    RLIMIT_NPROC counts TASKS (threads), not processes — counting
+    tgids alone would set a ceiling BELOW the current usage on any
+    thread-heavy host and make every fork in the sandbox fail EAGAIN.
+    Numeric entries only: the magic links (self, thread-self) and
+    non-pid dirs stat to a uid too and would poison the count.
+    Returns None when /proc is unreadable.
+    """
+    try:
+        _uid = os.geteuid()
+        _count = 0
+        for _d in os.listdir("/proc"):
+            if not _d.isdigit():
+                continue
+            try:
+                if os.stat(f"/proc/{_d}").st_uid != _uid:
+                    continue
+                with open(f"/proc/{_d}/status", "rb") as _f:
+                    for _line in _f.read(4096).splitlines():
+                        if _line.startswith(b"Threads:"):
+                            _count += int(_line.split()[1])
+                            break
+                    else:
+                        _count += 1
+            except (OSError, ValueError, IndexError):
+                continue
+    except OSError:
+        return None  # /proc unreadable — caller skips the cap
+    return _count
+
+
+def _derive_host_nproc_cap(nproc_budget: int) -> "int | None":
+    """THE host-uid RLIMIT_NPROC ceiling formula: fresh same-uid task
+    snapshot + configured budget + `_NPROC_CLAMP_HEADROOM`.
+
+    Single derivation chokepoint on purpose: the EAGAIN pressure retry
+    in run() re-derives the ceiling mid-call with a fresh snapshot,
+    and routing every (re)computation through this function is what
+    keeps that recompute-only — the retry can never hand a child a
+    ceiling the formula itself wouldn't produce, so a hostile child
+    that provokes retries cannot ratchet its own fork allowance past
+    snapshot + budget + headroom. Returns None (no cap) when the
+    budget is unset or /proc is unreadable.
+    """
+    if nproc_budget <= 0:
+        return None
+    _count = _count_same_uid_tasks()
+    if _count is None:
+        return None  # /proc unreadable — skip the cap
+    return _count + nproc_budget + _NPROC_CLAMP_HEADROOM
+
+
+def _consumption_nproc_cap(
+        setup_cap: "int | None", nproc_budget: int) -> "int | None":
+    """NPROC ceiling for a no-namespace lane at DISPATCH time: a fresh
+    `_derive_host_nproc_cap` sample, falling back to the setup-time
+    cap when the fresh derivation fails.
+
+    The setup-time snapshot ages between sandbox() entry and the
+    moment a demoted call actually forks, and any mid-call resample
+    (e.g. one taken while an EAGAIN retry fires) is by construction
+    load-peak-biased — a fresh sample at consumption dominates both.
+    Two guards:
+    - ``setup_cap is None`` stays None: the lane had no cap configured
+      (no budget / no cap at setup) and consumption must not invent
+      one — behaviour there is unchanged.
+    - a failed fresh derivation (transiently unreadable /proc) keeps
+      the setup-time cap rather than returning None: shedding the
+      fork-bomb bound a context already holds would let untrusted
+      code run to the host's per-uid ceiling.
+    Both inputs come from `_derive_host_nproc_cap`, so the value can
+    never exceed that single formula.
+    """
+    if setup_cap is None:
+        return None
+    _fresh = _derive_host_nproc_cap(nproc_budget)
+    return _fresh if _fresh is not None else setup_cap
+
+
+def _nproc_eagain_shaped(detail: str) -> bool:
+    """True when a spawn child's setup-status detail line looks like a
+    fork/clone EAGAIN.
+
+    The detail is trusted setup-child text (last traceback line, exec
+    errno tag) but it can EMBED target-influenced substrings — bind
+    paths under the scanned tree ride the mount-failure tracebacks, so
+    a hostile repo can name a file after these markers. Shape-matching
+    alone must therefore never change behaviour: callers pair it with
+    ``_nproc_pressure_evidence()``, which measures OUR OWN rlimit and
+    /proc — evidence the target cannot forge.
+    """
+    return any(_m in detail for _m in _NPROC_EAGAIN_MARKERS)
+
+
+def _nproc_pressure_evidence() -> "str | None":
+    """Live evidence that THIS process tree runs at/near a finite
+    RLIMIT_NPROC ceiling: the honest attribution for a fork/clone
+    EAGAIN in the spawn chain (the spawn children fork under the
+    parent's inherited limit — the per-uid count racing an NPROC
+    clamp, not a kernel capability or LSM policy refusal).
+
+    Returns the evidence string (measured count vs soft limit) or
+    None when no finite limit binds / the count is comfortably below
+    it / /proc is unreadable. "Near" means within one
+    `_NPROC_CLAMP_HEADROOM` of the ceiling: the count that provoked
+    the child's EAGAIN has already moved by the time we re-measure,
+    and demanding exact exceedance would flap the attribution off on
+    exactly the fluctuating hosts it exists for.
+    """
+    try:
+        _soft, _ = resource.getrlimit(resource.RLIMIT_NPROC)
+    except (OSError, ValueError):
+        return None
+    if _soft == resource.RLIM_INFINITY or _soft <= 0:
+        return None
+    _count = _count_same_uid_tasks()
+    if _count is None:
+        return None
+    if _count < max(0, _soft - _NPROC_CLAMP_HEADROOM):
+        return None
+    return (f"same-uid task count {_count} vs RLIMIT_NPROC soft limit "
+            f"{_soft}")
+
+
+def _nproc_eagain_retry_decision(
+        setup_status: "tuple[str, str] | None",
+        already_retried: bool) -> "str | None":
+    """Decide whether ONE fresh-clamp spawn retry is warranted for a
+    failed spawn attempt; returns the pressure evidence when it is,
+    None otherwise.
+
+    Fires only when ALL of: (1) `already_retried` is False — the hard
+    once-bound. Without it, a failure that keeps presenting as EAGAIN
+    under sustained load would ratchet retries, and every retry forks
+    a fresh spawn chain — adding tasks under the very ceiling that is
+    already exhausted, a retry storm amplifying the outage it responds
+    to. (2) The child failed at a stage with fork/clone sites under
+    the inherited limit ('M'/'X'/'U' — mount setup, pre-exec forks,
+    namespace staging); the fail-closed categories (P tamper, C
+    contract, F fresh-procfs, L/S layer installs) have no fork race to
+    rescue and must keep their existing loud handling. (3) The detail
+    is EAGAIN-shaped AND (4) live pressure evidence corroborates it —
+    the shape alone can be spoofed by target-influenced path text (see
+    `_nproc_eagain_shaped`), so the self-measured evidence is the
+    load-bearing gate: absent pressure, behaviour is byte-identical to
+    the pre-retry code (no lane decision changes under non-race
+    conditions).
+    """
+    if already_retried:
+        return None
+    if setup_status is None or setup_status[0] not in ("M", "X", "U"):
+        return None
+    if not _nproc_eagain_shaped(setup_status[1]):
+        return None
+    return _nproc_pressure_evidence()
 
 
 @contextmanager
@@ -2889,9 +3079,15 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # cap would count the operator's unrelated processes — so it
     # historically applied NO process bound at all and a fork bomb ran
     # to the host ceiling. Bound it relative to the current same-uid
-    # process count instead: ceiling = count-at-setup + configured
-    # nproc headroom. Growth is capped at the same budget the
-    # namespace paths grant, without starving concurrent RAPTOR work.
+    # process count instead (`_derive_host_nproc_cap`): ceiling =
+    # count-at-setup + configured nproc budget + a bounded fluctuation
+    # headroom. Growth is capped at the same budget the namespace
+    # paths grant, without starving concurrent RAPTOR work. The
+    # snapshot is a SETUP-TIME value consumed at every later fork in
+    # the child tree — on a loaded host the same-uid count moves past
+    # it (the headroom absorbs ordinary churn, and the demoted-lane /
+    # audit-lane rebuilds resample at dispatch time through
+    # _consumption_nproc_cap, same formula).
     _host_nproc_cap = None
     # Teardown-sweep cell for the same no-namespace posture: the
     # composed preexec forks a PR_SET_CHILD_SUBREAPER sweeper that
@@ -2924,32 +3120,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         _reaper_cell = {"death_local": threading.local()}
         _nproc_budget = int(effective_limits.get("nproc", 0) or 0)
         if _nproc_budget > 0:
-            try:
-                _uid = os.geteuid()
-                _count = 0
-                for _d in os.listdir("/proc"):
-                    if not _d.isdigit():
-                        continue
-                    try:
-                        if os.stat(f"/proc/{_d}").st_uid != _uid:
-                            continue
-                        # RLIMIT_NPROC counts TASKS (threads), not
-                        # processes — counting tgids alone would set a
-                        # ceiling BELOW the current usage on any
-                        # thread-heavy host and make every fork in the
-                        # sandbox fail EAGAIN.
-                        with open(f"/proc/{_d}/status", "rb") as _f:
-                            for _line in _f.read(4096).splitlines():
-                                if _line.startswith(b"Threads:"):
-                                    _count += int(_line.split()[1])
-                                    break
-                            else:
-                                _count += 1
-                    except (OSError, ValueError, IndexError):
-                        continue
-                _host_nproc_cap = _count + _nproc_budget
-            except OSError:
-                _host_nproc_cap = None  # /proc unreadable — skip the cap
+            _host_nproc_cap = _derive_host_nproc_cap(_nproc_budget)
 
     _preexec_build_kwargs: dict[str, Any] = dict(
         writable_paths=writable_paths,
@@ -5777,6 +5948,104 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         #           sandbox, failed → retry with namespaces
                         #           intact but without the bind tree.
                         _setup_status = getattr(result, "_setup_status", None)
+                        # NPROC-pressure EAGAIN rescue: a spawn child
+                        # forks its setup chain (proxy forwarder,
+                        # pid-ns init split) under the PARENT's
+                        # inherited RLIMIT_NPROC, and on a loaded host
+                        # the same-uid task count races any finite
+                        # clamp on this process tree — the child dies
+                        # EAGAIN mid-setup and the failure reads like
+                        # a bind-tree / namespace capability loss.
+                        # When the failure is EAGAIN-shaped AND our
+                        # own measurement corroborates live pressure
+                        # (both gates — see the decision helper; the
+                        # shape alone is target-influenceable), retry
+                        # the SAME lane once. The spawn lanes don't
+                        # consume _host_nproc_cap (their children fork
+                        # under the parent's inherited limit), and the
+                        # no-namespace lanes re-derive their clamp at
+                        # dispatch time (_consumption_nproc_cap) — so
+                        # the retry deliberately persists NO snapshot:
+                        # a sample taken here would be load-peak-
+                        # biased for the rest of the context's life.
+                        # One retry per
+                        # run() CALL (not per context — repeated calls
+                        # under sustained pressure each get one, so
+                        # amplification is bounded at two spawn
+                        # attempts per operator-initiated call). The
+                        # bound is structural: this block is straight-
+                        # line code with no enclosing loop, and the
+                        # sequence pin test (mount-ns, retry, mountless
+                        # — exactly three dispatches) is the tripwire
+                        # against a loop refactor; the decision helper
+                        # additionally refuses any caller that reports
+                        # already_retried=True, because retry storms
+                        # under an exhausted per-uid ceiling amplify
+                        # the very pressure they respond to. Placed
+                        # BEFORE the category arms so a retry that
+                        # fails differently (P tamper, L/S layer
+                        # apply) still gets that category's
+                        # fail-closed handling on the adopted result.
+                        _nproc_pressure_cause = _nproc_eagain_retry_decision(
+                            _setup_status,
+                            already_retried=False,  # first attempt of
+                            # this call — the straight-line block never
+                            # re-consults the decision.
+                        )
+                        if _nproc_pressure_cause is not None:
+                            logger.info(
+                                "Sandbox: spawn child failed EAGAIN under "
+                                "per-uid process-count pressure (%s) — "
+                                "retrying the same lane once.",
+                                _nproc_pressure_cause,
+                            )
+                            try:
+                                result = _dispatch_floor_check(
+                                    _spawn_lane,
+                                    executor=lambda: _run_spawn_backend(
+                                        skip_mount=_spawn_without_mount,
+                                    ),
+                                    cap=_spawn_tier_cap(_spawn_without_mount),
+                                    **_spawn_lane_kwargs,
+                                )
+                            finally:
+                                # Peers register only when the proxy
+                                # lane exists (_register_lane_peer
+                                # gates on it): the truthiness guard
+                                # narrows the Optionals under that
+                                # invariant for the type-checker.
+                                if (_lane_peer_pids and proxy_instance
+                                        and _proxy_unix_path):
+                                    for _pp in _lane_peer_pids:
+                                        proxy_instance.discard_lane_peer_root(
+                                            _proxy_unix_path, _pp)
+                            _setup_status = getattr(
+                                result, "_setup_status", None)
+                            if _setup_status is None:
+                                # Rescued: the target execed on the
+                                # promised lane — no degrade, no
+                                # misattributed capability warning.
+                                logger.info(
+                                    "Sandbox: fresh-clamp retry succeeded "
+                                    "— the earlier failure was transient "
+                                    "NPROC pressure, not a capability or "
+                                    "policy refusal.")
+                                _nproc_pressure_cause = None
+                            elif not _nproc_eagain_shaped(_setup_status[1]):
+                                # The retry failed for a DIFFERENT
+                                # reason: the adopted terminal status
+                                # is not EAGAIN-shaped, so the FIRST
+                                # attempt's pressure verdict no longer
+                                # describes the failure the category
+                                # arms below are about to handle.
+                                # Clear it, or a genuine capability /
+                                # policy refusal surfacing only on the
+                                # retry would be reported as "NOT a
+                                # kernel capability or policy refusal"
+                                # (self-contradictory on L/S/U) and
+                                # would escape speculative-cache
+                                # memoisation on M/X.
+                                _nproc_pressure_cause = None
                         if _setup_status is not None and _setup_status[0] == "P":
                             from .errors import SandboxSetupError
                             msg_0 = (
@@ -5929,6 +6198,21 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 f"sandbox {_layer} setup failed in the spawn "
                                 f"child: {_setup_status[1]}"
                             )
+                            if _nproc_pressure_cause is not None:
+                                # The EAGAIN rescue above already
+                                # retried once and the child still
+                                # died at this stage under measured
+                                # pressure — name the actual cause so
+                                # the operator chases host load, not a
+                                # kernel/LSM capability that is fine.
+                                msg_0 += (
+                                    f" — cause: per-uid process-count "
+                                    f"pressure against RLIMIT_NPROC "
+                                    f"({_nproc_pressure_cause}), not a "
+                                    f"kernel capability or policy "
+                                    f"refusal; one fresh-clamp retry "
+                                    f"also failed."
+                                )
                             _lsu_exc = SandboxSetupError(
                                 msg_0,
                                 _instr,
@@ -6162,28 +6446,54 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                         "the replacement path to the retry.",
                                         setup_category="P",
                                     )
-                                _resolved_cmd0 = shutil.which(cmd[0]) or cmd[0]
-                                with state._cache_lock:
-                                    _first_seen = (
-                                        _resolved_cmd0
-                                        not in state._speculative_failure_cache
-                                    )
-                                    if _first_seen:
-                                        state._speculative_failure_cache[
-                                            _resolved_cmd0] = True
-                                if _first_seen:
+                                if _nproc_pressure_cause is not None:
+                                    # Do NOT memoise a pressure-shaped
+                                    # failure: the cache asserts "this
+                                    # BINARY's bind tree is unusable"
+                                    # and steers every later call for
+                                    # it (trusted ones included) onto
+                                    # the mountless lane — evidence
+                                    # about the HOST's transient load
+                                    # must not buy that standing
+                                    # demotion. The next call probes
+                                    # mount-ns afresh, which is the
+                                    # pre-race behaviour once the load
+                                    # subsides.
                                     logger.info(
-                                        "Sandbox: %r bind tree is unusable; "
-                                        "future runs will use the reduced "
-                                        "namespace backend.",
+                                        "Sandbox: not memoising the "
+                                        "bind-tree failure for %r — it "
+                                        "failed under per-uid "
+                                        "process-count pressure (a "
+                                        "transient host condition), not "
+                                        "a property of this binary's "
+                                        "bind tree.",
                                         cmd[0],
                                     )
                                 else:
-                                    logger.debug(
-                                        "Sandbox: bind-tree failure cache hit "
-                                        "for cmd[0]=%r.",
-                                        cmd[0],
-                                    )
+                                    _resolved_cmd0 = (
+                                        shutil.which(cmd[0]) or cmd[0])
+                                    with state._cache_lock:
+                                        _first_seen = (
+                                            _resolved_cmd0 not in
+                                            state._speculative_failure_cache
+                                        )
+                                        if _first_seen:
+                                            state._speculative_failure_cache[
+                                                _resolved_cmd0] = True
+                                    if _first_seen:
+                                        logger.info(
+                                            "Sandbox: %r bind tree is "
+                                            "unusable; future runs will "
+                                            "use the reduced namespace "
+                                            "backend.",
+                                            cmd[0],
+                                        )
+                                    else:
+                                        logger.debug(
+                                            "Sandbox: bind-tree failure "
+                                            "cache hit for cmd[0]=%r.",
+                                            cmd[0],
+                                        )
                                 result = _dispatch_floor_check(
                                     "mountless namespace backend",
                                     executor=lambda: _run_spawn_backend(
@@ -6211,14 +6521,62 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                         "the target was not run.",
                                         setup_category=_retry_status[0],
                                     )
-                                _mount_ns_degraded = (
-                                    "bind-tree setup failed "
-                                    f"({_failed_setup_status[0]}: "
-                                    f"{_failed_setup_status[1]}); retried with "
-                                    "Landlock + PID namespace + fresh procfs")
+                                if _nproc_pressure_cause is not None:
+                                    # Honest degrade record: this was
+                                    # never a bind-tree capability
+                                    # problem — the spawn chain's
+                                    # forks lost a race against a
+                                    # finite RLIMIT_NPROC, twice
+                                    # (fresh-clamp retry included).
+                                    # Marker consumers and operators
+                                    # must see host pressure, not a
+                                    # kernel/policy refusal to chase.
+                                    _mount_ns_degraded = (
+                                        "bind-tree spawn failed under "
+                                        "per-uid process-count pressure "
+                                        "against RLIMIT_NPROC "
+                                        f"({_nproc_pressure_cause}; "
+                                        "child reported "
+                                        f"{_failed_setup_status[0]}: "
+                                        f"{_failed_setup_status[1]}); "
+                                        "one fresh-clamp retry also "
+                                        "failed; retried with Landlock "
+                                        "+ PID namespace + fresh procfs")
+                                else:
+                                    _mount_ns_degraded = (
+                                        "bind-tree setup failed "
+                                        f"({_failed_setup_status[0]}: "
+                                        f"{_failed_setup_status[1]}); "
+                                        "retried with "
+                                        "Landlock + PID namespace + "
+                                        "fresh procfs")
                                 _spawn_without_mount = True
                                 used_spawn = True
-                                if state.warn_once(
+                                if _nproc_pressure_cause is not None:
+                                    # Distinct warn-once key: the
+                                    # pressure cause and the genuine
+                                    # capability/policy cause each
+                                    # deserve their one loud surfacing
+                                    # per process — sharing the key
+                                    # would let whichever fires first
+                                    # swallow the other's diagnosis.
+                                    if state.warn_once(
+                                            "_nproc_pressure_degrade_warned"):
+                                        logger.warning(
+                                            "Sandbox: bind-tree spawn for "
+                                            "%r failed under per-uid "
+                                            "process-count pressure "
+                                            "against RLIMIT_NPROC (%s) — "
+                                            "NOT a kernel capability or "
+                                            "policy refusal. One "
+                                            "fresh-clamp retry also "
+                                            "failed; using Landlock + "
+                                            "PID namespace + fresh "
+                                            "procfs for this call.",
+                                            cmd[0],
+                                            _nproc_pressure_cause,
+                                        )
+                                elif state.warn_once(
                                         "_mountless_backend_warned"):
                                     logger.warning(
                                         "Sandbox: bind-tree isolation "
@@ -6726,7 +7084,13 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         readable_paths=_preexec_readable,
                         deny_all_tcp_connect=(_degraded_tcp_deny
                                               or _demoted_net_deny),
-                        host_nproc_cap=_host_nproc_cap,
+                        # Fresh-at-dispatch NPROC sample: the setup-
+                        # time snapshot has aged by the time a demoted
+                        # call forks (falls back to it if the resample
+                        # fails — never sheds the fork-bomb bound).
+                        host_nproc_cap=_consumption_nproc_cap(
+                            _host_nproc_cap,
+                            int(effective_limits.get("nproc", 0) or 0)),
                         reaper_cell=_reaper_cell,
                         seccomp_block_ns_creation=True,
                         # The demotion rebuild must not shed the
@@ -6801,7 +7165,13 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 writable_paths=None,
                                 readable_paths=None,
                                 allowed_tcp_ports=None,
-                                host_nproc_cap=_host_nproc_cap,
+                                # Fresh-at-dispatch sample, setup-time
+                                # fallback — same rationale as the
+                                # demoted-lane rebuild above.
+                                host_nproc_cap=_consumption_nproc_cap(
+                                    _host_nproc_cap,
+                                    int(effective_limits.get(
+                                        "nproc", 0) or 0)),
                                 reaper_cell=None,
                             )
                             _wp = list(
