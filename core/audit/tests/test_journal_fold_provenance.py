@@ -121,6 +121,32 @@ def test_unverifiable_token_row_demotes_to_unstamped_tier(
     assert _fold([loaded], target) == set()
 
 
+def test_unstamped_finding_class_row_never_hash_credits(
+    target: Path,
+) -> None:
+    """Finding-class rows are excluded from the unstamped hash tier
+    even with a CURRENT exact hash: only a verified row re-imports
+    its finding into findings.json, so hash-tier credit here would
+    retire the function while its claimed finding surfaces nowhere —
+    silent finding loss. Re-review, rediscover honestly."""
+    real = _real_hash(target)
+    for verdict in ("finding", "suspicious"):
+        assert _fold(
+            [_entry(source_hash=real, verdict=verdict)], target) == set()
+
+
+def test_verified_finding_class_row_keeps_credit(
+    tmp_path: Path, target: Path,
+) -> None:
+    """The exclusion is unstamped-tier only: a VERIFIED finding row
+    both re-imports (findings gate) and folds."""
+    out = tmp_path / "run"
+    real = _real_hash(target)
+    append_entry(out, _entry(source_hash=real, verdict="finding"))
+    loaded = load_entries(out)[0]
+    assert _fold([loaded], target) == {"a.c:f"}
+
+
 def test_unstamped_row_never_enters_reuse_sink(target: Path) -> None:
     """Legacy tolerance: exact-hash unstamped rows keep suppression,
     but a $0 verdict import requires an authenticated row."""

@@ -102,13 +102,17 @@ def test_audit_gap_fold_ignores_openant_functions_analysed():
     # retire functions only an external scanner ever looked at.
     from core.audit.gaps import _build_covered_set
 
-    scanner_record = {
-        "tool": "openant",
-        "functions_analysed": [{"file": "src/a.c", "function": "f1"}],
-    }
+    from core.coverage import journal_mac
+    row = {"file": "src/a.c", "function": "f1"}
+    row[journal_mac.TOKEN_KEY] = journal_mac.mint_coverage_row(row, "openant")
+    scanner_record = {"tool": "openant", "functions_analysed": [row]}
     assert _build_covered_set([scanner_record]) == set()
-    # Control: the same row under a review-grade tool DOES cover.
-    review_record = dict(scanner_record, tool="audit")
+    # Control: the same row under a review-grade tool DOES cover
+    # (stamped under that tool — the coverage-row MAC is tool-bound).
+    review_row = {"file": "src/a.c", "function": "f1"}
+    review_row[journal_mac.TOKEN_KEY] = journal_mac.mint_coverage_row(
+        review_row, "audit")
+    review_record = {"tool": "audit", "functions_analysed": [review_row]}
     assert _build_covered_set([review_record]) != set()
 
 

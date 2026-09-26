@@ -52,6 +52,8 @@ def _sample_checklist():
 
 def _sample_coverage_records():
     return [
+        # Scanner examination: feeds the file-tool priority tiers
+        # only — the files{} shape earns no review credit.
         {
             "tool": "semgrep",
             "files": {
@@ -63,7 +65,27 @@ def _sample_coverage_records():
             },
             "files_examined": ["src/handler.c"],
         },
+        # The review lane: a stamped review-grade row suppresses.
+        {
+            "tool": "llm",
+            "functions_analysed": [
+                _reviewed_row("src/handler.c", "parse_request"),
+            ],
+        },
     ]
+
+
+def _reviewed_row(file, function, tool="llm", **fields):
+    """A functions_analysed row as a LEGITIMATE writer produces it:
+    stamped at creation (core.coverage.journal_mac coverage-row
+    domain, tool-bound). The gap fold refuses unstamped hashless
+    rows — see test_coverage_record_provenance.py for the tiers."""
+    from core.coverage import journal_mac
+    row = {"file": file, "function": function, **fields}
+    token = journal_mac.mint_coverage_row(row, tool)
+    assert token, "hermetic XDG key must be mintable"
+    row[journal_mac.TOKEN_KEY] = token
+    return row
 
 
 class TestComputeGaps:
@@ -164,25 +186,19 @@ class TestComputeGaps:
         assert gaps == []
 
     def test_all_covered(self):
-        records = [
-            {
-                "tool": "audit",
-                "files": {
-                    "src/handler.c": {
-                        "functions": {
-                            "parse_request": {},
-                            "handle_error": {},
-                            "tiny_helper": {},
-                        },
-                    },
-                    "src/auth.c": {
-                        "functions": {
-                            "check_password": {},
-                        },
-                    },
-                },
-            },
-        ]
+        records = [{
+            "tool": "audit",
+            "functions_analysed": [
+                _reviewed_row("src/handler.c", "parse_request",
+                              tool="audit"),
+                _reviewed_row("src/handler.c", "handle_error",
+                              tool="audit"),
+                _reviewed_row("src/handler.c", "tiny_helper",
+                              tool="audit"),
+                _reviewed_row("src/auth.c", "check_password",
+                              tool="audit"),
+            ],
+        }]
         gaps = compute_gaps(_sample_checklist(), records)
         assert len(gaps) == 0
 
@@ -807,10 +823,8 @@ class TestCoveredKeyInjectivity:
 
     def test_coverage_record_does_not_alias(self):
         records = [{
-            "tool": "semgrep",
-            "files": {
-                "src/a.c:evil": {"functions": {"f": {"status": "clean"}}},
-            },
+            "tool": "llm",
+            "functions_analysed": [_reviewed_row("src/a.c:evil", "f")],
             "files_examined": ["src/a.c:evil"],
         }]
         gaps = compute_gaps(self._checklist(), records)
@@ -846,7 +860,7 @@ class TestModernRecordCoveredSet:
         records = [{
             "tool": "llm",
             "functions_analysed": [
-                {"file": "src/handler.c", "function": "parse_request"},
+                _reviewed_row("src/handler.c", "parse_request"),
             ],
         }]
         gaps = compute_gaps(_sample_checklist(), records)

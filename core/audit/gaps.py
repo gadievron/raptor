@@ -274,7 +274,11 @@ def compute_gaps(
         - file, name, line_start, line_end, priority, strategies,
           is_stale, old_annotation (if stale)
     """
-    covered_functions = _build_covered_set(coverage_records)
+    covered_functions = _build_covered_set(
+        coverage_records,
+        target_path=checklist.get("target_path", "") or "",
+        checklist=checklist,
+    )
     # Span-bound credits from the hash-verified journal fold: each
     # verified per-site entry credits ITS OWN line_start under the
     # file:function key, so suppression lands on the reviewed site
@@ -1816,6 +1820,8 @@ def write_gaps(gaps: list[dict[str, Any]], out_dir: Path) -> Path:
 
 def _build_covered_set(
     records: list[dict[str, Any]],
+    target_path: str = "",
+    checklist: dict[str, Any] | None = None,
 ) -> set:
     """Build set of file:function keys that have coverage.
 
@@ -1825,7 +1831,39 @@ def _build_covered_set(
     disambiguated at CONSUMPTION time via _consume_covered_key, which
     suppresses only one same-named item per covered key instead of
     all of them.
+
+    Row authority is TIERED like the journal fold — coverage records
+    live in the same target-writable run/project directories, and a
+    dropped ``coverage-llm.json`` naming a function used to silence
+    its review with no stamp, no verdict and no source evidence:
+
+    * stamped + verified (``coverage_row_provenance`` under the
+      record's tool label — see ``core.coverage.journal_mac``) →
+      full credit.
+    * unstamped / tampered → credit ONLY when the row's ``hash``
+      exactly matches the function's CURRENT source hash, recomputed
+      from the checklist's spans against ``target_path`` (full-length
+      equality; a prefix is not evidence), AND the row is not
+      finding-class (``status`` finding/suspicious — those rows have
+      no re-import route, so hash credit would silently retire a
+      claimed finding; they re-review instead). The journal's
+      tolerant-reader compromise: the hash is UNKEYED (computable by
+      anything that can read the source), so this tier is a source-
+      currency check that keeps pre-MAC legacy rows credited — it is
+      NOT authentication, and a plant that copies the current hash is
+      indistinguishable from a legacy row by construction. It stops
+      hashless plants and stale-source credit; authorship assurance
+      comes only from the verified tier. Rows for functions absent
+      from the checklist get no credit — no gap exists for them, so
+      credit is moot.
+    * the legacy ``files{...functions{}}`` shape earns NO review
+      credit at all: it names functions with no verdict, no hash and
+      no stamp (and it credited under ANY non-runtime tool label,
+      even ``semgrep``). It keeps its store/report value for other
+      consumers; review suppression comes only from
+      ``functions_analysed`` rows.
     """
+    from core.coverage import journal_mac
     from core.coverage.registry import (
         CATEGORY_LLM,
         CATEGORY_RUNTIME,
@@ -1833,41 +1871,82 @@ def _build_covered_set(
         category_of,
         classify,
     )
+    from core.staleness import hash_spans
+
+    # (file, function) → current-source hash oracle for the
+    # unstamped tier, built lazily: spans come from the checklist,
+    # hashes are computed per-file on the first candidate row
+    # (hash_spans batches the file read) and only for files that
+    # actually have unstamped rows to verify.
+    spans_by_file: dict[str, list[tuple[str, tuple[int, int]]]] = {}
+    files_val = (checklist or {}).get("files")
+    for file_info in files_val if isinstance(files_val, list) else []:
+        if not isinstance(file_info, dict):
+            continue
+        fp = file_info.get("path", "")
+        if not fp or not isinstance(fp, str):
+            continue
+        items = file_info.get("items", file_info.get("functions", []))
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name", "")
+            ls = item.get("line_start", 0)
+            if (name and isinstance(name, str) and isinstance(ls, int)
+                    and not isinstance(ls, bool) and ls > 0):
+                le = item.get("line_end")
+                if not isinstance(le, int) or isinstance(le, bool):
+                    le = ls
+                spans_by_file.setdefault(fp, []).append((name, (ls, le)))
+    current_hashes: dict[str, dict[str, set]] = {}
+
+    def _row_hash_current(file_path: str, func_name: str,
+                          stored: str) -> bool:
+        if not target_path or not stored:
+            return False
+        entries = spans_by_file.get(file_path)
+        if not entries:
+            return False
+        if file_path not in current_hashes:
+            per_name: dict[str, set] = {}
+            resolved = safe_join(Path(target_path), file_path)
+            if resolved is not None and resolved.is_file():
+                try:
+                    hashes = hash_spans(
+                        resolved, [sp for _n, sp in entries])
+                except OSError:
+                    hashes = []
+                for (name, _sp), h in zip(entries, hashes):
+                    if h:
+                        per_name.setdefault(name, set()).add(h)
+            current_hashes[file_path] = per_name
+        # Exact, full-length equality with a freshly computed span
+        # hash — same discipline as the journal fold's compare (a
+        # short stored prefix simply never matches).
+        return stored in current_hashes[file_path].get(func_name, ())
 
     covered = set()
+    refused_rows = 0
+    legacy_shape_records = 0
     for record in records:
-        # Legacy coverage-record.json shape (files{...functions{}}).
-        # Runtime records (coverage-fuzz.json carries the same nested
-        # shape for its consumers) are excluded: a fuzzer REACHING a
-        # function is reachability evidence, not a review — folding it
-        # here would suppress exactly the functions fuzzing proved live.
+        # Runtime records (coverage-fuzz.json) never fold: a fuzzer
+        # REACHING a function is reachability evidence, not a review —
+        # folding it here would suppress exactly the functions fuzzing
+        # proved live.
         if category_of(record.get("tool", "")) == CATEGORY_RUNTIME:
             continue
-        # isinstance guards at every level: coverage records are
-        # on-disk JSON, and the containers are as forgeable as the
-        # values — a LIST ``files`` passed the old ``or {}`` null
-        # screen and crashed the fold on ``.items()`` (an AttributeError
-        # a child-plantable record turned into a gap-computation DoS);
-        # same for a list ``file_data`` / non-dict ``functions``. Any
-        # non-dict level degrades to "no coverage from this record".
+        # Legacy coverage-record.json shape (files{...functions{}}):
+        # counted for the summary log, never credited (see docstring).
         files = record.get("files")
-        if not isinstance(files, dict):
-            files = {}
-        for file_path, file_data in files.items():
-            funcs = (file_data.get("functions")
-                     if isinstance(file_data, dict) else None)
-            if not isinstance(funcs, dict):
-                continue
-            for func_name in funcs:
-                covered.add(make_function_key(file_path, func_name))
+        if isinstance(files, dict) and files:
+            legacy_shape_records += 1
         # Modern per-tool records carry function-level review marks in
         # functions_analysed (operator --mark, coverage-llm.json,
-        # coverage-journal.json). Pre-fix only the legacy shape was
-        # parsed, so an operator's --mark never suppressed a gap. Only
-        # review-grade labels count: files_examined (whole-file, any
-        # depth) and scanned-depth marks (read / understand) must not
-        # suppress review gaps.
-        if classify(record.get("tool", "")) != (CATEGORY_LLM, DEPTH_ANALYSED):
+        # coverage-journal.json). Only review-grade labels count:
+        # files_examined (whole-file, any depth) and scanned-depth
+        # marks (read / understand) must not suppress review gaps.
+        tool = record.get("tool", "")
+        if classify(tool) != (CATEGORY_LLM, DEPTH_ANALYSED):
             continue
         for fa in record.get("functions_analysed") or []:
             if not isinstance(fa, dict):
@@ -1882,8 +1961,42 @@ def _build_covered_set(
                 continue
             file_path = fa.get("file") or ""
             func_name = fa.get("function") or ""
-            if file_path and func_name:
-                covered.add(make_function_key(file_path, func_name))
+            if not (isinstance(file_path, str) and file_path
+                    and isinstance(func_name, str) and func_name):
+                continue
+            prov = journal_mac.coverage_row_provenance(fa, tool)
+            if prov != journal_mac.ROW_VERIFIED:
+                if fa.get("status") in ("finding", "suspicious"):
+                    # Same rule as the journal fold: a finding-class
+                    # row earns suppression only when its finding is
+                    # live, which only a verified row can prove —
+                    # hash-tier credit here would suppress review of
+                    # a function whose claimed finding no consumer
+                    # surfaces. Re-review, rediscover honestly.
+                    refused_rows += 1
+                    continue
+                stored = fa.get("hash")
+                if not (isinstance(stored, str) and _row_hash_current(
+                        file_path, func_name, stored)):
+                    refused_rows += 1
+                    logger.debug(
+                        "coverage record %s: refusing review credit for "
+                        "%s:%s (%s row, no matching source hash)",
+                        tool, file_path, func_name, prov,
+                    )
+                    continue
+            covered.add(make_function_key(file_path, func_name))
+    if refused_rows or legacy_shape_records:
+        logger.warning(
+            "coverage records: %d unverified functions_analysed row(s) "
+            "refused review credit (no stamp, no matching source hash, "
+            "or an unverified finding-class status); %d legacy files{} "
+            "record(s) carry no review credit — affected functions "
+            "resurface as gaps and will be re-reviewed (over-review, "
+            "the safe direction; on a large pre-migration run dir this "
+            "can be a substantial paid re-review)",
+            refused_rows, legacy_shape_records,
+        )
     return covered
 
 
@@ -2007,16 +2120,10 @@ def _fold_journal_into_covered(
                 # with the compaction remedy, and the except arm
                 # below re-raises it past the best-effort boundary.
                 from .journal import require_complete_entries
-                per_site: dict[tuple, Any] = {}
                 own_entries = require_complete_entries(out_dir)
-                for _e in own_entries:
-                    _k = (_e.file, _e.function, _e.line_start)
-                    _prev = per_site.get(_k)
-                    if _prev is None or _e.ts > _prev.ts:
-                        per_site[_k] = _e
                 _verify_entries_fold(
                     covered,
-                    list(per_site.values()),
+                    _latest_review_rows_per_site(own_entries),
                     target_path=target_path,
                     current_spans=current_spans or {},
                     binary_hashes=binary_hashes or {},
@@ -2033,48 +2140,52 @@ def _fold_journal_into_covered(
                     sidecar_dir=out_dir,
                 )
             else:
-                from .journal import (
-                    is_agent_mark,
-                    is_function_grade,
-                    is_mechanical_echo,
-                    load_entries,
-                )
-                # Provisional rows (unfinalized cadence-tick
-                # promotions) are excluded here too: this is the
-                # reuse-DISABLED resume path (cold-profile
-                # --no-verdict-reuse + SIGTERM + resume), and plain
-                # coverage credit would silently suppress the very
-                # re-review that settles them — same screen as the
-                # verified folds, same fail direction (re-review).
-                # ``dark`` is excluded for the same direction: it is
-                # the unresolved gate-resolution bucket ("tool-blind,
-                # needs concrete verification"), settled only by the
-                # post-loop dark pass or a reuse import that the dark
-                # pass re-walks. Neither exists on this fold — plain
-                # credit here was the one suppression surface the
-                # reviewed-set hardening did not reach, and it kept
-                # interrupted dark rows unadjudicated forever on
-                # every reuse-disabled resume.
-                # ``[mechanical]`` echo rows are excluded everywhere
-                # a fold credits: a pattern-scan echo (written for
-                # gap functions no review ever visited) is not a
-                # review, and plain credit here retired those
-                # functions from the resumed run's queue.
-                # Agent-context --mark assertions are excluded for
-                # the same reason review-grade marks are operator-
-                # tier (is_agent_mark): a non-operator assertion
-                # carries no evidence gate and must not retire the
-                # function.
+                from .journal import load_entries
+                # Reuse-DISABLED fold (cold-profile --no-verdict-reuse
+                # + interrupt + resume, and every mid-run recompute):
+                # same MAC-tier + exact-hash verification as the
+                # reuse-enabled fold, with reuse_sink=None so no
+                # import route exists. Plain set-fold credit here was
+                # the one journal suppression surface without a
+                # provenance gate: the journal is target-writable
+                # during runs, and one planted unstamped "clean" row
+                # silently retired the named function from the review
+                # queue — the forged-clean-row lever journal_mac
+                # exists to stop. Verified rows keep full credit
+                # (including hashless historical suppression —
+                # span-bound to the recorded site, so a row whose
+                # span matches no checklist item re-reviews);
+                # unstamped and unverifiable-token rows credit only
+                # behind the exact source-hash gate; dark /
+                # provisional / mechanical-echo / agent-mark rows
+                # resurface exactly as before (those screens live in
+                # _verify_entries_fold, shared with the verified
+                # folds).
                 # fresh=True: this fold suppresses re-review on a
                 # resume — resume decisions never read the
-                # process-local journal load cache.
-                covered.update(
-                    e.key for e in load_entries(out_dir, fresh=True)
-                    if e.verdict not in ("error", "dark")
-                    and is_function_grade(e)
-                    and not getattr(e, "provisional", None)
-                    and not is_mechanical_echo(e)
-                    and not is_agent_mark(e)
+                # process-local journal load cache. Best-effort load
+                # is correct here (unlike the spend-authorizing
+                # own-run reuse fold above): a partial load
+                # re-reviews, the safe direction.
+                _verify_entries_fold(
+                    covered,
+                    _latest_review_rows_per_site(
+                        load_entries(out_dir, fresh=True)),
+                    target_path=target_path,
+                    current_spans=current_spans or {},
+                    binary_hashes=binary_hashes or {},
+                    reuse_sink=None,
+                    credits=credits,
+                    current_strategies_fn=current_strategies_fn,
+                    current_model=current_model,
+                    domain_ctx=domain_ctx,
+                    source_label="reuse-disabled",
+                    reuse_stats=reuse_stats,
+                    # Slim-tier stubs hydrate from THIS run's sidecar
+                    # (import-eligibility only — inert with the sink
+                    # disabled, but keeps the call shape identical to
+                    # the own-run fold).
+                    sidecar_dir=out_dir,
                 )
         except Exception as exc:
             from core.coverage.journal import JournalIncomplete
@@ -2502,6 +2613,38 @@ def _fold_project_index(
     )
 
 
+def _latest_review_rows_per_site(entries) -> list:
+    """Per-SITE latest collapse over REVIEW-GRADE rows only.
+
+    Per SITE, not per key: same-named items (macro redefinitions,
+    C++ overloads) journal one entry per line span under a shared
+    file:function key, and a per-key collapse would drop the
+    coverage credit for siblings and re-buy their reviews on every
+    fold.
+
+    Non-review rows — mechanical echoes, agent-context marks,
+    finding-grade entries — never participate in the collapse: they
+    are screened again inside ``_verify_entries_fold`` (belt-and-
+    braces), but if they entered here a LATER echo at a reviewed
+    site would shadow the genuine review out of the fold entirely
+    and resurface a properly-reviewed function. Error/dark/
+    provisional rows stay in: they are genuine review rows whose
+    latest-wins semantics (and downstream screens) are the point.
+    """
+    from .journal import is_agent_mark, is_function_grade, is_mechanical_echo
+
+    per_site: dict[tuple, Any] = {}
+    for e in entries:
+        if (not is_function_grade(e) or is_mechanical_echo(e)
+                or is_agent_mark(e)):
+            continue
+        k = (e.file, e.function, e.line_start)
+        prev = per_site.get(k)
+        if prev is None or e.ts > prev.ts:
+            per_site[k] = e
+    return list(per_site.values())
+
+
 def _verify_entries_fold(
     covered: set,
     entries: list,
@@ -2911,6 +3054,26 @@ def _verify_entries_fold(
                     # re-adjudication route — legacy tolerance is for
                     # SETTLED verdicts, not the unresolved bucket.
                     _dark_resurface(key, "unstamped rows never import")
+                    continue
+                if entry.verdict in ("finding", "suspicious"):
+                    # Finding-class rows need their finding to be
+                    # LIVE to earn suppression, and only a verified
+                    # row re-materialises into findings.json (the
+                    # re-import gate refuses unstamped/tampered
+                    # rows). Crediting here while the finding is
+                    # refused would be the worst joint outcome —
+                    # finding dropped AND review suppressed. Re-
+                    # review instead: the finding is honestly
+                    # rediscovered (cross-install resume / key
+                    # rotation pay re-review only for the tiny
+                    # finding-bearing fraction).
+                    stale += 1
+                    logger.debug(
+                        "journal-fold: unstamped %s row carries a "
+                        "finding-class verdict (%s) with no re-import "
+                        "route — resurfacing as gap",
+                        key, entry.verdict,
+                    )
                     continue
                 unstamped_credited += 1
                 _credit(key, matched_span[0])

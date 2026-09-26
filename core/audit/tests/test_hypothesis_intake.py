@@ -849,17 +849,22 @@ def _rereview_checklist():
 def _covering_records():
     """LLM-analysed coverage over every checklist function — the
     fully-covered-target shape that made seeds a structured no-op."""
+    from core.coverage import journal_mac
+
+    def _row(file, function):
+        row = {"file": file, "function": function, "status": "clean"}
+        token = journal_mac.mint_coverage_row(row, "llm")
+        assert token, "hermetic XDG key must be mintable"
+        row[journal_mac.TOKEN_KEY] = token
+        return row
+
     return [{
-        "tool": "semgrep",
-        "files": {
-            "binary:acmed": {"functions": {
-                "parse_channel": {"status": "clean"},
-                "validate_sig": {"status": "clean"},
-            }},
-            "src/auth.c": {"functions": {
-                "check_pw": {"status": "clean"},
-            }},
-        },
+        "tool": "llm",
+        "functions_analysed": [
+            _row("binary:acmed", "parse_channel"),
+            _row("binary:acmed", "validate_sig"),
+            _row("src/auth.c", "check_pw"),
+        ],
     }]
 
 

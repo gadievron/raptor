@@ -974,13 +974,13 @@ class TestDarkRecordSurfaces:
 
     def _record_gaps(self, tmp_path, status):
         target = _write_target(tmp_path)
-        record = {
-            "tool": "journal",
-            "functions_analysed": [{
-                "file": "auth.c", "function": "check_pw",
-                "status": status,
-            }],
-        }
+        from core.coverage import journal_mac
+        row = {"file": "auth.c", "function": "check_pw",
+               "status": status}
+        token = journal_mac.mint_coverage_row(row, "journal")
+        assert token
+        row[journal_mac.TOKEN_KEY] = token
+        record = {"tool": "journal", "functions_analysed": [row]}
         return _gap_keys(compute_gaps(_checklist(target), [record]))
 
     @pytest.mark.parametrize("status,suppressed", [
