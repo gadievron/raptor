@@ -739,6 +739,50 @@ class CExtractor:
 
     STORAGE_CLASSES = frozenset({'static', 'extern', 'inline'})
 
+    # Reserved words that must never be recognised as a FUNCTION NAME.
+    # The regex patterns capture "the last word before `(`" — on
+    # declarator shapes where that paren is not the parameter list
+    # (function-pointer returns: `static int (*lookup(...))(int)`),
+    # the captured word is a TYPE, and real corpora minted inventory
+    # identities named `int` / `void` / `char` whose brace-filled
+    # spans ran tens of KB (wasting whole LLM review slots).
+    # KEYWORDS alone only blocks statement keywords; the name seams
+    # need the full reserved vocabulary.
+    #
+    # Membership criterion (churn-prone limit — both directions):
+    #  * BELONGS: reserved words of ISO C (any revision, incl. the
+    #    C23 additions and `_Xxx` spellings) and ISO C++ — words that
+    #    cannot name a function in the language reserving them. The
+    #    union serves both the c and cpp lanes (one extractor
+    #    instance handles both): a C-only function literally named
+    #    `new` or `class` is refused too — an accepted cost, since
+    #    such names break the moment a header is included from C++.
+    #  * NEVER: anything that lexes as an ordinary identifier in both
+    #    languages — typedef/library names (`size_t`, `uint32_t`),
+    #    project types, or identifiers that merely share a keyword
+    #    prefix (`iffy`, `interior`, `intp` must keep extracting).
+    RESERVED_WORDS = KEYWORDS | C_TYPE_HINTS | frozenset({
+        # ISO C (C89..C23) not already in KEYWORDS / C_TYPE_HINTS
+        'auto', 'restrict', 'typedef',
+        '_Alignas', '_Alignof', '_Atomic', '_BitInt', '_Bool',
+        '_Complex', '_Decimal128', '_Decimal32', '_Decimal64',
+        '_Generic', '_Imaginary', '_Noreturn', '_Static_assert',
+        '_Thread_local',
+        'alignas', 'alignof', 'bool', 'constexpr', 'false', 'nullptr',
+        'static_assert', 'thread_local', 'true', 'typeof_unqual',
+        # ISO C++ (through C++23) not already covered above
+        'and', 'and_eq', 'asm', 'bitand', 'bitor', 'catch',
+        'char16_t', 'char32_t', 'char8_t', 'class', 'compl',
+        'concept', 'const_cast', 'consteval', 'constinit',
+        'co_await', 'co_return', 'co_yield', 'decltype', 'delete',
+        'dynamic_cast', 'explicit', 'export', 'friend', 'mutable',
+        'namespace', 'new', 'noexcept', 'not', 'not_eq', 'operator',
+        'or', 'or_eq', 'private', 'protected', 'public',
+        'reinterpret_cast', 'requires', 'static_cast', 'template',
+        'this', 'throw', 'try', 'typeid', 'typename', 'using',
+        'virtual', 'wchar_t', 'xor', 'xor_eq',
+    })
+
     def _c_metadata(self, line: str, name: str) -> FunctionMetadata | None:
         """Extract return type and storage class from the text before the function name."""
         try:
@@ -801,7 +845,7 @@ class CExtractor:
             match = re.match(self.ANSI_PATTERN, line)
             if match:
                 name = match.group(1)
-                if name not in self.KEYWORDS and name not in seen:
+                if name not in self.RESERVED_WORDS and name not in seen:
                     functions.append(FunctionInfo(
                         name=name, line_start=i + 1,
                         metadata=self._c_metadata(line, name),
@@ -813,7 +857,7 @@ class CExtractor:
             split_match = re.match(self.ANSI_SPLIT_PATTERN, line)
             if split_match:
                 name = split_match.group(1)
-                if name not in self.KEYWORDS and name not in seen:
+                if name not in self.RESERVED_WORDS and name not in seen:
                     # K&R declarations (e.g. `z_streamp strm;`) may
                     # appear between the signature and the `{`.
                     for j in range(i + 1, min(i + 40, len(lines))):
@@ -848,7 +892,7 @@ class CExtractor:
             )
             if knr_match:
                 name = knr_match.group(1)
-                if name not in self.KEYWORDS and name not in seen:
+                if name not in self.RESERVED_WORDS and name not in seen:
                     prev_idx = i - 1
                     while prev_idx >= 0 and not lines[prev_idx].strip():
                         prev_idx -= 1
@@ -973,7 +1017,7 @@ class CExtractor:
         if not m:
             return None
         name = m.group('name')
-        if name in self.KEYWORDS or name in seen:
+        if name in self.RESERVED_WORDS or name in seen:
             return None
 
         # Body-definition check: look for `{` within a few lines of
@@ -2072,6 +2116,28 @@ class GenericExtractor:
     # lowering it starts dropping legitimate long declarations.
     _MAX_LINE = 16 * 1024
 
+    # Control-flow words that PATTERNS[1]'s "word before `(`" capture
+    # picks out of statement HEADERS rather than definitions:
+    # `} else if (x) {` captures `if` (demonstrated end-to-end on the
+    # `.inc` residual lane), `return when (x) {` captures `when`
+    # (Kotlin). This lane is language-AGNOSTIC, so the C/C++
+    # RESERVED_WORDS vocabulary deliberately stays out.
+    #
+    # Membership criterion (churn-prone limit — both directions):
+    #  * BELONGS: parenthesised-statement-header keywords reserved
+    #    across the C-syntax languages this fallback can receive
+    #    (C-family includes, C#, PHP, Java, JS, Kotlin, Swift when
+    #    grammar-less) — words that head `kw (…) {` and cannot name a
+    #    function there.
+    #  * NEVER: the rest of the C/C++ reserved vocabulary — words that
+    #    are ordinary identifiers in generic-lane languages
+    #    (`template`, `restrict`, `typename` are legal C#/PHP/Java
+    #    method names and must keep extracting).
+    _CONTROL_FLOW_NAMES: ClassVar[frozenset[str]] = frozenset({
+        'if', 'else', 'elseif', 'while', 'for', 'foreach',
+        'switch', 'do', 'catch', 'when',
+    })
+
     def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions = []
         seen = set()
@@ -2083,6 +2149,8 @@ class GenericExtractor:
                 match = re.search(pattern, line)
                 if match:
                     name = match.group(1)
+                    if name in self._CONTROL_FLOW_NAMES:
+                        continue
                     if name not in seen:
                         functions.append(FunctionInfo(name=name, line_start=i))
                         seen.add(name)
@@ -2766,7 +2834,11 @@ class TreeSitterExtractor:
             if sub.type == "identifier":
                 name = sub.text.decode()
                 break
-        if not name or name in seen_names or name in CExtractor.KEYWORDS:
+        # RESERVED_WORDS here is belt-and-braces: reserved words lex as
+        # keyword / primitive_type nodes, never as the `identifier`
+        # child this arm reads, so no known input reaches this check —
+        # it guards against grammar-version drift only.
+        if not name or name in seen_names or name in CExtractor.RESERVED_WORDS:
             return
         end_line: int | None = decl_node.start_point[0] + 1
         # Siblings come from the walk's shared children list, not
@@ -3042,7 +3114,11 @@ class TreeSitterExtractor:
                     if sub.type == "identifier":
                         name = sub.text.decode()
                         break
-                if name and name not in seen_names and name not in CExtractor.KEYWORDS:
+                # RESERVED_WORDS here is belt-and-braces: reserved words
+                # lex as keyword / primitive_type nodes, never as the
+                # `identifier` child read above, so no known input
+                # reaches this check — grammar-version drift guard only.
+                if name and name not in seen_names and name not in CExtractor.RESERVED_WORDS:
                     functions.append(FunctionInfo(
                         name=name,
                         line_start=child.start_point[0] + 1,
@@ -3063,6 +3139,21 @@ class TreeSitterExtractor:
                           class_attributes: Sequence[str] = ()) -> FunctionInfo | None:
         name = self._get_name(node)
         if not name:
+            return None
+
+        # Reserved-word gate on the tree-sitter MAIN lane (c/cpp only):
+        # preprocessor-fragmented parses can leave a statement keyword as
+        # the declarator identifier of a CLEAN function_definition node —
+        # an `#ifdef`-wrapped `else if` arm minted `if` identities with
+        # multi-KB spans from real corpora, and `if (cond)` under a
+        # dangling type line, `MACRO(if)(void)` parenthesized declarators,
+        # and `operator int()` routed to the c lane all mint keyword /
+        # type names here. tree-sitter can never lex these as identifiers
+        # in a VALID parse, so a reserved-word name is always fragment
+        # debris. Cost (documented residual): a C-only function literally
+        # named a C++ keyword (`new`, `class`) is refused on this lane
+        # too — consistent with the regex lane's documented behaviour.
+        if self.language in ("c", "cpp") and name in CExtractor.RESERVED_WORDS:
             return None
 
         visibility, class_name = self._extract_visibility(node, name, class_name, attrs)
@@ -3835,7 +3926,17 @@ def extract_items(filepath: str, language: str, content: str,
         from core.inventory.dead_scope import _c_strip_comments_and_strings
         regex_funcs = regex_ext.extract(
             filepath, _c_strip_comments_and_strings(content))
-        regex_by_name = {f.name: f for f in regex_funcs if f.kind == KIND_FUNCTION}
+        # Reserved-word gate at the merge seam (defense in depth): the
+        # recognition fix in CExtractor already refuses reserved words,
+        # but this append is where a regression would land — on the
+        # PRIMARY tree-sitter path the ts lane names the function
+        # correctly, so a regex-minted `int` / `void` is never in
+        # ts_funcs and would be appended as a phantom identity.
+        regex_by_name = {
+            f.name: f for f in regex_funcs
+            if f.kind == KIND_FUNCTION
+            and f.name not in CExtractor.RESERVED_WORDS
+        }
         for i, item in enumerate(items):
             if item.kind == KIND_FUNCTION and item.name in broken:
                 repair = regex_by_name.get(item.name)

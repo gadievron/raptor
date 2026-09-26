@@ -16,6 +16,7 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING
 
 from core.inventory._walk import iter_regular_files
+from core.inventory.extractors import CExtractor
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -45,10 +46,12 @@ _FUNC_DEF_RE = re.compile(
     re.MULTILINE,
 )
 
-_SKIP_NAMES = frozenset({
-    "if", "else", "for", "while", "do", "switch", "return",
-    "sizeof", "typeof", "defined",
-})
+# Same "last word before `(`" capture as the inventory's C regex lane,
+# so the same declarator shapes (function-pointer returns) can put a
+# TYPE token in the name group — share the extractor's reserved-word
+# blocklist. `defined` is preprocessor-only (an ordinary identifier in
+# C proper) and stays a local extra for `#if defined(...)` lines.
+_SKIP_NAMES = CExtractor.RESERVED_WORDS | frozenset({"defined"})
 
 _MAX_BODY_LINES = 30
 _MAX_CACHE_ENTRIES = 16

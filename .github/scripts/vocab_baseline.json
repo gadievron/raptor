@@ -1243,6 +1243,18 @@
     "count": 14,
     "kind": "literal"
   },
+  "core/inventory/extractors.py::RESERVED_WORDS": {
+    "count": 77,
+    "kind": "literal",
+    "note": "Closed ISO C (through C23) + ISO C++ keyword enumeration refused as function names at the C-family name-recognition seams; not a learnable API vocabulary. Same class as lifetime_witness.py::_C_KEYWORDS.",
+    "reviewed": "2026-09-26"
+  },
+  "core/inventory/extractors.py::_CONTROL_FLOW_NAMES": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed control-flow keyword subset refused as function names at the language-agnostic generic-fallback seam (statement headers like `} else if (x) {` match the definition pattern); deliberately NOT the full C/C++ reserved vocabulary — C-only reserved words are ordinary identifiers in generic-lane languages. Not a learnable API vocabulary.",
+    "reviewed": "2026-09-26"
+  },
   "core/inventory/extractors.py::_CLASS_TYPES": {
     "count": 16,
     "kind": "literal"
@@ -1279,10 +1291,6 @@
   },
   "core/inventory/header_api.py::_SKIP_NAMES": {
     "count": 13,
-    "kind": "literal"
-  },
-  "core/inventory/header_functions.py::_SKIP_NAMES": {
-    "count": 10,
     "kind": "literal"
   },
   "core/inventory/languages.py::LANG_DISPLAY": {
