@@ -6,9 +6,18 @@ the function-header probe (``_body_depth``, anchored match), the
 assignment splitter (``_ASSIGN_RE``, anchored match per statement)
 and the post-boundary transform-feed scan (built inline in
 ``extract_chain``, unanchored search per later statement).  All three
-are linear by construction — character-disjoint adjacent repeats for
-the anchored pair, paren-delimited restart windows for the scan — and
-the redos-idiom census pump oracle pins each at growth exponent 1.0.
+are linear by construction — character-disjoint repeats left of each
+failable atom for the anchored pair, paren-delimited restart windows
+for the scan — and the redos-idiom census pump oracle pins each at
+growth exponent 1.0.  The chain-ASSEMBLY loop itself is pinned linear
+too (``TestAssemblyLoopLinear``): regex linearity alone did not make
+the entry point linear.
+
+Clock choice, adjudicated: every bound here is ``time.process_time``
+(CPU, not wall) — the same clock the census pins moved to — so a
+loaded host cannot flake a pin and a pin cannot hide behind idle
+wall time.  The bounds discriminate by >5x against the nearest
+measured mutant (11.3s) and >25x against the rest.
 
 Every pin here is two-direction and non-vacuous: it asserts the
 verdict on the hostile shape as well as the CPU bound, and a
@@ -204,3 +213,114 @@ class TestTransformFeedScanLinear:
         assert isinstance(result, ExtractionRefusal)
         assert "transformed or reassigned" in result.reason
         assert took < _CPU_BOUND_S
+
+
+def _alias_pump(k: int) -> str:
+    lines = ["function f($x) {",
+             "    $v0 = htmlspecialchars($x, ENT_QUOTES);"]
+    lines += [f"    $v{i + 1} = $v{i};" for i in range(k)]
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _transform_pump(k: int) -> str:
+    lines = ["function f($x) {",
+             "    $v0 = htmlspecialchars($x, ENT_QUOTES);"]
+    lines += [f"    $v{i + 1} = trim($v{i});" for i in range(k)]
+    lines.append("}")
+    return "\n".join(lines)
+
+
+class TestAssemblyLoopLinear:
+    """The chain-ASSEMBLY loop through the production entry point:
+    the divergence check used to rescan every remaining statement
+    per carrier move, so a pumped alias chain was QUADRATIC (53s at
+    16k one-line aliases — and ACCEPTED). Two independent layers pin
+    the fix: the precomputed mention index makes extraction linear,
+    and the carrier-move / step ceilings refuse hostile shapes
+    DURING extraction (refusal over mis-attribution), so even a
+    future algorithmic regression degrades to a bounded refusal."""
+
+    def test_alias_pump_refuses_bounded(self):
+        # 16k carrier moves: refused at the carrier gate, in linear
+        # time (the mention index is built either way).
+        src = _alias_pump(16_000)
+        result, took = _timed(
+            lambda: extract_chain(src, ("htmlspecialchars",)))
+        assert isinstance(result, ExtractionRefusal)
+        assert "moves its carrier" in result.reason
+        assert took < _CPU_BOUND_S
+
+    def test_transform_pump_refuses_bounded(self):
+        # The transform variant grows steps, so the in-extraction
+        # step ceiling fires first — still a bounded refusal.
+        src = _transform_pump(16_000)
+        result, took = _timed(
+            lambda: extract_chain(src, ("htmlspecialchars",)))
+        assert isinstance(result, ExtractionRefusal)
+        assert "step ceiling" in result.reason
+        assert took < _CPU_BOUND_S
+
+    def test_algorithm_is_linear_past_the_gate(self, monkeypatch):
+        # The gate is defense-in-depth, NOT the fix: with the gate
+        # lifted, the same 16k pump ACCEPTS within the CPU bound
+        # (measured 0.095s; the pre-fix rescan measured 53.3s) and
+        # follows every carrier move correctly.
+        import core.audit.sanwit._extract as ex
+
+        monkeypatch.setattr(ex, "_MAX_CARRIER_MOVES", 10**9)
+        src = _alias_pump(16_000)
+        result, took = _timed(
+            lambda: extract_chain(src, ("htmlspecialchars",)))
+        assert isinstance(result, ChainExtraction)
+        assert result.final_var == "v16000"
+        assert took < _CPU_BOUND_S
+
+    def test_carrier_gate_two_directions(self):
+        import core.audit.sanwit._extract as ex
+
+        at_gate = extract_chain(
+            _alias_pump(ex._MAX_CARRIER_MOVES), ("htmlspecialchars",))
+        assert isinstance(at_gate, ChainExtraction)
+        assert at_gate.final_var == f"v{ex._MAX_CARRIER_MOVES}"
+        over = extract_chain(
+            _alias_pump(ex._MAX_CARRIER_MOVES + 1),
+            ("htmlspecialchars",))
+        assert isinstance(over, ExtractionRefusal)
+        assert "moves its carrier" in over.reason
+
+    def test_step_ceiling_two_directions(self):
+        from core.audit.sanwit._extract import MAX_CHAIN_STEPS
+
+        def same_var(extra: int) -> str:
+            lines = ["function f($x) {",
+                     "    $v = htmlspecialchars($x, ENT_QUOTES);"]
+            lines += ["    $v = trim($v);"] * extra
+            lines.append("}")
+            return "\n".join(lines)
+
+        at = extract_chain(
+            same_var(MAX_CHAIN_STEPS - 1), ("htmlspecialchars",))
+        assert isinstance(at, ChainExtraction)
+        assert len(at.steps) == MAX_CHAIN_STEPS
+        over = extract_chain(
+            same_var(MAX_CHAIN_STEPS), ("htmlspecialchars",))
+        assert isinstance(over, ExtractionRefusal)
+        assert "step ceiling" in over.reason
+
+    def test_divergence_verdict_survives_the_index(self):
+        # Non-vacuity: the O(log n) mention-index lookup preserves
+        # the divergence refusal the per-move rescan used to make —
+        # an abandoned carrier used later still refuses, near or far.
+        filler = "".join(f"    $z{i} = 1;\n" for i in range(40))
+        src = (
+            "function f($x) {\n"
+            "    $a = htmlspecialchars($x, ENT_QUOTES);\n"
+            "    $b = $a;\n"
+            + filler
+            + "    echo $a;\n"
+            "}"
+        )
+        result = extract_chain(src, ("htmlspecialchars",))
+        assert isinstance(result, ExtractionRefusal)
+        assert "copies can diverge" in result.reason

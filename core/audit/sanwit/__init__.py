@@ -39,6 +39,7 @@ token-authenticated receipt.
 
 from __future__ import annotations
 
+import functools
 import re
 import secrets
 from dataclasses import dataclass, field
@@ -48,6 +49,8 @@ from typing import Any
 from core.source import read_contained_bytes
 
 from ._extract import (
+    MAX_CHAIN_STEPS,
+    ChainExtraction,
     ExtractionRefusal,
     extract_chain,
 )
@@ -83,12 +86,8 @@ SANWIT_CWES: frozenset[str] = frozenset({
     "CWE-78", "CWE-77", "CWE-88", "CWE-79", "CWE-116",
 })
 
-#: Chain-length ceiling. Real sanitizer chains are a handful of
-#: steps; a longer extraction is almost certainly a mis-anchored
-#: walk and would bloat probe/receipts. Larger admits stranger
-#: chains at receipt-size cost; smaller starts refusing real
-#: multi-step rewrites.
-MAX_CHAIN_STEPS = 12
+# MAX_CHAIN_STEPS lives with the extractor (enforced during
+# extraction) and is re-exported here for the callers' re-checks.
 
 # Receipt caps (exhibits are target/interpreter-derived text).
 _EXHIBIT_OUTPUT_CAP = 256
@@ -399,6 +398,20 @@ class SanwitResult:
         return d
 
 
+@functools.lru_cache(maxsize=4)
+def _extract_cached(
+    source: str, names: tuple[str, ...],
+) -> ChainExtraction | ExtractionRefusal:
+    """One extraction per (source, sanitizer set): the precheck
+    (:func:`sanwit_can_adjudicate`, consulted by the chain builder)
+    and the leg itself (:func:`run_sanwit_check`) both extract, and
+    extraction is a full parse of the function source. Results are
+    frozen dataclasses — safe to share. maxsize is small on purpose:
+    the keys retain the source strings, so the cache holds at most a
+    few in-flight items' text, not a run's corpus."""
+    return extract_chain(source, names)
+
+
 def sanwit_can_adjudicate(
     target_path: Path | str,
     file_path: str,
@@ -421,7 +434,9 @@ def sanwit_can_adjudicate(
     ctx, _ = resolve_context(hypothesis, cwe)
     if ctx is None:
         return False
-    extraction = extract_chain(source or "", mentioned_sanitizers(hypothesis))
+    extraction = _extract_cached(
+        source or "", mentioned_sanitizers(hypothesis),
+    )
     if isinstance(extraction, ExtractionRefusal):
         return False
     if len(extraction.steps) > MAX_CHAIN_STEPS:
@@ -681,7 +696,7 @@ def run_sanwit_check(
         return _not_executable(file_path, function_name, why)
 
     names = mentioned_sanitizers(hypothesis)
-    extraction = extract_chain(source or "", names)
+    extraction = _extract_cached(source or "", names)
     if isinstance(extraction, ExtractionRefusal):
         return _not_executable(
             file_path, function_name,
