@@ -134,7 +134,40 @@ def _journal_shard_name(n: int) -> str:
     return f"review-journal.{n:03d}.jsonl"
 
 
-def journal_shard_paths(out_dir: Path) -> list[Path]:
+def _journal_dir_snapshot(out_dir: Path) -> "frozenset[str] | None":
+    """ONE directory listing serving both shard-set computations.
+
+    The contiguity walk and the orphan classification were two
+    separate directory reads; a load racing a concurrent appender
+    roll could observe the fresh shard in the second read but not
+    the first, transiently classifying it as an orphan (one-load
+    incomplete flag). A caller that takes one snapshot and feeds it
+    to BOTH :func:`journal_shard_paths` and
+    :func:`_orphan_shard_names` sees a single consistent view — a
+    roll is either wholly before the snapshot (in the set) or wholly
+    after it (next load's business), never split across the pair.
+    ``None`` = the listing failed; callers fall back to their
+    self-probing behavior.
+    """
+    try:
+        return frozenset(p.name for p in Path(out_dir).iterdir())
+    except OSError as exc:
+        # Transient listing failure (e.g. EMFILE in an fd-heavy
+        # process): callers degrade to per-shard self-probing — the
+        # pre-snapshot two-read pattern — so the race window this
+        # snapshot closes is briefly back open. Log it: a silent
+        # degrade would make a recurrence of the transient-orphan
+        # flag undiagnosable.
+        logger.debug("journal dir snapshot failed for %s (%s) — "
+                     "falling back to per-shard probing", out_dir, exc)
+        return None
+
+
+def journal_shard_paths(
+    out_dir: Path,
+    *,
+    snapshot: "frozenset[str] | None" = None,
+) -> list[Path]:
     """The journal's contiguous shard set, in append order.
 
     Always starts with ``review-journal.jsonl`` (whether or not it
@@ -142,32 +175,53 @@ def journal_shard_paths(out_dir: Path) -> list[Path]:
     The scan is contiguity-by-construction: a planted high-numbered
     file does not extend the set (the loader flags non-contiguous
     leftovers separately, see ``_orphan_shard_names``).
+
+    ``snapshot`` (a :func:`_journal_dir_snapshot` result) computes
+    contiguity from that single directory view instead of live
+    per-shard probes — pass the SAME snapshot to
+    ``_orphan_shard_names`` so a concurrent roll can never split the
+    pair. ``None`` keeps the self-probing behavior.
     """
     out_dir = Path(out_dir)
     paths = [out_dir / JOURNAL_FILENAME]
     n = 2
     while n <= _MAX_JOURNAL_SHARDS:
-        p = out_dir / _journal_shard_name(n)
-        try:
-            if not p.exists():
+        name = _journal_shard_name(n)
+        if snapshot is not None:
+            if name not in snapshot:
                 break
-        except OSError:
-            break
-        paths.append(p)
+        else:
+            p = out_dir / name
+            try:
+                if not p.exists():
+                    break
+            except OSError:
+                break
+        paths.append(out_dir / name)
         n += 1
     return paths
 
 
-def _orphan_shard_names(out_dir: Path, known: int) -> list[str]:
+def _orphan_shard_names(
+    out_dir: Path,
+    known: int,
+    *,
+    snapshot: "frozenset[str] | None" = None,
+) -> list[str]:
     """Numbered shard files BEYOND the contiguous set — evidence that
     an interior shard was deleted (rows silently invisible), so the
     load must flag incomplete rather than pretend the survivors are
-    the whole journal."""
+    the whole journal. ``snapshot`` classifies from the caller's
+    single directory view (see :func:`_journal_dir_snapshot`);
+    ``None`` takes its own listing."""
     names: list[str] = []
-    try:
-        candidates = sorted(p.name for p in Path(out_dir).iterdir())
-    except OSError:
-        return names
+    if snapshot is not None:
+        candidates = sorted(snapshot)
+    else:
+        try:
+            candidates = sorted(p.name for p in Path(out_dir).iterdir())
+        except OSError:
+            return names
     for name in candidates:
         m = _JOURNAL_SHARD_RE.match(name)
         if m and int(m.group(1)) > known:
@@ -1236,12 +1290,15 @@ def _load_checked_locked(
             served = _serve_or_extend_set(out_dir, cache_key, cached)
             if served is not None:
                 return served
-    # Cold parse of the whole shard set.
+    # Cold parse of the whole shard set — ONE directory snapshot
+    # feeds both the contiguity walk and finalize's orphan
+    # classification (see _journal_dir_snapshot).
+    snap = _journal_dir_snapshot(out_dir)
     states = [
         _load_shard_cold(shard)
-        for shard in journal_shard_paths(out_dir)
+        for shard in journal_shard_paths(out_dir, snapshot=snap)
     ]
-    return _finalize_set(out_dir, cache_key, states)
+    return _finalize_set(out_dir, cache_key, states, snapshot=snap)
 
 
 def _serve_or_extend_set(
@@ -1252,7 +1309,8 @@ def _serve_or_extend_set(
     Caller holds ``_load_cache_lock``."""
     if cached.config != _loader_config():
         return None
-    shards_now = journal_shard_paths(out_dir)
+    snap = _journal_dir_snapshot(out_dir)
+    shards_now = journal_shard_paths(out_dir, snapshot=snap)
     names_now = [p.name for p in shards_now]
     cached_names = [s.name for s in cached.shard_states]
     if (len(names_now) < len(cached_names)
@@ -1260,22 +1318,16 @@ def _serve_or_extend_set(
         # The shard set shrank or was renumbered: the cached parse
         # describes files that no longer form this journal.
         return None
-    if _orphan_shard_names(out_dir, len(shards_now)):
+    if _orphan_shard_names(out_dir, len(shards_now), snapshot=snap):
         # Contiguity anomaly: cold behavior flags it per load, and
         # anomalous states are never cached — matching that exactly
         # means never serving through one either.
         #
-        # CONTRACT for a future single-snapshot loader fix: the
-        # contiguity walk (journal_shard_paths) and this orphan
-        # classification are today two separate directory reads, so
-        # a roll landing between them transiently reads as an
-        # orphan. When a shared directory-snapshot helper lands
-        # (feeding BOTH the walk and the orphan sweep, optional
-        # snapshot parameter defaulting to a self-snapshot), THIS
-        # re-check must consume the SAME snapshot as the
-        # journal_shard_paths call above — re-scanning here would
-        # reintroduce the two-read race one layer up, in the serve
-        # path instead of the cold loader.
+        # Contract with the cold loader (fulfilled): this re-check
+        # consumes the SAME snapshot as the journal_shard_paths call
+        # above — a roll is wholly in or wholly after the snapshot,
+        # never split across the pair; re-scanning here would
+        # reintroduce the two-read race one layer up.
         return None
     if not cached.complete:
         # Pinned incomplete record (the observed reload storm was an
@@ -1365,7 +1417,7 @@ def _serve_or_extend_set(
         # every newly-appeared shard is parsed from byte 0, and the
         # new last shard becomes the active one.
         states.append(_load_shard_cold(out_dir / name))
-    return _finalize_set(out_dir, cache_key, states)
+    return _finalize_set(out_dir, cache_key, states, snapshot=snap)
 
 
 def _shard_pin_matches(
@@ -1708,6 +1760,8 @@ def _finalize_set(
     out_dir: Path,
     cache_key: str,
     states: list[_ShardLoadState],
+    *,
+    snapshot: "frozenset[str] | None" = None,
 ) -> JournalLoad:
     """Aggregate the shard states into one JournalLoad, emit the
     set-level warnings, and store/drop the cache record. Caller holds
@@ -1738,7 +1792,7 @@ def _finalize_set(
             incomplete_reason = (
                 f"{state.name}: {state.reason}" if i else state.reason
             )
-    orphans = _orphan_shard_names(out_dir, len(states))
+    orphans = _orphan_shard_names(out_dir, len(states), snapshot=snapshot)
     if orphans:
         # Anomalous by definition; also never served through the
         # cache (the serve path re-checks orphans per call), so

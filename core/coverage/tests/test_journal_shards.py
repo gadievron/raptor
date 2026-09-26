@@ -213,3 +213,153 @@ def test_compact_supersede_multi_shard_spend_carriers(tmp_path, tiny_roll):
     assert loaded.complete
     from core.audit.resume import journal_spend_usd
     assert journal_spend_usd(tmp_path) == pytest.approx(8 * 3 * 0.25)
+
+
+class TestSnapshotConsistentShardView:
+    """The orphan race fix: one directory snapshot feeds BOTH the
+    contiguity walk and the orphan classification, so a concurrent
+    appender roll is wholly in or wholly after the view — never
+    split across the pair (previously: fresh shard visible to the
+    orphan listing but not the contiguity probes → transient
+    one-load incomplete flag)."""
+
+    def test_roll_after_snapshot_is_invisible_to_both(self, tmp_path):
+        from core.coverage.journal import (
+            _journal_dir_snapshot,
+            _orphan_shard_names,
+            journal_shard_paths,
+        )
+        append_entry(tmp_path, _entry(0))
+        snap = _journal_dir_snapshot(tmp_path)
+        # A roll lands AFTER the snapshot (the race window).
+        (tmp_path / "review-journal.002.jsonl").write_text("")
+        paths = journal_shard_paths(tmp_path, snapshot=snap)
+        assert len(paths) == 1  # pre-roll view
+        # Same snapshot → the fresh shard is NOT an orphan.
+        assert _orphan_shard_names(
+            tmp_path, len(paths), snapshot=snap) == []
+        # The OLD two-read behavior (self-listing) misreads it —
+        # pinned so the fix is revert-detectable.
+        assert _orphan_shard_names(tmp_path, len(paths)) == [
+            "review-journal.002.jsonl"]
+
+    def test_roll_before_snapshot_is_in_the_set_not_orphan(
+            self, tmp_path):
+        from core.coverage.journal import (
+            _journal_dir_snapshot,
+            _orphan_shard_names,
+            journal_shard_paths,
+        )
+        append_entry(tmp_path, _entry(0))
+        (tmp_path / "review-journal.002.jsonl").write_text("")
+        snap = _journal_dir_snapshot(tmp_path)
+        paths = journal_shard_paths(tmp_path, snapshot=snap)
+        assert len(paths) == 2  # roll included in the view
+        assert _orphan_shard_names(
+            tmp_path, len(paths), snapshot=snap) == []
+
+    def test_true_orphan_still_flagged_under_snapshot(self, tmp_path):
+        # A genuine gap (interior shard deleted) must still flag —
+        # the snapshot changes VIEW consistency, never the
+        # deletion-evidence semantics.
+        from core.coverage.journal import (
+            _journal_dir_snapshot,
+            _orphan_shard_names,
+            journal_shard_paths,
+        )
+        append_entry(tmp_path, _entry(0))
+        (tmp_path / "review-journal.004.jsonl").write_text("")
+        snap = _journal_dir_snapshot(tmp_path)
+        paths = journal_shard_paths(tmp_path, snapshot=snap)
+        assert len(paths) == 1  # 002/003 absent: 004 not contiguous
+        assert _orphan_shard_names(
+            tmp_path, len(paths), snapshot=snap) == [
+            "review-journal.004.jsonl"]
+
+    def test_warm_serve_with_race_roll_stays_cached(self, tmp_path,
+                                                    monkeypatch):
+        # Serve path: a roll landing between the warm-serve's snapshot
+        # and its orphan re-check must not read as an anomaly (which
+        # would refuse the serve and force a full cold reparse of an
+        # otherwise-unchanged journal — the reload-storm cost this
+        # snapshot threading exists to prevent).
+        import os as _os
+
+        import core.coverage.journal as jm
+        append_entry(tmp_path, _entry(0, cost=1.0))
+        shard = tmp_path / JOURNAL_FILENAME
+        st = _os.stat(shard)
+        aged = st.st_mtime_ns - 60 * 1_000_000_000
+        _os.utime(shard, ns=(aged, aged))   # past the racy window
+        warm = load_entries_checked(tmp_path)
+        assert warm.complete
+        cold_parses: list[str] = []
+        real_cold = jm._load_shard_cold
+
+        def counting_cold(path):
+            cold_parses.append(path.name)
+            return real_cold(path)
+
+        real_snapshot = jm._journal_dir_snapshot
+
+        def snap_then_roll(out_dir):
+            snap = real_snapshot(out_dir)
+            (tmp_path / "review-journal.002.jsonl").write_text("")
+            return snap
+
+        monkeypatch.setattr(jm, "_load_shard_cold", counting_cold)
+        monkeypatch.setattr(jm, "_journal_dir_snapshot", snap_then_roll)
+        got = load_entries_checked(tmp_path)
+        assert got.complete, got.reason
+        assert [e.function for e in got.entries] == ["fn0"]
+        # Identity-served from the cache: the race roll must not have
+        # been classified an orphan (which returns None from the serve
+        # and cold-reparses every shard).
+        assert cold_parses == []
+
+    def test_warm_extend_with_race_roll_reads_complete(self, tmp_path,
+                                                       monkeypatch):
+        # Extend path: the delta parse's finalize must consume the
+        # SAME snapshot as the serve walk — a roll landing after the
+        # snapshot previously re-flagged the load incomplete
+        # ("non-contiguous"), the original bug one layer up.
+        import os as _os
+
+        import core.coverage.journal as jm
+        append_entry(tmp_path, _entry(0, cost=1.0))
+        shard = tmp_path / JOURNAL_FILENAME
+        st = _os.stat(shard)
+        aged = st.st_mtime_ns - 60 * 1_000_000_000
+        _os.utime(shard, ns=(aged, aged))   # past the racy window
+        warm = load_entries_checked(tmp_path)
+        assert warm.complete
+        append_entry(tmp_path, _entry(1, cost=1.0))   # grow the shard
+        real_snapshot = jm._journal_dir_snapshot
+
+        def snap_then_roll(out_dir):
+            snap = real_snapshot(out_dir)
+            (tmp_path / "review-journal.002.jsonl").write_text("")
+            return snap
+
+        monkeypatch.setattr(jm, "_journal_dir_snapshot", snap_then_roll)
+        got = load_entries_checked(tmp_path)
+        assert got.complete, got.reason
+        assert [e.function for e in got.entries] == ["fn0", "fn1"]
+
+    def test_cold_load_with_race_roll_reads_complete(self, tmp_path,
+                                                     monkeypatch):
+        # End-to-end: a roll injected DURING the cold load (planted
+        # right after the snapshot is taken) must not flag the load
+        # incomplete.
+        import core.coverage.journal as jm
+        append_entry(tmp_path, _entry(0, cost=1.0))
+        real_snapshot = jm._journal_dir_snapshot
+
+        def snap_then_roll(out_dir):
+            snap = real_snapshot(out_dir)
+            (tmp_path / "review-journal.002.jsonl").write_text("")
+            return snap
+
+        monkeypatch.setattr(jm, "_journal_dir_snapshot", snap_then_roll)
+        got = load_entries_checked(tmp_path)
+        assert got.complete, got.reason
