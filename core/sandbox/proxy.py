@@ -87,11 +87,13 @@ Error responses:
 import asyncio
 import atexit
 import contextlib
+import errno
 import ipaddress
 import itertools
 import logging
 import os
 import socket
+import struct
 import sys
 import threading
 import time
@@ -781,13 +783,15 @@ def _hex_v6(ip: str) -> str:
 _PEER_UID_TABLE_AVAILABLE = os.path.exists("/proc/net/tcp")
 
 
-def _loopback_peer_uid(peer, sockname) -> "int | None":
-    """Best-effort UID of a connected loopback TCP peer.
+def _peer_uid_via_proc_scan(peer, sockname) -> "int | None":
+    """UID of a connected loopback TCP peer via the /proc socket table.
 
-    TCP sockets have no SO_PEERCRED, so the equivalent is the kernel's
-    per-socket table: find the peer's socket row in /proc/net/tcp{,6}
-    (its local_address == the peer's addr:port, its rem_address == our
-    listener-side addr:port) and read the uid column.
+    Fallback path (and netlink-miss second opinion) behind the
+    _loopback_peer_uid dispatcher below: find the peer's socket row in
+    /proc/net/tcp{,6} (its local_address == the peer's addr:port, its
+    rem_address == our listener-side addr:port) and read the uid
+    column. Same owner field the kernel serves over NETLINK_SOCK_DIAG
+    (both render sock_i_uid of the same struct sock).
 
     Only ESTABLISHED rows (st == 01) are matched: TIME_WAIT rows
     report uid 0 regardless of who created the socket, and a peer we
@@ -795,21 +799,13 @@ def _loopback_peer_uid(peer, sockname) -> "int | None":
 
     Returns None when the UID cannot be determined — non-Linux hosts
     (no /proc/net), malformed peername tuples, or a row that vanished
-    because the peer closed mid-lookup. The caller's policy on None
-    is capability-scoped: on hosts WITH the socket table
-    (_PEER_UID_TABLE_AVAILABLE) an undetermined UID is retried once
-    and then REFUSED — allowing it let a different-uid local process
-    race connect-vs-row-visibility (or exhaust the row scan) to ride
-    the proxy's allowlisted egress. On hosts without the table
-    (macOS) None is the permanent answer for every peer, honest or
-    not, and the gate stays layered defense only (loopback-only bind
-    + hostname allowlist). Residual: a same-UID process can still
-    hand its connected fd to another principal (SCM_RIGHTS); no
-    /proc view defends that.
+    because the peer closed mid-lookup.
 
-    Cost: one bounded /proc read per inbound loopback TCP connection
-    (unix-socket lanes never reach this). The scan stops at the first
-    matching established row.
+    Cost: an O(host-sockets) linear read of the table (the scan stops
+    at the first matching established row, but a miss walks the whole
+    table). That is why this is NOT the primary path: when it must
+    run per-connection (netlink structurally unavailable) the caller
+    offloads it to an executor instead of blocking the event loop.
     """
     try:
         peer_ip, peer_port = peer[0], peer[1]
@@ -842,6 +838,244 @@ def _loopback_peer_uid(peer, sockname) -> "int | None":
     except OSError:
         return None
     return None
+
+
+# --- NETLINK_SOCK_DIAG exact-match peer-uid lookup -------------------
+#
+# The primary peer-uid primitive. Instead of linearly scanning the
+# rendered /proc/net/tcp{,6} text (O(host-sockets) per connection, on
+# the event-loop thread), ask the kernel for exactly one socket by its
+# 4-tuple: SOCK_DIAG_BY_FAMILY without NLM_F_DUMP is a hash-table
+# lookup (inet_diag_find_one_icsk) that returns a single
+# inet_diag_msg. The idiag_uid field it carries is sock_i_uid() of the
+# same struct sock whose uid the /proc row prints — the same owner
+# fact, fetched in O(1).
+_NETLINK_SOCK_DIAG = 4        # linux/netlink.h NETLINK_SOCK_DIAG
+_SOCK_DIAG_BY_FAMILY = 20     # linux/sock_diag.h
+_NLM_F_REQUEST = 0x1
+_NLMSG_ERROR = 0x2
+_NLMSG_HDRLEN = 16            # sizeof(struct nlmsghdr)
+_TCP_ESTABLISHED = 1          # linux/tcp_states.h TCP_ESTABLISHED
+_INET_DIAG_NOCOOKIE = 0xFFFFFFFF
+_INET_DIAG_MSG_LEN = 72       # sizeof(struct inet_diag_msg)
+_INET_DIAG_UID_OFFSET = 64    # offsetof(struct inet_diag_msg, idiag_uid)
+
+
+class _SockDiagUnavailableError(Exception):
+    """The NETLINK_SOCK_DIAG lookup is structurally unusable here.
+
+    Raised for socket()/send/recv failures (kernel without inet_diag,
+    seccomp/LSM denying AF_NETLINK), unexpected netlink errnos, and
+    unparseable replies. Distinct from a plain miss (None): a miss is
+    an answer about ONE peer; this says the primitive itself does not
+    work, so the dispatcher latches it off and uses the /proc scan
+    from then on.
+    """
+
+
+def _sock_diag_peer_uid(peer, sockname) -> "int | None":
+    """UID of a connected loopback TCP peer via NETLINK_SOCK_DIAG.
+
+    Exact-match query for the PEER'S socket: its local end is the
+    peer's (addr, port), its remote end is our listener-side
+    (addr, port). Returns the owning UID, or None when the kernel has
+    no such established socket (ENOENT, or a non-ESTABLISHED state —
+    TIME_WAIT reports uid 0 regardless of who created the socket, so
+    it must never satisfy the gate). Raises
+    _SockDiagUnavailableError when the primitive itself fails.
+
+    Runs synchronously on the event-loop thread by design: one
+    AF_NETLINK socket + one request/reply round-trip against a kernel
+    hash lookup is microseconds, with no dependency on host socket
+    count — unlike the /proc scan it replaces.
+    """
+    try:
+        peer_ip, peer_port = peer[0], peer[1]
+        local_ip, local_port = sockname[0], sockname[1]
+    except (TypeError, IndexError):
+        return None
+    family = socket.AF_INET6 if ":" in peer_ip else socket.AF_INET
+    try:
+        src_raw = socket.inet_pton(family, peer_ip)
+        dst_raw = socket.inet_pton(family, local_ip)
+    except OSError:
+        return None
+    # struct inet_diag_sockid: sport/dport are big-endian, addresses
+    # occupy 16 bytes each (IPv4 in the first 4), idiag_if = 0 (the
+    # loopback peer's socket is not device-bound; if it somehow is,
+    # the lookup misses and the dispatcher's scan fallback answers),
+    # cookie = INET_DIAG_NOCOOKIE ("match any").
+    sockid = (
+        struct.pack("!HH", peer_port, local_port)
+        + src_raw.ljust(16, b"\x00")
+        + dst_raw.ljust(16, b"\x00")
+        + struct.pack("=III", 0, _INET_DIAG_NOCOOKIE, _INET_DIAG_NOCOOKIE)
+    )
+    # struct inet_diag_req_v2 + nlmsghdr. idiag_states = ESTABLISHED
+    # only, mirroring the scan's `st == 01` filter.
+    req = struct.pack(
+        "=BBBBI", family, socket.IPPROTO_TCP, 0, 0, 1 << _TCP_ESTABLISHED,
+    ) + sockid
+    msg = struct.pack(
+        "=IHHII", _NLMSG_HDRLEN + len(req), _SOCK_DIAG_BY_FAMILY,
+        _NLM_F_REQUEST, 1, 0,
+    ) + req
+    try:
+        nl = socket.socket(
+            socket.AF_NETLINK, socket.SOCK_RAW, _NETLINK_SOCK_DIAG,
+        )
+    except (AttributeError, OSError) as exc:
+        raise _SockDiagUnavailableError(f"socket: {exc}") from exc
+    try:
+        # Belt-and-braces bound: the kernel answers an exact-match
+        # request immediately; the timeout only guards against a
+        # pathological filter swallowing the reply.
+        nl.settimeout(1.0)
+        try:
+            nl.sendto(msg, (0, 0))
+            # Only the KERNEL's answer counts: netlink permits
+            # user-to-user unicast, so a local process that guessed
+            # this socket's autobound portid could inject a forged
+            # "uid = proxy uid" reply. Kernel-origin datagrams carry
+            # sender pid 0 — drain anything else. Bound iterations
+            # (plus the 1s timeout) so a spoof flood degrades to the
+            # scan fallback instead of blocking the lookup; the /proc
+            # scan has no such injection channel, so verdicts stay
+            # trustworthy either way.
+            for _ in range(32):
+                resp, sender = nl.recvfrom(4096)
+                if sender and sender[0] == 0:
+                    break
+            else:
+                raise _SockDiagUnavailableError(
+                    "no kernel-origin reply (spoofed datagrams only)")
+        except OSError as exc:
+            raise _SockDiagUnavailableError(f"query: {exc}") from exc
+    finally:
+        nl.close()
+    off = 0
+    while off + _NLMSG_HDRLEN <= len(resp):
+        nl_len, nl_type = struct.unpack_from("=IH", resp, off)
+        if nl_len < _NLMSG_HDRLEN or off + nl_len > len(resp):
+            raise _SockDiagUnavailableError("truncated netlink reply")
+        payload = resp[off + _NLMSG_HDRLEN:off + nl_len]
+        if nl_type == _NLMSG_ERROR:
+            if len(payload) < 4:
+                raise _SockDiagUnavailableError("short NLMSG_ERROR")
+            err = -struct.unpack_from("=i", payload, 0)[0]
+            if err == errno.ENOENT:
+                return None  # no such established socket — a miss
+            raise _SockDiagUnavailableError(f"netlink errno {err}")
+        if nl_type == _SOCK_DIAG_BY_FAMILY:
+            if len(payload) < _INET_DIAG_MSG_LEN:
+                raise _SockDiagUnavailableError("short inet_diag_msg")
+            if payload[1] != _TCP_ESTABLISHED:  # idiag_state
+                return None
+            return struct.unpack_from(
+                "=I", payload, _INET_DIAG_UID_OFFSET,
+            )[0]
+        off += (nl_len + 3) & ~3
+    raise _SockDiagUnavailableError("no inet_diag message in reply")
+
+
+# Whether NETLINK_SOCK_DIAG is worth attempting at all. Starts from
+# platform capability (AF_NETLINK exists = Linux) and is latched False
+# by the dispatcher on the first structural failure so a kernel/LSM
+# that refuses inet_diag costs one failed attempt, not one per
+# connection. Module-level (not per-proxy): the capability is a host
+# fact, like _PEER_UID_TABLE_AVAILABLE above.
+_SOCK_DIAG_USABLE = hasattr(socket, "AF_NETLINK")
+
+# Executor slots for /proc-scan peer-uid lookups when the scan IS the
+# per-connection path (netlink latched off). Lower values serialise
+# accept-time gating under connection bursts (peers queue behind the
+# semaphore before their CONNECT is even read); higher values just
+# multiply concurrent full-table /proc reads that contend on the same
+# kernel seq_file iteration without any of them finishing sooner —
+# the scan is kernel-CPU-bound, not blocked on I/O worth overlapping.
+_PEER_SCAN_MAX_CONCURRENCY = 4
+
+# Signal channel between EgressProxy._lookup_peer_uid and the real
+# dispatcher below. Armed on the event-loop thread around the INLINE
+# dispatcher call, it tells the dispatcher to report "scan still owed"
+# (pending=True, verdict None) instead of walking /proc on the loop —
+# a peer doing connect-then-reset churn can force a netlink miss on
+# every CONNECT, and the miss-path scan must go to the same bounded
+# executor as the latched-off fallback. Thread-local because the same
+# dispatcher also runs, unarmed, inside executor workers, where the
+# scan is exactly what should happen. Monkeypatched seam fakes never
+# touch it: pending stays False and their verdict is final, preserving
+# the seam contract (one two-argument call, return value = verdict).
+_INLINE_SCAN_DEFER = threading.local()
+
+
+def _loopback_peer_uid(peer, sockname) -> "int | None":
+    """Best-effort UID of a connected loopback TCP peer.
+
+    TCP sockets have no SO_PEERCRED, so the equivalent is asking the
+    kernel who owns the peer's socket. Two primitives answer that,
+    both reading the same struct-sock owner field (sock_i_uid):
+
+    1. NETLINK_SOCK_DIAG exact-match lookup (primary) — O(1) kernel
+       hash lookup by 4-tuple; microseconds, host-socket-count
+       independent.
+    2. /proc/net/tcp{,6} row scan (fallback, and second opinion on a
+       netlink miss) — O(host-sockets); also covers the edge where
+       the peer's socket is device-bound and the idiag_if=0 lookup
+       misses it. The union keeps this dispatcher a strict semantic
+       superset of the historical scan-only behaviour: it can only
+       resolve MORE peers, never fewer, so every None still means
+       "the kernel shows no established socket for this 4-tuple".
+
+    Returns None when the UID cannot be determined — non-Linux hosts,
+    malformed peername tuples, or a socket that vanished because the
+    peer closed mid-lookup. The caller's policy on None is
+    capability-scoped: on hosts WITH the socket table
+    (_PEER_UID_TABLE_AVAILABLE) an undetermined UID is retried once
+    and then REFUSED — allowing it let a different-uid local process
+    race connect-vs-row-visibility (or exhaust the row scan) to ride
+    the proxy's allowlisted egress. On hosts without the table
+    (macOS) None is the permanent answer for every peer, honest or
+    not, and the gate stays layered defense only (loopback-only bind
+    + hostname allowlist). Residual: a same-UID process can still
+    hand its connected fd to another principal (SCM_RIGHTS); no
+    kernel socket-owner view defends that.
+
+    Synchronous. EgressProxy._lookup_peer_uid is the event-loop-side
+    wrapper that decides where this runs: inline while the verdict
+    comes from netlink alone (cheap), in a bounded executor whenever
+    the /proc scan owes the verdict — scan-only hosts, and the
+    netlink-miss / just-latched cases, which the wrapper detects via
+    the _INLINE_SCAN_DEFER signal above (the linear read must never
+    block the loop, and a hostile peer can force the miss case on
+    every connection).
+    """
+    global _SOCK_DIAG_USABLE
+    if _SOCK_DIAG_USABLE:
+        try:
+            uid = _sock_diag_peer_uid(peer, sockname)
+        except _SockDiagUnavailableError as exc:
+            _SOCK_DIAG_USABLE = False
+            logger.info(
+                "egress proxy: NETLINK_SOCK_DIAG unusable (%s) — peer-uid "
+                "lookups fall back to the /proc/net/tcp scan", exc,
+            )
+        else:
+            if uid is not None:
+                return uid
+            # Netlink says "no such socket": rare organically (row-lag
+            # race, device-bound peer socket) but forcible on demand
+            # (connect-then-reset churn). Give the scan the last word
+            # so a miss here never refuses a peer the historical
+            # behaviour would have identified.
+        if getattr(_INLINE_SCAN_DEFER, "armed", False):
+            # Inline on the event loop: the scan verdict is still owed,
+            # but the O(host-sockets) walk must not run here.
+            # _lookup_peer_uid re-runs this dispatcher in the bounded
+            # executor (where this branch is unarmed) for the verdict.
+            _INLINE_SCAN_DEFER.pending = True
+            return None
+    return _peer_uid_via_proc_scan(peer, sockname)
 
 
 class _Gate2BlockedError(OSError):
@@ -1286,6 +1520,12 @@ class EgressProxy:
         self._buffer_size = buffer_size
         self._active_tunnels = 0
         self._active_lock = threading.Lock()
+        # Bounds concurrent executor-offloaded /proc peer-uid scans
+        # (only used when NETLINK_SOCK_DIAG is unusable). Created
+        # lazily by _lookup_peer_uid so it binds to the proxy's own
+        # event loop, not whichever loop (if any) is current in the
+        # constructing thread.
+        self._peer_scan_sem: "asyncio.Semaphore | None" = None
         # Upstream proxy support — for corporate environments where the
         # user's HTTPS_PROXY env var points at an outbound HTTP proxy
         # that must be traversed to reach any external host. Parsed URL
@@ -2675,6 +2915,51 @@ class EgressProxy:
         self._client_tasks.add(task)
         task.add_done_callback(self._client_tasks.discard)
 
+    async def _lookup_peer_uid(self, peer, sockname) -> "int | None":
+        """Event-loop-side peer-uid lookup with hot-path protection.
+
+        While NETLINK_SOCK_DIAG is usable the module-level
+        _loopback_peer_uid runs inline: the exact-match query is an
+        O(1) kernel lookup, cheaper than an executor hop. The inline
+        call is armed via _INLINE_SCAN_DEFER, so on a netlink miss
+        (or a structural failure that just latched netlink off) the
+        dispatcher reports "scan still owed" instead of walking /proc
+        on the loop — a peer doing connect-then-reset churn can force
+        that miss on every CONNECT, and the O(host-sockets) walk
+        must never be loop-blocking on demand.
+
+        Whenever the scan owes the verdict — scan-only hosts, and the
+        miss/just-latched cases above — the full dispatcher runs in
+        the default executor, bounded by _PEER_SCAN_MAX_CONCURRENCY
+        so a connection burst cannot occupy every executor worker
+        with table scans. (The executor re-runs the whole dispatcher,
+        so a socket whose row appears late still gets the cheap
+        netlink answer there before the scan.)
+
+        Every branch resolves the verdict through the module-global
+        _loopback_peer_uid name (tests monkeypatch that seam; the
+        verdict policy in _handle_client must see the patched answers
+        either way). A patched fake never arms the defer signal's
+        pending flag, so its answer — including None — is final and
+        never triggers the executor re-run.
+        """
+        if _SOCK_DIAG_USABLE:
+            _INLINE_SCAN_DEFER.armed = True
+            _INLINE_SCAN_DEFER.pending = False
+            try:
+                uid = _loopback_peer_uid(peer, sockname)
+            finally:
+                _INLINE_SCAN_DEFER.armed = False
+            if uid is not None or not _INLINE_SCAN_DEFER.pending:
+                return uid
+        if self._peer_scan_sem is None:
+            self._peer_scan_sem = asyncio.Semaphore(
+                _PEER_SCAN_MAX_CONCURRENCY)
+        async with self._peer_scan_sem:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, _loopback_peer_uid, peer, sockname,
+            )
+
     async def _handle_client(self, reader: asyncio.StreamReader,
                              writer: asyncio.StreamWriter,
                              lane: "_Lane | None" = None) -> None:
@@ -2705,9 +2990,10 @@ class EgressProxy:
         # shared with EVERY local user — without this, any other
         # account on the host could ride the proxy's allowlisted
         # egress. TCP has no SO_PEERCRED, so the peer's UID comes from
-        # its /proc/net/tcp{,6} socket row. On hosts that HAVE the
-        # table, an undeterminable UID is retried once (the peer's row
-        # can lag its connect by a scheduling beat) and then REFUSED:
+        # the kernel socket table (NETLINK_SOCK_DIAG exact-match, with
+        # the /proc/net/tcp{,6} row scan as fallback). On hosts that
+        # HAVE the table, an undeterminable UID is retried once (the
+        # peer's row can lag its connect by a beat) and then REFUSED:
         # the old unconditional allow-on-None handed a different-uid
         # local process a deterministic ride — race the connect
         # against row visibility, or pad the table past the scan.
@@ -2715,10 +3001,10 @@ class EgressProxy:
         # None there is the permanent answer for every honest peer.
         if client_ip != "unix" and isinstance(peer, tuple) and len(peer) >= 2:
             sockname = writer.get_extra_info("sockname")
-            peer_uid = _loopback_peer_uid(peer, sockname)
+            peer_uid = await self._lookup_peer_uid(peer, sockname)
             if peer_uid is None and _PEER_UID_TABLE_AVAILABLE:
                 await asyncio.sleep(0.01)
-                peer_uid = _loopback_peer_uid(peer, sockname)
+                peer_uid = await self._lookup_peer_uid(peer, sockname)
                 if peer_uid is None:
                     logger.warning(
                         "egress proxy: rejecting loopback peer %s:%s — "
