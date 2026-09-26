@@ -501,6 +501,42 @@ def _warn_doh_hosts(hosts: "set[str] | frozenset[str]") -> None:
             ", ".join(sorted(matched)),
         )
 
+# Verdict groupings for snapshot()'s derived headline numbers. These
+# classify RECORD-TIME verdicts (what _record saw), so the groups
+# partition cleanly:
+#   * denied — the CONNECT was actually refused by a policy gate.
+#     `would_deny_host` is deliberately absent: audit mode allows the
+#     connection (log-and-allow), so counting it as denied would
+#     misstate what the proxy did — it stays visible in the per-result
+#     `events` map.
+#   * failed — the CONNECT never became a working tunnel for a
+#     non-policy reason. `timed_out` is absent because it is a
+#     CLOSE-TIME reclassification of an event recorded as `allowed`
+#     (it never passes through _record); the scalar
+#     `tunnels_timed_out` counter carries it instead.
+_STATS_DENIED_RESULTS = frozenset({
+    "denied_host",
+    "denied_resolved_ip",
+    "denied_sni",
+    "denied_port",
+})
+_STATS_FAILED_RESULTS = frozenset({
+    "dns_failed",
+    "upstream_failed",
+    "bad_request",
+    "handler_error",
+    "refused_capacity",
+})
+
+# Cadence of the proxy's structured stats heartbeat line (INFO; see
+# _stats_heartbeat). Emitted at most once per interval and ONLY when
+# the counters moved since the previous beat, so an idle proxy is
+# silent. Lower values make a mid-run degradation (e.g. the netlink
+# latch tripping) visible sooner but add log-noise lines to every
+# long busy run; higher values save log lines but can leave a
+# degradation invisible for the whole gap — 5 minutes bounds the
+# blind window while keeping a 12h audit run to at most ~144 lines.
+_STATS_HEARTBEAT_INTERVAL_S = 300.0
 
 # Live-escalation: default distinct-denied-host threshold before the
 # proxy prints an immediate stderr recon-pattern banner. Shared with
@@ -1667,6 +1703,90 @@ class EgressProxy:
         # as a cheap pre-computed view (and for introspection/tests).
         self._sandbox_buffers_snapshot: tuple = ()
 
+        # ----- observability counters (read via snapshot()) -----
+        # Race-freedom contract: both dicts are FIXED-KEY — every key
+        # is inserted here and none is ever added or removed later, so
+        # a cross-thread `dict(...)` copy can never observe a resize
+        # in progress. Mutation sites:
+        #   * _stats_events (per-result verdict counts): incremented
+        #     inside _record()'s / _append_bounded_locked()'s existing
+        #     _buffer_lock critical sections — _record is the one
+        #     counter seam that is exercised off the event-loop thread
+        #     (tests hammer it cross-thread), and it already holds the
+        #     lock;
+        #   * _stats (scalar counters): incremented only on the
+        #     proxy's own event-loop thread (handshake parse, uid
+        #     lookup, relay, tunnel close), where the single loop
+        #     serialises every read-modify-write — no lock needed and
+        #     none taken, so the hot path pays nothing;
+        #   * _peak_tunnels: updated inside the existing _active_lock
+        #     critical section, beside the _active_tunnels increment
+        #     it tracks.
+        # Readers (snapshot(), the heartbeat, stop()'s summary) take
+        # GIL-atomic per-key reads; a reader racing a loop-thread
+        # increment sees a value at most one event stale, never torn.
+        self._started_at: float = time.monotonic()
+        self._peak_tunnels: int = 0
+        # Record-time verdict counts, one bucket per known result
+        # string plus a pre-declared "other" fallback (never add keys
+        # at runtime — see the fixed-key contract above).
+        self._stats_events: dict[str, int] = {
+            r: 0 for r in sorted(_PROXY_EVENT_RESULTS)}
+        self._stats_events["other"] = 0
+        self._stats: dict[str, int] = {
+            # Handshake parse outcomes: well-formed CONNECT request
+            # lines vs request lines whose method is not CONNECT
+            # (malformed-but-CONNECT lines are neither — they show up
+            # as bad_request in _stats_events).
+            "requests_connect": 0,
+            "requests_non_connect": 0,
+            # Established tunnels that reached close, and the subset
+            # severed by the progress-aware total cap.
+            "tunnels_closed": 0,
+            "tunnels_timed_out": 0,
+            # Bytes relayed per direction, folded once per tunnel at
+            # close from the tunnel's own counters (never per chunk).
+            "bytes_c2u": 0,
+            "bytes_u2c": 0,
+            # Relay termination contract: EOFs propagated as
+            # write_eof() vs full pair teardowns (reset, failed
+            # half-close, dead destination).
+            "relay_eof_propagated": 0,
+            "relay_pair_teardowns": 0,
+            # Peer-uid resolution outcomes (see _lookup_peer_uid):
+            # inline netlink answer / inline None verdict (final, no
+            # scan owed) / executor scan hit and miss (miss-path and
+            # latch-path alike) / lookups routed straight to the
+            # executor because netlink was latched off or unsupported
+            # at entry / CONNECTs refused fail-closed because the uid
+            # never resolved (see _handle_client).
+            "uid_netlink_hit": 0,
+            "uid_inline_none": 0,
+            "uid_scan_hit": 0,
+            "uid_scan_miss": 0,
+            "uid_latch_fallback": 0,
+            "uid_unresolvable_failclosed": 0,
+            # Executor-scan permit contention: lookups that arrived
+            # while every _PEER_SCAN_MAX_CONCURRENCY permit was held
+            # (they queued), current holders, and the peak holders
+            # ever observed.
+            "scan_permits_deferred": 0,
+            "scan_concurrency_cur": 0,
+            "scan_concurrency_peak": 0,
+        }
+        # Heartbeat change token (monotonic totals at the last emitted
+        # line); (0, 0) so an idle proxy never emits. Written by
+        # _log_stats_line from its two callers — the heartbeat task
+        # (loop thread) and stop()'s one-shot summary (arbitrary
+        # caller thread). Those callers are NOT mutually serialised:
+        # the write is a single reference swap of an immutable tuple,
+        # so a stop() racing an in-flight heartbeat can at worst
+        # duplicate one aggregate line — never tear the token or
+        # corrupt a counter.
+        self._stats_last_beat: "tuple[int, int]" = (0, 0)
+        self._summary_emitted = False
+        self._heartbeat_task: "asyncio.Task | None" = None
+
         # Synchronise startup: the thread runs the asyncio loop and signals
         # `_ready` once the server is bound and port is known. The calling
         # thread blocks on _ready before returning from __init__, so
@@ -2316,6 +2436,14 @@ class EgressProxy:
         # keeps the one seq through the unregister copies.
         event.setdefault("proxy_seq", next(self._event_seq))
         with self._buffer_lock:
+            # Verdict counter fold (see the fixed-key contract in
+            # __init__). Inside the existing critical section because
+            # _record is the one counter seam callers may drive off
+            # the event-loop thread; the "other" bucket is
+            # pre-declared, so no key is ever added here.
+            result = event.get("result")
+            self._stats_events[
+                result if result in self._stats_events else "other"] += 1
             for tok, buf, sub in self._sandbox_buffers_snapshot:
                 if sub is None or (lane_id is not None and sub == lane_id):
                     self._append_bounded_locked(tok, buf, event)
@@ -2377,6 +2505,10 @@ class EgressProxy:
             overflow = {"marker": marker, "denials_kept": 0}
             self._sandbox_buffer_overflow[token] = overflow
             buf.append(marker)
+            # Marker events bypass _record (appended directly, once
+            # per overflowed registration) — count them here, under
+            # the same _buffer_lock the caller already holds.
+            self._stats_events["buffer_overflow"] += 1
             logger.warning(
                 "egress proxy: per-registration event buffer cap "
                 "(%d) reached — further events trimmed (denials keep "
@@ -2867,6 +2999,24 @@ class EgressProxy:
         # that belong to the caller's next subprocess.run pipes.
         if self._thread is not None:
             self._thread.join(timeout=drain_timeout + 2.0)
+        # One-shot teardown summary — the single proxy-summary line a
+        # run ends with. Emitted AFTER the drain and thread join so
+        # tunnels that complete during the drain window are already
+        # folded into the counters (a pre-drain summary under-reported
+        # their closes and bytes). Needs no loop: snapshot() and the
+        # log call read plain dicts, so a stopped loop is fine.
+        # force=True so an all-zero lifetime still reports. The
+        # _summary_emitted check-then-set keeps repeated sequential
+        # stop() calls to exactly one line; it is NOT atomic, so two
+        # threads calling stop() concurrently could each emit (benign:
+        # one duplicate aggregate line, no counter is written) —
+        # in-repo callers stop a proxy from one place. Logging can hit
+        # an already-closed stream at interpreter exit (atexit path) —
+        # suppressed, never raised.
+        if not self._summary_emitted:
+            self._summary_emitted = True
+            with contextlib.suppress(OSError, ValueError):
+                self._log_stats_line("summary", force=True)
 
     def _stop_thread_best_effort(self) -> None:
         """Defensive cleanup helper called from ``__init__`` when the
@@ -2895,6 +3045,115 @@ class EgressProxy:
         """
         return self._thread is not None and self._thread.is_alive()
 
+    # ----- observability -----
+
+    def snapshot(self) -> dict:
+        """One-call health snapshot: counters, gauges, latch state,
+        uptime. Thread-safe from any thread; read-only (no counter is
+        reset). Numbers only — no hostnames, no peer-derived strings —
+        so renderers need no further sanitisation.
+
+        Keys:
+          * ``uptime_s`` — seconds since construction (monotonic).
+          * ``peer_uid_netlink_latched`` — True when this host HAS
+            netlink support but the process-lifetime transient-failure
+            latch has switched peer-uid lookups to the bounded /proc
+            scan (the un-retried degradation the hotpath series
+            documents; silent throughput loss without this flag).
+            False on hosts without netlink at all — that is the
+            platform's permanent shape, not a degradation.
+          * ``tunnels_active`` / ``tunnels_peak`` — gauge + high-water
+            mark of concurrently open tunnels.
+          * ``connections_accepted`` / ``_denied`` / ``_failed`` —
+            headline groupings of the record-time verdicts (see
+            _STATS_DENIED_RESULTS / _STATS_FAILED_RESULTS for what
+            counts where and why ``would_deny_host`` / ``timed_out``
+            are in neither).
+          * ``events`` — the full per-result verdict map.
+          * ``counters`` — the scalar counters declared in __init__
+            (parse outcomes, byte totals, relay termination, uid
+            resolution outcomes, scan-permit contention).
+        """
+        with self._active_lock:
+            active = self._active_tunnels
+            peak = self._peak_tunnels
+        with self._buffer_lock:
+            events = dict(self._stats_events)
+        counters = dict(self._stats)
+        return {
+            "uptime_s": round(time.monotonic() - self._started_at, 3),
+            "peer_uid_netlink_latched": (
+                hasattr(socket, "AF_NETLINK") and not _SOCK_DIAG_USABLE),
+            "tunnels_active": active,
+            "tunnels_peak": peak,
+            "connections_accepted": events["allowed"],
+            "connections_denied": sum(
+                events[r] for r in _STATS_DENIED_RESULTS),
+            "connections_failed": sum(
+                events[r] for r in _STATS_FAILED_RESULTS),
+            "events": events,
+            "counters": counters,
+        }
+
+    def _log_stats_line(self, kind: str, *, force: bool = False) -> bool:
+        """Emit one structured INFO stats line; True when emitted.
+
+        Change-gated unless *force*: the monotonic totals (verdict
+        counts + scalar counters, excluding the transient
+        ``scan_concurrency_cur`` gauge) are compared against the last
+        emitted beat, so an idle proxy adds no log lines. Content is
+        aggregate numbers plus operator-authored constants only —
+        nothing peer- or target-derived — so the line satisfies the
+        log-sanitisation posture by construction.
+        """
+        snap = self.snapshot()
+        c = snap["counters"]
+        token = (
+            sum(snap["events"].values()),
+            sum(v for k, v in c.items() if k != "scan_concurrency_cur"),
+        )
+        if not force and token == self._stats_last_beat:
+            return False
+        self._stats_last_beat = token
+        latch_note = (
+            " DEGRADED: netlink sock_diag latched off — peer-uid "
+            "lookups ride the bounded /proc scan"
+            if snap["peer_uid_netlink_latched"] else "")
+        logger.info(
+            "egress proxy %s: uptime=%.0fs accepted=%d denied=%d "
+            "failed=%d tunnels=%d active/%d peak "
+            "bytes[c2u=%d u2c=%d] "
+            "uid[netlink=%d scan=%d miss=%d latch_fallback=%d "
+            "failclosed=%d] scan_permits[deferred=%d peak=%d] "
+            "relay[eof=%d teardown=%d timed_out=%d]%s",
+            kind, snap["uptime_s"], snap["connections_accepted"],
+            snap["connections_denied"], snap["connections_failed"],
+            snap["tunnels_active"], snap["tunnels_peak"],
+            c["bytes_c2u"], c["bytes_u2c"],
+            c["uid_netlink_hit"], c["uid_scan_hit"], c["uid_scan_miss"],
+            c["uid_latch_fallback"], c["uid_unresolvable_failclosed"],
+            c["scan_permits_deferred"], c["scan_concurrency_peak"],
+            c["relay_eof_propagated"], c["relay_pair_teardowns"],
+            c["tunnels_timed_out"], latch_note,
+        )
+        return True
+
+    async def _stats_heartbeat(self) -> None:
+        """Low-frequency stats heartbeat on the proxy's own loop.
+
+        Sleeps _STATS_HEARTBEAT_INTERVAL_S between beats and delegates
+        to _log_stats_line, which suppresses no-change beats — so this
+        costs one timer per interval and NOTHING per connection.
+        Cancelled by _run_loop's finally (and retired there so no
+        pending-task finalizer outlives the loop). Logging failures
+        (stream closed during interpreter teardown) must not kill the
+        task's parent loop.
+        """
+        while True:
+            await asyncio.sleep(_STATS_HEARTBEAT_INTERVAL_S)
+            with contextlib.suppress(OSError, ValueError):
+                self._log_stats_line("heartbeat")
+
     # ----- thread entry -----
 
     def _run_loop(self) -> None:
@@ -2922,6 +3181,8 @@ class EgressProxy:
                 "egress proxy listening on 127.0.0.1:%s (allowlist: %s)", self.port, sorted(self._allowed_hosts)
             )
             self._ready.set()
+            self._heartbeat_task = self._loop.create_task(
+                self._stats_heartbeat())
             self._loop.run_forever()
         except BaseException as e:  # noqa: BLE001
             self._start_error = e
@@ -2931,6 +3192,15 @@ class EgressProxy:
             for task in list(self._client_tasks):
                 task.cancel()
             self._client_tasks.clear()
+            if self._heartbeat_task is not None:
+                self._heartbeat_task.cancel()
+                # Retire the cancelled task on the still-open loop so
+                # its finalizer never logs "Task was destroyed but it
+                # is pending!" after the loop (and, under pytest, the
+                # capture stream) is gone.
+                with contextlib.suppress(RuntimeError, OSError,
+                                         asyncio.CancelledError):
+                    self._loop.run_until_complete(self._heartbeat_task)
             if self._server is not None and self._loop is not None:
                 self._server.close()
                 # run_until_complete on a loop that crashed or was
@@ -2977,7 +3247,17 @@ class EgressProxy:
         either way). A patched fake never arms the defer signal's
         pending flag, so its answer — including None — is final and
         never triggers the executor re-run.
+
+        Observability: outcomes and permit contention fold into the
+        _stats counters (see __init__). Every increment below runs on
+        the event-loop thread — the executor scan's RESULT is consumed
+        here, after the await — so no locking is needed. `stats` is
+        looked up defensively because tests exercise this method as an
+        unbound function against a minimal namespace carrying only
+        `_peer_scan_sem`; counting is best-effort observability and
+        must never change the verdict path.
         """
+        stats = getattr(self, "_stats", None)
         if _SOCK_DIAG_USABLE:
             _INLINE_SCAN_DEFER.armed = True
             _INLINE_SCAN_DEFER.pending = False
@@ -2986,14 +3266,39 @@ class EgressProxy:
             finally:
                 _INLINE_SCAN_DEFER.armed = False
             if uid is not None or not _INLINE_SCAN_DEFER.pending:
+                if stats is not None:
+                    stats["uid_netlink_hit" if uid is not None
+                          else "uid_inline_none"] += 1
                 return uid
+        elif stats is not None:
+            # Netlink latched off (or absent): every lookup rides the
+            # bounded executor scan. Counted at entry so the latch's
+            # ongoing cost stays visible, independent of scan outcome.
+            stats["uid_latch_fallback"] += 1
         if self._peer_scan_sem is None:
             self._peer_scan_sem = asyncio.Semaphore(
                 _PEER_SCAN_MAX_CONCURRENCY)
+        if stats is not None and self._peer_scan_sem.locked():
+            # All permits held at arrival: this lookup queues.
+            stats["scan_permits_deferred"] += 1
         async with self._peer_scan_sem:
-            return await asyncio.get_running_loop().run_in_executor(
-                None, _loopback_peer_uid, peer, sockname,
-            )
+            if stats is not None:
+                stats["scan_concurrency_cur"] += 1
+                if (stats["scan_concurrency_cur"]
+                        > stats["scan_concurrency_peak"]):
+                    stats["scan_concurrency_peak"] = (
+                        stats["scan_concurrency_cur"])
+            try:
+                uid = await asyncio.get_running_loop().run_in_executor(
+                    None, _loopback_peer_uid, peer, sockname,
+                )
+            finally:
+                if stats is not None:
+                    stats["scan_concurrency_cur"] -= 1
+        if stats is not None:
+            stats["uid_scan_hit" if uid is not None
+                  else "uid_scan_miss"] += 1
+        return uid
 
     async def _handle_client(self, reader: asyncio.StreamReader,
                              writer: asyncio.StreamWriter,
@@ -3049,6 +3354,7 @@ class EgressProxy:
                         "hit this — retry, or use the unix lane)",
                         client_ip, peer[1],
                     )
+                    self._stats["uid_unresolvable_failclosed"] += 1
                     writer.close()
                     return
             if peer_uid is not None and peer_uid != os.geteuid():
@@ -3077,6 +3383,10 @@ class EgressProxy:
                 full = True
             else:
                 self._active_tunnels += 1
+                # High-water mark rides the same critical section as
+                # the gauge it tracks — no extra locking.
+                if self._active_tunnels > self._peak_tunnels:
+                    self._peak_tunnels = self._active_tunnels
         if full:
             logger.warning(
                 "egress proxy: max tunnels (%s) reached — refusing new connection", self._max_tunnels
@@ -3199,12 +3509,19 @@ class EgressProxy:
 
         parts = request_line.split()
         if len(parts) != 3 or parts[0] != "CONNECT" or not parts[2].startswith("HTTP/"):
+            # Method census: a request line whose method is not
+            # CONNECT (a plain HTTP client pointed at the proxy) is
+            # worth distinguishing from a garbled CONNECT — both are
+            # refused identically below (bad_request).
+            if parts and parts[0] != "CONNECT":
+                self._stats["requests_non_connect"] += 1
             event.update(result="bad_request", reason=f"malformed: {request_line[:80]!r}",
                          duration=time.monotonic() - t_start)
             self._record(event)
             await self._write_error(writer, 400, "Bad Request")
             return
 
+        self._stats["requests_connect"] += 1
         target = parts[1]
         # Reject non-printable characters in the CONNECT target. A
         # sandboxed client that includes ESC (0x1b) / CR / NUL / C1
@@ -3819,6 +4136,13 @@ class EgressProxy:
                 event, result=result, reason=reason,
                 bytes_c2u=total["c2u"], bytes_u2c=total["u2c"],
                 duration=time.monotonic() - t_start)
+            # Global byte/close fold: once per tunnel at close (never
+            # per relayed chunk), on the event-loop thread.
+            self._stats["tunnels_closed"] += 1
+            if result == "timed_out":
+                self._stats["tunnels_timed_out"] += 1
+            self._stats["bytes_c2u"] += total["c2u"]
+            self._stats["bytes_u2c"] += total["u2c"]
             if not self._stopping:
                 logger.debug(
                     "egress proxy: CLOSE %s:%s (c2u=%s u2c=%s)",
@@ -3928,6 +4252,7 @@ class EgressProxy:
                 # Idle → let the other direction notice and close.
                 return
             except (ConnectionResetError, BrokenPipeError):
+                self._stats["relay_pair_teardowns"] += 1
                 self._close_tunnel_pair(src_writer, dst)
                 return
             if not chunk:
@@ -3940,9 +4265,12 @@ class EgressProxy:
                 try:
                     if dst.can_write_eof():
                         dst.write_eof()
+                        self._stats["relay_eof_propagated"] += 1
                     else:
+                        self._stats["relay_pair_teardowns"] += 1
                         self._close_tunnel_pair(src_writer, dst)
                 except (OSError, RuntimeError, NotImplementedError):
+                    self._stats["relay_pair_teardowns"] += 1
                     self._close_tunnel_pair(src_writer, dst)
                 return
             # Pre-fix the counter was bumped BEFORE `dst.drain()`. If
@@ -3961,6 +4289,7 @@ class EgressProxy:
             try:
                 await dst.drain()
             except (ConnectionResetError, BrokenPipeError):
+                self._stats["relay_pair_teardowns"] += 1
                 self._close_tunnel_pair(src_writer, dst)
                 return
             counters[counter_key] += len(chunk)
