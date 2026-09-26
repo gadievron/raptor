@@ -88,11 +88,13 @@ class TestBudgetUnaffectedDirection:
         # at the measured kernel average (~15 KiB retained/file →
         # ~300 MiB at the 20k ceiling) with headroom, and a
         # python-heavy tree at this repo's own measured density
-        # (~40 KiB/file as the estimator charges it → ~800 MiB).
+        # (~42 KiB/file as the estimator charges it — 41.5 KiB
+        # measured over core/ with the arg-facts base at its
+        # empty-object cost → ~820 MiB).
         # LOWERING below either point drops cross-function context on
         # honestly dense trees — change deliberately, re-measure.
         kernel_scale = cg._CHECKLIST_MAX_FILES * 15 * 1024
-        dense_scale = cg._CHECKLIST_MAX_FILES * 40 * 1024
+        dense_scale = cg._CHECKLIST_MAX_FILES * 42 * 1024
         assert cg.CALL_GRAPH_MAX_TOTAL_BYTES >= 2 * kernel_scale
         assert cg.CALL_GRAPH_MAX_TOTAL_BYTES >= dense_scale
         # ...and RAISING past 1 GiB only admits degenerate call
@@ -270,3 +272,35 @@ class TestEstimator:
     def test_exported(self):
         assert "estimate_call_graph_bytes" in cg.__all__
         assert "CALL_GRAPH_MAX_TOTAL_BYTES" in cg.__all__
+
+    def test_estimator_charges_decorator_floods(self):
+        # Adversarial shape: `@d()` repeated — every CALL decorator
+        # allocates one (empty) CallArgumentFacts, the only UNCAPPED
+        # facts carrier (constructed_objects and string_ref_calls
+        # are capped). An arg-facts base charge below the measured
+        # empty-object cost lets this shape under-charge (a 200 B
+        # base measured est/deep 0.63 at 160x input amplification,
+        # ~1.6x budget overshoot), so this fixture pins a tighter
+        # floor than the drift band: the estimator must never
+        # under-charge the flood by more than 1.5x. The upper bound
+        # stays at the suite's loose 2.5x drift band.
+        src = "\n".join(
+            "@d()\n" * 50 + f"def f{i}(a): pass" for i in range(200))
+        g = cg.extract_call_graph_python(src)
+        assert len(g.decorated_functions) == 200
+        assert all(a is not None for d in g.decorated_functions
+                   for a in d.decorator_args)
+        deep = _deep_size(g)
+        est = cg.estimate_call_graph_bytes(g)
+        assert deep > 5_000_000  # the flood really amplifies
+        assert deep / 1.5 <= est <= deep * 2.5
+
+    def test_arg_facts_base_covers_empty_object_cost(self):
+        # The base charge tracks the true deep size of an EMPTY
+        # CallArgumentFacts (slots instance + 4 empty dicts + 3
+        # empty lists — 548 B on 64-bit CPython 3.14). Tight band on
+        # purpose: the flood fixture above only amplifies this
+        # per-object gap, so catch drift at the object level first.
+        deep = _deep_size(cg.CallArgumentFacts())
+        est = cg._est_arg_facts(cg.CallArgumentFacts())
+        assert deep / 1.5 <= est <= deep * 1.5

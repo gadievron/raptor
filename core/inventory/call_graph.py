@@ -7906,8 +7906,8 @@ CALL_GRAPH_MAX_FILE_BYTES = 1_500_000
 #: cross-function context on honestly dense trees — a kernel-scale
 #: 20,000-file checklist at the measured kernel average (~15 KiB
 #: retained/file) needs ~300 MiB, and a python-heavy tree at this
-#: repo's own measured density (~40 KiB/file estimated over core/,
-#: deep ~36 KiB) needs ~800 MiB at the checklist ceiling; both must
+#: repo's own measured density (~42 KiB/file estimated over core/,
+#: deep ~36 KiB) needs ~820 MiB at the checklist ceiling; both must
 #: fit. HIGHER only admits degenerate density (1 GiB already
 #: tolerates ~18 input-cap call-dense monsters at ~57 MiB estimated
 #: each before stopping) while the mapping sits in the orchestrator's
@@ -7922,8 +7922,9 @@ CALL_GRAPH_MAX_TOTAL_BYTES = 1024 * 1024 * 1024
 # (estimate / measured): minimal-call pathological 1.03, kernel-shaped
 # C 0.87, ordinary python 1.01, chain-dense 1.21, PHP include-heavy
 # 1.25, long-caller-name shapes (380/1000/4000 chars) 1.00, astral
-# (UCS-4) caller 1.00, astral chain 1.86, this repo's own core/ tree
-# 1.11 — a budget gate needs "right order of magnitude, cheap, mildly
+# (UCS-4) caller 1.00, astral chain 1.86, decorator flood 1.04, ctor
+# flood 0.97, string-ref flood 1.00, this repo's own core/ tree
+# 1.16 — a budget gate needs "right order of magnitude, cheap, mildly
 # conservative", not pympler. String charges go through
 # ``sys.getsizeof`` so wide (UCS-2/UCS-4) identifiers are charged
 # their real bytes, with a small share discount because extracted
@@ -7936,6 +7937,17 @@ _EST_CALL_SITE_BYTES = 230     # CallSite + two list headers + line int
 _EST_ENTRY_BYTES = 130         # small tuple/dict-entry shaped records
 _EST_RECORD_BYTES = 190        # slots record instances (ClassDef, ...)
 _EST_GRAPH_BASE_BYTES = 700    # empty FileCallGraph + field containers
+#: Base charge for one :class:`CallArgumentFacts` before per-fact
+#: charges — the measured deep size of an EMPTY instance (96 B slots
+#: object + 28 B int + 3 x 56 B empty lists + 4 x 64 B empty dicts =
+#: 548 B on 64-bit CPython 3.14). Both directions: LOWER re-opens the
+#: decorator-flood under-charge (``@d()`` repeated allocates one
+#: empty-ish facts object per decorator — the only uncapped carrier;
+#: a 200 B base measured est/deep 0.63, ~1.6x budget overshoot);
+#: HIGHER over-charges every constructed-object and string-ref
+#: record too (both capped, so drift is bounded) and pushes honest
+#: decorator/ctor-heavy trees toward tripping the budget early.
+_EST_ARG_FACTS_BASE = 548
 
 
 def _est_strs(seq: "Iterable[str]") -> int:
@@ -7948,7 +7960,7 @@ def _est_strs(seq: "Iterable[str]") -> int:
 
 def _est_arg_facts(a: CallArgumentFacts) -> int:
     getsizeof = sys.getsizeof
-    total = 200
+    total = _EST_ARG_FACTS_BASE
     total += sum(30 + getsizeof(s) for _, s in a.string_args)
     for _, ch in a.ref_args:
         total += 60 + _est_strs(ch)
