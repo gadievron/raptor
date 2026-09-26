@@ -1919,6 +1919,12 @@ def run_orchestrator(
         _joern_timings: dict[str, float] = {}
         joern_server = _start_joern_server_raw(
             _joern_path, config.joern_overrides, _jt,
+            # out_dir is the CPG status-record destination (and the
+            # IRIS store pin): without it every build/import outcome
+            # on the audit's own server-start path was recordless —
+            # the report could not name a lost channel the log
+            # shouted about.
+            out_dir=config.out_dir,
             # Keep an in-target run output dir out of the CPG content
             # key and graph — its artifacts change every segment, and
             # a flapping key re-buys a full CPG rebuild per resume.

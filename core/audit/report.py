@@ -1784,7 +1784,8 @@ def _format_summary(report: dict[str, Any]) -> str:
             )
 
     cpg_build = report.get("joern_cpg_build")
-    if cpg_build and (cpg_build.get("failed") or cpg_build.get("retried")):
+    if cpg_build and (cpg_build.get("failed") or cpg_build.get("retried")
+                      or cpg_build.get("import_retried")):
         lines.append("")
         first_heap = cpg_build.get("first_heap_mb")
         first_wall = cpg_build.get("first_timeout_s")
@@ -1802,6 +1803,13 @@ def _format_summary(report: dict[str, Any]) -> str:
             )
         if cpg_build.get("failed"):
             lines.append("### ⚠️ Joern channel lost — CPG build failed")
+            rec_target = cpg_build.get("target")
+            if rec_target:
+                # Attribution: the record is a per-run-dir singleton;
+                # naming its target lets an operator spot a stale
+                # record from a segment that audited a different
+                # narrowed root.
+                lines.append(f"(build target: {rec_target})")
             what = (
                 "The CPG built but failed to import into the server"
                 if cpg_build.get("phase") == "import"
@@ -1814,15 +1822,22 @@ def _format_summary(report: dict[str, Any]) -> str:
                 f"joern_heap_ceiling_mb / joern_cpg_timeout_s in "
                 f"tuning.json, or narrow --scope."
             )
-        elif cpg_build.get("retried"):
-            # Rescued by the derived-max retry — worth one line so
-            # the doubled wall is attributable. A plain success
-            # (failed=False, retried=False — written to retire a
+        else:
+            # Each rescue gets one line so its doubled wall is
+            # attributable; a plain success (written to retire a
             # prior segment's stale failure record) prints nothing.
-            lines.append(
-                f"Joern CPG build succeeded on the derived-max retry "
-                f"({attempts})."
-            )
+            if cpg_build.get("retried"):
+                lines.append(
+                    f"Joern CPG build succeeded on the derived-max "
+                    f"retry ({attempts})."
+                )
+            if cpg_build.get("import_retried"):
+                imp_wall = cpg_build.get("import_retry_timeout_s")
+                lines.append(
+                    f"Joern CPG import was rescued by a retry against "
+                    f"a restarted server (import timeout "
+                    f"{imp_wall}s)."
+                )
 
     channel_health = report.get("channel_health")
     if channel_health:

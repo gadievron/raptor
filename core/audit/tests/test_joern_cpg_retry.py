@@ -127,7 +127,7 @@ class TestEnsureCpgLoadedRetry:
         imported: list = []
         srv = SimpleNamespace(
             _cpg_loaded=False,
-            import_cpg=lambda path, timeout=None: imported.append(path),
+            import_cpg=lambda path, timeout=None: imported.append(path) or True,
         )
         ok = jb._ensure_cpg_loaded(
             srv, tmp_path,
@@ -265,7 +265,7 @@ class TestEnsureCpgLoadedRetry:
         )
         srv = SimpleNamespace(
             _cpg_loaded=False,
-            import_cpg=lambda path, timeout=None: None,
+            import_cpg=lambda path, timeout=None: True,
         )
         assert jb._ensure_cpg_loaded(srv, tmp_path, out_dir=out) is True
         record = load_cpg_build_status(out)
@@ -353,7 +353,7 @@ class TestPlainSuccessRetiresStaleRecord:
         )
         srv = SimpleNamespace(
             _cpg_loaded=False,
-            import_cpg=lambda path, timeout=None: None,
+            import_cpg=lambda path, timeout=None: True,
         )
         ok = jb._ensure_cpg_loaded(srv, tmp_path, out_dir=out)
         assert ok is True
@@ -378,3 +378,168 @@ class TestPlainSuccessRetiresStaleRecord:
         assert report["joern_cpg_build"]["failed"] is False
         assert "derived-max retry" not in report["summary"]
         assert "Joern channel lost" not in report["summary"]
+
+
+class TestImportResultHonesty:
+    """import_cpg reports handled failures by RETURNING False (server
+    died mid-import, malformed response) — segment-shape: a kernel
+    CPG import killing the server minted a fake success (CPG-less
+    server read as loaded, false failed=False record, unrecoverable
+    pre-sweep). The result must be checked, retried once against a
+    restarted server, and recorded truthfully."""
+
+    _isolate_home = TestEnsureCpgLoadedRetry._isolate_home
+    _fake_cpg = TestEnsureCpgLoadedRetry._fake_cpg
+
+    def _setup(self, monkeypatch, tmp_path):
+        import packages.joern.runner as runner
+        self._isolate_home(monkeypatch, tmp_path)
+        _patch_sizing(monkeypatch, sloc=10_000)
+        out = tmp_path / "run"
+        out.mkdir()
+        monkeypatch.setattr(
+            runner, "build_cpg_cached",
+            lambda target, cache_dir, **kw: self._fake_cpg(
+                tmp_path, failed=False),
+        )
+        return out
+
+    def test_false_import_is_channel_loss_not_success(
+            self, monkeypatch, tmp_path):
+        out = self._setup(monkeypatch, tmp_path)
+        calls: list = []
+        srv = SimpleNamespace(
+            _cpg_loaded=False,
+            import_cpg=lambda path, timeout=None: calls.append(
+                timeout) or False,
+            restart=lambda: False,  # restart fails too
+        )
+        assert jb._ensure_cpg_loaded(srv, tmp_path, out_dir=out) is False
+        assert len(calls) == 1  # failed restart => no second import
+        record = load_cpg_build_status(out)
+        assert record is not None
+        assert record["failed"] is True
+        assert record["phase"] == "import"
+
+    def test_import_retry_after_restart_rescues(
+            self, monkeypatch, tmp_path):
+        out = self._setup(monkeypatch, tmp_path)
+        imports: list = []
+        restarts: list = []
+
+        def fake_import(path, timeout=None):
+            imports.append(timeout)
+            return len(imports) > 1  # first fails, retry succeeds
+
+        srv = SimpleNamespace(
+            _cpg_loaded=False,
+            import_cpg=fake_import,
+            restart=lambda: restarts.append(1) or True,
+        )
+        assert jb._ensure_cpg_loaded(srv, tmp_path, out_dir=out) is True
+        assert len(imports) == 2 and len(restarts) == 1
+        # Retry timeout: doubled with a 30-min floor.
+        assert imports[1] >= 1800
+        record = load_cpg_build_status(out)
+        assert record is not None
+        assert record["failed"] is False
+
+    def test_no_restart_api_degrades_without_retry(
+            self, monkeypatch, tmp_path):
+        out = self._setup(monkeypatch, tmp_path)
+        imports: list = []
+        srv = SimpleNamespace(
+            _cpg_loaded=False,
+            import_cpg=lambda path, timeout=None: imports.append(
+                1) or False,
+        )
+        assert jb._ensure_cpg_loaded(srv, tmp_path, out_dir=out) is False
+        assert len(imports) == 1
+        record = load_cpg_build_status(out)
+        assert record["failed"] is True
+
+    def test_orchestrator_passes_out_dir(self):
+        # Wiring pin: the audit's own server start must hand out_dir
+        # through, or every record write above is a silent no-op on
+        # the main path (the segment-6 observability gap).
+        import inspect
+        import core.audit.orchestrator as orch
+        src = inspect.getsource(orch)
+        idx = src.find("_start_joern_server_raw(\n")
+        assert idx != -1
+        call = src[idx:idx + 800]
+        assert "out_dir=config.out_dir" in call
+
+    def test_report_names_the_record_target(self, tmp_path):
+        from core.json import save_json
+        save_json(tmp_path / JOERN_CPG_STATUS_FILENAME, {
+            "target": "/t/narrowed-root", "failed": True,
+            "retried": False, "phase": "import",
+            "first_heap_mb": 16384, "first_timeout_s": 300,
+            "retry_heap_mb": 65536, "retry_timeout_s": 5700,
+            "estimated_sloc": 3_000_000, "scope_excluded_dirs": 4,
+        })
+        from core.audit.report import generate_report
+        report = generate_report(tmp_path)
+        assert "Joern channel lost" in report["summary"]
+        assert "/t/narrowed-root" in report["summary"]
+
+    def test_record_fields_never_clobber_build_retry(
+            self, monkeypatch, tmp_path):
+        # The import retry must record its own fields — rebinding the
+        # build retry's closure variable fabricated retry_timeout_s
+        # (report printed 1800 where the derived-max build retry ran
+        # 5700).
+        import packages.joern.runner as runner
+        self._isolate_home(monkeypatch, tmp_path)
+        _patch_sizing(monkeypatch, sloc=3_000_000)
+        out = tmp_path / "run"
+        out.mkdir()
+        builds: list = []
+        fake_results = [
+            self._fake_cpg(tmp_path, failed=True),
+            self._fake_cpg(tmp_path, failed=False),
+        ]
+
+        def fake_build(target, cache_dir, **kwargs):
+            builds.append(kwargs)
+            return fake_results[min(len(builds), 2) - 1]
+
+        monkeypatch.setattr(runner, "build_cpg_cached", fake_build)
+        imports: list = []
+        srv = SimpleNamespace(
+            _cpg_loaded=False,
+            import_cpg=lambda path, timeout=None: imports.append(
+                timeout) or len(imports) > 1,
+            restart=lambda: True,
+        )
+        ok = jb._ensure_cpg_loaded(
+            srv, tmp_path,
+            tunables=SimpleNamespace(
+                cpg_timeout_s=300, import_timeout_s=900, heap_mb=16384,
+                cpg_timeout_auto=False, heap_is_derived=True,
+            ),
+            out_dir=out,
+        )
+        assert ok is True
+        record = load_cpg_build_status(out)
+        assert record["retried"] is True          # build retry ran
+        assert record["retry_timeout_s"] >= 2 * 2849  # NOT clobbered
+        assert record["import_retried"] is True
+        assert record["import_retry_timeout_s"] == 1800
+
+    def test_report_names_the_import_rescue(self, tmp_path):
+        from core.json import save_json
+        save_json(tmp_path / JOERN_CPG_STATUS_FILENAME, {
+            "target": "/t", "failed": False, "retried": False,
+            "phase": "complete", "import_retried": True,
+            "import_retry_timeout_s": 1800,
+            "first_heap_mb": 16384, "first_timeout_s": 300,
+            "retry_heap_mb": None, "retry_timeout_s": 5700,
+            "estimated_sloc": 10_000, "scope_excluded_dirs": 0,
+        })
+        from core.audit.report import generate_report
+        report = generate_report(tmp_path)
+        assert "rescued by a retry against" in report["summary"]
+        assert "Joern channel lost" not in report["summary"]
+        assert "derived-max retry" not in report["summary"]

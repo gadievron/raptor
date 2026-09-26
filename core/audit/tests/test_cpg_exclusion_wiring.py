@@ -109,7 +109,9 @@ class TestServerCpgExclusionWiring:
         monkeypatch.setattr(runner, "build_cpg_cached", fake_build_cached)
         srv = SimpleNamespace(
             _cpg_loaded=False,
-            import_cpg=lambda path, timeout=0: None,
+            # Truthful-success stub: import_cpg has a checked boolean
+            # contract (None reads as a handled import failure).
+            import_cpg=lambda path, timeout=0: True,
         )
         assert jb._ensure_cpg_loaded(
             srv, tmp_path, None, exclude_dirs=("/declared/run-dir",),

@@ -553,6 +553,12 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
     retry_timeout: int | None = None
     est_sloc: int | None = None
 
+    # Bound before _status's first call site (the build-phase failure
+    # records) — the closure reads them for the record's import-retry
+    # fields.
+    import_retried = False
+    import_retry_timeout_s: int | None = None
+
     def _status(*, failed: bool, phase: str) -> dict:
         return {
             "target": str(target_path),
@@ -563,6 +569,8 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
             "first_timeout_s": cpg_timeout,
             "retry_heap_mb": retry_heap,
             "retry_timeout_s": retry_timeout,
+            "import_retried": import_retried,
+            "import_retry_timeout_s": import_retry_timeout_s,
             "estimated_sloc": est_sloc,
             "scope_excluded_dirs": len(scope_exclude_dirs),
         }
@@ -609,21 +617,67 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
         _write_cpg_build_status(out_dir, _status(
             failed=True, phase="build"))
         return False
-    try:
-        srv.import_cpg(cpg.path, timeout=import_timeout)
-    except Exception:
-        logger.debug("CPG import failed for %s", target_path, exc_info=True)
+    def _try_import(timeout) -> bool:
+        # import_cpg reports failure BOTH ways: False for handled
+        # failures (server died mid-import — "remote end closed" —
+        # malformed response, binding check) and raise for transport
+        # errors. Ignoring the boolean minted a CPG-less server that
+        # read as loaded: Joern stayed enabled, every pre-sweep query
+        # returned "no CPG loaded" unrecoverably (restart() has no
+        # successful _cpg_path to re-import), and the status record
+        # claimed a channel the run never had.
+        try:
+            return bool(srv.import_cpg(cpg.path, timeout=timeout))
+        except Exception:
+            logger.debug(
+                "CPG import failed for %s", target_path, exc_info=True)
+            return False
+
+    imported = _try_import(import_timeout)
+    if not imported:
+        # Channel-keep: a kernel-scale import can kill the server
+        # outright; one explicit retry against a restarted server —
+        # restart() alone cannot help here (no successful _cpg_path
+        # to re-import) so the import is re-issued by hand. Timeout
+        # doubles (floor 30 min): too small re-buys the same death on
+        # a slow import; unbounded would let one graph eat the run's
+        # wall — the build-side derived-max retry uses the same
+        # one-retry posture.
+        # Distinct name: `retry_timeout` is the BUILD retry's closure
+        # variable — _status() reads it for the record's
+        # retry_timeout_s field, and rebinding it here fabricated the
+        # reported derived-max build timeout.
+        import_retry_timeout_s = max(
+            (import_timeout or 0) * 2, 1800,
+        )
+        logger.warning(
+            "CPG import failed for %s — restarting the server and "
+            "retrying the import once (timeout %ds)",
+            target_path, import_retry_timeout_s,
+        )
+        restarted = False
+        try:
+            restart = getattr(srv, "restart", None)
+            restarted = bool(restart()) if callable(restart) else False
+        except Exception:
+            logger.debug("server restart before import retry failed",
+                         exc_info=True)
+        if restarted:
+            import_retried = True
+            imported = _try_import(import_retry_timeout_s)
+    if not imported:
         # A built-but-unimported graph is still a lost channel: the
         # record must never claim a rescue the server can't serve.
         _write_cpg_build_status(out_dir, _status(
             failed=True, phase="import"))
         return False
-    # Success record on EVERY successful import (only AFTER it: a
-    # rescue claim for a graph that failed to import would report a
-    # channel the run never had). Writing the plain-success case too
-    # is what retires a stale failed=true record from an earlier
-    # segment in the same out dir — otherwise the report claims a
-    # channel loss beside that later segment's real receipts.
+    # Success record on EVERY successful import (only AFTER it, and
+    # only on a TRUTHFUL import result: a rescue claim for a graph
+    # that failed to import would report a channel the run never
+    # had). Writing the plain-success case too is what retires a
+    # stale failed=true record from an earlier segment in the same
+    # out dir — otherwise the report claims a channel loss beside
+    # that later segment's real receipts.
     _write_cpg_build_status(out_dir, _status(
         failed=False, phase="complete"))
     return True
