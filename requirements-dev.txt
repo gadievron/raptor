@@ -1,5 +1,7 @@
-# RAPTOR Development Dependencies
-# Install with: pip install -r requirements-dev.txt
+# RAPTOR Development Dependencies (compatibility export)
+# Source of truth: pyproject.toml + uv.lock.
+# Install with: pip install -r requirements-dev.txt during the transition
+# window, or prefer: uv sync --locked --group dev.
 
 -r requirements.txt
 
