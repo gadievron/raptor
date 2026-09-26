@@ -105,10 +105,14 @@ _SOURCE_SIDE_FD_READ_FUNCS: frozenset[str] = frozenset({
 
 # The shared taxonomy sets are intentionally broader for binary fingerprinting.
 # Keep only call sites that directly ingest bytes for L1 source evidence.
+# WSAAccept is excluded with accept — both return a socket, no bytes land at
+# the call site. AcceptEx stays: its lpOutputBuffer receives the connection's
+# first data block, so the call site itself ingests attacker bytes.
 _SOURCE_SIDE_SOCKET_INPUT_FUNCS: frozenset[str] = NETWORK_INGEST_FUNCS - frozenset({
     "accept",
     "bind",
     "listen",
+    "WSAAccept",
 })
 _SOURCE_SIDE_STREAM_INPUT_FUNCS: frozenset[str] = (
     STREAM_INPUT_FUNCS | SCAN_FAMILY_FUNCS

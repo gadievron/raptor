@@ -69,6 +69,20 @@ STRING_OVERFLOW_FUNCS: frozenset[str] = frozenset({
     # safe (`_s` suffix) and unsafe variants. The unsafe ones below
     # have the same risk shape as strcpy.
     "lstrcpyA", "lstrcpyW", "lstrcatA", "lstrcatW",
+
+    # shlwapi unbounded copy/concat — deprecated by Microsoft for
+    # exactly the strcpy shape; still exported and still imported by
+    # legacy Windows binaries. Note: only the W forms are real shlwapi
+    # exports; StrCpyA/StrCatA are shlwapi.h macros over lstrcpyA/
+    # lstrcatA and normally never appear in an import table. They are
+    # kept anyway — statically-linked shims and re-exports do surface
+    # the names, and a never-matching entry costs nothing (deliberate
+    # over-inclusion, mirrored to lstrcpyA/lstrcatA above).
+    "StrCpyA", "StrCpyW", "StrCatA", "StrCatW",
+
+    # Multibyte CRT siblings — same unbounded copy shape, common in
+    # older MBCS-built Windows code.
+    "_mbscpy", "_mbscat",
 })
 
 
@@ -93,6 +107,12 @@ MEMORY_COPY_FUNCS: frozenset[str] = frozenset({
     "memcpy", "memmove", "bcopy",
     # Wide-char variants
     "wmemcpy", "wmemmove",
+    # Windows forms of the same shape. RtlMoveMemory is a real
+    # kernel32/ntdll export (the MoveMemory macro resolves to it);
+    # RtlCopyMemory is usually a winnt.h macro over memcpy and only
+    # surfaces as an import from ntdll-linked/kernel-mode images —
+    # kept for those, cheap when absent.
+    "RtlCopyMemory", "RtlMoveMemory",
 })
 
 
@@ -120,7 +140,7 @@ FORMAT_STRING_FUNCS: frozenset[str] = frozenset({
     # Windows ANSI/Unicode wsprintf — format-string variants of
     # sprintf. (Windows safe variants like StringCchPrintf are NOT
     # included — explicit size param.)
-    "wsprintfA", "wsprintfW",
+    "wsprintfA", "wsprintfW", "wvsprintfA", "wvsprintfW",
 })
 
 
@@ -165,6 +185,11 @@ NETWORK_INGEST_FUNCS: frozenset[str] = frozenset({
     "accept", "bind", "listen",
     # OpenSSL
     "SSL_read", "BIO_read",
+    # Winsock: the overlapped/extension forms have their own names
+    # (the classic recv/accept names above are shared with Winsock
+    # and already match); a PE importing these is doing real
+    # network ingestion / serving.
+    "WSARecv", "WSARecvFrom", "WSAAccept", "AcceptEx",
 })
 
 
@@ -346,8 +371,70 @@ KERNEL_USERSPACE_FUNCS: frozenset[str] = frozenset({
 # so they belong in the shared catalog. Source-side scanners may treat
 # them as L1 context; import/fuzz-priority consumers can opt in only when
 # this signal is meaningful for their target class.
+#
+# Two sides of the same boundary live here: the kernel-side dispatch
+# names (unlocked_ioctl / compat_ioctl — never in user-space import
+# tables) and the USER-side callers that push attacker-shaped control
+# codes and buffers across it (DeviceIoControl / NtDeviceIoControlFile
+# on Windows). POSIX `ioctl` is the caller-side name too, but it is
+# near-ubiquitous (every TTY-touching binary imports it) — consumers
+# with a fuzz-priority purpose must compose the subset that carries
+# signal for their target class rather than the whole group (the
+# surface classifier does exactly that for the Windows callers).
 DEVICE_CONTROL_FUNCS: frozenset[str] = frozenset({
     "ioctl", "unlocked_ioctl", "compat_ioctl",
+    "DeviceIoControl", "NtDeviceIoControlFile",
+})
+
+
+# === Win32 registry ingestion (read primitives only) ===
+# The registry is a Windows input channel the POSIX vocabulary has no
+# name for: values are frequently writable by less-privileged
+# principals (HKCU, world-writable service keys) and consumed by
+# higher-privileged code. READ primitives only, mirroring the
+# IPC_FUNCS rationale — RegOpenKeyEx / RegCreateKeyEx are setup
+# calls that ingest nothing, so flagging them would add matches with
+# no live read primitive behind them.
+WIN32_REGISTRY_INGEST_FUNCS: frozenset[str] = frozenset({
+    "RegQueryValueExA", "RegQueryValueExW",
+    "RegGetValueA", "RegGetValueW",
+    "RegEnumValueA", "RegEnumValueW",
+    "RegEnumKeyExA", "RegEnumKeyExW",
+})
+
+
+# === Win32 dynamic code loading ===
+# LoadLibrary's CVE shape is search-path / planting (a relative or
+# attacker-influenced path loads attacker code), not a memory-safety
+# sink. Nearly every Windows binary imports LoadLibraryA/W, so this
+# group is SURFACE-classification vocabulary only — never a
+# fuzz-priority sink set (the same ubiquity rule that keeps getenv
+# out of the dangerous categories). GetProcAddress is deliberately
+# absent: it is a pure lookup over an already-loaded module and is
+# even more ubiquitous.
+WIN32_DYNAMIC_LOAD_FUNCS: frozenset[str] = frozenset({
+    "LoadLibraryA", "LoadLibraryW",
+    "LoadLibraryExA", "LoadLibraryExW",
+})
+
+
+# === Win32 SEH-adjacent machinery ===
+# Exception-handling registration and unwind primitives. Not sinks —
+# markers: SEH state is a classic exploitation primitive target
+# (handler overwrite, unwind abuse), so a binary managing its own
+# exception machinery is review surface, and the compiler-emitted
+# personality routines (_except_handler3/4, __C_specific_handler)
+# tell a triage pass which SEH generation the image was built
+# against.
+WIN32_SEH_FUNCS: frozenset[str] = frozenset({
+    "SetUnhandledExceptionFilter",
+    "AddVectoredExceptionHandler",
+    "RaiseException", "RtlUnwind",
+    "_except_handler3", "_except_handler4",
+    # Both spellings of the x64 personality routine: the raw export
+    # and the once-stripped form a single-underscore symbol
+    # normaliser may hand a consumer.
+    "__C_specific_handler", "_C_specific_handler",
 })
 
 
@@ -514,12 +601,48 @@ MACOS_PROCESS_EXEC_SUBSTRINGS: frozenset[str] = frozenset({
     "Foundation.Process",
 })
 
+# IOKit user-client boundary. Caller-side entries (IOConnectCall*)
+# push attacker-shaped selectors and struct buffers into kernel
+# extensions — the macOS sibling of the ioctl boundary; IOServiceOpen
+# / matching are how the client acquires the boundary handle. These
+# are plain C exports, matched by the same token/prefix rule as the
+# bare Obj-C names.
+MACOS_IOKIT_SUBSTRINGS: frozenset[str] = frozenset({
+    # The complete IOConnectCall* dispatch family (sync + async,
+    # untyped/scalar/struct) — closed API set, listed exhaustively so
+    # exact-name consumers match every variant.
+    "IOConnectCallMethod",
+    "IOConnectCallScalarMethod",
+    "IOConnectCallStructMethod",
+    "IOConnectCallAsyncMethod",
+    "IOConnectCallAsyncScalarMethod",
+    "IOConnectCallAsyncStructMethod",
+    "IOServiceOpen",
+    "IOServiceGetMatchingService",
+    "IORegistryEntryCreateCFProperty",
+})
+
+# XPC ingress. Listener setup (event handler / mach service /
+# xpc_main) marks a binary that RECEIVES peer messages; the
+# dictionary/data getters are the read primitives attacker-shaped
+# payload bytes come through.
+MACOS_XPC_INGRESS_SUBSTRINGS: frozenset[str] = frozenset({
+    "xpc_connection_set_event_handler",
+    "xpc_connection_create_mach_service",
+    "xpc_main",
+    "xpc_dictionary_get_data",
+    "xpc_dictionary_get_string",
+    "xpc_data_get_bytes_ptr",
+})
+
 MACOS_DANGEROUS_SUBSTRINGS: frozenset[str] = (
     MACOS_PARSER_SUBSTRINGS
     | MACOS_FILESYSTEM_URL_SUBSTRINGS
     | MACOS_SECURITY_BOUNDARY_SUBSTRINGS
     | MACOS_BYTE_BUFFER_SUBSTRINGS
     | MACOS_PROCESS_EXEC_SUBSTRINGS
+    | MACOS_IOKIT_SUBSTRINGS
+    | MACOS_XPC_INGRESS_SUBSTRINGS
 )
 
 
@@ -532,7 +655,8 @@ MACOS_DANGEROUS_SUBSTRINGS: frozenset[str] = (
 # so patterns don't belong here either — names only.
 ENTRY_POINT_HINTS: frozenset[str] = frozenset({
     "main", "_start", "wmain",
-    "WinMain", "DllMain", "DriverEntry",
+    "WinMain", "wWinMain", "DllMain", "DriverEntry",
+    "ServiceMain",               # SCM-invoked Windows service entry
     "LLVMFuzzerTestOneInput",   # libFuzzer harness convention
     "do_main",                   # common alias seen in real codebases
 })
@@ -570,10 +694,12 @@ __all__ = [
     "MACOS_BYTE_BUFFER_SUBSTRINGS",
     "MACOS_DANGEROUS_SUBSTRINGS",
     "MACOS_FILESYSTEM_URL_SUBSTRINGS",
+    "MACOS_IOKIT_SUBSTRINGS",
     "MACOS_PARSER_SUBSTRINGS",
     "MACOS_PROCESS_EXEC_SUBSTRINGS",
     "MACOS_SECURITY_BOUNDARY_PREFIXES",
     "MACOS_SECURITY_BOUNDARY_SUBSTRINGS",
+    "MACOS_XPC_INGRESS_SUBSTRINGS",
     "MEMORY_COPY_FUNCS",
     "NETWORK_INGEST_FUNCS",
     "PARSER_FUNCS",
@@ -585,6 +711,9 @@ __all__ = [
     "STREAM_INPUT_FUNCS",
     "STRING_OVERFLOW_FUNCS",
     "TOCTOU_FUNCS",
+    "WIN32_DYNAMIC_LOAD_FUNCS",
+    "WIN32_REGISTRY_INGEST_FUNCS",
+    "WIN32_SEH_FUNCS",
     "fortified",
     "FORMAT_STRING_FMT_ARG_INDEX",
 ]

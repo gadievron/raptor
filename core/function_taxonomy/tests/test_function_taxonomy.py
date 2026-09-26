@@ -30,6 +30,9 @@ from core.function_taxonomy import (
     STREAM_INPUT_FUNCS,
     STRING_OVERFLOW_FUNCS,
     TOCTOU_FUNCS,
+    WIN32_DYNAMIC_LOAD_FUNCS,
+    WIN32_REGISTRY_INGEST_FUNCS,
+    WIN32_SEH_FUNCS,
     fortified,
 )
 
@@ -40,6 +43,8 @@ ALL_DANGEROUS_CATEGORIES = [
     TOCTOU_FUNCS,
     STREAM_INPUT_FUNCS, PROCESS_BOUNDARY_FUNCS, IPC_FUNCS,
     KERNEL_USERSPACE_FUNCS, DEVICE_CONTROL_FUNCS,
+    WIN32_REGISTRY_INGEST_FUNCS, WIN32_DYNAMIC_LOAD_FUNCS,
+    WIN32_SEH_FUNCS,
 ]
 
 
@@ -372,6 +377,124 @@ class TestCrossCategory(unittest.TestCase):
                                    "empty-string member in category")
 
 
+# === Win32 / darwin seed sets ===
+
+class TestWin32Seeds(unittest.TestCase):
+    """The Win32 seed vocabulary: curated additions to the existing
+    categories plus the three new groups — every entry follows the
+    module's CVE-shape and ubiquity rules."""
+
+    def test_shlwapi_and_mbcs_copy_in_overflow(self):
+        for name in ("StrCpyA", "StrCpyW", "StrCatA", "StrCatW",
+                     "_mbscpy", "_mbscat"):
+            self.assertIn(name, STRING_OVERFLOW_FUNCS)
+
+    def test_rtl_copy_forms_in_memory_copy(self):
+        self.assertIn("RtlCopyMemory", MEMORY_COPY_FUNCS)
+        self.assertIn("RtlMoveMemory", MEMORY_COPY_FUNCS)
+
+    def test_winsock_ingest_names(self):
+        for name in ("WSARecv", "WSARecvFrom", "WSAAccept",
+                     "AcceptEx"):
+            self.assertIn(name, NETWORK_INGEST_FUNCS)
+
+    def test_device_control_gains_windows_callers(self):
+        self.assertIn("DeviceIoControl", DEVICE_CONTROL_FUNCS)
+        self.assertIn("NtDeviceIoControlFile", DEVICE_CONTROL_FUNCS)
+
+    def test_registry_group_is_read_primitives_only(self):
+        """Setup calls (open/create) deliberately absent — same
+        rationale as IPC_FUNCS excluding shm_open."""
+        self.assertIn("RegQueryValueExW", WIN32_REGISTRY_INGEST_FUNCS)
+        self.assertIn("RegGetValueA", WIN32_REGISTRY_INGEST_FUNCS)
+        self.assertNotIn("RegOpenKeyExA", WIN32_REGISTRY_INGEST_FUNCS)
+        self.assertNotIn("RegOpenKeyExW", WIN32_REGISTRY_INGEST_FUNCS)
+        self.assertNotIn("RegCreateKeyExW",
+                         WIN32_REGISTRY_INGEST_FUNCS)
+
+    def test_dynamic_load_excludes_getprocaddress(self):
+        """GetProcAddress is a pure lookup and even more ubiquitous
+        than LoadLibrary — the ubiquity rule keeps it out."""
+        self.assertIn("LoadLibraryW", WIN32_DYNAMIC_LOAD_FUNCS)
+        self.assertIn("LoadLibraryExA", WIN32_DYNAMIC_LOAD_FUNCS)
+        self.assertNotIn("GetProcAddress", WIN32_DYNAMIC_LOAD_FUNCS)
+
+    def test_seh_markers_present(self):
+        for name in ("SetUnhandledExceptionFilter", "RtlUnwind",
+                     "_except_handler4", "__C_specific_handler"):
+            self.assertIn(name, WIN32_SEH_FUNCS)
+
+    def test_seh_personality_post_strip_alias(self):
+        """Both spellings of the x64 personality routine are present:
+        the raw export and the once-stripped form a single-underscore
+        symbol normaliser hands consumers."""
+        self.assertIn("_C_specific_handler", WIN32_SEH_FUNCS)
+
+    def test_safe_variants_stay_out(self):
+        """Microsoft `_s` and StringCch* safe variants never join
+        the dangerous sets."""
+        for cat in ALL_DANGEROUS_CATEGORIES:
+            self.assertNotIn("StrCpyNA", cat)      # bounded shlwapi
+            self.assertNotIn("memcpy_s", cat)
+            self.assertNotIn("StringCchPrintfA", cat)
+
+    def test_service_entry_hints(self):
+        self.assertIn("ServiceMain", ENTRY_POINT_HINTS)
+        self.assertIn("wWinMain", ENTRY_POINT_HINTS)
+
+    def test_group_sizes_reasonable(self):
+        self.assertGreaterEqual(len(WIN32_REGISTRY_INGEST_FUNCS), 4)
+        self.assertLess(len(WIN32_REGISTRY_INGEST_FUNCS), 16)
+        self.assertGreaterEqual(len(WIN32_DYNAMIC_LOAD_FUNCS), 2)
+        self.assertLess(len(WIN32_DYNAMIC_LOAD_FUNCS), 10)
+        self.assertGreaterEqual(len(WIN32_SEH_FUNCS), 4)
+        self.assertLess(len(WIN32_SEH_FUNCS), 15)
+
+
+class TestDarwinSeeds(unittest.TestCase):
+    """The darwin IOKit / XPC seed groups (union membership is
+    guarded by TestMacosSubstringGroups below)."""
+
+    def test_iokit_user_client_entries(self):
+        from core.function_taxonomy import MACOS_IOKIT_SUBSTRINGS
+        for name in ("IOConnectCallMethod",
+                     "IOConnectCallStructMethod", "IOServiceOpen"):
+            self.assertIn(name, MACOS_IOKIT_SUBSTRINGS)
+
+    def test_ioconnect_dispatch_family_complete(self):
+        """The IOConnectCall* family is a CLOSED API set, listed
+        exhaustively — exact-name consumers must match the async
+        variants too, not just the sync three."""
+        from core.function_taxonomy import MACOS_IOKIT_SUBSTRINGS
+        expected = {
+            "IOConnectCallMethod",
+            "IOConnectCallScalarMethod",
+            "IOConnectCallStructMethod",
+            "IOConnectCallAsyncMethod",
+            "IOConnectCallAsyncScalarMethod",
+            "IOConnectCallAsyncStructMethod",
+        }
+        family = {name for name in MACOS_IOKIT_SUBSTRINGS
+                  if name.startswith("IOConnectCall")}
+        self.assertEqual(family, expected)
+
+    def test_xpc_ingress_entries(self):
+        from core.function_taxonomy import MACOS_XPC_INGRESS_SUBSTRINGS
+        for name in ("xpc_connection_set_event_handler", "xpc_main",
+                     "xpc_dictionary_get_data"):
+            self.assertIn(name, MACOS_XPC_INGRESS_SUBSTRINGS)
+
+    def test_seed_scale_not_exhaustive(self):
+        """Seed lists stay small and curated (learn-vocab doctrine:
+        project vocabulary comes from study/IRIS, not hardcodes)."""
+        from core.function_taxonomy import (
+            MACOS_IOKIT_SUBSTRINGS,
+            MACOS_XPC_INGRESS_SUBSTRINGS,
+        )
+        self.assertLess(len(MACOS_IOKIT_SUBSTRINGS), 15)
+        self.assertLess(len(MACOS_XPC_INGRESS_SUBSTRINGS), 15)
+
+
 # === fortified() helper ===
 
 class TestFortified(unittest.TestCase):
@@ -477,9 +600,11 @@ class TestMacosSubstringGroups:
             MACOS_BYTE_BUFFER_SUBSTRINGS,
             MACOS_DANGEROUS_SUBSTRINGS,
             MACOS_FILESYSTEM_URL_SUBSTRINGS,
+            MACOS_IOKIT_SUBSTRINGS,
             MACOS_PARSER_SUBSTRINGS,
             MACOS_PROCESS_EXEC_SUBSTRINGS,
             MACOS_SECURITY_BOUNDARY_SUBSTRINGS,
+            MACOS_XPC_INGRESS_SUBSTRINGS,
         )
 
         union = (
@@ -488,6 +613,8 @@ class TestMacosSubstringGroups:
             | MACOS_SECURITY_BOUNDARY_SUBSTRINGS
             | MACOS_BYTE_BUFFER_SUBSTRINGS
             | MACOS_PROCESS_EXEC_SUBSTRINGS
+            | MACOS_IOKIT_SUBSTRINGS
+            | MACOS_XPC_INGRESS_SUBSTRINGS
         )
         assert union == MACOS_DANGEROUS_SUBSTRINGS
 
@@ -495,9 +622,11 @@ class TestMacosSubstringGroups:
         from core.function_taxonomy import (
             MACOS_BYTE_BUFFER_SUBSTRINGS,
             MACOS_FILESYSTEM_URL_SUBSTRINGS,
+            MACOS_IOKIT_SUBSTRINGS,
             MACOS_PARSER_SUBSTRINGS,
             MACOS_PROCESS_EXEC_SUBSTRINGS,
             MACOS_SECURITY_BOUNDARY_SUBSTRINGS,
+            MACOS_XPC_INGRESS_SUBSTRINGS,
         )
 
         groups = [
@@ -506,15 +635,23 @@ class TestMacosSubstringGroups:
             MACOS_SECURITY_BOUNDARY_SUBSTRINGS,
             MACOS_BYTE_BUFFER_SUBSTRINGS,
             MACOS_PROCESS_EXEC_SUBSTRINGS,
+            MACOS_IOKIT_SUBSTRINGS,
+            MACOS_XPC_INGRESS_SUBSTRINGS,
         ]
         for i, a in enumerate(groups):
             for b in groups[i + 1:]:
                 assert not a & b
 
-    def test_pre_split_flat_set_unchanged(self):
+    def test_pre_split_names_all_retained(self):
+        # SUBSET, not equality: the pin's job is split-integrity —
+        # the categorised groups must never LOSE a pre-split entry.
+        # Curated growth (the darwin IOKit/XPC groups) is governed
+        # by the union/disjoint guards above plus each addition's
+        # own membership pins, so an equality pin here would only
+        # re-churn this list on every legitimate addition.
         from core.function_taxonomy import MACOS_DANGEROUS_SUBSTRINGS
 
-        assert MACOS_DANGEROUS_SUBSTRINGS == frozenset({
+        assert MACOS_DANGEROUS_SUBSTRINGS >= frozenset({
             "CFPropertyListCreateWithData", "CFPropertyListCreateFromXMLData",
             "CFReadStreamRead", "CFDataGetBytes",
             "CFStringCreateWithBytes", "CFURLCreateWithBytes",

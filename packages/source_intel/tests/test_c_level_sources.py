@@ -25,6 +25,12 @@ def test_source_scanner_composes_shared_catalog_with_source_local_reads():
     assert "accept" not in _C_L1_SOURCE_CALLS
     assert "bind" not in _C_L1_SOURCE_CALLS
     assert "listen" not in _C_L1_SOURCE_CALLS
+    # WSAAccept mirrors accept — returns a socket, ingests no bytes
+    # at the call site. AcceptEx stays: lpOutputBuffer receives the
+    # connection's first data block, so the call site itself ingests.
+    assert "WSAAccept" not in _C_L1_SOURCE_CALLS
+    assert _C_L1_SOURCE_CALLS["AcceptEx"] == "socket"
+    assert _C_L1_SOURCE_CALLS["WSARecv"] == "socket"
     assert "sscanf" not in _C_L1_SOURCE_CALLS
     assert "vsscanf" not in _C_L1_SOURCE_CALLS
     assert "swscanf" not in _C_L1_SOURCE_CALLS
