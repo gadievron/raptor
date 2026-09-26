@@ -1020,8 +1020,13 @@ def _prune_reemission_rows(
     """Drop all-but-the-NEWEST duplicate re-emission row per identity,
     in place, preserving order. Returns ``(rows_freed, bytes_freed)``.
 
-    "Newest" is last-in-file, matching the append-order convention
-    every latest-wins consumer already applies on ``ts`` ties.
+    "Newest" here is last-in-file BY POSITION (``ts`` is not
+    consulted); the latest-wins consumers themselves compare strict
+    ``entry.ts > existing.ts``, first-in-file winning a ``ts`` tie.
+    The rows this prune folds are zero-cost reused re-emissions
+    whose identity pins every verdict-relevant field (key, site,
+    source hash, verdict, model, strategy hash), so surviving twins
+    differ only in non-identity fields.
     """
     seen: set[tuple] = set()
     keep = [True] * len(entries)
