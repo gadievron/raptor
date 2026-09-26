@@ -1297,7 +1297,21 @@ def main() -> int:
         _collect_key_files(data, key_files, seen_key_files, str(target))
 
         if n_items == 0:
-            print("study-loop: no study items — done", file=sys.stderr)
+            dropped = data.get("reading_list_dropped")
+            if isinstance(dropped, int) and dropped > 0:
+                # Never a silent empty study: prep dropped foreign
+                # reading-list identifiers (project-store carryover
+                # from a different tree/binary) and still ended with
+                # zero items — name the cause instead of "done".
+                print(
+                    f"study-loop: WARNING: 0 study items — {dropped} "
+                    "reading-list identifier(s) resolved to no file "
+                    "in this tree (different binary?); the domain "
+                    "model was NOT updated by this pass",
+                    file=sys.stderr,
+                )
+            else:
+                print("study-loop: no study items — done", file=sys.stderr)
         else:
             # --- Study ---
             run_cmd = [sys.executable, run_bin, str(output_dir)]
