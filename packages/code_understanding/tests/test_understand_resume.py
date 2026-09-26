@@ -339,3 +339,31 @@ class TestSpendFloorBooksFailedDispatch:
             fingerprint=task_fingerprint("hunt", "k", repo),
             target=repo)
         assert store.load("model-a") is None
+
+
+class TestResumeTargetSource:
+    def test_pinned_config_target_wins_over_drifted_metadata(
+            self, repo, run_dir, monkeypatch, capsys):
+        # The pinned run config is the resume's own record — the
+        # checkpoint fingerprint and drift gate were built against
+        # ITS target. Run metadata is a shared lifecycle file another
+        # command on the same dir can rewrite; when the two disagree,
+        # the config governs and the disagreement is warned (a
+        # metadata-first read once aborted the resume on a vanished
+        # metadata target while the pinned target was fine).
+        mod = _load_shim()
+        _interrupted_hunt_run(mod, monkeypatch, repo, run_dir)
+
+        meta_path = run_dir / RUN_METADATA_FILE
+        meta = json.loads(meta_path.read_text())
+        meta["target_path"] = str(run_dir.parent / "vanished-elsewhere")
+        meta_path.write_text(json.dumps(meta))
+
+        run2_calls: list = []
+        _patch_hunt_dispatch(monkeypatch, run2_calls)
+        rc = _run_shim(mod, monkeypatch, ["--resume", str(run_dir)])
+        err = capsys.readouterr().err
+
+        assert rc == 0
+        assert [c[0] for c in run2_calls] == ["model-c"]
+        assert "disagree" in err
