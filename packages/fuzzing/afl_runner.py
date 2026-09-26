@@ -42,6 +42,7 @@ from core.sandbox import run_trusted as _run_trusted
 from core.security.log_sanitisation import sanitise_for_terminal
 from core.source import open_regular
 from packages.fuzzing.seed_corpus import prepare_builtin_seed_corpus
+from packages.fuzzing.smt_seed import ensure_real_seed_dir
 
 logger = get_logger()
 
@@ -523,7 +524,20 @@ class AFLRunner:
         files in ``<target>/out/corpus_default/``.
         """
         corpus = self.output_dir / "corpus_default"
-        corpus.mkdir(parents=True, exist_ok=True)
+        # Name containment BEFORE any create or write: the reused run
+        # dir was writable by the previous campaign's sandboxed
+        # target, and a symlink planted at this predictable name would
+        # otherwise receive every seed (mkdir's exist_ok tolerates a
+        # symlink to a directory). Raise — the emergency-seed fallback
+        # below must never write through a plant either.
+        refusal = ensure_real_seed_dir(corpus)
+        if refusal is not None:
+            msg = (
+                f"refusing default corpus dir "
+                f"{sanitise_for_terminal(str(corpus))}: "
+                f"{sanitise_for_terminal(refusal, max_len=200)}"
+            )
+            raise RuntimeError(msg)
         # No getattr fallback: seed_profile is assigned before corpus
         # resolution in __init__; a fallback here would silently mask a
         # regression in that ordering.

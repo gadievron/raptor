@@ -453,3 +453,29 @@ def test_generated_seed_copy_is_bounded_against_growth(tmp_path, monkeypatch):
         sk["path"] == "data.json" and sk["reason"] == "too large"
         for sk in manifest["skipped"]
     )
+
+
+def test_prepare_builtin_refuses_symlinked_out_dir(tmp_path):
+    # The out dir sits at a predictable name inside a reused run dir
+    # the previous campaign's sandboxed target could write; resolve()
+    # would follow the plant and every seed + the manifest os.replace
+    # would land in the attacker's directory.
+    attacker = tmp_path / "attacker"
+    attacker.mkdir()
+    out = tmp_path / "seeds"
+    out.symlink_to(attacker)
+    with pytest.raises(ValueError,
+                       match="refusing built-in seed corpus output"):
+        prepare_builtin_seed_corpus(out)
+    assert list(attacker.iterdir()) == []
+    # The plant is left in place for forensics, never followed.
+    assert out.is_symlink()
+
+
+def test_prepare_builtin_refuses_file_planted_at_out_dir(tmp_path):
+    out = tmp_path / "seeds"
+    out.write_text("plant")
+    with pytest.raises(ValueError,
+                       match="refusing built-in seed corpus output"):
+        prepare_builtin_seed_corpus(out)
+    assert out.read_text() == "plant"

@@ -139,6 +139,26 @@ class TestCreateDefaultCorpus:
         )
         assert seen["profile"] == "network"
 
+    def test_planted_symlink_at_corpus_default_refused(self, tmp_path):
+        # The default-corpus dir sits at a predictable name inside a
+        # reused output dir the previous campaign's sandboxed target
+        # could write; mkdir's exist_ok follows a symlink to a
+        # directory, so every seed (built-in AND the emergency
+        # fallback) would land in the attacker's directory.
+        output_dir = tmp_path / "fuzz_run"
+        output_dir.mkdir()
+        attacker = tmp_path / "attacker"
+        attacker.mkdir()
+        (output_dir / "corpus_default").symlink_to(attacker)
+
+        runner = self._make_runner(output_dir)
+        with pytest.raises(RuntimeError,
+                           match="refusing default corpus dir"):
+            runner._create_default_corpus()
+        assert list(attacker.iterdir()) == []
+        # Plant left in place, never followed.
+        assert (output_dir / "corpus_default").is_symlink()
+
     def test_seeds_have_expected_content(self, tmp_path):
         output_dir = tmp_path / "fuzz_run"
         output_dir.mkdir()

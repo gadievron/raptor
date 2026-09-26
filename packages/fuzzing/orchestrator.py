@@ -999,9 +999,23 @@ class FuzzingOrchestrator:
         seed_profile: str = "default",
     ) -> tuple[Path, dict[str, Any]]:
         """Materialise RAPTOR's checked-in baseline corpus for this campaign."""
+        from core.security.log_sanitisation import sanitise_for_terminal
         from packages.fuzzing.seed_corpus import prepare_builtin_seed_corpus
+        from packages.fuzzing.smt_seed import ensure_real_seed_dir
 
         seed_dir = out_dir / "seed-corpus"
+        # Name containment before any write: the run dir is reused and
+        # was writable by a previous campaign's sandboxed target; a
+        # symlink planted at this predictable name would receive the
+        # whole seed corpus and the manifest os.replace.
+        refusal = ensure_real_seed_dir(seed_dir)
+        if refusal is not None:
+            msg = (
+                f"refusing seed corpus dir "
+                f"{sanitise_for_terminal(str(seed_dir))}: "
+                f"{sanitise_for_terminal(refusal, max_len=200)}"
+            )
+            raise RuntimeError(msg)
         manifest = prepare_builtin_seed_corpus(seed_dir, profile=seed_profile)
         info = {
             "source": "raptor_builtin_seed_corpus",

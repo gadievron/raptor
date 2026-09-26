@@ -415,3 +415,30 @@ class TestEnvRootfsLifetime(unittest.TestCase):
                     for h in plan.hints))
         finally:
             os.unlink(tmp)
+
+
+class TestPrepareBuiltinCorpusContainment(unittest.TestCase):
+    """The seed-corpus dir sits at a predictable name inside a reused
+    run dir the previous campaign's sandboxed target could write; a
+    planted symlink must never receive the corpus or manifest."""
+
+    def test_planted_symlink_refused(self):
+        tmp = _tmpdir(self)
+        attacker = tmp / "attacker"
+        attacker.mkdir()
+        out = tmp / "run"
+        out.mkdir()
+        (out / "seed-corpus").symlink_to(attacker)
+        orch = FuzzingOrchestrator.__new__(FuzzingOrchestrator)
+        with self.assertRaises(RuntimeError):
+            orch._prepare_builtin_corpus(out)
+        self.assertEqual(list(attacker.iterdir()), [])
+        self.assertTrue((out / "seed-corpus").is_symlink())
+
+    def test_clean_dir_builds_seed_corpus(self):
+        out = _tmpdir(self)
+        orch = FuzzingOrchestrator.__new__(FuzzingOrchestrator)
+        seed_dir, info = orch._prepare_builtin_corpus(out)
+        self.assertTrue((seed_dir / "manifest.json").is_file())
+        self.assertGreater(info["seeds"], 0)
+        self.assertTrue((out / "seed-corpus.json").is_file())

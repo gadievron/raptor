@@ -450,8 +450,24 @@ def prepare_builtin_seed_corpus(out_dir: Path, profile: str = "default") -> dict
     manifest with sizes and hashes for the exact seeds used by this run.
     """
 
-    out_dir = Path(out_dir).resolve()
-    _validate_builtin_output_directory(out_dir)
+    out_dir = Path(out_dir)
+    # Dangerous-path check first (a read of the resolved path only —
+    # its specific diagnostics must keep priority), then vet the NAME
+    # before adopting resolve()'s answer: resolve follows a planted
+    # symlink, pointing every write below (seeds, manifest.json via
+    # os.replace) at an attacker-chosen directory.
+    _validate_builtin_output_directory(out_dir.resolve())
+    from packages.fuzzing.smt_seed import ensure_real_seed_dir
+    refusal = ensure_real_seed_dir(out_dir)
+    if refusal is not None:
+        from core.security.log_sanitisation import sanitise_for_terminal
+        msg = (
+            f"refusing built-in seed corpus output at "
+            f"{sanitise_for_terminal(str(out_dir))}: "
+            f"{sanitise_for_terminal(refusal, max_len=200)}"
+        )
+        raise ValueError(msg)
+    out_dir = out_dir.resolve()
     manifest_path = BUILTIN_SEED_CORPUS_DIR / "manifest.json"
     if not manifest_path.is_file():
         msg = f"built-in seed corpus manifest missing: {manifest_path}"
