@@ -280,6 +280,9 @@
     "artifacts:write_only_artifact::coverage-web.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:write_only_artifact::crate-corpus.json": {
+      "note": "operator-facing run record: names the crate's own cargo-fuzz corpus (fuzz/corpus/<target>) the campaign staged — same posture as generated-corpus.json / seed-corpus.json"
+    },
     "artifacts:write_only_artifact::crashes_for_validation.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
