@@ -9,6 +9,7 @@ not).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from core.json import load_json
@@ -19,6 +20,14 @@ logger = get_logger()
 # Registry / run-metadata records are small; the shared small-record
 # budget the review CLI applies to the same files.
 _MAX_META_BYTES = 8 * 1024 * 1024
+
+# Twin of the session-binding registry's name gate
+# (core.project.sessions._NAME_RE — pattern equality pinned by test):
+# a registry lookup keyed by a raw name is a path join, so a name
+# carrying separators would escape PROJECTS_DIR and read an
+# attacker-placed record. fullmatch, so a trailing newline (which
+# ``$`` alone tolerates) is refused too.
+_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 def project_output_dir(name: str | None = None) -> Path | None:
@@ -36,6 +45,12 @@ def project_output_dir(name: str | None = None) -> Path | None:
             name = None
         if not name:
             return None
+    if not _PROJECT_NAME_RE.fullmatch(name):
+        logger.warning(
+            "project name %r fails the registry charset gate — "
+            "refusing the lookup", name,
+        )
+        return None
     data = load_json(PROJECTS_DIR / f"{name}.json",
                      max_bytes=_MAX_META_BYTES)
     if isinstance(data, dict) and data.get("output_dir"):
