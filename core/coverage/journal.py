@@ -18,12 +18,13 @@ import logging
 import os
 import re
 import threading
+import time
 import types
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Union, get_args, get_origin, get_type_hints
+from typing import IO, Any, Union, get_args, get_origin, get_type_hints
 
 from core.json import load_json, loads
 
@@ -694,6 +695,17 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
     data = (
         json.dumps(row, separators=(",", ":"), allow_nan=False) + "\n"
     ).encode("utf-8")
+    # No load-cache invalidation on append, by design: this writer
+    # only ever ADDS whole newline-terminated lines to the ACTIVE
+    # (last) shard past any cached reader offset (O_APPEND under
+    # flock; short writes rolled back below, so no torn tail
+    # survives), and a roll only CREATES the next shard file — the
+    # reader's extension arm picks up appended rows from the cached
+    # offset and a rolled set through its new-shard arm, while
+    # sealed shards are never written again. Invalidating here would
+    # only convert those O(delta) reads back into the full re-parse
+    # the cache exists to avoid. Writers that REPLACE shard files
+    # (compaction) call invalidate_load_cache.
     with _append_lock:
         fd = os.open(
             str(journal_path),
@@ -825,7 +837,13 @@ def require_complete_entries(out_dir: Path) -> list[ReviewJournalEntry]:
     with the compaction remedy; returns the (possibly load-pruned,
     never lossy) entry list otherwise.
     """
-    loaded = load_entries_checked(out_dir)
+    # fresh=True: spend authorization never trusts the process-local
+    # load cache. A cached view that drifted from the bytes on disk
+    # (however unlikely the guards make it) would either re-buy every
+    # missing verdict or — worse — treat a verdict set the shards no
+    # longer carry as this run's prior state, so this chokepoint
+    # always re-parses the journal.
+    loaded = load_entries_checked(out_dir, fresh=True)
     if not loaded.complete:
         raise JournalIncomplete(
             f"review journal in {out_dir} could not be loaded "
@@ -836,7 +854,9 @@ def require_complete_entries(out_dir: Path) -> list[ReviewJournalEntry]:
     return loaded.entries
 
 
-def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
+def load_entries(
+    out_dir: Path, *, fresh: bool = False,
+) -> list[ReviewJournalEntry]:
     """Load all valid entries from review-journal.jsonl.
 
     Skips corrupt trailing line (truncated write) with a warning.
@@ -845,11 +865,292 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
     the loader's memory bounds — read-only consumers keep working;
     spend-authorizing consumers must use
     :func:`require_complete_entries` instead.
+
+    ``fresh=True`` bypasses (and repopulates) the process-local load
+    cache — see :func:`load_entries_checked` for the contract.
     """
-    return load_entries_checked(out_dir).entries
+    return load_entries_checked(out_dir, fresh=fresh).entries
 
 
-def load_entries_checked(out_dir: Path) -> JournalLoad:
+# ── process-local incremental load cache ────────────────────────────
+#
+# A mega-audit's read-only journal consumers (reports, FP feedback,
+# the collector's strategy snapshot, survival telemetry, coverage
+# records) each call load_entries() per invocation, and every call
+# used to stream and re-parse the WHOLE shard set from byte 0 — one
+# observed audit segment re-loaded a ~255 MB journal 468 times. The
+# journal's legitimate writers are APPEND-ONLY to the ACTIVE (last)
+# shard under flock (``append_entry``; torn tails rolled back), a
+# roll only ADDS a new shard file, and compaction swaps shard inodes
+# — so a loader that remembers each shard's parse can serve an
+# unchanged shard set from memory, parse only the active shard's
+# appended delta, and absorb a roll by sealing the old active shard
+# and parsing the new files from scratch. The cache is
+# process-local, keyed by resolved run dir, guarded by the
+# identity/fingerprint checks below, and NEVER consulted by
+# spend-authorizing consumers (``fresh=True`` — see
+# require_complete_entries): a wrong cached view there converts
+# directly into duplicate LLM spend or trusted-but-absent verdicts.
+
+#: Tail fingerprint length for the ACTIVE shard. Before extending a
+#: cached parse (and on every identity-serve), the loader re-reads
+#: the last up-to-64 raw bytes ending at the cached offset and
+#: compares — an in-place rewrite of the bytes AT the boundary would
+#: otherwise be silently glued onto the cached parse. SEALED shards
+#: (all but the last) carry no fingerprint: they are pinned to their
+#: exact ``(dev, ino, size, mtime_ns)`` instead, so any rewrite that
+#: the filesystem metadata reflects forces a cold parse. Trade-off,
+#: both directions: shorter and a rewrite that happens to preserve
+#: the boundary bytes slips through more easily; longer costs a
+#: larger pinned buffer per cached path while the residual below
+#: stays open regardless (the check is O(1) evidence at the
+#: boundary, not a hash of the whole prefix).
+#:
+#: ACCEPTED STALE-SERVE RESIDUAL (all guards combined). Two routes
+#: remain by which a writer with run-dir write access can keep a
+#: cached view alive over rewritten bytes:
+#:
+#: * active-shard extension arm — a rewrite strictly below
+#:   ``offset - 64`` in the ACTIVE shard followed by any growth
+#:   passes the fingerprint, so the rewritten head stays glued to
+#:   every later extension until something forces a cold parse
+#:   (identity change, truncation, budget/backend change,
+#:   fresh=True, eviction). A SEALED shard has no such route: its
+#:   exact pins catch any size/mtime/inode-visible rewrite;
+#: * identity arms — ``os.utime`` backdating restores a recorded
+#:   mtime, defeating both the mtime equality (active and sealed
+#:   pins alike) and the racy window (that rule defends against
+#:   ACCIDENTAL same-tick rewrites, never a deliberately
+#:   timestamp-forging writer).
+#:
+#: Accepted because the outcome class does not change: a stale
+#: serve reaches read-only consumers only — every spend, verdict
+#: and index authority path reads fresh=True and never consults the
+#: cache — and an actor who can rewrite journal bytes in place is
+#: already inside the journal MAC's documented trust boundary
+#: (same-user run-dir writers can forge rows outright; the MAC, not
+#: this cache, is the row-authenticity mechanism).
+#:
+#: One further OBSERVABLE divergence (no rewrite needed): the read
+#: budget is per consume call, so an extension chain can report
+#: complete=True where a single cold parse of the same bytes would
+#: exhaust its one budget and flag incomplete. Safe direction (more
+#: data, honestly labelled complete because every byte WAS parsed),
+#: and spend authorizers read fresh — they always get the single
+#: cold parse's verdict.
+_TAIL_FINGERPRINT_BYTES = 64
+
+#: Cached-run-dir count bound (LRU eviction). Each record retains
+#: its parsed entry lists — and a SHARDED journal multiplies the
+#: worst case: one record can pin up to ``_MAX_JOURNAL_SHARDS`` x
+#: the per-shard retained budget — so an unbounded dict would grow
+#: with every run dir a long-lived process touches (cross-run
+#: report/correlate tools walk dozens). Trade-off, both directions:
+#: too low and alternating consumers thrash back to a full re-parse
+#: per call (today's pre-cache cost, never worse); too high and a
+#: long-lived session pins N x the retained budget of parsed
+#: entries. 4 covers the audit loop's real working set (run root,
+#: its ``autonomous/`` subdir, a project sibling) with one slot
+#: spare. The count cap does not bound MEMORY once shards multiply
+#: the per-record worst case — ``_LOAD_CACHE_MAX_BYTES`` below is
+#: the byte bound.
+_LOAD_CACHE_MAX_PATHS = 4
+
+#: Aggregate byte bound on the cache, computed from each record's
+#: summed per-shard ``retained_bytes`` (the loader's own accounting
+#: of raw row bytes kept; Python object overhead rides on top, in a
+#: ratio the per-shard retained budgets already bound). Stores evict
+#: LRU-oldest until under the cap; a SINGLE record over the cap is
+#: simply not cached — the load still returns normally, at the
+#: pre-cache cost for that run dir. Trade-off, both directions: too
+#: low and mega-journals lose the cache exactly where a re-parse
+#: hurts most (the reload storm this cache exists to collapse); too
+#: high and a long-lived multi-run process pins gibibytes of parsed
+#: rows (a fully-sharded record alone can reach
+#: _MAX_JOURNAL_SHARDS x the per-shard budget ≈ 16 GiB). 1 GiB
+#: holds ~4 max-size single-shard journals, or one moderately
+#: sharded one.
+_LOAD_CACHE_MAX_BYTES = 1 << 30
+
+#: Racy-mtime window (ns), git's racy-lstat rule: a shard whose
+#: mtime falls within this window of the record's creation cannot be
+#: trusted by (size, mtime) identity alone — a same-size in-place
+#: rewrite inside one coarse-clock tick (filesystems stamp mtime_ns
+#: at jiffy resolution) would be indistinguishable from "unchanged".
+#: A racy ACTIVE shard still EXTENDS normally (the tail fingerprint
+#: guards that arm) but refuses identity-serves; a racy SEALED pin
+#: refuses serves AND extensions (sealed shards have only the pin —
+#: reusing their cached rows IS an identity-serve of that shard).
+#: EVERY refused attempt inside the window pays a full parse (the
+#: re-store stays racy while the mtime is still within the window
+#: of "now"); the first attempt after the window elapses re-stores
+#: non-racy and later calls serve. Trade-off, both directions: too
+#: small and a coarse-clock or NFS-granularity same-size rewrite can
+#: be served stale; too large and every load of an unchanged journal
+#: within the window re-parses it (bounded in TIME by the window,
+#: not in call count — sealed-pin raciness additionally re-parses
+#: for one window after each ROLL, which is rare by construction).
+#: 2s covers every observed kernel tick and NFS timestamp
+#: granularity.
+_MTIME_RACE_WINDOW_NS = 2_000_000_000
+
+
+@dataclass
+class _ShardLoadState:
+    """One shard's streaming-parse state plus its cache pin.
+
+    The parse fields are the loader's exact in-stream accounting,
+    shared verbatim between a cold shard load (empty initial state)
+    and an active-shard cache extension (state restored from the
+    record), so the two paths cannot drift: the per-line transition
+    depends only on (state, next line), which is what makes an
+    extended load equal a cold parse of the same bytes. There is no
+    per-shard end-of-load dedup — the cross-shard final pass runs on
+    a COPY of the concatenated lists — so the cached per-shard state
+    is ALWAYS the pristine in-stream state.
+    """
+
+    name: str
+    entries: list[ReviewJournalEntry] = field(default_factory=list)
+    sizes: list[int] = field(default_factory=list)  # raw line length per retained entry
+    retained_bytes: int = 0
+    pruned: int = 0
+    line_no: int = -1        # absolute index of the last consumed line
+    corrupt_total: int = 0   # quarantined lines across all consume calls
+    at_line_boundary: bool = True  # last consumed byte was a newline
+    io_error: bool = False   # a mid-read OSError degraded this shard
+    missing: bool = False    # file absent entirely
+    refused: bool = False    # exists but refused the disciplined open
+    reason: str | None = None
+    # ── cache pin, captured from the OPEN fd at parse end ──
+    pin_ok: bool = False
+    dev: int = -1
+    ino: int = -1
+    size: int = -1
+    mtime_ns: int = -1
+    racy: bool = True
+    offset: int = 0          # byte offset after the last fully-consumed line
+    tail: bytes = b""        # raw bytes ending at ``offset`` (fingerprint)
+
+
+@dataclass
+class _CachedLoad:
+    """One run dir's cached journal parse (see the section note).
+
+    ``shard_states`` is the contiguous shard set in append order; the
+    LAST state is the active shard. A ``complete`` record serves when
+    every sealed shard matches its exact ``(dev, ino, size,
+    mtime_ns)`` pin and the active shard passes the r-style
+    identity/fingerprint checks; it extends by delta-parsing the
+    active shard and, when new shard files appeared, sealing the old
+    active at its EOF and parsing the new files from byte 0. An
+    INCOMPLETE record is pinned whole — every shard (active
+    included) must match its exact pin — and is never extended: a
+    budget-bounded parse is deterministic for the same bytes, but
+    resuming it is not.
+    """
+
+    shard_states: list[_ShardLoadState]
+    complete: bool
+    reason: str | None
+    pruned_total: int        # aggregate, including the final dedup pass
+    result_entries: list[ReviewJournalEntry]  # final post-dedup view
+    extensible: bool         # complete AND active shard ended at a boundary
+    #: Summed per-shard retained raw bytes — the record's cost under
+    #: the ``_LOAD_CACHE_MAX_BYTES`` aggregate bound.
+    retained_bytes: int
+    #: Loader knobs this parse depended on (budgets + JSON backend):
+    #: a view computed under different budgets or a different parser
+    #: is NOT equivalent to a cold load under the current ones (rows
+    #: quarantine differently, budgets bind at different rows), so a
+    #: mismatch — budget tunables, or the containment tests'
+    #: monkeypatched budgets/backends — forces a full reload.
+    config: tuple[int, int, int, int, int, bool]
+
+
+_load_cache: dict[str, _CachedLoad] = {}
+#: Guards the cache dict AND every record's lists, held across the
+#: whole load: an extension mutates the cached lists in place, and
+#: two threads extending one record concurrently would interleave
+#: rows. Holding it across the parse also means N workers racing to
+#: load the same journal serialize into one parse plus N-1 cache
+#: hits — exactly the reload storm this cache exists to collapse.
+#: Cross-path contention is bounded by one journal parse; served
+#: results are copies, so no consumer ever holds the lock.
+_load_cache_lock = threading.Lock()
+
+
+def _loader_config() -> tuple[int, int, int, int, int, bool]:
+    """The knobs a cached parse is only valid under (see
+    ``_CachedLoad.config``). The roll threshold is included: it
+    decides which shard the appender writes next, and the shard-set
+    tests monkeypatch it."""
+    from core.json import utils as _json_utils
+    return (
+        _MAX_JOURNAL_BYTES,
+        _MAX_JOURNAL_LINE_BYTES,
+        _MAX_RETAINED_ENTRIES,
+        _READ_BUDGET_MULTIPLIER,
+        _JOURNAL_SHARD_ROLL_BYTES,
+        _json_utils._orjson is not None,
+    )
+
+
+def invalidate_load_cache(out_dir: Path | str) -> None:
+    """Drop the process-local load-cache record for *out_dir*.
+
+    For writers that REPLACE journal shard files rather than
+    appending lines (compaction's per-shard tempfile+rename swaps):
+    the reader's ``(dev, ino)`` identity checks catch the common
+    inode change, but freed inode numbers can be recycled
+    immediately on some filesystems (a hardlink-backup-then-rename
+    swap frees and reallocates within one call), so the swapper
+    drops the record explicitly instead of betting on the identity
+    check. Appends need no invalidation — see the note in
+    :func:`append_entry`.
+    """
+    key = os.path.realpath(out_dir)
+    with _load_cache_lock:
+        _load_cache.pop(key, None)
+
+
+def _cache_store(cache_key: str, record: _CachedLoad) -> None:
+    """Insert/refresh *record* at LRU-newest; evict past the count
+    AND aggregate-byte caps. Caller holds ``_load_cache_lock``."""
+    _load_cache.pop(cache_key, None)
+    if record.retained_bytes > _LOAD_CACHE_MAX_BYTES:
+        # A single record over the aggregate cap is not cached at
+        # all: evicting every other run dir would still not fit it,
+        # and the load already returned normally (pre-cache cost).
+        return
+    _load_cache[cache_key] = record
+    while (len(_load_cache) > _LOAD_CACHE_MAX_PATHS
+           or sum(r.retained_bytes for r in _load_cache.values())
+           > _LOAD_CACHE_MAX_BYTES):
+        # Evict LRU-oldest first; terminates before evicting the
+        # just-inserted record — alone it satisfies both caps (count
+        # 1, bytes gated above).
+        _load_cache.pop(next(iter(_load_cache)))
+
+
+def _cached_result(cached: _CachedLoad) -> JournalLoad:
+    # Shallow copy on every serve: later extensions rebuild the
+    # cached result list, and a caller's own list mutations must
+    # never leak into the cache (or into another caller's earlier
+    # result). The entry OBJECTS are shared — frozen by contract: no
+    # journal consumer mutates a loaded entry (audited; corrections
+    # are appended as NEW rows, never edited onto loaded ones).
+    return JournalLoad(
+        entries=list(cached.result_entries),
+        complete=cached.complete,
+        pruned=cached.pruned_total,
+        reason=cached.reason,
+    )
+
+
+def load_entries_checked(
+    out_dir: Path, *, fresh: bool = False,
+) -> JournalLoad:
     """Streaming, memory-bounded journal load with completeness flag.
 
     Reads the journal's whole CONTIGUOUS shard set
@@ -876,86 +1177,230 @@ def load_entries_checked(out_dir: Path) -> JournalLoad:
       back under budget does the load stop, flagged incomplete;
     * consumed: ``_READ_BUDGET_MULTIPLIER`` x the retained budget —
       bounds the read loop itself against multi-GiB plants and
-      writers growing the file mid-read.
+      writers growing the file mid-read. The budget bounds ONE
+      consume call per shard (the historical per-call semantics), so
+      a cache extension gets a full fresh budget for its delta.
+
+    Results may be served from the process-local incremental cache
+    (unchanged shard set → cached copy; grown active shard or a
+    rolled shard set → cached prefix plus a parse of only the new
+    bytes/files); for any in-budget byte sequence the served result
+    equals a cold parse of the same bytes (pinned by the equivalence
+    test in core/coverage/tests/test_journal_load_cache.py).
+    ``fresh=True`` bypasses the cache for this call and repopulates
+    it from the fresh parse — the mandatory contract for
+    spend-authorizing consumers (:func:`require_complete_entries`,
+    the resume spend floor, drift computation, the project-index
+    merge).
+
+    The returned ``entries`` list is the caller's own (a copy); the
+    entry objects themselves are shared with the cache and are
+    frozen by contract.
     """
     out_dir = Path(out_dir)
-    shards = journal_shard_paths(out_dir)
-    entries: list[ReviewJournalEntry] = []
-    sizes: list[int] = []
-    pruned_total = 0
-    incomplete_reason: str | None = None
-    for i, shard in enumerate(shards):
-        (shard_entries, shard_sizes, shard_pruned,
-         shard_reason, missing) = _load_one_journal_file(shard)
-        if missing:
-            if len(shards) > 1:
-                # Numbered shards exist but this one is gone: rows
-                # were lost, not never written.
-                incomplete_reason = incomplete_reason or (
-                    f"journal shard {shard.name} is missing from a "
-                    f"multi-shard journal"
-                )
-            continue
-        entries.extend(shard_entries)
-        sizes.extend(shard_sizes)
-        pruned_total += shard_pruned
-        if shard_reason and incomplete_reason is None:
-            incomplete_reason = (
-                f"{shard.name}: {shard_reason}" if i else shard_reason
-            )
-    orphans = _orphan_shard_names(out_dir, len(shards))
-    if orphans and incomplete_reason is None:
-        incomplete_reason = (
-            "non-contiguous journal shard file(s) "
-            f"{', '.join(orphans)} — an interior shard was deleted"
-        )
-    if pruned_total or len(shards) > 1:
-        # Final pass so the load is FULLY deduplicated across shard
-        # boundaries too (single-shard loads without any budget
-        # crossing keep their historical row-for-row output).
-        freed_rows, _freed = _prune_reemission_rows(entries, sizes)
-        pruned_total += freed_rows
-    if pruned_total:
-        logger.warning(
-            "journal: %s exceeded the retained-entry budget or spans "
-            "shards — pruned %d duplicate re-emission row(s) at load "
-            "(newest per identity kept; no verdict or spend evidence "
-            "lost); %s",
-            out_dir / JOURNAL_FILENAME, pruned_total,
-            compact_hint(out_dir),
-        )
-    if incomplete_reason:
-        logger.warning(
-            "journal: PARTIAL load of %s — %s (%d entries loaded); "
-            "read-only consumers degrade, spend-authorizing consumers "
-            "refuse; %s",
-            out_dir / JOURNAL_FILENAME, incomplete_reason, len(entries),
-            compact_hint(out_dir),
-        )
-    return JournalLoad(
-        entries=entries,
-        complete=incomplete_reason is None,
-        pruned=pruned_total,
-        reason=incomplete_reason,
-    )
+    # Resolved cache key: two spellings of one run dir (symlinked
+    # parents, relative vs absolute --out) share a record — distinct
+    # keys would not be wrong, just cold and double-retained.
+    cache_key = os.path.realpath(out_dir)
+    with _load_cache_lock:
+        return _load_checked_locked(out_dir, cache_key, fresh=fresh)
 
 
-def _load_one_journal_file(
-    journal_path: Path,
-) -> tuple[list[ReviewJournalEntry], list[int], int, str | None, bool]:
-    """Load ONE journal shard file under the per-shard bounds.
+def _load_checked_locked(
+    out_dir: Path, cache_key: str, *, fresh: bool,
+) -> JournalLoad:
+    """Cache-aware shard-set load; caller holds ``_load_cache_lock``."""
+    if not fresh:
+        cached = _load_cache.get(cache_key)
+        if cached is not None:
+            served = _serve_or_extend_set(out_dir, cache_key, cached)
+            if served is not None:
+                return served
+    # Cold parse of the whole shard set.
+    states = [
+        _load_shard_cold(shard)
+        for shard in journal_shard_paths(out_dir)
+    ]
+    return _finalize_set(out_dir, cache_key, states)
 
-    Returns ``(entries, raw_sizes, pruned, incomplete_reason,
-    missing)`` — *missing* means the file does not exist at all
-    (distinct from exists-but-refused, which sets a reason).
-    """
+
+def _serve_or_extend_set(
+    out_dir: Path, cache_key: str, cached: _CachedLoad,
+) -> JournalLoad | None:
+    """Serve or extend *cached* against the shard set on disk.
+    ``None`` means the caller must fall back to a full cold parse.
+    Caller holds ``_load_cache_lock``."""
+    if cached.config != _loader_config():
+        return None
+    shards_now = journal_shard_paths(out_dir)
+    names_now = [p.name for p in shards_now]
+    cached_names = [s.name for s in cached.shard_states]
+    if (len(names_now) < len(cached_names)
+            or names_now[:len(cached_names)] != cached_names):
+        # The shard set shrank or was renumbered: the cached parse
+        # describes files that no longer form this journal.
+        return None
+    if _orphan_shard_names(out_dir, len(shards_now)):
+        # Contiguity anomaly: cold behavior flags it per load, and
+        # anomalous states are never cached — matching that exactly
+        # means never serving through one either.
+        #
+        # CONTRACT for a future single-snapshot loader fix: the
+        # contiguity walk (journal_shard_paths) and this orphan
+        # classification are today two separate directory reads, so
+        # a roll landing between them transiently reads as an
+        # orphan. When a shared directory-snapshot helper lands
+        # (feeding BOTH the walk and the orphan sweep, optional
+        # snapshot parameter defaulting to a self-snapshot), THIS
+        # re-check must consume the SAME snapshot as the
+        # journal_shard_paths call above — re-scanning here would
+        # reintroduce the two-read race one layer up, in the serve
+        # path instead of the cold loader.
+        return None
+    if not cached.complete:
+        # Pinned incomplete record (the observed reload storm was an
+        # over-budget journal, static between calls): serve the exact
+        # bytes it was pinned to — EVERY shard, active included —
+        # and never extend (a budget-bounded parse is deterministic
+        # for the same bytes; resuming it is not).
+        if len(names_now) != len(cached_names):
+            return None
+        for state in cached.shard_states:
+            if state.racy or not _shard_pin_matches(
+                    out_dir, state, check_tail=True):
+                return None
+        _cache_store(cache_key, cached)   # refresh LRU recency
+        return _cached_result(cached)
+    sealed = cached.shard_states[:-1]
+    active = cached.shard_states[-1]
+    for state in sealed:
+        # Sealed shards never legitimately change: exact pins only.
+        # A racy pin (sealed less than one clock tick before the
+        # store — i.e. just after a roll) cannot vouch for itself,
+        # and reusing a sealed shard's cached rows IS an identity-
+        # serve of that shard, so raciness here refuses extension
+        # too, not just the full-set serve.
+        if state.racy or not _shard_pin_matches(
+                out_dir, state, check_tail=False):
+            return None
+    new_names = names_now[len(cached_names):]
+    from core.source import open_regular
+    fh = open_regular(out_dir / active.name, "rb")
+    if fh is None:
+        return None
+    extended = False
+    try:
+        try:
+            st = os.fstat(fh.fileno())
+        except OSError:
+            return None
+        if (st.st_dev, st.st_ino) != (active.dev, active.ino):
+            return None
+        if not new_names and st.st_size == active.offset:
+            # Unchanged journal — the hot path of the reload storm.
+            # mtime + tail fingerprint still gate the serve: a
+            # same-size in-place rewrite keeps (dev, ino, size), and
+            # the racy mark covers rewrites inside one clock tick.
+            if (active.racy
+                    or getattr(st, "st_mtime_ns", None)
+                    != active.mtime_ns
+                    or not _tail_matches(fh, active)):
+                return None
+            _cache_store(cache_key, cached)
+            return _cached_result(cached)
+        if st.st_size < active.offset:
+            # Truncated below the consumed prefix.
+            return None
+        if not cached.extensible:
+            # Complete but the active shard's parse ended mid-line: a
+            # writer completing that line merges it with the next
+            # append into ONE line a cold parse reads differently —
+            # never resume past an unterminated tail.
+            return None
+        if not _tail_matches(fh, active):
+            return None            # head rewritten in place
+        # Pop the record BEFORE handing its lists to the extension: a
+        # BaseException (KeyboardInterrupt, SystemExit) escaping the
+        # streaming loop mid-extension must leave this key COLD — a
+        # torn record whose lists already carry part of the delta but
+        # whose offset still points at the old boundary would
+        # re-consume the delta on the next call and serve duplicated
+        # entries. _finalize_set re-stores the finished record on
+        # success.
+        _load_cache.pop(cache_key, None)
+        extended = True
+        _consume_shard_stream(fh, out_dir / active.name, active)
+        _finish_shard_pin(fh, active)
+    finally:
+        # Close errors on a read-only fd carry no data-loss risk for
+        # the reader; the parse (and any degrade decision) is done.
+        with contextlib.suppress(OSError):
+            fh.close()
+    if not extended:
+        return None
+    states = list(cached.shard_states)
+    for name in new_names:
+        # A roll happened since the record was stored: the old active
+        # shard was just delta-parsed to ITS EOF and sealed above;
+        # every newly-appeared shard is parsed from byte 0, and the
+        # new last shard becomes the active one.
+        states.append(_load_shard_cold(out_dir / name))
+    return _finalize_set(out_dir, cache_key, states)
+
+
+def _shard_pin_matches(
+    out_dir: Path, state: _ShardLoadState, *, check_tail: bool,
+) -> bool:
+    """True when the shard file on disk matches *state*'s exact pin
+    (and, for ``check_tail``, its boundary fingerprint). Opens via
+    the disciplined ``open_regular`` and checks the OPEN fd — never
+    a by-name stat, which races a swap."""
+    from core.source import open_regular
+    fh = open_regular(out_dir / state.name, "rb")
+    if fh is None:
+        return False
+    try:
+        try:
+            st = os.fstat(fh.fileno())
+        except OSError:
+            return False
+        if (st.st_dev, st.st_ino) != (state.dev, state.ino):
+            return False
+        if st.st_size != state.size:
+            return False
+        if getattr(st, "st_mtime_ns", None) != state.mtime_ns:
+            return False
+        if check_tail and not _tail_matches(fh, state):
+            return False
+        return True
+    finally:
+        with contextlib.suppress(OSError):
+            fh.close()
+
+
+def _tail_matches(fh: IO[bytes], state: _ShardLoadState) -> bool:
+    """Re-read and compare the cached tail fingerprint; leaves *fh*
+    positioned at ``state.offset`` on a match."""
+    tail_len = len(state.tail)
+    try:
+        fh.seek(state.offset - tail_len)
+        return fh.read(tail_len) == state.tail
+    except OSError:
+        return False
+
+
+def _load_shard_cold(journal_path: Path) -> _ShardLoadState:
+    """Cold parse of ONE journal shard file under the per-shard
+    bounds, from byte 0, capturing the cache pin at parse end."""
+    state = _ShardLoadState(name=journal_path.name)
     # fd-discipline open (core.source.open_regular): the journal sits
     # in the sandbox-writable run dir, and the previous
     # is_symlink()/is_file() probes raced a swap — a symlink swapped
     # in between check and open read a FOREIGN journal into this
     # run's merge, and a planted FIFO blocked the open forever.
     # O_NOFOLLOW + O_NONBLOCK + fstat(S_ISREG) on the OPENED fd close
-    # both windows.
+    # both windows. The cache pins reuse this fd — NEVER a bare
+    # by-name stat, which would race the same swap.
     from core.source import open_regular
     fh = open_regular(journal_path, "rb")
     if fh is None:
@@ -969,32 +1414,113 @@ def _load_one_journal_file(
         with contextlib.suppress(OSError):
             exists = journal_path.exists()
         if exists:
-            return ([], [], 0,
-                    "journal exists but refused the read open", False)
-        return [], [], 0, None, True
+            state.refused = True
+            state.reason = "journal exists but refused the read open"
+        else:
+            state.missing = True
+        return state
+    try:
+        _consume_shard_stream(fh, journal_path, state)
+        _finish_shard_pin(fh, state)
+    finally:
+        with contextlib.suppress(OSError):
+            fh.close()
+    return state
 
-    entries: list[ReviewJournalEntry] = []
-    # Read raw BYTES and hand each line to the parser individually. A
-    # whole-file ``read_text()`` decoded BEFORE any per-line quarantine
-    # could run, so one undecodable byte (anything with the run-dir
-    # write grant can append ``b"\x80"``) crashed every journal
-    # consumer at once; per-row parsing contains a bad encoding to the
-    # row that carries it (both JSON backends decode per input).
-    #
-    # STREAM the lines instead of materialising a whole-file
-    # ``splitlines()``: a degenerate journal of 2-3 byte rows costs one
-    # small bytes object PER LINE when split eagerly (~20x the file
-    # size in peak RSS — an at-cap journal of tiny rows OOM-killed the
-    # reader that exists to contain hostile bytes). Iterating the file
-    # keeps one line alive at a time, so the byte budgets bound the
-    # reader's own memory, not just the file. Pinned by the RSS-bounded
-    # test in core/coverage/tests/test_journal_containment.py.
-    sizes: list[int] = []      # raw line length per retained entry
-    retained_bytes = 0
-    pruned_total = 0
-    corrupt = 0
+
+def _finish_shard_pin(fh: IO[bytes], state: _ShardLoadState) -> None:
+    """Capture *state*'s cache pin from the still-open fd; a pin that
+    cannot be captured soundly leaves ``pin_ok`` False (the record is
+    then not cacheable)."""
+    state.pin_ok = False
+    if state.io_error:
+        # A mid-read I/O failure is not deterministic: a cold load of
+        # the same unchanged file may well succeed, so the degraded
+        # view must never be pinned and re-served.
+        return
+    try:
+        end_st = os.fstat(fh.fileno())
+        pos = fh.tell()
+    except OSError:
+        return
+    mtime_ns = getattr(end_st, "st_mtime_ns", None)
+    if not isinstance(mtime_ns, int):
+        # A stat_result without a nanosecond mtime (synthetic stat
+        # objects from test shims; exotic platforms) leaves the pin
+        # identity incomplete — refuse to cache rather than pin on a
+        # weaker identity.
+        return
+    if state.reason is None and pos != end_st.st_size:
+        # Complete parse but the file grew between our EOF and the
+        # pin fstat: a cold load of the pinned identity would see the
+        # extra bytes — do not pin a view the identity cannot vouch
+        # for. (Budget-bounded incomplete parses stop mid-file by
+        # construction and stay deterministic for the same bytes, so
+        # they pin fine.)
+        return
+    tail = _read_tail(fh, pos)
+    if tail is None:
+        return                      # racing truncation mid-probe
+    state.dev = end_st.st_dev
+    state.ino = end_st.st_ino
+    state.size = end_st.st_size
+    state.mtime_ns = mtime_ns
+    state.racy = (
+        abs(time.time_ns() - mtime_ns) < _MTIME_RACE_WINDOW_NS
+    )
+    state.offset = pos
+    state.tail = tail
+    state.pin_ok = True
+
+
+def _read_tail(fh: IO[bytes], pos: int) -> bytes | None:
+    """The up-to-``_TAIL_FINGERPRINT_BYTES`` raw bytes ending at
+    *pos*, or ``None`` when they cannot be read back (racing
+    truncation, I/O error). Restores no position — callers are done
+    streaming."""
+    tail_len = min(_TAIL_FINGERPRINT_BYTES, pos)
+    try:
+        fh.seek(pos - tail_len)
+        tail = fh.read(tail_len)
+    except OSError:
+        return None
+    if len(tail) != tail_len:
+        return None
+    return tail
+
+
+def _consume_shard_stream(
+    fh: IO[bytes],
+    journal_path: Path,
+    state: _ShardLoadState,
+) -> None:
+    """Run the bounded streaming parse from *fh*'s CURRENT position,
+    extending *state* in place. Never raises: a mid-read OSError
+    degrades (keep what loaded, flag incomplete) like the historical
+    loader.
+
+    Reads raw BYTES and hands each line to the parser individually. A
+    whole-file ``read_text()`` decoded BEFORE any per-line quarantine
+    could run, so one undecodable byte (anything with the run-dir
+    write grant can append ``b"\\x80"``) crashed every journal
+    consumer at once; per-row parsing contains a bad encoding to the
+    row that carries it (both JSON backends decode per input).
+
+    STREAMS the lines instead of materialising a whole-file
+    ``splitlines()``: a degenerate journal of 2-3 byte rows costs one
+    small bytes object PER LINE when split eagerly (~20x the file
+    size in peak RSS — an at-cap journal of tiny rows OOM-killed the
+    reader that exists to contain hostile bytes). Iterating the file
+    keeps one line alive at a time, so the byte budgets bound the
+    reader's own memory, not just the file. Pinned by the RSS-bounded
+    test in core/coverage/tests/test_journal_containment.py.
+    """
     row_warnings = 0
-    incomplete_reason: str | None = None
+    corrupt = 0
+    # Fresh per CALL: the read budget bounds what one consume call
+    # may take (CPU/IO on a hostile plant, a writer growing the file
+    # mid-read) — the historical per-call semantics, so an extension
+    # gets a full budget for its delta.
     read_budget = _READ_BUDGET_MULTIPLIER * _MAX_JOURNAL_BYTES
 
     def _row_warning(msg: str, *args: object) -> None:
@@ -1014,159 +1540,274 @@ def _load_one_journal_file(
         else:
             logger.debug(msg, *args)
 
+    entries = state.entries
+    sizes = state.sizes
     try:
-        with fh:
-            i = -1
-            while True:
-                # Bounded readline: a plain ``for line in fh``
-                # materialised one multi-GiB line whole before any
-                # budget check fired. readline(cap + 1) bounds the
-                # worst case to one capped chunk; the read budget arm
-                # of the min() keeps that chunk within what the loop
-                # is still allowed to consume at all.
-                line_cap = min(_MAX_JOURNAL_LINE_BYTES, read_budget)
-                line = fh.readline(line_cap + 1)
-                if not line:
-                    break
-                i += 1
-                read_budget -= len(line)
-                if len(line) > line_cap and not line.endswith(b"\n"):
-                    # Over-long line: quarantine the ROW and stream
-                    # past it in bounded chunks (never buffer it).
-                    skipped, budget_hit = _discard_to_newline(
-                        fh, read_budget)
-                    read_budget -= skipped
-                    corrupt += 1
-                    _row_warning(
-                        "journal: skipping over-long line %d in %s "
-                        "(exceeds the %d byte per-line bound)",
-                        i + 1, journal_path, line_cap,
-                    )
-                    if budget_hit or read_budget <= 0:
-                        incomplete_reason = (
-                            f"read budget "
-                            f"({_READ_BUDGET_MULTIPLIER}x"
-                            f"{_MAX_JOURNAL_BYTES} bytes) exhausted"
-                        )
-                        break
-                    continue
-                if read_budget <= 0:
-                    # Also covers a writer growing the file mid-read:
-                    # the loop consumes at most the read budget no
-                    # matter what st_size claimed at open.
-                    incomplete_reason = (
-                        f"read budget ({_READ_BUDGET_MULTIPLIER}x"
+        while True:
+            # Bounded readline: a plain ``for line in fh``
+            # materialised one multi-GiB line whole before any
+            # budget check fired. readline(cap + 1) bounds the
+            # worst case to one capped chunk; the read budget arm
+            # of the min() keeps that chunk within what the loop
+            # is still allowed to consume at all.
+            line_cap = min(_MAX_JOURNAL_LINE_BYTES, read_budget)
+            line = fh.readline(line_cap + 1)
+            if not line:
+                break
+            state.line_no += 1
+            state.at_line_boundary = line.endswith(b"\n")
+            read_budget -= len(line)
+            if len(line) > line_cap and not line.endswith(b"\n"):
+                # Over-long line: quarantine the ROW and stream
+                # past it in bounded chunks (never buffer it).
+                skipped, budget_hit, at_newline = _discard_to_newline(
+                    fh, read_budget)
+                read_budget -= skipped
+                state.at_line_boundary = at_newline
+                corrupt += 1
+                _row_warning(
+                    "journal: skipping over-long line %d in %s "
+                    "(exceeds the %d byte per-line bound)",
+                    state.line_no + 1, journal_path, line_cap,
+                )
+                if budget_hit or read_budget <= 0:
+                    state.reason = (
+                        f"read budget "
+                        f"({_READ_BUDGET_MULTIPLIER}x"
                         f"{_MAX_JOURNAL_BYTES} bytes) exhausted"
                     )
                     break
-                raw_len = len(line)
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    raw = loads(line)
-                except Exception:  # noqa: BLE001 — row containment boundary
-                    # ANY parse failure quarantines THIS row only — malformed
-                    # JSON (ValueError), undecodable bytes (UnicodeDecodeError),
-                    # nesting bombs (RecursionError on the stdlib arm; orjson
-                    # rejects depth with ValueError). Enumerating exception
-                    # types here is exactly how each previous planted-row
-                    # generation crashed every consumer: the journal lives in
-                    # the sandbox-writable run dir, so the boundary must be
-                    # total. Pinned by the generative containment test
-                    # (core/coverage/tests/test_intake_containment.py).
-                    corrupt += 1
-                    logger.debug(
-                        "journal: skipping corrupt line %d in %s",
-                        i + 1, journal_path,
+                continue
+            if read_budget <= 0:
+                # Also covers a writer growing the file mid-read:
+                # the loop consumes at most the read budget no
+                # matter what st_size claimed at open.
+                state.reason = (
+                    f"read budget ({_READ_BUDGET_MULTIPLIER}x"
+                    f"{_MAX_JOURNAL_BYTES} bytes) exhausted"
+                )
+                break
+            raw_len = len(line)
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw = loads(line)
+            except Exception:  # noqa: BLE001 — row containment boundary
+                # ANY parse failure quarantines THIS row only — malformed
+                # JSON (ValueError), undecodable bytes (UnicodeDecodeError),
+                # nesting bombs (RecursionError on the stdlib arm; orjson
+                # rejects depth with ValueError). Enumerating exception
+                # types here is exactly how each previous planted-row
+                # generation crashed every consumer: the journal lives in
+                # the sandbox-writable run dir, so the boundary must be
+                # total. Pinned by the generative containment test
+                # (core/coverage/tests/test_intake_containment.py).
+                corrupt += 1
+                logger.debug(
+                    "journal: skipping corrupt line %d in %s",
+                    state.line_no + 1, journal_path,
+                )
+                continue
+            if not isinstance(raw, dict):
+                # Valid JSON is not necessarily a dict: ``null``, a
+                # list, a string, or a bare number parses fine but
+                # would raise AttributeError inside _entry_from_dict
+                # — past any except tuple keyed on the dict schema.
+                # Quarantine the row BEFORE handing it over:
+                # anything that is not a validated dict is
+                # contained here.
+                _row_warning(
+                    "journal: skipping non-dict entry on line %d: %s",
+                    state.line_no + 1, type(raw).__name__,
+                )
+                continue
+            try:
+                entries.append(_entry_from_dict(raw))
+                sizes.append(raw_len)
+                state.retained_bytes += raw_len
+            except Exception as exc:  # noqa: BLE001 — row containment boundary
+                # The journal lives inside the run dir — SANDBOX-
+                # WRITABLE — so ONE planted row must quarantine
+                # (skip + warn), never persistently crash every
+                # journal consumer (audit resume, reports,
+                # completion merge). The catch is deliberately
+                # total: the previous tuple (TypeError/KeyError/
+                # ValueError) was a shape enumeration, and each
+                # newly reachable exception class (serializer
+                # RecursionError on a deep field, future validator
+                # arms) re-opened the crash. Same oracle as the
+                # parse arm above.
+                _row_warning(
+                    "journal: skipping malformed entry on line %d: %s",
+                    state.line_no + 1, exc,
+                )
+                continue
+            if (state.retained_bytes > _MAX_JOURNAL_BYTES
+                    or len(entries) > _MAX_RETAINED_ENTRIES):
+                # Over the retained budget: prune duplicate
+                # re-emission rows in place (lossless — newest per
+                # identity, zero-cost rows only) and continue only
+                # with >=10% headroom back, so repeated prunes
+                # amortize instead of running per row.
+                freed_rows, freed_bytes = _prune_reemission_rows(
+                    entries, sizes)
+                state.pruned += freed_rows
+                state.retained_bytes -= freed_bytes
+                if (state.retained_bytes * 10 > _MAX_JOURNAL_BYTES * 9
+                        or len(entries) * 10
+                        > _MAX_RETAINED_ENTRIES * 9):
+                    state.reason = (
+                        "retained-entry budget exceeded "
+                        f"({len(entries)} rows / "
+                        f"{state.retained_bytes} "
+                        "bytes retained; duplicate pruning freed "
+                        "too little)"
                     )
-                    continue
-                if not isinstance(raw, dict):
-                    # Valid JSON is not necessarily a dict: ``null``, a
-                    # list, a string, or a bare number parses fine but
-                    # would raise AttributeError inside _entry_from_dict
-                    # — past any except tuple keyed on the dict schema.
-                    # Quarantine the row BEFORE handing it over:
-                    # anything that is not a validated dict is
-                    # contained here.
-                    _row_warning(
-                        "journal: skipping non-dict entry on line %d: %s",
-                        i + 1, type(raw).__name__,
-                    )
-                    continue
-                try:
-                    entries.append(_entry_from_dict(raw))
-                    sizes.append(raw_len)
-                    retained_bytes += raw_len
-                except Exception as exc:  # noqa: BLE001 — row containment boundary
-                    # The journal lives inside the run dir — SANDBOX-
-                    # WRITABLE — so ONE planted row must quarantine
-                    # (skip + warn), never persistently crash every
-                    # journal consumer (audit resume, reports,
-                    # completion merge). The catch is deliberately
-                    # total: the previous tuple (TypeError/KeyError/
-                    # ValueError) was a shape enumeration, and each
-                    # newly reachable exception class (serializer
-                    # RecursionError on a deep field, future validator
-                    # arms) re-opened the crash. Same oracle as the
-                    # parse arm above.
-                    _row_warning(
-                        "journal: skipping malformed entry on line %d: %s",
-                        i + 1, exc,
-                    )
-                    continue
-                if (retained_bytes > _MAX_JOURNAL_BYTES
-                        or len(entries) > _MAX_RETAINED_ENTRIES):
-                    # Over the retained budget: prune duplicate
-                    # re-emission rows in place (lossless — newest per
-                    # identity, zero-cost rows only) and continue only
-                    # with >=10% headroom back, so repeated prunes
-                    # amortize instead of running per row.
-                    freed_rows, freed_bytes = _prune_reemission_rows(
-                        entries, sizes)
-                    pruned_total += freed_rows
-                    retained_bytes -= freed_bytes
-                    if (retained_bytes * 10 > _MAX_JOURNAL_BYTES * 9
-                            or len(entries) * 10
-                            > _MAX_RETAINED_ENTRIES * 9):
-                        incomplete_reason = (
-                            "retained-entry budget exceeded "
-                            f"({len(entries)} rows / {retained_bytes} "
-                            "bytes retained; duplicate pruning freed "
-                            "too little)"
-                        )
-                        break
+                    break
     except OSError as exc:
-        # Open failure, or a read failure mid-iteration (EIO): keep
-        # whatever already loaded (degrade, never propagate) and warn.
+        # Read failure mid-iteration (EIO): keep whatever already
+        # loaded (degrade, never propagate) and warn.
         logger.warning(
             "journal: failed to read %s: %s", journal_path, exc,
         )
-        incomplete_reason = incomplete_reason or f"read failed: {exc}"
+        state.io_error = True
+        state.reason = state.reason or f"read failed: {exc}"
     if corrupt:
+        # THIS call's quarantined lines: an extension must not
+        # re-warn for lines a prior call already reported.
         logger.warning(
             "journal: skipped %d corrupt line(s) in %s "
             "(%d entries loaded)",
             corrupt, journal_path, len(entries),
         )
-    # The caller (load_entries_checked) runs the final dedup pass and
-    # emits the prune / partial-load warnings over the whole shard set.
-    return entries, sizes, pruned_total, incomplete_reason, False
+    state.corrupt_total += corrupt
 
 
-def _discard_to_newline(fh: Any, budget: int) -> tuple[int, bool]:
+def _finalize_set(
+    out_dir: Path,
+    cache_key: str,
+    states: list[_ShardLoadState],
+) -> JournalLoad:
+    """Aggregate the shard states into one JournalLoad, emit the
+    set-level warnings, and store/drop the cache record. Caller holds
+    ``_load_cache_lock``.
+
+    The cross-shard final dedup runs on a COPY of the concatenated
+    lists, so the cached per-shard states always stay the pristine
+    in-stream parse state — that is what keeps a later extension
+    equal to a cold parse (the pass that rewrites the result never
+    contaminates the state the extension resumes from).
+    """
+    incomplete_reason: str | None = None
+    anomalous = False
+    for i, state in enumerate(states):
+        if state.missing:
+            anomalous = True
+            if len(states) > 1:
+                # Numbered shards exist but this one is gone: rows
+                # were lost, not never written.
+                incomplete_reason = incomplete_reason or (
+                    f"journal shard {state.name} is missing from a "
+                    f"multi-shard journal"
+                )
+            continue
+        if state.refused or state.io_error:
+            anomalous = True
+        if state.reason and incomplete_reason is None:
+            incomplete_reason = (
+                f"{state.name}: {state.reason}" if i else state.reason
+            )
+    orphans = _orphan_shard_names(out_dir, len(states))
+    if orphans:
+        # Anomalous by definition; also never served through the
+        # cache (the serve path re-checks orphans per call), so
+        # cached and cold behavior stay identical under a plant.
+        anomalous = True
+        if incomplete_reason is None:
+            incomplete_reason = (
+                "non-contiguous journal shard file(s) "
+                f"{', '.join(orphans)} — an interior shard was deleted"
+            )
+    entries: list[ReviewJournalEntry] = []
+    sizes: list[int] = []
+    pruned_total = 0
+    for state in states:
+        entries.extend(state.entries)
+        sizes.extend(state.sizes)
+        pruned_total += state.pruned
+    if pruned_total or len(states) > 1:
+        # Final pass so the load is FULLY deduplicated across shard
+        # boundaries too (single-shard loads without any budget
+        # crossing keep their historical row-for-row output). Runs
+        # on the freshly-concatenated lists — never on the cached
+        # per-shard state (see the docstring).
+        freed_rows, _freed = _prune_reemission_rows(entries, sizes)
+        pruned_total += freed_rows
+    if pruned_total:
+        logger.warning(
+            "journal: %s exceeded the retained-entry budget or spans "
+            "shards — pruned %d duplicate re-emission row(s) at load "
+            "(newest per identity kept; no verdict or spend evidence "
+            "lost); %s",
+            out_dir / JOURNAL_FILENAME, pruned_total,
+            compact_hint(out_dir),
+        )
+    if incomplete_reason:
+        logger.warning(
+            "journal: PARTIAL load of %s — %s (%d entries loaded); "
+            "read-only consumers degrade, spend-authorizing consumers "
+            "refuse; %s",
+            out_dir / JOURNAL_FILENAME, incomplete_reason, len(entries),
+            compact_hint(out_dir),
+        )
+    complete = incomplete_reason is None
+    cacheable = not anomalous and all(s.pin_ok for s in states)
+    if cacheable:
+        _cache_store(cache_key, _CachedLoad(
+            shard_states=states,
+            complete=complete,
+            reason=incomplete_reason,
+            pruned_total=pruned_total,
+            result_entries=entries,
+            extensible=complete and states[-1].at_line_boundary,
+            retained_bytes=sum(s.retained_bytes for s in states),
+            config=_loader_config(),
+        ))
+    else:
+        # Uncacheable outcome (missing/refused shard, I/O degrade,
+        # orphan anomaly, EOF race): a stale prior record for this
+        # run dir must not survive it.
+        _load_cache.pop(cache_key, None)
+    return JournalLoad(
+        # Copy: the record keeps ``entries`` as its served result and
+        # callers own their lists (uniform aliasing contract).
+        entries=list(entries),
+        complete=complete,
+        pruned=pruned_total,
+        reason=incomplete_reason,
+    )
+
+
+def _discard_to_newline(
+    fh: IO[bytes], budget: int,
+) -> tuple[int, bool, bool]:
     """Stream past the remainder of an over-long line in bounded
-    chunks. Returns ``(bytes_consumed, budget_hit)``."""
+    chunks. Returns ``(bytes_consumed, budget_hit, at_newline)`` —
+    *at_newline* reports whether the discard ended at a line
+    terminator (EOF inside the over-long line leaves the stream
+    mid-line, which the load cache must know: state ending mid-line
+    is never extensible)."""
     consumed = 0
     chunk_cap = 1 << 20
     while budget - consumed > 0:
         chunk = fh.readline(min(chunk_cap, budget - consumed))
         if not chunk:
-            return consumed, False          # EOF
+            return consumed, False, False   # EOF mid-line
         consumed += len(chunk)
         if chunk.endswith(b"\n"):
-            return consumed, False
-    return consumed, True
+            return consumed, False, True
+    return consumed, True, False
 
 
 def _reemission_identity(entry: ReviewJournalEntry) -> tuple | None:
@@ -1648,7 +2289,9 @@ def latest_function_grade_collapse(
     return result
 
 
-def latest_entries(out_dir: Path) -> dict[str, ReviewJournalEntry]:
+def latest_entries(
+    out_dir: Path, *, fresh: bool = False,
+) -> dict[str, ReviewJournalEntry]:
     """Return the most recent entry per ``file:function`` key.
 
     Uses strict ``>`` on ``entry.ts`` (a microsecond-precision UTC
@@ -1657,9 +2300,13 @@ def latest_entries(out_dir: Path) -> dict[str, ReviewJournalEntry]:
     for sequential Python appends — so first-in-file wins on the
     theoretically-possible tie, matching :func:`merge_into_index`
     and preserving idempotent-merge semantics.
+
+    ``fresh`` threads through to :func:`load_entries` for callers on
+    the spend/resume side (drift computation) that must never read
+    the process-local load cache.
     """
     best: dict[str, ReviewJournalEntry] = {}
-    for entry in load_entries(out_dir):
+    for entry in load_entries(out_dir, fresh=fresh):
         existing = best.get(entry.key)
         if existing is None or entry.ts > existing.ts:
             best[entry.key] = entry
@@ -1798,7 +2445,11 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
 
     Returns the number of entries merged (new or updated).
     """
-    run_entries = load_entries(run_dir)
+    # fresh=True: this merge writes the DURABLE project index that
+    # cross-run verdict reuse imports at $0 — durable authority never
+    # trusts the process-local load cache. One fresh parse per run
+    # completion is negligible at this boundary.
+    run_entries = load_entries(run_dir, fresh=True)
     if not run_entries:
         return 0
     if len(run_entries) > _MAX_MERGE_ENTRIES:

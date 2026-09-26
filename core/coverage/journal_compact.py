@@ -689,6 +689,16 @@ def _compact_one_file(
                 stats.backup_path = str(backup)
                 os.rename(str(tmp_path), str(journal_path))
                 tmp_path = None
+                # Drop this process's load-cache record explicitly —
+                # per swapped shard, so even a refusal later in the
+                # set leaves no record describing pre-swap bytes.
+                # The swap normally changes the shard's inode (which
+                # the reader's identity checks catch), but freed
+                # inode numbers can be recycled immediately on some
+                # filesystems, and a recycled inode at the same path
+                # with a plausible size would let a cached parse be
+                # served or extended over the compacted bytes.
+                _journal.invalidate_load_cache(out_dir)
                 dir_fd = os.open(str(out_dir), os.O_RDONLY)
                 try:
                     os.fsync(dir_fd)
