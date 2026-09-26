@@ -604,6 +604,10 @@ _REPORT_WRITER_FILES = (
     "packages/cve_diff/cve_diff/cli/main.py",
     "packages/cve_env/cve_env/cli.py",
     "packages/describe/report.py",
+    # /describe single-binary arm: every target-derived string
+    # (section/library/debug-ref names, the target path) routes
+    # through sanitise_for_terminal at render.
+    "packages/describe/binary_target.py",
     "packages/diagram/attack_paths.py",
     "packages/diagram/attack_tree.py",
     "packages/diagram/context_map.py",

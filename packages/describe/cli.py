@@ -69,6 +69,19 @@ def describe_main(
         if raw_path.is_dir():
             target_path = raw_path
         else:
+            # Single-binary arm FIRST, keyed on format MAGIC (never
+            # extension): an ELF/PE/Mach-O file gets the binary
+            # facts block — extension-based archive handling must
+            # not swallow e.g. a PE that happens to end in .zip.
+            # The magic sets are NOT disjoint from every archive
+            # signature (a tar's first bytes are its first member
+            # NAME, which may start "MZ"), so the arm claims a
+            # magic-matched file only when its headers actually
+            # parse — a refusal on a recognised archive falls
+            # through to the extraction path below.
+            rc = _describe_binary(raw_path, json_output, stderr, stdout)
+            if rc is not None:
+                return rc
             resolved = _resolve_archive(raw_path, stderr)
             if resolved is None:
                 return 1
@@ -95,6 +108,70 @@ def describe_main(
     finally:
         if tmp_extract_root is not None:
             shutil.rmtree(tmp_extract_root, ignore_errors=True)
+
+
+def _describe_binary(
+    raw_path: Path, json_output: bool, stderr, stdout,
+) -> int | None:
+    """The single-binary target arm. Returns an exit code when the
+    file is a recognised binary (handled here, describe ends), or
+    ``None`` when it is not (the caller continues to the archive
+    path — pre-existing behavior untouched).
+
+    A file whose MAGIC matches but whose bytes the facts extractor
+    refuses (truncated / doctored image) is reported as an error
+    rather than falling through — UNLESS the file is a recognised
+    archive: a tar whose first member name begins "MZ" carries the
+    MZ bytes at offset 0 without being any kind of PE, and it must
+    keep its extraction path (the error here would hard-fail a
+    perfectly valid archive on a filename coincidence).
+    """
+    try:
+        from packages.describe.binary_target import (
+            build_binary_report,
+            format_binary_json,
+            format_binary_text,
+            is_binary_target,
+        )
+    except Exception:  # noqa: BLE001 — substrate optional, arm degrades
+        return None
+    if not is_binary_target(raw_path):
+        return None
+    report = build_binary_report(raw_path)
+    if report is None:
+        if _is_recognised_archive(raw_path):
+            return None       # magic collision — archive path serves it
+        # The path is operator-typed but may traverse target-
+        # controlled directory names — escape per the terminal
+        # display-integrity contract before it hits stderr.
+        from core.security.log_sanitisation import sanitise_for_terminal
+        stderr.write(
+            f"✗ target has a binary format magic but its headers "
+            f"do not parse (truncated or malformed image): "
+            f"{sanitise_for_terminal(str(raw_path))}\n"
+        )
+        return 1
+    if json_output:
+        stdout.write(format_binary_json(report))
+    else:
+        stdout.write(format_binary_text(report))
+    stdout.write("\n")
+    return 0
+
+
+def _is_recognised_archive(raw_path: Path) -> bool:
+    """Best-effort ``core.archive.is_archive`` probe for the binary
+    arm's fall-through decision. Unavailable substrate = not an
+    archive (the caller then reports the binary-arm error — with no
+    extractor there is no archive path to lose)."""
+    try:
+        from core.archive import is_archive
+    except Exception:  # noqa: BLE001 — substrate optional
+        return False
+    try:
+        return bool(is_archive(raw_path))
+    except Exception:  # noqa: BLE001 — probe must never raise past here
+        return False
 
 
 def _resolve_archive(
