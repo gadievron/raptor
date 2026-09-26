@@ -214,7 +214,7 @@ class FunctionLabel:
             )
             if spec_errors:
                 msg = (
-                    f"Invalid synthetic_mutant label: "
+                    "Invalid synthetic_mutant label: "
                     + "; ".join(spec_errors)
                 )
                 raise ValueError(msg)
