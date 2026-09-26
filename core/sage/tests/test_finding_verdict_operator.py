@@ -37,10 +37,12 @@ FN = "run_query"
 
 
 class _Memory:
-    def __init__(self, memory_id, content, domain_tag):
+    def __init__(self, memory_id, content, domain_tag, status=None):
         self.memory_id = memory_id
         self.content = content
         self.domain_tag = domain_tag
+        if status is not None:
+            self.status = status
 
 
 class FakeOperatorClient:
@@ -52,9 +54,15 @@ class FakeOperatorClient:
         self.memories = list(memories)
         self.forgotten = []
         self.proposed = []
+        self.domain_requests = []
 
-    def list_memories(self, limit=200, offset=0):
-        page = self.memories[offset:offset + limit]
+    def list_memories(self, limit=200, offset=0, domain=None):
+        self.domain_requests.append(domain)
+        rows = self.memories
+        if domain is not None:
+            rows = [m for m in rows
+                    if getattr(m, "domain_tag", None) == domain]
+        page = rows[offset:offset + limit]
         return types.SimpleNamespace(memories=page)
 
     def forget(self, memory_id, reason=""):
@@ -446,6 +454,59 @@ class TestListAndForget(unittest.TestCase):
             self.assertIsNone(
                 forget_finding_verdicts(REPO, RULE, FILE, FN))
 
+    def test_deprecated_rows_neither_list_nor_reclear(self):
+        # Deprecation is the server's soft-delete (what the forget
+        # verb performs): a cleared row must not re-list as live, and
+        # a retest must not count re-deprecating it as new work.
+        from core.sage.hooks import (
+            forget_finding_verdicts,
+            list_finding_verdict_rows,
+        )
+        def rows():
+            gone = _stored_row("m2", "false_positive")
+            gone.status = "deprecated"
+            return [_stored_row("m1", "false_positive"), gone]
+        got = list_finding_verdict_rows(
+            REPO, RULE, FILE, FN, client=FakeOperatorClient(rows()))
+        self.assertEqual([r["memory_id"] for r in got], ["m1"])
+        client = FakeOperatorClient(rows())
+        result = forget_finding_verdicts(
+            REPO, RULE, FILE, FN, reason="retest", client=client)
+        self.assertEqual(result, (1, 0))
+        self.assertEqual([m for m, _ in client.forgotten], ["m1"])
+
+    def test_enum_shaped_status_is_folded(self):
+        # SDK statuses arrive as enum members carrying .value.
+        import enum
+
+        class _St(enum.Enum):
+            DEPRECATED = "deprecated"
+
+        from core.sage.hooks import list_finding_verdict_rows
+        row = _stored_row("m1", "false_positive")
+        row.status = _St.DEPRECATED
+        self.assertEqual(
+            list_finding_verdict_rows(
+                REPO, RULE, FILE, FN, client=FakeOperatorClient([row])),
+            [])
+
+    def test_status_rides_in_listed_rows(self):
+        from core.sage.hooks import list_finding_verdict_rows
+        row = _stored_row("m1", "false_positive")
+        row.status = "committed"
+        (got,) = list_finding_verdict_rows(
+            REPO, RULE, FILE, FN, client=FakeOperatorClient([row]))
+        self.assertEqual(got["status"], "committed")
+
+    def test_walk_requests_the_fp_domain_server_side(self):
+        # The store can hold far more rows than the walk's page cap;
+        # asking the server to filter on the fp domain keeps the walk
+        # paging the repo's rows, not the whole store.
+        from core.sage.hooks import _fp_domain, list_finding_verdict_rows
+        client = FakeOperatorClient([_stored_row("m1", "false_positive")])
+        list_finding_verdict_rows(REPO, RULE, FILE, FN, client=client)
+        self.assertEqual(client.domain_requests, [_fp_domain(REPO)])
+
     def test_multi_page_walk_collects_all_rows(self):
         from core.sage.hooks import list_finding_verdict_rows
         rows = [_stored_row(f"m{i}", "false_positive")
@@ -459,7 +520,8 @@ class TestListAndForget(unittest.TestCase):
         from core.sage.hooks import list_finding_verdict_rows
 
         class StallingClient(FakeOperatorClient):
-            def list_memories(self, limit=200, offset=0):
+            def list_memories(self, limit=200, offset=0,
+                              domain=None):
                 # Server ignores offset — always the same full page;
                 # no has_more (legacy shape).
                 return types.SimpleNamespace(
@@ -494,7 +556,8 @@ class TestListAndForget(unittest.TestCase):
         from core.sage.hooks import list_finding_verdict_rows
 
         class CappedClient(FakeOperatorClient):
-            def list_memories(self, limit=200, offset=0):
+            def list_memories(self, limit=200, offset=0,
+                              domain=None):
                 page = self.memories[offset:offset + 100]
                 return types.SimpleNamespace(
                     memories=page,
@@ -518,7 +581,8 @@ class TestListAndForget(unittest.TestCase):
         )
 
         class BrokenClient(FakeOperatorClient):
-            def list_memories(self, limit=200, offset=0):
+            def list_memories(self, limit=200, offset=0,
+                              domain=None):
                 return types.SimpleNamespace(
                     memories=self.memories[:limit], has_more=True)
 
@@ -542,7 +606,8 @@ class TestListAndForget(unittest.TestCase):
         )
 
         class FailingClient(FakeOperatorClient):
-            def list_memories(self, limit=200, offset=0):
+            def list_memories(self, limit=200, offset=0,
+                              domain=None):
                 return None  # wrapper's degradation shape
 
         with self.assertRaises(VerdictWalkTruncated):
