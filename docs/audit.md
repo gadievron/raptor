@@ -691,7 +691,13 @@ seeds the reviewer saw (`seed_provenance`), and the intake receipt
 file hashes plus loaded/matched/missed/conflict/skip counts; seeds
 naming unknown functions are recorded misses in `fid-misses.json`
 (reason-differentiated: placeholder names and address/name conflicts
-are called out as producer errors), never run errors.
+are called out as producer errors), never run errors.  Resumed runs
+re-run the intake each segment against that segment's residual
+queue: a seed whose target this run already reviewed counts in the
+receipt's `already_covered` bucket (no new miss rows accumulate per
+resume), and a seed the checklist recognises but the segment's queue
+does not carry records the precise reason `not_in_gap_queue` instead
+of a guess derived from the seed's name shape.
 
 Against a fully-covered target the boost has nothing to land on: a
 seed naming a function every prior run already reviewed records as a

@@ -525,6 +525,37 @@ def _satisfied_rereview_keys(out_dir: Path) -> set[str]:
         return set()
 
 
+def _completed_review_keys(out_dir: Path) -> set[str]:
+    """``file:function`` keys with ANY completed review row in THIS
+    run's journal.
+
+    The default-mode resume classifier: an audit resumed into a new
+    segment re-runs the intake against that segment's RESIDUAL gap
+    queue, in which every already-reviewed function no longer exists.
+    Without this set, a seed whose join succeeded in segment 1 (its
+    target reviewed at the head of the schedule, boosted by the seed
+    itself) re-ledgers on every resume as a JOIN failure — with a
+    reason computed from the seed's name shape
+    (``placeholder_name_refused`` for tool-synthetic names,
+    ``no_matching_gap`` for real ones), both of which misdescribe
+    "already reviewed" as producer error. Error and dark verdicts do
+    NOT count — same retry discipline as the coverage fold — and
+    edge rows never speak for the function itself. Same trust domain
+    as the rest of the run dir; best-effort — an unreadable journal
+    degrades to "nothing covered", never an error.
+    """
+    try:
+        from core.coverage.journal import load_entries
+        return {
+            entry.key for entry in load_entries(Path(out_dir))
+            if entry.verdict not in ("error", "dark")
+            and not entry.edge_callee
+        }
+    except Exception:  # noqa: BLE001 — enrichment, never a gate
+        logger.debug("completed-review key scan failed", exc_info=True)
+        return set()
+
+
 def rereview_candidate_keys(
     checklist: dict[str, Any],
     out_dir: Path,
@@ -598,15 +629,35 @@ def apply_hypothesis_seeds(
     two-bucket intake (no marker can exist, the receipt carries no
     ``rereview_scheduled`` key, the log line keeps its shape).
 
-    ``checklist`` (rereview mode only, ignored otherwise): a seed
-    that misses the gap queue is resolved against the checklist and,
-    when its key already carries a completed seed-forced review in
-    the run journal (:func:`_satisfied_rereview_keys`), counted as
-    ``rereview_already_satisfied`` — honest accounting for resume
-    segments — instead of a ``no_matching_gap`` miss. Satisfied
-    seeds write NO ledger row: the join already succeeded once and
-    was recorded; re-recording it every segment would accumulate a
-    fid-misses operation per resume.
+    ``checklist``: a seed that misses the gap queue is resolved
+    against the FULL checklist inventory (address wins, then a
+    non-placeholder name — a tool-synthetic name rides its address
+    here exactly as it does on the queue join). Resolution refines
+    the accounting in BOTH modes:
+
+    * key already reviewed by THIS run's journal
+      (:func:`_completed_review_keys`) → counted in the
+      ``already_covered`` receipt bucket, NO ledger row. This is the
+      resume-segment shape: segment 1 matched the seed and reviewed
+      its target; the segment-2 intake re-runs against the residual
+      queue where the target no longer exists. Re-ledgering it as a
+      join failure (reason computed from the seed's NAME shape —
+      ``placeholder_name_refused`` / ``no_matching_gap``) misread
+      "already reviewed" as producer error, one fid-misses operation
+      per resume.
+    * under ``rereview``, key with a completed seed-forced row
+      (:func:`_satisfied_rereview_keys`) → the more specific
+      ``rereview_already_satisfied`` bucket, checked first; also no
+      ledger row.
+    * resolves but never reviewed this run → the miss is kept, with
+      the precise reason ``not_in_gap_queue`` (recognised by the
+      checklist, suppressed or cut from this segment's queue) rather
+      than a name-shape guess.
+    * does not resolve → the queue join's reason stands
+      (``no_matching_gap`` / ``placeholder_name_refused``).
+
+    Without ``checklist`` the intake keeps the plain two-bucket
+    accounting and the receipt carries no ``already_covered`` key.
     """
     paths = discover_seed_paths(out_dir, extra_paths)
     if not paths:
@@ -625,30 +676,37 @@ def apply_hypothesis_seeds(
     seeds, skips, sources = load_seed_files(paths)
     boosted: set[int] = set()
     matched = 0
+    already_covered = 0
     rereview_scheduled = 0
     rereview_satisfied = 0
     conflicts = 0
     misses: list[dict[str, Any]] = []
     scheduled_rows: list[dict[str, Any]] = []
-    # Rereview-mode satisfaction classifier: a queue-missing seed
-    # whose checklist resolution lands on a key the run journal
-    # already re-reviewed under this consent (completed seed_rereview
-    # row) is "already satisfied", not a miss. Built once, only when
-    # the caller passed the checklist under the flag.
+    # Resume classifier: a queue-missing seed is resolved against the
+    # FULL checklist inventory; a key the run journal already reviewed
+    # is "already covered" (or, under the rereview consent, "already
+    # satisfied" when the completed row carries the seed_rereview
+    # marker), not a join failure. Built once, only when the caller
+    # passed the checklist.
     cl_by_name: dict = {}
     cl_by_addr: dict = {}
     satisfied_keys: set[str] = set()
-    if rereview and checklist is not None and seeds:
+    completed_keys: set[str] = set()
+    if checklist is not None and seeds:
         cl_by_name, cl_by_addr = _checklist_indexes(checklist)
-        satisfied_keys = _satisfied_rereview_keys(Path(out_dir))
+        completed_keys = _completed_review_keys(Path(out_dir))
+        if rereview:
+            satisfied_keys = _satisfied_rereview_keys(Path(out_dir))
     if seeds:
         by_name, by_addr = _gap_indexes(gaps)
         for seed in seeds:
             gap, miss_reason = _match_gap(seed, by_name, by_addr)
             if gap is None:
                 if (
-                    miss_reason == "no_matching_gap"
-                    and satisfied_keys
+                    miss_reason in (
+                        "no_matching_gap", "placeholder_name_refused",
+                    )
+                    and (cl_by_name or cl_by_addr)
                 ):
                     entry, _cl_reason = _match_gap(
                         seed, cl_by_name, cl_by_addr,
@@ -657,11 +715,22 @@ def apply_hypothesis_seeds(
                         from core.coverage.journal import (
                             make_function_key,
                         )
-                        if make_function_key(
+                        key = make_function_key(
                             entry["file"], entry["name"],
-                        ) in satisfied_keys:
+                        )
+                        if key in satisfied_keys:
                             rereview_satisfied += 1
                             continue
+                        if key in completed_keys:
+                            already_covered += 1
+                            continue
+                        # Recognised by the checklist, absent from
+                        # this segment's queue, no completed review:
+                        # coverage-suppressed or budget-cut. The
+                        # precise signal (vs the name-shape guesses
+                        # above) — --seed-rereview is the lever that
+                        # forces these open.
+                        miss_reason = "not_in_gap_queue"
                 # A seed the queue cannot place is a recorded miss,
                 # never an error: entry-detection disagreements and
                 # out-of-scope functions are expected residue of any
@@ -733,6 +802,10 @@ def apply_hypothesis_seeds(
         "conflicts": conflicts,
         "skipped": skips,
     }
+    if checklist is not None:
+        # Present only when the caller supplied the resolution space,
+        # so checklist-less intakes keep the plain two-bucket receipt.
+        summary["already_covered"] = already_covered
     if rereview:
         # Third and fourth buckets, present only under the consent
         # flag so the flag-off receipt stays byte-identical to the
@@ -781,12 +854,26 @@ def apply_hypothesis_seeds(
                 "hypothesis-seed intake: %d external hypothesis seeds "
                 "ingested from %s — %d matched (%d gaps boosted), "
                 "%d scheduled for re-review, %d already satisfied, "
+                "%d already covered this run, "
                 "%d missed (%d conflicts), skips=%s",
                 len(seeds),
                 ", ".join(s["path"] for s in sources)
                 or "no readable source",
                 matched, len(boosted), rereview_scheduled,
-                rereview_satisfied, len(misses), conflicts, skips or {},
+                rereview_satisfied, already_covered,
+                len(misses), conflicts, skips or {},
+            )
+        elif checklist is not None:
+            logger.info(
+                "hypothesis-seed intake: %d external hypothesis seeds "
+                "ingested from %s — %d matched (%d gaps boosted), "
+                "%d already covered this run, "
+                "%d missed (%d conflicts), skips=%s",
+                len(seeds),
+                ", ".join(s["path"] for s in sources)
+                or "no readable source",
+                matched, len(boosted), already_covered,
+                len(misses), conflicts, skips or {},
             )
         else:
             logger.info(

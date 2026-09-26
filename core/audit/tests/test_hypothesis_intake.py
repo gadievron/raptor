@@ -1434,6 +1434,261 @@ class TestRereviewSatisfaction:
         assert row["reason"] == "no_matching_gap"
 
 
+class TestDefaultModeResumeIdempotence:
+    """Default (two-bucket) intake on RESUME segments: the intake
+    re-runs during every segment's prep against that segment's
+    residual gap queue, in which already-reviewed functions no longer
+    exist. A seed whose join succeeded in segment 1 must count as
+    ``already_covered`` — never re-ledger as a join failure whose
+    reason is guessed from the seed's name shape
+    (``placeholder_name_refused`` for tool-synthetic names,
+    ``no_matching_gap`` for real ones), accumulating one fid-misses
+    operation per resume."""
+
+    def _outcome(self, function="parse_channel", status="clean"):
+        from dataclasses import dataclass, field as dc_field
+
+        @dataclass
+        class _Outcome:
+            file: str = "binary:acmed"
+            function: str = "parse_channel"
+            status: str = "clean"
+            body: str = "reviewed in segment 1"
+            model: str = "m"
+            cost_usd: float = 1.0
+            duration_s: float = 1.0
+            hypothesis: str = ""
+            hypotheses: list = dc_field(default_factory=list)
+            evidence_tool: str = ""
+            review_result: dict | None = None
+
+        out = _Outcome()
+        out.function = function
+        out.status = status
+        return out
+
+    def _journal_reviewed_row(self, out_dir, function="parse_channel",
+                              status="clean"):
+        # An ORDINARY completed review row — no seed_rereview marker.
+        from core.audit.collector import append_journal_for_outcome
+        append_journal_for_outcome(
+            out_dir=out_dir, target_path=out_dir, run_id="r1",
+            outcome=self._outcome(function=function, status=status),
+            gap={"file": "binary:acmed", "name": function,
+                 "line_start": 0},
+        )
+
+    def test_reviewed_seed_counts_already_covered_no_ledger(
+        self, tmp_path,
+    ):
+        # The resume shape: segment 1 reviewed the seed's target;
+        # segment 2's queue no longer carries it.
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        self._journal_reviewed_row(tmp_path)
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        summary = apply_hypothesis_seeds(
+            [], tmp_path, checklist=_rereview_checklist(),
+        )
+        assert summary["already_covered"] == 1
+        assert summary["missed"] == 0
+        assert "misses_ledger" not in summary
+        assert not (tmp_path / "fid-misses.json").exists()
+
+    def test_placeholder_named_seed_rides_its_address_to_covered(
+        self, tmp_path,
+    ):
+        # The binary-audit resume shape: r2/Ghidra-named seeds carry
+        # a tool-synthetic name plus an address. On resume the old
+        # accounting called these placeholder_name_refused — a
+        # producer-error signal for a join that SUCCEEDED in
+        # segment 1 via the address.
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        self._journal_reviewed_row(tmp_path)
+        _write_seeds(tmp_path / SEEDS_FILENAME, [
+            _seed(function="fcn.00161da0"),
+        ])
+        summary = apply_hypothesis_seeds(
+            [], tmp_path, checklist=_rereview_checklist(),
+        )
+        assert summary["already_covered"] == 1
+        assert summary["missed"] == 0
+        assert not (tmp_path / "fid-misses.json").exists()
+
+    def test_resolved_but_unreviewed_gets_precise_reason(
+        self, tmp_path,
+    ):
+        # Recognised by the checklist, absent from the queue, no
+        # completed review: coverage-suppressed or budget-cut. The
+        # ledger must say not_in_gap_queue — a different operator
+        # signal (use --seed-rereview) than "unknown function".
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        summary = apply_hypothesis_seeds(
+            [], tmp_path, checklist=_rereview_checklist(),
+        )
+        assert summary["already_covered"] == 0
+        assert summary["missed"] == 1
+        misses_doc = json.loads((tmp_path / "fid-misses.json").read_text())
+        (op,) = misses_doc["operations"]
+        (row,) = op["misses"]
+        assert row["reason"] == "not_in_gap_queue"
+
+    def test_unknown_seed_stays_no_matching_gap(self, tmp_path):
+        # The classifier must not launder genuinely-unknown
+        # functions: absent from checklist AND queue stays a
+        # no_matching_gap miss even with the checklist supplied.
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        self._journal_reviewed_row(tmp_path)
+        _write_seeds(tmp_path / SEEDS_FILENAME, [
+            _seed(),
+            _seed(function="no_such_fn", address=0xDEAD0, fid=None),
+        ])
+        summary = apply_hypothesis_seeds(
+            [], tmp_path, checklist=_rereview_checklist(),
+        )
+        assert summary["already_covered"] == 1  # the co-loaded _seed()
+        misses_doc = json.loads((tmp_path / "fid-misses.json").read_text())
+        (op,) = misses_doc["operations"]
+        rows = {r.get("function"): r for r in op["misses"]}
+        assert rows == {
+            "no_such_fn": rows["no_such_fn"],
+        }
+        assert rows["no_such_fn"]["reason"] == "no_matching_gap"
+
+    def test_error_row_does_not_count_covered(self, tmp_path):
+        # Same retry discipline as the coverage fold: an errored
+        # review is not a settled verdict — the seed's target was
+        # NOT consumed, and the precise not-queued reason applies.
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        self._journal_reviewed_row(tmp_path, status="error")
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        summary = apply_hypothesis_seeds(
+            [], tmp_path, checklist=_rereview_checklist(),
+        )
+        assert summary["already_covered"] == 0
+        assert summary["missed"] == 1
+
+    def test_matched_seed_unaffected_by_checklist(self, tmp_path):
+        # A seed present in the queue still matches and boosts —
+        # the classifier only touches queue MISSES.
+        from core.audit.hypothesis_intake import (
+            SEED_PRIORITY_BOOST,
+            apply_hypothesis_seeds,
+        )
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        gaps = [{
+            "file": "binary:acmed", "name": "parse_channel",
+            "priority": 1, "priority_score": 5,
+            "metadata": {"address": 0x161DA0},
+        }]
+        summary = apply_hypothesis_seeds(
+            gaps, tmp_path, checklist=_rereview_checklist(),
+        )
+        assert summary["matched"] == 1
+        assert summary["already_covered"] == 0
+        assert gaps[0]["priority_score"] == 5 + SEED_PRIORITY_BOOST
+
+    def test_checklist_less_receipt_shape_unchanged(self, tmp_path):
+        # Without a checklist the plain two-bucket receipt stands:
+        # no already_covered key, misses keep the queue-join reasons.
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        self._journal_reviewed_row(tmp_path)
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        summary = apply_hypothesis_seeds([], tmp_path)
+        assert "already_covered" not in summary
+        assert summary["missed"] == 1
+
+    def test_conflict_refusal_never_reclassified(self, tmp_path):
+        # An address/name conflict is an identity refusal — the
+        # checklist resolution must not launder it into covered.
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        self._journal_reviewed_row(tmp_path)
+        self._journal_reviewed_row(tmp_path, function="validate_sig")
+        _write_seeds(tmp_path / SEEDS_FILENAME, [
+            _seed(function="validate_sig"),
+        ])
+        gaps = [
+            {"file": "binary:acmed", "name": "parse_channel",
+             "priority": 1, "metadata": {"address": 0x161DA0}},
+            {"file": "binary:acmed", "name": "validate_sig",
+             "priority": 1, "metadata": {"address": 0x162000}},
+        ]
+        summary = apply_hypothesis_seeds(
+            gaps, tmp_path, checklist=_rereview_checklist(),
+        )
+        assert summary["conflicts"] == 1
+        assert summary["already_covered"] == 0
+        misses_doc = json.loads((tmp_path / "fid-misses.json").read_text())
+        (op,) = misses_doc["operations"]
+        (row,) = op["misses"]
+        assert row["reason"] == "address_name_conflict"
+
+    def test_covered_bucket_in_default_info_line(self, tmp_path, caplog):
+        import logging
+
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        self._journal_reviewed_row(tmp_path)
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        with caplog.at_level(logging.INFO,
+                             logger="core.audit.hypothesis_intake"):
+            apply_hypothesis_seeds(
+                [], tmp_path, checklist=_rereview_checklist(),
+            )
+        assert any(
+            "1 already covered this run" in r.getMessage()
+            for r in caplog.records
+        )
+        assert not any(
+            "scheduled for re-review" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_rereview_satisfied_beats_covered(self, tmp_path):
+        # Under the consent flag a completed seed_rereview row lands
+        # in the MORE SPECIFIC bucket, not already_covered.
+        from core.audit.collector import append_journal_for_outcome
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        append_journal_for_outcome(
+            out_dir=tmp_path, target_path=tmp_path, run_id="r1",
+            outcome=self._outcome(),
+            gap={"file": "binary:acmed", "name": "parse_channel",
+                 "line_start": 0, "seed_rereview": True},
+        )
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        summary = apply_hypothesis_seeds(
+            [], tmp_path, rereview=True,
+            checklist=_rereview_checklist(),
+        )
+        assert summary["rereview_already_satisfied"] == 1
+        assert summary["already_covered"] == 0
+        assert summary["missed"] == 0
+
+    def test_placeholder_named_seed_satisfies_under_rereview(
+        self, tmp_path,
+    ):
+        # The satisfaction classifier previously only looked at
+        # no_matching_gap misses; a placeholder-named binary seed
+        # (address-joined in segment 1) must satisfy the same way.
+        from core.audit.collector import append_journal_for_outcome
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        append_journal_for_outcome(
+            out_dir=tmp_path, target_path=tmp_path, run_id="r1",
+            outcome=self._outcome(),
+            gap={"file": "binary:acmed", "name": "parse_channel",
+                 "line_start": 0, "seed_rereview": True},
+        )
+        _write_seeds(tmp_path / SEEDS_FILENAME, [
+            _seed(function="fcn.00161da0"),
+        ])
+        summary = apply_hypothesis_seeds(
+            [], tmp_path, rereview=True,
+            checklist=_rereview_checklist(),
+        )
+        assert summary["rereview_already_satisfied"] == 1
+        assert summary["missed"] == 0
+        assert not (tmp_path / "fid-misses.json").exists()
+
+
 class TestHoistBannerBounds:
     def test_hostile_pin_names_escaped_and_bounded(self, tmp_path, caplog):
         # --seed-rereview routes target-controlled function names
