@@ -202,7 +202,14 @@ def build_graded_finding(
     # the channel is corroboration-only by contract, so its receipt
     # is chain context and must never lift the exported confidence
     # (finding_confidence upgrades LOW LLM entries when any
-    # mechanical:* entry is present).
+    # mechanical:* entry is present). Known scope limit: the attribute
+    # lives only on the in-memory outcome, so this receipt reaches the
+    # LIVE export chain exclusively — export_graded_from_journal
+    # rebuilds outcomes from journal rows, which never carry it, and a
+    # journal re-export ships without the entry. Accepted for a
+    # corroboration-only LOW receipt (no verdict or confidence
+    # effect); the audit-log ``action=disasm_xcheck`` row remains the
+    # durable record.
     dx = getattr(outcome, "disasm_xcheck", None)
     if isinstance(dx, dict) and dx.get("engine") == "disasm":
         detail = str(dx.get("excerpt") or "")[:600] or None
