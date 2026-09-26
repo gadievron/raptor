@@ -2058,6 +2058,43 @@ def cmd_run(args: argparse.Namespace) -> int:
     if supervisor_bound is not None:
         max_time = supervisor_bound
 
+    # --- deepen-aware pre-spend cost forecast ---
+    # `--forecast` prints the band and exits at $0 LLM spend (mirrors
+    # openant's --forecast contract). Uncapped runs (no --max-cost)
+    # print the same band informationally before the pipeline commits
+    # — never a gate; --max-cost stays the enforcement surface.
+    forecast_only = bool(getattr(args, "forecast", False))
+    forecast_doc = None
+    if forecast_only or not args.max_cost:
+        forecast_doc = _compute_forecast(args, out_dir, checklist_data)
+    if forecast_only:
+        if forecast_doc is None:
+            print(
+                "error: forecast unavailable — no gap queue could be "
+                "computed from the checklist (see warnings above)",
+                file=sys.stderr,
+            )
+            _lifecycle_fail(out_dir, "forecast unavailable — no gap queue")
+            return 1
+        from core.audit.forecast import format_forecast_lines
+        for _line in format_forecast_lines(forecast_doc):
+            print(sanitise_for_terminal(_line, max_len=300), flush=True)
+        _save_forecast_best_effort(out_dir, forecast_doc, forecast_only=True)
+        print(
+            "\nAUDIT FORECAST COMPLETE (no review performed — "
+            "$0 LLM spend)",
+            flush=True,
+        )
+        _lifecycle_complete_quiet(out_dir)
+        return 0
+    if forecast_doc is not None:
+        from core.audit.forecast import format_forecast_lines
+        for _line in format_forecast_lines(forecast_doc):
+            print(sanitise_for_terminal(_line, max_len=300), flush=True)
+        # Persisted so the completion tail can pair the prediction
+        # with the actual ledger (forecast-calibration.jsonl).
+        _save_forecast_best_effort(out_dir, forecast_doc)
+
     # --- run ---
     print(f"\nStarting audit of {target_path}", flush=True)
     print(f"Output: {out_dir}\n", flush=True)
@@ -2234,6 +2271,23 @@ def _finalize_run(
         else "completed"
     )
     report = generate_report(out_dir, final_status=_final_status)
+
+    # Forecast vs actual (the calibration loop): pair the run's
+    # pre-spend forecast with the cost ledger, append the calibration
+    # record, and embed the comparison in the report. Best-effort —
+    # runs without a forecast (capped runs, resumes of pre-forecast
+    # runs) skip silently.
+    forecast_entry = None
+    try:
+        from core.audit.forecast import record_run_calibration
+        forecast_entry = record_run_calibration(out_dir)
+        if forecast_entry is not None:
+            report["forecast_vs_actual"] = forecast_entry
+    except Exception:  # noqa: BLE001 — completion tail is best-effort
+        logging.getLogger(__name__).debug(
+            "forecast calibration recording failed", exc_info=True,
+        )
+
     report_path = write_report(report, out_dir)
 
     # Completed-with-remainder note for supervisor-bounded runs: the
@@ -2292,6 +2346,22 @@ def _finalize_run(
     cost_line = format_cost_summary(result)
     if cost_line:
         print(cost_line, flush=True)
+    if forecast_entry is not None:
+        # Contained like the recording above: a malformed calibration
+        # entry must never fail a fully-paid run at a print statement
+        # (the formatter is already tolerant; this is the belt).
+        try:
+            from core.audit.forecast import format_calibration_line
+            print(
+                sanitise_for_terminal(
+                    format_calibration_line(forecast_entry), max_len=300,
+                ),
+                flush=True,
+            )
+        except Exception:  # noqa: BLE001 — completion tail is best-effort
+            logging.getLogger(__name__).debug(
+                "forecast-vs-actual line formatting failed", exc_info=True,
+            )
     print(f"Report: {report_path}", flush=True)
     print(f"Terminated: {result.terminated_by}", flush=True)
 
@@ -3468,6 +3538,119 @@ def _run_config_from_args(
     }
 
 
+def _save_forecast_best_effort(out_dir: Path, forecast_doc: dict,
+                               *, forecast_only: bool = False) -> None:
+    """Persist forecast.json, warning loudly instead of raising.
+
+    The printed band is the product at both call sites — the artifact
+    feeds the completion-tail calibration pairing (pre_run) or is a
+    record of a run that made no LLM calls (forecast_only). A full
+    disk must not traceback past the lifecycle tail and strand the
+    run record at "running"; it degrades to a named warning.
+    """
+    try:
+        from core.audit.forecast import save_forecast
+        save_forecast(out_dir, forecast_doc, forecast_only=forecast_only)
+    except Exception as exc:  # noqa: BLE001 — persistence is best-effort
+        print(
+            f"warning: could not persist {out_dir / 'forecast.json'} "
+            f"({sanitise_for_terminal(str(exc), max_len=200)}) — the "
+            f"band above is unaffected"
+            + ("" if forecast_only
+               else "; forecast-vs-actual calibration will be skipped "
+                    "at completion"),
+            file=sys.stderr,
+        )
+
+
+def _compute_forecast(args: argparse.Namespace, out_dir: Path,
+                      checklist_data: dict | None) -> dict | None:
+    """Assemble the $0 pre-spend forecast: gap queue from the
+    checklist census, suspicious-density priors from the review
+    journal. No LLM calls by construction. Best-effort — returns
+    ``None`` (with a logged warning) rather than blocking a run."""
+    if not checklist_data:
+        return None
+    try:
+        from core.audit.forecast import (
+            forecast_audit_cost,
+            gap_slocs,
+            predicted_suspicious_density,
+            prior_verdicts_from_index,
+            prior_verdicts_from_run_dirs,
+            seed_rereview_mass,
+        )
+        from core.audit.gaps import compute_gaps, load_context_map
+        from core.coverage.journal import INDEX_FILENAME
+        from core.coverage.record import load_records
+
+        project_dir = (
+            out_dir.parent
+            if (out_dir.parent / INDEX_FILENAME).is_file() else None
+        )
+        gaps = compute_gaps(
+            checklist_data,
+            load_records(out_dir),
+            context_map=load_context_map(out_dir),
+            strategy_filter=args.strategy,
+            budget=args.budget,
+            scope=args.scope,
+            scope_floor=args.scope_floor,
+            annotations_dir=(
+                Path(args.annotations_dir)
+                if args.annotations_dir else None
+            ),
+            out_dir=out_dir,
+            project_dir=project_dir,
+            include_kinds=(
+                {k.strip() for k in args.include_kinds.split(",")
+                 if k.strip()}
+                if args.include_kinds else None
+            ),
+        )
+        priors = (
+            prior_verdicts_from_index(project_dir)
+            if project_dir is not None else {}
+        )
+        if not priors and getattr(args, "prior_journal", None):
+            priors = prior_verdicts_from_run_dirs(
+                [Path(p) for p in args.prior_journal],
+            )
+        density = predicted_suspicious_density(gaps, priors)
+        queue_keys = {
+            (g.get("file"), g.get("name"))
+            for g in gaps if isinstance(g, dict)
+        }
+        seed = seed_rereview_mass(priors, queue_keys)
+        return forecast_audit_cost(
+            slocs=gap_slocs(gaps),
+            density=density,
+            seed_mass=seed,
+            review_passes=args.review_passes,
+            model_overrides=len(args.model or []),
+        )
+    except Exception:  # noqa: BLE001 — forecast never blocks a run
+        logging.getLogger(__name__).warning(
+            "pre-spend cost forecast failed", exc_info=True,
+        )
+        return None
+
+
+def _lifecycle_complete_quiet(out_dir: Path) -> None:
+    """Call lifecycle complete, swallowing errors — used by the
+    forecast-only exit, whose run performed no review and whose
+    console already carries the forecast outcome."""
+    import subprocess
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        subprocess.run(
+            [str(_RAPTOR_DIR / "libexec" / "raptor-run-lifecycle"),
+             "complete", str(out_dir), "--command", "audit"],
+            capture_output=True,
+            check=False,
+            timeout=_LIFECYCLE_TIMEOUT_S,
+        )
+
+
 def _lifecycle_fail(out_dir: Path, reason: str) -> None:
     """Call lifecycle fail, swallowing errors (timeouts included —
     this always runs on an error path that already reports its own
@@ -4115,6 +4298,11 @@ def main() -> int:
                             "file's language")
     p_run.add_argument("--max-cost", type=float, default=None,
                        help="Maximum cost in USD before stopping")
+    p_run.add_argument("--forecast", action="store_true",
+                       help="Print the deepen-aware pre-spend cost "
+                            "forecast band (gap-queue census + journal "
+                            "priors, $0 LLM spend) and exit without "
+                            "reviewing anything")
     p_run.add_argument("--deepen-reserve", type=float, default=None,
                        metavar="FRACTION",
                        help="Slice of --max-cost held back for the deepen "
