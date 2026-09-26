@@ -252,6 +252,71 @@ class TestCmdRunChecklistGate:
         rounds = {json.loads(p.read_text())["round"] for p in asides}
         assert rounds == {1, 2}
 
+    def _write_sharded(self, monkeypatch, out_dir: Path,
+                       target: Path) -> None:
+        """A run-local SHARDED checklist recording *target*."""
+        import core.inventory as inv
+        from core.inventory import save_checklist
+        monkeypatch.setattr(inv, "_MAX_CHECKLIST_BYTES", 64)
+        try:
+            save_checklist(out_dir, {
+                "target_path": str(target),
+                "files": [{"path": "a.c", "items": [], "sloc": 1}],
+            })
+        finally:
+            monkeypatch.undo()
+        assert (out_dir / "checklist" / "index.json").is_file()
+
+    def test_sharded_mismatch_discards_and_rebuilds(
+        self, tmp_path: Path, monkeypatch, capsys,
+    ):
+        # The gate must see the SHARDED form too: a single-file probe
+        # here plus the form-aware rebuild probe silently audited
+        # target B against target A's sharded inventory.
+        target_a = tmp_path / "target-a"
+        target_b = tmp_path / "target-b"
+        target_a.mkdir()
+        target_b.mkdir()
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        self._write_sharded(monkeypatch, out_dir, target_a)
+
+        mod, calls, args = _run_cmd_run(
+            tmp_path, monkeypatch, out_dir, target_b)
+        rc = mod.cmd_run(args)
+        assert rc == 1  # stopped at the stubbed checklist BUILD
+
+        # The stale sharded layout was set aside (evidence, never
+        # deleted) and the rebuild path was taken.
+        assert not (out_dir / "checklist" / "index.json").exists()
+        asides = list(out_dir.glob("checklist.mismatched-target-*"))
+        assert len(asides) == 1
+        assert (asides[0] / "index.json").is_file()
+        assert any(
+            "raptor-build-checklist" in c[0] for c in calls
+        ), "sharded mismatch must route into the rebuild path"
+        err = capsys.readouterr().err
+        assert "checklist target mismatch" in err
+
+    def test_sharded_match_kept_no_rebuild(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        target_a = tmp_path / "target-a"
+        target_a.mkdir()
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        self._write_sharded(monkeypatch, out_dir, target_a)
+
+        mod, calls, args = _run_cmd_run(
+            tmp_path, monkeypatch, out_dir, target_a)
+        with pytest.raises(_SentinelStop):
+            mod.cmd_run(args)
+
+        assert (out_dir / "checklist" / "index.json").is_file()
+        assert not any(
+            "raptor-build-checklist" in c[0] for c in calls
+        ), "a matching sharded checklist must be inherited, not rebuilt"
+
     def test_matching_checklist_kept_no_rebuild(
         self, tmp_path: Path, monkeypatch,
     ):

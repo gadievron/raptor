@@ -179,16 +179,14 @@ def _find_checklist(base_dir: Path, explicit: str | None) -> Path | None:
     if explicit:
         p = Path(explicit)
         return p if p.exists() else None
-    candidate = base_dir.parent / "checklist.json"
-    if candidate.exists():
-        return candidate
-    # Two more levels up — generous but bounded.
-    candidate = base_dir.parent.parent / "checklist.json"
-    if candidate.exists():
-        return candidate
-    candidate = base_dir.parent.parent.parent / "checklist.json"
-    if candidate.exists():
-        return candidate
+    # Either on-disk form counts (single file or the sharded
+    # checklist/ layout) — the returned SLOT path is read through the
+    # accessor by _lookup_bounds_by_name.
+    from core.inventory import checklist_exists
+    for up in (base_dir.parent, base_dir.parent.parent,
+               base_dir.parent.parent.parent):
+        if checklist_exists(up):
+            return up / "checklist.json"
     return None
 
 
@@ -198,9 +196,16 @@ def _lookup_bounds_by_name(
     """Look up ``(line_start, line_end)`` for ``function`` in
     ``file_path`` from a checklist. Returns ``None`` if either is
     missing or the function isn't in the inventory."""
-    # Best-effort: None on a missing/oversize/malformed checklist.
-    data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
-    if not isinstance(data, dict):
+    # Best-effort: {} on a missing/oversize/malformed checklist.
+    # Accessor read for the slot path (resolves single-file vs
+    # sharded); an explicit --checklist pointing at an arbitrary file
+    # keeps a direct bounded load.
+    if checklist_path.name == "checklist.json":
+        from core.inventory import read_checklist
+        data = read_checklist(checklist_path.parent)
+    else:
+        data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
+    if not isinstance(data, dict) or not data:
         return None
     from core.audit.gaps import find_checklist_item
     item = find_checklist_item(data, file_path, function)
