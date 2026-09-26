@@ -2883,6 +2883,16 @@ def cmd_resume(args: argparse.Namespace) -> int:
         print(f"error: target not found: {target_path}", file=sys.stderr)
         return 1
 
+    # --- resume checklist provenance gate ---
+    # Same target-match gate the launch path applies, plus run-local-
+    # wins at the segment boundary (see _resume_checklist_gate). Runs
+    # BEFORE the existence probe below: an inherited slot holding
+    # another target's inventory must never satisfy it.
+    _gate_err = _resume_checklist_gate(out_dir, target_path)
+    if _gate_err:
+        print(f"error: {_gate_err}", file=sys.stderr)
+        return 1
+
     from core.inventory import checklist_exists
     if not checklist_exists(out_dir):
         print(
@@ -3473,6 +3483,195 @@ def _lifecycle_fail(out_dir: Path, reason: str) -> None:
         )
 
 
+def _resume_checklist_gate(out_dir: Path, target_path: Path) -> str | None:
+    """Segment-boundary provenance gate on the run's checklist slot.
+
+    The run was pinned to its inventory at segment 1; a resumed
+    segment must re-read THAT inventory, not whatever the shared
+    project slot holds NOW. Live-hit: a binary run's segment-2
+    resume re-read the project slot through the run-dir symlink
+    after the slot's content had been replaced with a SIBLING
+    target's inventory, and reviewed 1,000+ of the other binary's
+    items until killed. The launch path
+    (``cmd_run``) gates exactly this inheritance
+    (``_mismatched_checklist_target``); the resume re-read bypassed
+    it. Same loud drop-the-LINK contract as launch (the
+    project-level file belongs to the other target's runs and is
+    never touched):
+
+    * run-local wins — when the run dir holds its own inventory
+      (a run-local sharded ``checklist/`` dir), an inherited
+      ``checklist.json`` symlink beside it is dropped even when its
+      target matches: the accessors resolve the link BEFORE the
+      sharded probe, so the link shadows the run's own segment-1
+      artifact with the slot's current content.
+    * inherited inventories get the target-match gate — a symlink
+      whose resolved inventory records a DIFFERENT target is dropped
+      loudly, and with no run-local inventory to fall back on the
+      resume is REFUSED (error string returned) with the rebuild
+      remedy; a mid-run slot swap must never retarget the resumed
+      run.
+    * UNCOMPARABLE inherited slots are refused too — fail-CLOSED,
+      deliberately diverging from the launch gate, which fails OPEN
+      on the same shapes (corrupt slot, no recorded ``target_path``,
+      relative recorded path). At launch that trade-off is right: a
+      legitimate first run may inherit a legacy checklist that
+      simply predates target stamping, and refusing it would break
+      every such project. At RESUME the run provably had a usable
+      inventory when segment 1 reviewed against it, so an inherited
+      slot that can no longer be provenance-checked is strictly
+      anomalous (swapped, truncated, or corrupted since) — and the
+      refusal is safe and non-wedging: it fires before any status
+      flip and names the rebuild remedy, which lands run-local once
+      the link is gone.
+
+    A DANGLING inherited link (no readable slot at all) is not this
+    gate's case: it returns ``None`` and the existing checklist
+    existence probe right after the gate refuses the resume with its
+    own "nothing to resume" message, exactly as before.
+
+    Returns an error message when the resume must not proceed, else
+    ``None`` (the slot — possibly just made run-local — is the run's
+    own inventory). Matching inherited checklists keep the
+    historical inheritance, exactly like the launch gate.
+    """
+    checklist_path = out_dir / "checklist.json"
+    if not checklist_path.is_symlink():
+        # Run-local file, run-local sharded dir, or nothing: no
+        # inheritance to vet — downstream reads are the run's own.
+        return None
+    runlocal_shards = (
+        (out_dir / "checklist" / "index.json").is_file()
+        and not (out_dir / "checklist").is_symlink()
+    )
+    if runlocal_shards:
+        print(
+            "resume: dropping the project-slot checklist symlink in "
+            f"{sanitise_for_terminal(str(out_dir), max_len=300)} — it "
+            "shadows this run's own run-local inventory (the run was "
+            "pinned to its inventory at segment 1; a project-slot "
+            "change mid-run must not retarget the resumed run)",
+            file=sys.stderr,
+        )
+        try:
+            checklist_path.unlink()
+        except OSError as exc:
+            # exc can quote attacker-influenced path bytes.
+            return (
+                "could not detach the checklist symlink shadowing the "
+                "run-local inventory: "
+                f"{sanitise_for_terminal(str(exc), max_len=300)}"
+            )
+        return None
+    from core.inventory import checklist_exists
+    if not checklist_exists(out_dir):
+        # Dangling link: nothing to vet AND nothing to resume — leave
+        # it to the existence probe's historical refusal.
+        return None
+    verdict, detail = _checklist_target_verdict(checklist_path, target_path)
+    if verdict == "match":
+        return None
+    if verdict == "mismatch":
+        print(
+            "checklist target mismatch at resume: the inherited "
+            f"{sanitise_for_terminal(str(checklist_path), max_len=300)} "
+            "now resolves to an inventory built for "
+            f"{sanitise_for_terminal(detail, max_len=300)} "
+            "but this run targets "
+            f"{sanitise_for_terminal(str(target_path), max_len=300)} "
+            "— dropping the run-local link (never auditing one target "
+            "against another target's inventory; the project-level "
+            "checklist it points at belongs to the other target's runs "
+            "and is untouched)",
+            file=sys.stderr, flush=True,
+        )
+        try:
+            checklist_path.unlink()
+        except OSError as exc:
+            return (
+                "could not detach the mismatched checklist symlink: "
+                f"{sanitise_for_terminal(str(exc), max_len=300)}"
+            )
+        return (
+            "the run's inherited inventory was replaced mid-run by "
+            "another target's checklist and no run-local inventory "
+            "remains — rebuild it with 'libexec/raptor-build-checklist "
+            f"{sanitise_for_terminal(str(target_path), max_len=300)} "
+            f"{sanitise_for_terminal(str(out_dir), max_len=300)}' "
+            "(it now lands run-local), then resume again"
+        )
+    # verdict == "uncomparable": fail CLOSED at resume (see docstring
+    # for the deliberate divergence from the fail-open launch gate).
+    # ``detail`` is one of this module's own constant reasons — never
+    # slot-derived text.
+    print(
+        "checklist provenance uncheckable at resume: the inherited "
+        f"{sanitise_for_terminal(str(checklist_path), max_len=300)} "
+        f"cannot be matched to this run's target ({detail}) — the run "
+        "had a usable inventory at segment 1, so an unverifiable "
+        "inherited slot is anomalous; dropping the run-local link "
+        "(the project-level checklist it points at is untouched)",
+        file=sys.stderr, flush=True,
+    )
+    try:
+        checklist_path.unlink()
+    except OSError as exc:
+        return (
+            "could not detach the unverifiable checklist symlink: "
+            f"{sanitise_for_terminal(str(exc), max_len=300)}"
+        )
+    return (
+        "the run's inherited checklist cannot be provenance-checked "
+        f"({detail}) and no run-local inventory remains — rebuild it "
+        "with 'libexec/raptor-build-checklist "
+        f"{sanitise_for_terminal(str(target_path), max_len=300)} "
+        f"{sanitise_for_terminal(str(out_dir), max_len=300)}' "
+        "(it now lands run-local), then resume again"
+    )
+
+
+def _checklist_target_verdict(
+    checklist_path: Path,
+    target_path: Path,
+) -> tuple[str, str]:
+    """Provenance verdict for an inherited checklist slot.
+
+    ``("match", recorded)`` / ``("mismatch", recorded)`` when the
+    slot's recorded ``target_path`` could be compared to this run's
+    resolved target; ``("uncomparable", reason)`` when it could not
+    (``reason`` is one of this function's own constant strings, never
+    slot-derived text). Plain resolved-path equality: a file target
+    inside the recorded tree is still a mismatch — the inventory's
+    items describe the tree, not the file.
+
+    The two consumers deliberately read "uncomparable" in opposite
+    directions: the launch gate (``_mismatched_checklist_target``)
+    fails OPEN, the resume gate (``_resume_checklist_gate``) fails
+    CLOSED — each carries its own rationale.
+    """
+    try:
+        from core.inventory import read_checklist_meta
+        data = read_checklist_meta(checklist_path.parent)
+    except (OSError, ValueError):
+        return ("uncomparable", "checklist metadata unreadable")
+    if not data:
+        return ("uncomparable", "checklist metadata missing or malformed")
+    recorded = str(data.get("target_path") or "")
+    if not recorded:
+        return ("uncomparable", "checklist records no target_path")
+    if not Path(recorded).is_absolute():
+        return ("uncomparable", "checklist records a relative target_path")
+    # RuntimeError alongside OSError: Python 3.10-3.12 raise it from
+    # Path.resolve() on symlink loops — a planted loop must never
+    # traceback out of cmd_run leaving the run stuck "running".
+    try:
+        if Path(recorded).resolve() != Path(target_path).resolve():
+            return ("mismatch", recorded)
+    except (OSError, RuntimeError):
+        return ("uncomparable", "target path resolution failed")
+    return ("match", recorded)
+
+
 def _mismatched_checklist_target(
     checklist_path: Path,
     target_path: Path,
@@ -3480,34 +3679,18 @@ def _mismatched_checklist_target(
     """The checklist's recorded ``target_path`` when it POSITIVELY
     mismatches this run's resolved target, else ``None``.
 
-    Plain resolved-path equality: a file target inside the recorded
-    tree is still a mismatch — the inventory's items describe the
-    tree, not the file. Fail-open on unknowns (missing/relative
-    recorded path, unreadable checklist): the guard exists to stop a
-    demonstrably-wrong inheritance, not to refuse legacy checklists
-    that cannot be compared — those keep today's behavior and the
-    downstream readers' own failure modes.
+    The LAUNCH-path reading of ``_checklist_target_verdict``:
+    fail-open on unknowns (missing/relative recorded path, unreadable
+    checklist) — this guard exists to stop a demonstrably-wrong
+    inheritance, not to refuse legacy checklists that cannot be
+    compared; a legitimate first run may inherit a slot that predates
+    target stamping, and those keep today's behavior and the
+    downstream readers' own failure modes. The RESUME gate
+    deliberately diverges (fail-closed) — see
+    ``_resume_checklist_gate``.
     """
-    try:
-        from core.inventory import read_checklist_meta
-        data = read_checklist_meta(checklist_path.parent)
-    except (OSError, ValueError):
-        return None
-    if not data:
-        return None
-    recorded = str(data.get("target_path") or "")
-    if not recorded or not Path(recorded).is_absolute():
-        return None
-    # RuntimeError alongside OSError: Python 3.10-3.12 raise it from
-    # Path.resolve() on symlink loops — a planted loop must fail OPEN
-    # (no discard, run proceeds on the existing checklist), never
-    # traceback out of cmd_run leaving the run stuck "running".
-    try:
-        if Path(recorded).resolve() != Path(target_path).resolve():
-            return recorded
-    except (OSError, RuntimeError):
-        return None
-    return None
+    verdict, detail = _checklist_target_verdict(checklist_path, target_path)
+    return detail if verdict == "mismatch" else None
 
 
 def _checklist_file_language(out_dir: Path, file_path: str) -> str | None:
