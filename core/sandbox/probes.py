@@ -694,6 +694,46 @@ def check_mount_available() -> bool:
         return True
 
 
+def check_child_unix_sockets_available() -> bool:
+    """Whether a child sandboxed by ``core.sandbox.run`` can CREATE
+    AF_UNIX sockets (``socket(AF_UNIX)`` + ``bind``).
+
+    Consumers that host a unix-socket server INSIDE the sandbox (the
+    persistent Ghidra worker) use this as a transport pre-flight: when
+    it returns False the child's very first ``socket(2)`` dies with
+    EPERM under the seccomp policy, so the caller must hand the child
+    an inherited descriptor (socketpair) instead of a pathname socket.
+
+    The verdict mirrors the spawn path's own gating:
+
+    - darwin: the seatbelt profile does not filter socket creation —
+      always True.
+    - Linux: socket creation is allowed only on the NAMESPACE spawn
+      lane (``core.sandbox._spawn``), and only when the connect-
+      scoping supervisor can run (``probe_unix_scope`` — without it
+      ``allow_unix_sockets`` stays disabled, fail-closed). Every other
+      lane (subprocess+preexec) installs a seccomp filter that denies
+      ``socket(AF_UNIX)`` unconditionally. ``check_mount_available()``
+      stands in for "the namespace lane serves this host" — it implies
+      ``check_net_available()`` (the staged pid-ns self-test included,
+      which is exactly what nested-sandbox hosts fail).
+
+    Deliberately conservative: a Linux host where seccomp itself is
+    unavailable would let the preexec lane create sockets unfiltered,
+    but this helper still reports False there — a false negative only
+    steers the consumer onto the inherited-descriptor transport, which
+    works on every lane. A false POSITIVE would boot-loop the child
+    against EPERM, so the bias is the safe one.
+    """
+    import sys
+    if sys.platform == "darwin":
+        return True
+    if not check_mount_available():
+        return False
+    from ._unix_scope import probe_unix_scope
+    return probe_unix_scope()
+
+
 def _selinux_enforcing() -> bool:
     """Return True iff SELinux is loaded AND enforcing on this host.
 

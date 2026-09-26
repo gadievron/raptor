@@ -716,6 +716,7 @@ from .observe_profile import (
 )
 from .preexec import _DEFAULT_LIMITS, _load_user_limits, _make_preexec_fn, set_pdeathsig
 from .probes import (
+    check_child_unix_sockets_available,
     check_mount_available,
     check_net_available,
     check_sandbox_available,
@@ -785,6 +786,7 @@ __all__ = [
     # CLI surface
     "add_cli_args",
     "apply_cli_args",
+    "check_child_unix_sockets_available",
     "check_landlock_available",
     "check_mount_available",
     "check_net_available",

@@ -21,11 +21,17 @@ Protocol (one JSON object per line, response mirrors ``id``):
 Responses: {"id": N, "ok": true, ...} or {"id": N, "ok": false,
 "error": "..."}. The worker exits on "shutdown", on socket EOF, or
 when idle past --idle-timeout.
+
+Two transports: a pathname unix socket the worker binds itself
+(primary), or ``--socket-fd N`` — an inherited, already-connected
+socketpair half for sandbox lanes whose seccomp policy denies
+``socket(2)`` to the child (the worker then never creates a socket).
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import socket
@@ -355,11 +361,102 @@ class _HandlerThread:
         return box["result"]
 
 
+def _serve_stream(
+    handler: _HandlerThread, stream: io.BufferedRWPair,
+) -> bool:
+    """Serve one connection's line-JSON requests off *stream*.
+
+    Returns True when a shutdown op was answered (the worker should
+    exit 0); False when the peer closed the stream (EOF).
+    """
+    for line in stream:
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError as e:
+            resp = {"id": None, "ok": False,
+                    "error": f"bad request: {e}"}
+            stream.write(
+                (json.dumps(resp) + "\n").encode())
+            stream.flush()
+            continue
+        if req.get("op") == "shutdown":
+            resp = {"id": req.get("id"), "ok": True,
+                    "bye": True}
+            stream.write(
+                (json.dumps(resp) + "\n").encode())
+            stream.flush()
+            return True
+        try:
+            result = handler.run(req)
+            resp = {"id": req.get("id"), "ok": True,
+                    **result}
+        except _OpHung as e:
+            # Answer, then die: the wedged JVM thread
+            # cannot be cancelled, so a fresh worker is
+            # the only recoverable state. The parent sees
+            # the connection drop and may restart.
+            _log(f"watchdog: {e} — exiting")
+            resp = {"id": req.get("id"), "ok": False,
+                    "error": f"worker watchdog: {e}",
+                    "worker_exiting": True}
+            try:
+                stream.write(
+                    (json.dumps(resp) + "\n").encode())
+                stream.flush()
+            except (OSError, ValueError):
+                # ValueError: write on a closed makefile.
+                pass
+            os._exit(_WATCHDOG_EXIT_CODE)
+        except BaseException as e:  # noqa: BLE001 — one channel
+            _log(traceback.format_exc())
+            resp = {"id": req.get("id"), "ok": False,
+                    "error": f"{type(e).__name__}: {e}"}
+        stream.write((json.dumps(resp) + "\n").encode())
+        stream.flush()
+    return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("socket_path")
+    parser.add_argument("socket_path", nargs="?", default=None)
+    parser.add_argument(
+        "--socket-fd", type=int, default=None,
+        help="serve an inherited, already-connected AF_UNIX "
+             "socketpair half instead of binding a pathname socket "
+             "(the transport for sandbox lanes whose seccomp policy "
+             "denies socket(2) to the child)",
+    )
     parser.add_argument("--idle-timeout", type=int, default=3600)
     args = parser.parse_args()
+    if (args.socket_path is None) == (args.socket_fd is None):
+        parser.error(
+            "exactly one of socket_path or --socket-fd is required")
+
+    if args.socket_fd is not None:
+        # Inherited-socketpair transport: the parent created a
+        # connected AF_UNIX socketpair and passed one half down as
+        # this fd. No socket(2)/bind(2) happens here — this is the
+        # lane for hosts whose sandbox denies AF_UNIX socket CREATION
+        # to the child (nested-sandbox hosts fall off the namespace
+        # lane onto preexec seccomp, which admits inherited
+        # descriptors but not socket creation). One connection, one
+        # peer: exit on EOF, shutdown, or idle timeout.
+        conn = socket.socket(fileno=args.socket_fd)
+        conn.settimeout(args.idle_timeout)
+        _log(f"serving inherited socketpair (fd {args.socket_fd})")
+        session = _Session()
+        handler = _HandlerThread(session)
+        try:
+            try:
+                with conn, conn.makefile("rwb") as stream:
+                    _serve_stream(handler, stream)
+            except socket.timeout:
+                _log("idle timeout on connection — exiting")
+                return 0
+            _log("peer closed or shutdown — exiting")
+            return 0
+        finally:
+            session.close()
 
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(args.socket_path)
@@ -383,50 +480,8 @@ def main() -> int:
             conn.settimeout(args.idle_timeout)
             try:
                 with conn, conn.makefile("rwb") as stream:
-                    for line in stream:
-                        try:
-                            req = json.loads(line)
-                        except json.JSONDecodeError as e:
-                            resp = {"id": None, "ok": False,
-                                    "error": f"bad request: {e}"}
-                            stream.write(
-                                (json.dumps(resp) + "\n").encode())
-                            stream.flush()
-                            continue
-                        if req.get("op") == "shutdown":
-                            resp = {"id": req.get("id"), "ok": True,
-                                    "bye": True}
-                            stream.write(
-                                (json.dumps(resp) + "\n").encode())
-                            stream.flush()
-                            return 0
-                        try:
-                            result = handler.run(req)
-                            resp = {"id": req.get("id"), "ok": True,
-                                    **result}
-                        except _OpHung as e:
-                            # Answer, then die: the wedged JVM thread
-                            # cannot be cancelled, so a fresh worker is
-                            # the only recoverable state. The parent sees
-                            # the connection drop and may restart.
-                            _log(f"watchdog: {e} — exiting")
-                            resp = {"id": req.get("id"), "ok": False,
-                                    "error": f"worker watchdog: {e}",
-                                    "worker_exiting": True}
-                            try:
-                                stream.write(
-                                    (json.dumps(resp) + "\n").encode())
-                                stream.flush()
-                            except (OSError, ValueError):
-                                # ValueError: write on a closed makefile.
-                                pass
-                            os._exit(_WATCHDOG_EXIT_CODE)
-                        except BaseException as e:  # noqa: BLE001 — one channel
-                            _log(traceback.format_exc())
-                            resp = {"id": req.get("id"), "ok": False,
-                                    "error": f"{type(e).__name__}: {e}"}
-                        stream.write((json.dumps(resp) + "\n").encode())
-                        stream.flush()
+                    if _serve_stream(handler, stream):
+                        return 0
             except socket.timeout:
                 _log("idle timeout on connection — exiting")
                 return 0

@@ -9,6 +9,13 @@ sandbox the in-process path cannot have — many-request consumers
 (audit loops decompiling function after function) pay one JVM boot
 instead of one per subprocess invocation, on hostile projects.
 
+Two transports, chosen by a boot-time pre-flight
+(``check_child_unix_sockets_available``): a pathname unix socket the
+worker binds itself (primary — keeps the namespace sandbox lane), or
+an inherited socketpair half (``--socket-fd``) on hosts whose sandbox
+lane denies ``socket(2)`` to the child (nested sandboxes: the worker
+would otherwise die at bind with EPERM).
+
 Usage::
 
     with GhidraServer(gpr_path) as srv:
@@ -23,6 +30,7 @@ callers that persist results.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -36,6 +44,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from core.atomic_fs import open_exclusive_artifact
+from core.sandbox import check_child_unix_sockets_available
 
 from .detect import pyghidra_available
 from .headless import _install_read_paths
@@ -81,7 +90,20 @@ class GhidraServer:
         self._work_dir: Optional[Path] = None
         self._work_gpr: Optional[Path] = None
         self._sock: Optional[socket.socket] = None
-        self._stream = None
+        # Socketpair transport only: the parent's duplicate of the
+        # CHILD half, OWNED by the boot's _serve thread — closed in
+        # its finally, i.e. strictly after the sandbox call returns.
+        # The sandbox spawn happens in that daemon thread with no
+        # post-spawn hook, so any earlier close (boot timeout, boot
+        # failure, stop()) races Popen inheriting the fd: the number
+        # can be reused and pass_fds would export whatever descriptor
+        # now wears it. Worker death still surfaces as EOF — the
+        # sandbox call returns when the worker exits and the finally
+        # drops the last open write end. This attribute is
+        # observability only (cleared by the owning thread under
+        # self._lock); nothing else may close it.
+        self._child_sock: Optional[socket.socket] = None
+        self._stream: Optional[io.BufferedRWPair] = None
         self._thread: Optional[threading.Thread] = None
         self._result: Dict[str, Any] = {}
         self._req_id = 0
@@ -119,22 +141,53 @@ class GhidraServer:
         """Boot one sandboxed worker against the prepared work dir."""
         self._boot_seq += 1
         self._result = {}
-        socket_path = self._work_dir / f"worker-{self._boot_seq}.sock"
-        # The work dir is worker-writable: a hostile worker from a
-        # previous boot can squat the predictable next socket name to
-        # make the replacement die at bind. Clear anything there.
-        try:
-            if socket_path.is_symlink() or socket_path.exists():
-                socket_path.unlink()
-        except OSError:
-            pass
-
         worker = Path(__file__).parent / "server_worker.py"
-        cmd = [
-            sys.executable, "-u", str(worker),
-            str(socket_path),
-            "--idle-timeout", str(self.lifetime_s),
-        ]
+
+        # Transport pre-flight. The pathname unix socket stays PRIMARY:
+        # an inherited-fd child forces the subprocess+preexec sandbox
+        # lane (pass_fds is not plumbed through the namespace spawn
+        # chain), which would downgrade healthy hosts from mount-ns
+        # isolation. Hosts whose sandboxed child cannot CREATE AF_UNIX
+        # sockets at all — nested sandboxes, where the namespace lane
+        # cannot engage and the preexec seccomp lane denies
+        # socket(AF_UNIX) unconditionally, killing the worker at bind
+        # with EPERM — get the socketpair transport instead: the pair
+        # is created HERE and inherited, so the worker never calls
+        # socket(2).
+        use_pathname = check_child_unix_sockets_available()
+        socket_path: Optional[Path] = None
+        parent_sock: Optional[socket.socket] = None
+        child_sock: Optional[socket.socket] = None
+        if use_pathname:
+            socket_path = self._work_dir / f"worker-{self._boot_seq}.sock"
+            # The work dir is worker-writable: a hostile worker from a
+            # previous boot can squat the predictable next socket name
+            # to make the replacement die at bind. Clear anything there.
+            try:
+                if socket_path.is_symlink() or socket_path.exists():
+                    socket_path.unlink()
+            except OSError:
+                pass
+            cmd = [
+                sys.executable, "-u", str(worker),
+                str(socket_path),
+                "--idle-timeout", str(self.lifetime_s),
+            ]
+        else:
+            logger.info(
+                "ghidra server: sandboxed child cannot create AF_UNIX "
+                "sockets on this host (namespace lane unavailable; the "
+                "preexec seccomp lane denies socket creation) — using "
+                "the inherited-socketpair transport on the "
+                "Landlock-only lane"
+            )
+            parent_sock, child_sock = socket.socketpair()
+            self._child_sock = child_sock
+            cmd = [
+                sys.executable, "-u", str(worker),
+                "--socket-fd", str(child_sock.fileno()),
+                "--idle-timeout", str(self.lifetime_s),
+            ]
 
         import getpass
         import os
@@ -172,6 +225,21 @@ class GhidraServer:
 
         def _serve() -> None:
             from core.sandbox import run as _sandbox_run
+            extra: Dict[str, Any] = {}
+            if child_sock is not None:
+                # Socketpair transport: the child half rides into the
+                # sandboxed worker as an inherited descriptor. The
+                # sandbox's pass_fds gate admits it (a connected
+                # anonymous AF_UNIX socketpair half created by this
+                # process — pipe-equivalent); pass_fds routes the call
+                # onto the subprocess+preexec lane, which is exactly
+                # the lane this transport exists for. fileno() is read
+                # HERE, and the socket object is owned by this thread
+                # (closed in the finally below, strictly after the
+                # sandbox call returns) — no other close may race the
+                # spawn, or the fd number could be reused and pass_fds
+                # would export a different descriptor.
+                extra["pass_fds"] = (child_sock.fileno(),)
             try:
                 # The JVM parses attacker-controlled project data:
                 # network denied, reads restricted, writes scoped to
@@ -188,11 +256,25 @@ class GhidraServer:
                     timeout=self.lifetime_s + _SHUTDOWN_GRACE_S,
                     env=env,
                     env_caller_filtered=True,
+                    **extra,
                 )
                 self._result["returncode"] = proc.returncode
                 self._result["stderr"] = (proc.stderr or "")[-2000:]
             except BaseException as e:  # noqa: BLE001 — thread edge
                 self._result["error"] = f"{type(e).__name__}: {e}"
+            finally:
+                # Owner-side close: the worker has exited (or the
+                # spawn failed), so dropping the parent's duplicate
+                # of the child half is now safe AND is what turns a
+                # later worker death into EOF for the request path.
+                if child_sock is not None:
+                    try:
+                        child_sock.close()
+                    except OSError:
+                        pass
+                    with self._lock:
+                        if self._child_sock is child_sock:
+                            self._child_sock = None
 
         self._thread = threading.Thread(
             target=_serve, name="ghidra-server", daemon=True,
@@ -201,12 +283,13 @@ class GhidraServer:
 
         deadline = time.monotonic() + _BOOT_TIMEOUT_S
         try:
+            if parent_sock is not None:
+                self._boot_wait_socketpair(parent_sock, deadline)
+                return
+            assert socket_path is not None  # pathname transport
             while time.monotonic() < deadline:
                 if self._result:
-                    raise GhidraServerError(
-                        "worker died during boot: "
-                        f"{self._result.get('error') or self._result.get('stderr', '')}"
-                    )
+                    raise self._boot_death_error(pathname=True)
                 if socket_path.exists():
                     try:
                         self._connect(socket_path)
@@ -224,10 +307,127 @@ class GhidraServer:
             )
         except BaseException:
             self._disconnect()
+            if parent_sock is not None:
+                # Not adopted as self._sock (or already closed by
+                # _disconnect — socket close is idempotent).
+                try:
+                    parent_sock.close()
+                except OSError:
+                    pass
+            # The child half is NOT closed here: the _serve thread
+            # may still be pre-spawn (a boot timeout races the
+            # sandbox layer's own setup), and closing would free the
+            # fd number for reuse so pass_fds could export a
+            # different descriptor. The owning thread's finally
+            # closes it once the sandbox call returns.
             raise
 
+    def _boot_death_error(self, *, pathname: bool) -> GhidraServerError:
+        """Attributed boot-death error from the _serve thread result."""
+        detail = str(
+            self._result.get("error")
+            or self._result.get("stderr", "")
+        ).strip()
+        msg = f"worker died during boot: {detail}"
+        if pathname and "Operation not permitted" in detail:
+            msg += (
+                " — EPERM at worker socket setup: this host's sandbox "
+                "lane denies AF_UNIX socket creation to the child "
+                "(preexec seccomp policy), so the pathname transport "
+                "cannot boot. The transport pre-flight "
+                "(check_child_unix_sockets_available) should have "
+                "selected the socketpair fallback here; its verdict "
+                "was wrong for this host."
+            )
+        return GhidraServerError(msg)
+
+    def _boot_wait_socketpair(
+        self, parent_sock: socket.socket, deadline: float,
+    ) -> None:
+        """Wait for the worker over the socketpair transport.
+
+        The connection exists from the start (no socket file to poll),
+        so boot progress is: send ONE ping, then poll for the response
+        with short read timeouts, checking the _serve thread's result
+        box for worker death between reads. Raw recv (not makefile):
+        a timeout mid-``readline`` on a buffered reader can drop
+        already-buffered bytes; accumulating raw chunks is
+        timeout-safe, and the accumulation is capped at
+        ``_MAX_RESPONSE_BYTES`` — a worker that floods the pair
+        without a newline fails the boot instead of growing the
+        buffer without bound. On success the socket is adopted as
+        the regular request transport; the child half stays with its
+        owner (the _serve thread closes it when the sandbox call
+        returns, which is what surfaces a later worker death as EOF).
+        """
+        self._req_id += 1
+        ping_id = self._req_id
+        try:
+            parent_sock.sendall(
+                (json.dumps({"id": ping_id, "op": "ping"}) + "\n")
+                .encode())
+        except OSError as e:
+            # The peer is already gone: the worker (or its spawn)
+            # died before boot-wait could ping, and the owning
+            # _serve thread has closed the child half. _serve books
+            # its result before that close, so the death is
+            # attributable.
+            raise self._boot_death_error(pathname=False) from e
+        parent_sock.settimeout(0.2)
+        buf = b""
+        while time.monotonic() < deadline:
+            if self._result:
+                raise self._boot_death_error(pathname=False)
+            try:
+                chunk = parent_sock.recv(4096)
+            except socket.timeout:
+                continue
+            if not chunk:
+                raise self._boot_death_error(pathname=False)
+            buf += chunk
+            if len(buf) > _MAX_RESPONSE_BYTES:
+                # Fail closed: the (sandboxed, untrusted) worker is
+                # flooding the pair without ever completing a line.
+                raise GhidraServerError(
+                    f"worker boot response exceeded "
+                    f"{_MAX_RESPONSE_BYTES >> 20} MiB before a "
+                    f"newline — refusing to buffer further"
+                )
+            if b"\n" not in buf:
+                continue
+            line, _, rest = buf.partition(b"\n")
+            try:
+                resp = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise GhidraServerError(
+                    f"malformed worker boot response: {e}"
+                ) from e
+            if rest or resp.get("id") != ping_id or not resp.get("pong"):
+                raise GhidraServerError(
+                    "unexpected worker boot response — "
+                    "desynchronized socketpair"
+                )
+            parent_sock.settimeout(_REQUEST_TIMEOUT_S)
+            self._sock = parent_sock
+            self._stream = parent_sock.makefile("rwb")
+            logger.info(
+                "ghidra server up over socketpair transport "
+                "(work dir %s)", self._work_dir,
+            )
+            return
+        raise GhidraServerError(
+            f"worker did not come up within {_BOOT_TIMEOUT_S}s"
+        )
+
     def stop(self) -> None:
-        """Shut the worker down and remove the work dir."""
+        """Shut the worker down and remove the work dir.
+
+        The socketpair child half is deliberately not closed here —
+        its owning _serve thread closes it in its finally once the
+        sandbox call returns (the join below waits for exactly that),
+        so a stop() racing an in-flight spawn can never free the fd
+        number out from under pass_fds.
+        """
         try:
             if self._stream is not None:
                 try:
