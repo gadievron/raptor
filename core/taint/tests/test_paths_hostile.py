@@ -584,6 +584,9 @@ def _fuzz_mutate(rng: random.Random, texts: dict[str, str],
             RouteModels(routes=tuple(route_list)))
 
 
+# 12k mutated reconstructions are genuine multi-second work; measured
+# over the fast tier's budget on loaded CI shards.
+@pytest.mark.slow
 def test_fuzz_12k_reconstruction_never_fabricates(packs) -> None:
     """12k mutated runs: whatever the graph / route / text mutation,
     reconstruction returns well-formed step records (no exception —

@@ -542,6 +542,9 @@ def _fuzz_mutate(rng: random.Random, texts: dict[str, str],
             RouteModels(routes=tuple(route_list)))
 
 
+# 30k mutated engine runs are genuine multi-minute work on CI shards
+# (55-92s measured); far over the fast tier's budget.
+@pytest.mark.slow
 def test_fuzz_30k_generated_trees(packs) -> None:
     # 30k mutated runs over generated packages: whatever the graph /
     # route / text mutation, the engine returns a well-formed result

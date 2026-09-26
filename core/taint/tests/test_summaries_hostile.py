@@ -389,6 +389,9 @@ def _mutate(rng: random.Random, text: str) -> str:
     return "".join(out)
 
 
+# 30k mutation iterations are genuine multi-second work; measured
+# over the fast tier's budget on loaded CI shards.
+@pytest.mark.slow
 def test_mutation_fuzz_30k_no_exceptions_outside_contract(
     specs: SpecIndex,
 ) -> None:
@@ -537,6 +540,11 @@ def test_growth_ratio_pin_n_vs_2n(specs: SpecIndex) -> None:
     assert ratio <= 2.6, f"super-linear growth: ratio {ratio:.2f}"
 
 
+# The 74k-function cap-shape file is genuine multi-second work;
+# measured over the fast tier's budget on loaded CI shards. The
+# internal 15s wall pin below still reds the nightly lane on any
+# quadratic injection.
+@pytest.mark.slow
 def test_many_tiny_functions_max_shape_wall(tmp_path, specs: SpecIndex) -> None:
     # The cross-function cost dimension, pinned DIRECTLY: a file at
     # the read cap holding 74k one-line functions (the shape that
