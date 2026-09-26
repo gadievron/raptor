@@ -32,6 +32,14 @@ Scope
   claimed signer's CN (``claimed_signer`` — a recorded CLAIM,
   never a verification; see the field docs and the skim's own
   doctrine at :class:`_DerSkim`).
+- Load-config skim: SecurityCookie (the /GS ``stack_cookie``
+  fact) plus the PE32 SafeSEH registration (``safeseh`` /
+  ``safeseh_handler_count``) — one bounded chokepoint read of
+  three fields; the handler table itself is never walked (see
+  :func:`_read_load_config`).
+- Stripped-ness signals: debug-directory presence and the COFF
+  symbol-table count claim (presence facts only — neither table's
+  contents are parsed here).
 
 Out of scope
 - The bound-import table (a pre-Vista binding optimisation; its
@@ -177,6 +185,7 @@ _IMAGE_FILE_DLL = 0x2000
 _DLLCHAR_HIGH_ENTROPY_VA = 0x0020
 _DLLCHAR_DYNAMIC_BASE = 0x0040       # ASLR
 _DLLCHAR_NX_COMPAT = 0x0100          # DEP
+_DLLCHAR_NO_SEH = 0x0400             # image uses no SEH at all
 _DLLCHAR_GUARD_CF = 0x4000           # Control Flow Guard
 
 # ---- Sanity caps. Every breach is surfaced in ``PeFacts.caps_hit``
@@ -406,8 +415,26 @@ _DIR_EXPORT = 0
 _DIR_IMPORT = 1
 _DIR_SECURITY = 4
 _DIR_DEBUG = 6
+_DIR_LOAD_CONFIG = 10
 _DIR_DELAY_IMPORT = 13
 _DIR_CLR = 14
+
+# Load-config skim windows (IMAGE_LOAD_CONFIG_DIRECTORY32/64 —
+# winnt.h field order). Only three fields are consumed:
+# SecurityCookie (the /GS cookie storage VA), SEHandlerTable and
+# SEHandlerCount (the PE32 SafeSEH registration). The window is the
+# FIXED byte extent covering the last consumed field per layout —
+# the struct's own leading Size field and the directory size are
+# both attacker u32 claims and neither is ever a read budget: the
+# read is min(claimed directory size, this fixed need), so a
+# GiB-scale claim buys the same bounded read as an honest one,
+# while a SHORT claim (a real pre-SafeSEH struct version, or a
+# crafted stub) degrades the uncovered fields to None with a
+# marker instead of reading past the claim.
+_LOAD_CONFIG_NEED = {32: 72, 64: 112}
+_LOAD_CONFIG_COOKIE_OFFSET = {32: 60, 64: 88}
+_LOAD_CONFIG_SEH_TABLE_OFFSET_32 = 64
+_LOAD_CONFIG_SEH_COUNT_OFFSET_32 = 68
 
 # The export directory: Characteristics(I) TimeDateStamp(I)
 # MajorVersion(H) MinorVersion(H) Name(I) Base(I)
@@ -626,6 +653,26 @@ class PeFacts:
     high_entropy_va: bool = False         # ..._HIGH_ENTROPY_VA
     dep: bool = False                     # ..._NX_COMPAT
     cfg: bool = False                     # ..._GUARD_CF
+    no_seh: bool = False                  # ..._NO_SEH (image uses no SEH)
+    # Load-config skim facts (see :func:`_read_load_config`).
+    # ``stack_cookie`` is True when the load config names a nonzero
+    # SecurityCookie storage VA — the /GS cookie is CONFIGURED; this
+    # is a linker fact, not proof any function's prologue checks it.
+    # ``safeseh`` is PE32-only by format definition: True = a nonzero
+    # SEHandlerTable with a nonzero count is registered; False = the
+    # load config covers those fields and registers none; ``None`` =
+    # not derivable (PE32+ image, no/unreadable load config, or a
+    # struct too short to carry the fields — the markers say which).
+    # ``safeseh_handler_count`` is the raw count claim when the
+    # fields were covered (0 included), else None.
+    # Interplay: ``no_seh`` (above) moots ``safeseh`` — an image
+    # that declares NO_SEH uses no SEH at all, so a registered
+    # handler table is irrelevant to its posture. Consumers must
+    # read the pair together, never ``safeseh`` alone.
+    load_config_present: bool = False
+    stack_cookie: bool | None = None
+    safeseh: bool | None = None
+    safeseh_handler_count: int | None = None
     entrypoint: int = 0                   # AddressOfEntryPoint RVA
     image_base: int = 0
     size_of_image: int = 0
@@ -664,6 +711,17 @@ class PeFacts:
     # (the signing-facts fence test); amend BOTH places together
     # if a consumer is ever added deliberately.
     claimed_signer: str = ""
+    # Debug-directory presence (a nonzero debug data-directory
+    # entry) — the stripped-ness signal, distinct from the parsed
+    # RSDS identity below: a present directory whose CodeView entry
+    # is absent or unparsable still CLAIMS debug data.
+    debug_directory_present: bool = False
+    # COFF symbol-table facts: deprecated for images, but MinGW/GCC
+    # toolchains still emit one, so presence = "not fully stripped"
+    # evidence there. The count is recorded only when the POINTER is
+    # nonzero — a doctored count over a zero pointer names no table
+    # and claims nothing.
+    coff_symbol_count: int = 0
     # Debug-directory RSDS (CodeView) identity: the raw 16 GUID
     # bytes in file order as lowercase hex, the age, the pdb path's
     # last component (hostile text — capped at capture, escape at
@@ -1019,7 +1077,7 @@ def _extract_facts_stream(f: BinaryIO, file_size: int) -> PeFacts | None:
     coff_raw = f.read(_COFF_HEADER.size)
     if len(coff_raw) < _COFF_HEADER.size:
         return None
-    (machine, n_sections, timestamp, _sym_ptr, _sym_count,
+    (machine, n_sections, timestamp, sym_ptr, sym_count,
      size_of_optional, characteristics) = _COFF_HEADER.unpack(coff_raw)
 
     facts = PeFacts(
@@ -1031,6 +1089,11 @@ def _extract_facts_stream(f: BinaryIO, file_size: int) -> PeFacts | None:
         is_executable_image=bool(
             characteristics & _IMAGE_FILE_EXECUTABLE_IMAGE),
         declared_section_count=n_sections,
+        # Count claim recorded only when the pointer names a table
+        # (see the field docs) — both values stay header claims,
+        # never dereferenced: the COFF table's contents are not
+        # this extractor's business, only its presence.
+        coff_symbol_count=sym_count if sym_ptr else 0,
     )
     caps: set[str] = set()
 
@@ -1080,8 +1143,13 @@ def _extract_facts_stream(f: BinaryIO, file_size: int) -> PeFacts | None:
         caps.add("overlapping_sections")
 
     debug_va, debug_size = data_dirs.get(_DIR_DEBUG, (0, 0))
+    facts.debug_directory_present = debug_va != 0 and debug_size != 0
     _read_debug_identity(f, resolver, debug_va, debug_size,
                          facts, caps)
+
+    lc_va, lc_size = data_dirs.get(_DIR_LOAD_CONFIG, (0, 0))
+    if lc_va and lc_size:
+        _read_load_config(f, resolver, lc_va, lc_size, facts, caps)
 
     # Table walks share ONE name-retention budget (and the import
     # walks one thunk budget): the caps bound the whole record, not
@@ -1219,6 +1287,66 @@ def _pdb_basename(payload: bytes) -> tuple[str | None, set[str]]:
         raw = raw[:_MAX_PDB_BASENAME_BYTES]
         caps.add("pdb_name_truncated")
     return raw.decode("utf-8", errors="replace"), caps
+
+
+def _read_load_config(
+    f: BinaryIO, resolver: _RvaResolver, lc_va: int, lc_size: int,
+    facts: PeFacts, caps: set[str],
+) -> None:
+    """Skim the load-config directory for the three consumed fields
+    (SecurityCookie; SEHandlerTable + SEHandlerCount on PE32).
+
+    Named rules:
+
+      * the read is ONE chokepoint read of ``min(claimed size, the
+        fixed per-layout need)`` — both the directory size and the
+        struct's own Size field are attacker u32s and neither is
+        ever a budget (see ``_LOAD_CONFIG_NEED``);
+      * a field the read window does not cover degrades to ``None``
+        with ``load_config_short`` — real pre-SafeSEH struct
+        versions ARE this short, so the marker records a format
+        shape, not necessarily hostility;
+      * an unmapped / truncated directory leaves every field
+        ``None`` with ``load_config_unreadable``;
+      * ``safeseh`` is PE32-only: the PE32+ layout carries the
+        legacy fields but the x64 unwind model replaces SafeSEH,
+        so a PE32+ record keeps ``safeseh=None`` by definition
+        (``no_seh`` and DEP/CFG are that format's SEH story);
+      * every recorded value is a header CLAIM — nothing here
+        proves a prologue checks the cookie or that the handler
+        table's entries are valid.
+    """
+    facts.load_config_present = True
+    if facts.bits not in _LOAD_CONFIG_NEED:
+        # Unknown optional-header layout: the directory table could
+        # not have been parsed without one, so this arm is
+        # belt-and-braces against future layout additions.
+        caps.add("load_config_unreadable")
+        return
+    need = _LOAD_CONFIG_NEED[facts.bits]
+    window = resolver.read(f, lc_va, min(lc_size, need))
+    if window is None:
+        caps.add("load_config_unreadable")
+        return
+    cookie_off = _LOAD_CONFIG_COOKIE_OFFSET[facts.bits]
+    cookie_width = 4 if facts.bits == 32 else 8
+    short = False
+    if len(window) >= cookie_off + cookie_width:
+        (cookie,) = struct.unpack_from(
+            "<I" if facts.bits == 32 else "<Q", window, cookie_off)
+        facts.stack_cookie = cookie != 0
+    else:
+        short = True
+    if facts.bits == 32:
+        if len(window) >= _LOAD_CONFIG_SEH_COUNT_OFFSET_32 + 4:
+            table, count = struct.unpack_from(
+                "<II", window, _LOAD_CONFIG_SEH_TABLE_OFFSET_32)
+            facts.safeseh = table != 0 and count > 0
+            facts.safeseh_handler_count = count
+        else:
+            short = True
+    if short:
+        caps.add("load_config_short")
 
 
 # ---------------------------------------------------------------------------
@@ -2169,6 +2297,7 @@ def _parse_optional_header(
             dll_chars & _DLLCHAR_HIGH_ENTROPY_VA)
         facts.dep = bool(dll_chars & _DLLCHAR_NX_COMPAT)
         facts.cfg = bool(dll_chars & _DLLCHAR_GUARD_CF)
+        facts.no_seh = bool(dll_chars & _DLLCHAR_NO_SEH)
 
     # --- Data directories ---------------------------------------
     claimed = _u32(dirs_count_off)
