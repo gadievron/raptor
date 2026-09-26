@@ -2315,6 +2315,16 @@ Examples:
                              "+ 600s slack). Positive integer, no "
                              "ceiling")
 
+    # Cross-file taint engine (opt-in; the mechanical native lane)
+    parser.add_argument(
+        "--taint-crossfile", action="store_true",
+        help="Run the cross-file taint engine (spec packs -> per-"
+             "function summaries -> interprocedural propagation -> "
+             "SARIF-with-codeFlows emission) and merge its candidate "
+             "findings after the scan phase. Mechanical, no LLM "
+             "calls; findings enter the same dedup/classifier/"
+             "validation pipeline as every producer")
+
     parser.add_argument(
         "--rank", action="store_true",
         help=(
@@ -4033,6 +4043,42 @@ def main() -> int:
             openant_metrics["hard_error"] = True
             logger.warning("OpenAnt scan failed (continuing): %s", e)
 
+    # ========================================================================
+    # PHASE 1c: CROSS-FILE TAINT (opt-in via --taint-crossfile)
+    # ========================================================================
+    # Post-scan producer: findings merge into the validation phase's
+    # findings set AFTER the scanner SARIF conversion (the OpenAnt
+    # channel) — the engine writes nothing into all_sarif_files, so
+    # scanner-side postpasses never see its cross-file paths in their
+    # input set.
+    taint_findings_count = 0
+    taint_metrics = {}
+    taint_findings_file = None
+    if getattr(args, "taint_crossfile", False):
+        print("\n" + "=" * 70)
+        print("CROSS-FILE TAINT")
+        print("=" * 70)
+        try:
+            from core.taint.run import run_crossfile_taint
+            taint_report = run_crossfile_taint(
+                original_repo_path, out_dir)
+            taint_findings_count = taint_report.emitted
+            taint_metrics = taint_report.metrics()
+            if taint_report.emitted:
+                taint_findings_file = taint_report.findings_path
+            # Counts + frontier + caps only — no target text.
+            print(f"✓ {taint_report.summary_line()}")
+        except Exception as e:
+            # Infrastructure failure (packs, inventory) — recorded
+            # loudly; target content never raises out of the engine,
+            # and the other producers' results still stand.
+            _taint_err = sanitise_for_terminal(str(e), max_len=600)
+            taint_metrics = {"error": _taint_err, "hard_error": True}
+            print(f"✗ Cross-file taint phase failed: {_taint_err}",
+                  file=sys.stderr)
+            logger.warning(
+                "Cross-file taint phase failed (continuing): %s", e)
+
     # ---- External SARIF import ----
     import_result = None
     if import_sarif_files:
@@ -4070,14 +4116,16 @@ def main() -> int:
             normalized_path = out_dir / "imported-normalized.sarif"
             save_json(normalized_path, normalized_sarif)
             all_sarif_files.append(normalized_path)
-        elif not all_sarif_files and not openant_findings_count:
+        elif (not all_sarif_files and not openant_findings_count
+                and not taint_findings_count):
             reason = "no findings in imported SARIF and no scan results"
             if openant_hard_error:
                 reason += f"; OpenAnt scan failed: {openant_hard_error}"
             print("\n✗ No findings in imported SARIF and no scan results", file=sys.stderr)
             _fail_run_and_exit(out_dir, reason)
 
-    if not all_sarif_files and not openant_findings_count:
+    if (not all_sarif_files and not openant_findings_count
+            and not taint_findings_count):
         if openant_hard_error:
             # OpenAnt was the only scanner that could have produced
             # results and it hard-failed — that failure IS the run's
@@ -4099,6 +4147,7 @@ def main() -> int:
                       + codeql_metrics.get('total_findings', 0)
                       + sca_findings_count
                       + openant_findings_count
+                      + taint_findings_count
                       + threat_model_findings_count
                       + imported_findings_count)
     scan_metrics = {
@@ -4109,6 +4158,7 @@ def main() -> int:
         'codeql': codeql_metrics,
         'sca': sca_metrics,
         'openant': openant_metrics,
+        'taint_crossfile': taint_metrics,
         'threat_model': threat_model_phase,
     }
     if import_result:
@@ -4129,6 +4179,8 @@ def main() -> int:
         print(f"  SCA: {sca_findings_count} findings")
     if openant_findings_count:
         print(f"  OpenAnt: {openant_findings_count} findings")
+    if taint_findings_count:
+        print(f"  Cross-file taint: {taint_findings_count} findings")
     if threat_model_findings_count:
         print(f"  Threat model: {threat_model_findings_count} candidates")
     if imported_findings_count:
@@ -4208,6 +4260,7 @@ def main() -> int:
         openant_findings_path=(
             out_dir / "openant_findings.json" if openant_findings_count else None
         ),
+        taint_findings_path=taint_findings_file,
     )
 
     # Enrichment summary — pre-LLM visibility of mechanical enrichments
@@ -4222,6 +4275,10 @@ def main() -> int:
         openant_m = validation_result.get("openant_merged", 0)
         if openant_m > 0:
             _enrichment_lines.append(f"  OpenAnt: {openant_m} semantic findings merged")
+        taint_m = validation_result.get("taint_merged", 0)
+        if taint_m > 0:
+            _enrichment_lines.append(
+                f"  Cross-file taint: {taint_m} findings merged")
     if import_result and import_result.stats.total_imported > 0:
         stats = import_result.stats
         _enrichment_lines.append(

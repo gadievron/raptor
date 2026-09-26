@@ -27,6 +27,10 @@ Module map:
 * :mod:`core.taint.emission` — candidates serialized as
   SARIF-with-codeFlows and scan-shaped finding dicts at the bounded
   artifact byte boundary (the enforcing rail).
+* :mod:`core.taint.run` — the pipeline phase: inventory → callgraph →
+  routes → packs (+ bounded learned intake) → propagation →
+  emission, artifacts written into the run's output directory and
+  merged post-scan (never into the scanner SARIF set).
 
 Nothing here renders verdicts: packs and learned specs configure an
 origination lane whose findings are candidates for the existing
