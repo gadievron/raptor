@@ -376,6 +376,10 @@ def run_consistency_prepass(
         }
     """
     t0 = time.monotonic()
+    # Telemetry anchor, distinct from the DEADLINE anchor: t0 is
+    # re-anchored after the census in derived mode, but wall_time_s
+    # must report the whole prepass wall, census included.
+    t_start = t0
     _derived_prepass = budget_s is _DERIVE_PREPASS
     if _derived_prepass:
         # The census share derives (below); the DIMENSION deadline is
@@ -1503,7 +1507,7 @@ def run_consistency_prepass(
 
     capped_leads = _rank_leads(leads)
     telemetry["leads_seeded"] = len(capped_leads)
-    telemetry["wall_time_s"] = round(time.monotonic() - t0, 3)
+    telemetry["wall_time_s"] = round(time.monotonic() - t_start, 3)
 
     if out_dir is not None and census:
         try:
