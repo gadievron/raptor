@@ -11,6 +11,11 @@ from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
 from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
+from core.function_taxonomy import (
+    MACOS_XPC_INGRESS_SUBSTRINGS,
+    NETWORK_INGEST_FUNCS,
+    WIN32_REGISTRY_INGEST_FUNCS,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -18,18 +23,30 @@ if TYPE_CHECKING:
 # Deliberately broader than core/function_taxonomy: ubiquitous functions
 # like read/fread/open are zero-signal as *sinks* but valid evidence that
 # a particular *input channel* exists (network, file, ipc, etc.).
+# The network and registry channels compose taxonomy groups directly
+# (one curation site each). Network composition at this use site:
+# bind/listen are socket SETUP, not byte ingestion — channel evidence
+# comes from the accept/recv side, mirroring the registry channel's
+# setup-vs-read rule; accept4 is the Linux flags-variant of accept
+# (a channel marker here, but not a taxonomy sink candidate, so it
+# stays a consumer-side addition). The ipc channel composes the whole
+# darwin XPC ingress group — every entry is an exact C import name,
+# so the substring group doubles as this channel's name list.
 _IMPORT_CHANNELS: dict[str, tuple[str, ...]] = {
-    "network": (
-        "accept", "accept4", "recv", "recvfrom", "recvmsg",
-        "SSL_read", "BIO_read", "WSARecv",
-    ),
+    "network": tuple(sorted(
+        (NETWORK_INGEST_FUNCS - {"bind", "listen"}) | {"accept4"}
+    )),
     "stream": (
         "read", "fread", "fgets", "getline", "gets", "scanf",
         "fscanf", "sscanf", "ReadFile",
     ),
     "file": ("open", "openat", "fopen", "CreateFileA", "CreateFileW"),
     "environment": ("getenv", "GetEnvironmentVariableA", "GetEnvironmentVariableW"),
-    "ipc": ("readlink", "mq_receive", "msgrcv", "shm_open"),
+    "ipc": (
+        "readlink", "mq_receive", "msgrcv", "shm_open",
+        *sorted(MACOS_XPC_INGRESS_SUBSTRINGS),
+    ),
+    "registry": tuple(sorted(WIN32_REGISTRY_INGEST_FUNCS)),
 }
 
 

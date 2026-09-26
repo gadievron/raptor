@@ -95,6 +95,47 @@ _DRIVER_SYMBOLS = {
     "IRP_MJ_INTERNAL_DEVICE_CONTROL": ("ioctl_dispatch", "kernel_peer_ioctl", "kernel_boundary", 115),
 }
 
+# Windows service entry points: the Service Control Manager invokes
+# ServiceMain with SCM-supplied arguments on a privileged service —
+# a real process-boundary ingress beside WinMain/main. Matched
+# against exports AND recovered function names like the driver
+# symbols above.
+_WIN_SERVICE_SYMBOLS = {
+    "ServiceMain": ("service_entry", "service_control_manager", "process_boundary", 60),
+}
+
+# Mach-O XPC listener markers: a binary importing the listener setup
+# calls RECEIVES peer messages (the C-level sibling of the
+# listener:shouldAcceptNewConnection: Obj-C callback above, and
+# scored with it). Import names are matched exactly — these are
+# plain C exports.
+_MACHO_XPC_LISTENER_IMPORTS = {
+    "xpc_connection_set_event_handler",
+    "xpc_connection_create_mach_service",
+    "xpc_main",
+}
+
+# IOKit user-client dispatch on the KEXT side: IOUserClient
+# subclasses override externalMethod (C++-mangled in the symbol
+# table, so substring-matched against recovered function names).
+# The client-side IOConnectCall* imports are deliberately NOT
+# ingress — they are outbound calls, classified as device_control
+# sinks by surface_classification instead.
+_MACHO_IOKIT_DISPATCH_SUBSTRING = "externalMethod"
+
+# Per-binary cap on the HEURISTIC externalMethod substring match. A
+# real kext overrides externalMethod once per IOUserClient subclass
+# (single digits in practice), so name tables yielding more are
+# either template-heavy C++ images or a crafted symbol set flooding
+# the ranked queue with fake kernel-boundary entries. Too low and a
+# legitimate multi-client driver loses dispatch candidates; too high
+# and one hostile name table drowns every other ingress kind — 24
+# keeps generous headroom over observed drivers while bounding the
+# flood. Overflow is never silent: an aggregated evidence record
+# carries the full match count and a bounded skipped-name sample
+# (same pattern as exported_data_symbol).
+_MACHO_IOKIT_DISPATCH_CAP = 24
+
 _LINUX_DRIVER_SYMBOLS = {
     "module_init": ("driver_initialisation", "kernel_loader", "kernel_boundary", 40),
     "init_module": ("driver_initialisation", "kernel_loader", "kernel_boundary", 40),
@@ -275,6 +316,8 @@ def recover_external_ingress(
             control = "kernel_loader"
             boundary = "kernel_boundary"
             score = 40
+        elif name in _WIN_SERVICE_SYMBOLS:
+            kind, control, boundary, score = _WIN_SERVICE_SYMBOLS[name]
         add(
             kind=kind,
             name=name,
@@ -407,7 +450,8 @@ def recover_external_ingress(
         )
 
     if str(getattr(manifest, "target_kind", "")).startswith("pe-"):
-        for symbol, (kind, control, boundary, score) in _DRIVER_SYMBOLS.items():
+        for symbol, (kind, control, boundary, score) in {
+                **_DRIVER_SYMBOLS, **_WIN_SERVICE_SYMBOLS}.items():
             matches = sorted({
                 name
                 for name in [*exports, *functions]
@@ -498,6 +542,78 @@ def recover_external_ingress(
                 bound_function_name=function_name,
                 address=address,
             )
+    elif getattr(manifest, "target_kind", "") == "macho":
+        # XPC listener markers from the import table: setup-call
+        # presence proves the binary RECEIVES peer messages, not
+        # which function handles them — capability-level ingress
+        # (import-table tier), scored with the Obj-C listener
+        # callback it is the C-level sibling of.
+        imports = {str(item) for item in
+                   getattr(manifest, "imports", []) if item}
+        xpc_markers = sorted(imports & _MACHO_XPC_LISTENER_IMPORTS)
+        if xpc_markers:
+            add(
+                kind="xpc_listener",
+                name="XPC service listener",
+                source="import_table",
+                external_control="peer_process",
+                boundary="process_boundary",
+                score=105,
+                tier=EvidenceTier.HEADER_BACKED,
+                confidence="candidate",
+                details={"symbols": xpc_markers},
+            )
+        # IOKit user-client dispatch (kext side): IOUserClient
+        # subclasses override externalMethod — C++-mangled, so the
+        # recovered function names are substring-matched. Client-
+        # side IOConnectCall* imports stay OUT of ingress (outbound
+        # calls; the sink catalog owns them).
+        dispatch_matches = [
+            name for name in sorted(functions)
+            if _MACHO_IOKIT_DISPATCH_SUBSTRING in name
+        ]
+        for name in dispatch_matches[:_MACHO_IOKIT_DISPATCH_CAP]:
+            function_id, function_name, address = bind_function(name)
+            add(
+                kind="iokit_external_method",
+                name=name,
+                source="radare2_function_name",
+                external_control="user_client_call",
+                boundary="kernel_boundary",
+                score=120,
+                tier=EvidenceTier.HEURISTIC,
+                confidence="candidate",
+                bound_function_id=function_id,
+                bound_function_name=function_name,
+                address=address,
+            )
+        skipped_dispatch = dispatch_matches[_MACHO_IOKIT_DISPATCH_CAP:]
+        if skipped_dispatch:
+            # Aggregated truncation record: the full count survives
+            # even when the name sample is bounded, so a flooded
+            # symbol table cannot push dispatch names out of the
+            # audit trail unnoticed.
+            records.append(make_evidence(
+                manifest.binary_sha256,
+                kind="iokit_dispatch_truncated",
+                source="radare2_function_name",
+                summary=(
+                    f"{len(dispatch_matches)} externalMethod-matching "
+                    f"function name(s) exceed the "
+                    f"{_MACHO_IOKIT_DISPATCH_CAP}-candidate cap; "
+                    f"{len(skipped_dispatch)} not ranked"
+                ),
+                tier=EvidenceTier.HEURISTIC,
+                confidence="confirmed",
+                reproducible=True,
+                tool="binary-ingress",
+                data={
+                    "count": len(dispatch_matches),
+                    "cap": _MACHO_IOKIT_DISPATCH_CAP,
+                    "skipped_names": skipped_dispatch[:200],
+                    "names_truncated": len(skipped_dispatch) > 200,
+                },
+            ))
 
     if data_export_names:
         # One aggregated record of the demotion decision, on top of

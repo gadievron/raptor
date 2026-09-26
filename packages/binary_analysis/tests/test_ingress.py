@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from packages.binary_analysis.fuzz_suitability import assess_fuzz_suitability
 from packages.binary_analysis.ingress import recover_external_ingress
@@ -25,6 +25,7 @@ def _manifest(
     exports: Optional[list[str]] = None,
     export_types: Optional[dict[str, str]] = None,
     app_bundle: Optional[AppBundleMetadata] = None,
+    imports: Optional[list[str]] = None,
 ) -> BinaryManifest:
     return BinaryManifest(
         schema_version=1,
@@ -36,6 +37,7 @@ def _manifest(
         arch="x86",
         bits=64,
         binary_format=target_kind.split("-")[0] if "-" in target_kind else target_kind,
+        imports=list(imports or []),
         exports=list(exports or []),
         export_types=dict(export_types or {}),
         app_bundle=app_bundle,
@@ -365,3 +367,217 @@ def test_unbound_export_still_surfaces(tmp_path: Path) -> None:
 
     exported = next(item for item in ingress if item["kind"] == "exported_api")
     assert exported["bound_function_id"] == ""
+
+
+# --- Win32 / darwin catalog arms -------------------------------------------
+
+
+def test_windows_service_entry_recovered(tmp_path: Path) -> None:
+    binary = _write_binary(tmp_path / "svc.exe", _pe_fixture())
+    manifest = _manifest(binary, target_kind="pe-exe",
+                         exports=["ServiceMain"])
+    context = {
+        "interesting_functions": [{
+            "id": "BFN-401200",
+            "name": "ServiceMain",
+            "address": "0x401200",
+        }],
+        "surface_details": [],
+        "sources": [],
+    }
+
+    ingress, _ = recover_external_ingress(manifest, context)
+
+    service = next(item for item in ingress
+                   if item["kind"] == "service_entry")
+    assert service["external_control"] == "service_control_manager"
+    assert service["boundary"] == "process_boundary"
+    assert service["bound_function_id"] == "BFN-401200"
+
+
+def test_service_entry_point_classified_from_entry_points(
+        tmp_path: Path) -> None:
+    binary = _write_binary(tmp_path / "svc.exe", _pe_fixture())
+    manifest = _manifest(binary, target_kind="pe-exe")
+    context = {
+        "entry_points": [{
+            "id": "BFN-401200",
+            "name": "ServiceMain",
+            "address": "0x401200",
+        }],
+        "interesting_functions": [],
+        "surface_details": [],
+        "sources": [],
+    }
+
+    ingress, _ = recover_external_ingress(manifest, context)
+
+    service = next(item for item in ingress
+                   if item["kind"] == "service_entry")
+    assert service["external_control"] == "service_control_manager"
+
+
+def test_macho_xpc_listener_from_imports(tmp_path: Path) -> None:
+    binary = _write_binary(tmp_path / "helper",
+                           b"\xcf\xfa\xed\xfe" + b"\x00" * 128)
+    manifest = _manifest(
+        binary, target_kind="macho",
+        imports=["xpc_connection_set_event_handler", "xpc_main",
+                 "printf"])
+    context: dict[str, Any] = {
+        "interesting_functions": [],
+        "surface_details": [],
+        "sources": [],
+    }
+
+    ingress, _ = recover_external_ingress(manifest, context)
+
+    listener = next(item for item in ingress
+                    if item["kind"] == "xpc_listener")
+    assert listener["boundary"] == "process_boundary"
+    assert listener["external_control"] == "peer_process"
+    assert listener["details"]["symbols"] == [
+        "xpc_connection_set_event_handler", "xpc_main"]
+    # Import-table facts are header-backed, but presence of the setup
+    # call is still only a candidate for "this binary listens".
+    assert listener["evidence_tier"] == "header_backed"
+    assert listener["confidence"] == "candidate"
+
+
+def test_macho_without_xpc_imports_has_no_listener(
+        tmp_path: Path) -> None:
+    binary = _write_binary(tmp_path / "tool",
+                           b"\xcf\xfa\xed\xfe" + b"\x00" * 128)
+    manifest = _manifest(binary, target_kind="macho",
+                         imports=["printf", "read"])
+    ingress, _ = recover_external_ingress(
+        manifest, {"interesting_functions": [], "sources": []})
+    assert not [item for item in ingress
+                if item["kind"] == "xpc_listener"]
+
+
+def test_macho_iokit_external_method_from_functions(
+        tmp_path: Path) -> None:
+    binary = _write_binary(tmp_path / "driver.kext",
+                           b"\xcf\xfa\xed\xfe" + b"\x00" * 128)
+    manifest = _manifest(binary, target_kind="macho")
+    mangled = "__ZN12MyUserClient14externalMethodEjP25IOExternalMethodArguments"
+    context = {
+        "interesting_functions": [{
+            "id": "BFN-9000",
+            "name": mangled,
+            "address": "0x9000",
+        }],
+        "surface_details": [],
+        "sources": [],
+    }
+
+    ingress, _ = recover_external_ingress(manifest, context)
+
+    method = next(item for item in ingress
+                  if item["kind"] == "iokit_external_method")
+    assert method["boundary"] == "kernel_boundary"
+    assert method["external_control"] == "user_client_call"
+    assert method["bound_function_id"] == "BFN-9000"
+    # Substring-matched recovered names are a heuristic, candidate-
+    # confidence signal — never header-backed like the import arms.
+    assert method["evidence_tier"] == "heuristic"
+    assert method["confidence"] == "candidate"
+
+
+def test_macho_iokit_dispatch_under_cap_all_ranked(
+        tmp_path: Path) -> None:
+    """Below the flood cap every externalMethod match ranks and no
+    truncation record is emitted (the cap must not eat legitimate
+    multi-client drivers)."""
+    from packages.binary_analysis.ingress import (
+        _MACHO_IOKIT_DISPATCH_CAP,
+    )
+    binary = _write_binary(tmp_path / "driver.kext",
+                           b"\xcf\xfa\xed\xfe" + b"\x00" * 128)
+    manifest = _manifest(binary, target_kind="macho")
+    count = _MACHO_IOKIT_DISPATCH_CAP
+    context = {
+        "interesting_functions": [{
+            "id": f"BFN-{9000 + i}",
+            "name": f"__ZN8Client{i:02d}14externalMethodEj",
+            "address": hex(0x9000 + i),
+        } for i in range(count)],
+        "surface_details": [],
+        "sources": [],
+    }
+
+    ingress, records = recover_external_ingress(manifest, context)
+
+    methods = [item for item in ingress
+               if item["kind"] == "iokit_external_method"]
+    assert len(methods) == count
+    assert not any(r.kind == "iokit_dispatch_truncated"
+                   for r in records)
+
+
+def test_macho_iokit_dispatch_flood_capped_with_audit_record(
+        tmp_path: Path) -> None:
+    """Above the cap: candidates bounded, and an aggregated evidence
+    record keeps the full match count plus the skipped names — a
+    crafted symbol table cannot silently drown the ranked queue OR
+    silently hide names from the audit trail."""
+    from packages.binary_analysis.ingress import (
+        _MACHO_IOKIT_DISPATCH_CAP,
+    )
+    binary = _write_binary(tmp_path / "driver.kext",
+                           b"\xcf\xfa\xed\xfe" + b"\x00" * 128)
+    manifest = _manifest(binary, target_kind="macho")
+    total = _MACHO_IOKIT_DISPATCH_CAP + 5
+    context = {
+        "interesting_functions": [{
+            "id": f"BFN-{9000 + i}",
+            "name": f"__ZN8Flood{i:03d}14externalMethodEj",
+            "address": hex(0x9000 + i),
+        } for i in range(total)],
+        "surface_details": [],
+        "sources": [],
+    }
+
+    ingress, records = recover_external_ingress(manifest, context)
+
+    methods = [item for item in ingress
+               if item["kind"] == "iokit_external_method"]
+    assert len(methods) == _MACHO_IOKIT_DISPATCH_CAP
+    truncation = [r for r in records
+                  if r.kind == "iokit_dispatch_truncated"]
+    assert len(truncation) == 1
+    assert truncation[0].data["count"] == total
+    assert truncation[0].data["cap"] == _MACHO_IOKIT_DISPATCH_CAP
+    assert len(truncation[0].data["skipped_names"]) == 5
+    assert truncation[0].data["names_truncated"] is False
+
+
+def test_elf_ingress_unaffected_by_winmac_catalogs(
+        tmp_path: Path) -> None:
+    """No-ELF-regression pin: the Win32/darwin arms are kind-gated,
+    so an elf-linux manifest never grows their candidate kinds even
+    when name collisions exist."""
+    binary = _write_binary(tmp_path / "app", b"\x7fELF" + b"\x00" * 64)
+    manifest = _manifest(
+        binary, target_kind="elf-linux",
+        exports=["ServiceMain", "process_data"],
+        imports=["xpc_main", "RegQueryValueExW"])
+    context = {
+        "interesting_functions": [{
+            "id": "BFN-1",
+            "name": "MyClass_externalMethod_impl",
+            "address": "0x1000",
+        }],
+        "surface_details": [],
+        "sources": [],
+    }
+
+    ingress, _ = recover_external_ingress(manifest, context)
+
+    kinds = {item["kind"] for item in ingress}
+    assert "xpc_listener" not in kinds
+    assert "iokit_external_method" not in kinds
+    assert "service_entry" not in kinds
+    # The exports still surface through the pre-existing ELF arm.
+    assert "exported_api" in kinds
