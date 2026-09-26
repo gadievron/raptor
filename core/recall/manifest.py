@@ -59,6 +59,18 @@ SCHEMA_VERSION = 1
 
 #: Detection profiles the runner knows how to execute. Values document
 #: LLM usage so cost is visible before a run starts.
+#:
+#: CLOSED VOCABULARY, both directions. A profile name maps to exactly
+#: one argv shape (``build_pipeline_argv``'s if/elif) — never a
+#: passthrough: a generic per-manifest ``extra_args`` would let
+#: arbitrary flags into a measurement run's argv, so a report's
+#: ``profile`` stamp would no longer determine what actually ran and
+#: reports would stop being comparable across runs. Conversely, a new
+#: detector configuration worth measuring gets its OWN named profile
+#: (e.g. ``agentic-taint``) rather than mutating an existing one:
+#: baseline/candidate comparisons need both shapes to stay runnable
+#: side by side, and an unknown name must keep refusing loudly (a
+#: typo must never silently fall back to a different detector).
 PROFILES: dict[str, dict[str, Any]] = {
     "scan": {"uses_llm": False,
              "description": "semgrep + local rules via raptor.py scan"},
@@ -68,6 +80,12 @@ PROFILES: dict[str, dict[str, Any]] = {
                 "description": ("full scan -> dedup -> LLM analysis "
                                  "pipeline — every finding costs LLM "
                                  "tokens")},
+    "agentic-taint": {"uses_llm": True,
+                      "description": ("agentic plus the cross-file "
+                                      "taint engine (appends exactly "
+                                      "--taint-crossfile) — the "
+                                      "flip-gate candidate profile; "
+                                      "LLM cost as agentic")},
 }
 
 _CWE_RE = re.compile(r"^CWE-\d{1,5}$")
