@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import stat
 import sys
 import time
 from contextlib import contextmanager
@@ -171,9 +172,33 @@ def graph_path_for_run(run_dir: Path, target_path: Optional[str] = None) -> Path
     return run_dir / "graph" / GRAPH_FILENAME
 
 
+class GraphStoreUnsafeError(RuntimeError):
+    """The graph DB slot holds a symlink or non-regular file.
+
+    The store's integrity binding is keyed to the graph path's parent
+    dir, so a link planted at the DB name points reads at a foreign
+    store whose rows still VERIFY — and every write lands on the link
+    target. Nothing in the pipeline ever creates the DB as a symlink;
+    refuse rather than follow.
+    """
+
+
 def open_graph(path: Path) -> sqlite3.Connection:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        st = None  # Fresh store: sqlite creates the file below.
+    if st is not None and not stat.S_ISREG(st.st_mode):
+        from core.security.log_sanitisation import sanitise_for_terminal
+
+        msg = (
+            f"refusing graph store at "
+            f"{sanitise_for_terminal(str(path))}: not a regular file "
+            f"(symlink or special file planted at the DB slot)"
+        )
+        raise GraphStoreUnsafeError(msg)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute(f"PRAGMA busy_timeout={int(_BUSY_TIMEOUT_MS)}")
