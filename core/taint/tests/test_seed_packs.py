@@ -117,8 +117,13 @@ def test_method_name_sinks_are_heuristic_with_hints(seed_packs):
 
 
 def test_shell_sinks_carry_literal_unless_kwargs(seed_packs):
+    """Scoped to the command-injection claim: the secrets pack's argv
+    entry for the same callee is about process-table visibility, which
+    shell=False does not change."""
     subprocess_sinks = [
-        s for s in seed_packs.sinks if s.match.startswith("subprocess.")
+        s for s in seed_packs.sinks
+        if s.match.startswith("subprocess.")
+        and s.sink_class == "command-injection"
     ]
     assert subprocess_sinks
     for sink in subprocess_sinks:

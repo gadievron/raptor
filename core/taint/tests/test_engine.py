@@ -42,16 +42,16 @@ from core.taint.learned_intake import LearnedIntake, LearnedSpec
 from core.taint.packs import (
     TIER_LEARNED,
     PackSet,
-    default_pack_names,
     load_packs,
 )
+from core.taint.tests import HAND_COMPUTED_PACKS
 
 # ── fixture plumbing (real builders end to end) ──────────────────────
 
 
 @pytest.fixture(scope="module")
 def packs() -> PackSet:
-    return load_packs(default_pack_names())
+    return load_packs(HAND_COMPUTED_PACKS)
 
 
 def _record(rel: str, content: str) -> dict:
