@@ -414,6 +414,11 @@
     "kind": "literal",
     "note": "deviation-record serializer field keys consumed verbatim by the prepass fold and the adjudication detour — a serialization schema like consistency_dimensions.py::d, not a learned name vocabulary"
   },
+  "core/audit/path_symmetry.py::d": {
+    "count": 12,
+    "kind": "literal",
+    "note": "deviation-record serializer field keys (counterpart, counterpart_has, ...) consumed verbatim by the prepass fold — a serialization schema like consistency_dimensions.py::d, not a learned name vocabulary"
+  },
   "core/audit/consistency_verify.py::_HYPOTHESIS_STOPWORDS": {
     "count": 48,
     "kind": "literal",
