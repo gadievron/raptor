@@ -8,6 +8,8 @@ import json
 import textwrap
 from types import SimpleNamespace
 
+import pytest
+
 from core.audit.callsite_consistency import (
     USAGE_DISCARDED,
     USAGE_TESTED,
@@ -24,6 +26,21 @@ from core.audit.consistency_verify import (
     RULE_RETURN_CHECK_MAJORITY,
     census_verdict,
     guard_presence_verdict,
+)
+
+
+def _ts_available() -> bool:
+    from core.audit.callsite_consistency import parse_source_cached
+    tree, _ = parse_source_cached("probe.c", "int f(void) { return 0; }")
+    return tree is not None
+
+
+# Scoped, not module-wide: the synthetic-CalleeCensus tests exercise
+# pure verdict logic and keep their coverage on grammar-less runners;
+# only the tests that need call sites PARSED out of C corpus source
+# (site usage classification is tree-sitter-tier) require the grammar.
+requires_ts = pytest.mark.skipif(
+    not _ts_available(), reason="tree-sitter C grammar unavailable",
 )
 
 
@@ -99,6 +116,7 @@ class TestVerdictFloorsTwoDirections:
         assert bare.to_dict() == defaulted.to_dict()
 
 
+@requires_ts
 class TestGuardPromoteFloorOverride:
     @staticmethod
     def _deviation(ratio: float):
@@ -186,6 +204,7 @@ def _majority_findings(result) -> list:
 
 
 class TestPrepassOverrideWiring:
+    @requires_ts
     def test_default_run_records_no_override_telemetry(self, tmp_path):
         result = run_consistency_prepass(
             _majority_corpus(), out_dir=tmp_path,
@@ -205,6 +224,7 @@ class TestPrepassOverrideWiring:
         assert base["findings"] == empty["findings"]
         assert base["leads"] == empty["leads"]
 
+    @requires_ts
     def test_verdict_ratio_override_raises_the_gate(self, tmp_path):
         result = run_consistency_prepass(
             _majority_corpus(), out_dir=tmp_path,
@@ -220,6 +240,7 @@ class TestPrepassOverrideWiring:
             "ratio-below-threshold", 0,
         ) >= 1
 
+    @requires_ts
     def test_contract_floor_override_withholds_discard_ok(
         self, tmp_path,
     ):
@@ -254,6 +275,7 @@ class TestPrepassOverrideWiring:
         }
         assert _majority_findings(result) == []
 
+    @requires_ts
     def test_explicit_overrides_win_over_run_config(self, tmp_path):
         (tmp_path / "audit-run-config.json").write_text(json.dumps({
             RUN_CONFIG_FLOORS_KEY: {
