@@ -17,6 +17,7 @@ Subcommands:
     ast      — extract function AST subtree and call targets
     critique — identify gaps in tool coverage
     journal  — journal maintenance (compact duplicate re-emission rows)
+    coverage — coverage-store maintenance (compact an over-budget store)
 """
 
 from __future__ import annotations
@@ -2537,6 +2538,36 @@ def cmd_journal(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_coverage(args: argparse.Namespace) -> int:
+    """Coverage-store maintenance. ``coverage compact <path>``
+    atomically rewrites a coverage store in compact, re-normalised
+    form (original preserved as ``coverage.json.pre-compact``) — the
+    remedy for a store past the read budget, which every consumer
+    otherwise sees as empty coverage.
+    """
+    if getattr(args, "coverage_command", None) != "compact":
+        print(
+            "error: usage: raptor-audit coverage compact "
+            "<coverage.json-or-dir>",
+            file=sys.stderr,
+        )
+        return 1
+    path = Path(args.store_path).resolve()
+    if path.is_dir():
+        path = path / "coverage.json"
+    from core.coverage.store import StoreWriteOverBudget, compact_store_file
+    try:
+        before, after = compact_store_file(path)
+    except (ValueError, OSError, StoreWriteOverBudget) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    ratio = f"{before / after:.1f}x" if after else "n/a"
+    print(f"coverage store: {path}")
+    print(f"  bytes: {before} -> {after} ({ratio})")
+    print(f"  backup: {path.name}.pre-compact (same directory)")
+    return 0
+
+
 def cmd_resume(args: argparse.Namespace) -> int:
     """Re-enter a failed/interrupted audit run AS THE SAME RUN.
 
@@ -3707,6 +3738,23 @@ def main() -> int:
              "review-journal.jsonl.pre-supersede",
     )
 
+    p_coverage = sub.add_parser(
+        "coverage",
+        help="Coverage-store maintenance",
+    )
+    coverage_sub = p_coverage.add_subparsers(dest="coverage_command")
+    p_ccompact = coverage_sub.add_parser(
+        "compact",
+        help="Atomically rewrite a coverage store in compact, "
+             "re-normalised form (original backed up as "
+             "coverage.json.pre-compact) — the remedy for a store "
+             "past the read budget",
+    )
+    p_ccompact.add_argument(
+        "store_path",
+        help="coverage.json path, or a directory containing one",
+    )
+
     args = parser.parse_args()
     if getattr(args, "project", None) is not None:
         from core.run.pin import set_process_project
@@ -3754,6 +3802,7 @@ def main() -> int:
         "run": cmd_run,
         "resume": cmd_resume,
         "journal": cmd_journal,
+        "coverage": cmd_coverage,
     }
 
     return dispatch[args.command](args)
