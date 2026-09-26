@@ -3231,7 +3231,20 @@ def main() -> int:
             from packages.joern.server import JoernServer
             srv = JoernServer()
             srv.start()
-            srv.import_cpg(cpg.path)
+            # Checked contract: import_cpg returns False on handled
+            # failures — an unchecked call here handed the prepass a
+            # CPG-less server that read as loaded (same class as the
+            # audit-path fix in core/audit/joern_backend).
+            if not srv.import_cpg(cpg.path):
+                logger.warning(
+                    "Joern cached-CPG import failed for prepass — "
+                    "running without the joern reachability channel")
+                try:
+                    srv.stop()
+                except Exception:
+                    logger.debug("prepass server stop failed",
+                                 exc_info=True)
+                return None
             logger.info("Joern server started with cached CPG for prepass")
             return srv
         except Exception:
