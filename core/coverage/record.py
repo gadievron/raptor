@@ -547,25 +547,6 @@ def build_from_codeql(sarif_path: Path) -> dict[str, Any] | None:
     return record
 
 
-def _stamp_analysed_rows(rows: list[dict[str, Any]], tool: str) -> None:
-    """Stamp ``functions_analysed`` rows at CREATION time.
-
-    Per-row HMAC under the coverage-row domain
-    (:func:`core.coverage.journal_mac.mint_coverage_row` — see its
-    docstring for why the stamp is per-row and tool-bound). Builders
-    call this on rows THEY constructed in-process; RMW writers
-    (mark/unmark CLI, completion snapshots) copy existing rows
-    verbatim and never re-stamp, so a row planted in the on-disk
-    record can't be laundered through a legitimate save. A missing /
-    unusable key stamps nothing — the fold then holds those rows to
-    the source-hash gate (fail toward re-review)."""
-    from core.coverage import journal_mac
-    for row in rows:
-        token = journal_mac.mint_coverage_row(row, tool)
-        if token:
-            row[journal_mac.TOKEN_KEY] = token
-
-
 def build_from_findings(findings_path: Path, reads_manifest_path: Path | None = None,
                         tool: str = "llm") -> dict[str, Any] | None:
     """Build a coverage record from findings.json + optional reads manifest.
