@@ -1921,6 +1921,9 @@ def complete_run(output_dir: Path, extra: dict[str, Any] | None = None,
     # Snapshot AFTER the status/manifest write so coverage provenance can read
     # the sealed manifest (engine versions / resolved models).
     _snapshot_run_coverage(output_dir)
+    # LAST, after the status write above stamps this run completed, so
+    # the split detector sees the run's own end-state as final.
+    _refresh_project_readjudication(output_dir)
 
 
 def _stamp_findings_provenance(output_dir: Path) -> None:
@@ -2042,8 +2045,9 @@ def project_run_projections(output_dir: Path,
                             project_dir: Path | None = None) -> None:
     """Re-run the project-facing completion projections for one run.
 
-    The journal-index merge, reads-manifest conversion, and coverage
-    snapshot normally fire exactly once, at ``complete_run`` — a run
+    The journal-index merge, reads-manifest conversion, coverage
+    snapshot, and project re-adjudication refresh normally fire
+    exactly once, at ``complete_run`` — a run
     ADOPTED into a project after the fact (retro-created project,
     ``raptor project add``/``adopt``) already had its completion and
     missed them, so its verdicts stay invisible to cross-run reuse,
@@ -2078,6 +2082,7 @@ def project_run_projections(output_dir: Path,
     _merge_run_journal(output_dir, project_dir=project_dir)
     _convert_reads_manifest(output_dir)
     _snapshot_run_coverage(output_dir, project_dir=project_dir)
+    _refresh_project_readjudication(output_dir, project_dir=project_dir)
 
 
 def _merge_run_journal(output_dir: Path,
@@ -2114,6 +2119,57 @@ def _merge_run_journal(output_dir: Path,
     except Exception:
         logger.debug(
             "_merge_run_journal failed for %s", output_dir, exc_info=True
+        )
+
+
+def _refresh_project_readjudication(output_dir: Path,
+                                    project_dir: Path | None = None) -> None:
+    """Best-effort completion projection: refresh the PROJECT-level
+    re-adjudication queue (``<project>/_report/readjudication-queue.
+    jsonl``) so a completing run's verdicts are cross-checked against
+    every SIBLING run's recorded disproofs and confirmed verdicts. The
+    import-time detector (validation-helper ``--findings``) only sees
+    the destination run's own container; without this hook a
+    cross-run contradiction stayed invisible until an operator
+    happened to run ``/project report``.
+
+    Read-only over the project's run dirs plus one atomic queue write,
+    byte-budgeted (see ``readjudication.refresh_project_queue``).
+    THE RUN PIN decides the project, with the same witness and
+    write-target gates as the other completion projections —
+    AUTHORITATIVE pins only: the legacy parent-marker probe serves
+    shared ``--out`` dirs, whose contradiction seam the import-time
+    detector already covers, and a marker-less topology inference must
+    not mint project-store writes. Never raises — lifecycle hooks must
+    not fail on an additive trail.
+    """
+    try:
+        proj = project_dir
+        if proj is None:
+            out_res = Path(output_dir).resolve()
+            from core.run.pin import (
+                pin_project_dir,
+                pinned_write_target_ok,
+                resolve_run_pin,
+            )
+            pin = resolve_run_pin(out_res)
+            if not pin.authoritative:
+                return
+            if not _pin_witness_ok(out_res, pin):
+                return
+            proj = pin_project_dir(out_res, for_write=True)
+            if proj is None or not pinned_write_target_ok(out_res):
+                return
+        from core.project.readjudication import refresh_project_queue
+        queue_path = refresh_project_queue(Path(proj))
+        if queue_path is not None:
+            logger.info(
+                "readjudication: project queue refreshed → %s", queue_path,
+            )
+    except Exception:
+        logger.debug(
+            "_refresh_project_readjudication failed for %s",
+            output_dir, exc_info=True,
         )
 
 

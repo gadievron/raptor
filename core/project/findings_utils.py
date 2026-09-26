@@ -244,6 +244,38 @@ def load_findings_from_dir(run_dir: Path) -> list[dict[str, Any]]:
     return []
 
 
+def oversized_findings_files(run_dir: Path) -> list[Path]:
+    """The findings artifacts :func:`load_findings_from_dir` would skip
+    for size in *run_dir* — a stat-only preview of the byte gate.
+
+    Follows the loader's fallback chain exactly: ``findings.json``
+    first; ``openant_findings.json`` is consulted only when the primary
+    is missing or itself over the gate. A readable primary therefore
+    shadows an oversized fallback file — the loader never reads it, so
+    no gate would fire and previewing it anyway would report a
+    phantom. Size is the only axis previewed: a parse failure on an
+    under-gate primary (a different, pre-existing exclusion channel)
+    still falls back inside the loader without registering here.
+
+    Callers that recompute-and-REPLACE artifacts derived from a whole
+    project's findings (the completion-time re-adjudication sweep) use
+    this to refuse the replace when the recomputation would silently
+    exclude a run's rows.
+    """
+    out: list[Path] = []
+    for name in ("findings.json", "openant_findings.json"):
+        path = run_dir / name
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue  # missing — the loader falls through to the next name
+        if size > MAX_FINDINGS_JSON_BYTES:
+            out.append(path)
+            continue  # skipped by the gate — the next name IS consulted
+        break  # this is the file the loader reads; later names never are
+    return out
+
+
 def load_sca_findings_from_dir(run_dir: Path) -> list[dict[str, Any]]:
     """Load SCA findings from a run's ``sca/findings.json`` subdir.
 

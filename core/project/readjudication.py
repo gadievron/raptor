@@ -59,6 +59,7 @@ from core.project.findings_utils import (
     finding_file,
     get_finding_id,
     load_findings_from_dir,
+    oversized_findings_files,
     run_is_imported,
 )
 
@@ -591,6 +592,123 @@ def detect_project_contradictions(
         sources, final_sources=frozenset(final_labels))
 
 
+#: Byte budget for the COMPLETION-TIME project sweep (see
+#: :func:`refresh_project_queue`): the summed size of every sibling
+#: run's findings artifacts, cheaply stat'd before anything is read.
+#: Both directions of the limit matter: too LOW and the refresh
+#: silently defers to a manual /project report on exactly the
+#: many-run projects where cross-run contradictions accumulate; too
+#: HIGH and every run completion re-reads a kernel-scale project's
+#: whole findings corpus. 256 MiB (= 4 single-file size-gate maxima,
+#: MAX_FINDINGS_JSON_BYTES) keeps ordinary projects — dozens of runs,
+#: megabyte-scale findings — fully covered while bounding the
+#: completion hook on outliers, which get a loud deferral notice
+#: instead of a silent partial detection. No incremental mode exists
+#: to prefer: every detection pass is a FRESH recomputation by
+#: contract (see :func:`write_queue`), so the only honest cheap exit
+#: is not running the sweep at all.
+PROJECT_SWEEP_BYTE_BUDGET = 256 * 1024 * 1024
+
+
+def refresh_project_queue(project_dir: Path) -> Path | None:
+    """Recompute and (re)write the PROJECT-level queue artifact —
+    ``<project>/_report/readjudication-queue.jsonl``, the same path
+    ``/project report`` materialises — from the project's run dirs.
+
+    The completion-time bridge: the import-time detector only sees
+    the destination run's own container, so a sibling run's recorded
+    disproofs and confirmed verdicts were invisible until an operator
+    happened to run ``/project report``. Calling this at run
+    completion closes that gap. Read-only over the run dirs (the
+    shared ``core.run.locate`` enumerator; oldest-first, the merge
+    fold's order) plus one atomic queue write.
+
+    Cost-bounded: when the summed size of the runs' findings
+    artifacts exceeds :data:`PROJECT_SWEEP_BYTE_BUDGET`, the sweep is
+    SKIPPED with a loud deferral notice and any existing queue file is
+    left in place — a stale-but-computed queue beats deleting signal
+    this pass never recomputed, and ``/project report`` (uncapped)
+    remains the full-detection surface.
+
+    The per-file findings gate defers under the SAME contract: when
+    any run's artifact exceeds ``MAX_FINDINGS_JSON_BYTES`` (so
+    detection's loader would silently EXCLUDE that run — see
+    :func:`core.project.findings_utils.oversized_findings_files` for
+    the exact fallback-chain preview), the recompute is incomplete by
+    construction and the refresh defers: return None, existing queue
+    left byte-identical, loud notice with the skipped-file count.
+    Rewriting or deleting the queue over the gate-excluded view could
+    remove records that depended on the excluded run. The preview is
+    stat-only like the budget; a file grown between the stat and the
+    read is still refused by the loader's own re-check (that residual
+    window needs a concurrent writer inside the project dir, which
+    already equals the capability gained).
+
+    ADJUDICATED: ``/project report`` deliberately remains the
+    force-fresh surface — its own write path recomputes and writes
+    the queue over the gated view, consistent with every other
+    artifact it derives from that same view (its merged findings.json
+    excludes the oversized run too), and the findings-file gate
+    warning announces the exclusion there at warning level. If report
+    also deferred, NO surface could refresh the queue while an
+    oversized artifact existed.
+
+    Returns the written path, or None when nothing was written (no
+    runs, per-file-gate or budget deferral, empty detection, or
+    refused write).
+    """
+    project_dir = Path(project_dir)
+    from core.run.locate import run_dirs_newest_first
+    run_dirs = list(reversed(run_dirs_newest_first(project_dir)))
+    if not run_dirs:
+        return None
+    total_bytes = 0
+    gate_skipped: list[Path] = []
+    for run_dir in run_dirs:
+        gate_skipped.extend(oversized_findings_files(run_dir))
+        for name in ("findings.json", "openant_findings.json"):
+            try:
+                total_bytes += (run_dir / name).stat().st_size
+            except OSError:
+                continue
+    if gate_skipped:
+        logger.info(
+            "readjudication: completion-time project sweep deferred for "
+            "%s — %d findings artifact(s) exceed the per-file gate, so "
+            "detection would silently exclude their run(s); an existing "
+            "queue file is left as-is (never replaced by a partial "
+            "recompute). Shrink or inspect the flagged file(s) — the "
+            "findings-file gate warning names each — or run /project "
+            "report, which recomputes over the gated view.",
+            project_dir, len(gate_skipped),
+        )
+        return None
+    if total_bytes > PROJECT_SWEEP_BYTE_BUDGET:
+        logger.info(
+            "readjudication: completion-time project sweep skipped for "
+            "%s — findings artifacts total %d bytes (budget %d); an "
+            "existing queue file is left as-is. Run /project report "
+            "for the full detection.",
+            project_dir, total_bytes, PROJECT_SWEEP_BYTE_BUDGET,
+        )
+        return None
+    records = detect_project_contradictions(run_dirs)
+    report_dir = project_dir / "_report"
+    if not records and not report_dir.is_dir():
+        # Nothing to write and nothing stale to clear — don't mint an
+        # empty _report dir on every projectless-of-contradiction run.
+        return None
+    try:
+        report_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # A planted non-dir at _report: write_queue could not land
+        # anyway; the refresh is best-effort by contract.
+        logger.debug("readjudication: cannot create %s", report_dir,
+                     exc_info=True)
+        return None
+    return write_queue(report_dir, records)
+
+
 def queued_count(records: Sequence[dict[str, Any]]) -> int:
     """Queued contradiction signals (excludes marker records)."""
     return sum(
@@ -725,6 +843,7 @@ def write_queue(
 __all__ = [
     "CONFIRMED_TIER_STATUSES",
     "DISPROOF_STATUSES",
+    "PROJECT_SWEEP_BYTE_BUDGET",
     "QUEUE_FILENAME",
     "RECORD_CAP",
     "SHAPE_CLAIM_AFTER_DISPROOF",
@@ -739,6 +858,7 @@ __all__ = [
     "is_disproof",
     "queued_count",
     "record_shape",
+    "refresh_project_queue",
     "shape_counts",
     "site_key",
     "suppressed_count",
