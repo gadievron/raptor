@@ -2610,3 +2610,68 @@ def test_from_and_yaml_walkers_share_oci_cache(
     assert [c.target_version for c in yaml_cands] == ["3.99"]
     # One upstream fetch for the one repo, shared across walkers.
     assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Symlink containment: discovery and the read leg
+# ---------------------------------------------------------------------------
+
+_SEMGREP_RELEASE = {
+    "https://api.github.com/repos/semgrep/semgrep/releases/latest":
+        {"tag_name": "v1.119.0"},
+}
+
+
+def test_escaping_dockerfile_symlink_refused(tmp_path: Path) -> None:
+    """A Dockerfile symlink pointing outside the scan target must not
+    feed candidate enumeration — discovered files also feed the
+    rewriter, so an escaping link would redirect writes."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "Dockerfile").write_text("ARG SEMGREP_VERSION=1.50.0\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Dockerfile").symlink_to(outside / "Dockerfile")
+
+    report = run_bump(repo, http=_StubHttp(_SEMGREP_RELEASE))
+    assert [c for c in report.candidates if c.kind == "arg"] == []
+
+
+def test_in_root_symlinked_dockerfile_still_parsed(
+    tmp_path: Path,
+) -> None:
+    """The monorepo pattern — a link resolving INSIDE the target —
+    keeps harvesting."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "Dockerfile").write_text("ARG SEMGREP_VERSION=1.50.0\n")
+    (tmp_path / "Dockerfile").symlink_to(
+        Path("shared") / "Dockerfile")
+
+    report = run_bump(tmp_path, http=_StubHttp(_SEMGREP_RELEASE))
+    cands = [c for c in report.candidates if c.kind == "arg"]
+    assert cands and cands[0].target_version == "1.119.0"
+
+
+def test_walkers_refuse_escaping_symlinks(tmp_path: Path) -> None:
+    from packages.sca.bump.orchestrator import (
+        _find_dockerfiles,
+        _find_dockerfiles_and_workflows,
+        _find_gha_workflows,
+    )
+    outside = tmp_path / "outside"
+    (outside / ".github" / "workflows").mkdir(parents=True)
+    (outside / "Dockerfile").write_text("FROM x\n")
+    (outside / ".github" / "workflows" / "ci.yml").write_text(
+        "jobs: {}\n")
+    repo = tmp_path / "repo"
+    (repo / ".github").mkdir(parents=True)
+    (repo / "Dockerfile").symlink_to(outside / "Dockerfile")
+    (repo / ".github" / "workflows").symlink_to(
+        outside / ".github" / "workflows")
+
+    dockerfiles, workflows = _find_dockerfiles_and_workflows(repo)
+    assert dockerfiles == []
+    assert workflows == []
+    assert _find_dockerfiles(repo) == []
+    assert _find_gha_workflows(repo) == []

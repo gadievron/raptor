@@ -402,11 +402,8 @@ def _enumerate_candidates(
     # Dockerfiles may pin the same tool.
     latest_cache: dict = {}
     for dockerfile in dockerfiles:
-        try:
-            text = dockerfile.read_text(encoding="utf-8")
-        except OSError as e:
-            logger.warning("sca.bump: read failed for %s: %s",
-                            dockerfile, e)
+        text = _read_target_text(dockerfile, target)
+        if text is None:
             continue
         for line in text.splitlines():
             match = _ARG_RE.match(line)
@@ -532,9 +529,8 @@ def _enumerate_candidates(
     # bookworm`` — variants aren't bump candidates without a
     # variant-tag map we don't have).
     for dockerfile in dockerfiles:
-        try:
-            text = dockerfile.read_text(encoding="utf-8")
-        except OSError:
+        text = _read_target_text(dockerfile, target)
+        if text is None:
             continue
         from_candidates, from_skipped = _enumerate_from_image_candidates(
             text=text, dockerfile=dockerfile,
@@ -607,9 +603,8 @@ def _enumerate_candidates(
         )
         excluded_files.update((p, None) for p in dropped)
     for wf in workflow_files:
-        try:
-            text = wf.read_text(encoding="utf-8")
-        except OSError:
+        text = _read_target_text(wf, target)
+        if text is None:
             continue
         gha_candidates, gha_skipped = _enumerate_gha_uses_candidates(
             text=text, workflow=wf,
@@ -1881,16 +1876,62 @@ def _same_major_pin(current: str, target: str) -> bool:
     return cur[0] == tgt[0]
 
 
+def _read_target_text(path: Path, target: Path) -> str | None:
+    """Read a discovered file through the bounded parser reader.
+
+    ``read_bounded(follow_symlinks=False)`` under a
+    ``scan_root_context`` accepts a symlinked file whose resolved
+    target still lies inside *target* (the monorepo shared-manifest
+    pattern) and refuses links that escape the tree, oversize files,
+    and non-regular entries — each with its own warning. A bare
+    ``read_text`` here follows any planted link, laundering host
+    files into candidate enumeration.
+    """
+    from ..parsers._safe_read import read_bounded, scan_root_context
+    with scan_root_context(target):
+        return read_bounded(path, follow_symlinks=False)
+
+
+def _harvestable_file(path: Path, root: Path) -> bool:
+    """True when a discovered entry may enter the bump file lists.
+
+    Regular files pass. A symlink passes only when its resolved
+    target is a regular file still inside *root* (pre-resolved) —
+    discovered files feed the REWRITER, so an escaping link would
+    redirect writes outside the tree. Everything else is skipped
+    with a sanitised warning.
+    """
+    if not path.is_symlink():
+        return path.is_file()
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    if resolved.is_file() and resolved.is_relative_to(root):
+        return True
+    from core.security.log_sanitisation import sanitise_for_terminal
+    logger.warning(
+        "sca.bump: refusing non-contained symlink %s",
+        sanitise_for_terminal(str(path)),
+    )
+    return False
+
+
 def _find_gha_workflows(target: Path) -> list[Path]:
     """Walk ``target`` for GitHub Actions workflow YAML files."""
     out: list[Path] = []
+    root = target.resolve()
     for gh_dir in target.rglob(".github"):
-        if not gh_dir.is_dir():
+        if gh_dir.is_symlink() or not gh_dir.is_dir():
             continue
         wf_dir = gh_dir / "workflows"
-        if not wf_dir.is_dir():
+        if wf_dir.is_symlink() or not wf_dir.is_dir():
             continue
-        out.extend(path for path in wf_dir.iterdir() if path.is_file() and path.suffix in (".yml", ".yaml"))
+        out.extend(
+            path for path in wf_dir.iterdir()
+            if _harvestable_file(path, root)
+            and path.suffix in (".yml", ".yaml")
+        )
     return sorted(out)
 
 
@@ -1907,8 +1948,9 @@ def _find_dockerfiles_and_workflows(
         return ([target] if _is_dockerfile(target) else []), []
     dockerfiles: list[Path] = []
     workflows: list[Path] = []
+    root = target.resolve()
     for path in target.rglob("*"):
-        if not path.is_file():
+        if not _harvestable_file(path, root):
             continue
         if _is_dockerfile(path):
             dockerfiles.append(path)
@@ -1944,7 +1986,11 @@ def _find_dockerfiles(target: Path) -> list[Path]:
     file that the rest of SCA does."""
     if target.is_file():
         return [target] if _is_dockerfile(target) else []
-    out: list[Path] = [path for path in target.rglob("*") if path.is_file() and _is_dockerfile(path)]
+    root = target.resolve()
+    out: list[Path] = [
+        path for path in target.rglob("*")
+        if _harvestable_file(path, root) and _is_dockerfile(path)
+    ]
     return sorted(out)
 
 
