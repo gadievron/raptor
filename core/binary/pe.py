@@ -27,6 +27,11 @@ Scope
 - Export table: declared name, ordinal base, declared-vs-walked
   counts, named + ordinal-only entries, forwarders as capped
   literal strings (never resolved — invariant g below).
+- Signing facts: the security-directory presence bit plus a
+  bounded DER skim of the first PKCS#7 certificate entry for the
+  claimed signer's CN (``claimed_signer`` — a recorded CLAIM,
+  never a verification; see the field docs and the skim's own
+  doctrine at :class:`_DerSkim`).
 
 Out of scope
 - The bound-import table (a pre-Vista binding optimisation; its
@@ -35,7 +40,11 @@ Out of scope
   hostile-recursion surface — deliberately not parsed)
 - TE (Terse Executable) images — no DOS/COFF header, different
   format; callers classify separately
-- Authenticode certificate parsing (presence only, in this module)
+- Authenticode VERIFICATION in any form: no signature or digest
+  check, no chain building, no timestamp/counter-signature
+  parsing, no trust or validity decision — the skim copies one
+  capped name string out of an attacker-authored structure and
+  stops
 - .NET metadata beyond the CLR-directory presence bit
 
 Error handling
@@ -314,11 +323,85 @@ _MAX_TABLE_NAME_TOTAL_BYTES = 8 * 1024 * 1024
 # name-window read, each function slot a record row).
 _MAX_EXPORT_FUNCTIONS = 32_768
 _MAX_EXPORT_NAMES = 32_768
+# ---- Signing-facts skim caps (invariant e applies here too: every
+# walk runs under a named cap with a marker on breach).
+#
+# WIN_CERTIFICATE entries walked in the certificate table. Real
+# tables carry 1-3 entries (the primary signature, occasionally a
+# second-algorithm one); dwLength is an attacker u32 pricing the
+# stride, so an uncapped walk would sell one seek+read per crafted
+# entry across the whole declared table. 16 truncates nothing real;
+# higher only resells the same hostile walk.
+_MAX_CERT_TABLE_ENTRIES = 16
+# Bytes of the ONE skimmed PKCS#7 blob materialised in memory.
+# dwLength is an attacker u32 and never a read budget on its own;
+# real Authenticode blobs (chain + countersignatures + page-hash
+# attributes) stay under a few hundred KB, so 1 MiB truncates
+# nothing real, while higher re-opens allocation amplification from
+# a single crafted directory entry. A capped blob degrades
+# marker-visibly (``authenticode_blob_capped``).
+_MAX_CERT_BLOB_BYTES = 1024 * 1024
+# Nested-TLV depth ceiling for the DER walk. The skim's deepest
+# fixed path (ContentInfo → content → SignedData → certificates →
+# Certificate → tbsCertificate → subject → RDN → attribute → value)
+# sits at depth 9 BY CONSTRUCTION — the walk is targeted, never
+# recursive-on-input — so the cap is belt-and-braces: it exists so
+# a future edit that introduces input-driven descent cannot
+# silently unbound it. 32 is three real paths deep (nothing real
+# breaches); lower would leave no headroom for legitimate structure
+# growth, higher only weakens the tripwire.
+_MAX_DER_DEPTH = 32
+# TLV headers parsed per skim — the op-count budget, and the term
+# that bounds the whole walk's work: worst case is
+# _MAX_DER_NODES x (one O(1) header parse + at most one capped
+# content copy at the few capture points), over an in-memory blob
+# already bounded by _MAX_CERT_BLOB_BYTES — no per-node file IO
+# exists. A real blob's targeted walk touches well under a few
+# hundred nodes (skipped siblings cost one header each); a crafted
+# flood of 2-byte TLVs prices one header parse per 2 input bytes,
+# so without this budget the work would scale with blob size. 4096
+# is an order above real; higher only sells CPU to a TLV flood.
+_MAX_DER_NODES = 4_096
+# Signer-CN bytes retained (raw DER content, counted before
+# decode). X.520 bounds real common names at 64 characters; 256
+# truncates nothing real while the record never becomes the
+# amplifier for a crafted megabyte string value. Hostile text
+# either way — escape at render.
+_MAX_SIGNER_NAME_BYTES = 256
+
+# WIN_CERTIFICATE header: dwLength(I) wRevision(H)
+# wCertificateType(H), then bCertificate. Entries are 8-byte
+# aligned within the table.
+_WIN_CERT_HEADER = struct.Struct("<IHH")
+_WIN_CERT_TYPE_PKCS_SIGNED_DATA = 0x0002
+
+# OIDs compared as RAW DER content bytes — never arc-decoded: an
+# arc decoder is a second numeric parser with its own overflow
+# surface, and byte equality answers the only question the skim
+# asks. Bounded by construction: comparison against a fixed-width
+# constant reads at most that many bytes.
+_OID_PKCS7_SIGNED_DATA = bytes.fromhex("2a864886f70d010702")  # 1.2.840.113549.1.7.2
+_OID_COMMON_NAME = bytes.fromhex("550403")                    # 2.5.4.3
+
+# DER tags the skim recognises. The context-specific constructed
+# tags appear both as the EXPLICIT content wrapper ([0] in
+# ContentInfo) and as the IMPLICIT certificates field of SignedData.
+_DER_INTEGER = 0x02
+_DER_OID = 0x06
+_DER_UTF8_STRING = 0x0C
+_DER_PRINTABLE_STRING = 0x13
+_DER_TELETEX_STRING = 0x14
+_DER_IA5_STRING = 0x16
+_DER_BMP_STRING = 0x1E
+_DER_SEQUENCE = 0x30
+_DER_SET = 0x31
+_DER_CONTEXT_0 = 0xA0
 
 # Data-directory indices consumed (spec order). The security entry
-# holds a FILE OFFSET (not an RVA) to the certificate table; only
-# its PRESENCE is read here — certificate parsing is a separate,
-# deliberately-unimplemented surface.
+# holds a FILE OFFSET (not an RVA) to the certificate table — the
+# one directory that must NOT resolve through the RVA chokepoint
+# (the table is never mapped); its presence bit and the bounded
+# claimed-signer skim are the only things read from it.
 _DIR_EXPORT = 0
 _DIR_IMPORT = 1
 _DIR_SECURITY = 4
@@ -559,17 +642,27 @@ class PeFacts:
     overlay_present: bool = False
     overlay_offset: int | None = None
     overlay_size: int = 0
-    # Security (certificate table) directory PRESENCE only — a
-    # nonzero entry means the image CLAIMS an Authenticode blob.
-    # Nothing here verifies, parses, or trusts it.
+    # Security (certificate table) directory presence — a nonzero
+    # entry means the image CLAIMS an Authenticode blob. Nothing
+    # here verifies or trusts it.
     authenticode_present: bool = False
     # CLR runtime header directory presence — the .NET bit.
     dotnet_present: bool = False
-    # Signing-facts slot, pre-declared so the record schema stays
-    # stable across phases: populated by the signing-facts
-    # extraction when it lands; empty string means UNEXAMINED.
-    # ``authenticode_present`` above is the only signing fact this
-    # extractor asserts.
+    # ``claimed_signer`` is the subject CN of the certificate the
+    # blob's first SignerInfo names — recovered by a bounded DER
+    # SKIM (:func:`_skim_claimed_signer`), never a verification:
+    # no signature, digest, chain, validity or trust decision
+    # exists in this module. The name carries the epistemic status:
+    # this is attacker-authored STEERING TEXT by design — capped at
+    # capture, stored as data, escape at render. "" = no claim
+    # extracted (no signature, a non-PKCS#7 entry, or a skim
+    # degrade — the markers say which).
+    # FENCE: no mechanical consumer may gate, suppress, or trust
+    # on ``authenticode_present`` / ``claimed_signer`` — they are
+    # display/correlation facts only. The consumer census pinning
+    # this fence lives in core/binary/tests/test_pe_signing.py
+    # (the signing-facts fence test); amend BOTH places together
+    # if a consumer is ever added deliberately.
     claimed_signer: str = ""
     # Debug-directory RSDS (CodeView) identity: the raw 16 GUID
     # bytes in file order as lowercase hex, the age, the pdb path's
@@ -961,6 +1054,14 @@ def _extract_facts_stream(f: BinaryIO, file_size: int) -> PeFacts | None:
     clr_dir = data_dirs.get(_DIR_CLR, (0, 0))
     facts.dotnet_present = clr_dir[0] != 0 and clr_dir[1] != 0
 
+    # Claimed-signer skim. The security entry is FILE-OFFSET
+    # addressed by format definition, so it never touches the RVA
+    # resolver — the walk applies the seek screen + OSError net
+    # directly.
+    if facts.authenticode_present:
+        _read_signing_facts(f, file_size, sec_dir[0], sec_dir[1],
+                            facts, caps)
+
     # --- Section table ------------------------------------------
     # Located directly after the optional header — at the DECLARED
     # SizeOfOptionalHeader distance, even when the read above came
@@ -1118,6 +1219,411 @@ def _pdb_basename(payload: bytes) -> tuple[str | None, set[str]]:
         raw = raw[:_MAX_PDB_BASENAME_BYTES]
         caps.add("pdb_name_truncated")
     return raw.decode("utf-8", errors="replace"), caps
+
+
+# ---------------------------------------------------------------------------
+# Signing facts — the claimed-signer skim (NEVER verification)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _DerNode:
+    """One parsed TLV: identifier offset plus content extent.
+    ``start`` keeps the identifier octet's offset so a caller can
+    take the FULL element bytes (``blob[start:content_end]``) for
+    verbatim DER comparison."""
+
+    tag: int
+    start: int
+    content_start: int
+    content_end: int
+
+
+class _DerSkim:
+    """Bounded, targeted DER walk over ONE in-memory PKCS#7 blob —
+    its own hostile parser with its own doctrine, mirroring the
+    module's invariants:
+
+      * every length is an attacker-chosen claim, screened against
+        the enclosing extent BEFORE use — a length lying past its
+        enclosure is refused (marker), never clamped-and-continued,
+        so no node can read its parent's siblings as content;
+      * indefinite lengths (BER-only, forbidden by DER) are refused
+        with a marker — a terminator-driven scan is exactly the
+        attacker-priced walk this parser does not run;
+      * the walk spends a named NODE budget (the op-count bound —
+        see ``_MAX_DER_NODES`` for the worst-case cost product) and
+        a named DEPTH budget (belt-and-braces: the targeted walk's
+        deepest path is fixed at 9 by construction);
+      * every refusal lands a ``caps_hit`` marker, never an
+        exception past the module contract.
+
+    No signature, digest, chain, validity, or trust decision exists
+    anywhere here — the skim copies ONE capped name string out of
+    an attacker-authored structure and stops.
+    """
+
+    def __init__(self, blob: bytes, caps: set[str]) -> None:
+        self._blob = blob
+        self._caps = caps
+        self._nodes_left = _MAX_DER_NODES
+
+    def top(self) -> _DerNode | None:
+        """The blob's outermost TLV (``None`` + marker when even
+        that does not parse — the empty blob included)."""
+        return self._header(0, len(self._blob))
+
+    def content(self, node: _DerNode) -> bytes:
+        return self._blob[node.content_start:node.content_end]
+
+    def element(self, node: _DerNode) -> bytes:
+        """Full encoded element (identifier + length + content) —
+        for verbatim DER comparison (DER is canonical by
+        definition, so byte equality IS name equality; anything
+        that would only match after re-encoding is malformed input
+        and degrades)."""
+        return self._blob[node.start:node.content_end]
+
+    def children(self, node: _DerNode, depth: int) -> list[_DerNode]:
+        """The child TLVs of one constructed node. On a malformed
+        child, the parsed PREFIX is returned and the marker set by
+        the header parse records the gap (per-field degradation —
+        a malformation can only ever DROP later siblings, never
+        skip past one, so first-wins selections stay steer-proof);
+        a spent depth budget returns nothing, marker-visibly."""
+        if depth >= _MAX_DER_DEPTH:
+            self._caps.add("signer_skim_depth_capped")
+            return []
+        out: list[_DerNode] = []
+        off = node.content_start
+        while off < node.content_end:
+            child = self._header(off, node.content_end)
+            if child is None:
+                break                    # marker already recorded
+            out.append(child)
+            off = child.content_end
+        return out
+
+    def children_strict(self, node: _DerNode,
+                        depth: int) -> list[_DerNode] | None:
+        """:meth:`children` with a TERMINAL malformation contract:
+        a child that fails to parse (or a spent depth budget)
+        refuses the WHOLE enclosure — ``None``, marker already
+        recorded — instead of returning the walked prefix.
+
+        For walks that SELECT among siblings by content (the
+        claimed-signer CN walk): prefix-degrade there would make a
+        structurally-poisoned first candidate silently skippable,
+        handing a hostile subject the choice of which sibling gets
+        recorded — exactly the steering the first-wins rules deny.
+        Refusal-with-no-claim is the same no-fallback posture the
+        certificate-table walk applies to a doctored first entry.
+        """
+        if depth >= _MAX_DER_DEPTH:
+            self._caps.add("signer_skim_depth_capped")
+            return None
+        out: list[_DerNode] = []
+        off = node.content_start
+        while off < node.content_end:
+            child = self._header(off, node.content_end)
+            if child is None:
+                return None              # marker already recorded
+            out.append(child)
+            off = child.content_end
+        return out
+
+    def _header(self, off: int, end: int) -> _DerNode | None:
+        """Parse one TLV header inside ``[off, end)``. ``None`` +
+        marker on any malformation or a spent node budget."""
+        blob = self._blob
+        if off >= end:
+            self._caps.add("signer_skim_malformed")
+            return None
+        if self._nodes_left <= 0:
+            self._caps.add("signer_skim_nodes_capped")
+            return None
+        self._nodes_left -= 1
+        tag = blob[off]
+        cur = off + 1
+        if tag & 0x1F == 0x1F:
+            # High-tag-number form: nothing the skim LOOKS FOR uses
+            # it, but a skipped sibling may — the header must still
+            # parse so its length can be honoured. Continuation
+            # bytes are capped at 4 (a longer run claims a tag
+            # number past 2**28, which nothing real encodes).
+            for _ in range(4):
+                if cur >= end:
+                    self._caps.add("signer_skim_malformed")
+                    return None
+                cont = blob[cur]
+                cur += 1
+                if not cont & 0x80:
+                    break
+            else:
+                self._caps.add("signer_skim_malformed")
+                return None
+        if cur >= end:
+            self._caps.add("signer_skim_malformed")
+            return None
+        first = blob[cur]
+        cur += 1
+        if first == 0x80:
+            self._caps.add("signer_skim_indefinite_length")
+            return None
+        if first < 0x80:
+            length = first
+        else:
+            n_len = first & 0x7F
+            if n_len > 4 or cur + n_len > end:
+                # A length-of-length past 4 claims content past
+                # 4 GiB — no honest blob under the read cap can.
+                self._caps.add("signer_skim_malformed")
+                return None
+            length = int.from_bytes(blob[cur:cur + n_len], "big")
+            cur += n_len
+        if length > end - cur:
+            self._caps.add("signer_skim_malformed")
+            return None
+        return _DerNode(tag=tag, start=off, content_start=cur,
+                        content_end=cur + length)
+
+
+def _skim_claimed_signer(blob: bytes, caps: set[str]) -> str | None:
+    """Subject CN of the certificate the blob's first SignerInfo
+    names — the claimed signer, exactly the way the format
+    identifies it (issuer + serial), with named rules:
+
+      * the FIRST SignerInfo in encoding order is the recorded
+        claim; further SignerInfos are surfaced as
+        ``signer_multiple_signers`` (first-wins, mirroring the
+        debug-directory rule);
+      * only the v1 ``issuerAndSerialNumber`` signer-identifier
+        form is skimmed (the only form Authenticode emits); any
+        other shape degrades with ``signer_skim_malformed``;
+      * issuer and serial are matched against each certificate's
+        tbsCertificate by VERBATIM DER bytes — no name
+        canonicalisation, no chain walk; no match (including an
+        absent certificates field) is ``signer_cert_unmatched``;
+      * the FIRST CN attribute in the subject's encoding order is
+        the claim; an undecodable value type degrades
+        (``signer_cn_unrecognised_type``) rather than falling
+        through to a later CN — a hostile subject must not choose
+        which CN is recorded by poisoning the first.
+    """
+    skim = _DerSkim(blob, caps)
+    root = skim.top()
+    if root is None or root.tag != _DER_SEQUENCE:
+        caps.add("signer_skim_malformed")
+        return None
+    info = skim.children(root, 1)
+    if (len(info) < 2 or info[0].tag != _DER_OID
+            or skim.content(info[0]) != _OID_PKCS7_SIGNED_DATA
+            or info[1].tag != _DER_CONTEXT_0):
+        caps.add("signer_skim_malformed")
+        return None
+    wrap = skim.children(info[1], 2)
+    if not wrap or wrap[0].tag != _DER_SEQUENCE:
+        caps.add("signer_skim_malformed")
+        return None
+    # SignedData fields in order: version, digestAlgorithms,
+    # contentInfo, [0]certificates?, [1]crls?, signerInfos (last).
+    fields = skim.children(wrap[0], 3)
+    if len(fields) < 4 or fields[-1].tag != _DER_SET:
+        caps.add("signer_skim_malformed")
+        return None
+    certs_node = next(
+        (n for n in fields[3:-1] if n.tag == _DER_CONTEXT_0), None)
+    signer_seqs = [n for n in skim.children(fields[-1], 4)
+                   if n.tag == _DER_SEQUENCE]
+    if not signer_seqs:
+        caps.add("signer_skim_malformed")
+        return None
+    if len(signer_seqs) > 1:
+        caps.add("signer_multiple_signers")
+    si_fields = skim.children(signer_seqs[0], 5)
+    if (len(si_fields) < 2 or si_fields[0].tag != _DER_INTEGER
+            or si_fields[1].tag != _DER_SEQUENCE):
+        caps.add("signer_skim_malformed")
+        return None
+    isn = skim.children(si_fields[1], 6)
+    if (len(isn) != 2 or isn[0].tag != _DER_SEQUENCE
+            or isn[1].tag != _DER_INTEGER):
+        caps.add("signer_skim_malformed")
+        return None
+    want_issuer = skim.element(isn[0])
+    want_serial = skim.content(isn[1])
+
+    subject: _DerNode | None = None
+    for cert in skim.children(certs_node, 4) if certs_node else []:
+        if cert.tag != _DER_SEQUENCE:
+            continue     # extendedCertificate / attr-cert choices — skipped
+        cert_fields = skim.children(cert, 5)
+        if not cert_fields or cert_fields[0].tag != _DER_SEQUENCE:
+            continue
+        tbs = skim.children(cert_fields[0], 6)
+        # tbsCertificate: [0]version?, serialNumber, signature,
+        # issuer, validity, subject, ...
+        idx = 1 if tbs and tbs[0].tag == _DER_CONTEXT_0 else 0
+        if (len(tbs) < idx + 5
+                or tbs[idx].tag != _DER_INTEGER
+                or tbs[idx + 2].tag != _DER_SEQUENCE
+                or tbs[idx + 4].tag != _DER_SEQUENCE):
+            continue
+        if (skim.content(tbs[idx]) == want_serial
+                and skim.element(tbs[idx + 2]) == want_issuer):
+            subject = tbs[idx + 4]
+            break
+    if subject is None:
+        caps.add("signer_cert_unmatched")
+        return None
+
+    # The CN walk SELECTS among siblings, so malformation here is
+    # TERMINAL (children_strict): a structurally-poisoned first
+    # candidate must refuse the claim, never fall through to a
+    # later, attacker-chosen CN — the same denial the type-poison
+    # lane below already applies. Well-formed non-CN siblings
+    # (other attribute types, wrong tags) are skipped as normal
+    # subject structure.
+    rdns = skim.children_strict(subject, 7)
+    if rdns is None:
+        return None
+    for rdn in rdns:
+        if rdn.tag != _DER_SET:
+            continue
+        atvs = skim.children_strict(rdn, 8)
+        if atvs is None:
+            return None
+        for atv in atvs:
+            if atv.tag != _DER_SEQUENCE:
+                continue
+            parts = skim.children_strict(atv, 9)
+            if parts is None:
+                return None
+            if (len(parts) < 2 or parts[0].tag != _DER_OID
+                    or skim.content(parts[0]) != _OID_COMMON_NAME):
+                continue
+            return _decode_signer_cn(skim.content(parts[1]),
+                                     parts[1].tag, caps)
+    caps.add("signer_cn_absent")
+    return None
+
+
+def _decode_signer_cn(raw: bytes, tag: int,
+                      caps: set[str]) -> str | None:
+    """Decode one CN value by its string type, capped at retention.
+    Hostile bytes survive AS DATA (``errors="replace"`` marks lossy
+    decodes; control bytes and bidi overrides pass through) —
+    consumers escape at render, same contract as every other name
+    field here."""
+    if len(raw) > _MAX_SIGNER_NAME_BYTES:
+        raw = raw[:_MAX_SIGNER_NAME_BYTES]
+        caps.add("signer_name_truncated")
+    if tag == _DER_BMP_STRING:
+        return raw.decode("utf-16-be", errors="replace")
+    if tag in (_DER_UTF8_STRING, _DER_PRINTABLE_STRING,
+               _DER_TELETEX_STRING, _DER_IA5_STRING):
+        # PrintableString / IA5 / Teletex are ASCII-ish subsets a
+        # UTF-8 decode reads verbatim; a hostile value violating
+        # its declared universe degrades per byte to U+FFFD, never
+        # raises.
+        return raw.decode("utf-8", errors="replace")
+    caps.add("signer_cn_unrecognised_type")
+    return None
+
+
+def _read_at(f: BinaryIO, offset: int, length: int) -> bytes | None:
+    """Screened + netted direct file read (the certificate table is
+    file-offset addressed — the one lane that bypasses the RVA
+    chokepoint by format definition). Possibly-short bytes; ``None``
+    on a refused seek/read."""
+    if offset > _MAX_SEEK_OFFSET:
+        return None
+    if length <= 0:
+        # A zero-length claim reads nothing — the caller's parse of
+        # the empty bytes records the honest degradation.
+        return b""
+    try:
+        f.seek(offset)
+        return f.read(length)
+    except OSError:
+        return None
+
+
+def _read_signing_facts(
+    f: BinaryIO, file_size: int, table_offset: int, table_size: int,
+    facts: PeFacts, caps: set[str],
+) -> None:
+    """Walk the WIN_CERTIFICATE table for the claimed-signer skim.
+
+    Named rules, mirroring the debug-directory walk:
+
+      * the FIRST entry of type WIN_CERT_TYPE_PKCS_SIGNED_DATA in
+        table order is the recorded claim; every entry after it
+        (any type) is only counted, as
+        ``authenticode_extra_certificates`` — a second signature
+        must not silently steer the record;
+      * a non-PKCS#7 entry BEFORE the claim is skipped with
+        ``authenticode_non_pkcs_entry`` and the walk continues;
+      * a first PKCS#7 entry whose skim fails leaves the field
+        empty with its skim markers — later entries are never
+        consulted as a fallback (a doctored first entry fails SAFE
+        to "no claim", it cannot redirect the record to entry two);
+      * ``dwLength`` is an attacker u32 pricing both the stride and
+        the blob read — the entry count, the blob size, and the
+        table extent (clamped to EOF) are all named caps.
+    """
+    end = table_offset + table_size
+    if (table_offset <= 0 or table_offset > _MAX_SEEK_OFFSET
+            or table_offset >= file_size):
+        caps.add("authenticode_unreadable")
+        return
+    if end > file_size:
+        # The directory claims bytes past EOF: the walk degrades to
+        # what the file really has (short entries mark themselves).
+        end = file_size
+    off = table_offset
+    skimmed = False
+    for i in range(_MAX_CERT_TABLE_ENTRIES + 1):
+        if off >= end:
+            break
+        if i == _MAX_CERT_TABLE_ENTRIES:
+            caps.add("authenticode_entries_capped")
+            break
+        header = _read_at(f, off, _WIN_CERT_HEADER.size)
+        if header is None or len(header) < _WIN_CERT_HEADER.size:
+            caps.add("authenticode_malformed")
+            break
+        dw_length, _revision, cert_type = _WIN_CERT_HEADER.unpack(
+            header)
+        if dw_length < _WIN_CERT_HEADER.size:
+            # Cannot even cover its own header — and a stride this
+            # small would re-read the same bytes forever.
+            caps.add("authenticode_malformed")
+            break
+        entry_end = off + dw_length
+        if entry_end > end:
+            caps.add("authenticode_malformed")
+            entry_end = end
+        if skimmed:
+            caps.add("authenticode_extra_certificates")
+        elif cert_type != _WIN_CERT_TYPE_PKCS_SIGNED_DATA:
+            caps.add("authenticode_non_pkcs_entry")
+        else:
+            skimmed = True
+            blob_len = entry_end - off - _WIN_CERT_HEADER.size
+            if blob_len > _MAX_CERT_BLOB_BYTES:
+                blob_len = _MAX_CERT_BLOB_BYTES
+                caps.add("authenticode_blob_capped")
+            blob = _read_at(f, off + _WIN_CERT_HEADER.size, blob_len)
+            if blob is None:
+                caps.add("authenticode_unreadable")
+            else:
+                name = _skim_claimed_signer(blob, caps)
+                if name is not None:
+                    facts.claimed_signer = name
+        # Entries are 8-byte aligned; the aligned stride past a
+        # clamped entry_end lands at/after ``end`` and exits.
+        off = entry_end + (-entry_end % 8)
 
 
 # ---------------------------------------------------------------------------
