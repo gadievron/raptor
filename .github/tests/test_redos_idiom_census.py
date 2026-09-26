@@ -121,7 +121,32 @@ opener once, then repeats of a body unit that embeds the delimiter
 either satisfies the continuation (the plant doubles as the close)
 or halts the repeat, so the density shape prices each attempt at
 O(gap) instead of O(run) on string-literal matchers like
-``"(?:\\.|[^"\\])*"``.  Pins live in
+``"(?:\\.|[^"\\])*"``.
+
+Three further synthesis mechanisms keep the pumps honest:
+
+* BRANCH-VARIANT ENTRIES: entry min-models enumerate every branch
+  alternative on the spine (capped), not just the first generable
+  one — a separator alternation whose first branch is zero-width
+  (``(?:\\A|[;&|(]|\\n)…``) or self-closing (``(?:\"\"\"|/\\*\\*)…``)
+  otherwise hides the dangerous entry from every lane.
+* MULTI-CHAR OPENER: for a non-empty entry, the entry ONCE followed
+  by body-unit repeats — a single attempt whose repeat/continuation
+  split ambiguity is quadratic in the run (bounded-chain shapes like
+  ``head\\(\\s*(?:\\w+\\s*(?:->|\\.)\\s*)+field[,)]``).  Not gated on
+  entry⊆charset: the entry never has to sit inside the repeat's
+  span, which is exactly why the density lanes could not price it.
+* ATTACK-DEGENERACY GUARD: an attack the pattern MATCHES returns
+  from the position loop early and prices nothing, so a matching
+  lane never contributes a linear verdict — the worker retries
+  poison-free (the poison chooser is first-set bounded and a later
+  continuation atom can complete a match it cannot see), then
+  reports the lane unsynthesizable; a member with no non-degenerate
+  lane routes LOUDLY to the manual-review lane.
+
+Per-member lane count is budgeted by ``_SCAN_LANE_CAP``;
+regeneration refuses and the nightly re-check flags any member over
+the cap instead of part-measuring it silently.  Pins live in
 ``data/redos_scan_restart_expected.json`` under the same
 propose/refuse/nightly regime as the trailing-span arm, over the
 same universe (call sites and pattern-table entries both).
@@ -1426,6 +1451,57 @@ def _gen_min_seq_embed(seq, flags: int, target: int) -> str:
     return "".join(_gen_min_embed(node, flags, target) for node in seq)
 
 
+# Variant caps: per-node branch alternatives and accumulated entry
+# variants are both bounded so the lane walk stays linear-ish in
+# pattern size.  Both directions: raising them multiplies lanes (and
+# oracle lanes are subprocess-measured, so nightly cost follows);
+# lowering them re-opens the first-branch-only blindness for
+# patterns whose dangerous alternative sits past the cap.
+_VARIANT_CAP = 4
+_ENTRY_VARIANT_CAP = 6
+
+
+def _gen_min_variants(node: tuple, flags: int,
+                      cap: int = _VARIANT_CAP) -> list[str]:
+    """ALL branch-alternative min-models of a node (capped) — the
+    scalar ``_gen_min`` keeps only the FIRST generable alternative,
+    so a pattern whose dangerous entry or body unit sits in a later
+    branch was modeled by a harmless sibling (``(?:\\A|[;&|(]|\\n)``
+    modeled as the zero-width ``\\A``; a doc-comment alternation
+    modeled as its first delimiter only)."""
+    op, arg = node
+    if op is sre_parse.BRANCH:
+        outs: list[str] = []
+        for branch in arg[1]:
+            try:
+                outs.extend(_gen_min_seq_variants(branch, flags, cap))
+            except _Unsupported:
+                continue
+            if len(outs) >= cap:
+                break
+        if not outs:
+            raise _Unsupported("no generable branch")
+        return outs[:cap]
+    if op is sre_parse.SUBPATTERN:
+        return _gen_min_seq_variants(arg[3], flags, cap)
+    if op in (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT):
+        low = arg[0]
+        if low == 0:
+            return [""]
+        subs = _gen_min_seq_variants(arg[2], flags, cap)
+        return [sub * min(low, 5) for sub in subs][:cap]
+    return [_gen_min(node, flags)]
+
+
+def _gen_min_seq_variants(seq, flags: int,
+                          cap: int = _VARIANT_CAP) -> list[str]:
+    outs = [""]
+    for node in seq:
+        variants = _gen_min_variants(node, flags, cap)
+        outs = [a + b for a in outs for b in variants][:cap]
+    return outs
+
+
 def _pump_units(pair: dict, flags: int) -> list[str]:
     """Pump units for a pair: the single overlap char, plus the
     min-model STRING of the first repeat's body — word-granularity
@@ -1672,7 +1748,7 @@ def _oracle_lane(pattern: str, flags: int, mode: str, kind: str,
             status = parts[0]
     if killed:
         return (99.0, "wall")
-    if status in ("NOATTACK", "NOPARSE", "NOLANE"):
+    if status in ("NOATTACK", "NOPARSE", "NOLANE", "DEGEN"):
         return (None, status)
     if len(probes) == 1 and probes[0][1] > 1.0:
         return (99.0, "wall")  # first probe already over the CPU budget
@@ -1805,6 +1881,17 @@ def _regen_expected(workers: int = 8) -> int:
 _SCAN_EXPECTED_FILE = Path(__file__).resolve().parent / "data" / \
     "redos_scan_restart_expected.json"
 
+# Per-member lane budget for the scan oracle.  The classifier
+# measures at most this many lanes; a member whose lane count
+# EXCEEDS it is refused at regeneration and flagged by the nightly
+# re-check instead of being silently part-measured (a silent cap
+# once left a member's excess lanes unpriced with zero headroom).
+# Both directions: raising it buys more measurement per member at
+# subprocess cost (nightly re-measures every lane of every pin);
+# lowering it below the universe's max lane count (40 at this cut)
+# turns real members into refusals.
+_SCAN_LANE_CAP = 64
+
 # Rule S's identity-pinned manual-review lane, digest-keyed like
 # ``_TABLE_ADJUDICATED``: string-table entries the worst-case table
 # extraction admits but that are NEVER COMPILED as regexes — output
@@ -1857,6 +1944,71 @@ _SCAN_ADJUDICATED: dict[str, str] = {
         "('.*.pyd'): a filename glob, never compiled as a regex"
     ),
 }
+
+
+# All-lanes-degenerate members: every pump the synthesizer can build
+# MATCHES the pattern (their continuations are total or near-total —
+# a ``\\Z`` / ``$`` / to-end-of-line alternative accepts wherever
+# the interior stops), so no failing attempt THE SYNTHESIZER'S
+# POISON CHOOSER CAN BUILD exists for the oracle to price, and the
+# members route to the manual noattack lane.  Degeneracy is relative
+# to the chooser, not always intrinsic: for some members a poison
+# outside its candidate set does build a failing attack (measured
+# linear where checked).  Adjudicated LINEAR as a class: an
+# entry-anchored attempt either matches (the scan consumes and
+# advances) or fails cheaply, and the nightly ladder re-times each
+# member's still-matching lanes, so a pathological match cost cannot
+# hide behind the DEGEN routing.  Identity-pinned like the other
+# manual lanes: a NEW degenerate member fails the lane test until it
+# is analysed and listed here.
+_SCAN_DEGENERATE_MEMBERS: frozenset[str] = frozenset({
+    "core/analysis/binary_oracle.py :: name_indirect_re",
+    "core/analysis/reachability_gates.py :: _FENCED_CODE_RE",
+    "core/analysis/taint_multi_lang.py :: assert_re",
+    "core/analysis/taint_multi_lang.py :: named_re",
+    "core/audit/corpus/rule_eval.py :: _CWE_RE",
+    "core/audit/negative_space.py :: assign_re",
+    "core/audit/prefilter.py :: `[^`]*\\$",
+    "core/audit/release_order.py :: assign_re",
+    "core/audit/sentinel_collapse.py :: _GO_NIL_COERCE",
+    "core/audit/sibling_analysis.py :: _NULL_GUARD_RE",
+    "core/sage/hooks.py :: m",
+    "core/sandbox/observe.py :: m",
+    "core/symbolic/_detect.py :: _READ_SIZED_RE",
+    "packages/autonomous/dialogue.py :: code_block_match",
+    "packages/cve_env/cve_env/tools/dockerfile_gen.py :: "
+    "_APT_INSTALL_RE",
+    "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py :: "
+    ",?\\s{0,16}leading to (?:a |an )?(?:[a-zA",
+    "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py :: "
+    "An attacker (can|could|may|with)(?:[^.\\n",
+    "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py :: "
+    "It (is|may be) possible to (launch|initi",
+    "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py :: "
+    "Successful exploitation(?:[^.\\n]|\\.(?=\\d",
+    "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py :: "
+    "The exploit has been (publicly )?disclos",
+    "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py :: "
+    "The manipulation of (the )?(argument|par",
+    "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py :: "
+    "This (allows|enables) (attackers?|advers",
+    "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py :: "
+    "This (issue|vulnerability) (affects|allo",
+    "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py :: "
+    "VDB-\\d+(?:[^.\\n]|\\.(?=\\d))*(?:\\.(?!\\d)|\\",
+    "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py :: "
+    "\\b(allows?|enables?|permits?)\\s+(a\\s+|an",
+    "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py :: "
+    "\\b(the\\s+)?attacks?\\s+(may|can|could|wil",
+    "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py :: "
+    "\\bexploitable by(?:[^.\\n]|\\.(?=\\d))*(?:\\",
+    "packages/sca/refresh_typosquat_lists.py :: "
+    "[a-z0-9]([a-z0-9._-]*[a-z0-9])?",
+    "packages/sca/registries/packagist.py :: _PRERELEASE_RE",
+    "packages/sca/rewriters/gradle_version_catalog.py :: "
+    "_TOML_MULTILINE_STRING_RE",
+    "packages/semgrep/nosemgrep.py :: _NOSEMGREP_RE",
+})
 
 
 def _seq_leading_anchor(seq) -> bool:
@@ -1988,23 +2140,28 @@ def _find_scan_restart_lanes(parsed, flags: int) -> list[dict]:
 
     Walks into subpatterns, branches, and repeat BODIES (an unbounded
     repeat nested inside an optional group scan-restarts all the
-    same), with the enclosing tail visible, accumulating the
-    min-model entry string."""
+    same), with the enclosing tail visible, accumulating min-model
+    ENTRY VARIANTS: every branch alternative on the spine becomes an
+    entry candidate (capped), because the scalar min-model kept only
+    the FIRST alternative and a separator alternation whose first
+    branch is zero-width (``(?:\\A|[;&|(]|\\n)``) or self-closing
+    (``(?:\"\"\"|/\\*\\*)``) hid the dangerous entry from every
+    lane."""
     lanes: list[dict] = []
     seen: set[int] = set()
 
-    def walk(seq, entry: str, tail_after: tuple) -> None:
+    def walk(seq, entries: tuple, tail_after: tuple) -> None:
         for i, node in enumerate(list(seq)):
             op, arg = node
             rest = tuple(list(seq)[i + 1:]) + tail_after
             if op is sre_parse.SUBPATTERN:
-                walk(arg[3], entry, rest)
+                walk(arg[3], entries, rest)
             elif op is sre_parse.BRANCH:
                 for branch in arg[1]:
-                    walk(branch, entry, rest)
+                    walk(branch, entries, rest)
             elif op in (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT) \
                     and not _is_unbounded_repeat(node):
-                walk(arg[2], entry, rest)
+                walk(arg[2], entries, rest)
             elif _is_unbounded_repeat(node) and id(node) not in seen:
                 seen.add(id(node))
                 charset = _charset(node, flags)
@@ -2017,110 +2174,145 @@ def _find_scan_restart_lanes(parsed, flags: int) -> list[dict]:
                     true_first = _first_set(list(rest), flags)
                     fills = [c for c in sorted(charset - true_first)
                              if c not in (10, 13)]
-                    if tail["consuming"] and not fills \
-                            and all(ord(ch) in charset for ch in entry):
-                        # STARVED density lane: no fill avoids the
-                        # continuation's first-set, so this repeat's
-                        # restart cost cannot be pumped — the member
-                        # must not silently pin linear on the other
-                        # lanes alone.  Regeneration routes starved
-                        # members to the identity-pinned manual lane.
-                        lanes.append({
-                            "entry": entry, "fill": "",
-                            "poison": "", "starved": True,
-                        })
                     poison = next(
                         (chr(c) for c in (1, 46, 59, 88, 10, 33, 2)
                          if c not in charset and c not in first),
                         None,
                     )
-                    if tail["consuming"] and fills \
-                            and all(ord(ch) in charset for ch in entry):
-                        fill = chr(32 if 32 in fills else next(
-                            (c for c in fills if chr(c).isalnum()),
-                            fills[0]))
-                        lanes.append({
-                            "entry": entry, "fill": fill,
-                            "poison": poison or "",
-                        })
-                        boundary_fill = _guard_breaking_fill(
-                            parsed, flags, entry, fills, fill,
+                    try:
+                        bodies = _gen_min_seq_variants(arg[2], flags)
+                    except _Unsupported:
+                        bodies = []
+                    for entry in entries:
+                        _emit_lanes_for_entry(
+                            lanes, parsed, flags, arg, entry, charset,
+                            tail, first, fills, poison, bodies,
                         )
-                        if boundary_fill is not None:
-                            lanes.append({
-                                "entry": entry, "fill": boundary_fill,
-                                "poison": poison or "",
-                            })
-                        # Body-unit lane: a repeat whose BODY spans
-                        # several chars (member-access links, dotted
-                        # segments) only exposes its per-position
-                        # re-walk to a pump built from whole body
-                        # units — a single-char fill never iterates
-                        # it.
-                        try:
-                            body = _gen_min_seq(arg[2], flags)
-                        except _Unsupported:
-                            body = ""
-                        if len(body) > 1 and body != fill:
-                            lanes.append({
-                                "entry": entry, "fill": body,
-                                "poison": poison or "",
-                            })
-                        # Unterminated-delimiter lane: when the entry
-                        # char is consumable by R only INSIDE a
-                        # multi-char body unit (an escape pair like
-                        # \" for a string-literal matcher), the
-                        # density pump's bare planted entries either
-                        # satisfy the continuation (the plant doubles
-                        # as the close — the match succeeds early) or
-                        # halt the repeat at the next plant — either
-                        # way each attempt costs O(gap), not O(run).
-                        # The pump for this shape is the opener ONCE,
-                        # then repeats of the embedding unit with no
-                        # close: every embedded entry is a live
-                        # attempt position, and the repeat consumes
-                        # ACROSS the remaining plants (each sits
-                        # inside a unit), so every attempt re-scans
-                        # the whole tail.
-                        if len(entry) == 1:
-                            try:
-                                embed = _gen_min_seq_embed(
-                                    arg[2], flags, ord(entry),
-                                )
-                            except _Unsupported:
-                                embed = ""
-                            if len(embed) > 1 and entry in embed \
-                                    and embed != body:
-                                lanes.append({
-                                    "entry": entry, "fill": embed,
-                                    "poison": poison or "",
-                                    "opener": True,
-                                })
-                    if tail["consuming"] and (charset & first):
-                        # Overlap lane: when the continuation's first
-                        # char is ALSO in charset(R), the split of a
-                        # hostile run between R and its continuation
-                        # is the attack — one attempt at a single
-                        # entry, quadratic in the run.  Neither the
-                        # pure fill nor the body unit measures it
-                        # (both avoid the tail's first-set).
-                        overlap = sorted(charset & first)
-                        ofill = chr(next(
-                            (c for c in overlap if chr(c).isprintable()),
-                            overlap[0]))
-                        lanes.append({
-                            "entry": entry, "fill": ofill,
-                            "poison": poison or "", "once": True,
-                        })
-                walk(arg[2], entry, rest)
-            try:
-                entry += _gen_min(node, flags)
-            except _Unsupported:
-                pass
+                walk(arg[2], entries, rest)
+            new_entries = []
+            for entry in entries:
+                try:
+                    for variant in _gen_min_variants(node, flags):
+                        new_entries.append(entry + variant)
+                except _Unsupported:
+                    new_entries.append(entry)
+            entries = tuple(
+                dict.fromkeys(new_entries))[:_ENTRY_VARIANT_CAP]
 
     if not _seq_leading_anchor(parsed):
-        walk(parsed, "", ())
-    return lanes
+        walk(parsed, ("",), ())
+    # Entry variants can rediscover the same lane through different
+    # spine paths — deduplicate on full lane identity (order kept).
+    uniq: dict[tuple, dict] = {}
+    for lane in lanes:
+        key = (lane.get("entry"), lane.get("fill"), lane.get("poison"),
+               lane.get("opener"), lane.get("once"), lane.get("starved"))
+        uniq.setdefault(key, lane)
+    return list(uniq.values())
+
+
+def _emit_lanes_for_entry(lanes: list, parsed, flags: int, arg,
+                          entry: str, charset: set, tail: dict,
+                          first: set, fills: list,
+                          poison: str | None, bodies: list) -> None:
+    """All lane shapes for ONE (repeat, entry-variant) pair."""
+    if tail["consuming"] and not fills \
+            and all(ord(ch) in charset for ch in entry):
+        # STARVED density lane: no fill avoids the continuation's
+        # first-set, so this repeat's restart cost cannot be pumped —
+        # the member must not silently pin linear on the other lanes
+        # alone.  Regeneration routes starved members to the
+        # identity-pinned manual lane.
+        lanes.append({
+            "entry": entry, "fill": "",
+            "poison": "", "starved": True,
+        })
+    if tail["consuming"] and fills \
+            and all(ord(ch) in charset for ch in entry):
+        fill = chr(32 if 32 in fills else next(
+            (c for c in fills if chr(c).isalnum()),
+            fills[0]))
+        lanes.append({
+            "entry": entry, "fill": fill,
+            "poison": poison or "",
+        })
+        boundary_fill = _guard_breaking_fill(
+            parsed, flags, entry, fills, fill,
+        )
+        if boundary_fill is not None:
+            lanes.append({
+                "entry": entry, "fill": boundary_fill,
+                "poison": poison or "",
+            })
+        # Body-unit lane: a repeat whose BODY spans several chars
+        # (member-access links, dotted segments) only exposes its
+        # per-position re-walk to a pump built from whole body units
+        # — a single-char fill never iterates it.  All branch
+        # variants of the body pump (the first-variant-only unit
+        # missed chains whose ambiguous separator sits in a later
+        # branch).
+        for body in bodies:
+            if len(body) > 1 and body != fill:
+                lanes.append({
+                    "entry": entry, "fill": body,
+                    "poison": poison or "",
+                })
+        # Unterminated-delimiter lane: when the entry char is
+        # consumable by R only INSIDE a multi-char body unit (an
+        # escape pair like \" for a string-literal matcher), the
+        # density pump's bare planted entries either satisfy the
+        # continuation (the plant doubles as the close — the match
+        # succeeds early) or halt the repeat at the next plant —
+        # either way each attempt costs O(gap), not O(run).  The
+        # pump for this shape is the opener ONCE, then repeats of
+        # the embedding unit with no close: every embedded entry is
+        # a live attempt position, and the repeat consumes ACROSS
+        # the remaining plants (each sits inside a unit), so every
+        # attempt re-scans the whole tail.
+        if len(entry) == 1:
+            try:
+                embed = _gen_min_seq_embed(
+                    arg[2], flags, ord(entry),
+                )
+            except _Unsupported:
+                embed = ""
+            if len(embed) > 1 and entry in embed \
+                    and embed not in bodies:
+                lanes.append({
+                    "entry": entry, "fill": embed,
+                    "poison": poison or "",
+                    "opener": True,
+                })
+    if tail["consuming"] and entry:
+        # Multi-char opener lane: the entry ONCE, then body-unit
+        # repeats — a single attempt whose repeat/continuation
+        # ambiguity is quadratic in the run (bounded-chain shapes
+        # like ``head\(\s*(?:\w+\s*(?:->|\.)\s*)+field[,)]``).  Not
+        # gated on entry⊆charset: the entry never has to sit inside
+        # R's span (it appears once), which is exactly why the
+        # density lanes — all so gated — could not price these
+        # shapes.
+        for unit in bodies:
+            if len(unit) > 1:
+                lanes.append({
+                    "entry": entry, "fill": unit,
+                    "poison": poison or "", "opener": True,
+                })
+    if tail["consuming"] and (charset & first):
+        # Overlap lane: when the continuation's first char is ALSO
+        # in charset(R), the split of a hostile run between R and
+        # its continuation is the attack — one attempt at a single
+        # entry, quadratic in the run.  Neither the pure fill nor
+        # the body unit measures it (both avoid the tail's
+        # first-set).
+        overlap = sorted(charset & first)
+        ofill = chr(next(
+            (c for c in overlap if chr(c).isprintable()),
+            overlap[0]))
+        lanes.append({
+            "entry": entry, "fill": ofill,
+            "poison": poison or "", "once": True,
+        })
 
 
 def _build_scan_restart_attack(lane: dict, n: int) -> str | None:
@@ -2214,6 +2406,27 @@ def _scan_oracle_probe_lines(pattern: str, flags: int,
         return
     lane = lanes[index]
     rx = re.compile(pattern, flags)
+    # Attack-degeneracy guard: an attack the pattern MATCHES returns
+    # from the position loop early and prices no restart cost — a
+    # matching lane must never contribute a LINEAR verdict.  The
+    # poison chooser is first-set bounded, and a LATER continuation
+    # atom can complete a match the first-set test cannot see (a
+    # poison ``;`` completed ``return …;`` and minted a linear pin),
+    # so retry poison-free first.  When every spelling still
+    # matches, the lane is still TIMED — a pathological match cost
+    # must not hide behind the guard — but its probes are only
+    # reported if they blow the budget; a fast matching lane
+    # reports DEGEN, which the parent treats as unsynthesizable.
+    degenerate = False
+    probe = _build_scan_restart_attack(lane, 1000)
+    if probe is not None and rx.search(probe) is not None:
+        stripped = dict(lane, poison="")
+        probe = _build_scan_restart_attack(stripped, 1000)
+        if probe is not None and rx.search(probe) is None:
+            lane = stripped
+        else:
+            degenerate = True
+    buffered: list[str] = []
     n = 500
     while n <= 32000:
         text = _build_scan_restart_attack(lane, n)
@@ -2226,10 +2439,18 @@ def _scan_oracle_probe_lines(pattern: str, flags: int,
         start = time.process_time()
         rx.search(text)
         elapsed = time.process_time() - start
-        print(n, f"{elapsed:.6f}", flush=True)
+        if degenerate:
+            buffered.append(f"{n} {elapsed:.6f}")
+        else:
+            print(n, f"{elapsed:.6f}", flush=True)
         if elapsed > 1.0:
             break
         n *= 2
+    if degenerate:
+        if buffered and float(buffered[-1].split()[1]) > 1.0:
+            print("\n".join(buffered), flush=True)
+        else:
+            print("DEGEN")
 
 
 def _scan_oracle_classify(pattern: str,
@@ -2244,11 +2465,11 @@ def _scan_oracle_classify(pattern: str,
     lanes = _find_scan_restart_lanes(parsed, parsed.state.flags)
     worst: float | None = None
     synthesized = False
-    for index in range(min(len(lanes), 12)):
+    for index in range(min(len(lanes), _SCAN_LANE_CAP)):
         exponent, status = _oracle_lane(
             pattern, flags, "search", "scan", index, "",
         )
-        if status not in ("NOATTACK", "NOPARSE", "NOLANE"):
+        if status not in ("NOATTACK", "NOPARSE", "NOLANE", "DEGEN"):
             synthesized = True
         if exponent is not None and (worst is None or exponent > worst):
             worst = exponent
@@ -2270,17 +2491,24 @@ def _regen_scan_expected(workers: int = 8) -> int:
         key, record = item
         lineno, pattern, flags, _mode = record["sites"][0]
         exponent, synthesized = _scan_oracle_classify(pattern, flags)
-        starved = any(
-            lane.get("starved")
-            for lane in _site_scan_lanes(_Site(
-                key, lineno, pattern, flags, "search", None,
-            ))
-        )
-        return key, record, exponent, synthesized, starved
+        lanes = _site_scan_lanes(_Site(
+            key, lineno, pattern, flags, "search", None,
+        ))
+        starved = any(lane.get("starved") for lane in lanes)
+        return key, record, exponent, synthesized, starved, len(lanes)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for key, record, exponent, synthesized, starved in pool.map(
-                classify, sorted(members.items())):
+        for key, record, exponent, synthesized, starved, n_lanes \
+                in pool.map(classify, sorted(members.items())):
+            if n_lanes > _SCAN_LANE_CAP:
+                # Loud, never silent: a part-measured member must not
+                # pin — its unmeasured lanes could carry the verdict.
+                failures.append(
+                    f"{key[0]} :: {key[1]} has {n_lanes} lanes, over "
+                    f"the classify cap ({_SCAN_LANE_CAP}) — raise "
+                    f"_SCAN_LANE_CAP or simplify the pattern",
+                )
+                continue
             if record["digests"] <= set(_SCAN_ADJUDICATED):
                 # Never-compiled table string with a documented
                 # disposition (see _SCAN_ADJUDICATED) — pinned, not
@@ -3365,15 +3593,17 @@ class TrailingSpanCensus(unittest.TestCase):
           missing the continuation's true first char (universe at
           this cut: zero members; empty fills route LOUD to the
           manual lane rather than minting a pin).
-        * Multi-char-entry embedding: the unterminated-delimiter
-          lane's unit generator targets SINGLE-char entries, so a
-          member whose restart trigger is a multi-char entry
-          recreatable only ACROSS body-unit boundaries is measured
-          by the density/body/overlap lanes alone (universe at this
-          cut: 168 multi-char-entry lanes, each oracle-pinned
-          through its other lanes; a restart at such an entry also
-          needs every entry char re-matched, so single-unit
-          embedding — the covered case — is the dense one).
+        * Cross-unit entry recreation: the multi-char opener lane
+          pumps the entry ONCE (single-attempt split ambiguity); a
+          member that is dense only when full multi-char entries are
+          RECREATED inside the repeat's span across body-unit
+          boundaries has no dedicated pump — the density lane plants
+          entries bare, and a bare multi-char plant needs every
+          entry char consumable, which the entry⊆charset gate
+          already covers where it holds.  A restart at such an entry
+          re-matches every entry char, so the uncovered subclass
+          needs the units to concatenate into the exact entry —
+          constructed-only at this cut.
 
         Accepted over-census: a member mixing closer-anchored dot
         companions with arrow chains can census one row twice —
@@ -3586,11 +3816,15 @@ class ScanRestartCensus(unittest.TestCase):
 
         openers = [lane for lane in lanes_for(r'"(?:\\.|[^"\\])*"')
                    if lane.get("opener")]
-        self.assertEqual(
+        # The embed unit rides among the opener lanes (the multi-char
+        # opener mechanism adds plain body-unit lanes beside it).
+        self.assertIn(
+            ('"', '\\"'),
             [(lane["entry"], lane["fill"]) for lane in openers],
-            [('"', '\\"')],
         )
-        attack = _build_scan_restart_attack(openers[0], 64)
+        embed_lane = next(lane for lane in openers
+                          if lane["fill"] == '\\"')
+        attack = _build_scan_restart_attack(embed_lane, 64)
         self.assertIsNotNone(attack)
         self.assertTrue(attack.startswith('"\\"'))
         # No bare close anywhere: every delimiter after the opener
@@ -3602,15 +3836,15 @@ class ScanRestartCensus(unittest.TestCase):
         # opener lane; the escape-pair sibling with a DIFFERENT
         # close delimiter (paren matcher) is the same family.
         two_quote = (r'"(?:\\.|[^"\\])*"' + r"|'(?:\\.|[^'\\])*'")
-        self.assertEqual(
-            sorted(lane["entry"] for lane in lanes_for(two_quote)
-                   if lane.get("opener")),
-            ['"', "'"],
+        self.assertLessEqual(
+            {'"', "'"},
+            {lane["entry"] for lane in lanes_for(two_quote)
+             if lane.get("opener")},
         )
-        self.assertEqual(
+        self.assertIn(
+            "\\(",
             [lane["fill"] for lane in lanes_for(r"\((?:\\.|[^()\\])*\)")
              if lane.get("opener")],
-            ["\\("],
         )
         # Run-start-pinned spelling: still proposed (lane present) —
         # linear disposition belongs to the oracle, not the proposer.
@@ -3623,6 +3857,81 @@ class ScanRestartCensus(unittest.TestCase):
             lanes_for(r'"(?:\\.|[^"\\]){0,200}"'
                       r"|'(?:\\.|[^'\\]){0,200}'"), [],
         )
+
+    def test_variant_opener_and_degeneracy_mechanisms(self) -> None:
+        """Generator self-checks for the three synthesis mechanisms
+        (in-process, no timing — each mechanism's timing half lives
+        in the nightly oracle self-check):
+
+        * branch-variant entries — a doc-comment alternation's
+          NON-first opener and a separator alternation's non-first
+          branches become entries (the first-variant-only model hid
+          them: one is preceded by a self-closing sibling, the
+          other by a zero-width ``\\A``);
+        * multi-char opener — a bounded-chain shape gets an
+          entry-once lane whose unit is a whole chain link, and the
+          built attack is the head followed by link repeats;
+        * attack-degeneracy guard — a lane whose every attack
+          spelling MATCHES the pattern reports DEGEN instead of
+          printing fast probe lines that would read as linear."""
+        import contextlib
+        import io
+
+        def lanes_for(pattern: str, flags: int = 0) -> list[dict]:
+            return _site_scan_lanes(_Site(
+                ("<probe>", pattern[:40]), 0, pattern, flags,
+                "search", None,
+            ))
+
+        # Branch-variant entries: the doc-comment exemplar's third
+        # opener (first two self-close: the plant doubles as the
+        # close) and the separator exemplar's non-first branches.
+        doc = r'(?:"""|\'\'\'|/\*\*)(.*?)(?:"""|\'\'\'|\*/)'
+        entries = {lane["entry"] for lane in lanes_for(doc, re.DOTALL)}
+        self.assertIn("/**", entries)
+        sep = r'(?:\A|[;&|(]|\n)\s*(?:\S*/)?libexec/x-[a-z]+'
+        entries = {lane["entry"] for lane in lanes_for(sep)}
+        self.assertIn("&", entries)
+        self.assertIn("\n", entries)
+        # Multi-char opener: the bounded-chain shape's head is an
+        # entry-once lane with a whole chain link as the unit.
+        chain = (r"\bcmp\s*\(\s*(?:\w+\s*(?:->|\.)\s*)+"
+                 r"([\w.]+?)\s*[,)]")
+        openers = [lane for lane in lanes_for(chain)
+                   if lane.get("opener") and lane["entry"] == "cmp("]
+        self.assertTrue(any("." in lane["fill"] and len(lane["fill"]) > 1
+                            for lane in openers), openers)
+        lane = next(lane for lane in openers if "." in lane["fill"])
+        attack = _build_scan_restart_attack(lane, 64)
+        self.assertTrue(attack.startswith("cmp(" + lane["fill"]))
+        self.assertEqual(attack.count("cmp("), 1)
+        # Degeneracy guard: every attack spelling for this shape
+        # matches the pattern (the planted entry doubles as the
+        # continuation), so the worker must report DEGEN — without
+        # the guard it prints fast probe lines that read linear.
+        degen = r"a[^;]*a"
+        lanes = _find_scan_restart_lanes(
+            sre_parse.parse(degen, 0), 0)
+        index = next(i for i, ln in enumerate(lanes)
+                     if not ln.get("once") and not ln.get("starved"))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            _scan_oracle_probe_lines(degen, 0, index)
+        self.assertEqual(out.getvalue().strip(), "DEGEN")
+        # The retry half: the poisoned attack for the return-value
+        # shape MATCHES (the first-set-safe poison ';' completes the
+        # match downstream), the poison-free respelling does not —
+        # the worker's retry has a live pump to fall back to.
+        ret = r"\breturn\s+([^;\s](?:[^;]*[^;\s])?)\s*;"
+        rlanes = _find_scan_restart_lanes(sre_parse.parse(ret, 0), 0)
+        rlane = next(ln for ln in rlanes
+                     if not ln.get("once") and not ln.get("starved"))
+        rx = re.compile(ret)
+        poisoned = _build_scan_restart_attack(rlane, 1000)
+        self.assertIsNotNone(rx.search(poisoned))
+        stripped = dict(rlane, poison="")
+        self.assertIsNone(
+            rx.search(_build_scan_restart_attack(stripped, 1000)))
 
     def test_members_match_the_pinned_verdicts(self) -> None:
         """Default-tier closure: the live Rule S proposal set equals
@@ -3741,25 +4050,36 @@ class ScanRestartCensus(unittest.TestCase):
         every documented digest must still be pinned (a stale
         disposition is drift too).
 
-        Current noattack lane, one member, manually adjudicated
-        LINEAR: struct_field_checker ``_STRUCT_FIELD_RE`` — its
-        starved-density routing is a FIRST-SET over-approximation
-        (the ``(?:backslash-s|(?=*))`` gate's lookahead constrains the
-        following atoms to '*', which the assert-blind first-set
-        cannot see), and by inspection no fill can pass the
-        ws-or-star gate: a word-char run costs one O(1)-per-split
-        rejection per word start, so the scan is linear.  Same
-        manual-friction class as the trailing-span lane's
-        backreference member."""
+        The lane is the starved member plus the documented
+        all-lanes-degenerate CLASS (see ``_SCAN_DEGENERATE_MEMBERS``
+        for the class adjudication):
+
+        * struct_field_checker ``_STRUCT_FIELD_RE`` — starved-density
+          routing from a FIRST-SET over-approximation (the
+          ``(?:backslash-s|(?=*))`` gate's lookahead constrains the
+          following atoms to '*', which the assert-blind first-set
+          cannot see), and by inspection no fill can pass the
+          ws-or-star gate: a word-char run costs one O(1)-per-split
+          rejection per word start, so the scan is linear.  Same
+          manual-friction class as the trailing-span lane's
+          backreference member.
+        * the ``_SCAN_DEGENERATE_MEMBERS`` class — total-continuation
+          patterns whose every synthesizable pump MATCHES, so no
+          failing attempt exists to price (the degeneracy guard
+          keeps their matching pumps from reading as linear
+          evidence, and a pathological match cost would still
+          surface: degenerate lanes are timed, DEGEN only reports
+          when the budget holds)."""
         pinned = _load_scan_expected()["members"]
         noattack = sorted(
             key.replace("\x1f", " :: ")
             for key, row in pinned.items()
             if row["verdict"] == "noattack"
         )
-        self.assertEqual(noattack, [
-            "core/audit/struct_field_checker.py :: _STRUCT_FIELD_RE",
-        ])
+        self.assertEqual(noattack, sorted(
+            {"core/audit/struct_field_checker.py :: _STRUCT_FIELD_RE"}
+            | _SCAN_DEGENERATE_MEMBERS
+        ))
         adjudicated_digests: set[str] = set()
         for row in pinned.values():
             if row["verdict"] == "adjudicated":
@@ -3859,6 +4179,57 @@ class ScanRestartNightly(unittest.TestCase):
         )
         self.assertLess(exponent if exponent is not None else 1.0,
                         _SUPERLINEAR_EXP)
+        # The branch-variant-entry exemplar: the dangerous opener is
+        # the alternation's THIRD branch (the first two self-close),
+        # so a first-variant-only entry model measured this shape
+        # linear; enumerated entries expose the unclosed-opener
+        # storm.  The token-scan rewrite that fixed the live member
+        # compiles no unbounded repeat, so the pass-side here is the
+        # bounded-window spelling of the same family.
+        exponent, synthesized = _scan_oracle_classify(
+            r'(?:"""|\'\'\'|/\*\*)(.*?)(?:"""|\'\'\'|\*/)', re.DOTALL,
+        )
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        self.assertEqual(_site_scan_lanes(_Site(
+            ("<probe>", "docs"), 0,
+            r'(?:"""|\'\'\'|/\*\*)(.{0,200}?)(?:"""|\'\'\'|\*/)',
+            re.DOTALL, "search", None,
+        )), [])
+        # The multi-char-opener exemplar: head once, then chain-link
+        # repeats with the closer withheld — single-attempt split
+        # ambiguity the density lanes cannot price (the head is
+        # never inside the repeat's span); the {1,32}-bounded chain
+        # measures linear.
+        chain_bad = (r"\bcmp\s*\(\s*(?:\w+\s*(?:->|\.)\s*)+"
+                     r"([\w.]+?)\s*[,)]")
+        exponent, synthesized = _scan_oracle_classify(chain_bad, 0)
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        chain_good = (r"\bcmp\s*\(\s*(?:\w+\s*(?:->|\.)\s*){1,32}"
+                      r"([\w.]+?)\s*[,)]")
+        exponent, _ = _scan_oracle_classify(chain_good, 0)
+        self.assertLess(exponent if exponent is not None else 1.0,
+                        _SUPERLINEAR_EXP)
+        # The degeneracy exemplar: the first-set-safe poison ';'
+        # COMPLETES this pattern's match, so the poisoned pump
+        # returned early and read linear — the guard's poison-free
+        # retry is the only path that prices the quadratic (remove
+        # the retry and the lane goes DEGEN, exponent None, and this
+        # assertion fails).
+        exponent, synthesized = _scan_oracle_classify(
+            r"\breturn\s+([^;\s](?:[^;]*[^;\s])?)\s*;", 0,
+        )
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        self.assertEqual(_site_scan_lanes(_Site(
+            ("<probe>", "ret"), 0,
+            r"\breturn\s+([^;\s](?:[^;]{0,400}[^;\s])?)\s*;",
+            0, "search", None,
+        )), [])
 
     @pytest.mark.slow
     def test_nightly_oracle_agrees_with_pins(self) -> None:
@@ -3871,21 +4242,25 @@ class ScanRestartNightly(unittest.TestCase):
         def measure(item):
             key, record = item
             lineno, pattern, flags, _mode = record["sites"][0]
-            starved = any(
-                lane.get("starved")
-                for lane in _site_scan_lanes(_Site(
-                    key, lineno, pattern, flags, "search", None,
-                ))
-            )
-            return key, starved, _scan_oracle_classify(pattern, flags)
+            lanes = _site_scan_lanes(_Site(
+                key, lineno, pattern, flags, "search", None,
+            ))
+            starved = any(lane.get("starved") for lane in lanes)
+            return (key, starved, len(lanes),
+                    _scan_oracle_classify(pattern, flags))
 
         items = [
             (key, record) for key, record in sorted(live.items())
             if pinned.get("\x1f".join(key)) is not None
         ]
         with ThreadPoolExecutor(max_workers=8) as pool:
-            for key, starved, (exponent, synthesized) in pool.map(
-                    measure, items):
+            for key, starved, n_lanes, (exponent, synthesized) \
+                    in pool.map(measure, items):
+                if n_lanes > _SCAN_LANE_CAP:
+                    violations.append(
+                        f"{key[0]} :: {key[1]}: {n_lanes} lanes over "
+                        f"the classify cap ({_SCAN_LANE_CAP}) — the "
+                        f"pin is part-measured; raise _SCAN_LANE_CAP")
                 row = pinned["\x1f".join(key)]
                 if row["verdict"] == "adjudicated":
                     # Never-compiled table strings (documented in
