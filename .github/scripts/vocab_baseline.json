@@ -399,6 +399,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "core/audit/boundary_unit.py::d": {
+    "count": 11,
+    "kind": "literal",
+    "note": "deviation-record serializer field keys (conforming, cwe, deviant, ...) consumed verbatim by the prepass fold — a serialization schema like consistency_dimensions.py::d, not a learned name vocabulary"
+  },
   "core/audit/consistency_dimensions.py::d": {
     "count": 11,
     "kind": "literal",
