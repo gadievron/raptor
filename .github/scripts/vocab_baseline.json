@@ -1815,6 +1815,11 @@
     "kind": "literal",
     "note": "persistence schema keys of one disclosure-backlog pointer record - a JSON record shape, not a function-name vocabulary"
   },
+  "core/taint/summaries.py::to_dict": {
+    "count": 17,
+    "kind": "literal",
+    "note": "summary serialization field names (FunctionSummary.to_dict JSON keys, shape-validated on cache load), not name vocabulary \u2014 same class as the finding-dict field-name entries"
+  },
   "core/trajectories/test_store.py::base": {
     "count": 10,
     "kind": "literal"
