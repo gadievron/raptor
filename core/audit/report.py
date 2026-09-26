@@ -1776,7 +1776,7 @@ def _format_summary(report: dict[str, Any]) -> str:
             )
         elif interrupted:
             lines.append(
-                f"### ⚠️ Joern pre-sweep window lost"
+                "### ⚠️ Joern pre-sweep window lost"
             )
             lines.append(
                 f"Interrupted by a server restart and NOT recovered "
