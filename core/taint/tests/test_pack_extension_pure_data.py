@@ -39,7 +39,9 @@ def test_new_sink_classes_enter_the_vocabulary_without_code():
     extended = load_with_fixture()
     new_classes = (extended.taint_class_vocabulary()
                    - baseline.taint_class_vocabulary())
-    assert {"stored-taint", "secret-exposure", "stored-user-input"} <= new_classes
+    assert {
+        "profile-store-taint", "credential-egress", "stored-profile-input",
+    } <= new_classes
 
 
 def test_new_vocabulary_immediately_governs_the_learned_channel():
@@ -48,7 +50,7 @@ def test_new_vocabulary_immediately_governs_the_learned_channel():
     and admitted after it — no code changed in between."""
     learned = [{
         "role": "sink", "function": "app.store.persist",
-        "taint_classes": ["stored-taint"], "confidence": 0.8,
+        "taint_classes": ["profile-store-taint"], "confidence": 0.8,
     }]
     before = intake_learned_specs(
         learned,
