@@ -447,6 +447,16 @@ def _show_function(file, function, cm, entries, index, ann_dir, args, out_dir=No
     else:
         print("  Verdict:  (no review recorded)")
 
+    if journal_entry and getattr(journal_entry, "body_offload", None):
+        # Slim-tier stub (journal compact --slim-clean): the prose
+        # body / hypotheses / snapshot lists live in the run sidecar.
+        # Constant text plus the fixed sidecar name — nothing here is
+        # row-derived, so no escaping is needed.
+        print("  Offloaded: body/hypotheses in "
+              "review-journal-bodies.jsonl "
+              "(journal compact --slim-clean; --raw shows the "
+              "pointer)")
+
     if journal_entry and journal_entry.hypotheses:
         print()
         print("  Hypotheses:")

@@ -331,14 +331,21 @@ class TestPlantedTypedFieldRows:
     def test_wrong_typed_field_quarantines_row(
         self, tmp_path: Path, caplog, field_name: str,
     ) -> None:
-        # Self-check: {} conforms to NO field annotation in the current
-        # schema — a future dict-typed field would silently make this
-        # parametrization vacuous for itself, so assert the premise.
+        # Per-field wrong-typed probe: {} mismatches every scalar and
+        # list annotation, but dict-typed fields (``body_offload``)
+        # accept it — those take an int probe instead. Self-check the
+        # premise so a future annotation shape with no mismatching
+        # candidate fails loudly instead of making its own
+        # parametrization vacuous.
         expected = journal_mod._field_types()[field_name]
-        assert not journal_mod._value_matches({}, expected)
+        probe: object = next(
+            (p for p in ({}, 5) if not journal_mod._value_matches(
+                p, expected)), None)
+        assert probe is not None, (
+            f"no wrong-typed probe candidate for {expected}")
 
         row = _base_row()
-        row[field_name] = {}
+        row[field_name] = probe
         self._plant(tmp_path, row)
 
         with caplog.at_level(logging.WARNING, logger="core.coverage.journal"):

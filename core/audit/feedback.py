@@ -397,6 +397,23 @@ def import_validation_results(
         prior_entry = prior_by_key.get(key)
         audit_status = prior_entry.verdict if prior_entry else ""
         prior_body = prior_entry.body if prior_entry else ""
+        if (prior_entry is not None and not prior_body
+                and getattr(prior_entry, "body_offload", None)
+                and audit_out_dir):
+            # Slim-tier stub (journal compact --slim-clean): restore
+            # the prior prose from the run sidecar so the correction
+            # row carries the reasoning it corrects. Unresolvable →
+            # the correction lands with an empty body (prose-only
+            # degrade; verdict/lesson fields are inline regardless).
+            try:
+                from core.coverage.journal_sidecar import resolve_offload
+                fields = resolve_offload(audit_out_dir, prior_entry)
+                body = fields.get("body") if fields else None
+                if isinstance(body, str):
+                    prior_body = body
+            except Exception:  # noqa: BLE001 — sidecar is run-dir content; containment boundary
+                logger.debug("sidecar hydration failed for %s", key,
+                             exc_info=True)
 
         # Machine-tier path: annotations without human grade — legacy
         # pre-migration LLM verdicts, agent-sourced notes, and human

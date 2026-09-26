@@ -46,6 +46,26 @@ def outcome_from_entry(entry: Any) -> Any:
     ]
     hypothesis = hypotheses[0]["mechanism"] if hypotheses else ""
 
+    body = entry.body or ""
+    if not body and getattr(entry, "body_offload", None):
+        # Slim-tier stub (journal compact --slim-clean): DELIBERATELY
+        # not hydrated. The re-emitted reused row is re-journaled per
+        # resume segment, so restoring the prose here would re-inflate
+        # the journal the slim tier just shrank, every segment — and
+        # the candidates can come from the project index, which has
+        # no route back to the producing run's sidecar. The verdict,
+        # cwe, and evidence provenance stay inline on the stub; the
+        # outcome's HYPOTHESES (and the hypothesis line above) come
+        # back empty too — offloaded alongside the body, prose-hint
+        # tier only on the function-grade clean/dormant rows the slim
+        # tier touches — so the marker names both. (Claim bodies
+        # always travel inline.)
+        body = (
+            "[body and hypotheses offloaded: "
+            "review-journal-bodies.jsonl — journal compact "
+            "--slim-clean]"
+        )
+
     review_result: dict[str, Any] = {
         "status": entry.verdict,
         "reused": True,
@@ -62,7 +82,7 @@ def outcome_from_entry(entry: Any) -> Any:
         status=entry.verdict,
         body=(
             f"[reused: verdict imported from run {origin}; "
-            f"source hash unchanged]\n\n{entry.body or ''}"
+            f"source hash unchanged]\n\n{body}"
         ),
         hypothesis=hypothesis,
         hypotheses=hypotheses or None,

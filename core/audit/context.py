@@ -3825,6 +3825,17 @@ def _load_existing_annotation(
             entry = latest.get(f"{file_path}:{function_name}")
             if entry and entry.body:
                 return entry.body
+            if entry and getattr(entry, "body_offload", None):
+                # Slim-tier stub (journal compact --slim-clean): the
+                # prose lives in the run sidecar — hydrate so the
+                # re-review sees the same prior reasoning it saw
+                # pre-slim. Unresolvable → fall through to the
+                # annotation, the pre-existing no-journal-body path.
+                from core.coverage.journal_sidecar import resolve_offload
+                fields = resolve_offload(out_dir, entry)
+                body = fields.get("body") if fields else None
+                if isinstance(body, str) and body:
+                    return body
     except (ImportError, OSError):
         pass
     except Exception:

@@ -435,6 +435,18 @@ class ReviewJournalEntry:
     # fold verifies before granting verdict-reuse authority; see
     # core.coverage.journal_mac. Additive; absent on pre-MAC rows.
     integrity: str | None = None
+    # ``body_offload``: pointer stamped by ``journal compact
+    # --slim-clean`` on clean/dormant STUB rows whose fat prose/context
+    # fields (body, hypotheses, invariants_available,
+    # domain_concepts_available) were moved to the run-local sidecar
+    # (``core.coverage.journal_sidecar``). Shape: ``{"sidecar",
+    # "offset", "bytes", "sha256", "fields"}``. Covered by the row MAC
+    # on restamped stubs, so a verified stub's content hash
+    # authenticates the sidecar record on read. Never set by live
+    # writers; consumers that need the offloaded content hydrate
+    # through the sidecar module and fail toward re-review when the
+    # sidecar is unavailable. Additive; absent on non-stub rows.
+    body_offload: dict | None = None
     schema_version: int = SCHEMA_VERSION
 
     @property
@@ -812,18 +824,26 @@ class JournalLoad:
 def compact_hint(out_dir: Path | str) -> str:
     """The operator remedy line for an over-budget journal.
 
-    Names BOTH compaction tiers unconditionally: whether the lossless
+    Names EVERY compaction tier unconditionally: whether the lossless
     duplicate prune can free enough is not knowable at message-render
-    time (it needs the same two-pass census the compactor runs), and a
+    time (it needs the same two-pass census the compactor runs), a
     wedged operator whose journal holds no prunable duplicates must
-    still be told the actionable remedy.
+    still be told the actionable remedy — and a claim-dominated
+    journal of distinct latest rows can stay over budget even after
+    superseding, which only the slim tier can shrink further.
     """
     return (
         "compact it first: libexec/raptor-audit journal compact "
-        f"{out_dir} — and if that frees too little (no duplicate "
+        f"{out_dir} — if that frees too little (no duplicate "
         "rows to drop), add --supersede to keep only the newest "
         "verdict per identity (the full journal is archived as "
-        "review-journal.jsonl.pre-supersede*, spend floor preserved)"
+        "review-journal.jsonl.pre-supersede*, spend floor preserved) "
+        "— and if the journal is still over budget (distinct latest "
+        "rows dominate), use --slim-clean to move clean/dormant rows' "
+        "prose and context-snapshot fields to the "
+        "review-journal-bodies.jsonl sidecar (verdicts, spend, and "
+        "claim rows stay inline; the full journal is archived as "
+        "review-journal.jsonl.pre-slim*)"
     )
 
 
@@ -2102,6 +2122,7 @@ def _entry_from_dict(raw: dict[str, Any]) -> ReviewJournalEntry:
         seed_rereview=raw.get("seed_rereview"),
         provisional=raw.get("provisional"),
         integrity=raw.get("integrity"),
+        body_offload=raw.get("body_offload"),
         schema_version=version,
     )
 
