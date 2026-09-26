@@ -69,6 +69,16 @@ so run `cargo fetch` in the crate's fuzz/ dir once in a trusted context first):
 python3 raptor.py fuzz --binary /path/to/crate --fuzz-target parse_input --duration 600
 ```
 
+Java/Kotlin project via Jazzer (alpha; needs the `jazzer` standalone binary on
+PATH plus a JVM, and a harness class with `fuzzerTestOneInput` or `@FuzzTest`
+in the tree — `--fuzz-target <class>` picks one, auto-selected when the
+project has exactly one; Maven/Gradle builds run sandboxed and offline, so run
+`mvn -DskipTests test-compile` or `gradle testClasses` once in a trusted
+context first to populate the dependency cache):
+```bash
+python3 raptor.py fuzz --binary /path/to/project --fuzz-target com.example.ParserFuzz --duration 600
+```
+
 ## macOS Shared Memory Fix
 
 If fuzzing fails with "shmget() failed", run:

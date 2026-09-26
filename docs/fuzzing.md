@@ -171,6 +171,71 @@ cargo and cargo-fuzz are optional dependencies.  When either is missing the
 detector still reports the target with an install hint
 (`cargo install cargo-fuzz`) and the plan blocks instead of running.
 
+### Jazzer (Java/JVM, alpha)
+
+Coverage-guided fuzzing for Java/Kotlin projects via
+[Jazzer](https://github.com/CodeIntelligenceTesting/jazzer) — a native
+libFuzzer driver loading the JVM and calling a harness class's
+`fuzzerTestOneInput`.  Detected automatically for `java-project` targets (a
+directory with a `pom.xml` / Gradle build marker, or a bare Java/Kotlin
+source tree); force it with `--engine jazzer`.  Alpha caveats up front:
+single-instance campaigns that stop at the first crash (libFuzzer
+semantics), no JVM coverage bridge yet (JaCoCo is a later lane), and no
+harness synthesis — the fuzz targets are the project's own (a class with
+`public static void fuzzerTestOneInput(byte[] data)` or a `@FuzzTest` JUnit
+method).
+
+Target selection: `--fuzz-target <class>` picks one of the project's
+enumerated target classes (fully-qualified, or the simple name when it is
+unambiguous); a project with exactly one auto-selects it, several targets
+block the plan with the list (never a silent pick).  Without an operator
+`--corpus`, the project's own `src/test/resources/<pkg>/<Class>Inputs`
+seeds (the jazzer JUnit convention) are staged when present (through the
+same bounded, symlink-refusing corpus stager as every other engine).
+
+```bash
+python3 raptor.py fuzz --binary /path/to/project --fuzz-target com.example.ParserFuzz
+python3 raptor.py fuzz --binary /path/to/project           # single target
+```
+
+The campaign has two phases.  The BUILD compiles the harness classpath by
+layout — Maven (`mvn -B -o test-compile dependency:build-classpath`),
+Gradle (`gradle --offline --no-daemon` with a RAPTOR init script collecting
+the runtime classpath), or a bare `javac` compile into the run directory —
+and executes target code (Maven plugins ARE code, `build.gradle` IS code),
+so it runs under the full sandbox with the network denied and the tool
+pinned offline: dependencies must already be in the local cache (the
+failure message says to run one trusted-context build first).  The
+dependency caches the build sees are hermetic run-local copies seeded from
+the host `~/.m2/repository` / `~/.gradle/caches` dependency subtree — the
+host caches are never build-writable (a hostile build could otherwise
+poison the shared cache that the operator's own later, trusted builds
+silently consume) — and the build's in-project write scope covers only the
+build tool's own output dirs (module `target/` / `build/` plus the root
+`.gradle/`), while the rest of the project stays read-only.  The repo's own
+`mvnw`/`gradlew` wrappers are never executed.  The CAMPAIGN then executes
+the jazzer binary directly under the strict libFuzzer-runner sandbox with
+`--cp`/`--target_class` (the build tool never runs inside the campaign);
+the classpath entries coming out of the build are vetted — kept only when
+they exist inside the project or the run directory — before jazzer sees
+them.
+
+Crashes are usually uncaught Java exceptions (Jazzer's security detectors
+raise `FuzzerSecurityIssue*` exception types through the same report): the
+exception type, message, and stack frames parsed from the harness output
+become the triage signal on the normalized crash records
+(`jazzer/jazzer-crashes.json`), and each crash artifact is wrapped as a
+Witness under `<out>/witnesses/` (`produced_by: jazzer`, with the harness
+source file's hash) — the same record shape and store the AFL++, atheris,
+and cargo-fuzz paths use, so `/validate` and `raptor-verified-outcomes`
+consume jazzer crashes with no extra wiring.
+
+jazzer and a JVM are optional dependencies.  When either is missing the
+detector still reports the target with an install hint (the standalone
+release from the Jazzer GitHub releases page) and the plan blocks instead
+of running; a missing build tool for the project's layout (`mvn`,
+`gradle`, or `javac` for bare trees) blocks the plan the same way.
+
 ## Target Detection
 
 Before any campaign starts, RAPTOR identifies the target and recommends the
@@ -184,13 +249,14 @@ appropriate approach.  The detector recognises:
 | `pe-exe` | Windows PE executable | WinAFL (not orchestrated) |
 | `pe-dll` | Windows DLL | WinAFL (not orchestrated) |
 | `pe-sys` | Windows kernel driver (.sys) | kAFL / Snapchange (not orchestrated) |
-| `java-class` | Java class file | Not yet orchestrated |
-| `java-archive` | Java JAR archive | Not yet orchestrated |
+| `java-class` | Java class file | Not orchestrated (point at the source tree for Jazzer) |
+| `java-archive` | Java JAR archive | Not orchestrated (point at the source tree for Jazzer) |
 | `apk` | Android APK archive | Not yet orchestrated |
 | `source-c` | C/C++ sources (file or tree) | Env build-on-demand (trees, trust-gated) or harness generation then libFuzzer |
 | `source-cpp` | C++ source / header files | Harness generation then libFuzzer |
 | `rust-crate` | Rust crate (Cargo.toml present) | `cargo-fuzz` |
 | `python-pkg` | Python package (pyproject.toml / setup.py) | Atheris |
+| `java-project` | Java/Kotlin project (Maven / Gradle / bare sources) | Jazzer |
 
 Detection works by reading magic bytes (ELF, Mach-O, PE, PK/ZIP), inspecting
 file extensions, and checking for project markers (`Cargo.toml`,
@@ -270,11 +336,11 @@ python3 raptor.py fuzz --binary <path> [flags]
 | `--orchestrator` | Force the orchestrator pipeline (target detection + capability checks + engine selection) |
 | `--legacy` | Force the legacy AFL++-only path |
 | `--plan-only` | Print the campaign plan and exit without running |
-| `--engine <afl\|libfuzzer\|atheris\|cargo-fuzz>` | Force a specific engine; honoured only when the detected target kind supports it, otherwise the plan blocks. Implies `--orchestrator` |
+| `--engine <afl\|libfuzzer\|atheris\|cargo-fuzz\|jazzer>` | Force a specific engine; honoured only when the detected target kind supports it, otherwise the plan blocks. Implies `--orchestrator` |
 | `--py-harness <file>` | Operator-written atheris `TestOneInput` harness for python-pkg targets. Implies `--orchestrator` |
 | `--py-entry <module:function>` | Scaffold a template atheris harness around this entry point (simple bytes/str case only). Implies `--orchestrator` |
 | `--py-input <bytes\|text>` | Payload type the scaffolded harness feeds the entry point (default: bytes) |
-| `--fuzz-target <name>` | cargo-fuzz target to build and run for rust-crate targets; auto-selected when the crate has exactly one. Implies `--orchestrator` |
+| `--fuzz-target <name>` | In-repo harness to build and run: the cargo-fuzz target name (rust-crate) or the Jazzer target class (java-project; fully-qualified, or the simple name when unambiguous); auto-selected when the project has exactly one. Implies `--orchestrator` |
 
 ### Witness and exploit flags
 
@@ -571,8 +637,8 @@ out/fuzz_<binary>_<timestamp>/
                                  (skipped with --no-record-witnesses)
   witnesses/                  -- Crash Witness objects for the fuzz
                                  crashes themselves (always recorded;
-                                 atheris and cargo-fuzz campaigns
-                                 write here too)
+                                 atheris, cargo-fuzz, and jazzer
+                                 campaigns write here too)
   atheris/                    -- atheris campaign results (python-pkg targets)
     corpus/                   -- working corpus (seeds staged in)
     crashes/                  -- crash-* / timeout-* / oom-* artifacts
@@ -590,6 +656,23 @@ out/fuzz_<binary>_<timestamp>/
                                  Rust panic triage signal
   crate-corpus.json           -- record of the crate's own fuzz/corpus/<target>
                                  seeds being used (cargo-fuzz, no --corpus)
+  jazzer/                     -- jazzer campaign results (java-project targets)
+    classes/                  -- bare-lane javac output (Maven/Gradle
+                                 builds write their module target/ or
+                                 build/ dirs instead)
+    m2-repo/ gradle-home/     -- hermetic run-local dependency caches
+                                 (seeded by copy from the host caches)
+    classpath.txt             -- the build's classpath output (vetted
+                                 before the campaign uses it)
+    corpus/                   -- working corpus (seeds staged in)
+    crashes/                  -- crash-* / timeout-* / oom-* artifacts
+    build-stdout.log          -- build-tool output
+    build-stderr.log
+    jazzer-crashes.json       -- normalized crash records with the
+                                 Java exception triage signal
+  jazzer-corpus.json          -- record of the project's own
+                                 <Class>Inputs seeds being used
+                                 (jazzer, no --corpus)
   binary-context-map.json     -- radare2 binary analysis (when enabled)
   coverage-fuzz.json          -- Function-precise runtime coverage record
                                  (gcov-instrumented targets; reaches the
