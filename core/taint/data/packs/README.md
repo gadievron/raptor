@@ -54,3 +54,9 @@ consumes the label; the label itself is free-form lowercase).
   boto3 credentials) and secret-exposure sinks (logging, print,
   query-string encoding, exception messages, subprocess argv);
   tag-only redaction sanitizers.
+* `template-engines` — constructor-level SSTI sinks the core pack
+  lacks: from_string surfaces (jinja2 dotted + receiver-hinted
+  method form, native-types jinja2, django Engine), tornado, bottle,
+  Cheetah, chameleon. The render-call sinks (jinja2.Template,
+  render_template_string, mako, django.template.Template) stay in
+  `web-injection-core`.

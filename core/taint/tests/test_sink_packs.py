@@ -259,3 +259,70 @@ def test_secrets_rows_emit_or_refuse_accountably(seed_packs: PackSet):
         "source:call_return:os.environ.get",
     }
     assert not (emitted_ok & set(reasons))
+
+
+# ── template-engines ─────────────────────────────────────────────────
+
+
+def test_template_pack_ships_as_pure_data(seed_packs: PackSet):
+    assert "python/template-engines" in default_pack_names("python")
+    pack = pack_named(seed_packs, "template-engines")
+    assert pack.sinks and not pack.sources
+    assert {s.sink_class for s in pack.sinks} == {"template-injection"}
+    assert {s.cwe for s in pack.sinks} == {"CWE-1336", "CWE-94"}
+
+
+def test_no_shipped_pack_restates_another_packs_sink(
+    seed_packs: PackSet,
+):
+    """De-dup census over the whole shipped set: the same claim —
+    (kind, match, sink class) — may ship once. Deliberate same-callee
+    overlaps (subprocess.run argv vs shell, execute statement vs
+    parameters, pickle.loads input vs output) differ in class or kind
+    and pass; a restated row would be pure noise."""
+    seen: dict[tuple[str, str, str], str] = {}
+    for sink in seed_packs.sinks:
+        claim = (sink.kind, sink.match, sink.sink_class)
+        assert claim not in seen, (
+            f"{sink.pack} restates {claim} from {seen[claim]}"
+        )
+        seen[claim] = sink.pack
+
+
+def test_constructor_level_ssti_fires_via_the_env_hint(
+    specs: SpecIndex,
+):
+    """env.from_string(user) has no import binding — the
+    receiver-hinted method_name entry is what catches the dominant
+    spelling."""
+    src = """
+import jinja2
+
+def f(user):
+    env = jinja2.Environment()
+    return env.from_string(user)
+"""
+    s = summarize(src, specs, "f")
+    hits = [ev for ev in s.sink_events if ev.match == "from_string"]
+    assert [ev.sink_class for ev in hits] == ["template-injection"]
+    assert hits[0].confidence == "heuristic"
+    assert {f.origin for ev in hits for f in ev.flows} == {"param:0"}
+
+
+def test_unbound_from_string_spelling_carries_self_offset(
+    seed_packs: PackSet,
+):
+    """The dotted from_string entries describe the unbound spelling
+    Environment.from_string(env, source) — the tainted source is
+    position 1, and the keyword spelling is declared beside it so
+    from_string(source=...) is not a miss."""
+    pack = pack_named(seed_packs, "template-engines")
+    for sink in pack.sinks:
+        if sink.kind != "dotted_callee":
+            continue
+        if sink.match.endswith(".from_string"):
+            assert sink.args == (1,)
+            assert sink.kwargs
+        else:
+            # Constructor calls have no explicit self.
+            assert sink.args == (0,)
