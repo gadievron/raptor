@@ -51,7 +51,7 @@ from .lookup import lookup_function, normalise_path
 import logging
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -98,6 +98,7 @@ __all__ = [
     "compare_inventories",
     "count_sloc",
     "detect_language",
+    "ensure_runlocal_checklist",
     "extract_functions",
     "extract_items",
     "format_coverage_summary",
@@ -128,7 +129,9 @@ def get_items(file_entry):
     return file_entry.get("items", file_entry.get("functions", [])) or []
 
 
-def iter_checklist_items(checklist):
+def iter_checklist_items(
+    checklist: Any,
+) -> "Iterator[tuple[str, dict, dict]]":
     """Single authority for walking ``checklist["files"][*]`` items.
 
     Yields ``(file_path, file_entry, item)`` for every code item in a
@@ -771,7 +774,7 @@ class ChecklistBudgetExceededError(RuntimeError):
 _CHECKLIST_SHARD_TARGET_BYTES = 64 * 1024 * 1024
 
 
-def _resolve_checklist_path(output_dir):
+def _resolve_checklist_path(output_dir: "str | Path") -> "Path":
     """Resolve checklist.json path, following symlinks."""
     from pathlib import Path
     checklist_path = Path(output_dir) / "checklist.json"
@@ -850,7 +853,61 @@ class _checklist_lock:
         return False
 
 
-def save_checklist(output_dir, data) -> None:
+def ensure_runlocal_checklist(output_dir: "str | Path") -> bool:
+    """Detach a project-linked checklist slot so writes land run-local.
+
+    Scope-collision rule: a SCOPED (partial) inventory build must
+    never overwrite the project-level checklist slot. In project mode
+    the run dir's ``checklist.json`` is a symlink to the project-level
+    file, so a scoped rebuild through the write accessors would
+    replace the shared full-tree inventory with a partial one — every
+    sibling run's coverage, gap selection, and reporting would then
+    silently run against the reduced file set. Unlinking the symlink
+    (under the project slot's flock) makes this run's checklist
+    run-local; the project-level slot only ever holds the full-tree
+    form.
+
+    Returns True when a project link was detached. Loud when the
+    project slot already holds an inventory the scoped build now
+    diverges from.
+    """
+    from pathlib import Path
+
+    base = Path(output_dir) / "checklist.json"
+    if not base.is_symlink():
+        return False
+    resolved = base.resolve()
+    project_has_inventory = (
+        resolved.is_file() or _sharded_index_path(resolved).is_file()
+    )
+    with _checklist_lock(resolved):
+        try:
+            base.unlink()
+        except OSError as exc:
+            logger.warning(
+                "scoped inventory build: failed to detach %s from the "
+                "project-level checklist slot (%s) — REFUSE writing a "
+                "scoped inventory through the link", base, exc,
+            )
+            raise
+    if project_has_inventory:
+        logger.warning(
+            "scoped inventory build: %s detached from the project-level "
+            "checklist slot %s — the scoped inventory DIVERGES from the "
+            "existing project-level inventory and is kept run-local; "
+            "the project slot keeps the full-tree form",
+            base, resolved,
+        )
+    else:
+        logger.info(
+            "scoped inventory build: %s detached from the (empty) "
+            "project-level checklist slot %s — scoped inventories are "
+            "run-local", base, resolved,
+        )
+    return True
+
+
+def save_checklist(output_dir: "str | Path", data: Any) -> None:
     """Save the checklist, resolving symlinks and using file locking.
 
     In project mode, output_dir/checklist.json is a symlink to the
@@ -880,7 +937,7 @@ def save_checklist(output_dir, data) -> None:
         _write_checklist_locked(checklist_path, data)
 
 
-def _checklist_slot_present(output_dir) -> bool:
+def _checklist_slot_present(output_dir: "str | Path") -> bool:
     """True when the output dir's checklist slot holds ANYTHING —
     single-file, run-local sharded dir, or a (possibly dangling, in
     project mode once the project slot went sharded) symlink."""
@@ -894,7 +951,7 @@ def _checklist_slot_present(output_dir) -> bool:
     ).is_file()
 
 
-def checklist_exists(output_dir) -> bool:
+def checklist_exists(output_dir: "str | Path") -> bool:
     """True when *output_dir* holds a readable checklist in EITHER
     on-disk form.
 
@@ -919,7 +976,7 @@ def checklist_exists(output_dir) -> bool:
     return False
 
 
-def read_checklist(output_dir):
+def read_checklist(output_dir: "str | Path") -> dict[str, Any]:
     """Read the checklist under the writers' flock + symlink resolution.
 
     Read-side counterpart of :func:`save_checklist` /
@@ -966,7 +1023,7 @@ def read_checklist(output_dir):
     return data if isinstance(data, dict) else {}
 
 
-def read_checklist_meta(output_dir) -> dict[str, Any]:
+def read_checklist_meta(output_dir: "str | Path") -> dict[str, Any]:
     """The checklist's top-level metadata (every key except ``files``).
 
     For a sharded checklist this reads ONLY the index manifest — the
@@ -1005,7 +1062,7 @@ def read_checklist_meta(output_dir) -> dict[str, Any]:
 
 
 def _iter_checklist_items_from_dir(
-    output_dir,
+    output_dir: "str | Path",
 ) -> "Iterator[tuple[str, dict, dict]]":
     """Stream checklist items from an output dir, one shard in memory.
 
@@ -1041,7 +1098,10 @@ def _iter_checklist_items_from_dir(
     yield from _iter_items_of(data)
 
 
-def update_checklist(output_dir, transform_fn) -> None:
+def update_checklist(
+    output_dir: "str | Path",
+    transform_fn: "Callable[[dict[str, Any]], dict[str, Any]]",
+) -> None:
     """Atomically read-modify-write checklist.json.
 
     Holds the flock across the entire read-modify-write cycle so
