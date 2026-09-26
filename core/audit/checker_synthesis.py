@@ -822,8 +822,9 @@ def synthesize_verification_rule(
     covered on later runs.
 
     Args:
-        outcome: ReviewOutcome — must be suspicious or finding, never
-            clean (verification money is for candidates only).
+        outcome: ReviewOutcome — must be candidate-grade (suspicious,
+            finding, or dark), never clean (verification money is for
+            candidates only).
         config: OrchestratorConfig with target_path, out_dir, models.
         cwe: Effective CWE (review-supplied or inferred); may be empty.
         source_snippet: The function source, when the caller already
@@ -844,7 +845,11 @@ def synthesize_verification_rule(
         return None
 
     status = getattr(outcome, "status", "")
-    if status not in ("suspicious", "finding"):
+    # Candidates only — verification money never re-checks a clean
+    # verdict. "dark" is candidate-grade too: a parked hypothesis no
+    # tool had a channel for is exactly what this lane exists to
+    # verify (the witness-backlog drain retargets it at backlog rows).
+    if status not in ("suspicious", "finding", "dark"):
         return None
 
     review = getattr(outcome, "review_result", None) or {}
