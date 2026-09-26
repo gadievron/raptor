@@ -189,3 +189,26 @@ class TestSetManualOverride:
         changed, failed = set_manual_override(matches, True, "r")
         assert changed == []
         assert failed == [path]
+
+    def test_vanished_finding_id_reports_as_failed(self, tmp_path):
+        # The artifact stays readable but the wanted record is gone
+        # (rewritten between resolution and edit): the edit silently
+        # not happening must surface as failed, never as a no-op.
+        path = _write_findings(tmp_path, [_finding("f-1")])
+        matches, _ = resolve_finding([tmp_path], "f-1")
+        _write_findings(tmp_path, [_finding("f-other")])
+        changed, failed = set_manual_override(matches, True, "r")
+        assert changed == []
+        assert failed == [path]
+
+    def test_partial_vanish_reports_both_lists(self, tmp_path):
+        # One wanted id lands, the other vanished: the landed edit is
+        # reported changed AND the artifact is reported failed for
+        # the missing record — the operator must see both.
+        path = _write_findings(tmp_path, [_finding("f-1"), _finding("f-2")])
+        m1, _ = resolve_finding([tmp_path], "f-1")
+        m2, _ = resolve_finding([tmp_path], "f-2")
+        _write_findings(tmp_path, [_finding("f-1")])
+        changed, failed = set_manual_override(m1 + m2, True, "r")
+        assert changed == [path]
+        assert failed == [path]

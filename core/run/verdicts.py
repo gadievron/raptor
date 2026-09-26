@@ -198,8 +198,10 @@ def set_manual_override(
 
     Writes each touched artifact once (atomic ``save_json``).
     Returns ``(changed, failed)`` — artifacts rewritten, and
-    artifacts that could NOT be rewritten (became unreadable /
-    over-budget / write error between resolution and rewrite).
+    artifacts where an edit could NOT be applied (became unreadable /
+    over-budget / write error / a wanted record no longer present —
+    all between resolution and rewrite). An artifact where some
+    records landed and others vanished appears in BOTH lists.
     Callers must surface ``failed`` — an edit that silently did not
     happen reads as "force-through set" to the operator. Read-only
     refs (analysis reports) are skipped — a verdict edit never
@@ -228,12 +230,15 @@ def set_manual_override(
             failed.append(artifact)
             continue
         wanted_ids = {r.finding_id for r in artifact_refs}
+        found_ids: set[str] = set()
         mutated = False
         for f in findings_list:
             if not isinstance(f, dict):
                 continue
-            if get_finding_id(f) not in wanted_ids:
+            fid = get_finding_id(f)
+            if fid not in wanted_ids:
                 continue
+            found_ids.add(fid)
             if value:
                 if f.get("manual_override") is not True:
                     f["manual_override"] = True
@@ -246,6 +251,17 @@ def set_manual_override(
                     if key in f:
                         del f[key]
                         mutated = True
+        missing = wanted_ids - found_ids
+        if missing:
+            # The record vanished between resolution and rewrite (the
+            # artifact was rewritten under us). An edit that silently
+            # did not happen is exactly what the failed list exists
+            # for — a partially-landed artifact appears in BOTH lists.
+            logger.warning(
+                "verdicts: %d finding id(s) no longer present in %s — "
+                "edit not applied for them", len(missing), artifact,
+            )
+            failed.append(artifact)
         if not mutated:
             continue
         try:
