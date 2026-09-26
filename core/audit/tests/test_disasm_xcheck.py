@@ -452,6 +452,128 @@ class TestSiteAnalysis:
         assert a.unwritten_complete  # walked to the previous call
 
 
+class TestUnresolvedJumpPoison:
+    """In-window indirect-jump targets: a jump-table dispatch's landing
+    site is invisible to ``_branch_targets``, and on a non-entry-anchored
+    window (``entry_reach`` None) the targets set was the branch-free
+    leg's ONLY reachability screen — so a strong write graded across the
+    dispatch and a TRUE "not set on the dispatched path" claim was
+    demoted. Pins both directions: unresolved jumps poison branch-free
+    grade window-wide; resolved out-of-window jumps and entry-dominating
+    writes are unaffected."""
+
+    def setup_method(self):
+        self.members = dx._DISASM_FAMILY_MEMBERS["r8"]
+
+    def _analyze(self, insns, call_index, head=True):
+        insns = tuple(insns)
+        reach = dx._entry_reachable(insns) if head else None
+        return dx._analyze_site(
+            insns, call_index, self.members,
+            dx._branch_targets(insns), reach,
+        )
+
+    def test_direct_jump_operands_are_resolved(self):
+        assert not dx._has_unresolved_jump((
+            _insn(0x10, "jmp", "18 <f+0x8>"),
+            _insn(0x12, "je", "1b <f+0xb>"),
+            _insn(0x14, "loop", "10 <f>"),
+        ))
+
+    def test_indirect_register_jump_is_unresolved(self):
+        assert dx._has_unresolved_jump((_insn(0x10, "jmp", "rax"),))
+
+    def test_indirect_memory_jump_is_unresolved(self):
+        assert dx._has_unresolved_jump((
+            _insn(0x10, "jmp", "QWORD PTR [rax*8+0x404060]"),
+        ))
+
+    def test_non_jump_indirection_is_not_a_jump(self):
+        # Indirect CALLS fall through (callees return) and ret/traps
+        # have no landing site — only jumps/branches need targets.
+        assert not dx._has_unresolved_jump((
+            _insn(0x10, "call", "rax"),
+            _insn(0x12, "ret", ""),
+            _insn(0x13, "ud2", ""),
+        ))
+
+    def test_indirect_jump_elsewhere_denies_branch_free_non_entry(self):
+        # THE residual shape: non-entry-anchored window, indirect
+        # dispatch earlier in the window — its landing site could lie
+        # between the write and the call, so refute grade is refused
+        # (the write still blocks corroboration: honest record).
+        insns = (
+            _insn(0x12, "jmp", "rax"),
+            _insn(0x14, "mov", "r8d,0x5"),
+            _insn(0x1A, "nop", ""),
+            _insn(0x1B, "call", "40 <p>"),
+        )
+        a = self._analyze(insns, 3, head=False)
+        assert not a.strong
+        assert a.weak_write
+
+    def test_indirect_memory_jump_also_denies_branch_free(self):
+        insns = (
+            _insn(0x12, "jmp", "QWORD PTR [rax*8+0x404060]"),
+            _insn(0x1A, "mov", "r8d,0x5"),
+            _insn(0x20, "call", "40 <p>"),
+        )
+        a = self._analyze(insns, 2, head=False)
+        assert not a.strong
+        assert a.weak_write
+
+    def test_direct_out_of_window_jump_keeps_branch_free(self):
+        # Boundary contract, other direction: a DIRECT jump that
+        # leaves the window has a KNOWN target that cannot land
+        # between write and call — refute grade stands.
+        insns = (
+            _insn(0x12, "jmp", "999 <other>"),
+            _insn(0x14, "mov", "r8d,0x5"),
+            _insn(0x1A, "call", "40 <p>"),
+        )
+        a = self._analyze(insns, 2, head=False)
+        assert a.strong and a.strong_kind == "branch-free"
+
+    def test_indirect_jump_keeps_entry_domination(self):
+        # Scope pin: the poison is branch-free-only. An entry-region
+        # write precedes every control transfer, so any in-window
+        # path — the indirect dispatch included — passes it first
+        # (external entries stay the documented residual).
+        insns = (
+            _insn(0x00, "mov", "r8d,0x9"),
+            _insn(0x06, "test", "rdi,rdi"),
+            _insn(0x09, "je", "e <f+0xe>"),
+            _insn(0x0B, "jmp", "rax"),
+            _insn(0x0E, "call", "99 <p>"),
+        )
+        a = self._analyze(insns, 4)
+        assert a.strong and a.strong_kind == "entry-dominating"
+
+    def test_strong_profile_excludes_poisoned_families(self):
+        # The sibling lane's claimed-site (strong_only) detector
+        # inherits the poison: families written only across an
+        # indirect dispatch stay out of the refute-grade profile,
+        # while the over-approximating sibling detector still counts
+        # them (more shared registers = refutation strictly harder,
+        # the safe direction).
+        insns = (
+            _insn(0x12, "jmp", "rax"),
+            _insn(0x14, "mov", "r8d,0x5"),
+            _insn(0x18, "mov", "edi,0x2"),
+            _insn(0x1C, "call", "40 <p>"),
+        )
+        strong, _ = dx._site_arg_profile(
+            insns, 3, dx._branch_targets(insns), None,
+            strong_only=True,
+        )
+        assert "r8" not in strong and "rdi" not in strong
+        weak, _ = dx._site_arg_profile(
+            insns, 3, dx._branch_targets(insns), None,
+            strong_only=False,
+        )
+        assert {"r8", "rdi"} <= weak
+
+
 class TestOperandWidth:
     def test_register_widths(self):
         assert dx._operand_width_bytes("rax,rdx") == 8
@@ -1050,6 +1172,63 @@ class TestRunSynthetic:
             out_dir=aliased,
         )
         assert second.reason == dx.REASON_INVOCATION_CAP
+
+
+_INDIRECT_NONENTRY_OBJDUMP = """\
+/tmp/x/fixture:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000401002 <target_fn>:
+  401002:\tff e0                \tjmp    rax
+  401004:\t41 b8 05 00 00 00    \tmov    r8d,0x5
+  40100a:\t90                   \tnop
+  40100b:\te8 fe ff ff ff       \tcall   40100e <validator>
+  401010:\tc3                   \tret
+"""
+
+
+class TestIndirectJumpResidual:
+    """End-to-end pin of the in-window indirect-jump residual: the
+    checklist address (0x401000) sits below the first decoded
+    instruction, so the window is NOT entry-anchored and the
+    branch-free leg's only reachability screen is the decoded-target
+    set — which an indirect dispatch's landing site never enters."""
+
+    def test_indirect_dispatch_on_nonentry_window_never_refutes(
+        self, fake_binary, monkeypatch, tmp_path,
+    ):
+        _patch_objdump(monkeypatch, _INDIRECT_NONENTRY_OBJDUMP)
+        res = run_disasm_xcheck(
+            fake_binary, "binary:fixture", "target_fn", _DROP_HYP,
+            checklist=_checklist("target_fn", 0x401000, 0x11),
+            out_dir=tmp_path,
+        )
+        assert res.outcome == "inconclusive"
+        assert res.reason == dx.REASON_WRITE_NOT_REFUTE_GRADE
+        # The write still blocks corroboration — the honest record.
+        assert res.call_sites[0]["write_grade"] == "weak"
+
+    def test_direct_out_of_window_jump_still_refutes(
+        self, fake_binary, monkeypatch, tmp_path,
+    ):
+        # Boundary contract (other direction): the same non-entry
+        # window with a DIRECT jump leaving the window — its known
+        # target cannot land between write and call, so the
+        # refute-grade write stands.
+        text = _INDIRECT_NONENTRY_OBJDUMP.replace(
+            "\tjmp    rax",
+            "\tjmp    401080 <elsewhere>",
+        )
+        _patch_objdump(monkeypatch, text)
+        res = run_disasm_xcheck(
+            fake_binary, "binary:fixture", "target_fn", _DROP_HYP,
+            checklist=_checklist("target_fn", 0x401000, 0x11),
+            out_dir=tmp_path,
+        )
+        assert res.outcome == "refuted"
+        assert res.call_sites[0]["write_grade"] == "branch-free"
 
 
 class TestSyntheticWidthLane:
@@ -1931,6 +2110,30 @@ bnd_past:
     ret
     .size bnd_past, .-bnd_past
 
+    .globl indirect_poison
+    .type indirect_poison, @function
+indirect_poison:
+    test %rdi, %rdi
+    je .Lip
+    jmp *%rax
+.Lip:
+    mov $5, %r8d
+    call validator
+    ret
+    .size indirect_poison, .-indirect_poison
+
+    .globl indirect_entrydom
+    .type indirect_entrydom, @function
+indirect_entrydom:
+    mov $9, %r8d
+    test %rdi, %rdi
+    je .Lie
+    jmp *%rax
+.Lie:
+    call validator
+    ret
+    .size indirect_entrydom, .-indirect_entrydom
+
     .globl jmp_chain
     .type jmp_chain, @function
 jmp_chain:
@@ -2119,6 +2322,33 @@ class TestCompiledFixture:
             "the count argument in r8d is never passed to validator",
         )
         assert res.outcome != "refuted"
+
+    def test_indirect_dispatch_poisons_branch_free_real_objdump(
+        self, compiled_fixture, _direct_objdump,
+    ):
+        # Jump-table-dispatch shape on real objdump output: the write
+        # sits at the dispatch's possible landing region (`jmp *%rax`
+        # could land between it and the call), so the true "not set
+        # on the dispatched path" claim must survive.
+        res = self._run(
+            compiled_fixture, "indirect_poison",
+            "the count argument in r8d is never passed to validator",
+        )
+        assert res.outcome == "inconclusive"
+        assert res.reason == dx.REASON_WRITE_NOT_REFUTE_GRADE
+
+    def test_indirect_dispatch_keeps_entry_domination_real_objdump(
+        self, compiled_fixture, _direct_objdump,
+    ):
+        # Scope control: the poison is branch-free-only — an
+        # entry-region write precedes every control transfer,
+        # indirect dispatch included.
+        res = self._run(
+            compiled_fixture, "indirect_entrydom",
+            "the count argument in r8d is never passed to validator",
+        )
+        assert res.outcome == "refuted"
+        assert res.call_sites[0]["write_grade"] == "entry-dominating"
 
     def test_jmp_chain_to_call_still_refutes(
         self, compiled_fixture, _direct_objdump,
