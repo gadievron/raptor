@@ -293,3 +293,139 @@ class TestPreconditionStoreLane:
             graph_store=graph,
         )
         assert verdict.checks[0].verdict == "contradicted"
+
+
+class TestBootstrapRoutesToStore:
+    """The audit's in-memory bootstrap was the one call-edge producer
+    that never ingested — an audit-built map could never grow the
+    store lane, so kernel-scale runs carried the capped 26% forever.
+    Pins: both prep-seam enrich calls pass the store args, and a
+    routing bootstrap's fresh marker gets the complete lane replay."""
+
+    def test_prep_seam_enrich_calls_carry_store_args(self):
+        import inspect
+        import core.audit.orchestrator as orch
+        src = inspect.getsource(orch._prep_call_edges)
+        # Both the store-lane bootstrap and the storeless fallback
+        # must route: an unrouted call re-creates the never-ingests
+        # producer. And the trailing consult must exist AFTER both
+        # (order is behavior — see the helper docstring).
+        assert src.count("graph_store=") >= 2
+        assert src.count("run_dir=config.out_dir") >= 2
+        assert "target_path=str(config.target_path" in src
+
+    def test_marker_after_routing_bootstrap_triggers_complete_replay(
+            self, tmp_path):
+        # Shape pin on the trailing consult: a map whose bootstrap
+        # just ingested (marker present) but which still carries the
+        # capped list + truncation flag gets the complete verified
+        # lane on the follow-up _load_call_edges_from_store call.
+        out_dir, graph, result = _seed_store(tmp_path)
+        cmap = {
+            "call_edges": [dict(_EDGES[0])],  # capped subset
+            "call_edges_truncated": True,
+            "call_edges_store": {
+                "snapshot": result["snapshot"], "edges": len(_EDGES)},
+        }
+        config = SimpleNamespace(
+            out_dir=out_dir, target_path=Path("/target"))
+        assert _load_call_edges_from_store(cmap, config) is True
+        assert len(cmap["call_edges"]) == len(_EDGES)
+        assert not cmap.get("call_edges_truncated")
+
+    def test_fresh_map_end_to_end_gets_the_full_graph(
+            self, tmp_path, monkeypatch):
+        # THE motivating scenario, driven through the real seam: a
+        # fresh audit-built map (no marker, no edges) over a
+        # checklist whose graph exceeds the in-artifact cap must end
+        # with the COMPLETE verified set in memory and truncation
+        # lifted — in-run, not just at the next resume.
+        import core.audit.orchestrator as orch
+        import core.orchestration.context_map_callgraph as cmc
+        monkeypatch.setattr(cmc, "_MAX_CALL_EDGES", 2)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        checklist = {
+            "target_path": "/target",
+            "files": [{
+                "path": "a.c",
+                "call_graph": {"calls": [
+                    {"caller": "main", "chain": ["helper"]},
+                    {"caller": "helper", "chain": ["f"]},
+                    {"caller": "orphan", "chain": ["iso"]},
+                ]},
+                "items": [],
+            }],
+        }
+        cmap: dict = {}
+        config = SimpleNamespace(
+            out_dir=out_dir, target_path=Path("/target"))
+        orch._prep_call_edges(cmap, config, checklist)
+        assert cmap.get("call_edges_store"), "bootstrap must ingest"
+        assert len(cmap["call_edges"]) == 3  # full graph, not the cap
+        assert not cmap.get("call_edges_truncated")
+
+    def test_incomplete_lane_union_is_deduplicated(self, tmp_path):
+        # A repeated consult over an incomplete lane must not double
+        # the verified rows (kernel scale: ~2x lean dicts for the
+        # whole run).
+        out_dir, graph, result = _seed_store(tmp_path)
+        _tamper_one_edge(graph)
+        cmap = {
+            "call_edges": [dict(_EDGES[0])],
+            "call_edges_truncated": True,
+            "call_edges_store": {
+                "snapshot": result["snapshot"], "edges": len(_EDGES)},
+        }
+        config = SimpleNamespace(
+            out_dir=out_dir, target_path=Path("/target"))
+        _load_call_edges_from_store(cmap, config)
+        n_first = len(cmap["call_edges"])
+        _load_call_edges_from_store(cmap, config)
+        assert len(cmap["call_edges"]) == n_first  # no duplicates
+        assert cmap.get("call_edges_truncated") is True
+
+
+class TestTruncatedProvenanceNeverTrustedOnly:
+    """A truncated edge list cannot support the NEGATIVE conclusion
+    'reachable only from trusted entry points' — a dropped
+    untrusted-entry path reads as trusted-only and suppresses the
+    finding. The sentinel makes both consumers fail toward keeping
+    it."""
+
+    @staticmethod
+    def _cmap(truncated: bool):
+        return {
+            "entry_points": [{
+                "id": "EP-1", "name": "admin_cli", "type": "cli",
+                "function": "main", "file": "a.c",
+                "trust": "trusted",
+            }],
+            "call_edges": [{
+                "caller_file": "a.c", "caller": "main",
+                "callee": "f", "callee_file": "a.c",
+            }],
+            "call_edges_truncated": truncated,
+        }
+
+    def test_untruncated_map_still_concludes_trusted_only(self):
+        from core.audit.mechanical_gates import build_provenance_map
+        prov = build_provenance_map(self._cmap(False))
+        for reaching in prov.values():
+            assert all(e.get("trust") == "trusted" for e in reaching)
+
+    def test_truncated_map_never_reads_all_trusted(self):
+        from core.audit.mechanical_gates import (
+            build_provenance_map,
+            format_provenance_for_context,
+        )
+        prov = build_provenance_map(self._cmap(True))
+        assert prov  # positive tags survive
+        for reaching in prov.values():
+            # The orchestrator's provenance_all_trusted condition
+            # (all trusted) must fail...
+            assert not all(
+                e.get("trust", "") == "trusted" for e in reaching)
+            # ...and the prompt block must not render 'Do not flag'.
+            block = format_provenance_for_context(reaching)
+            assert "Do not flag" not in block

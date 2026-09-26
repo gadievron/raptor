@@ -111,13 +111,29 @@ def main() -> int:
         print("raptor-enrich-context-map: checklist missing target_path; "
               "only callgraph enrichment available", file=sys.stderr)
 
-    # 1. Call-graph edges (uses checklist only)
+    # 1. Call-graph edges (uses checklist only). Store routing
+    # mirrors the per-stage sibling (raptor-enrich-context-map-
+    # callgraph): the combined shim was the sibling-drift producer
+    # that never ingested, so maps enriched through it carried only
+    # the capped in-artifact list.
     try:
         from core.orchestration.context_map_callgraph import (
             enrich_with_call_edges,
         )
+        graph_store = None
+        if target_path:
+            try:
+                from core.understand_graph.store import graph_path_for_run
+                candidate = graph_path_for_run(
+                    understand_dir, str(target_path))
+                if not candidate.resolve().is_relative_to(understand_dir):
+                    graph_store = candidate
+            except Exception:  # noqa: BLE001 — routing is additive; enrichment must survive resolution failure
+                graph_store = None
         n_edges = enrich_with_call_edges(
             context_map, checklist=checklist,
+            graph_store=graph_store, run_dir=understand_dir,
+            target_path=str(target_path or ""),
         )
         if n_edges:
             summary.append(f"callgraph: {n_edges} edges")
