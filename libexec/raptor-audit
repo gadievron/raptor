@@ -3745,6 +3745,154 @@ def _guess_target(out_dir: Path) -> Path | None:
     return None
 
 
+def cmd_token_map(args: argparse.Namespace) -> int:
+    """Token-enforcement map operations (hint-tier, never a verdict).
+
+    ``project`` — mechanical projection of the run's LEARNED
+    ``token_checks`` (domain model) onto the run's entry sources.
+    ``drift`` — per-entry status changes between two runs' maps.
+    ``sweep`` — class-sweep hypothesis seeds in the intake contract
+    (``core.audit.hypothesis_intake``); seeds never mint findings.
+    """
+    from core.concepts.token_map import load_token_map, token_map_drift
+
+    action = getattr(args, "token_map_action", None)
+    if action == "project":
+        from core.concepts.audit_bridge import ensure_token_map
+        out_dir = Path(args.out).resolve()
+        target = Path(args.target).resolve()
+        if not out_dir.is_dir() or not target.is_dir():
+            print("error: --out and --target must be directories",
+                  file=sys.stderr)
+            return 1
+        payload = ensure_token_map(out_dir, target)
+        if not payload:
+            print("token-map: nothing to project — no learned "
+                  "token_checks in the discoverable domain model, or "
+                  "no entry source (context-map.json / checklist.json) "
+                  "in the run dir")
+            return 1
+        census = payload.get("census") or {}
+        # Census keys come from a map file that may pre-exist the run
+        # (ensure semantics) — attacker-influenceable text, so escape
+        # before it reaches the operator terminal.
+        census_line = ", ".join(
+            f"{sanitise_for_terminal(str(k), max_len=32)}={int(v)}"
+            for k, v in sorted(census.items())
+            if isinstance(v, int)
+        ) or "no entries projected"
+        print(f"token-map: {len(payload.get('check_functions') or [])} "
+              f"learned check(s); {census_line}")
+        print(f"  artifact: {out_dir / 'token-map.json'}")
+        return 0
+
+    if action == "drift":
+        prior = load_token_map(Path(args.prior).resolve())
+        current = load_token_map(Path(args.current).resolve())
+        if prior is None or current is None:
+            missing = "--prior" if prior is None else "--current"
+            print(f"error: no token-map.json under {missing} run dir",
+                  file=sys.stderr)
+            return 1
+        records = token_map_drift(prior, current)
+        if getattr(args, "json", False):
+            print(json.dumps(records, indent=2, ensure_ascii=True))
+            return 0
+        if not records:
+            print("token-map drift: no per-entry status changes")
+            return 0
+        print(f"token-map drift: {len(records)} change(s) — hint-tier, "
+              "re-review food, never an auto-overturn")
+        for rec in records:
+            print(
+                "  "
+                f"{sanitise_for_terminal(str(rec.get('file', '?')), max_len=120)}: "
+                f"{sanitise_for_terminal(str(rec.get('prior_status', '?')), max_len=32)}"
+                " -> "
+                f"{sanitise_for_terminal(str(rec.get('current_status', '?')), max_len=32)}"
+                f" [{sanitise_for_terminal(str(rec.get('change', '?')), max_len=32)}]",
+            )
+        return 0
+
+    if action == "sweep":
+        from core.concepts.token_sweep import (
+            sweep_seeds_for_finding,
+            write_sweep_payload,
+        )
+        out_dir = Path(args.out).resolve()
+        token_map = load_token_map(out_dir)
+        if token_map is None:
+            print("error: no token-map.json in the run dir — run "
+                  "`token-map project` first", file=sys.stderr)
+            return 1
+        findings = _load_sweep_findings(out_dir, args.findings)
+        if args.finding_id:
+            findings = [
+                f for f in findings
+                if str(f.get("id") or f.get("finding_id") or "")
+                == args.finding_id
+            ]
+        checklist = None
+        if (out_dir / "checklist.json").exists():
+            from core.inventory import read_checklist
+            loaded = read_checklist(out_dir)
+            if isinstance(loaded, dict):
+                checklist = loaded
+        seeds: list[dict] = []
+        seen_files: set[str] = set()
+        for finding in findings:
+            for seed in sweep_seeds_for_finding(
+                finding, token_map, checklist,
+            ):
+                if seed["file"] in seen_files:
+                    continue
+                seen_files.add(seed["file"])
+                seeds.append(seed)
+        if not seeds:
+            print("token-map sweep: no seeds — no confirmed "
+                  "token-premise finding, or no not_enforced entries")
+            return 0
+        path, canonical = write_sweep_payload(out_dir, seeds)
+        print(f"token-map sweep: {len(seeds)} hypothesis seed(s) -> "
+              f"{path}")
+        if not canonical:
+            print("  sibling-hypotheses.json already exists (another "
+                  "producer) — pass this file on the next run via "
+                  f"--hypothesis-seeds {path}")
+        else:
+            print("  co-located: the next /audit run on this out dir "
+                  "ingests it automatically; seeds boost priority and "
+                  "add hints, never mint findings")
+        return 0
+
+    print("usage: raptor-audit token-map {project|drift|sweep} ...",
+          file=sys.stderr)
+    return 1
+
+
+def _load_sweep_findings(out_dir: Path, findings_arg: str | None) -> list[dict]:
+    """Finding rows for the sweep — findings.json shapes, then the
+    orchestrated report's results. Non-dict rows are dropped."""
+    candidates: list = []
+    if findings_arg:
+        raw = load_json(Path(findings_arg))
+        if isinstance(raw, list):
+            candidates = raw
+        elif isinstance(raw, dict):
+            candidates = raw.get("findings") or raw.get("results") or []
+    else:
+        raw = load_json(out_dir / "findings.json")
+        if isinstance(raw, list):
+            candidates = raw
+        elif isinstance(raw, dict):
+            candidates = raw.get("findings") or []
+        if not candidates:
+            orch = load_json(out_dir / "orchestrated_report.json")
+            if isinstance(orch, dict):
+                candidates = orch.get("results") or []
+    return [f for f in candidates if isinstance(f, dict)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="raptor-audit",
@@ -4312,6 +4460,46 @@ def main() -> int:
         help="coverage.json path, or a directory containing one",
     )
 
+    p_tokenmap = sub.add_parser(
+        "token-map",
+        help="Token-enforcement map: project / drift / sweep "
+             "(core.concepts.token_map — hint-tier, never a verdict)",
+    )
+    tokenmap_sub = p_tokenmap.add_subparsers(dest="token_map_action")
+    p_tm_project = tokenmap_sub.add_parser(
+        "project",
+        help="Project token-map.json from the run's learned "
+             "token_checks + entry sources (mechanical, no LLM)",
+    )
+    p_tm_project.add_argument("--out", required=True)
+    p_tm_project.add_argument("--target", required=True,
+                              help="Source root the map projects over")
+    p_tm_drift = tokenmap_sub.add_parser(
+        "drift",
+        help="Per-entry status changes between two runs' token maps",
+    )
+    p_tm_drift.add_argument("--prior", required=True,
+                            help="Run dir carrying the earlier token-map.json")
+    p_tm_drift.add_argument("--current", required=True,
+                            help="Run dir carrying the later token-map.json")
+    p_tm_drift.add_argument("--json", action="store_true")
+    p_tm_sweep = tokenmap_sub.add_parser(
+        "sweep",
+        help="Emit class-sweep hypothesis seeds (sibling-hypotheses "
+             "contract) from confirmed token-premise findings",
+    )
+    p_tm_sweep.add_argument("--out", required=True)
+    p_tm_sweep.add_argument(
+        "--findings", default=None,
+        help="Findings JSON (default: <out>/findings.json, then "
+             "<out>/orchestrated_report.json results)",
+    )
+    p_tm_sweep.add_argument(
+        "--finding-id", default=None,
+        help="Sweep from this finding only (default: every confirmed "
+             "token-premise finding, deduped per entry)",
+    )
+
     args = parser.parse_args()
     if getattr(args, "project", None) is not None:
         from core.run.pin import set_process_project
@@ -4361,6 +4549,7 @@ def main() -> int:
         "resume": cmd_resume,
         "journal": cmd_journal,
         "coverage": cmd_coverage,
+        "token-map": cmd_token_map,
     }
 
     return dispatch[args.command](args)
