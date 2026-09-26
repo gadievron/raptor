@@ -1489,6 +1489,12 @@ def _setup_checklist_symlink(run_dir: Path,
     if checklist_in_run.exists() and not checklist_in_run.is_symlink():
         return
 
+    # A run-local SHARDED checklist (checklist/index.json — e.g. a
+    # scoped build's run-local inventory) is a real checklist too: a
+    # symlink beside it would shadow it for every accessor read.
+    if (run_dir / "checklist" / "index.json").is_file():
+        return
+
     # Don't create symlink if it already exists
     if checklist_in_run.is_symlink():
         return
@@ -1637,6 +1643,13 @@ def _promote_checklist(project_dir: Path) -> None:
             continue
         data = load_json(cl, max_bytes=RUN_ARTIFACT_MAX_BYTES)
         if not data:
+            continue
+        if isinstance(data, dict) and data.get("scope"):
+            # Scope-collision rule: a scoped build's run-local
+            # checklist is PARTIAL by construction — promoting it
+            # would install a reduced file set as the project-level
+            # inventory every sibling run inherits. The project slot
+            # only ever holds the full-tree form.
             continue
         if promoted is None:
             promoted = data  # newest wins the base

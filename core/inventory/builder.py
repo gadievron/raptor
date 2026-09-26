@@ -813,6 +813,21 @@ def build_inventory(
             "scope filter: %d → %d files (%d excluded)",
             before, len(file_list), before - len(file_list),
         )
+        # Target-relative scope stamp for the artifact: marks the
+        # inventory as PARTIAL so shared-slot machinery (project
+        # checklist promotion) never adopts it as the full-tree form.
+        # A scope that covers the target ROOT is a full-tree build in
+        # scope clothing — stamping it would permanently demote a
+        # genuinely complete inventory to run-local/never-promoted.
+        if any(p == str(target_resolved) for p in resolved_prefixes):
+            scope_stamp = None
+        else:
+            scope_stamp = sorted(
+                str(Path(p).relative_to(target_resolved))
+                for p in resolved_prefixes
+            )
+    else:
+        scope_stamp = None
     logger.info("Found %d source files to process", len(file_list))
 
     output_path = Path(output_dir)
@@ -1100,6 +1115,8 @@ def build_inventory(
         'excluded_files': excluded_files,
         'files': files_info,
     }
+    if scope_stamp is not None:
+        inventory['scope'] = scope_stamp
     # Target classification (library | hybrid | application | unknown) — a
     # first-class, neutral signal for downstream consumers (reachability,
     # attack-surface mapping, taint sources, SCA pinning posture). Setting is
@@ -1242,7 +1259,13 @@ def build_inventory(
         except (KeyError, TypeError):
             logger.debug("incompatible old inventory, skipping diff", exc_info=True)
 
-    from core.inventory import save_checklist
+    from core.inventory import ensure_runlocal_checklist, save_checklist
+    if scope_stamp is not None:
+        # Scope-collision rule: never write a PARTIAL inventory
+        # through the project-slot symlink — detach so the write
+        # below lands run-local and the project keeps the full-tree
+        # form (loud when the two now diverge).
+        ensure_runlocal_checklist(output_path)
     save_checklist(str(output_path), inventory)
 
     # PHP include-graph derivation (Layer 1, hint-tier) — mechanical
