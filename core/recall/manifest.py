@@ -100,15 +100,22 @@ class ManifestError(ValueError):
 
 @dataclass(frozen=True)
 class Provenance:
-    kind: str  # "benchmark" | "cve"
+    kind: str  # "benchmark" | "cve" | "synthetic"
     suite: str | None = None
     case: str | None = None
     cve_id: str | None = None
     fix_commit: str | None = None
+    #: synthetic-kind fields: the in-tree generator that authored the
+    #: flaw (public by construction — the generator ships) plus the
+    #: seed that reproduces it. Kind-separated on purpose: synthetic
+    #: labels never masquerade as benchmark or CVE provenance.
+    generator: str | None = None
+    seed: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"kind": self.kind}
-        for k in ("suite", "case", "cve_id", "fix_commit"):
+        for k in ("suite", "case", "cve_id", "fix_commit",
+                  "generator", "seed"):
             v = getattr(self, k)
             if v is not None:
                 d[k] = v
@@ -180,10 +187,24 @@ def _parse_provenance(raw: Any, where: str, errors: list[str]) -> Provenance:
             errors.append(f"{where}: cve provenance needs a fix commit sha")
         return Provenance(kind="cve", cve_id=cve or None,
                           fix_commit=fix or None)
+    if kind == "synthetic":
+        if not raw.get("generator") or not raw.get("case"):
+            errors.append(
+                f"{where}: synthetic provenance needs generator and "
+                "case (the in-tree generator + the case it produced)")
+        seed = raw.get("seed")
+        if seed is not None and not isinstance(seed, int):
+            errors.append(
+                f"{where}: synthetic provenance seed must be an int")
+            seed = None
+        return Provenance(kind="synthetic",
+                          generator=raw.get("generator"),
+                          case=raw.get("case"), seed=seed)
     errors.append(
-        f"{where}: provenance.kind must be 'benchmark' or 'cve' — "
-        "recall labels require public provenance (no undisclosed "
-        "vulnerabilities in corpora)")
+        f"{where}: provenance.kind must be 'benchmark', 'cve', or "
+        "'synthetic' — recall labels require public provenance (no "
+        "undisclosed vulnerabilities in corpora; synthetic flaws are "
+        "generator-authored, public by construction)")
     return Provenance(kind=str(kind))
 
 
