@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "language": "python",
+  "framework": "flask",
+  "pack": "frameworks-flask",
+  "sources": [
+    {
+      "kind": "module_attribute",
+      "match": "flask.request",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "The request proxy carries args, form, headers, cookies, json, data and files — all attacker-chosen. Whole-object tainting matches whole-value granularity; any expression rooted at an import binding of flask.request is tainted."
+    },
+    {
+      "kind": "call_return",
+      "match": "flask.request.get_json",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "Parses the attacker-supplied request body; the returned structure is attacker-chosen end to end."
+    },
+    {
+      "kind": "call_return",
+      "match": "flask.request.get_data",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "Raw request body bytes, unparsed and fully attacker-chosen."
+    },
+    {
+      "kind": "route_param",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "Binds to extracted route records: path parameters parsed from Flask route patterns arrive as handler arguments chosen by the requester. Confirmation for handler-parameter seeding, not the full census (query and body ride the request object)."
+    }
+  ],
+  "sinks": [
+    {
+      "kind": "dotted_callee",
+      "match": "flask.send_file",
+      "args": [0],
+      "kwargs": ["path_or_file"],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "send_file serves the named filesystem path; an attacker-influenced path reads outside the intended directory (send_from_directory is the guarded form)."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "flask.redirect",
+      "args": [0],
+      "kwargs": ["location"],
+      "sink_class": "url-redirection",
+      "cwe": "CWE-601",
+      "provenance": "framework_catalog",
+      "rationale": "Redirecting to an attacker-chosen absolute URL is an open redirect."
+    }
+  ]
+}

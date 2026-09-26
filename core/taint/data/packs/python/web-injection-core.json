@@ -1,0 +1,341 @@
+{
+  "schema_version": 1,
+  "language": "python",
+  "framework": "stdlib",
+  "pack": "web-injection-core",
+  "sources": [
+    {
+      "kind": "call_return",
+      "match": "input",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "Builtin input() returns an attacker-typed line. Sources are not route-gated, so CLI tools seed from here too."
+    }
+  ],
+  "sinks": [
+    {
+      "kind": "dotted_callee",
+      "match": "os.system",
+      "args": [0],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "provenance": "framework_catalog",
+      "rationale": "os.system passes its argument to the shell verbatim; any attacker text in it is shell syntax."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "os.popen",
+      "args": [0],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "provenance": "framework_catalog",
+      "rationale": "os.popen runs its command string through the shell, same exposure as os.system."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "subprocess.run",
+      "args": [0],
+      "kwargs": ["args"],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "unless_kwargs": {"shell": "False"},
+      "provenance": "framework_catalog",
+      "rationale": "subprocess.run with a shell interprets the command string; only a literal shell=False at the call site suppresses the hit (a computed value never does)."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "subprocess.Popen",
+      "args": [0],
+      "kwargs": ["args"],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "unless_kwargs": {"shell": "False"},
+      "provenance": "framework_catalog",
+      "rationale": "subprocess.Popen is the constructor form of subprocess.run; same shell interpretation of the command argument."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "subprocess.call",
+      "args": [0],
+      "kwargs": ["args"],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "unless_kwargs": {"shell": "False"},
+      "provenance": "framework_catalog",
+      "rationale": "Legacy wrapper over Popen; the command argument reaches the same shell interpretation path."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "subprocess.check_output",
+      "args": [0],
+      "kwargs": ["args"],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "unless_kwargs": {"shell": "False"},
+      "provenance": "framework_catalog",
+      "rationale": "Output-capturing wrapper over Popen; the command argument reaches the same shell interpretation path."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "subprocess.check_call",
+      "args": [0],
+      "kwargs": ["args"],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "unless_kwargs": {"shell": "False"},
+      "provenance": "framework_catalog",
+      "rationale": "Checked wrapper over Popen; the command argument reaches the same shell interpretation path."
+    },
+    {
+      "kind": "method_name",
+      "match": "execute",
+      "receiver_hint": "cursor",
+      "args": [0],
+      "sink_class": "sql-injection",
+      "cwe": "CWE-89",
+      "confidence": "heuristic",
+      "provenance": "framework_catalog",
+      "rationale": "DB-API 2.0 cursor.execute(sql) — the standard SQL execution surface across drivers. Name-equality match, hence heuristic confidence."
+    },
+    {
+      "kind": "method_name",
+      "match": "executemany",
+      "receiver_hint": "cursor",
+      "args": [0],
+      "sink_class": "sql-injection",
+      "cwe": "CWE-89",
+      "confidence": "heuristic",
+      "provenance": "framework_catalog",
+      "rationale": "DB-API 2.0 batched execution; the statement argument is SQL text."
+    },
+    {
+      "kind": "method_name",
+      "match": "executescript",
+      "receiver_hint": "cursor",
+      "args": [0],
+      "sink_class": "sql-injection",
+      "cwe": "CWE-89",
+      "confidence": "heuristic",
+      "provenance": "framework_catalog",
+      "rationale": "sqlite3 multi-statement execution; parameterisation is not available on this surface at all."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "sqlalchemy.text",
+      "args": [0],
+      "sink_class": "sql-injection",
+      "cwe": "CWE-89",
+      "provenance": "framework_catalog",
+      "rationale": "sqlalchemy.text() wraps a raw SQL fragment that the engine executes as written."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "eval",
+      "args": [0],
+      "sink_class": "code-injection",
+      "cwe": "CWE-95",
+      "provenance": "framework_catalog",
+      "rationale": "Builtin eval executes its argument as a Python expression."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "exec",
+      "args": [0],
+      "sink_class": "code-injection",
+      "cwe": "CWE-95",
+      "provenance": "framework_catalog",
+      "rationale": "Builtin exec executes its argument as Python statements."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "compile",
+      "args": [0],
+      "sink_class": "code-injection",
+      "cwe": "CWE-95",
+      "provenance": "framework_catalog",
+      "rationale": "compile() turns attacker text into a code object; execution typically follows immediately."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "open",
+      "args": [0],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "Builtin open with an attacker-influenced path reads or writes outside the intended directory via dot segments."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "io.open",
+      "args": [0],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "io.open is the same call as builtin open under its importable name."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "os.open",
+      "args": [0],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "Low-level file open; same traversal exposure as builtin open."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "jinja2.Template",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "Constructing a Jinja2 template from attacker text allows template-expression execution when rendered."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "flask.render_template_string",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "Renders its first argument as a Jinja2 template in the app context — the canonical Flask SSTI surface."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "mako.template.Template",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "Mako templates embed Python; a template built from attacker text is code execution on render."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "django.template.Template",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "A Django template compiled from attacker text evaluates attacker-chosen template expressions and filters."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "markupsafe.Markup",
+      "args": [0],
+      "sink_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "framework_catalog",
+      "rationale": "Markup() marks its argument HTML-safe without escaping it — attacker text is then emitted raw by templates."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "flask.Markup",
+      "args": [0],
+      "sink_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "framework_catalog",
+      "rationale": "Re-exported markupsafe.Markup; same safe-marking of unescaped attacker text."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "django.utils.safestring.mark_safe",
+      "args": [0],
+      "sink_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "framework_catalog",
+      "rationale": "mark_safe exempts its argument from Django's template auto-escaping."
+    }
+  ],
+  "sanitizers": [
+    {
+      "kind": "dotted_callee",
+      "match": "re.match",
+      "semantics": "tag",
+      "sink_classes": ["*"],
+      "provenance": "framework_catalog",
+      "rationale": "A validation-shaped guard: it does not rewrite the value and its adequacy depends on the pattern, so the flow stays alive with the sanitizer hop recorded for downstream classification."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "re.fullmatch",
+      "semantics": "tag",
+      "sink_classes": ["*"],
+      "provenance": "framework_catalog",
+      "rationale": "Same validation shape as re.match; anchored, but pattern adequacy is still call-site-specific, so tag rather than kill."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "ast.literal_eval",
+      "semantics": "tag",
+      "sink_classes": ["code-injection"],
+      "provenance": "framework_catalog",
+      "rationale": "literal_eval only builds literal values, so it defuses eval-style execution of the parsed TEXT — but the resulting value can still be an attacker string, so the flow is tagged, not killed."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "int",
+      "semantics": "kill",
+      "sink_classes": ["command-injection", "sql-injection", "code-injection", "path-traversal", "template-injection", "xss"],
+      "provenance": "framework_catalog",
+      "rationale": "int() returns an int object or raises; no character of the input survives into the return value, so the returned value cannot carry injection syntax for any string-consuming sink class listed."
+    }
+  ],
+  "propagators": [
+    {
+      "kind": "dotted_callee",
+      "match": "os.path.join",
+      "flow": [{"from": "Argument[*]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "Any tainted component survives into the joined path; a later absolute or dot-segment component can even discard the safe prefix."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "posixpath.join",
+      "flow": [{"from": "Argument[*]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "POSIX-flavoured variant of os.path.join with identical propagation."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "os.path.abspath",
+      "flow": [{"from": "Argument[0]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "abspath normalises but does not validate — a traversal path stays attacker-chosen after normalisation."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "urllib.parse.unquote",
+      "flow": [{"from": "Argument[0]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "Percent-decoding REVEALS injection characters that were encoded; the output is at least as attacker-controlled as the input."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "urllib.parse.unquote_plus",
+      "flow": [{"from": "Argument[0]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "Form-flavoured percent-decoding; same taint exposure as unquote."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "base64.b64decode",
+      "flow": [{"from": "Argument[0]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "Decoding is a bijection over attacker bytes; the decoded value is fully attacker-chosen."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "json.loads",
+      "flow": [{"from": "Argument[0]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "Parsed structure and every string inside it come from the attacker document; whole-value granularity taints the result."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "codecs.decode",
+      "flow": [{"from": "Argument[0]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "Codec decoding (including rot13/hex/base64 codecs) transforms attacker bytes into attacker text."
+    }
+  ]
+}
