@@ -345,57 +345,73 @@ def _load_suppression_records(
 
 def _load_readjudication_records(
     out_dir: Path | None, file: str, function: str,
+    project_dir: Path | None = None,
 ) -> tuple[list[dict], int]:
     """Re-adjudication queue records for this function from
     readjudication-queue.jsonl (core.project.readjudication), plus
     the queue's GLOBAL suppressed count from its truncation marker.
 
-    A record means a recorded disproof at this site was contradicted
-    by a later independent signal — queued, never auto-overturned.
-    The suppressed count is surfaced even when this function has no
-    records: a capped queue may have refused exactly this function's
-    contradiction, so silence would be dishonest. Same tolerant-reader
-    + hostile-artifact discipline as :func:`_load_suppression_records`
-    (the queue lives in the same agent-writable run dir; only
-    positive int-typed suppressed fields count).
+    Two queue homes are read: the run-local queue (the /validate
+    import's cross-check against the run's OWN prior container) and
+    the PROJECT-level queue at ``<project>/_report/`` (the cross-run
+    detection the completion hook and /project report write) — a
+    sibling-run contradiction only ever appears in the latter, so
+    reading one home showed an incomplete picture.
+
+    A record means two adjudications disagree at this site — queued,
+    never auto-overturned. The suppressed count is surfaced even when
+    this function has no records: a capped queue may have refused
+    exactly this function's contradiction, so silence would be
+    dishonest. Same tolerant-reader + hostile-artifact discipline as
+    :func:`_load_suppression_records` (the queues live in
+    agent-writable run/report dirs; only positive int-typed
+    suppressed fields count).
     """
-    if not out_dir:
-        return [], 0
-    path = out_dir / "readjudication-queue.jsonl"
-    if not path.is_file():
-        return [], 0
+    paths = []
+    if out_dir:
+        paths.append(Path(out_dir) / "readjudication-queue.jsonl")
+    if project_dir:
+        candidate = (Path(project_dir) / "_report"
+                     / "readjudication-queue.jsonl")
+        if candidate not in paths:
+            paths.append(candidate)
     records = []
     suppressed = 0
-    try:
-        import os as _os
-        import stat as _stat
-        _st = _os.stat(path)
-        if not _stat.S_ISREG(_st.st_mode) or _st.st_size > 64 * 1024 * 1024:
-            return [], 0
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            import os as _os
+            import stat as _stat
+            _st = _os.stat(path)
+            if (not _stat.S_ISREG(_st.st_mode)
+                    or _st.st_size > 64 * 1024 * 1024):
                 continue
-            try:
-                rec = loads(line)
-            except ValueError:
-                continue
-            if not isinstance(rec, dict):
-                continue
-            if rec.get("action") == "truncated":
-                value = rec.get("suppressed")
-                if (isinstance(value, int) and not isinstance(value, bool)
-                        and value > 0):
-                    suppressed += value
-                continue
-            if rec.get("action") != "queued":
-                continue
-            site = rec.get("site")
-            site = site if isinstance(site, dict) else {}
-            if site.get("file") == file and site.get("function") == function:
-                records.append(rec)
-    except OSError:
-        return [], 0
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                if rec.get("action") == "truncated":
+                    value = rec.get("suppressed")
+                    if (isinstance(value, int)
+                            and not isinstance(value, bool) and value > 0):
+                        suppressed += value
+                    continue
+                if rec.get("action") != "queued":
+                    continue
+                site = rec.get("site")
+                site = site if isinstance(site, dict) else {}
+                if (site.get("file") == file
+                        and site.get("function") == function):
+                    records.append(rec)
+        except OSError:
+            continue
     return records, suppressed
 
 
@@ -456,13 +472,14 @@ def cmd_show(args) -> None:
     if args.function:
         _show_function(
             args.file, args.function, cm, entries, index, ann_dir, args,
-            out_dir=out_dir,
+            out_dir=out_dir, project_dir=project_dir,
         )
     else:
         _show_file(args.file, cm, entries, index, ann_dir, args)
 
 
-def _show_function(file, function, cm, entries, index, ann_dir, args, out_dir=None):
+def _show_function(file, function, cm, entries, index, ann_dir, args,
+                   out_dir=None, project_dir=None):
     # Shared injective key (file component percent-encoded) — a raw
     # f-string key misses journal entries for paths containing ':'
     # or '%'.
@@ -545,21 +562,41 @@ def _show_function(file, function, cm, entries, index, ann_dir, args, out_dir=No
                 print(f"      {_line(reason, max_chars=160)}")
 
     readjudication, readj_suppressed = _load_readjudication_records(
-        out_dir, file, function)
+        out_dir, file, function, project_dir=project_dir)
     if readjudication:
+        from core.project.readjudication import (
+            SHAPE_INTRA_RUN_SPLIT,
+            SHAPE_OVERTURN,
+        )
         print()
-        print("  Re-adjudication queued (recorded disproof contradicted "
-              "by a later signal — nothing auto-overturned):")
+        print("  Re-adjudication queued (contradictory adjudications at "
+              "this site — nothing auto-overturned):")
         for rec in readjudication:
             claim = rec.get("new_claim")
             claim = claim if isinstance(claim, dict) else {}
             disproof = rec.get("disproof")
             disproof = disproof if isinstance(disproof, dict) else {}
-            mech = ", ".join(str(m) for m in claim.get("mechanism") or [])
-            print(f"    new {_line(mech or '?', max_chars=80)} claim from "
-                  f"{_line(str(claim.get('source', '?')), max_chars=80)} vs "
-                  f"{_line(str(disproof.get('status', 'disproof')), max_chars=40)} from "
-                  f"{_line(str(disproof.get('source', '?')), max_chars=80)}")
+            shape = rec.get("shape")
+            # Missing/foreign shape reads as the legacy class.
+            shape = shape if isinstance(shape, str) else ""
+            claim_src = _line(str(claim.get("source", "?")), max_chars=80)
+            claim_status = _line(
+                str(claim.get("status", "confirmed")), max_chars=40)
+            dis_src = _line(str(disproof.get("source", "?")), max_chars=80)
+            dis_status = _line(
+                str(disproof.get("status", "disproof")), max_chars=40)
+            if shape == SHAPE_OVERTURN:
+                print(f"    prior {claim_status} verdict from {claim_src} "
+                      f"disproven by later {dis_status} from {dis_src} "
+                      f"[overturn-shaped]")
+            elif shape == SHAPE_INTRA_RUN_SPLIT:
+                print(f"    intra-run split in {claim_src}: {claim_status} "
+                      f"and {dis_status} both final at this site")
+            else:
+                mech = ", ".join(
+                    str(m) for m in claim.get("mechanism") or [])
+                print(f"    new {_line(mech or '?', max_chars=80)} claim "
+                      f"from {claim_src} vs {dis_status} from {dis_src}")
             reconsider = str(disproof.get("would_reconsider_if", ""))
             if reconsider:
                 print(f"      would reconsider if: "

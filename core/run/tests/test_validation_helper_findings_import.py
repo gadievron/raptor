@@ -318,7 +318,7 @@ class TestImportReadjudicationCrossCheck:
         # cross-check ran before normalisation.
         assert rec["new_claim"]["id"] == "SCAN-1"
         out = capsys.readouterr().out
-        assert ("1 incoming finding(s) contradict recorded disproofs"
+        assert ("1 incoming finding(s) contradict recorded verdicts"
                 in out)
         assert "nothing auto-overturned" in out
 
