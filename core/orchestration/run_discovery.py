@@ -157,14 +157,24 @@ def _ledger_candidates(marker, exclude, dir_filter):
 
 def recorded_target_matches(run_dir: Path,
                             target_path: Path | str) -> bool:
-    """False only when the candidate's run metadata records a target
-    that is NOT *target_path* (resolved comparison, containment
-    either way). Metadata-less dirs are admitted — legacy tolerance."""
+    """False when the candidate's run metadata records a target that
+    is NOT *target_path* (resolved comparison, containment either
+    way), and when a metadata file is PRESENT but unreadable, corrupt,
+    or oversized. Metadata-less dirs are admitted — legacy tolerance:
+    ABSENCE is what pre-metadata runs look like; a present-but-broken
+    file is not legacy, it is the cheapest self-declaration bypass
+    (garbage bytes admitted a candidate to every query), so it fails
+    closed. strict=True is what separates the two: load_json returns
+    None only for a missing file and raises on everything else —
+    the non-strict default returns None for BOTH, which is exactly
+    the conflation the pre-fix admit rode in on."""
     try:
         from core.json import load_json
         meta = load_json(Path(run_dir) / ".raptor-run.json",
-                         max_bytes=1024 * 1024)
-        recorded = (meta or {}).get("target_path") if isinstance(meta, dict) else None
+                         strict=True, max_bytes=1024 * 1024)
+        if meta is None:
+            return True  # no metadata file: legacy run dir
+        recorded = meta.get("target_path") if isinstance(meta, dict) else None
         if recorded is None or recorded == "":
             return True
         if not isinstance(recorded, str):
@@ -182,8 +192,11 @@ def recorded_target_matches(run_dir: Path,
         a = Path(recorded).resolve()
         b = Path(target_path).resolve()
         return a == b or a in b.parents or b in a.parents
-    except Exception:  # noqa: BLE001 — unreadable metadata: admit (legacy)
-        return True
+    except Exception:  # noqa: BLE001 — present-but-bad metadata: refuse
+        logger.debug("recorded_target_matches: refusing %s "
+                     "(metadata present but unreadable)", run_dir,
+                     exc_info=True)
+        return False
 
 
 def _scan_dir(

@@ -109,3 +109,44 @@ class TestRecordedTargetMatches:
         wanted = tmp_path / "wanted"
         wanted.mkdir()
         assert not recorded_target_matches(d, wanted)
+
+    def test_corrupt_metadata_refused(self, tmp_path):
+        # Present-but-broken is NOT legacy: garbage bytes in
+        # .raptor-run.json used to admit the candidate to every
+        # query (the cheapest self-declaration bypass — no need to
+        # even forge the victim's target path).
+        d = _mk_run(tmp_path, "run")
+        (d / ".raptor-run.json").write_text("{not json")
+        wanted = tmp_path / "wanted"
+        wanted.mkdir()
+        assert not recorded_target_matches(d, wanted)
+
+    def test_oversized_metadata_refused(self, tmp_path):
+        d = _mk_run(tmp_path, "run")
+        (d / ".raptor-run.json").write_text(
+            json.dumps({"target_path": "x" * (1024 * 1024 + 64)}))
+        wanted = tmp_path / "wanted"
+        wanted.mkdir()
+        assert not recorded_target_matches(d, wanted)
+
+    def test_typed_corruption_refused(self, tmp_path):
+        d = _mk_run(tmp_path, "run")
+        (d / ".raptor-run.json").write_text(
+            json.dumps({"target_path": ["not", "a", "string"]}))
+        wanted = tmp_path / "wanted"
+        wanted.mkdir()
+        assert not recorded_target_matches(d, wanted)
+
+    def test_corrupt_metadata_refused_at_the_gate(self, tmp_path):
+        # Same defect at the collect_sibling_runs seam: the corrupt
+        # candidate must not ride the discovery results.
+        target = tmp_path / "target"
+        target.mkdir()
+        proj = tmp_path / "proj"
+        origin = proj / "validate-1"
+        origin.mkdir(parents=True)
+        bad = _mk_run(proj, "understand-corrupt")
+        (bad / ".raptor-run.json").write_text("\x00\x01garbage")
+        got = collect_sibling_runs(origin, MARKER, search_global=False,
+                                   target_path=target)
+        assert got == []
