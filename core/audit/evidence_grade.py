@@ -45,6 +45,7 @@ class EvidenceSource(str, enum.Enum):
     DYNAMIC_CRASH = "dynamic:crash"
     DARK_VERIFY = "mechanical:dark_verify"
     SANWIT = "mechanical:sanwit"
+    GADGET_ORACLE = "mechanical:gadget_oracle"
     COMPILATION = "mechanical:compilation"
     COMPILER_ANALYZER = "mechanical:compiler_analyzer"
     PRECONDITION = "mechanical:precondition"
@@ -125,6 +126,12 @@ _TOOL_NAMESPACES = frozenset(VALID_EVIDENCE_TOOLS | {
     # recognized pipeline stamps (aggregation-eligible), never
     # promoted alone.
     "sanwit",
+    # PHP gadget-chain oracle (core.analysis.gadget_oracle): same
+    # discipline as sanwit — every stamp is detection-grade by the
+    # channel's own classifier (a found chain adjudicates gadget
+    # existence, not the request-to-unserialize taint path), so its
+    # receipts aggregate but never promote alone.
+    "gadget_oracle",
     # Z3 path-infeasibility proof from the decorative-guard detector —
     # a real solver run, previously graded tool_backed only through
     # compute_tier's dispatched-name loophole (invisible to this
@@ -183,6 +190,11 @@ _DETECTION_CLASSIFIER_MODULES: dict[str, str] = {
     # defense-insufficiency premise, not the attack path), so the
     # channel classifier answers True for the whole namespace.
     "sanwit": "core.audit.sanwit",
+    # PHP gadget-chain oracle: EVERY stamp is detection-grade (a
+    # chain exhibit corroborates the gadget-existence premise; the
+    # absence variant is census-qualified hint evidence), so the
+    # channel classifier answers True for the whole namespace.
+    "gadget_oracle": "core.analysis.gadget_oracle",
     # Bare joern reachability (joern:live / joern:pre_sweep) is
     # guard-blind and detection-role at the promotion sites — grading
     # it as sustain-capable tool evidence here let the same receipt
@@ -245,6 +257,10 @@ def _is_detection_variant(part: str) -> bool:
     if part.startswith("sanwit:"):
         # The whole sanwit namespace is detection-grade (mirrors
         # core.audit.sanwit.is_detection_rule_id).
+        return True
+    if part.startswith("gadget_oracle:"):
+        # The whole gadget-oracle namespace is detection-grade
+        # (mirrors core.analysis.gadget_oracle.is_detection_rule_id).
         return True
     if part.startswith("consistency:") and part.endswith("-majority"):
         return True
@@ -464,6 +480,19 @@ _RECEIPT_MAP: dict[str, tuple] = {
             "executed against the sink context's breakout corpus "
             "(rule id carries the verdict and context; receipts are "
             "corpus- and context-scoped)"
+        ),
+    ),
+    # PHP gadget-chain oracle. Stamps are two-segment
+    # (``gadget_oracle:chain`` / ``:chain-conditional`` /
+    # ``:no-gadgets``) and every one is detection-grade; the bare
+    # namespace row renders for all of them.
+    "gadget_oracle": (
+        EvidenceSource.GADGET_ORACLE,
+        (
+            "gadget-chain oracle: static magic-method enumeration "
+            "with property-to-sink flow over the whole PHP tree "
+            "(chain exhibits and census-qualified absence are both "
+            "hint/boost evidence — verify against source)"
         ),
     ),
     "compilation": (EvidenceSource.COMPILATION, "confirmed by compilation and execution"),

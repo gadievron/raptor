@@ -388,6 +388,12 @@ def assemble_context(
     # hypothesis formation — NO verdict path reads it. Absent for
     # non-PHP files and pre-graph runs (graceful None).
     ctx["include_context"] = _build_include_context(out_dir, file_path)
+    # PHP gadget surface (hint-tier, prompt-context only): magic-
+    # method chains and unserialize sites from gadget-chains.json,
+    # with the mandatory completeness qualifier. Steering context for
+    # CWE-502 hypothesis formation — NO verdict path reads it. Absent
+    # for non-PHP targets and runs the oracle never touched.
+    ctx["gadget_context"] = _build_gadget_context(out_dir, file_path)
 
     strategies = None
     try:
@@ -1245,6 +1251,61 @@ def format_context_for_prompt(
             census_q, max_length=600))
         sections.append(PromptSection("include_context",
                                       "\n".join(ip), 1))
+
+    if ctx.get("gadget_context"):
+        # Hint-tier PHP gadget surface: chains the oracle found (or
+        # census-qualified absence) plus this file's unserialize
+        # sites. Steering context only — the block itself says so,
+        # and no verdict path consumes it.
+        gc = ctx["gadget_context"]
+        gp = ["\n### PHP gadget surface (hint-tier)"]
+
+        def _render_chain(c: dict) -> str:
+            steps = c.get("steps") or []
+            hop = (" via " + _defend_identifier(
+                "::".join(steps), max_length=200)) if steps else ""
+            req = c.get("trigger_requires")
+            req_s = (f"; requires: {_defend_identifier(str(req), max_length=200)}"
+                     if req else "")
+            return (
+                f"- `{_defend_identifier(str(c.get('class', '?')), max_length=256)}"
+                f"::{_defend_identifier(str(c.get('magic_method', '?')), max_length=64)}`"
+                f"{hop} -> {_defend_identifier(str(c.get('sink_category', '?')), max_length=32)}"
+                f":`{_defend_identifier(str(c.get('sink_callee', '?')), max_length=128)}`"
+                f" via property `{_defend_identifier(str(c.get('property_path', '?')), max_length=120)}`"
+                f" ({_defend_identifier(str(c.get('file', '?')), max_length=512)}"
+                f":{c.get('sink_line', '?')};"
+                f" availability: {_defend_identifier(str(c.get('availability', '?')), max_length=64)}"
+                f"{req_s}) — hint, verify against source, cite lines")
+
+        in_file = gc.get("chains_in_file") or []
+        elsewhere = gc.get("chains_elsewhere") or []
+        total = gc.get("chains_total", 0)
+        if in_file:
+            gp.append(f"- Gadget chain(s) rooted in THIS file "
+                      f"({len(in_file)} shown of {total} in tree):")
+            gp.extend(_render_chain(c) for c in in_file)
+        elif elsewhere:
+            gp.append(f"- Gadget chain(s) elsewhere in the tree "
+                      f"({len(elsewhere)} shown of {total}):")
+            gp.extend(_render_chain(c) for c in elsewhere)
+        elif total == 0:
+            gp.append(
+                "- No magic-method gadget chains found by the oracle "
+                "(see the census line — absence is evidence only "
+                "modulo the census and the stated flow depth, never "
+                "a verdict).")
+        for site in (gc.get("unserialize_sites_in_file") or [])[:5]:
+            rd = (" — argument text references request data"
+                  if site.get("request_derived") else "")
+            gp.append(
+                f"- unserialize() site in this file at line "
+                f"{site.get('line', '?')}{rd}: "
+                f"`{_defend_identifier(str(site.get('excerpt', '')), max_length=200)}`")
+        gp.append("- Census: " + _defend_identifier(
+            str(gc.get("qualifier", "")), max_length=600))
+        sections.append(PromptSection("gadget_context",
+                                      "\n".join(gp), 1))
 
     if ctx.get("threat_model"):
         # Operator-authored project threat model (assemble_context
@@ -5307,6 +5368,50 @@ def _build_include_context(
     except Exception:
         logger.debug("bootstrap context build failed", exc_info=True)
     return facts
+
+
+# Gadget-oracle artifact memo: keyed by (path, mtime, size) so a
+# rewritten artifact invalidates naturally; the report is re-read
+# once per run, not once per reviewed function.
+_gadget_report_memo: "BoundedMemo[dict[str, Any] | None]" = BoundedMemo(8)
+
+
+def _build_gadget_context(
+    out_dir: Path | None, file_path: str,
+) -> dict[str, Any] | None:
+    """Hint-tier gadget-surface facts for one file, or None.
+
+    Reads ``gadget-chains.json`` (written by the gadget-oracle
+    channel or the standalone scan). The returned block always
+    carries the completeness qualifier — a gadget fact without it is
+    exactly the dishonest "no gadgets in tree" shape the oracle
+    exists to replace. Every field is re-coerced in
+    ``gadget_facts_for_file`` because the artifact lives in a run
+    directory (JSON shapes are not trusted).
+    """
+    if not out_dir:
+        return None
+    try:
+        from core.analysis.gadget_oracle import (
+            gadget_facts_for_file,
+            load_gadget_report,
+            resolve_artifact_path,
+        )
+    except ImportError:
+        return None
+    try:
+        artifact = resolve_artifact_path(out_dir)
+        if artifact is None:
+            return None
+        st = artifact.stat()
+        key = (str(artifact), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    report, _cached = _gadget_report_memo.get_or_compute(
+        key, lambda: load_gadget_report(out_dir))
+    if not report:
+        return None
+    return gadget_facts_for_file(report, file_path)
 
 
 def _load_project_context(

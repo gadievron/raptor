@@ -391,6 +391,42 @@ def _sanwit_file_predicate(
     )
 
 
+def _gadget_oracle_file_predicate(
+    *, language: str | None, file_path: str,
+) -> Coverage:
+    """PHP is the gadget oracle's only modeled substrate: magic-method
+    enumeration and the unserialize lifecycle are PHP-specific, so
+    dispatching against any other detected language could only mint
+    noise. Unknown language fails OPEN (the channel's own gates skip
+    with a reasoned receipt, and the channel emits no refutations for
+    the license to matter)."""
+    if language is None:
+        return Coverage(
+            covered=None,
+            tier="language",
+            reason=(
+                "gadget_oracle: file language undetectable for "
+                f"'{file_path}' — dispatch kept (fail-open)"
+            ),
+        )
+    if language == "php":
+        return Coverage(
+            covered=True,
+            tier="language",
+            reason=(
+                "gadget_oracle: file language 'php' is the modeled "
+                "substrate"
+            ),
+            evidence={"language": language},
+        )
+    return Coverage(
+        covered=False,
+        tier="language",
+        reason=f"gadget_oracle: file language '{language}' is not php",
+        evidence={"language": language},
+    )
+
+
 # Registry of tiers the seam adjudicates. A tier absent here is
 # UNREGISTERED: the seam answers covered=None/fail-open for it — no
 # behavior change until the tier migrates with its own predicate,
@@ -427,6 +463,15 @@ _REGISTRY: dict[str, TierEntry] = {
     "sanwit": TierEntry(
         scope=SCOPE_FILE,
         predicate=_sanwit_file_predicate,
+        unknown_policy=UNKNOWN_FAIL_OPEN,
+    ),
+    # PHP gadget-chain oracle: PHP-only substrate, same rationale as
+    # sanwit — the channel never emits ``refuted``, so registration
+    # exists for the pre-dispatch skip on provably non-PHP files (and
+    # the registration tripwire).
+    "gadget_oracle": TierEntry(
+        scope=SCOPE_FILE,
+        predicate=_gadget_oracle_file_predicate,
         unknown_policy=UNKNOWN_FAIL_OPEN,
     ),
 }

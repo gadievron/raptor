@@ -18428,6 +18428,30 @@ def _hypothesis_to_tool_chain(
                 chain.append({"type": "sanwit", "config": {}})
                 seen_types.add("sanwit")
 
+    # Deserialization-gadget hypotheses ("no magic-method gadgets in
+    # tree", "POP chain through __destruct"): the gadget oracle
+    # enumerates PHP magic methods and property→sink flows across the
+    # whole tree — both directions land as detection-grade receipts
+    # (a found chain exhibits, absence renders census-qualified; the
+    # channel never refutes). Appended — pre-existing chain order is
+    # unchanged. Language-gated at BUILD time like sanwit: the leg's
+    # existence feeds the empty-dispatch synthesis routing, which
+    # must not change for non-PHP files.
+    if "gadget_oracle" not in seen_types:
+        try:
+            from core.analysis.gadget_oracle import (
+                gadget_language_permitted,
+                is_gadget_hypothesis,
+            )
+        except ImportError:
+            pass
+        else:
+            if is_gadget_hypothesis(hypothesis) and (
+                gadget_language_permitted(file_path, language)
+            ):
+                chain.append({"type": "gadget_oracle", "config": {}})
+                seen_types.add("gadget_oracle")
+
     return chain
 
 
@@ -19200,6 +19224,26 @@ def _cwe_fallback_chain(
             sanwit_language_permitted(file_path, language)
         ):
             chain.append({"type": "sanwit", "config": {}})
+
+    try:
+        from core.analysis.gadget_oracle import (
+            gadget_language_permitted,
+            gadget_oracle_applicable,
+        )
+    except ImportError:
+        pass
+    else:
+        # Deserialization family (GADGET_ORACLE_CWES — CWE-502): the
+        # gadget oracle joins the chain additively for PHP targets.
+        # Both directions of its output are detection-grade — a found
+        # chain is a witness exhibit, absence is census-qualified
+        # hint evidence, and the channel never emits ``refuted``
+        # (absence-as-suppression is a corpus-gated follow-up).
+        # Language-gated at build time (the sanwit precedent).
+        if gadget_oracle_applicable(cwe) and (
+            gadget_language_permitted(file_path, language)
+        ):
+            chain.append({"type": "gadget_oracle", "config": {}})
 
     if cwe and not chain:
         _warn_unmapped_cwe(cwe)
@@ -21489,6 +21533,77 @@ def _run_tool_chain(
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "sanwit", "inconclusive",
+                        )
+
+            elif tool_type == "gadget_oracle":
+                from core.analysis.gadget_oracle import (
+                    run_gadget_oracle_check,
+                )
+
+                go_res = run_gadget_oracle_check(
+                    effective_target,
+                    file_path,
+                    function_name,
+                    hypothesis,
+                    output_dir=config.out_dir,
+                )
+                go_res.corroboration.extend(
+                    c for c in confirmed
+                    if not c.startswith("gadget_oracle")
+                )
+                _record_channel_receipt(
+                    config, "gadget_oracle_check", file_path,
+                    function_name, go_res,
+                )
+                _go_oc = _classify_sweep_outcome(go_res)
+                if _go_oc == "confirmed":
+                    confirmed.append(go_res.rule_id)
+                    logger.info(
+                        "gadget-oracle chain %s:%s — %s",
+                        file_path, function_name, go_res.reason,
+                    )
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "gadget_oracle",
+                            "confirmed",
+                        )
+                elif _go_oc == "skipped":
+                    # Did not look (grammar absent / non-PHP /
+                    # unusable target): out of the dispatch record,
+                    # never the refuted counter. The receipt above
+                    # records the capability gap.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "gadget_oracle", "skipped",
+                        )
+                elif _go_oc == "error":
+                    if errored_types is not None:
+                        errored_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "gadget_oracle", "errors",
+                        )
+                elif _go_oc == "refuted" and tier_counters:
+                    # Unreachable by module contract (the oracle
+                    # never refutes — absence is hint-tier until the
+                    # corpus-gated promotion); booked defensively so
+                    # a future variant cannot be miscounted.
+                    _increment_tier_dict(
+                        tier_counters, "gadget_oracle", "refuted",
+                    )
+                else:
+                    # Census-qualified absence lands here: strong
+                    # steer-tier evidence, never a clean resolution.
+                    logger.info(
+                        "gadget-oracle inconclusive %s:%s — %s",
+                        file_path, function_name, go_res.reason,
+                    )
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "gadget_oracle",
+                            "inconclusive",
                         )
 
         except Exception as exc:  # noqa: BLE001

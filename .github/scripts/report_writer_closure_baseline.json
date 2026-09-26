@@ -73,6 +73,9 @@
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::ep": {
       "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; same disposition as this file's other rows"
     },
+    "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::gp": {
+      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; every artifact-derived field additionally rides _defend_identifier at append time; same disposition as this file's other rows"
+    },
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::lines_cl": {
       "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; same disposition as this file's other rows"
     },

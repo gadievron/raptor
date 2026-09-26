@@ -215,7 +215,11 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
                   "file_get_contents", "os.path.join", "send_file",
                   "sendFile", "include", "require_once"],
     },
-    # Deserialization
+    # Deserialization. The gadget-oracle channel joins this class's
+    # fallback chain additively for PHP targets
+    # (core.analysis.gadget_oracle.GADGET_ORACLE_CWES — magic-method
+    # enumeration + property→sink flow over the whole tree; both
+    # directions detection-grade, absence never suppresses).
     "CWE-502": {
         "smt": None,
         "cocci": None,
