@@ -1363,13 +1363,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/spec_inference.py\u001fdoc_match": {
-   "digests": [
-    "a3bd3a98c8ec"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/audit/spec_inference.py\u001fvar_match": {
    "digests": [
     "eec71ddd6672"

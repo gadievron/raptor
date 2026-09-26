@@ -332,12 +332,29 @@ def _infer_from_docstring(spec: InferredSpec, gap: dict[str, Any]) -> None:
     if not docstring:
         source = gap.get("source", "")
         if source:
-            doc_match = re.search(
-                r'(?:"""|\'\'\'|/\*\*)(.*?)(?:"""|\'\'\'|\*/)',
-                source, re.DOTALL,
-            )
-            if doc_match:
-                docstring = doc_match.group(1).strip()
+            # Opener regex + str.find closer lookup instead of the
+            # single-regex spelling (`(?:"""|'''|/\*\*)(.*?)(?:"""|
+            # '''|\*/)`): source that repeats an opener the closer
+            # set never terminates (`/**` with the `*/` withheld)
+            # made every planted opener lazy-scan the rest of the
+            # function source — quadratic on hostile repo text.  A
+            # tempered interior does NOT fix that (each unclosed
+            # opener still scans to the end); this two-step scan is
+            # one pass plus at most one failed find per closer kind.
+            # Match-equivalent to the single regex on every input:
+            # its first match is the first opener with any closer
+            # after it, and a closer after a LATER opener is also
+            # after the first, so only the first opener ever needs
+            # the lookup, with the earliest closer of any kind as
+            # its end (the alternation closed any opener with any
+            # closer — semantics kept, deliberately).
+            opener = re.search(r'"""|\'\'\'|/\*\*', source)
+            if opener is not None:
+                ends = [at for at in (source.find(closer, opener.end())
+                                      for closer in ('"""', "'''", "*/"))
+                        if at != -1]
+                if ends:
+                    docstring = source[opener.end():min(ends)].strip()
 
     if not docstring or len(docstring) < 10:
         return
