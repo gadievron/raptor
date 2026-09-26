@@ -26,7 +26,10 @@ Containment contract:
     ``CARGO_NET_OFFLINE=true`` (dependencies must already be in the
     local cargo cache — the failure message says how to fetch them in
     a trusted context). Reads are restricted to the crate, the Rust
-    toolchain roots (cargo/rustup homes), and the run directory.
+    toolchain binaries (the cargo home's ``bin/`` shims and the
+    rustup home — NEVER the cargo home ROOT, which carries
+    ``credentials.toml``, the crates.io publish token; see
+    :meth:`CargoFuzzRunner._rust_tool_paths`), and the run directory.
     Writes are scoped to the run directory (``CARGO_TARGET_DIR``
     points the build artifacts there) plus ONE directory cargo itself
     requires: the fuzz workspace (older cargo-fuzz versions pin their
@@ -477,16 +480,35 @@ class CargoFuzzRunner(LibFuzzerRunner):
 
     def _rust_tool_paths(self) -> list[str]:
         """Rust toolchain roots the build sandbox's read allowlist
-        needs beyond the system baseline (/usr, /bin, ...)."""
+        needs beyond the system baseline (/usr, /bin, ...).
+
+        The host cargo home is granted ONLY through its ``bin/``
+        subtree, never the home's root. With the registry seeded
+        run-locally (see the module containment contract), the sole
+        thing the build still needs from the host cargo home is the
+        rustup shims in ``bin/`` — while ``credentials.toml`` (the
+        crates.io publish token) sits directly at the home's root,
+        and the build phase runs hostile target code. Same boundary
+        as the jazzer lane's refusal to read-grant ``~/.gradle`` /
+        ``~/.m2``, whose credential files also live at the cache
+        roots. The shims re-exec the real toolchain binaries under
+        the rustup home, which keeps its own explicit grant below.
+        """
         system_prefixes = ("/usr/", "/lib/", "/lib64/", "/etc/",
                            "/bin/", "/sbin/")
         paths: list[str] = []
+        host_cargo_bin = (
+            None if self._host_cargo_home is None
+            else self._host_cargo_home / "bin"
+        )
         candidates = [
             Path(self.cargo).parent,
             Path(self.cargo).resolve().parent,
-            # READ-only: rustup shims and toolchains live here; the
-            # write scope never includes it (hermetic run-local home).
-            self._host_cargo_home,
+            # READ-only, and only bin/ (see the docstring — the home
+            # root holds credentials.toml); the write scope never
+            # includes any of it (hermetic run-local home).
+            host_cargo_bin,
+            # READ-only: the toolchains the bin/ shims re-exec into.
             self._rustup_home,
         ]
         for candidate in candidates:
