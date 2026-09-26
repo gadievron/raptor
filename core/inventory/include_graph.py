@@ -82,6 +82,26 @@ ARTIFACT_NOTE = (
 REF_BASIS_VALUES: tuple[str, ...] = (
     "relative_literal", "tail_unique", "env_resolved")
 
+
+def _set_basis(ref: dict[str, Any], basis: str) -> None:
+    """The ONE writer of the includer-ref ``basis`` field.
+
+    Producer-side dev-time correctness, not input validation: bases
+    are chosen by this module's resolution logic — hostile artifact
+    content never reaches this writer. A value outside the declared
+    vocabulary would render ``""`` through the consumer query
+    (indistinguishable from a forged ref), so an undeclared basis
+    fails loud at write time instead of silently blanking downstream.
+    The vocabulary tests additionally pin that no other write shape
+    exists in this module.
+    """
+    if basis not in REF_BASIS_VALUES:
+        raise ValueError(
+            f"undeclared includer-ref basis {basis!r}: add it to "
+            "REF_BASIS_VALUES — the consumer query renders exactly "
+            "that vocabulary")
+    ref["basis"] = basis
+
 # Bounds — the graph derives from hostile content; every list a
 # planted tree can grow is capped, with full counts kept beside the
 # truncated lists.
@@ -446,7 +466,7 @@ def build_include_graph(
     def _resolve_to(target: str, basis: str,
                     includer: str, e: dict[str, Any]) -> None:
         ref = _edge_ref(includer, e)
-        ref["basis"] = basis
+        _set_basis(ref, basis)
         included_by.setdefault(target, []).append(ref)
         resolved_1a[(includer, ref["line"])] = (target, ref)
         reason = _walkability_reason(target)
@@ -572,7 +592,7 @@ def build_include_graph(
             old = resolved_1a.get((includer, line))
             for target in targets:
                 if old is not None and old[0] == target:
-                    old[1]["basis"] = "env_resolved"
+                    _set_basis(old[1], "env_resolved")
                     _bump(outcomes, "env_confirmed_tail_basis")
                     continue
                 ref = {
@@ -580,8 +600,8 @@ def build_include_graph(
                     "keyword": rec["keyword"],
                     "conditional": rec["conditional"],
                     "position": rec["position"],
-                    "basis": "env_resolved",
                 }
+                _set_basis(ref, "env_resolved")
                 included_by.setdefault(target, []).append(ref)
                 why = _walkability_reason(target)
                 if why is not None:
