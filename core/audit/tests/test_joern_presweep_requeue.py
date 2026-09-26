@@ -326,3 +326,195 @@ class TestReportAndCritiqueSurfacing:
             if "pre-sweep window was LOST" in r.getMessage()
         ]
         assert len(hits) == 1  # once per run, not per critique tick
+
+
+class _TimeoutServer:
+    """Every window times out at its own budget; server stays healthy."""
+
+    restarting = False
+    _cpg_loaded = True
+
+    def __init__(self):
+        self.windows: list[int] = []
+
+    def cpg_size_bytes(self):
+        return None
+
+    def ensure_alive(self):
+        return True
+
+    def query_script(self, script, timeout=300, substitutions=None):
+        self.windows.append(int(timeout))
+        return JoernResult(
+            query="", errors=[f"query timed out after {timeout}s"],
+        )
+
+
+class TestFailureHonesty:
+    """A degraded sweep's status must say WHY (which ceiling bound,
+    what operation died) — the before-shape was a fatal status with
+    zero flows and no recorded reason at all."""
+
+    def test_timeout_lost_window_names_the_ceiling(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        _fast_recovery(monkeypatch)
+        server = _TimeoutServer()
+        status: dict = {}
+        flows = run_joern_pre_sweep(
+            tmp_path, {}, server=server, query_timeout=300,
+            status_out=status,
+        )
+        assert flows == {}
+        assert status["completed"] is False
+        # The exact before-shape gap: fatal, zero flows — now WITH a
+        # machine-readable reason naming the binding ceiling.
+        assert status["reason"] == "query_timeout"
+        # The LAST attempt's budget is recorded (raised, never the
+        # same wall re-bought: 300 -> 600 -> 1200).
+        assert server.windows == [300, 600, 1200]
+        assert status["query_timeout_s"] == 1200
+        assert status["cpg_bytes"] is None
+
+    def test_timeout_requeue_fails_fast_at_ceiling(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        from core.tuning import derived_max_joern_presweep_timeout_s
+        cap = derived_max_joern_presweep_timeout_s(4000)
+        _fast_recovery(monkeypatch)
+        server = _TimeoutServer()
+        status: dict = {}
+        run_joern_pre_sweep(
+            tmp_path, {}, server=server, query_timeout=4000,
+            status_out=status,
+        )
+        # 4000 raises to the cap; a window that timed out AT the cap
+        # has no larger budget to retry with — abandon, do not burn
+        # the remaining re-queue at the same wall.
+        assert server.windows == [4000, cap]
+        assert status["reason"] == "query_timeout"
+        assert status["query_timeout_s"] == cap
+
+    def test_external_interruption_keeps_budget_and_class(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # Restart-under-someone-else's-query says nothing about THIS
+        # window's wall: the budget stays, and the reason stays the
+        # interruption class rather than a fabricated ceiling claim.
+        _fast_recovery(monkeypatch)
+
+        class _RestartedServer(_TimeoutServer):
+            def query_script(self, script, timeout=300,
+                             substitutions=None):
+                self.windows.append(int(timeout))
+                return JoernResult(query="", errors=[_RESTARTING_ERROR])
+
+        server = _RestartedServer()
+        status: dict = {}
+        run_joern_pre_sweep(
+            tmp_path, {}, server=server, query_timeout=300,
+            status_out=status,
+        )
+        assert server.windows == [300, 300, 300]
+        assert status["reason"] == "window_interrupted"
+
+    def test_plain_query_error_reason(self, tmp_path: Path, monkeypatch):
+        server = _FakeServer(
+            [JoernResult(query="", errors=["parse error in script"])],
+        )
+        status: dict = {}
+        run_joern_pre_sweep(
+            tmp_path, {}, server=server, query_timeout=300,
+            status_out=status,
+        )
+        assert server.calls == 1  # not interruption class: no re-queue
+        assert status["reason"] == "query_error"
+
+    def test_clean_sweep_records_no_reason(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        server = _FakeServer([JoernResult(query="", errors=[])])
+        status: dict = {}
+        run_joern_pre_sweep(
+            tmp_path, {}, server=server, query_timeout=300,
+            status_out=status,
+        )
+        assert status["completed"] is True
+        assert "reason" not in status
+        assert status["query_timeout_s"] == 300
+
+
+class TestNonServerPathBudget:
+    """The subprocess path's single wall covers importCpg + the solve:
+    it must scale with the built CPG's size, and a degraded end must
+    carry the reason fields (the reference before-shape —
+    errors_fatal beside zero flows — came from this path)."""
+
+    def _patch_runner(self, monkeypatch, tmp_path: Path, *,
+                      cpg_bytes: int, errors: list[str]):
+        import packages.joern.prereqs as prereqs
+        import packages.joern.runner as runner
+        monkeypatch.setattr(prereqs, "is_available", lambda: True)
+        p = tmp_path / "cpg.bin"
+        with p.open("wb") as f:
+            f.truncate(cpg_bytes)  # sparse: size without the bytes
+        cpg = types.SimpleNamespace(path=p, exists=lambda: True)
+        monkeypatch.setattr(
+            runner, "build_cpg", lambda target, **kw: cpg,
+        )
+        monkeypatch.setattr(
+            runner, "build_cpg_cached", lambda target, cache, **kw: cpg,
+        )
+        monkeypatch.setattr(runner, "cleanup_cpg", lambda c: None)
+        captured: dict = {}
+
+        def fake_run_query(c, script, timeout=300, substitutions=None):
+            captured["timeout"] = timeout
+            return JoernResult(query="", errors=list(errors))
+
+        monkeypatch.setattr(runner, "run_query", fake_run_query)
+        return captured
+
+    def test_window_scales_with_cpg_size_including_import(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        captured = self._patch_runner(
+            monkeypatch, tmp_path,
+            cpg_bytes=190 * 1024 * 1024, errors=[],
+        )
+        status: dict = {}
+        target = tmp_path / "src"
+        target.mkdir()
+        run_joern_pre_sweep(
+            target, {}, query_timeout=300, status_out=status,
+        )
+        # The kernel-scale shape: the wall clears the flat 300 s that
+        # recorded zero flows, and covers import + solve.
+        assert captured["timeout"] > 1200
+        assert status["query_timeout_s"] == captured["timeout"]
+        assert status["cpg_bytes"] == 190 * 1024 * 1024
+        assert status["completed"] is True
+        assert "reason" not in status
+
+    def test_fatal_zero_flow_status_says_why(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # The reference before-shape: errors_fatal: true beside
+        # flows_partial: 0 with no recorded reason. After the change
+        # the same end names the ceiling that bound.
+        self._patch_runner(
+            monkeypatch, tmp_path, cpg_bytes=1,
+            errors=["query timed out after 300s"],
+        )
+        status: dict = {}
+        target = tmp_path / "src"
+        target.mkdir()
+        flows = run_joern_pre_sweep(
+            target, {}, query_timeout=300, status_out=status,
+        )
+        assert flows == {}
+        assert status["errors_fatal"] is True
+        assert status["completed"] is False
+        assert status["reason"] == "query_timeout"
+        assert status["query_timeout_s"] == 300  # tiny CPG: floor
+        assert status["cpg_bytes"] == 1

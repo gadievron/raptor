@@ -4238,17 +4238,16 @@ _PRE_SWEEP_MAX_REQUEUES = 2
 # whole-CPG dataflow solves in ONE submission, so its runtime scales
 # with graph size while the configured query timeout is sized for a
 # single query. Scale the window's budget by the serialized CPG size
-# (the only mechanical size signal available client-side): one extra
-# timeout-multiple per _PRE_SWEEP_CPG_BYTES_PER_STEP of CPG. Too
-# small a budget and the window straddles the boundary on big CPGs —
-# each straddle fires a server restart plus a multi-minute CPG
-# re-import that the re-queue machinery then has to wait out, and the
-# run's taint evidence is lost outright when the re-queues run out.
-# Too large (hence the cap) and one genuinely wedged window holds the
-# single-threaded REPL — and every review worker's query behind it —
-# for a large slice of the run.
-_PRE_SWEEP_CPG_BYTES_PER_STEP = 256 * 1024 * 1024
-_PRE_SWEEP_TIMEOUT_MAX_MULTIPLE = 4
+# (the only mechanical size signal available client-side) through the
+# central tuning derivation. Too small a budget and the window
+# straddles the boundary on big CPGs — each straddle fires a server
+# restart plus a multi-minute CPG re-import that the re-queue
+# machinery then has to wait out, and the run's taint evidence is
+# lost outright when the re-queues run out (a fixed 4x multiple of
+# the per-query timeout still starved a kernel-scale graph). Too
+# large (hence the derivation's hard cap) and one genuinely wedged
+# window holds the single-threaded REPL — and every review worker's
+# query behind it — for a large slice of the run.
 
 # Below this remaining-wall-budget floor a pre-sweep window (or a
 # re-queue of one) is not worth starting: the window would be clamped
@@ -4262,15 +4261,28 @@ def _presweep_bulk_timeout_s(
 ) -> int:
     """Budget for the bulk pre-sweep window, scaled by CPG size.
 
-    Floor: the configured per-query timeout (small CPGs keep the
-    configured budget). Cap: ``_PRE_SWEEP_TIMEOUT_MAX_MULTIPLE`` times
-    that. Unknown CPG size keeps the floor.
+    Delegates to :func:`core.tuning.derive_joern_presweep_timeout_s`:
+    floor = the configured per-query timeout (small/unknown CPGs and
+    an operator-raised budget keep the configured value), linear in
+    the serialized CPG size, hard absolute cap. Non-positive timeouts
+    pass through unchanged (degenerate/test paths).
     """
-    if not cpg_bytes or cpg_bytes <= 0 or query_timeout <= 0:
-        return query_timeout
-    steps = int(cpg_bytes // _PRE_SWEEP_CPG_BYTES_PER_STEP)
-    multiple = min(1 + steps, _PRE_SWEEP_TIMEOUT_MAX_MULTIPLE)
-    return query_timeout * multiple
+    from core.tuning import derive_joern_presweep_timeout_s
+    return derive_joern_presweep_timeout_s(query_timeout, cpg_bytes)
+
+
+def _presweep_error_reason(errors: list | None) -> str:
+    """Machine-readable WHY for an errored, non-interrupted sweep.
+
+    A fatal-with-zero-flows status must name what died: a window
+    killed by the query budget reads ``query_timeout`` (remedy:
+    joern_query_timeout_s / the CPG-size derivation), anything else
+    reads ``query_error``.
+    """
+    for err in errors or []:
+        if "timed out" in str(err).lower():
+            return "query_timeout"
+    return "query_error"
 #: How long to wait for the restarted server before each re-queue.
 #: Covers a JVM boot + CPG reload (~1-2 min on big targets).
 _PRE_SWEEP_RECOVERY_WAIT_S = 300
@@ -4456,6 +4468,24 @@ def run_joern_pre_sweep(
         )
         requeued = 0
         interrupted = 1 if _presweep_interrupted(result.errors) else 0
+        # Scale-aware re-queue budget: a timeout-class interruption
+        # proved the window's wall insufficient, so its re-queue must
+        # never re-buy the identical wall (doubled, capped at the
+        # derivation ceiling — beyond it the re-queue is abandoned
+        # with an honest status instead of parking the REPL for
+        # another ceiling-length window). Externally interrupted
+        # windows (server restarted under someone else's query) keep
+        # their budget: the wall said nothing about THIS window.
+        window_budget = bulk_timeout
+        try:
+            from core.tuning import derived_max_joern_presweep_timeout_s
+            window_cap: int | None = (
+                derived_max_joern_presweep_timeout_s(query_timeout)
+            )
+        except Exception:  # noqa: BLE001 — sizing must not cost the sweep
+            logger.debug("pre-sweep re-queue cap unavailable",
+                         exc_info=True)
+            window_cap = None
         while (
             _presweep_interrupted(result.errors)
             and requeued < _PRE_SWEEP_MAX_REQUEUES
@@ -4467,6 +4497,24 @@ def run_joern_pre_sweep(
                 "; ".join(str(e) for e in result.errors)[:300],
                 requeued + 1, _PRE_SWEEP_MAX_REQUEUES,
             )
+            if _presweep_error_reason(result.errors) == "query_timeout":
+                if window_cap is not None and window_budget >= window_cap:
+                    logger.warning(
+                        "joern pre-sweep window timed out at the "
+                        "derived ceiling (%ds) — no larger re-queue "
+                        "budget exists, abandoning; raise "
+                        "joern_query_timeout_s to exceed the ceiling",
+                        window_budget,
+                    )
+                    break
+                window_budget = window_budget * 2
+                if window_cap is not None:
+                    window_budget = min(window_budget, window_cap)
+                logger.info(
+                    "joern pre-sweep re-queue window raised to %ds "
+                    "(the timed-out wall is proven insufficient)",
+                    window_budget,
+                )
             _rem = _remaining_s()
             _recovery_wait: float = _PRE_SWEEP_RECOVERY_WAIT_S
             if _rem is not None:
@@ -4491,7 +4539,7 @@ def run_joern_pre_sweep(
                 break
             requeued += 1
             _rem = _remaining_s()
-            _window = bulk_timeout
+            _window = window_budget
             if _rem is not None:
                 if _rem < _PRE_SWEEP_MIN_WINDOW_S:
                     logger.warning(
@@ -4516,6 +4564,22 @@ def run_joern_pre_sweep(
             status_out["requeued"] = requeued
             status_out["recovered"] = recovered
             status_out["errors"] = [str(e) for e in (result.errors or [])]
+            # Failure honesty (ADDITIVE fields — readers tolerate
+            # absence and presence): the window budget the LAST
+            # attempt ran with and the size it was derived from, plus
+            # a machine-readable WHY when the sweep ends degraded.
+            status_out["query_timeout_s"] = window_budget
+            status_out["cpg_bytes"] = cpg_bytes
+            if result.errors:
+                # Timeout outranks the generic interruption class: it
+                # names the binding ceiling (the window's own wall),
+                # where window_interrupted means the server restarted
+                # underneath the window for someone else's reasons.
+                reason_val = _presweep_error_reason(result.errors)
+                if (reason_val != "query_timeout"
+                        and _presweep_interrupted(result.errors)):
+                    reason_val = "window_interrupted"
+                status_out["reason"] = reason_val
         if result.errors:
             if _presweep_interrupted(result.errors):
                 logger.warning(
@@ -4587,8 +4651,35 @@ def run_joern_pre_sweep(
     try:
         if _aborted("taint query"):
             return {}
+        cpg_bytes: int | None = None
+        try:
+            cpg_bytes = cpg.path.stat().st_size
+        except OSError:
+            cpg_bytes = None
+        # This subprocess path's single wall covers importCpg PLUS the
+        # taint solve (the query wrapper script loads the CPG itself),
+        # so the derivation includes the import slope and widens its
+        # cap accordingly — a static per-query budget starved a
+        # kernel-scale graph before the solve even started. Floor: the
+        # configured per-query timeout; unknown size keeps the floor.
+        local_timeout = query_timeout
+        try:
+            from core.tuning import derive_joern_presweep_timeout_s
+            local_timeout = derive_joern_presweep_timeout_s(
+                query_timeout, cpg_bytes, include_import=True,
+            )
+        except Exception:  # noqa: BLE001 — sizing must not cost the sweep
+            logger.debug("pre-sweep budget derivation failed",
+                         exc_info=True)
+        if local_timeout != query_timeout:
+            logger.info(
+                "joern pre-sweep window budget scaled to %ds "
+                "(CPG %.0f MB incl. import; per-query default %ds)",
+                local_timeout, (cpg_bytes or 0) / (1024 * 1024),
+                query_timeout,
+            )
         result = run_query(
-            cpg, str(sinks_script), timeout=query_timeout,
+            cpg, str(sinks_script), timeout=local_timeout,
             substitutions=sink_subst,
         )
         if result.errors:
@@ -4599,8 +4690,16 @@ def run_joern_pre_sweep(
             )
         if status_out is not None:
             status_out["errors"] = [str(e) for e in (result.errors or [])]
+            # Failure honesty (ADDITIVE fields): the window that
+            # actually ran and the size it was derived from, plus a
+            # machine-readable WHY on a degraded end — errors_fatal
+            # beside zero flows previously recorded no reason at all.
+            status_out["query_timeout_s"] = local_timeout
+            status_out["cpg_bytes"] = cpg_bytes
             if result.errors:
                 status_out["errors_fatal"] = True
+                status_out["reason"] = _presweep_error_reason(
+                    result.errors)
 
         flows_by_key: dict[str, list] = {}
         for flow in result.flows:

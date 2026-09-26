@@ -396,6 +396,26 @@ def derive_joern_presweep_timeout_s(
     return max(query_timeout_s, min(derived, cap))
 
 
+def derived_max_joern_presweep_timeout_s(
+    query_timeout_s: int,
+    *,
+    include_import: bool = False,
+) -> int:
+    """The largest pre-sweep window the derivation can produce for a
+    given configured budget: the hard cap, or the operator's budget
+    when it exceeds the cap (floor scaling keeps the operator's number
+    authoritative upward).
+
+    Retry consumers use it as their raise-on-retry upper bound — and
+    as the fail-fast marker: a window that already ran at this bound
+    cannot be rescued by a bigger one.
+    """
+    cap = _JOERN_PRESWEEP_TIMEOUT_CAP_S
+    if include_import:
+        cap += _JOERN_IMPORT_TIMEOUT_CAP_S
+    return max(query_timeout_s, cap)
+
+
 def derived_max_joern_heap_mb() -> int:
     """The largest heap the derivation can produce: the resolved
     ceiling, dead-zone-adjusted.
@@ -819,6 +839,7 @@ __all__ = [
     "derived_max_joern_cpg_timeout_s",
     "derived_max_joern_heap_mb",
     "derived_max_joern_import_timeout_s",
+    "derived_max_joern_presweep_timeout_s",
     "get_tuning",
     "load_tuning",
 ]

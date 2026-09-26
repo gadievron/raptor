@@ -704,3 +704,24 @@ class TestDerivedPresweepTimeout:
         from core.tuning import derive_joern_presweep_timeout_s
         assert derive_joern_presweep_timeout_s(0, 10**9) == 0
         assert derive_joern_presweep_timeout_s(-5, 10**9) == -5
+
+
+class TestDerivedMaxPresweepTimeout:
+    def test_cap_is_the_derivations_upper_bound(self):
+        from core.tuning import (
+            derive_joern_presweep_timeout_s,
+            derived_max_joern_presweep_timeout_s,
+        )
+        huge = 4 * 1024**4
+        assert derived_max_joern_presweep_timeout_s(300) == (
+            derive_joern_presweep_timeout_s(300, huge)
+        )
+        assert derived_max_joern_presweep_timeout_s(
+            300, include_import=True,
+        ) == derive_joern_presweep_timeout_s(
+            300, huge, include_import=True,
+        )
+
+    def test_operator_budget_above_cap_stays_authoritative(self):
+        from core.tuning import derived_max_joern_presweep_timeout_s
+        assert derived_max_joern_presweep_timeout_s(90000) == 90000

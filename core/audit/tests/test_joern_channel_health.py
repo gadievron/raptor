@@ -583,18 +583,34 @@ class TestDiagnosticsAndReport:
 
 
 class TestPresweepBulkBudget:
+    """Pins the central derivation's shape at this call site: floor =
+    configured budget (small/unknown CPGs, operator-raised budgets),
+    linear in CPG size, hard cap (the old fixed 4x multiple starved a
+    kernel-scale graph)."""
+
     def test_small_or_unknown_cpg_keeps_configured_budget(self):
         assert _presweep_bulk_timeout_s(300, None) == 300
         assert _presweep_bulk_timeout_s(300, 0) == 300
-        assert _presweep_bulk_timeout_s(300, 64 * 1024 * 1024) == 300
+        assert _presweep_bulk_timeout_s(300, 10 * 1024 * 1024) == 300
 
     def test_large_cpg_scales_budget_up(self):
-        assert _presweep_bulk_timeout_s(300, 300 * 1024 * 1024) == 600
-        assert _presweep_bulk_timeout_s(300, 600 * 1024 * 1024) == 900
+        # A kernel-scale (~190 MiB) CPG must clear the old fixed
+        # 4x cap (1200 s) that killed its sweep, inside the hard cap.
+        derived = _presweep_bulk_timeout_s(300, 190 * 1024 * 1024)
+        assert derived > 4 * 300
+        assert derived <= 7200
 
     def test_budget_is_capped(self):
+        # Hostile/corrupt size input: a multi-TB claim must bound at
+        # the hard cap, never mint an unbounded REPL-holding window.
         huge = 100 * 1024 * 1024 * 1024
-        assert _presweep_bulk_timeout_s(300, huge) == 1200
+        assert _presweep_bulk_timeout_s(300, huge) == 7200
+        assert _presweep_bulk_timeout_s(300, 4 * 1024**4) == 7200
+
+    def test_operator_raised_budget_passes_through(self):
+        # The floor is the CONFIGURED budget: an operator value above
+        # the derived number is never tightened by the derivation.
+        assert _presweep_bulk_timeout_s(9000, 10 * 1024 * 1024) == 9000
 
     def test_degenerate_timeout_passthrough(self):
         assert _presweep_bulk_timeout_s(0, 10**9) == 0
@@ -709,11 +725,14 @@ class TestPresweepRequeueClamp:
         )
         return server
 
-    def test_no_deadline_runs_three_full_windows(self, monkeypatch):
+    def test_no_deadline_runs_three_raised_windows(self, monkeypatch):
         server = self._run(monkeypatch, deadline=None)
-        # Initial window + both bounded re-queues, all at the
-        # configured budget.
-        assert server.windows == [300, 300, 300]
+        # Initial window + both bounded re-queues. Timeout-class
+        # interruptions never re-buy the identical wall: each re-queue
+        # doubles the window (capped at the derivation ceiling) — the
+        # timed-out wall is proven insufficient, so an identical
+        # re-queue is guaranteed waste.
+        assert server.windows == [300, 600, 1200]
 
     def test_deadline_clamps_requeue_window_then_abandons_recovery(
         self, monkeypatch, caplog,
