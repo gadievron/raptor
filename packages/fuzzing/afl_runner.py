@@ -269,6 +269,34 @@ class AFLRunner:
     binary_only_mode: str = "auto"
     _binary_only_support_dir: str | None = None
 
+    # Default per-exec memory cap (MB) for the fuzzed target, matching
+    # the 2048 the libFuzzer-family runners pass as -rss_limit_mb.
+    # AFL campaigns previously ran with no -m at all, and the sandbox
+    # rlimit default keeps RLIMIT_AS off (ASAN concession) — so a
+    # hostile or buggy target's allocations were unbounded.
+    # Scope: the cap bounds the COMMON failure — a non-adversarial,
+    # non-ASAN target hitting a runaway allocation path. It is NOT an
+    # adversarial boundary (see _detect_target_asan: the probe is
+    # target-steerable and the ASAN-side bound is best-effort); the
+    # detection-independent backstop is the sandbox itself. Both
+    # directions on the value:
+    #  * LOWER and legitimately large targets (image/video decoders,
+    #    template-heavy parsers with big working sets) start dying as
+    #    false OOM crashes at calibration;
+    #  * HIGHER (or 0 = off) and the cap stops bounding confined-code
+    #    memory — parallel instances can drive the host into swap from
+    #    inside the sandbox.
+    # 0 disables. Operators can also override per campaign: the flag
+    # is emitted BEFORE extra_afl_flags and afl-fuzz getopt takes the
+    # LAST occurrence, so `-m <n>` / `-m none` in extra flags wins.
+    mem_limit_mb: int = 2048
+    # Resolved per campaign by run_fuzzing (strings-based ASAN probe):
+    # ASAN targets cannot take the RLIMIT_AS-based -m (shadow VA
+    # reservation), so their cap moves to ASAN_OPTIONS
+    # hard_rss_limit_mb. Class default keeps __init__-bypass
+    # constructions on the plain capped path.
+    _target_has_asan: bool = False
+
     _VALID_POWER_SCHEDULES: ClassVar[set[str]] = {
         "explore", "exploit", "coe", "fast", "lin", "quad", "rare", "seek",
     }
@@ -295,6 +323,7 @@ class AFLRunner:
         binary_in_rootfs: str | None = None,
         afl_fuzz_path: str | None = None,
         cmplog_in_rootfs: str | None = None,
+        mem_limit_mb: int = 2048,
     ) -> None:
         self.binary = Path(binary_path).resolve()
         if not self.binary.exists():
@@ -365,6 +394,11 @@ class AFLRunner:
         self.power_schedule = power_schedule
         self.use_laf_intel = use_laf_intel
         self.deterministic = deterministic
+        if mem_limit_mb < 0:
+            msg = (f"mem_limit_mb must be >= 0 (0 disables the cap): "
+                   f"{mem_limit_mb}")
+            raise ValueError(msg)
+        self.mem_limit_mb = int(mem_limit_mb)
         self.custom_mutator = Path(custom_mutator).resolve() if custom_mutator else None
         if self.custom_mutator and not self.custom_mutator.exists():
             msg = f"Custom mutator not found: {custom_mutator}"
@@ -738,6 +772,51 @@ class AFLRunner:
         logger.warning("  Consider recompiling with -fsanitize=address for better bug detection")
         return False
 
+    def _detect_target_asan(self) -> bool:
+        """ASAN linkage probe steering the memory-cap MODE
+        (RLIMIT_AS ``-m`` vs ASAN_OPTIONS hard_rss_limit_mb).
+
+        Same sandboxed strings inspection as check_binary_sanitizers,
+        but consumed mechanically (cap mode) rather than advisorily.
+
+        Scope honesty — this steers plumbing for the common,
+        non-adversarial runaway-allocation case; it is NOT a security
+        boundary. The probe reads strings out of the (untrusted)
+        target, so a hostile binary can steer its own classification
+        by embedding ASAN marker strings; and an ASAN target's
+        hard_rss_limit_mb is enforced by a runtime thread that does
+        not survive AFL++'s per-case forkserver fork(), so ASAN
+        campaigns are RSS-bounded only best-effort either way. The
+        containment backstop is the sandbox the campaign runs under,
+        not this probe (memory bounding there: declared cgroup
+        memory.max follow-up — the sandbox rlimit default keeps
+        RLIMIT_AS off as the ASAN concession).
+
+        Failure direction: any probe miss (exec failure/timeout,
+        nonzero rc, empty output) treats the target as UNsanitized
+        and the RLIMIT_AS -m cap stays ON — an over-capped ASAN
+        target then dies loudly at calibration (visible, diagnosable,
+        overridable), whereas dropping the cap on probe failure would
+        leave a runaway target unbounded silently.
+        """
+        result = _inspect_binary("strings", (), self.binary, timeout=60)
+        if result.returncode != 0 or not result.stdout.strip():
+            # Full probe-miss matrix, all loud + fail-toward-bounded:
+            # exec failure / timeout (returncode None), nonzero rc,
+            # and rc==0-with-empty-stdout all land here. Distrusting
+            # a partial strings run beats letting it steer the cap
+            # off.
+            logger.warning(
+                "strings %s failed, timed out, or produced no usable "
+                "output — assuming no ASAN; the AFL -m memory cap "
+                "stays on (an ASAN target will die at calibration: "
+                "pass `-m none` in extra AFL flags "
+                "to override)",
+                self.binary,
+            )
+            return False
+        return self._has_runtime_sanitizer(result.stdout.lower(), "asan")
+
     @staticmethod
     def _has_runtime_sanitizer(strings_output: str, sanitizer: str) -> bool:
         """Detect real sanitizer runtime linkage without AFL helper false positives."""
@@ -844,6 +923,19 @@ class AFLRunner:
         if self.recompile_guide:
             self.show_recompile_guide()
 
+        # Memory-cap mode resolution: AFL++ implements -m via
+        # RLIMIT_AS, which no ASAN target survives (the shadow-memory
+        # VA reservation alone exceeds any sane cap — same concession
+        # as memory_mb=0 in the sandbox rlimit defaults). ASAN targets
+        # take the cap as ASAN_OPTIONS hard_rss_limit_mb instead (set
+        # on afl_env below); everything else gets a plain -m.
+        # The ASAN-side bound is best-effort only: hard_rss_limit_mb
+        # is enforced by a runtime thread started at __asan_init, and
+        # threads do not survive the forkserver fork() each fuzz case
+        # runs under — the sandbox is the adversarial backstop.
+        self._target_has_asan = (
+            self.mem_limit_mb > 0 and self._detect_target_asan())
+
         # Start AFL instances — each one a blocking `core.sandbox.run`
         # on a supervising thread (see _SandboxedAFLInstance). Landlock
         # writes are confined to output_dir; explicit readable paths
@@ -933,6 +1025,24 @@ class AFLRunner:
                 afl_env.setdefault("AFL_NO_AFFINITY", "1")
                 afl_env.setdefault("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1")
                 afl_env.setdefault("AFL_FORKSRV_INIT_TMOUT", "10000")
+                if self.mem_limit_mb > 0 and self._target_has_asan:
+                    # ASAN-side memory cap (see the mode resolution in
+                    # run_fuzzing: -m is RLIMIT_AS-based and would kill
+                    # the ASAN target at startup, hard_rss_limit_mb is
+                    # the RSS bound its runtime enforces itself —
+                    # best-effort under the forkserver, see run_fuzzing).
+                    # abort_on_error=1 and symbolize=0 are MANDATORY
+                    # companions: afl-fuzz FATALs on an ASAN_OPTIONS
+                    # that lacks them (it needs abort() for crash
+                    # detection and unsymbolized output for speed).
+                    # setdefault: get_safe_env strips ASAN_OPTIONS from
+                    # the inherited env, so an existing value can only
+                    # come from RAPTOR code that set it deliberately.
+                    afl_env.setdefault(
+                        "ASAN_OPTIONS",
+                        "abort_on_error=1:symbolize=0:"
+                        f"hard_rss_limit_mb={self.mem_limit_mb}",
+                    )
                 if self._binary_only_support_dir:
                     # afl-fuzz resolves its binary-only tracer via
                     # AFL_PATH when it is not adjacent to the afl-fuzz
@@ -1422,6 +1532,11 @@ class AFLRunner:
           -d                   deterministic mutations off (faster startup)
           -X <mutator.so>      custom mutator library
           -x <dict>            dictionary for structured input
+          -m <MB> / -m none    per-exec memory cap (RLIMIT_AS; "none"
+                               for ASAN targets, whose cap moves to
+                               ASAN_OPTIONS hard_rss_limit_mb; bounds
+                               the common runaway-allocation case,
+                               not an adversarial boundary)
           -V <seconds>         self-terminate after the campaign duration
                                (the campaign runs as a blocking sandboxed
                                call — -V is its primary clock; the sandbox
@@ -1496,7 +1611,20 @@ class AFLRunner:
         if self.dict_path and self.dict_path.exists():
             cmd.extend(["-x", str(self.dict_path)])
 
+        # Per-exec memory cap for the fuzzed target (default rationale
+        # on the mem_limit_mb class attribute). AFL++'s -m is
+        # RLIMIT_AS-based, which no ASAN target survives — for those
+        # the cap rides ASAN_OPTIONS hard_rss_limit_mb (run_fuzzing)
+        # and -m is pinned to "none" explicitly so the command line
+        # documents the decision (and stays correct if AFL's default
+        # ever changes).
+        if self.mem_limit_mb > 0:
+            cmd.extend(["-m", "none" if self._target_has_asan
+                        else str(self.mem_limit_mb)])
+
         # Optional SAGE-derived or operator-supplied AFL++ flags (before ``--``).
+        # AFTER the -m default above: afl-fuzz getopt takes the LAST
+        # occurrence of a flag, so an operator -m here wins.
         if self.extra_afl_flags:
             cmd.extend(self.extra_afl_flags)
 

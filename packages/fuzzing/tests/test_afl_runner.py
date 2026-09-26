@@ -1221,3 +1221,220 @@ class TestMaxCrashExecsAllInstances:
 
     def test_no_crash_dirs_is_zero(self, tmp_path):
         assert AFLRunner._max_crash_execs_all(tmp_path) == 0
+
+
+class TestMemoryCap:
+    """Per-exec memory cap on the fuzzed target.
+
+    Regression: campaigns ran with no ``-m`` at all while the sandbox
+    rlimit default keeps RLIMIT_AS off (ASAN concession) — a buggy
+    target's allocations were unbounded. The runner now defaults
+    ``-m <mem_limit_mb>``; ASAN targets (which cannot take a
+    virtual-address cap) get ``-m none`` plus an ASAN_OPTIONS
+    hard_rss_limit_mb bound instead.
+
+    Scope of every test here: they pin the PLUMBING — flag emission
+    and env contents for the common, non-adversarial runaway-
+    allocation case — not adversarial enforcement. A hostile target
+    can steer the strings probe, and ASAN's hard_rss_limit_mb rides a
+    runtime thread that does not survive the forkserver fork(); the
+    detection-independent backstop is the sandbox (see
+    _detect_target_asan's docstring).
+    """
+
+    # -- default pin, two directions -------------------------------
+
+    def test_default_not_below_floor(self):
+        """Too LOW: legitimately large targets (image/video decoders,
+        template-heavy parsers) die as false OOM crashes at
+        calibration."""
+        assert AFLRunner.mem_limit_mb >= 2048
+
+    def test_default_not_above_ceiling(self):
+        """Too HIGH: the cap stops bounding confined-code memory and
+        drifts from the libFuzzer-family runners' rss_limit_mb=2048
+        (the deliberate cross-engine default)."""
+        assert AFLRunner.mem_limit_mb <= 2048
+
+    # -- command-line emission --------------------------------------
+
+    @staticmethod
+    def _runner(tmp_path: Path) -> AFLRunner:
+        return TestSandboxedCampaign._make_runner(tmp_path)
+
+    def _cmd(self, runner: AFLRunner) -> list[str]:
+        return runner._build_afl_command(
+            instance_name="main", is_main=True, timeout_ms=1000)
+
+    def test_default_cap_on_command_line(self, tmp_path):
+        runner = self._runner(tmp_path)
+        cmd = self._cmd(runner)
+        m_idx = cmd.index("-m")
+        assert cmd[m_idx + 1] == "2048"
+        assert m_idx < cmd.index("--")
+
+    def test_asan_target_gets_m_none(self, tmp_path):
+        runner = self._runner(tmp_path)
+        runner._target_has_asan = True
+        cmd = self._cmd(runner)
+        assert cmd[cmd.index("-m") + 1] == "none"
+
+    def test_operator_extra_flag_wins_last(self, tmp_path):
+        """afl-fuzz getopt takes the LAST occurrence: an operator -m
+        in extra_afl_flags must come after the default."""
+        runner = self._runner(tmp_path)
+        runner.extra_afl_flags = ["-m", "none"]
+        cmd = self._cmd(runner)
+        m_positions = [i for i, tok in enumerate(cmd) if tok == "-m"]
+        assert len(m_positions) == 2
+        assert cmd[m_positions[-1] + 1] == "none"
+
+    def test_zero_disables_cap(self, tmp_path):
+        runner = self._runner(tmp_path)
+        runner.mem_limit_mb = 0
+        assert "-m" not in self._cmd(runner)
+
+    # -- ASAN probe and env plumbing --------------------------------
+
+    @staticmethod
+    def _fake_inspect(monkeypatch, stdout: str):
+        from core.binary.inspect import InspectResult
+        from packages.fuzzing import afl_runner as mod
+
+        def fake(tool, args, binary, **kwargs):
+            return InspectResult(returncode=0, stdout=stdout)
+
+        monkeypatch.setattr(mod, "_inspect_binary", fake)
+
+    def _campaign_env_and_cmds(self, tmp_path, monkeypatch, stdout):
+        import subprocess as sp
+
+        from packages.fuzzing import afl_runner as mod
+
+        self._fake_inspect(monkeypatch, stdout)
+        calls = []
+
+        def fake_sandbox_run(cmd, **kwargs):
+            calls.append((list(cmd), dict(kwargs)))
+            return sp.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+
+        monkeypatch.setattr(mod, "_sandbox_run", fake_sandbox_run)
+        runner = self._runner(tmp_path)
+        runner.run_fuzzing(duration=0, parallel_jobs=1)
+        return calls
+
+    def test_asan_campaign_env_carries_rss_cap(self, tmp_path,
+                                               monkeypatch):
+        """Plumbing pin: an ASAN-classified target's campaign env
+        carries the exact ASAN_OPTIONS bound (enforcement under the
+        forkserver is best-effort — see class docstring)."""
+        calls = self._campaign_env_and_cmds(
+            tmp_path, monkeypatch, "__AFL_SHM_ID __asan_init")
+        assert len(calls) == 1
+        cmd, kwargs = calls[0]
+        assert cmd[cmd.index("-m") + 1] == "none"
+        assert kwargs["env"]["ASAN_OPTIONS"] == (
+            "abort_on_error=1:symbolize=0:hard_rss_limit_mb=2048")
+
+    def test_plain_campaign_gets_rlimit_cap_no_asan_options(
+            self, tmp_path, monkeypatch):
+        """Plumbing pin: the plain (non-ASAN) path takes the
+        RLIMIT_AS -m with no ASAN_OPTIONS injection."""
+        calls = self._campaign_env_and_cmds(
+            tmp_path, monkeypatch, "__AFL_SHM_ID")
+        assert len(calls) == 1
+        cmd, kwargs = calls[0]
+        assert cmd[cmd.index("-m") + 1] == "2048"
+        assert "ASAN_OPTIONS" not in kwargs["env"]
+
+    @pytest.mark.parametrize("returncode,stdout", [
+        (None, ""),          # exec failure / timeout
+        (1, "__asan_init"),  # nonzero rc: distrust partial output
+        (0, ""),             # clean rc but empty output
+    ])
+    def test_probe_miss_matrix_keeps_cap_on(self, tmp_path, monkeypatch,
+                                            caplog, returncode, stdout):
+        """Failure direction: every probe miss (exec failure, nonzero
+        rc — even with marker-bearing partial output — or empty
+        stdout) is treated as UNsanitized, LOUDLY: the cap stays on
+        (calibration death for a real ASAN target beats a silently
+        unbounded campaign) and the warning names the `-m none`
+        escape hatch."""
+        import logging
+
+        from core.binary.inspect import InspectResult
+        from packages.fuzzing import afl_runner as mod
+
+        monkeypatch.setattr(
+            mod, "_inspect_binary",
+            lambda tool, args, binary, **kw: InspectResult(
+                returncode=returncode, stdout=stdout))
+        runner = self._runner(tmp_path)
+        with caplog.at_level(logging.WARNING):
+            assert runner._detect_target_asan() is False
+        assert any("-m none" in rec.getMessage()
+                   for rec in caplog.records)
+
+    def test_probe_failure_campaign_still_emits_default_cap(
+            self, tmp_path, monkeypatch):
+        """The emergent property, not just the probe's return value:
+        when the ASAN probe fails mid-campaign, the built afl-fuzz
+        argv still carries the default `-m 2048` — a probe failure
+        must never degrade the campaign to uncapped.
+
+        The fake is call-sequenced because run_fuzzing runs the SAME
+        strings inspection twice: instrumentation check first, ASAN
+        probe second — only the second may fail here or the run
+        would detour into binary-only tracer resolution (host AFL++
+        probing, not hermetic)."""
+        import subprocess as sp
+
+        from core.binary.inspect import InspectResult
+        from packages.fuzzing import afl_runner as mod
+
+        seen = {"n": 0}
+
+        def sequenced_inspect(tool, args, binary, **kwargs):
+            seen["n"] += 1
+            if seen["n"] == 1:  # instrumentation check succeeds
+                return InspectResult(returncode=0, stdout="__AFL_SHM_ID")
+            return InspectResult(returncode=None, stdout="")
+
+        monkeypatch.setattr(mod, "_inspect_binary", sequenced_inspect)
+
+        calls = []
+
+        def fake_sandbox_run(cmd, **kwargs):
+            calls.append((list(cmd), dict(kwargs)))
+            return sp.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+
+        monkeypatch.setattr(mod, "_sandbox_run", fake_sandbox_run)
+        runner = self._runner(tmp_path)
+        runner.run_fuzzing(duration=0, parallel_jobs=1)
+
+        # Guard the sequencing assumption: the ASAN probe (2nd
+        # inspection) really ran and really failed.
+        assert seen["n"] >= 2
+        assert len(calls) == 1
+        cmd, kwargs = calls[0]
+        assert cmd[cmd.index("-m") + 1] == "2048"
+        assert "ASAN_OPTIONS" not in kwargs["env"]
+
+    def test_negative_limit_rejected(self, tmp_path):
+        rootfs = tmp_path / "rootfs"
+        (rootfs / "src").mkdir(parents=True)
+        binary = rootfs / "src/app"
+        binary.write_bytes(b"\x7fELF")
+        binary.chmod(0o755)
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "seed0").write_bytes(b"A")
+        with pytest.raises(ValueError, match="mem_limit_mb"):
+            AFLRunner(
+                binary_path=binary,
+                corpus_dir=corpus,
+                output_dir=tmp_path / "out",
+                sandbox_rootfs=rootfs,
+                binary_in_rootfs="/src/app",
+                mem_limit_mb=-1,
+            )
