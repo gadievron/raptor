@@ -685,6 +685,58 @@ still never mint findings or change verdicts, and scheduled
 re-reviews spend inside `--max-cost`/`--budget` like every other
 review.
 
+### Token-enforcement map
+
+`/understand --study` can learn WHICH function(s) implement the
+target's anti-request-forgery (CSRF/nonce) check idiom — the
+`token_checks` vocabulary channel, name-verified against the study
+items like every other channel (generic name shapes like
+*token*/*csrf*/*nonce* are candidate discovery hints only; the
+classification comes from the enforcement behaviour in the studied
+code, so a validator without those words in its name still
+qualifies).  At save time a mechanical projection maps every entry
+point (context-map entry points plus checklist script-handler files;
+PHP targets) to a per-entry status via static call reachability
+inside the entry's pre-output prefix, written as `token-map.json`
+beside `domain-model.json`:
+
+- `enforced` — a learned check is called directly before any output
+- `indirect` — the check is reached through resolved intermediate
+  calls (branch conditions inside intermediates are NOT analysed)
+- `not_enforced` — no path, with every reachability search run to
+  natural exhaustion; the record carries the absence census
+- `unknown` — parse failure, dynamic dispatch, a truncated search
+  (call-depth cap, include depth cap, or include-splice budget), or a
+  config-dependent short open tag; never downgraded to a claim in
+  either direction
+
+Every status is hint-tier.  `enforced` is a call-presence witness,
+not bypass-freedom — a check behind a conditional projects as
+enforced with a `conditional` flag, and NO consumer may suppress or
+down-rank a finding because an entry maps as enforced.  Consumers:
+entry-point audit reviews get a verify-against-source hint line; the
+validate bridge attaches the fact to `attack-surface.json` entry
+points (advisory, never a status write); `/project correlate`
+reports per-entry drift between runs (`lost_enforcement` rows are
+re-review food for token-guard disproofs, never an auto-overturn).
+
+Operator surface:
+
+```bash
+libexec/raptor-audit token-map project --out <run-dir> --target <src>
+libexec/raptor-audit token-map drift --prior <run-A> --current <run-B>
+libexec/raptor-audit token-map sweep --out <run-dir> [--finding-id F-7]
+```
+
+`sweep` is the class-sweep generator: when a finding confirmed on a
+token-related premise (the finding names a learned check, or carries
+CWE-352), every `not_enforced` entry becomes a hypothesis seed in the
+`sibling-hypotheses.json` contract above — same caps, same
+guarantees, seeds never mint findings.  If another producer already
+owns the co-located file, the sweep writes
+`token-sweep-hypotheses.json` for an explicit `--hypothesis-seeds`
+pass instead (it never overwrites).
+
 ### /agentic → /audit
 
 `/agentic --gap-audit` runs the audit orchestrator over the coverage
