@@ -2390,6 +2390,11 @@
     "kind": "literal",
     "note": "cargo-fuzz campaign result-dict schema keys (mirrors the libFuzzer path's report shape plus the fuzz-target/binary identity and rust-panic triage fields), not a learned name vocabulary"
   },
+  "packages/fuzzing/orchestrator.py::_run_jazzer": {
+    "count": 15,
+    "kind": "literal",
+    "note": "jazzer campaign result-dict schema keys (mirrors the libFuzzer path's report shape plus the target-class/build-tool identity and java-exception triage fields), not a learned name vocabulary"
+  },
   "packages/fuzzing/orchestrator.py::_run_libfuzzer": {
     "count": 10,
     "kind": "literal",

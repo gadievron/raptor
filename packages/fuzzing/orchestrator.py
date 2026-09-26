@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from packages.fuzzing.atheris_runner import AtherisResult
     from packages.fuzzing.cargofuzz_runner import CargoFuzzResult
+    from packages.fuzzing.jazzer_runner import JazzerResult
 
 from core.binary.inspect import inspect_binary as _inspect_binary
 from core.json import save_json
@@ -31,7 +32,8 @@ _BINARY_UNDERSTAND_KINDS = frozenset({"elf-linux", "elf-kmod", "macho", "pe-exe"
 
 logger = get_logger()
 
-_EXECUTABLE_FUZZERS = {"afl", "libfuzzer", "atheris", "cargo-fuzz"}
+_EXECUTABLE_FUZZERS = {"afl", "libfuzzer", "atheris", "cargo-fuzz",
+                       "jazzer"}
 
 # Which target kinds each explicitly requested engine can drive.
 # Engine override is a redirect within a kind's viable engines, never
@@ -41,7 +43,11 @@ _ENGINE_KINDS = {
     "libfuzzer": frozenset({"elf-linux", "macho"}),
     "atheris": frozenset({"python-pkg"}),
     "cargo-fuzz": frozenset({"rust-crate"}),
+    "jazzer": frozenset({"java-project"}),
 }
+
+# Target kinds whose --fuzz-target flag selects an in-repo harness.
+_FUZZ_TARGET_KINDS = ("rust-crate", "java-project")
 
 
 @dataclass
@@ -73,6 +79,13 @@ class CampaignPlan:
     #: (operator --fuzz-target, or auto-selected when the crate has
     #: exactly one).
     cargofuzz_target: str | None = None
+    #: jazzer (java-project) target resolution — the fully-qualified
+    #: class carrying fuzzerTestOneInput / @FuzzTest the campaign will
+    #: build and run (operator --fuzz-target, or auto-selected when
+    #: the project has exactly one), plus its declaring source file
+    #: (binds witnesses; locates the seed-corpus convention).
+    jazzer_target: str | None = None
+    jazzer_target_source: Path | None = None
 
     def summary(self) -> str:
         lines = [
@@ -116,6 +129,8 @@ class CampaignPlan:
                 f"({self.atheris_payload} payload)")
         if self.cargofuzz_target:
             lines.append(f"cargo-fuzz target: {self.cargofuzz_target}")
+        if self.jazzer_target:
+            lines.append(f"jazzer target class: {self.jazzer_target}")
         if self.needs_harness:
             if self.fuzzer == "atheris":
                 lines.append(
@@ -126,6 +141,11 @@ class CampaignPlan:
                     "Action required: scaffold fuzz targets with "
                     "'cargo fuzz init' / 'cargo fuzz add <name>' "
                     "(fuzz/fuzz_targets/)")
+            elif self.fuzzer == "jazzer":
+                lines.append(
+                    "Action required: write a fuzz harness class with "
+                    "public static void fuzzerTestOneInput(byte[] "
+                    "data) (or a @FuzzTest JUnit method)")
             else:
                 lines.append("Action required: generate libFuzzer harness")
         if self.blockers:
@@ -181,10 +201,13 @@ class FuzzingOrchestrator:
         text). Without either, a python-pkg plan blocks on the missing
         harness.
 
-        ``fuzz_target``: cargo-fuzz target selection for rust-crate
-        targets — the fuzz-target name under ``fuzz/fuzz_targets/``.
-        Without it, a crate with exactly one target auto-selects;
-        several targets block with the list.
+        ``fuzz_target``: in-repo harness selection for rust-crate and
+        java-project targets — the cargo-fuzz target name under
+        ``fuzz/fuzz_targets/``, or the jazzer target class (a
+        fuzzerTestOneInput / @FuzzTest class; fully-qualified, or the
+        simple name when unambiguous). Without it, a project with
+        exactly one target auto-selects; several targets block with
+        the list.
         """
         target = detect_target(Path(target_path))
         plan = CampaignPlan(target=target, capabilities=self.capabilities,
@@ -193,12 +216,12 @@ class FuzzingOrchestrator:
             plan.hints.append(
                 "--env-build applies to source-tree targets; ignored "
                 f"for this {target.kind} file")
-        if fuzz_target and target.kind != "rust-crate":
+        if fuzz_target and target.kind not in _FUZZ_TARGET_KINDS:
             # An explicit operator flag must never vanish silently —
             # same visibility idiom as the --env-build hint above.
             plan.hints.append(
-                "--fuzz-target applies to rust-crate targets; ignored "
-                f"for this {target.kind} target")
+                "--fuzz-target applies to rust-crate and java-project "
+                f"targets; ignored for this {target.kind} target")
 
         # Carry blockers forward
         plan.blockers.extend(target.blockers)
@@ -272,6 +295,10 @@ class FuzzingOrchestrator:
             plan.fuzzer = "cargo-fuzz" if not target.blockers else None
             if plan.fuzzer:
                 self._plan_cargofuzz_target(plan, fuzz_target)
+        elif kind == "java-project":
+            plan.fuzzer = "jazzer" if not target.blockers else None
+            if plan.fuzzer:
+                self._plan_jazzer_target(plan, fuzz_target)
         elif kind == "python-pkg":
             plan.fuzzer = "atheris" if not target.blockers else None
             if plan.fuzzer:
@@ -438,6 +465,89 @@ class FuzzingOrchestrator:
         if nightly_toolchain_arg() is None:
             plan.hints.append(NIGHTLY_HINT)
 
+    @staticmethod
+    def _plan_jazzer_target(
+        plan: "CampaignPlan",
+        fuzz_target: str | None,
+    ) -> None:
+        """Resolve the jazzer target question at plan time.
+
+        An explicit operator ``--fuzz-target`` is validated against
+        the project's enumerated target classes (fully-qualified name
+        wins; a simple class name is honoured when it names exactly
+        one target, ambiguity blocks with the candidates); a project
+        with exactly one target auto-selects it; several targets block
+        with the list (never a silent pick); no targets blocks with
+        the write-a-harness remedy. Class names are charset-vetted by
+        the enumeration, so they are inert in plan output. The
+        layout's build tool is probed here too — the runner refuses
+        again at construction — so a missing mvn/gradle/javac blocks
+        the plan instead of dying mid-execute.
+        """
+        from packages.fuzzing.target_detector import list_jazzer_targets
+        targets = list_jazzer_targets(plan.target.path)
+        if not targets:
+            plan.needs_harness = True
+            plan.blockers.append(
+                "No Jazzer fuzz targets found (a class with public "
+                "static void fuzzerTestOneInput(byte[] data), or a "
+                "@FuzzTest JUnit method). Write one, then re-run."
+            )
+            return
+        names = [t.class_name for t in targets]
+        by_name = {t.class_name: t for t in targets}
+        shown = ", ".join(names[:8]) + (", ..." if len(names) > 8
+                                        else "")
+        selected = None
+        if fuzz_target:
+            if fuzz_target in by_name:
+                selected = by_name[fuzz_target]
+            else:
+                simple = [t for t in targets
+                          if t.class_name.rsplit(".", 1)[-1]
+                          == fuzz_target]
+                if len(simple) == 1:
+                    selected = simple[0]
+                elif len(simple) > 1:
+                    candidates = ", ".join(
+                        t.class_name for t in simple[:8])
+                    plan.blockers.append(
+                        f"--fuzz-target {str(fuzz_target)[:80]!r} is "
+                        f"ambiguous — use the fully-qualified class "
+                        f"name ({candidates})."
+                    )
+                    return
+                else:
+                    plan.blockers.append(
+                        f"--fuzz-target {str(fuzz_target)[:80]!r} is "
+                        f"not among the project's Jazzer targets: "
+                        f"{shown}"
+                    )
+                    return
+        elif len(targets) == 1:
+            selected = targets[0]
+            plan.hints.append(
+                "auto-selected the project's only Jazzer target: "
+                f"{targets[0].class_name}")
+        else:
+            plan.blockers.append(
+                f"Project has {len(targets)} Jazzer targets ({shown}) "
+                "— pass --fuzz-target <class> to pick one."
+            )
+            return
+        plan.jazzer_target = selected.class_name
+        plan.jazzer_target_source = selected.source
+        # Build-lane visibility at plan time — the runner probes again
+        # at construction and refuses the same way.
+        from packages.fuzzing.jazzer_runner import (
+            build_tool_executable,
+            build_tool_for,
+            build_tool_install_hint,
+        )
+        tool = build_tool_for(plan.target.path)
+        if build_tool_executable(tool) is None:
+            plan.blockers.append(build_tool_install_hint(tool))
+
     def _pick_for_unix_binary(self, caps: CapabilityReport, target_path: Path | None = None) -> str | None:
         """Pick AFL++ or libFuzzer for a Unix binary target.
 
@@ -581,6 +691,10 @@ class FuzzingOrchestrator:
                     {"cargofuzz_target": plan.cargofuzz_target}
                     if plan.fuzzer == "cargo-fuzz" else {}
                 ),
+                **(
+                    {"jazzer_target": plan.jazzer_target}
+                    if plan.fuzzer == "jazzer" else {}
+                ),
             },
         )
         save_json(out_dir / "capability_report.json", plan.capabilities.to_dict())
@@ -651,6 +765,30 @@ class FuzzingOrchestrator:
                     "Using the crate's own cargo-fuzz corpus: %s",
                     crate_corpus)
 
+        # jazzer corpus convention: without an operator corpus, the
+        # project's own <SimpleName>Inputs resources directory (the
+        # jazzer JUnit seed convention) wins over the generic
+        # generated corpus — same posture and same bounded,
+        # symlink-refusing stager as the cargo-fuzz crate corpus.
+        jazzer_corpus_info = None
+        if (corpus_dir is None and plan.fuzzer == "jazzer"
+                and plan.jazzer_target):
+            from packages.fuzzing.jazzer_runner import project_corpus_dir
+            jazzer_corpus = project_corpus_dir(
+                plan.target.path, plan.jazzer_target,
+                target_source=plan.jazzer_target_source)
+            if jazzer_corpus is not None:
+                corpus_dir = jazzer_corpus
+                jazzer_corpus_info = {
+                    "source": "jazzer_inputs_convention",
+                    "path": str(jazzer_corpus),
+                }
+                save_json(out_dir / "jazzer-corpus.json",
+                          jazzer_corpus_info)
+                logger.info(
+                    "Using the project's own Jazzer seed corpus: %s",
+                    jazzer_corpus)
+
         try:
             corpus_dir, generated_corpus_info = self._prepare_corpus(
                 plan,
@@ -716,6 +854,8 @@ class FuzzingOrchestrator:
             result = self._run_atheris(plan, out_dir, duration_seconds, corpus_dir, dict_path)
         elif plan.fuzzer == "cargo-fuzz":
             result = self._run_cargofuzz(plan, out_dir, duration_seconds, corpus_dir, dict_path)
+        elif plan.fuzzer == "jazzer":
+            result = self._run_jazzer(plan, out_dir, duration_seconds, corpus_dir, dict_path)
         else:
             msg = f"Fuzzer '{plan.fuzzer}' not yet wired into orchestrator."
             raise RuntimeError(msg)
@@ -723,6 +863,8 @@ class FuzzingOrchestrator:
             result["generated_corpus"] = generated_corpus_info
         if crate_corpus_info:
             result["crate_corpus"] = crate_corpus_info
+        if jazzer_corpus_info:
+            result["jazzer_corpus"] = jazzer_corpus_info
         if binary_understand and plan.target.kind in _BINARY_UNDERSTAND_KINDS:
             try:
                 from packages.binary_analysis import append_fuzz_evidence_to_run
@@ -747,8 +889,11 @@ class FuzzingOrchestrator:
         # binary; a Python coverage lane is a later phase. cargo-fuzz
         # campaigns skip it too: the built fuzz target carries sancov
         # instrumentation, not gcov, and the plan target is the crate
-        # directory — a Rust coverage lane is a later phase.
-        if plan.fuzzer in ("atheris", "cargo-fuzz"):
+        # directory — a Rust coverage lane is a later phase. jazzer
+        # campaigns skip it the same way: JVM coverage is JaCoCo, not
+        # gcov, and the plan target is the project directory — a JVM
+        # coverage lane is a later phase.
+        if plan.fuzzer in ("atheris", "cargo-fuzz", "jazzer"):
             return result
         try:
             from packages.fuzzing.coverage_bridge import emit_fuzz_coverage
@@ -1258,6 +1403,124 @@ class FuzzingOrchestrator:
         if recorded:
             logger.info(
                 "Recorded %d/%d cargo-fuzz crashes as Witnesses → %s",
+                recorded, len(result.crashes), out_dir / "witnesses",
+            )
+        return recorded
+
+    def _run_jazzer(
+        self,
+        plan: CampaignPlan,
+        out_dir: Path,
+        duration_seconds: int,
+        corpus_dir: Path | None,
+        dict_path: Path | None,
+    ) -> dict[str, Any]:
+        from packages.fuzzing.jazzer_runner import JazzerRunner
+        from packages.fuzzing.telemetry import FuzzingTelemetry
+
+        if not plan.jazzer_target:
+            msg = ("jazzer plan carries no target class — plan() "
+                   "should have blocked")
+            raise RuntimeError(msg)
+        runner = JazzerRunner(
+            plan.target.path,
+            plan.jazzer_target,
+            target_source=plan.jazzer_target_source,
+            corpus_dir=corpus_dir,
+            output_dir=out_dir / "jazzer",
+            dict_path=dict_path,
+            max_total_time=duration_seconds,
+        )
+        telemetry = FuzzingTelemetry(
+            out_dir=out_dir,
+            fuzzer="jazzer",
+            target=str(plan.target.path),
+        )
+        telemetry.start()
+        try:
+            result = runner.run(telemetry=telemetry)
+            telemetry.update_stats(
+                total_executions=result.stats.total_executions,
+                executions_per_second=result.stats.executions_per_second,
+                coverage_features=result.stats.coverage_features,
+                corpus_size=result.stats.corpus_size,
+            )
+        finally:
+            telemetry.stop()
+
+        recorded = self._record_jazzer_witnesses(
+            out_dir, result, plan.jazzer_target_source)
+
+        return {
+            "fuzzer": "jazzer",
+            "campaign_failed": result.campaign_failed,
+            "crashes": len(result.crashes),
+            "timeouts": len(result.timeouts),
+            "oom_events": len(result.oom_inputs),
+            "leaks": len(result.leak_inputs),
+            "crashes_dir": str(runner.crashes_dir),
+            "fuzz_target": plan.jazzer_target,
+            "build_tool": runner.build_tool,
+            "java_exception": (
+                result.java_exception.to_dict()
+                if result.java_exception else None
+            ),
+            "crash_records": (
+                str(runner.output_dir / "jazzer-crashes.json")
+                if result.crash_records else None
+            ),
+            "witnesses_recorded": recorded,
+            "stats": result.stats.__dict__,
+            "telemetry": str(out_dir / "fuzz-summary.json"),
+            "events": str(out_dir / "fuzz-events.jsonl"),
+        }
+
+    @staticmethod
+    def _record_jazzer_witnesses(
+        out_dir: Path,
+        result: JazzerResult,
+        harness_source: Path | None,
+    ) -> int:
+        """Record each jazzer crash artifact as a canonical Witness.
+
+        Same store path (``<out>/witnesses``) and best-effort posture
+        as the AFL, atheris, and cargo-fuzz paths: the crashes stay on
+        disk in their artifact form even when the canonical write
+        fails, and ``raptor-verified-outcomes`` picks the records up
+        from here.
+        """
+        if not result.crashes:
+            return 0
+        try:
+            from core.witness import WitnessStore
+            from packages.fuzzing.witness_adapter import (
+                witness_from_jazzer_artifact,
+            )
+            store = WitnessStore(out_dir / "witnesses")
+        except Exception as e:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "Witness-store setup failed: %s: %s; continuing without "
+                "canonical Witness records", type(e).__name__, e,
+            )
+            return 0
+        recorded = 0
+        for artifact in result.crashes:
+            try:
+                witness, data = witness_from_jazzer_artifact(
+                    artifact,
+                    exception=result.java_exception,
+                    harness_path=harness_source,
+                )
+                store.put(witness, data)
+                recorded += 1
+            except Exception as e:  # noqa: BLE001 — best-effort
+                logger.warning(
+                    "failed to record witness for crash %s: %s: %s",
+                    artifact.name, type(e).__name__, e,
+                )
+        if recorded:
+            logger.info(
+                "Recorded %d/%d jazzer crashes as Witnesses → %s",
                 recorded, len(result.crashes), out_dir / "witnesses",
             )
         return recorded
