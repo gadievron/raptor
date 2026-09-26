@@ -1022,16 +1022,25 @@ def _is_control_flow(mnemonic: str) -> bool:
         or m.startswith("j")      # jmp + every jcc + jrcxz
         or m.startswith("ret")
         or m.startswith("loop")
+        or m == "xbegin"          # TSX: abort path jumps to the operand
         or m in _TRAP_MNEMONICS   # execution never falls through
     )
 
 
 def _branch_targets(insns: tuple[_Insn, ...]) -> frozenset[int]:
-    """In-window jump/branch target addresses (decoded operands)."""
+    """In-window jump/branch target addresses (decoded operands).
+
+    ``xbegin`` counts as a branch: its operand is the abort-handler
+    landing site — a transaction abort transfers control there, so it
+    can land between a write and a call exactly like a ``jcc`` target.
+    """
     out: set[int] = set()
     for insn in insns:
         m0 = insn.mnemonic.lower()
-        if not (m0.startswith("j") or m0.startswith("loop")):
+        if not (
+            m0.startswith("j") or m0.startswith("loop")
+            or m0 == "xbegin"
+        ):
             continue
         m = _CALL_ADDR_RE.match(insn.operands.strip().lower())
         if m:
@@ -1050,14 +1059,20 @@ def _has_unresolved_jump(insns: tuple[_Insn, ...]) -> bool:
     invisible to :func:`_branch_targets`, yet it can lie strictly
     between a write and a call, so its presence poisons BRANCH-FREE
     refute grade window-wide (conservative, like truncation blocking
-    corroboration). ENTRY-DOMINATING grade is unaffected: the entry
-    region is straight-line by construction, so every in-window path
-    passes an entry write before reaching any control transfer,
-    including the unresolved jump — control flow entering the window
-    from OUTSIDE remains the documented residual for both legs."""
+    corroboration). ``xbegin`` is screened alongside the jumps: its
+    abort-handler operand is a landing site in the same sense, so an
+    undecodable one is just as unknowable. ENTRY-DOMINATING grade is
+    unaffected: the entry region is straight-line by construction, so
+    every in-window path passes an entry write before reaching any
+    control transfer, including the unresolved jump — control flow
+    entering the window from OUTSIDE remains the documented residual
+    for both legs."""
     for insn in insns:
         m0 = insn.mnemonic.lower()
-        if not (m0.startswith("j") or m0.startswith("loop")):
+        if not (
+            m0.startswith("j") or m0.startswith("loop")
+            or m0 == "xbegin"
+        ):
             continue
         if not _CALL_ADDR_RE.match(insn.operands.strip().lower()):
             return True

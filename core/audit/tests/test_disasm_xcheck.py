@@ -574,6 +574,102 @@ class TestUnresolvedJumpPoison:
         assert {"r8", "rdi"} <= weak
 
 
+class TestXbeginBranchVocabulary:
+    """``xbegin`` is a control transfer: a transaction abort jumps to
+    its operand (the abort-handler landing site). The jump screens
+    matched only ``j*``/``loop*``, so an xbegin whose abort target lay
+    between a write and the call graded branch-free strong on BOTH
+    anchorings — a false refute for a claim that is true on the abort
+    path. Pins: a decodable abort target enters the branch-target set
+    (denial between write and call), an undecodable operand poisons,
+    the entry region ends at the xbegin, and ``xabort``/``xend`` do
+    not over-poison."""
+
+    def setup_method(self):
+        self.members = dx._DISASM_FAMILY_MEMBERS["r8"]
+
+    def _analyze(self, insns, call_index, head=True):
+        insns = tuple(insns)
+        reach = dx._entry_reachable(insns) if head else None
+        return dx._analyze_site(
+            insns, call_index, self.members,
+            dx._branch_targets(insns), reach,
+        )
+
+    def test_xbegin_target_enters_branch_targets(self):
+        # A decodable abort target is a branch target like any jcc's;
+        # direct jumps keep contributing theirs (unchanged direction).
+        targets = dx._branch_targets((
+            _insn(0x10, "xbegin", "1d <f+0xd>"),
+            _insn(0x16, "jmp", "24 <f+0x14>"),
+        ))
+        assert targets == frozenset({0x1D, 0x24})
+
+    def test_xbegin_with_decodable_target_is_resolved(self):
+        assert not dx._has_unresolved_jump((
+            _insn(0x10, "xbegin", "1d <f+0xd>"),
+        ))
+
+    def test_xbegin_with_undecodable_operand_poisons(self):
+        assert dx._has_unresolved_jump((_insn(0x10, "xbegin", ""),))
+        assert dx._has_unresolved_jump((
+            _insn(0x10, "xbegin", "<garbled>"),
+        ))
+
+    def test_xabort_and_xend_are_not_jumps(self):
+        # No over-poison: xabort/xend carry no landing-site operand
+        # for the screens (alongside the existing call/ret/trap pin).
+        assert not dx._has_unresolved_jump((
+            _insn(0x10, "xabort", "0x1"),
+            _insn(0x13, "xend", ""),
+        ))
+
+    def test_abort_target_between_write_and_call_denies_non_entry(self):
+        # THE probe shape, non-entry anchoring: the abort target lies
+        # strictly between the write and the call, so the call is
+        # reachable without the write — refute grade refused (the
+        # write still blocks corroboration: honest record).
+        insns = (
+            _insn(0x12, "xbegin", "1a <f+0xa>"),
+            _insn(0x18, "mov", "r8d,0x5"),
+            _insn(0x1A, "nop", ""),
+            _insn(0x1B, "call", "40 <p>"),
+        )
+        a = self._analyze(insns, 3, head=False)
+        assert not a.strong
+        assert a.weak_write
+
+    def test_abort_target_between_write_and_call_denies_entry_anchored(
+        self,
+    ):
+        # Same probe, entry-anchored: branch-free is denied by the
+        # abort target, and entry domination is denied because the
+        # straight-line entry region now ends AT the xbegin.
+        insns = (
+            _insn(0x00, "xbegin", "c <f+0xc>"),
+            _insn(0x06, "mov", "r8d,0x5"),
+            _insn(0x0C, "nop", ""),
+            _insn(0x0D, "call", "40 <p>"),
+        )
+        assert dx._entry_cf_index(insns) == 0
+        a = self._analyze(insns, 3)
+        assert not a.strong
+        assert a.weak_write
+
+    def test_entry_write_before_xbegin_keeps_domination(self):
+        # Scope pin, the other direction: a write BEFORE the xbegin
+        # precedes every control transfer — the abort path passes it
+        # too, so entry domination stands.
+        insns = (
+            _insn(0x00, "mov", "r8d,0x9"),
+            _insn(0x06, "xbegin", "11 <f+0x11>"),
+            _insn(0x0C, "call", "40 <p>"),
+            _insn(0x11, "ret", ""),
+        )
+        a = self._analyze(insns, 2)
+        assert a.strong and a.strong_kind == "entry-dominating"
+
+
 class TestOperandWidth:
     def test_register_widths(self):
         assert dx._operand_width_bytes("rax,rdx") == 8
@@ -2134,6 +2230,18 @@ indirect_entrydom:
     ret
     .size indirect_entrydom, .-indirect_entrydom
 
+    .globl xbegin_poison
+    .type xbegin_poison, @function
+xbegin_poison:
+    xbegin .Lxp
+    mov $5, %r8d
+    nop
+.Lxp:
+    nop
+    call validator
+    ret
+    .size xbegin_poison, .-xbegin_poison
+
     .globl jmp_chain
     .type jmp_chain, @function
 jmp_chain:
@@ -2349,6 +2457,19 @@ class TestCompiledFixture:
         )
         assert res.outcome == "refuted"
         assert res.call_sites[0]["write_grade"] == "entry-dominating"
+
+    def test_xbegin_abort_path_never_refutes_real_objdump(
+        self, compiled_fixture, _direct_objdump,
+    ):
+        # TSX probe on real objdump output: the xbegin abort target
+        # lands strictly between the write and the call, so the true
+        # "not set on the abort path" claim must survive.
+        res = self._run(
+            compiled_fixture, "xbegin_poison",
+            "the count argument in r8d is never passed to validator",
+        )
+        assert res.outcome == "inconclusive"
+        assert res.reason == dx.REASON_WRITE_NOT_REFUTE_GRADE
 
     def test_jmp_chain_to_call_still_refutes(
         self, compiled_fixture, _direct_objdump,
