@@ -454,6 +454,23 @@ def assemble_context(
                 )
         except Exception:
             logger.debug("domain bug patterns failed", exc_info=True)
+        try:
+            from core.concepts.audit_bridge import token_enforcement_context
+            te_block = token_enforcement_context(
+                out_dir, file_path, target_path,
+            )
+            if te_block:
+                # Mechanical projection over study-LEARNED check names
+                # (LLM-derived vocabulary) plus target-parsed call
+                # facts — same provenance class as the domain-model
+                # blocks, so it rides the same untrusted envelope.
+                ctx["token_enforcement"] = wrap_untrusted(
+                    te_block,
+                    kind="token-enforcement",
+                    origin="study token-map projection",
+                )
+        except Exception:
+            logger.debug("token enforcement context failed", exc_info=True)
 
     _has_domain_primers = False
     if out_dir:
@@ -2203,6 +2220,10 @@ def format_context_for_prompt(
 
     if ctx.get("domain_model"):
         sections.append(PromptSection("domain_model", "\n" + ctx["domain_model"], 1))
+
+    if ctx.get("token_enforcement"):
+        sections.append(PromptSection(
+            "token_enforcement", "\n" + ctx["token_enforcement"], 1))
 
     if ctx.get("fp_warnings"):
         sections.append(PromptSection("fp_warnings",

@@ -319,6 +319,173 @@ def domain_security_context(out_dir: Path) -> str | None:
     return "\n".join(lines)
 
 
+@lru_cache(maxsize=4)
+def _token_map_for_run(out_dir_s: str, target_s: str) -> dict[str, Any] | None:
+    """Load — or mechanically project — the run's token-enforcement map.
+
+    A per-run ``token-map.json`` wins (written by the study pipeline,
+    or by a previous call here). Otherwise, when the discoverable
+    domain model carries learned ``token_checks`` and this run has an
+    entry-point source co-located (``checklist.json`` /
+    ``context-map.json``), the map is projected on the fly and
+    persisted for the rest of the run. Purely mechanical — no LLM
+    call. Cached per (run, target) so per-function context assembly
+    pays the projection at most once.
+    """
+    from .token_map import load_token_map, project_token_map_for_run
+
+    out_dir = Path(out_dir_s)
+    existing = load_token_map(out_dir)
+    if existing is not None:
+        return existing
+    if not target_s:
+        return None
+    model = _find_domain_model(out_dir)
+    if not isinstance(model, dict) or not model.get("token_checks"):
+        return None
+    written = project_token_map_for_run(model, out_dir, Path(target_s))
+    return load_token_map(out_dir) if written else None
+
+
+def ensure_token_map(
+    out_dir: Path, target_path: str | Path,
+) -> dict[str, Any] | None:
+    """Public load-or-project entry (CLI + tests) for the run's map."""
+    return _token_map_for_run(str(out_dir), str(target_path))
+
+
+_MAX_TOKEN_TEXT_CHARS = 300
+
+
+def _token_source_drift(
+    record: dict[str, Any], target_path: str | Path | None,
+) -> str:
+    """Drift marker when the entry's source changed since projection.
+
+    Compares the record's ``source_sha256`` stamp (content digest at
+    projection time — the map carries no timestamp, staying
+    deterministic) against the file's current content. Returns a
+    suffix for the fact line, or "". Fail-quiet: a legacy record
+    without a stamp, an unavailable target, or a read error produces
+    no marker (the hint block already says verify-against-source).
+    """
+    import hashlib
+
+    stamp = str(record.get("source_sha256") or "")
+    if not stamp or not target_path:
+        return ""
+    rel = str(record.get("file") or "").replace("\\", "/")
+    parts = PurePosixPath(rel)
+    if not rel or parts.is_absolute() or ".." in parts.parts:
+        return ""  # map content is untrusted — no traversal reads
+    try:
+        p = Path(target_path) / rel
+        if not p.is_file():
+            return " [source missing since projection]"
+        text = p.read_text(encoding="utf-8", errors="replace")
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    except OSError:
+        return ""
+    if digest == stamp:
+        return ""
+    return " [source drifted since projection — re-project before use]"
+
+
+def token_enforcement_context(
+    out_dir: Path,
+    file_path: str,
+    target_path: str | Path | None = None,
+) -> str | None:
+    """Per-entry token-enforcement hint block for an audit review.
+
+    Returns a rendered block only when *file_path* is a mapped entry
+    point in the run's token-enforcement map
+    (:mod:`core.concepts.token_map`); library files and unmapped
+    targets get None. Hint-tier by contract (same framing as the
+    include-graph facts): the block says verify-against-source and is
+    never a verdict input — in particular, an "enforced" line must
+    never be read as refuting a request-forgery hypothesis, because
+    the map records call PRESENCE, not bypass-freedom (conditional
+    checks and skip paths still project as enforced).
+    """
+    from core.security.log_sanitisation import escape_nonprintable
+
+    def _defend(value: Any, cap: int = _MAX_TOKEN_TEXT_CHARS) -> str:
+        text = escape_nonprintable(str(value or ""))
+        return text[:cap] + ("…" if len(text) > cap else "")
+
+    try:
+        payload = _token_map_for_run(str(out_dir), str(target_path or ""))
+    except Exception:  # noqa: BLE001 — enrichment, never a review gate
+        logger.debug("token map lookup failed", exc_info=True)
+        return None
+    if not payload:
+        return None
+
+    rel = str(file_path or "").replace("\\", "/").lstrip("./")
+    record = None
+    for r in payload.get("entries") or []:
+        if not isinstance(r, dict):
+            continue
+        rf = str(r.get("file") or "")
+        if rf == rel or rf.endswith("/" + rel) or rel.endswith("/" + rf):
+            record = r
+            break
+    if record is None:
+        return None
+
+    checks = [
+        c for c in (payload.get("check_functions") or [])
+        if isinstance(c, dict)
+    ]
+    check_desc = ", ".join(
+        f"{_defend(c.get('name'), 120)}() {_tier_tag(c)}"
+        for c in checks[:4]
+    ) or "(none)"
+
+    status = str(record.get("status") or "unknown")
+    via = _defend(record.get("via"), 120)
+    cond = " (on a CONDITIONAL branch)" if record.get("conditional") else ""
+    if status == "enforced":
+        fact = (
+            f"token-enforcement: enforced-via {via}(){cond} — direct "
+            "call in the pre-output prefix (call-presence witness only)"
+        )
+    elif status == "indirect":
+        chain = " -> ".join(
+            _defend(hop, 120) for hop in (record.get("call_path") or [])[:8]
+        )
+        fact = (
+            f"token-enforcement: enforced-via {via}() INDIRECTLY"
+            f"{cond} ({chain}); intermediate branch conditions not "
+            "analysed"
+        )
+    elif status == "not_enforced":
+        fact = (
+            "token-enforcement: NOT enforced — "
+            f"{_defend(record.get('evidence'))}"
+        )
+    else:
+        fact = (
+            "token-enforcement: unknown — "
+            f"{_defend(record.get('reason') or record.get('evidence'))}"
+        )
+    fact += _token_source_drift(record, target_path)
+
+    return "\n".join([
+        "### Token enforcement (mechanical projection of the "
+        "study-learned check idiom)",
+        f"- This file is a mapped entry point: {fact}.",
+        f"- Learned check idiom: {check_desc}.",
+        "Hint-tier steering context — verify against source; never "
+        "treat as a verdict input. \"Enforced\" is call presence, not "
+        "bypass-freedom (conditional checks and skip paths still map "
+        "as enforced), so it must never rule out a request-forgery or "
+        "state-change finding; \"NOT enforced\" is a static absence "
+        "census over resolved calls, not proof of exploitability.",
+    ])
+
+
 # Complexity cap for LLM-derived grep hints compiled as regexes.
 # Both directions matter: too low and legitimate multi-alternative
 # hints ("memcpy|memmove|strcpy...(dozens of sinks)") silently lose
