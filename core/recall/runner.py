@@ -87,6 +87,17 @@ def build_pipeline_argv(manifest: RecallManifest, target: Path,
     elif manifest.profile == "agentic":
         argv = [sys.executable, str(raptor_py), "agentic",
                 "--repo", str(target)]
+    elif manifest.profile == "agentic-taint":
+        # The flip-gate candidate shape: the agentic argv plus exactly
+        # `--taint-crossfile`, nothing else — baseline (`agentic`) and
+        # candidate runs must differ by the engine flag alone or the
+        # measured delta stops being attributable to the engine. The
+        # flag is parsed by raptor.py's agentic surface; a pipeline
+        # build without it fails loudly at argparse (no sentinel, no
+        # SARIFs -> RunnerError), never silently degrades to a
+        # flag-less run.
+        argv = [sys.executable, str(raptor_py), "agentic",
+                "--repo", str(target), "--taint-crossfile"]
     else:  # pragma: no cover - manifest validation refuses others
         msg = f"unknown profile {manifest.profile!r}"
         raise RunnerError(msg)

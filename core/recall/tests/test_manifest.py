@@ -101,6 +101,18 @@ class TestParseManifest:
         with pytest.raises(ManifestError, match="profile"):
             parse_manifest(data)
 
+    def test_agentic_taint_profile_accepted(self):
+        # The flip-gate candidate profile is part of the closed
+        # vocabulary; near-miss spellings keep refusing (no fuzzy
+        # fallback between baseline and candidate shapes).
+        data = _valid()
+        data["profile"] = "agentic-taint"
+        assert parse_manifest(data).profile == "agentic-taint"
+        for typo in ("agentic_taint", "agentic-taint ", "taint"):
+            data["profile"] = typo
+            with pytest.raises(ManifestError, match="profile"):
+                parse_manifest(data)
+
     def test_absolute_expected_path_refused(self):
         data = _valid()
         data["expected"][0]["file"] = "/etc/passwd"

@@ -79,6 +79,46 @@ class TestArgv:
                                    tmp_path)
         assert argv[2] == "agentic"
 
+    def test_agentic_taint_profile_exact_argv(self, tmp_path):
+        # The flip-gate candidate: full-list equality — the profile is
+        # the agentic argv plus exactly `--taint-crossfile` (any other
+        # drift would make baseline/candidate deltas unattributable).
+        argv = build_pipeline_argv(_manifest("agentic-taint"),
+                                   tmp_path / "t", tmp_path)
+        assert argv == [
+            sys.executable, str(tmp_path / "raptor.py"), "agentic",
+            "--repo", str(tmp_path / "t"), "--taint-crossfile",
+            "--project", "-",
+        ]
+
+    def test_agentic_taint_pins_out_dir_like_agentic(self, tmp_path):
+        out = tmp_path / "run" / "pipeline-run"
+        argv = build_pipeline_argv(_manifest("agentic-taint"),
+                                   tmp_path / "t", tmp_path,
+                                   pipeline_out=out)
+        assert argv[argv.index("--out") + 1] == str(out)
+        # --out rides between the flag and the projectless pin, like
+        # every profile; the engine flag stays immediately after the
+        # base agentic argv.
+        assert argv.index("--taint-crossfile") < argv.index("--out")
+
+    def test_existing_profiles_argv_unchanged(self, tmp_path):
+        # Differential pin: adding agentic-taint must leave the three
+        # pre-existing profiles' argv byte-identical. Full-list
+        # equality so ANY drift (reordering, new flags) reds this.
+        t, root = tmp_path / "t", tmp_path
+        base = [sys.executable, str(root / "raptor.py")]
+        cases = {
+            "scan": [*base, "scan", "--repo", str(t), "--project", "-"],
+            "scan-codeql": [*base, "scan", "--repo", str(t), "--codeql",
+                            "--project", "-"],
+            "agentic": [*base, "agentic", "--repo", str(t),
+                        "--project", "-"],
+        }
+        for profile, want in cases.items():
+            assert build_pipeline_argv(_manifest(profile), t,
+                                       root) == want, profile
+
     def test_build_command_threaded(self, tmp_path):
         argv = build_pipeline_argv(
             _manifest("scan", build_command="make -j2"),
