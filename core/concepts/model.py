@@ -381,9 +381,14 @@ class DomainModel:
     #   resource_limits:   {field_or_macro, applies_to[, provenance]}
     #   state_fields:      {field[, struct, authority, monotonic,
     #                        invariant_refs, provenance, receipt]}
-    # resource_limits / state_fields are parsed channel-locally
-    # (resource_bounds / protocol_state) — deliberately NOT surfaced
-    # through DomainVocabulary.
+    #   token_checks:      {name[, kind, when, provenance]} — the
+    #       target's LEARNED anti-request-forgery (CSRF/nonce) check
+    #       functions (kind: csrf | nonce | other). Consumed by
+    #       core.concepts.token_map for the per-entry enforcement
+    #       projection.
+    # resource_limits / state_fields / token_checks are parsed
+    # channel-locally — deliberately NOT surfaced through
+    # DomainVocabulary.
     paired_operations: list[dict[str, Any]] = field(default_factory=list)
     nullable_returns: list[Any] = field(default_factory=list)
     auth_predicates: list[Any] = field(default_factory=list)
@@ -393,6 +398,7 @@ class DomainModel:
     )
     resource_limits: list[Any] = field(default_factory=list)
     state_fields: list[Any] = field(default_factory=list)
+    token_checks: list[dict[str, Any]] = field(default_factory=list)
 
     # ----- persistence -------------------------------------------
 
@@ -507,6 +513,10 @@ class DomainModel:
             state_fields=[
                 s for s in _vocab_list("state_fields")
                 if isinstance(s, dict)
+            ],
+            token_checks=[
+                t for t in _vocab_list("token_checks")
+                if isinstance(t, dict)
             ],
         )
 

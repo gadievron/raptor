@@ -240,6 +240,7 @@ def _merge_domain_models(prior: DomainModel, new: DomainModel) -> DomainModel:
         fallibility_contracts=_merge_vocab("fallibility_contracts"),
         resource_limits=_merge_vocab("resource_limits"),
         state_fields=_merge_vocab("state_fields"),
+        token_checks=_merge_vocab("token_checks"),
     )
 
 
@@ -950,6 +951,16 @@ it in `unresolved_references`).
 - `auth_predicates`: privilege/permission gate functions — the \
   return value decides allow vs deny (kind: `capability`, \
   `permission`, `uid`, or `domain`).
+- `token_checks`: the function(s) implementing the application's \
+  anti-request-forgery enforcement idiom — the call that validates a \
+  per-session/per-request token (CSRF token, form nonce) and \
+  rejects/aborts the request on mismatch (kind: `csrf`, `nonce`, or \
+  `other`). Candidate names often contain token/csrf/nonce, but \
+  classify by the enforcement BEHAVIOUR shown in the provided code, \
+  not the name: a validator named without those words still \
+  qualifies, and a function that only MINTS or ECHOES a token never \
+  does. Name only functions whose enforcement you can see in the \
+  provided items.
 - `security_fields`: struct fields holding privilege, credential, \
   or access-control state (uid/gid fields, capability masks, \
   security flags, ACL pointers).
@@ -1493,6 +1504,27 @@ _RESPONSE_SCHEMA: dict[str, Any] = {
                                     "capability", "permission",
                                     "uid", "domain",
                                 ],
+                            },
+                        },
+                        "required": ["name"],
+                    },
+                },
+                "token_checks": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "kind": {
+                                "type": "string",
+                                "enum": ["csrf", "nonce", "other"],
+                            },
+                            "when": {
+                                "type": "string",
+                                "description": (
+                                    "What the check compares and "
+                                    "what happens on mismatch."
+                                ),
                             },
                         },
                         "required": ["name"],
@@ -2547,12 +2579,13 @@ def _parse_api_vocabulary(
       when the claim is corroborated by a study-prep-extracted signal
       (``paired_with``/``lock_sites``/``alloc_frees`` for pairs,
       ``null_guards`` for nullable returns, ``gate_checks`` for auth
-      predicates), ``llm_summarized`` otherwise (name verified, but
-      the classification is the LLM's judgement).
+      predicates and token checks), ``llm_summarized`` otherwise
+      (name verified, but the classification is the LLM's judgement).
 
     Returns flat entries carrying a ``class`` key (one of
     paired_operations / nullable_returns / auth_predicates /
-    security_fields) for :func:`_assemble_vocabulary`.
+    token_checks / security_fields / fallibility_contracts /
+    resource_limits / state_fields) for :func:`_assemble_vocabulary`.
     """
     from .receipts import TIER_LLM_SUMMARIZED, TIER_MECHANICAL
 
@@ -2651,6 +2684,35 @@ def _parse_api_vocabulary(
             "kind": str(pred.get("kind") or "domain").lower(),
             "provenance": tier,
         })
+
+    # Token checks: enforcement-idiom identification is LEARNED here
+    # (learn-vocab rule) — the name-shape seeds in
+    # core.concepts.token_map.TOKEN_SEED_RE are discovery hints for
+    # candidate selection, never a classification. Same corroboration
+    # signal as auth_predicates: a study-prep-extracted gate_checks
+    # hit earns mechanical tier, otherwise the classification is the
+    # LLM's judgement (llm_summarized).
+    for tc in vocab_raw.get("token_checks") or []:
+        if not isinstance(tc, dict):
+            continue
+        name = _bare_name(str(tc.get("name") or ""))
+        if not name:
+            continue
+        if name not in universe:
+            _discard("token_checks", name)
+            continue
+        tier = (
+            TIER_MECHANICAL if name in gate_signal else TIER_LLM_SUMMARIZED
+        )
+        entry = {
+            "class": "token_checks",
+            "name": name,
+            "kind": str(tc.get("kind") or "other").lower(),
+            "provenance": tier,
+        }
+        if tc.get("when"):
+            entry["when"] = str(tc["when"])
+        entries.append(entry)
 
     for fld in vocab_raw.get("security_fields") or []:
         if not isinstance(fld, dict):
@@ -2792,8 +2854,9 @@ def _assemble_vocabulary(
     list[dict[str, Any]], list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]], list[dict[str, Any]],
+    list[dict[str, Any]],
 ]:
-    """Dedup flat vocab entries into the seven DomainModel lists.
+    """Dedup flat vocab entries into the eight DomainModel lists.
 
     Keyed by (acquire, release, kind) for pairs and the entry name
     (``name`` / ``field`` / ``field_or_macro``) for the name classes;
@@ -2815,6 +2878,7 @@ def _assemble_vocabulary(
         "fallibility_contracts": {},
         "resource_limits": {},
         "state_fields": {},
+        "token_checks": {},
     }
     for entry in entries:
         vclass = entry.get("class")
@@ -2844,6 +2908,7 @@ def _assemble_vocabulary(
         list(by_class["fallibility_contracts"].values()),
         list(by_class["resource_limits"].values()),
         list(by_class["state_fields"].values()),
+        list(by_class["token_checks"].values()),
     )
 
 
@@ -4625,6 +4690,7 @@ def run_study(
             model.fallibility_contracts,
             model.resource_limits,
             model.state_fields,
+            model.token_checks,
         ) = _assemble_vocabulary(vocab_entries)
         if on_progress:
             on_progress(
@@ -4636,7 +4702,8 @@ def run_study(
                 f"{len(model.fallibility_contracts)} fallibility "
                 f"contracts, "
                 f"{len(model.resource_limits)} resource limits, "
-                f"{len(model.state_fields)} state fields",
+                f"{len(model.state_fields)} state fields, "
+                f"{len(model.token_checks)} token checks",
             )
 
     out_path = output_dir / "domain-model.json"

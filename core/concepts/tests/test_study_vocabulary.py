@@ -110,6 +110,7 @@ class TestElicitationSurface:
             "auth_predicates", "security_fields",
             "fallibility_contracts",
             "resource_limits", "state_fields",
+            "token_checks",
         }
         pair_props = props["paired_operations"]["items"]["properties"]
         assert "callback" in pair_props["kind"]["enum"]
@@ -272,7 +273,7 @@ class TestFallibilityContracts:
         )
 
     def test_assembly_and_model_round_trip(self, tmp_path):
-        _, _, _, _, fallible, _, _ = _assemble_vocabulary(self._parse(
+        _, _, _, _, fallible, _, _, _ = _assemble_vocabulary(self._parse(
             {"name": "foo_send", "can_fail": True,
              "convention": "negative"},
         ))
@@ -299,7 +300,7 @@ class TestAssembly:
                 "kind": "permission", "provenance": TIER_MECHANICAL,
             },
         ]
-        _, _, auth, _, _, _, _ = _assemble_vocabulary(entries)
+        _, _, auth, _, _, _, _, _ = _assemble_vocabulary(entries)
         assert len(auth) == 1
         assert auth[0]["provenance"] == TIER_MECHANICAL
 
@@ -316,7 +317,7 @@ class TestAssembly:
                 "provenance": TIER_MECHANICAL,
             },
         ]
-        pairs, _, _, _, _, _, _ = _assemble_vocabulary(entries)
+        pairs, _, _, _, _, _, _, _ = _assemble_vocabulary(entries)
         assert len(pairs) == 2
 
 
@@ -331,6 +332,7 @@ class TestPersistence:
             model.fallibility_contracts,
             model.resource_limits,
             model.state_fields,
+            model.token_checks,
         ) = _assemble_vocabulary(
             _parse_api_vocabulary(_response(), _items())
         )
