@@ -429,7 +429,15 @@ class TestBaselineSemantics:
         }
 
 
+@pytest.mark.slow
 class TestRealTree:
+    """Whole-tree censuses — genuine multi-second AST walks that
+    breach the default-tier budget under loaded-runner variance, so
+    nightly tier. Per-PR coverage does not thin: the
+    replay-determinism workflow runs check_transcript_seam.py itself
+    as a gate step on seam-relevant paths; this pair re-checks the
+    same walk through the pytest surface."""
+
     def test_shipped_baseline_matches_the_tree(self, det):
         """The committed baseline and the real tree agree: the gate
         exits 0 with no NEW/grown sites (stale warns allowed)."""
