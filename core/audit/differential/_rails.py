@@ -48,6 +48,13 @@ MAX_CONFORMING_EXECUTED = 8
 #: budget probing the same family over and over.
 MAX_VECTORS_PER_LEAD = 3
 
+#: Equivalence pairs executed per metamorphic relation (each pair is
+#: two executions, plus four for the trust controls). Lower and one
+#: relation gets a single shot at the invariant; higher and one
+#: relation's pair list crowds out the run budget the same way vector
+#: fishing would.
+MAX_RELATION_PAIRS = 3
+
 
 class DifferentialBudget:
     """Charge-before-run accounting for the two per-run rails.

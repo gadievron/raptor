@@ -26,6 +26,7 @@ from core.audit.differential import (
     MAX_CONFORMING_EXECUTED,
     MAX_DIFFERENTIAL_EXECUTIONS,
     MAX_DIFFERENTIAL_WALL_S,
+    MAX_RELATION_PAIRS,
     MAX_VECTORS_PER_LEAD,
     MIN_CONFORMING_EXECUTED,
     OBS_ACCEPT,
@@ -450,10 +451,14 @@ class TestRails:
         assert MIN_CONFORMING_EXECUTED == 3
         assert MAX_CONFORMING_EXECUTED == 8
         assert MAX_VECTORS_PER_LEAD == 3
+        assert MAX_RELATION_PAIRS == 3
 
     def test_rail_relationships(self):
         assert MAX_CONFORMING_EXECUTED >= MIN_CONFORMING_EXECUTED
         assert MAX_VECTORS_PER_LEAD >= 1
+        # One relation (controls + full pair list) must fit inside
+        # the run budget.
+        assert 4 + 2 * MAX_RELATION_PAIRS <= MAX_DIFFERENTIAL_EXECUTIONS
         # One fully-fanned lead must fit inside the run budget.
         assert (
             (1 + MAX_CONFORMING_EXECUTED) * MAX_VECTORS_PER_LEAD
