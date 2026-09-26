@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from core.inventory.builder import build_inventory
 from core.inventory.script_handler import (
     SCRIPT_HANDLER_FIELD,
@@ -83,6 +85,10 @@ def _interstitials(items: list[dict]) -> list[dict]:
 
 class TestBuilderStamps:
     def test_php_interstitials_are_stamped_both_directions(self, tmp_path):
+        # The asserted span split (docblock/require header vs the
+        # superglobal-read span) is the tree-sitter extractor's; the
+        # regex fallback draws different interstitial boundaries.
+        pytest.importorskip("tree_sitter_php")
         target = _write_tree(tmp_path)
         inv = build_inventory(str(target), str(tmp_path / "out"))
         by_file = _items_by_file(inv)
