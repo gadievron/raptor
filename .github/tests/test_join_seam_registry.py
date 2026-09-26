@@ -172,6 +172,23 @@ SEAMS: tuple[Seam, ...] = (
         },
     ),
     Seam(
+        name="cross-run anchor-identity site keys",
+        home="core/project/anchor_join.py",
+        constructors=("build_anchor_join",),
+        sides={
+            # Correlate groups every consumer view (disagreements,
+            # new/resolved, persistent, trends, tool gaps) by the
+            # joiner's site keys.
+            "core/project/correlate.py": ("build_anchor_join",),
+        },
+        forbidden={
+            # The exact-location key the join replaced — its return
+            # would silently re-split drifted anchors and re-open the
+            # manual dedupe pass.
+            "core/project/correlate.py": ("dedup_key(f)",),
+        },
+    ),
+    Seam(
         name="raw registry document → renderer contract",
         home="packages/sca/llm/registry_view.py",
         constructors=("build_registry_view", "iter_maintainers"),

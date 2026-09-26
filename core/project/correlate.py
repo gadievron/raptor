@@ -14,8 +14,12 @@ from typing import Any
 from core.json import load_json
 from core.run import load_run_metadata
 
+from .anchor_join import (
+    AnchorJoin,
+    build_anchor_join,
+    load_project_span_index,
+)
 from .findings_utils import (
-    dedup_key,
     finding_file,
     load_findings_from_dir,
     safe_run_mtime,
@@ -80,28 +84,38 @@ def correlate_project(project) -> dict[str, Any]:
     run_types = _get_run_types(run_dirs)
     findings_by_run = _load_all_findings(run_dirs)
 
+    # Anchor-identity join: one site key per defect across anchor
+    # drift, synthetic-scope name variants, and explicit lineage
+    # notes (see core.project.anchor_join). Recency ranks feed only
+    # the canonical-anchor tie-break.
+    recency = {d.name: i for i, d
+               in enumerate(sorted(run_dirs, key=safe_run_mtime))}
+    span_index = load_project_span_index(project, run_dirs)
+    join = build_anchor_join(findings_by_run, span_index, recency)
+
     # Existing
-    persistent = _find_persistent(findings_by_run, run_models)
-    trends = _build_trends(findings_by_run, run_dirs, run_models)
+    persistent = _find_persistent(findings_by_run, run_models, join=join)
+    trends = _build_trends(findings_by_run, run_dirs, run_models, join=join)
     tool_coverage = _build_tool_coverage(run_dirs)
 
     # New actionable analyses
-    disagreements = _find_disagreements(findings_by_run, run_models)
-    new_resolved = _find_new_and_resolved(findings_by_run, run_dirs, run_types)
-    tool_gaps = _build_tool_gaps(run_dirs, findings_by_run, run_types)
+    disagreements = _find_disagreements(findings_by_run, run_models,
+                                        join=join)
+    new_resolved = _find_new_and_resolved(findings_by_run, run_dirs,
+                                          run_types, join=join)
+    tool_gaps = _build_tool_gaps(run_dirs, findings_by_run, run_types,
+                                 join=join)
     actions = _build_action_list(
         disagreements, new_resolved, tool_gaps, persistent,
+        join_uncertain=join.uncertain_pairs,
     )
 
     n_persistent = len(persistent)
-    n_total_unique = len({
-        dedup_key(f)
-        for findings in findings_by_run.values()
-        for f in findings
-    })
+    n_total_unique = join.site_count()
 
     return {
         "actions": actions,
+        "join": _join_summary(join),
         "disagreements": disagreements,
         "new_findings": new_resolved["new_findings"],
         "potentially_resolved": new_resolved["potentially_resolved"],
@@ -121,9 +135,24 @@ def correlate_project(project) -> dict[str, Any]:
     }
 
 
+def _join_summary(join: AnchorJoin) -> dict[str, Any]:
+    """Operator-facing join facts: every multi-anchor site plus the
+    flagged (NOT joined) uncertain pairs awaiting a human."""
+    return {
+        "multi_anchor_sites": join.multi_anchor_sites(),
+        "uncertain_pairs": join.uncertain_pairs,
+        "uncertain_total": join.uncertain_total,
+    }
+
+
 def _empty_result() -> dict[str, Any]:
     return {
         "actions": [],
+        "join": {
+            "multi_anchor_sites": [],
+            "uncertain_pairs": [],
+            "uncertain_total": 0,
+        },
         "disagreements": [],
         "new_findings": [],
         "potentially_resolved": [],
@@ -222,15 +251,15 @@ def _load_all_findings(
 def _find_disagreements(
     findings_by_run: dict[str, list[dict]],
     run_models: dict[str, str],
+    join: AnchorJoin | None = None,
 ) -> list[dict[str, Any]]:
     """Find findings where runs disagree on verdict (positive vs negative)."""
+    join = join or build_anchor_join(findings_by_run)
     key_to_verdicts: dict[tuple, list[dict]] = defaultdict(list)
-    key_to_finding: dict[tuple, dict] = {}
 
     for run_name, findings in findings_by_run.items():
-        for f in findings:
-            k = dedup_key(f)
-            key_to_finding[k] = f
+        for i, f in enumerate(findings):
+            k = join.key_for(run_name, i)
             status = get_finding_status(f)
             if not status:
                 continue
@@ -258,17 +287,17 @@ def _find_disagreements(
         else:
             continue
 
-        f = key_to_finding[k]
+        f = join.finding_for(k)
         scores = [v["score"] for v in verdicts if v["score"] is not None]
-        disagreements.append({
-            "file": finding_file(f),
-            "function": f.get("function", ""),
-            "line": f.get("line") or 0,
+        disagreements.append(join.annotate({
+            "file": k[0],
+            "function": k[1],
+            "line": k[2],
             "vuln_type": f.get("vuln_type", ""),
             "verdicts": verdicts,
             "disagreement_type": dtype,
             "max_score": max(scores) if scores else 0,
-        })
+        }, k))
 
     disagreements.sort(key=lambda d: (
         0 if d["disagreement_type"] == "positive_vs_negative" else 1,
@@ -283,31 +312,31 @@ def _find_new_and_resolved(
     findings_by_run: dict[str, list[dict]],
     run_dirs: list[Path],
     run_types: dict[str, str],
+    join: AnchorJoin | None = None,
 ) -> dict[str, list[dict]]:
     """Detect findings that appeared or disappeared across runs.
 
     Only compares runs of the same command type — a finding in scan-001
     but absent from validate-001 is expected, not "resolved."
     """
+    join = join or build_anchor_join(findings_by_run)
     run_order = [d.name for d in sorted(run_dirs, key=safe_run_mtime)]
 
     key_to_runs_by_type: dict[tuple, dict[str, list[str]]] = defaultdict(
         lambda: defaultdict(list),
     )
-    key_to_finding: dict[tuple, dict] = {}
 
     for run_name, findings in findings_by_run.items():
         cmd_type = run_types.get(run_name, "unknown")
-        for f in findings:
-            k = dedup_key(f)
+        for i, _f in enumerate(findings):
+            k = join.key_for(run_name, i)
             key_to_runs_by_type[k][cmd_type].append(run_name)
-            key_to_finding[k] = f
 
     new_findings = []
     potentially_resolved = []
 
     for k, type_runs in key_to_runs_by_type.items():
-        f = key_to_finding[k]
+        f = join.finding_for(k)
         for cmd_type, runs in type_runs.items():
             typed_order = [r for r in run_order if run_types.get(r) == cmd_type]
             if len(typed_order) < 2:
@@ -321,16 +350,16 @@ def _find_new_and_resolved(
             ))
             if first_run != earliest:
                 status = get_finding_status(f)
-                new_findings.append({
-                    "file": finding_file(f),
-                    "function": f.get("function", ""),
-                    "line": f.get("line") or 0,
+                new_findings.append(join.annotate({
+                    "file": k[0],
+                    "function": k[1],
+                    "line": k[2],
                     "vuln_type": f.get("vuln_type", ""),
                     "status": status,
                     "verdict": normalize_verdict(status),
                     "first_seen_run": first_run,
                     "command_type": cmd_type,
-                })
+                }, k))
 
             if latest not in runs:
                 last_run = max(runs, key=lambda r: (
@@ -341,15 +370,15 @@ def _find_new_and_resolved(
                     if r not in runs
                     and run_order.index(r) > run_order.index(last_run)
                 ]
-                potentially_resolved.append({
-                    "file": finding_file(f),
-                    "function": f.get("function", ""),
-                    "line": f.get("line") or 0,
+                potentially_resolved.append(join.annotate({
+                    "file": k[0],
+                    "function": k[1],
+                    "line": k[2],
                     "vuln_type": f.get("vuln_type", ""),
                     "last_seen_run": last_run,
                     "absent_from": absent,
                     "command_type": cmd_type,
-                })
+                }, k))
 
     new_findings.sort(key=lambda n: (
         0 if n["verdict"] == "positive" else 1,
@@ -363,14 +392,16 @@ def _build_tool_gaps(
     _run_dirs: list[Path],
     findings_by_run: dict[str, list[dict]],
     run_types: dict[str, str],
+    join: AnchorJoin | None = None,
 ) -> dict[str, Any]:
     """Identify coverage gaps between scan tools and LLM analysis."""
+    join = join or build_anchor_join(findings_by_run)
     scan_files: dict[str, set] = defaultdict(set)
     llm_files: dict[str, set] = defaultdict(set)
 
     for run_name, findings in findings_by_run.items():
         cmd = run_types.get(run_name, "unknown")
-        for f in findings:
+        for i, f in enumerate(findings):
             # finding_file handles both scan-shaped (`file`) and
             # orchestrated (`file_path`) findings — pre-fix agentic
             # findings were silently skipped here, so LLM coverage
@@ -379,7 +410,7 @@ def _build_tool_gaps(
             fp = finding_file(f)
             if not fp:
                 continue
-            k = dedup_key(f)
+            k = join.key_for(run_name, i)
             if cmd in SCAN_COMMAND_TYPES:
                 scan_files[fp].add(k)
             elif cmd in LLM_COMMAND_TYPES:
@@ -427,11 +458,21 @@ def _build_tool_gaps(
 
 # --- Action list ---
 
+def _anchor_label(pair: dict[str, Any]) -> str:
+    """Compact ``file:lineA/lineB`` label for an uncertain pair."""
+    anchors = pair.get("anchors") or []
+    if not anchors:
+        return "?"
+    lines = "/".join(str(a.get("line", 0)) for a in anchors)
+    return f"{anchors[0].get('file', '?')}:{lines}"
+
+
 def _build_action_list(
     disagreements: list[dict],
     new_resolved: dict[str, list[dict]],
     tool_gaps: dict[str, Any],
     _persistent: list[dict],
+    join_uncertain: list[dict] | None = None,
 ) -> list[dict[str, Any]]:
     """Synthesize all analyses into a single prioritised action list."""
     actions: list[dict[str, Any]] = []
@@ -481,6 +522,19 @@ def _build_action_list(
             "detail": gap,
         } for gap in tool_gaps.get("scanned_not_validated", []))
 
+    # Anchor pairs the join declined (uncertainty is never a join) —
+    # each needs a human same-or-distinct call, like the manual
+    # dedupe pass this machinery replaces.
+    actions.extend({
+            "priority": 5,
+            "category": "join_uncertain",
+            "summary": (
+                f"{_anchor_label(pair)} — possible same defect "
+                f"({pair.get('reason', '')}); needs manual adjudication"
+            ),
+            "detail": pair,
+        } for pair in (join_uncertain or []))
+
     actions.extend({
             "priority": 5,
             "category": "resolved",
@@ -508,36 +562,39 @@ def _build_action_list(
 def _find_persistent(
     findings_by_run: dict[str, list[dict]],
     run_models: dict[str, str],
+    join: AnchorJoin | None = None,
 ) -> list[dict[str, Any]]:
     """Find findings that appear across 2+ runs."""
-    key_to_runs: dict[tuple, list[str]] = defaultdict(list)
-    key_to_finding: dict[tuple, dict] = {}
+    join = join or build_anchor_join(findings_by_run)
+    # Unique runs per site: a joined site can carry several anchors
+    # from ONE run, which must not inflate runs_seen.
+    key_to_runs: dict[tuple, set] = defaultdict(set)
     key_to_models: dict[tuple, set] = defaultdict(set)
 
     for run_name, findings in findings_by_run.items():
-        for f in findings:
-            k = dedup_key(f)
-            key_to_runs[k].append(run_name)
-            key_to_finding[k] = f
+        for i, f in enumerate(findings):
+            k = join.key_for(run_name, i)
+            key_to_runs[k].add(run_name)
             model = f.get("analysed_by") or run_models.get(run_name, "")
             if model:
                 key_to_models[k].add(model)
 
     persistent = []
-    for k, runs in sorted(key_to_runs.items(), key=lambda x: -len(x[1])):
+    for k, runs in sorted(key_to_runs.items(),
+                          key=lambda x: (-len(x[1]), x[0])):
         if len(runs) < 2:
             continue
-        f = key_to_finding[k]
-        persistent.append({
-            "file": finding_file(f),
-            "function": f.get("function", ""),
-            "line": f.get("line") or 0,
+        f = join.finding_for(k)
+        persistent.append(join.annotate({
+            "file": k[0],
+            "function": k[1],
+            "line": k[2],
             "vuln_type": f.get("vuln_type", ""),
             "status": f.get("final_status") or f.get("status", ""),
             "runs_seen": len(runs),
             "run_names": sorted(runs),
             "models": sorted(key_to_models.get(k, set())),
-        })
+        }, k))
 
     return persistent
 
@@ -546,17 +603,19 @@ def _build_trends(
     findings_by_run: dict[str, list[dict]],
     run_dirs: list[Path],
     run_models: dict[str, str],
+    join: AnchorJoin | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Track how each finding's status changed across runs.
 
     Returns {finding_label: [{run, status, score, model}]} ordered by run time.
     """
+    join = join or build_anchor_join(findings_by_run)
     run_order = [d.name for d in sorted(run_dirs, key=safe_run_mtime)]
 
     key_to_history: dict[tuple, list[dict]] = defaultdict(list)
     for run_name, findings in findings_by_run.items():
-        for f in findings:
-            k = dedup_key(f)
+        for i, f in enumerate(findings):
+            k = join.key_for(run_name, i)
             model = f.get("analysed_by") or run_models.get(run_name, "")
             es = f.get("exploitability_score")
             key_to_history[k].append({

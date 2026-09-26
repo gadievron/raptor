@@ -30,6 +30,7 @@ from core.project.anchor_join import (
     load_span_index,
     normalize_scope_name,
 )
+from core.project.correlate import correlate_project
 
 # --- Unit: scope-name normalization ---
 
@@ -760,3 +761,107 @@ class TestDirectionDiscipline(TestCase):
         self.assertEqual(join.uncertain_total, 120)
         self.assertEqual(len(join.uncertain_pairs), 100)
 
+
+# --- Correlate integration: the misclassification the join fixes ---
+
+class TestCorrelateIntegration(TestCase):
+    def _make_project(self, run_specs, checklist=None):
+        import shutil
+        from unittest import mock
+        base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, str(base), ignore_errors=True)
+        if checklist is not None:
+            (base / "checklist.json").write_text(json.dumps(checklist))
+        run_dirs = []
+        for name, command, findings in run_specs:
+            d = base / name
+            d.mkdir()
+            (d / "run-metadata.json").write_text(
+                json.dumps({"command": command, "status": "complete"}))
+            (d / "findings.json").write_text(
+                json.dumps({"findings": findings}))
+            run_dirs.append(d)
+        project = mock.MagicMock()
+        project.name = "test-project"
+        project.output_path = base
+        project.get_run_dirs.return_value = run_dirs
+        return project
+
+    def _two_run_project(self):
+        findings_by_run, _ = _seven_rows()
+        checklist = _checklist({
+            "src/one.php": [("openPipe", "function", 90, 100)],
+            "src/two.php": [("renderDiv", "function", 2067, 2095)],
+            "mod/three.mod": [
+                ("interstitial:20-60", "interstitial", 20, 60)],
+            "src/four.php": [("composeLink", "function", 704, 733)],
+            "ext/five/panel.php": [
+                ("interstitial:23-184", "interstitial", 23, 184)],
+            "ext/six.php": [("fetchAttachment", "function", 20, 40)],
+            "src/seven.php": [("notifyRead", "function", 167, 377)],
+        })
+        return self._make_project([
+            ("validate-001", "validate", findings_by_run["run-prior-1"]),
+            ("validate-002", "validate", findings_by_run["run-new-2"]),
+        ], checklist=checklist)
+
+    def test_rederived_rows_are_not_new(self):
+        """The acceptance arithmetic: of the seven delta rows, only
+        the genuinely-distinct one classifies as NEW."""
+        project = self._two_run_project()
+        result = correlate_project(project)
+        new = result["new_findings"]
+        self.assertEqual(len(new), 1)
+        self.assertEqual(new[0]["file"], "ext/five/panel.php")
+        self.assertEqual(new[0]["line"], 59)
+
+    def test_joined_sites_surface_anchors_and_canonical(self):
+        project = self._two_run_project()
+        result = correlate_project(project)
+        multi = result["join"]["multi_anchor_sites"]
+        self.assertEqual(len(multi), 6)
+        canon = {(s["file"], s["line"]) for s in multi}
+        self.assertEqual(canon, {
+            ("src/one.php", 98), ("src/two.php", 2075),
+            ("mod/three.mod", 34), ("src/four.php", 726),
+            ("ext/six.php", 26), ("src/seven.php", 188),
+        })
+        self.assertEqual(result["summary"]["total_unique_findings"], 8)
+
+    def test_persistent_counts_joined_site_once_per_run(self):
+        project = self._two_run_project()
+        result = correlate_project(project)
+        by_loc = {(p["file"], p["line"]): p
+                  for p in result["persistent_findings"]}
+        row = by_loc[("src/one.php", 98)]
+        self.assertEqual(row["runs_seen"], 2)
+        self.assertEqual(len(row["anchors"]), 2)
+        self.assertIn("span", row["join_via"])
+
+    def test_uncertain_pair_becomes_action(self):
+        findings = {
+            "r1": [_f("m.php", "<module>", 51, "CWE-93")],
+            "r2": [_f("m.php", "__module__", 59, "CWE-93")],
+        }
+        project = self._make_project([
+            ("validate-001", "validate", findings["r1"]),
+            ("validate-002", "validate", findings["r2"]),
+        ])
+        result = correlate_project(project)
+        uncertain_actions = [a for a in result["actions"]
+                             if a["category"] == "join_uncertain"]
+        self.assertEqual(len(uncertain_actions), 1)
+        self.assertEqual(uncertain_actions[0]["detail"]["join"],
+                         "uncertain")
+        self.assertEqual(result["join"]["uncertain_total"], 1)
+
+    def test_join_section_shape_on_empty_project(self):
+        from unittest import mock
+        project = mock.MagicMock()
+        project.get_run_dirs.return_value = []
+        result = correlate_project(project)
+        self.assertEqual(result["join"], {
+            "multi_anchor_sites": [],
+            "uncertain_pairs": [],
+            "uncertain_total": 0,
+        })
