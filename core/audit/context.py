@@ -3614,6 +3614,39 @@ def collect_caller_call_sites(
     return callers
 
 
+def collect_callee_sources(
+    inventory: dict[str, Any] | None,
+    file_path: str,
+    function_name: str,
+    target_path: Path,
+    *,
+    max_callees: int = MAX_PROMPT_CALLEES,
+    max_lines: int = CALLEE_SNIPPET_SPAN_LINES,
+    max_total_lines: int = CALLEE_SNIPPET_TOTAL_LINES,
+    context_map: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Public seam: 1-hop callees with source snippets attached.
+
+    The callee-direction mirror of :func:`collect_caller_call_sites`:
+    combines the callee lookup with source enrichment so other
+    pipelines can reuse the audit-side extractor without reaching
+    into private helpers. Enrichment iterates in security-relevance
+    order (sinks and validators first) under the shared line budget —
+    the same behaviour :func:`assemble_context` gets. Returns
+    ``[{file, name, line_start, source_snippet?}]`` (bounded; external
+    callees render with ``file="(external)"`` and, when a header
+    definition is found, gain a snippet like internal ones).
+    """
+    callees = _find_callees(
+        inventory, file_path, function_name, context_map=context_map,
+    )[:max_callees]
+    if callees:
+        _enrich_callees_with_source(
+            callees, target_path, inventory, max_lines, max_total_lines,
+        )
+    return callees
+
+
 def _find_callers(
     inventory: dict[str, Any] | None,
     file_path: str,
