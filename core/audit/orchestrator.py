@@ -1276,6 +1276,10 @@ def _make_tier_counters() -> dict[str, TierCounters]:
         "struct_field": TierCounters(),
         # Sanitizer-witness chain channel.
         "sanwit": TierCounters(),
+        # PHP gadget-chain oracle channel (confirmed / skipped /
+        # errors / inconclusive, plus the defensive refuted booking
+        # that is unreachable by module contract).
+        "gadget_oracle": TierCounters(),
         # Binary-only gate; registered unconditionally like every
         # tier — the diagnostics renderer suppresses all-zero tiers
         # (format_tier_diagnostics), so source-only runs never print
