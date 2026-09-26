@@ -570,6 +570,12 @@ Examples:
     from core.run.pin import bootstrap_process_pin
     bootstrap_process_pin(out_dir)
 
+    # In-memory SMT seed manifest: set ONLY when THIS run synthesised
+    # witness seeds. The post-campaign crash attribution keys off this
+    # object — never off smt-seeds-manifest.json in the reused run
+    # dir, whose content any other occupant of the dir could have
+    # planted or swapped.
+    smt_seed_manifest: dict | None = None
     if args.from_smt_witness:
         from packages.fuzzing.smt_seed import (
             SEED_DIR_NAME,
@@ -613,6 +619,7 @@ Examples:
             except Exception as e:  # noqa: BLE001 — witness seeds alone still work
                 logger.warning("built-in corpus materialisation failed: %s", e)
         manifest = synthesize_from_run_dir(source_dir, out_dir)
+        smt_seed_manifest = manifest
         print(
             f"SMT witness seeds: {manifest['witnesses']} witnesses -> "
             f"{manifest['seed_count']} seeds, {manifest['dict_entries']} "
@@ -1100,15 +1107,32 @@ Examples:
             # AFL mutation lineage (exact chains only — see
             # crash_attribution). Attribution failure is never fatal:
             # crashes record without a finding_id.
+            #
+            # Provenance comes from the IN-MEMORY manifest this run's
+            # own synthesis returned, and ONLY on a run that
+            # synthesised seeds. smt-seeds-manifest.json in the run
+            # dir is never read back here: on a run that never
+            # synthesised, a previous campaign's target could have
+            # planted a real seed dir + regular manifest naming
+            # predictable corpus seed names — its origin_id would ride
+            # the crash Witness into raptor-verified-outcomes as a
+            # fabricated finding confirmation; and even on a witness
+            # run, this campaign's sandboxed target could swap the
+            # file's content between the pre-campaign write and a
+            # post-campaign read. The disk manifest stays an audit
+            # artifact only.
             attribution = None
             try:
                 from packages.fuzzing.crash_attribution import (
-                    attribute_crashes,
-                    manifest_path_for_run,
+                    attribute_crashes_from_seeds,
                 )
-                smt_manifest = manifest_path_for_run(out_dir)
-                if smt_manifest.is_file():
-                    attribution = attribute_crashes(crashes, smt_manifest)
+                if (
+                    args.from_smt_witness
+                    and smt_seed_manifest is not None
+                    and not smt_seed_manifest.get("seed_dir_refused")
+                ):
+                    attribution = attribute_crashes_from_seeds(
+                        crashes, smt_seed_manifest.get("seeds"))
             except Exception as e:  # noqa: BLE001 — best-effort
                 logger.warning(
                     "SMT crash attribution failed: %s: %s", type(e).__name__, e

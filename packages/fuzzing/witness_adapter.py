@@ -67,7 +67,7 @@ def witness_from_crash(
     the same build before claiming the witness holds.
 
     ``smt_attribution`` is an exact-lineage attribution from
-    ``crash_attribution.attribute_crashes``: the crash's recorded
+    ``crash_attribution.attribute_crashes_from_seeds``: the crash's recorded
     AFL mutation chain roots in an SMT-witness seed. It stamps
     ``finding_id`` into ``outcome_detail``, which the
     ``from_witness`` projection surfaces in
