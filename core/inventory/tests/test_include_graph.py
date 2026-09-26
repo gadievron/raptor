@@ -3,9 +3,12 @@ census, roles-from-evidence, artifact discipline, consumer queries."""
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 from pathlib import Path
+
+import pytest
 
 from core.inventory import include_graph
 from core.inventory.include_graph import (
@@ -835,49 +838,80 @@ class TestConsumerQueries:
 class TestBasisVocabulary:
     """Producer↔consumer basis-vocabulary contract.
 
-    The build writes ``basis`` at literal write sites; the one query
-    every consumer goes through (:func:`include_facts_for_file`)
-    re-validates against ``REF_BASIS_VALUES``. Together these pins
-    make a NEW producer basis fail HERE instead of silently rendering
-    ``""`` (indistinguishable from a forged value) in every consumer:
-    the write-site census forces the new value into the declared
-    vocabulary, and the render pin proves declared values survive the
-    consumer query verbatim.
+    The GUARANTEE is the runtime chokepoint: every producer write
+    routes through ``_set_basis``, which refuses a value outside
+    ``REF_BASIS_VALUES`` loudly at write time — including values
+    reaching it through constants or any other indirection. The one
+    consumer query (:func:`include_facts_for_file`) re-validates
+    against the same vocabulary, so a declared basis renders verbatim
+    and an undeclared one can never be written in the first place.
+
+    The source census below is a SECONDARY tripwire, not the
+    guarantee: it pins that no basis write shape it knows (subscript
+    assignment, dict-display literal, ``update``/``dict`` kwarg)
+    exists outside the setter, catching a refactor that bypasses
+    ``_set_basis`` with a shape the runtime assert never sees.
     """
 
-    _WRITE_SITE_PATTERNS = (
-        # _resolve_to(target, "<basis>", includer, edge)
+    # Direct-write shapes that would bypass the setter.
+    _SUBSCRIPT_WRITE = re.compile(r"\[\s*[\"']basis[\"']\s*\]\s*=[^=]")
+    _DICT_LITERAL_WRITE = re.compile(r"[\"']basis[\"']\s*:\s*[\"']")
+    _KWARG_WRITE = re.compile(
+        r"(?:\.update|\bdict)\(\s*[^)]*\bbasis\s*=")
+    # The sanctioned routes' literal arguments (vocabulary census).
+    _ROUTE_LITERALS = (
         re.compile(r"_resolve_to\(\s*[^,]+,\s*\"([^\"]+)\""),
-        # ref["basis"] = "<basis>"  /  {"basis": "<basis>"}
-        re.compile(r"[\"']basis[\"']\s*\]?\s*[:=]\s*[\"']([^\"']+)[\"']"),
+        re.compile(r"_set_basis\(\s*[^,]+,\s*\"([^\"]+)\""),
     )
 
-    @classmethod
-    def _written_bases(cls, source: str) -> set[str]:
-        found: set[str] = set()
-        for pat in cls._WRITE_SITE_PATTERNS:
-            found.update(pat.findall(source))
-        return found
+    def test_undeclared_basis_fails_loud_at_write_time(self):
+        # The chokepoint refuses any undeclared value — literal or
+        # arriving through constant indirection (the shape a source
+        # census cannot see).
+        _MANIFEST_PIN_BASIS = "manifest_pinned"
+        ref = {"includer": "e.php", "line": 1}
+        with pytest.raises(ValueError, match="undeclared includer-ref"):
+            include_graph._set_basis(ref, _MANIFEST_PIN_BASIS)
+        assert "basis" not in ref
+        for basis in REF_BASIS_VALUES:
+            include_graph._set_basis(ref, basis)
+            assert ref["basis"] == basis
 
-    def test_write_sites_match_declared_vocabulary(self):
-        # Set-EQUALITY, both directions: a write site whose basis is
-        # missing from the declared vocabulary would render "" through
-        # every consumer; a declared value nothing writes is a stale
-        # allowlist entry.
+    def test_setter_is_the_only_basis_write_shape(self):
+        # Census over the real module: the single subscript write
+        # lives inside _set_basis; no dict-display literal or
+        # update/dict kwarg write exists anywhere.
         source = Path(include_graph.__file__).read_text()
-        assert self._written_bases(source) == set(REF_BASIS_VALUES)
+        setter_src = inspect.getsource(include_graph._set_basis)
+        subscript = self._SUBSCRIPT_WRITE.findall(source)
+        assert len(subscript) == 1
+        assert self._SUBSCRIPT_WRITE.search(setter_src)
+        assert not self._DICT_LITERAL_WRITE.search(source)
+        assert not self._KWARG_WRITE.search(source)
 
-    def test_write_site_census_sees_new_bases(self):
-        # Tripwire direction: a hypothetical fourth producer basis, in
-        # each write shape the module uses, is visible to the census —
-        # so a new write site cannot hide from the set-equality pin.
-        double = (
-            "_resolve_to(target, \"walk_guessed\", path, e)\n"
-            "old[1][\"basis\"] = \"sibling_probe\"\n"
-            "ref = {\"basis\": \"manifest_pinned\"}\n"
-        )
-        assert self._written_bases(double) == {
-            "walk_guessed", "sibling_probe", "manifest_pinned"}
+    def test_census_detects_bypass_shapes(self):
+        # Tripwire direction: each direct-write shape planted in a
+        # source double is visible to the census patterns.
+        assert self._SUBSCRIPT_WRITE.search(
+            'ref["basis"] = _MANIFEST_PIN_BASIS\n')
+        assert self._DICT_LITERAL_WRITE.search(
+            'ref = {"basis": "manifest_pinned"}\n')
+        assert self._KWARG_WRITE.search(
+            "ref.update(basis=_MANIFEST_PIN_BASIS)\n")
+        assert self._KWARG_WRITE.search(
+            "ref = dict(basis='manifest_pinned')\n")
+
+    def test_route_literals_match_declared_vocabulary(self):
+        # Vocabulary completeness: every declared value is actually
+        # produced by some sanctioned call site, and no call-site
+        # literal falls outside the declaration (an undeclared one
+        # would also raise at runtime — this keeps the declaration
+        # free of stale entries).
+        source = Path(include_graph.__file__).read_text()
+        found: set[str] = set()
+        for pat in self._ROUTE_LITERALS:
+            found.update(pat.findall(source))
+        assert found == set(REF_BASIS_VALUES)
 
     def test_every_declared_basis_renders_verbatim(self):
         # Producer ⊆ consumer, behaviourally: each declared basis
