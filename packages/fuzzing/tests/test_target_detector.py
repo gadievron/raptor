@@ -670,3 +670,215 @@ class TestCargoFuzzLayout(unittest.TestCase):
                 info = detect(crate)
         self.assertTrue(
             any("cargo fuzz init" in h for h in info.hints), info.hints)
+
+
+class TestJazzerLayout(unittest.TestCase):
+    """Jazzer target enumeration: harness discovery across Maven /
+    Gradle / bare layouts, class-name derivation (charset-vetted,
+    symlink-refusing, bounded), and the java-project hints that carry
+    the result."""
+
+    _HARNESS = (
+        "package com.example.fuzz;\n"
+        "public class ParserFuzz {\n"
+        "    public static void fuzzerTestOneInput(byte[] data) {}\n"
+        "}\n"
+    )
+
+    def _project(self, tmp: str, marker: str | None = "pom.xml",
+                 harness_rel: str = (
+                     "src/test/java/com/example/fuzz/ParserFuzz.java"),
+                 harness_text: str | None = None) -> Path:
+        project = Path(tmp) / "proj"
+        project.mkdir()
+        if marker:
+            (project / marker).write_text("<project/>\n")
+        harness = project / harness_rel
+        harness.parent.mkdir(parents=True, exist_ok=True)
+        harness.write_text(harness_text if harness_text is not None
+                           else self._HARNESS)
+        return project
+
+    def test_maven_layout_enumerates_fqcn(self):
+        from packages.fuzzing.target_detector import list_jazzer_targets
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(tmp)
+            targets = list_jazzer_targets(project)
+        self.assertEqual([t.class_name for t in targets],
+                         ["com.example.fuzz.ParserFuzz"])
+        self.assertTrue(targets[0].source.name == "ParserFuzz.java")
+
+    def test_gradle_layout_and_fuzztest_annotation(self):
+        from packages.fuzzing.target_detector import list_jazzer_targets
+        junit = (
+            "package com.example;\n"
+            "import com.code_intelligence.jazzer.junit.FuzzTest;\n"
+            "class ApiFuzzTest {\n"
+            "    @FuzzTest\n"
+            "    void fuzz(byte[] data) {}\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(
+                tmp, marker="build.gradle.kts",
+                harness_rel="src/test/java/com/example/ApiFuzzTest.java",
+                harness_text=junit)
+            targets = list_jazzer_targets(project)
+        self.assertEqual([t.class_name for t in targets],
+                         ["com.example.ApiFuzzTest"])
+
+    def test_bare_layout_without_package_uses_stem(self):
+        from packages.fuzzing.target_detector import list_jazzer_targets
+        bare = ("public class BareFuzz {\n"
+                "  public static void fuzzerTestOneInput(byte[] d) {}\n"
+                "}\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(tmp, marker=None,
+                                    harness_rel="BareFuzz.java",
+                                    harness_text=bare)
+            targets = list_jazzer_targets(project)
+        self.assertEqual([t.class_name for t in targets], ["BareFuzz"])
+
+    def test_kotlin_package_line_without_semicolon(self):
+        from packages.fuzzing.target_detector import list_jazzer_targets
+        kt = ("package com.example.kfuzz\n"
+              "object KFuzz {\n"
+              "    @JvmStatic fun fuzzerTestOneInput(data: ByteArray) {}\n"
+              "}\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(tmp,
+                                    harness_rel="src/KFuzz.kt",
+                                    harness_text=kt)
+            targets = list_jazzer_targets(project)
+        self.assertEqual([t.class_name for t in targets],
+                         ["com.example.kfuzz.KFuzz"])
+
+    def test_hostile_names_and_symlinks_never_enter_the_list(self):
+        # The tree is scanned-repo content: hostile file stems (shell
+        # metacharacters, spaces), hostile package lines, symlinked
+        # files, and build-output copies never enter the target list.
+        from packages.fuzzing.target_detector import list_jazzer_targets
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(tmp)
+            src = project / "src"
+            (src / "bad name$(x).java").write_text(self._HARNESS)
+            (src / ("X" * 200 + ".java")).write_text(self._HARNESS)
+            (src / "Linked.java").symlink_to(
+                project / "src/test/java/com/example/fuzz/ParserFuzz.java")
+            outside = Path(tmp) / "outside"
+            outside.mkdir()
+            (outside / "Victim.java").write_text(self._HARNESS)
+            (src / "linkdir").symlink_to(outside)
+            (project / "target" / "generated").mkdir(parents=True)
+            (project / "target" / "generated" / "Copy.java").write_text(
+                self._HARNESS)
+            targets = list_jazzer_targets(project)
+        self.assertEqual([t.class_name for t in targets],
+                         ["com.example.fuzz.ParserFuzz"])
+
+    def test_hostile_package_line_falls_back_to_vetted_stem(self):
+        # A package line that fails the identifier charset is treated
+        # as no package (the stem alone still names a real class in
+        # the default package for a copied-in harness) — never spliced
+        # into the class name.
+        from packages.fuzzing.target_detector import list_jazzer_targets
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(
+                tmp, harness_rel="src/StemFuzz.java",
+                harness_text=("package ../../etc;\n"
+                              "class StemFuzz {\n"
+                              "  static void fuzzerTestOneInput() {}\n"
+                              "}\n"))
+            targets = list_jazzer_targets(project)
+        self.assertEqual([t.class_name for t in targets], ["StemFuzz"])
+
+    def test_enumeration_is_bounded(self):
+        from packages.fuzzing import target_detector as td
+        # Fixture scale guard: this test creates bound+5 real files, so
+        # a bound raised past 1024 needs a rewritten fixture, not a
+        # bigger tree.
+        self.assertLessEqual(td._MAX_JAZZER_TARGETS, 1024)
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "proj"
+            src = project / "src"
+            src.mkdir(parents=True)
+            (project / "pom.xml").write_text("<project/>\n")
+            for i in range(td._MAX_JAZZER_TARGETS + 5):
+                (src / f"F{i:04d}.java").write_text(
+                    f"class F{i:04d} {{\n"
+                    "  static void fuzzerTestOneInput(byte[] d) {}\n"
+                    "}\n")
+            targets = td.list_jazzer_targets(project)
+        self.assertEqual(len(targets), td._MAX_JAZZER_TARGETS)
+
+    def test_file_scan_is_bounded(self):
+        # The walk itself is bounded: a planted tree of JVM-extension
+        # files must stop the scan at the file cap, not walk millions
+        # of entries. The cap is patched down so the fixture stays
+        # small; the harness sorts AFTER the decoys and must never be
+        # reached.
+        from packages.fuzzing import target_detector as td
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "proj"
+            src = project / "src"
+            src.mkdir(parents=True)
+            (project / "pom.xml").write_text("<project/>\n")
+            for i in range(20):
+                (src / f"a{i:03d}Decoy.java").write_text("class D {}\n")
+            (src / "zzzFuzz.java").write_text(
+                "class zzzFuzz {\n"
+                "  static void fuzzerTestOneInput(byte[] d) {}\n"
+                "}\n")
+            with patch.object(td, "_MAX_JAZZER_SCAN_FILES", 10):
+                targets = td.list_jazzer_targets(project)
+        self.assertEqual(targets, [])
+
+    def test_java_project_hint_names_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(tmp)
+            with patch("packages.fuzzing.target_detector.shutil.which",
+                       return_value="/x/tool"):
+                info = detect(project)
+        self.assertEqual(info.kind, "java-project")
+        self.assertTrue(info.can_fuzz_here)
+        self.assertEqual(info.recommended_fuzzer, "jazzer")
+        self.assertTrue(any("com.example.fuzz.ParserFuzz" in h
+                            for h in info.hints), info.hints)
+
+    def test_java_project_without_targets_names_the_harness_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "proj"
+            (project / "src").mkdir(parents=True)
+            (project / "pom.xml").write_text("<project/>\n")
+            (project / "src" / "Plain.java").write_text("class Plain {}\n")
+            with patch("packages.fuzzing.target_detector.shutil.which",
+                       return_value="/x/tool"):
+                info = detect(project)
+        self.assertEqual(info.kind, "java-project")
+        self.assertTrue(any("fuzzerTestOneInput" in h for h in info.hints),
+                        info.hints)
+
+    def test_missing_toolchain_blocks_with_install_hints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(tmp)
+            with patch("packages.fuzzing.target_detector.shutil.which",
+                       return_value=None):
+                info = detect(project)
+        self.assertEqual(info.kind, "java-project")
+        self.assertFalse(info.can_fuzz_here)
+        text = " ".join(info.blockers)
+        self.assertIn("jazzer", text)
+        self.assertIn("java", text)
+
+    def test_bare_java_tree_detects_after_c_family(self):
+        # Pure-Java bare tree (no build marker): java-project. A mixed
+        # C+Java tree keeps its pre-existing source-c detection.
+        with tempfile.TemporaryDirectory() as tmp:
+            pure = self._project(tmp, marker=None)
+            with patch("packages.fuzzing.target_detector.shutil.which",
+                       return_value="/x/tool"):
+                info = detect(pure)
+            self.assertEqual(info.kind, "java-project")
+            (pure / "native.c").write_text("int main(void){return 0;}\n")
+            info = detect(pure)
+            self.assertEqual(info.kind, "source-c")

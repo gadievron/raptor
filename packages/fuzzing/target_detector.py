@@ -22,6 +22,7 @@ Supported target kinds:
   - source-cpp     : C++ source files (need harness)
   - rust-crate     : Rust crate (Cargo.toml present)
   - python-pkg     : Python package (setup.py / pyproject.toml)
+  - java-project   : Java/Kotlin project (Maven / Gradle / bare sources)
   - unknown        : Unrecognised
 """
 
@@ -36,7 +37,7 @@ import struct
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +161,11 @@ def _detect_file(path: Path) -> TargetInfo:
             kind="java-class",
             description="Java class file",
             can_fuzz_here=False,
-            hints=["Use /binary or /understand --map for intake; JVM harnessing is not orchestrated yet."],
+            hints=[
+                "Use /binary or /understand --map for intake; compiled "
+                "JVM artifacts are not orchestrated. Point /fuzz at the "
+                "project SOURCE tree to run a Jazzer campaign instead.",
+            ],
         )
 
     if magic[:4] == b"PK\x03\x04":
@@ -192,6 +197,8 @@ def _detect_file(path: Path) -> TargetInfo:
         return _detect_rust_crate(path.parent)
     if path.name in ("pyproject.toml", "setup.py"):
         return _detect_python_pkg(path.parent)
+    if path.name in _JAVA_BUILD_MARKERS:
+        return _detect_java_project(path.parent)
 
     return TargetInfo(
         path=path, kind="unknown",
@@ -256,7 +263,11 @@ def _detect_zip_artifact(path: Path) -> TargetInfo | None:
             kind="java-archive",
             description="Java JAR archive",
             can_fuzz_here=False,
-            hints=["Use /binary or /understand --map for intake; JVM harnessing is not orchestrated yet."],
+            hints=[
+                "Use /binary or /understand --map for intake; compiled "
+                "JVM artifacts are not orchestrated. Point /fuzz at the "
+                "project SOURCE tree to run a Jazzer campaign instead.",
+            ],
         )
     return None
 
@@ -282,6 +293,8 @@ def _detect_directory(path: Path) -> TargetInfo:
         return _detect_rust_crate(path)
     if (path / "pyproject.toml").exists() or (path / "setup.py").exists():
         return _detect_python_pkg(path)
+    if any((path / marker).exists() for marker in _JAVA_BUILD_MARKERS):
+        return _detect_java_project(path)
     if _tree_has_extension(path, _C_FAMILY_EXTS):
         return TargetInfo(
             path=path, kind="source-c",
@@ -292,6 +305,12 @@ def _detect_directory(path: Path) -> TargetInfo:
                 "specific functions in this library.",
             ],
         )
+    # Bare JVM source trees (no build marker) come AFTER the C-family
+    # walk so mixed C+Java trees keep their pre-existing source-c
+    # detection; a pure Java/Kotlin tree previously detected `unknown`,
+    # so this branch is purely additive.
+    if _tree_has_extension(path, _JVM_SOURCE_EXTS):
+        return _detect_java_project(path)
     return TargetInfo(
         path=path, kind="unknown",
         description="Directory with no recognised project marker",
@@ -698,4 +717,184 @@ def _detect_python_pkg(pkg_dir: Path) -> TargetInfo:
         "harness, or --py-entry module:function to scaffold the simple "
         "bytes/str case."
     )
+    return info
+
+
+# jazzer (JVM) layout detection ----------------------------------------
+
+# Build-system markers that make a directory a java-project. The
+# repo's own mvnw/gradlew wrapper scripts are NOT markers and are
+# never executed — they are target code.
+_JAVA_BUILD_MARKERS = (
+    "pom.xml",
+    "build.gradle", "build.gradle.kts",
+    "settings.gradle", "settings.gradle.kts",
+)
+_JVM_SOURCE_EXTS = frozenset({".java", ".kt"})
+
+# Target class names double as a jazzer --target_class argument and a
+# resource-path component on the run side; the enumeration vets them
+# to the Java identifier charset so a scanned repo's file names and
+# package lines stay inert in hints, arguments, and paths.
+_JAZZER_IDENT = r"[A-Za-z_$][A-Za-z0-9_$]{0,127}"
+_JAZZER_TARGET_CLASS_RE = re.compile(
+    rf"{_JAZZER_IDENT}(?:\.{_JAZZER_IDENT}){{0,31}}"
+)
+# `package com.example;` (Java) / `package com.example` (Kotlin) —
+# matched per line, every repeat bounded.
+_JAVA_PACKAGE_RE = re.compile(
+    rf"^\s{{0,64}}package\s{{1,64}}({_JAZZER_IDENT}"
+    rf"(?:\.{_JAZZER_IDENT}){{0,31}})\s{{0,64}};?\s{{0,64}}$"
+)
+# Enumeration bounds — the source tree is scanned-repo content, so a
+# planted tree with millions of entries must not balloon hints, plan
+# output, or the scan itself. Real projects carry a handful of
+# harnesses; the file-scan bound keeps the walk linear in tree size
+# with an early exit.
+_MAX_JAZZER_TARGETS = 256
+_MAX_JAZZER_SCAN_FILES = 20000
+# Bounded read per candidate source file (the harness marker sits in
+# the class body; real fuzz harnesses are small files).
+_MAX_JAZZER_SOURCE_BYTES = 256 * 1024
+# Package declarations sit at the top of the file.
+_MAX_PACKAGE_SCAN_LINES = 100
+# Directories never walked for harness enumeration: VCS state and
+# build outputs (compiled trees can carry copies of the sources).
+_JAZZER_SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn", ".gradle", ".idea", ".mvn",
+    "target", "build", "out", "node_modules",
+})
+
+
+class JazzerTarget(NamedTuple):
+    """One enumerated Jazzer fuzz target."""
+
+    #: Fully-qualified class name (charset-vetted), the value handed
+    #: to jazzer as --target_class.
+    class_name: str
+    #: The source file that declares it — resolved, inside the
+    #: project; binds witnesses and locates the corpus convention.
+    source: Path
+
+
+def _jazzer_package_of(text: str) -> str:
+    """The `package` declaration in *text*, or empty. Only the top of
+    the file is scanned; every line is length-bounded before match."""
+    for raw in text.splitlines()[:_MAX_PACKAGE_SCAN_LINES]:
+        match = _JAVA_PACKAGE_RE.match(raw[:512])
+        if match:
+            return match.group(1)
+    return ""
+
+
+def list_jazzer_targets(project_dir: Path) -> list[JazzerTarget]:
+    """Enumerate Jazzer fuzz targets under *project_dir*.
+
+    A target is a Java/Kotlin source file that carries a
+    ``fuzzerTestOneInput`` method (jazzer's standalone entry point) or
+    a ``@FuzzTest`` annotation (its JUnit integration). The
+    fully-qualified class name is derived from the file's ``package``
+    declaration plus the file stem — both charset-vetted, because the
+    names become command arguments and path components downstream.
+
+    Containment and bounds: the tree is the scanned repo's own
+    content. The walk starts from the RESOLVED project directory and
+    never follows directory symlinks (a repo-planted symlink must not
+    steer the enumeration — or the build write grants derived from
+    the same tree downstream — at an arbitrary host path); symlinked
+    files are skipped; per-file reads, the file-scan count, and the
+    target count are all bounded. Sorted by class name, first source
+    wins on a duplicate class name.
+    """
+    try:
+        base = Path(project_dir).resolve()
+    except OSError:
+        return []
+    if not base.is_dir():
+        return []
+    found: dict[str, Path] = {}
+    scanned = 0
+    for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in _JAZZER_SKIP_DIRS and not d.startswith(".")
+        )
+        for name in sorted(filenames):
+            if scanned >= _MAX_JAZZER_SCAN_FILES \
+                    or len(found) >= _MAX_JAZZER_TARGETS:
+                return _sorted_jazzer_targets(found)
+            if os.path.splitext(name)[1].lower() not in _JVM_SOURCE_EXTS:
+                continue
+            scanned += 1
+            entry = Path(dirpath) / name
+            try:
+                if entry.is_symlink() or not entry.is_file():
+                    continue
+                with entry.open("rb") as fh:
+                    text = fh.read(_MAX_JAZZER_SOURCE_BYTES).decode(
+                        "utf-8", errors="replace")
+            except OSError:
+                continue
+            if "fuzzerTestOneInput" not in text and "@FuzzTest" not in text:
+                continue
+            stem = entry.stem
+            if not re.fullmatch(_JAZZER_IDENT, stem):
+                continue
+            package = _jazzer_package_of(text)
+            class_name = f"{package}.{stem}" if package else stem
+            if not _JAZZER_TARGET_CLASS_RE.fullmatch(class_name):
+                continue
+            found.setdefault(class_name, entry)
+    return _sorted_jazzer_targets(found)
+
+
+def _sorted_jazzer_targets(found: dict[str, Path]) -> list[JazzerTarget]:
+    return [JazzerTarget(class_name=name, source=source)
+            for name, source in sorted(found.items())]
+
+
+def _detect_java_project(project_dir: Path) -> TargetInfo:
+    has_jazzer = shutil.which("jazzer") is not None
+    has_java = shutil.which("java") is not None
+    can_fuzz = has_jazzer and has_java
+    if (project_dir / "pom.xml").exists():
+        layout = "Maven"
+    elif any((project_dir / marker).exists()
+             for marker in _JAVA_BUILD_MARKERS[1:]):
+        layout = "Gradle"
+    else:
+        layout = "bare-source"
+    info = TargetInfo(
+        path=project_dir,
+        kind="java-project",
+        description=f"Java/Kotlin project ({layout} layout)",
+        can_fuzz_here=can_fuzz,
+        recommended_fuzzer="jazzer" if can_fuzz else None,
+    )
+    if not has_jazzer:
+        info.blockers.append(
+            "jazzer not installed. Download the standalone release from "
+            "https://github.com/CodeIntelligenceTesting/jazzer/releases "
+            "and put the `jazzer` binary on PATH."
+        )
+    if not has_java:
+        info.blockers.append(
+            "java not installed. Install a JRE/JDK (e.g. OpenJDK) and "
+            "put `java` on PATH."
+        )
+    targets = list_jazzer_targets(project_dir)
+    if targets:
+        names = [t.class_name for t in targets]
+        shown = ", ".join(names[:8]) + (", ..." if len(names) > 8 else "")
+        info.hints.append(
+            f"Jazzer fuzz target(s) detected ({len(names)}): {shown}. "
+            "Select one with --fuzz-target <class>; a single target is "
+            "auto-selected."
+        )
+    else:
+        info.hints.append(
+            "No Jazzer fuzz targets found. Write a class with `public "
+            "static void fuzzerTestOneInput(byte[] data)` (or a "
+            "@FuzzTest JUnit method) in the source tree, then re-run."
+        )
     return info
