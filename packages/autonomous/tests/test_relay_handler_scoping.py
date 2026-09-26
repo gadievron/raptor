@@ -240,6 +240,16 @@ class RelayHandlerLiveTests(unittest.TestCase):
         # its ambient project through this test's override.
         from core.run.pin import get_process_project, set_process_project
         self.addCleanup(set_process_project, get_process_project())
+        # Same state class: apply_to_config (binary_oracle_cli) ALWAYS
+        # assigns the class-level RaptorConfig.BINARY_ORACLE_* slots
+        # when main() reaches the oracle wiring (the --binary lanes) —
+        # snapshot/restore them too, or every later test on this
+        # worker sees this test's fake binary as a declared oracle.
+        from core.config import RaptorConfig
+        for _name in ("BINARY_ORACLE_PATHS", "BINARY_ORACLE_NO_SUPPRESS",
+                      "BINARY_ORACLE_DECLARED", "BINARY_ORACLE_EDGES"):
+            self.addCleanup(
+                setattr, RaptorConfig, _name, getattr(RaptorConfig, _name))
 
     def tearDown(self):
         for obj, name, original in reversed(self._patched):

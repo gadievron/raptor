@@ -237,9 +237,11 @@ def test_mark_unreachable_preserves_project_symlink(tmp_path, monkeypatch):
         _mark_unreachable_low_priority,
     )
 
-    project_dir = tmp_path / "project"
-    project_dir.mkdir()
-    project_checklist = project_dir / "checklist.json"
+    # Real lifecycle shape (core/run/metadata.py): the run dir lives
+    # INSIDE the project dir, and the slot holds the one-level link
+    # ../checklist.json — the only symlink shape the checklist
+    # containment set admits.
+    project_checklist = tmp_path / "checklist.json"
     project_checklist.write_text(json.dumps({
         "files": [{"path": "src/a.py",
                    "items": [{"name": "dead", "kind": "function"}]}],
@@ -248,7 +250,7 @@ def test_mark_unreachable_preserves_project_symlink(tmp_path, monkeypatch):
     out_dir = tmp_path / "agentic-out"
     out_dir.mkdir()
     link = out_dir / "checklist.json"
-    link.symlink_to(project_checklist)
+    link.symlink_to("../checklist.json")
 
     def fake_mark(checklist, target, *, inventory=None,
                   allow_unreachable=False):
