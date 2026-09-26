@@ -4720,6 +4720,17 @@ def run_study(
     _stamp_related_strategies(model)
     model.save(out_path)
 
+    # Token-enforcement projection (mechanical, best-effort): when the
+    # study learned the target's token check idiom and an entry-point
+    # source is co-located, write token-map.json beside the model.
+    try:
+        from .token_map import project_token_map_for_run
+        tm_path = project_token_map_for_run(model, output_dir, source_root)
+        if tm_path is not None and on_progress:
+            on_progress("token_map", f"Token-enforcement map: {tm_path.name}")
+    except Exception:
+        logger.debug("token-map projection hook failed", exc_info=True)
+
     if struct_annots:
         annots_path = output_dir / "struct-annotations.json"
         save_json(annots_path, struct_annots)
