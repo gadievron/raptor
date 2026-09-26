@@ -1,13 +1,16 @@
-"""Dark-outcome routing into the /validate post-pass.
+"""Dark-outcome routing at the /validate post-pass.
 
-Dark findings ("tool-blind, needs concrete verification") are exported
-with ``needs_validation: true`` — the tier built for the /validate
-post-pass. These tests pin that the post-pass selection actually
-consumes them: budget-gated behind finding-status rows, priority-
-ordered by review confidence, and — when the cap or a skipped dispatch
-leaves rows behind — honestly recorded in ``validate-postpass.json``
-so the report's completeness block states the remainder with the exact
-follow-up command.
+Dark findings ("tool-blind, needs concrete verification") are NOT
+validate-eligible: the post-pass selection excludes them by the same
+eligibility predicate the /validate import chokepoint applies
+(``core.schema_constants.is_dark_row``), whose default routes dark
+rows to the witness backlog — ``--include-dark`` is the operator's
+explicit opt-in. These tests pin that policy end to end: the default
+selection excludes dark rows, the suggested follow-up command carries
+no ``--include-dark`` (the record's advisory names the flag instead),
+and every dark row is honestly recorded in ``validate-postpass.json``
+with its witness-backlog routing so the report's completeness block
+states the remainder.
 """
 
 from __future__ import annotations
@@ -51,18 +54,15 @@ def _emitted(out_dir: Path):
     return json.loads((out_dir / "findings.json").read_text())["findings"]
 
 
-def _selection(out_dir: Path):
-    return json.loads(
-        (out_dir / "validate-selection.json").read_text()
-    )["findings"]
-
-
 def _postpass_record(out_dir: Path):
     return json.loads((out_dir / "validate-postpass.json").read_text())
 
 
-class TestDarkSelection:
-    def test_dark_rows_join_the_selection(self, tmp_path, monkeypatch):
+class TestDarkExclusion:
+    def test_dark_rows_are_not_selected(self, tmp_path, monkeypatch):
+        # Dark is not validate-eligible: the dispatch consumes the
+        # finding-status rows only, and every dark row is recorded as
+        # awaiting with its witness-backlog routing.
         calls = []
         _stub_dispatch(monkeypatch, calls)
         result = _result(
@@ -74,26 +74,21 @@ class TestDarkSelection:
                           out_dir=tmp_path)
 
         assert len(calls) == 1
-        assert calls[0]["findings_count"] == 2
-        assert calls[0]["dark_count"] == 1
-        # The dispatch consumes the combined selection file.
-        assert calls[0]["findings_path"] == (
-            tmp_path / "validate-selection.json"
-        )
+        assert calls[0]["findings_count"] == 1
+        assert calls[0]["findings_path"] == tmp_path / "findings.json"
+        # No combined selection file — dark rows never ride a dispatch.
+        assert not (tmp_path / "validate-selection.json").exists()
 
-        selection = _selection(tmp_path)
-        assert len(selection) == 2
-        dark = [f for f in selection if f.get("audit_status") == "dark"]
-        assert len(dark) == 1
-        assert dark[0]["file"] == "b.c"
-        assert dark[0]["needs_validation"] is True
-        # /validate container contract: status stays "pending".
-        assert dark[0]["status"] == "pending"
+        record = _postpass_record(tmp_path)
+        assert record["dark_total"] == 1
+        assert record["dark_selected"] == 0
+        assert record["dark_awaiting"] == 1
+        assert record["dark_routing"] == "witness_backlog"
 
     def test_findings_json_contract_keeps_dark_out(self, tmp_path,
                                                    monkeypatch):
         # /project merged views read findings.json with no status
-        # filter — dark rows ride the separate selection file only.
+        # filter — dark rows must never render as ordinary findings.
         _stub_dispatch(monkeypatch, [])
         result = _result(
             _outcome(status="finding"),
@@ -115,12 +110,13 @@ class TestDarkSelection:
         emitted = _emitted(tmp_path)
         assert "audit_status" not in emitted[0]
         assert "needs_validation" not in emitted[0]
-        # No dark selection — no selection file.
         assert not (tmp_path / "validate-selection.json").exists()
 
-    def test_dark_only_run_still_dispatches(self, tmp_path, monkeypatch):
-        # Previously a run with zero finding-status outcomes returned
-        # early — every dark row dead-ended unadjudicated.
+    def test_dark_only_run_skips_dispatch_with_reason(self, tmp_path,
+                                                      monkeypatch):
+        # Nothing validate-eligible: no dispatch (no validation budget
+        # spent on tool-blind rows), but the remainder is recorded so
+        # the report states it with the follow-up command.
         calls = []
         _stub_dispatch(monkeypatch, calls)
         result = _result(
@@ -129,13 +125,14 @@ class TestDarkSelection:
         )
         validate_findings(result, target_path=Path("/target"),
                           out_dir=tmp_path)
-        assert len(calls) == 1
-        assert calls[0]["findings_count"] == 2
-        assert calls[0]["dark_count"] == 2
-        assert len(_selection(tmp_path)) == 2
-        # Dark-only runs write no findings.json — the /project views'
-        # finding-status contract stays intact.
+        assert calls == []
         assert not (tmp_path / "findings.json").exists()
+        record = _postpass_record(tmp_path)
+        assert record["ran"] is False
+        assert "witness-backlog" in record["skipped_reason"]
+        assert record["dark_total"] == 2
+        assert record["dark_awaiting"] == 2
+        assert record["dark_routing"] == "witness_backlog"
 
     def test_no_outcomes_returns_early(self, tmp_path, monkeypatch):
         calls = []
@@ -147,57 +144,33 @@ class TestDarkSelection:
         assert not (tmp_path / "findings.json").exists()
 
 
-class TestDarkCapPolicy:
-    def test_findings_fill_the_cap_first(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(validate_mod, "_MAX_VALIDATE_FINDINGS", 2)
-        calls = []
-        _stub_dispatch(monkeypatch, calls)
-        result = _result(
-            _outcome(file="f1.c", status="finding"),
-            _outcome(file="f2.c", status="finding"),
-            _outcome(file="d1.c", status="dark"),
-        )
-        validate_findings(result, target_path=Path("/target"),
-                          out_dir=tmp_path)
-        # Cap exhausted by findings — no dark row selected.
-        assert calls[0]["dark_count"] == 0
-        record = _postpass_record(tmp_path)
-        assert record["dark_total"] == 1
-        assert record["dark_selected"] == 0
-        assert record["dark_awaiting"] == 1
+class TestDispatchSelectionChokepoint:
+    """The copy into the validate dir applies the SHARED eligibility
+    predicate (core.schema_constants.is_dark_row) — whatever file
+    shape carried a dark row here, it never reaches the dispatch."""
 
-    def test_dark_fills_remaining_slots(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(validate_mod, "_MAX_VALIDATE_FINDINGS", 3)
-        calls = []
-        _stub_dispatch(monkeypatch, calls)
-        result = _result(
-            _outcome(file="f1.c", status="finding"),
-            _outcome(file="d1.c", status="dark"),
-            _outcome(file="d2.c", status="dark"),
-            _outcome(file="d3.c", status="dark"),
-        )
-        validate_findings(result, target_path=Path("/target"),
-                          out_dir=tmp_path)
-        assert calls[0]["findings_count"] == 3
-        assert calls[0]["dark_count"] == 2
-        record = _postpass_record(tmp_path)
-        assert record["dark_selected"] == 2
-        assert record["dark_awaiting"] == 1
+    def _copy(self, tmp_path, findings):
+        src = tmp_path / "src.json"
+        dest = tmp_path / "dest.json"
+        src.write_text(json.dumps({"findings": findings}))
+        validate_mod._copy_findings_for_validate(src, dest)
+        return json.loads(dest.read_text())["findings"]
 
-    def test_dark_priority_ordered_by_confidence(self, tmp_path,
-                                                 monkeypatch):
-        monkeypatch.setattr(validate_mod, "_MAX_VALIDATE_FINDINGS", 1)
-        _stub_dispatch(monkeypatch, [])
-        result = _result(
-            _outcome(file="low.c", status="dark",
-                     review_result={"confidence": "low"}),
-            _outcome(file="high.c", status="dark",
-                     review_result={"confidence": "high"}),
-        )
-        validate_findings(result, target_path=Path("/target"),
-                          out_dir=tmp_path)
-        selection = _selection(tmp_path)
-        assert [f["file"] for f in selection] == ["high.c"]
+    def test_all_three_dark_shapes_are_excluded(self, tmp_path):
+        kept = self._copy(tmp_path, [
+            {"id": "F1", "status": "pending"},
+            {"id": "D1", "status": "dark"},
+            {"id": "D2", "status": "pending", "audit_status": "dark"},
+            {"id": "D3", "status": "pending", "source_status": "dark"},
+        ])
+        assert [f["id"] for f in kept] == ["F1"]
+
+    def test_clean_selection_passes_through(self, tmp_path):
+        kept = self._copy(tmp_path, [
+            {"id": "F1", "status": "pending"},
+            {"id": "F2", "status": "pending"},
+        ])
+        assert [f["id"] for f in kept] == ["F1", "F2"]
 
 
 class TestPostpassRecord:
@@ -217,23 +190,14 @@ class TestPostpassRecord:
         assert record["dark_total"] == 2
         assert record["dark_awaiting"] == 2
 
-    def test_prompt_states_dark_count(self, tmp_path):
-        from core.audit.validate import _build_audit_validate_prompt
-        prompt = _build_audit_validate_prompt(
-            tmp_path, tmp_path, tmp_path, tmp_path / "sel.json", 5,
-            dark_count=3,
-        )
-        assert '3 of the findings carry audit_status "dark"' in prompt
-        # The selection deliberately carries dark rows — the child is
-        # told to opt in if it stages them via a --findings import
-        # (which otherwise routes dark rows to the witness backlog).
-        assert "--include-dark" in prompt
-
-    def test_prompt_omits_dark_block_when_none(self, tmp_path):
+    def test_prompt_carries_no_dark_optin(self, tmp_path):
+        # The selection never carries dark rows, so the child must not
+        # be instructed to opt them into candidacy.
         from core.audit.validate import _build_audit_validate_prompt
         prompt = _build_audit_validate_prompt(
             tmp_path, tmp_path, tmp_path, tmp_path / "sel.json", 5,
         )
+        assert "--include-dark" not in prompt
         assert "audit_status" not in prompt
 
     def test_followup_command_shape(self, tmp_path, monkeypatch):
@@ -242,13 +206,26 @@ class TestPostpassRecord:
         validate_findings(result, target_path=Path("/target"),
                           out_dir=tmp_path)
         record = _postpass_record(tmp_path)
-        # --include-dark rides the follow-up: the import chokepoint
-        # routes dark rows to the witness backlog by default, and this
-        # command exists to adjudicate exactly those rows.
+        # NO --include-dark on the suggested command: the import
+        # chokepoint's witness-backlog default IS the standing design.
+        # The advisory note names the flag for discoverability.
         assert record["followup_command"] == (
             f"/validate /target --findings "
-            f"{tmp_path / 'findings-graded.json'} --include-dark"
+            f"{tmp_path / 'findings-graded.json'}"
         )
+        assert "--include-dark" not in record["followup_command"]
+        assert record["dark_routing"] == "witness_backlog"
+        assert "witness backlog" in record["dark_note"]
+        assert "--include-dark" in record["dark_note"]
+
+    def test_no_dark_rows_no_routing_keys(self, tmp_path, monkeypatch):
+        _stub_dispatch(monkeypatch, [])
+        result = _result(_outcome(status="finding"))
+        validate_findings(result, target_path=Path("/target"),
+                          out_dir=tmp_path)
+        record = _postpass_record(tmp_path)
+        assert "dark_routing" not in record
+        assert "dark_note" not in record
 
 
 class TestReportCompleteness:
@@ -300,10 +277,15 @@ class TestReportCompleteness:
         assert completeness["dark_awaiting"] == 4
         assert completeness["dark_followup"] == (
             f"/validate /target --findings "
-            f"{tmp_path / 'findings-graded.json'} --include-dark"
+            f"{tmp_path / 'findings-graded.json'}"
         )
+        # The advisory rides beside the command: routing stated, the
+        # opt-in flag named — never embedded in the suggested command.
+        assert "--include-dark" in completeness["dark_followup_note"]
         lines = "\n".join(_completeness_lines(report))
         assert "4 dark finding(s) awaiting validation" in lines
+        assert "witness backlog" in lines
+        assert "--include-dark" in lines
 
     def test_zero_awaiting_sets_nothing(self, tmp_path):
         from core.audit.report import generate_report
@@ -368,7 +350,7 @@ class TestReportCompleteness:
         report = generate_report(tmp_path, target_path=Path("/target"))
         assert report["completeness"]["dark_followup"] == (
             f"/validate /target --findings "
-            f"{tmp_path / 'findings-graded.json'} --include-dark"
+            f"{tmp_path / 'findings-graded.json'}"
         )
 
     def test_followup_target_from_run_metadata(self, tmp_path):
@@ -384,7 +366,7 @@ class TestReportCompleteness:
         report = generate_report(tmp_path)
         assert report["completeness"]["dark_followup"] == (
             f"/validate /home/op/targets/proj --findings "
-            f"{tmp_path / 'findings-graded.json'} --include-dark"
+            f"{tmp_path / 'findings-graded.json'}"
         )
 
     def test_no_dark_rows_no_completeness_keys(self, tmp_path):

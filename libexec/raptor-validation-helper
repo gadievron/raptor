@@ -45,6 +45,7 @@ from core.schema_constants import (  # noqa: E402
     CWE_TO_VULN_TYPE,
     MEMORY_CORRUPTION_TYPES,
     VULN_TYPES,
+    is_dark_row as _is_dark_row,
     normalise_vuln_type,
 )
 from packages.exploitability_validation.schemas import (  # noqa: E402
@@ -468,21 +469,10 @@ def _coerce_findings_container(
     return None, None
 
 
-def _is_dark_row(finding: dict) -> bool:
-    """True when a finding row carries the audit "dark" grade — no
-    mechanical tool had a channel to adjudicate it.
-
-    Three shapes, one meaning: findings-graded.json rows carry
-    ``status="dark"``; the audit post-pass selection rows carry
-    ``audit_status="dark"`` (their ``status`` is the /validate entry
-    state); a re-import of an already-mapped container carries the
-    original grade as ``source_status="dark"``.
-    """
-    return "dark" in (
-        finding.get("audit_status"),
-        finding.get("status"),
-        finding.get("source_status"),
-    )
+# Dark-eligibility predicate: shared with the /audit post-pass
+# selection — ONE definition (core.schema_constants.is_dark_row,
+# imported above as _is_dark_row) so the import chokepoint and the
+# post-pass cannot drift on what counts as a dark row.
 
 
 #: Sites listed per witness-backlog cluster. Counts stay exact — the

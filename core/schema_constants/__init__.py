@@ -274,6 +274,29 @@ VALIDATE_RULING_VALUES = ["confirmed", "ruled_out", "exploitable"]
 # Confidence levels for LLM self-assessment.
 CONFIDENCE_LEVELS = ["high", "medium", "low"]
 
+def is_dark_row(finding: dict) -> bool:
+    """True when a finding row carries the audit "dark" grade — no
+    mechanical tool had a channel to adjudicate it.
+
+    Three shapes, one meaning: findings-graded.json rows carry
+    ``status="dark"``; audit-emitted selection rows carry
+    ``audit_status="dark"`` (their ``status`` is the /validate entry
+    state); a re-import of an already-mapped container carries the
+    original grade as ``source_status="dark"``.
+
+    THE dark-eligibility predicate: dark rows are not validate-eligible
+    by default (the /validate import chokepoint routes them to the
+    witness backlog; ``--include-dark`` is the explicit operator
+    opt-in), and the /audit post-pass selection excludes them by the
+    same test. One definition so the two readers cannot drift.
+    """
+    return "dark" in (
+        finding.get("audit_status"),
+        finding.get("status"),
+        finding.get("source_status"),
+    )
+
+
 # False-positive reason categories — why a finding was ruled out.
 FP_REASONS = [
     "sanitized_input", "dead_code", "test_only",

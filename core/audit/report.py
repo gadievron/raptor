@@ -1289,16 +1289,21 @@ def _annotate_dark_awaiting(
     # target (the main report path — libexec/raptor-audit's finalise —
     # does not pass target_path), and the findings path is fixed.
     target = str(target_path) if target_path else _run_meta_target(out_dir)
-    # --include-dark: the validate import routes dark rows to the
-    # witness backlog by default — this follow-up exists precisely to
-    # adjudicate them, so it carries the explicit opt-in.
+    # NO --include-dark on the suggested command: the validate import
+    # routes dark rows to the witness backlog by default and that
+    # default is the standing design — the flag is the operator's
+    # explicit opt-in, named in the advisory note below so it stays
+    # discoverable without being bulk-suggested.
     followup = (
         f"/validate {target or '<target>'} "
-        f"--findings {out_dir / 'findings-graded.json'} "
-        f"--include-dark"
+        f"--findings {out_dir / 'findings-graded.json'}"
     )
     completeness["dark_awaiting"] = awaiting
     completeness["dark_followup"] = followup
+    # Locally-built advisory (never read from the child-writable
+    # record): states the routing and names the opt-in flag.
+    from core.audit.validate import DARK_ROUTING_NOTE
+    completeness["dark_followup_note"] = DARK_ROUTING_NOTE
 
 
 def _annotate_validate_postpass(
@@ -1333,14 +1338,13 @@ def _annotate_validate_postpass(
     # writable file and renders as an operator-facing exact re-run
     # line, and the local derivation is what the writer used anyway.
     target = str(target_path) if target_path else _run_meta_target(out_dir)
-    # --include-dark: the skipped post-pass would have carried its
-    # selected dark rows into candidacy; the equivalent re-run must
-    # opt in the same way (the import chokepoint otherwise routes
-    # them to the witness backlog).
+    # NO --include-dark: the post-pass selection carries finding-status
+    # rows only (dark is not validate-eligible), so the equivalent
+    # re-run is the plain import — dark rows route to the witness
+    # backlog by default, as the dark follow-up's advisory states.
     followup = (
         f"/validate {target or '<target>'} "
-        f"--findings {out_dir / 'findings-graded.json'} "
-        f"--include-dark"
+        f"--findings {out_dir / 'findings-graded.json'}"
     )
     completeness["validate_postpass_followup"] = followup
 
@@ -1644,6 +1648,9 @@ def _completeness_lines(report: dict[str, Any]) -> list[str]:
         followup = completeness.get("dark_followup")
         if followup:
             lines.append(f"  Follow up: {_line(followup, max_chars=400)}")
+        note = completeness.get("dark_followup_note")
+        if note:
+            lines.append(f"  ({_line(note, max_chars=300)})")
     # A skipped /validate post-pass means NO emitted finding was
     # validated — stated with the recorded reason and the exact
     # re-run command, never left to the on-disk record alone.

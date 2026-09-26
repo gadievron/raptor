@@ -5,6 +5,14 @@ suspicious items) are emitted as findings.json and /validate is
 dispatched automatically to filter false positives via the full
 Stage A-F pipeline.
 
+Dark outcomes ("tool-blind, needs concrete verification") are NOT
+validate-eligible by default — the same policy as the /validate import
+chokepoint (``core.schema_constants.is_dark_row``), whose default
+routes dark rows to the witness backlog and reserves ``--include-dark``
+as the explicit operator opt-in. The post-pass records the dark
+remainder in ``validate-postpass.json`` (count, routing, follow-up
+command) instead of bulk-opting tool-blind rows into paid validation.
+
 Controlled by OrchestratorConfig.validate (default False).
 """
 
@@ -25,10 +33,14 @@ from core.orchestration.skill_dispatch import (
     run_skill_dispatch,
     truncate_findings_by_signal,
 )
-from core.schema_constants import CWE_TO_VULN_TYPE, normalise_vuln_type
+from core.schema_constants import (
+    CWE_TO_VULN_TYPE,
+    is_dark_row,
+    normalise_vuln_type,
+)
 
 from .record import _resolve_annotations_dir, append_audit_log
-from .tree_class import NON_PRODUCTION_TREE_CLASSES, classify_tree_class
+from .tree_class import classify_tree_class
 
 if TYPE_CHECKING:
     from .orchestrator import OrchestratorResult, ReviewOutcome
@@ -57,26 +69,6 @@ class ValidatePostpassResult:
     child_exit: str | None = None
 
 
-# Review-confidence rank for dark-outcome selection ordering: dark
-# rows carry no exploitability signal (no tool ever confirmed them),
-# so the LLM review's own confidence is the only priority available.
-_DARK_CONFIDENCE_RANK = {"high": 0, "medium": 1, "low": 2}
-
-
-def _dark_priority(outcome: Any) -> tuple[int, int]:
-    """Dark-slot ordering: review confidence first, then tree class —
-    production rows win a tied confidence over vendored-compat /
-    test-harness rows (preference only; non-production rows still
-    fill remaining slots)."""
-    review_result = getattr(outcome, "review_result", None) or {}
-    conf = str(review_result.get("confidence", "")).lower()
-    tree_class = classify_tree_class(str(getattr(outcome, "file", "") or ""))
-    return (
-        _DARK_CONFIDENCE_RANK.get(conf, 3),
-        1 if tree_class in NON_PRODUCTION_TREE_CLASSES else 0,
-    )
-
-
 def validate_findings(
     result: OrchestratorResult,
     *,
@@ -92,13 +84,15 @@ def validate_findings(
     cheap wide net; /validate is the expensive filter that kills
     false promotions by tracing reachability.
 
-    Dark outcomes ("tool-blind, needs concrete verification") ride the
-    same selection: finding-status rows fill the cap first (they are
-    signal-sorted at copy time), dark rows take the remaining slots
-    ordered by review confidence. Dark rows that do not fit — or that
-    never dispatch because the post-pass is skipped — are recorded in
-    ``validate-postpass.json`` so the report's completeness block can
-    state exactly how many are awaiting validation and how to run it.
+    Dark outcomes ("tool-blind, needs concrete verification") are NOT
+    selected: dark is not validate-eligible by default — the same
+    eligibility test the /validate import chokepoint applies
+    (``is_dark_row``), whose default routes dark rows to the witness
+    backlog for standalone adjudication. Every dark row is recorded in
+    ``validate-postpass.json`` (count, witness-backlog routing, the
+    exact follow-up command) so the report's completeness block can
+    state how many await adjudication; ``--include-dark`` on the
+    follow-up import is the operator's explicit opt-in.
     """
     findings_outcomes = [
         (i, o) for i, o in enumerate(result.outcomes)
@@ -112,64 +106,54 @@ def validate_findings(
         logger.info("validate_findings: no findings to emit")
         return result
 
-    dark_slots = max(0, _MAX_VALIDATE_FINDINGS - len(findings_outcomes))
-    ordered_dark = sorted(dark_outcomes, key=lambda io: _dark_priority(io[1]))
-    selected_dark = ordered_dark[:dark_slots]
-    dark_deferred = len(dark_outcomes) - len(selected_dark)
-
-    selected = findings_outcomes + selected_dark
+    dark_total = len(dark_outcomes)
 
     logger.info(
-        "validate_findings: emitting %d finding(s) + %d dark for "
-        "/validate (%d dark deferred by cap)",
-        len(findings_outcomes), len(selected_dark), dark_deferred,
+        "validate_findings: emitting %d finding(s) for /validate "
+        "(%d dark row(s) not validate-eligible — witness backlog)",
+        len(findings_outcomes), dark_total,
     )
 
     # findings.json keeps its established contract — finding-status
     # rows only (the /project merged views read it with no status
     # filter, so dark rows there would render as ordinary findings).
-    # When dark rows are selected, the post-pass dispatches on a
-    # separate validate-selection.json carrying findings + dark.
     path = None
     if findings_outcomes:
         path = _emit_findings_json(findings_outcomes, out_dir, target_path)
-    if selected_dark:
-        path = _emit_findings_json(
-            selected, out_dir, target_path,
-            filename="validate-selection.json",
-        )
 
     append_audit_log(out_dir, {
         "action": "findings_emitted",
-        "count": len(selected),
-        "dark_selected": len(selected_dark),
-        "dark_deferred": dark_deferred,
+        "count": len(findings_outcomes),
+        "dark_selected": 0,
+        "dark_deferred": dark_total,
         # Empty selection emits no file — record that as "", not the
         # string "None".
         "path": str(path) if path is not None else "",
     })
 
     if path is None:
-        # Degenerate cap (nothing selectable) — no dispatch, but the
-        # remainder is still recorded so the report states it.
+        # Dark-only run: nothing is validate-eligible — no dispatch,
+        # but the dark remainder is still recorded so the report
+        # states it with the follow-up command.
         postpass = ValidatePostpassResult(
-            ran=False, skipped_reason="empty selection (cap exhausted)",
+            ran=False,
+            skipped_reason=("no validate-eligible findings (dark rows "
+                            "await witness-backlog adjudication)"),
         )
     else:
         postpass = _dispatch_validate(
             target_path=target_path,
             audit_out_dir=out_dir,
             findings_path=path,
-            findings_count=len(selected),
-            dark_count=len(selected_dark),
+            findings_count=len(findings_outcomes),
         )
 
     append_audit_log(out_dir, {
         "action": "validate_postpass",
         "ran": postpass.ran,
         "selected_count": postpass.selected_count,
-        "dark_selected": len(selected_dark),
-        "dark_deferred": dark_deferred,
+        "dark_selected": 0,
+        "dark_deferred": dark_total,
         "validate_dir": postpass.validate_dir,
         "skipped_reason": postpass.skipped_reason,
         "duration_s": postpass.duration_s,
@@ -180,9 +164,7 @@ def validate_findings(
         target_path=target_path,
         postpass=postpass,
         findings_selected=len(findings_outcomes),
-        dark_total=len(dark_outcomes),
-        dark_selected=len(selected_dark),
-        dark_deferred=dark_deferred,
+        dark_total=dark_total,
     )
 
     if postpass.ran and postpass.validate_dir:
@@ -204,22 +186,33 @@ def validate_findings(
 
 
 def _followup_command(target_path: Path, out_dir: Path) -> str:
-    """The exact operator command that adjudicates deferred dark rows.
+    """The exact operator follow-up for the run's graded findings.
 
     ``/validate`` accepts ``--findings <file>`` imports (see
     ``.claude/commands/validate.md``; ``libexec/raptor-validation-helper``
-    stage 0 parses the flag), and findings-graded.json carries every
-    dark row with ``needs_validation: true``. ``--include-dark`` is
-    required: the import chokepoint routes dark rows to the witness
-    backlog by default, and THIS command's whole purpose is the
-    explicit opt-in — running it IS the operator's decision to spend
-    validation budget on tool-blind rows.
+    stage 0 parses the flag). The command deliberately carries NO
+    ``--include-dark``: the import chokepoint routes dark rows to the
+    witness backlog by default and that default IS the standing
+    design — bulk-piping tool-blind rows into paid validation defeats
+    the backlog's standalone adjudication role. The record's
+    ``dark_note`` names the flag so the explicit opt-in stays
+    discoverable.
     """
     return (
         f"/validate {target_path} "
-        f"--findings {Path(out_dir) / 'findings-graded.json'} "
-        f"--include-dark"
+        f"--findings {Path(out_dir) / 'findings-graded.json'}"
     )
+
+
+#: Advisory that rides the post-pass record (and the report's
+#: completeness block) whenever dark rows exist: states the default
+#: routing and names the explicit opt-in flag for discoverability.
+DARK_ROUTING_NOTE = (
+    "dark rows are not validate-eligible by default — the follow-up "
+    "import routes them to the witness backlog (witness-backlog.json) "
+    "for standalone adjudication; pass --include-dark to spend "
+    "validation budget on them explicitly"
+)
 
 
 #: Bytes read from the end of the tail artifact before escaping.
@@ -318,19 +311,16 @@ def _write_postpass_record(
     postpass: ValidatePostpassResult,
     findings_selected: int,
     dark_total: int,
-    dark_selected: int,
-    dark_deferred: int,
 ) -> None:
     """Persist the post-pass selection record (validate-postpass.json).
 
-    The report's completeness block reads this to state honestly how
-    many dark findings never reached the post-pass — cap-deferred rows
-    when the dispatch ran, ALL dark rows when it did not — together
-    with the exact follow-up command. Best-effort: a write failure
+    The report's completeness block reads this to state honestly that
+    NO dark finding entered the post-pass (dark is not
+    validate-eligible), where those rows route (the witness backlog),
+    and the exact follow-up command. Best-effort: a write failure
     must not break the audit pipeline (the report then conservatively
     treats every dark row as awaiting).
     """
-    dark_awaiting = dark_total if not postpass.ran else dark_deferred
     record: dict[str, object] = {
         "ran": postpass.ran,
         "skipped_reason": postpass.skipped_reason,
@@ -341,10 +331,16 @@ def _write_postpass_record(
         "validate_dir": postpass.validate_dir,
         "findings_selected": findings_selected,
         "dark_total": dark_total,
-        "dark_selected": dark_selected,
-        "dark_awaiting": dark_awaiting,
+        "dark_selected": 0,
+        "dark_awaiting": dark_total,
         "followup_command": _followup_command(target_path, out_dir),
     }
+    if dark_total:
+        # State the routing IN the record: dark rows go to the witness
+        # backlog, never silently dropped — and the opt-in flag stays
+        # discoverable without riding the suggested command.
+        record["dark_routing"] = "witness_backlog"
+        record["dark_note"] = DARK_ROUTING_NOTE
     if not postpass.ran and postpass.validate_dir:
         # A failed dispatch usually leaves the child's narrative
         # beside the pass (dispatch-child-tail.log); an excerpt in the
@@ -367,7 +363,6 @@ def _dispatch_validate(
     audit_out_dir: Path,
     findings_path: Path,
     findings_count: int,
-    dark_count: int = 0,
 ) -> ValidatePostpassResult:
     """Launch /validate as a Claude Code subprocess.
 
@@ -382,7 +377,6 @@ def _dispatch_validate(
             audit_out_dir=audit_out_dir,
             findings_path=findings_path,
             findings_count=findings_count,
-            dark_count=dark_count,
         )
     except Exception as e:
         logger.exception("validate post-pass crashed unexpectedly")
@@ -398,7 +392,6 @@ def _dispatch_validate_unsafe(
     audit_out_dir: Path,
     findings_path: Path,
     findings_count: int,
-    dark_count: int = 0,
 ) -> ValidatePostpassResult:
     target_path = Path(target_path).resolve()
     audit_out_dir = Path(audit_out_dir).resolve()
@@ -432,7 +425,6 @@ def _dispatch_validate_unsafe(
         return _build_audit_validate_prompt(
             target_path, audit_out_dir, validate_dir,
             validate_dir / "selected-findings.json", findings_count,
-            dark_count=dark_count,
         )
 
     # cc-trust gate: refuse to dispatch a Claude Code child against a
@@ -521,6 +513,21 @@ def _copy_findings_for_validate(
     if container is None:
         return
     entries = container.get("findings", [])
+    if isinstance(entries, list):
+        # Dark-eligibility chokepoint (shared predicate — the same
+        # test the /validate import applies): dark rows are not
+        # validate-eligible, whatever file shape carried them here
+        # (a legacy selection file, a hand-edited findings.json).
+        kept = [e for e in entries
+                if not (isinstance(e, dict) and is_dark_row(e))]
+        if len(kept) != len(entries):
+            logger.info(
+                "validate post-pass: %d dark row(s) excluded from the "
+                "dispatch selection (not validate-eligible — witness "
+                "backlog)", len(entries) - len(kept),
+            )
+            entries = kept
+            container["findings"] = entries
     if isinstance(entries, list) and len(entries) > _MAX_VALIDATE_FINDINGS:
         if all(isinstance(e, dict) for e in entries):
             entries = truncate_findings_by_signal(
@@ -541,8 +548,6 @@ def _build_audit_validate_prompt(
     validate_dir: Path,
     selection_file: Path,
     findings_count: int,
-    *,
-    dark_count: int = 0,
 ) -> str:
     from core.security.log_sanitisation import escape_nonprintable
     safe_target = escape_nonprintable(str(target))
@@ -551,28 +556,11 @@ def _build_audit_validate_prompt(
     safe_selection = escape_nonprintable(str(selection_file))
     safe_raptor = escape_nonprintable(str(_RAPTOR_DIR))
     threat_model = _threat_model_prompt_block(target)
-    dark_block = ""
-    if dark_count:
-        # The selection deliberately carries these dark rows (they won
-        # cap slots at selection time) — if the child stages them via
-        # a `--findings` import it must opt in with --include-dark,
-        # because the import chokepoint otherwise routes dark rows to
-        # the witness backlog by default.
-        dark_block = f"""
-{dark_count} of the findings carry audit_status "dark": the audit's
-mechanical tools had NO channel to confirm or refute them (tool-blind
-class). Treat them as unverified hypotheses — they need concrete
-reachability and impact verification from first principles, not tool
-corroboration. If you import the selection file with
-`raptor-validation-helper 0 --findings ...`, pass `--include-dark` —
-these dark rows were deliberately selected for validation and must not
-be routed to the witness backlog.
-"""
     return f"""You are running the /validate post-pass for the /audit security
 review. The audit loop has finished and produced {findings_count} findings
 (including sweep-promoted suspicious items confirmed by mechanical tools).
 Your job is to run the full validation pipeline to filter false positives.
-{dark_block}
+
 Target repository:    {safe_target}
 Audit out_dir:        {safe_audit}
 Selection file:       {safe_selection}
