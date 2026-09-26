@@ -1433,12 +1433,49 @@ class TestOrphanContainment:
         self._run_sweep(monkeypatch, shim)
         assert not calls.exists()
 
+    def test_hostile_digit_labels_skip_without_crashing(
+        self, tmp_path, monkeypatch,
+    ):
+        # Two executed sibling shapes, one gate: "²".isdigit() is
+        # True but int("²") raises ValueError, and an uncapped
+        # 300-digit run passes any ASCII-only vet, mints a bignum,
+        # and blows os.kill() up with OverflowError — either hostile
+        # image-inherited label crashed the sweep and escaped
+        # through _probe_docker into runtime resolution. The
+        # ASCII-anchored, length-capped gate skips every shape on
+        # both fields: the sweep completes, nothing hostile is
+        # reaped, nothing raises.
+        dead = self._dead_pid()
+        big = "9" * 300
+        containers = {
+            "a" * 64: self._labels("²", "123456"),   # pid = ²
+            "b" * 64: self._labels(dead, "²"),       # start = ²
+            "d" * 64: self._labels(big, "123456"),   # pid 300 digits
+            "e" * 64: self._labels(dead, big),       # start 300 digits
+            # accepting direction alongside: a genuine dead owner in
+            # the same pass is still reaped.
+            "c" * 64: self._labels(dead, "123456"),
+        }
+        shim, calls = self._sweep_shim(tmp_path, containers)
+        self._run_sweep(monkeypatch, shim)  # must not raise
+        got = calls.read_text() if calls.exists() else ""
+        for skipped in ("a", "b", "d", "e"):
+            assert skipped * 64 not in got
+        assert f"rm -f {'c' * 64}" in got
+
+    def test_pid_exists_belt_absorbs_a_bignum(self):
+        # Defense-in-depth independent of the vet-site length cap: a
+        # future unvetted caller gets skip-not-crash semantics — a
+        # pid too large for a C int cannot name a real process.
+        assert sanwit_execute._pid_exists(10**30) is False
+
     def test_sweep_budget_bounds_the_stall(self, tmp_path, monkeypatch):
         # Two directions: with the budget floored the sweep stops
         # before processing ANY row (a wedged daemon cannot stall
-        # the witness past the budget + one in-flight call); the
-        # default budget processes the same row (the reap tests
-        # above are the accepting direction at scale).
+        # the witness past the budget + one full per-row processing
+        # — up to three per-call timeouts); the default budget
+        # processes the same row (the reap tests above are the
+        # accepting direction at scale).
         containers = {"a" * 64: self._labels(self._dead_pid(), "123456")}
         shim, calls = self._sweep_shim(tmp_path, containers)
         monkeypatch.setattr(sanwit_execute, "_SWEEP_BUDGET_S", -1)
