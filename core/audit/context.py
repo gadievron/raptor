@@ -53,6 +53,97 @@ FAIL_OPEN_LEADS_PROMPT_CAP = 5
 # set lives in include-graph.json.
 MAX_INCLUDERS_RENDERED = 10
 
+# ── Caller call-site window limits ──────────────────────────────────
+# These four bound the "1-hop callers with call-site snippets" slice
+# that BOTH the audit review prompt and /agentic's per-finding
+# classifier consume (the classifier reaches it through
+# collect_caller_call_sites — see
+# packages.llm_analysis.flow_context_inject). Each value was
+# previously a bare literal at its use site; a change here changes
+# what every consumer's LLM sees, in both directions:
+
+# Lines of context before AND after a matched call line in the
+# attached call_site snippet — so a snippet is exactly
+# 2 * CALL_SITE_CONTEXT_LINES + 1 lines high, and downstream
+# consumers that bound snippet height (the /agentic caller channel
+# in packages.llm_analysis.flow_context_inject) DERIVE their cap
+# from this constant rather than duplicating it. Too small (0): only
+# the call line itself — an argument built on the line above
+# (`len = strlen(src);` then `copy(dst, src, len)`) is invisible, so
+# the reviewer cannot see whether the caller validated what it
+# passes. Too large: the snippet cost multiplies by the number of
+# enriched callers, and the call-site block's job is to show HOW the
+# function is invoked — a wide window turns it into an unreviewed
+# second function body that competes with the reviewed source for
+# attention.
+CALL_SITE_CONTEXT_LINES: int = 1
+
+# How many lines below the caller's start line to search for the
+# call expression. The inventory gives us the caller's START line
+# only — not its end — so this span stands in for "the caller's
+# body". Too small: a call site deep in a long caller silently gets
+# no call_site attached (the reviewer sees the caller's name but not
+# the invocation). Too large: past the real end of the caller the
+# scan runs into the NEXT function's body, and a same-named call
+# there gets attributed to the wrong caller — a misleading snippet
+# is worse than none.
+CALLER_CALL_SEARCH_SPAN_LINES: int = 80
+
+# At most this many callers get call-site enrichment / are returned
+# by collect_caller_call_sites by default / are rendered in the
+# "Callers (1-hop)" prompt section (one constant for all three on
+# purpose: a lower render cap would waste the snippets enriched past
+# it, a higher one would render bare un-enriched rows). Too small: a
+# widely-used function's trust surface is judged from an
+# unrepresentative sample of its callers. Too large: each caller
+# costs a file read plus a rendered snippet, and past a handful the
+# marginal caller repeats the same calling convention — the token
+# spend buys repetition.
+MAX_CALL_SITE_CALLERS: int = 10
+
+# At most this many callees rendered in the "Callees (1-hop)" prompt
+# section. The callee SNIPPET volume is separately bounded by the
+# two line budgets below; this bounds the row count. Too small: the
+# reviewer cannot see what the function delegates to — exactly the
+# calls whose contracts decide use-after-free / unchecked-return
+# hypotheses. Too large: a dispatcher calling dozens of handlers
+# floods the prompt with rows whose marginal value is near zero.
+MAX_PROMPT_CALLEES: int = 10
+
+# Per-callee body span (lines) attached as the callee's
+# source_snippet — the callee-side sibling of
+# SOURCE_SPAN_FALLBACK_LINES (same fallback pattern when the
+# checklist carries no line_end, and also the clamp when it does).
+# Too small: the snippet cuts off before the free / return / guard
+# that decides the callee's contract, so the reviewer judges the
+# delegation on the callee's opening lines. Too large: one long
+# callee eats the whole shared budget below, starving every other
+# callee of a body.
+CALLEE_SNIPPET_SPAN_LINES: int = 20
+
+# Total line budget across ALL callee snippets for one reviewed
+# function (iterated in security-relevance order — sinks and
+# validators first — so the budget goes to the callees most likely
+# to decide the verdict). Too small: only the first callee or two
+# get bodies and later security-relevant callees render as bare
+# names. Too large: a function with many callees floods the prompt
+# with unreviewed peer bodies that compete with the reviewed source
+# for attention, at token cost paid on every review of that
+# function.
+CALLEE_SNIPPET_TOTAL_LINES: int = 150
+
+# Default source span (lines) for the reviewed function when the
+# inventory carries no line_end. Audit-side sibling of the
+# classifier's window (core.llm.context_window.FINDING_CONTEXT_LINES
+# — same value, DIFFERENT meaning: this is "assume the function body
+# is at most N lines", not "N lines of context around the finding";
+# keep them separate). Too small: long functions get reviewed on a
+# truncated body — verdicts rendered without the later half where
+# the bug or its guard may live. Too large: for the common short
+# function the span spills into the file's NEXT functions, which the
+# reviewer may misattribute to the one under review.
+SOURCE_SPAN_FALLBACK_LINES: int = 50
+
 
 def _safe_path(target_path: Path, file_path: str) -> Path | None:
     """Join target_path / file_path with traversal guard.
@@ -1189,7 +1280,7 @@ def format_context_for_prompt(
         caller_contract_digest and caller_contract_digest.get("sites")
     ):
         cp = ["\n### Callers (1-hop)"]
-        for c in ctx["callers"][:10]:
+        for c in ctx["callers"][:MAX_CALL_SITE_CALLERS]:
             line = _defend_line(c.get('line_start', '?'))
             ident = _defend_identifier(
                 f"{c.get('file', '?')}:{c.get('name', '?')}",
@@ -1202,7 +1293,7 @@ def format_context_for_prompt(
 
     if ctx.get("callees"):
         cp = ["\n### Callees (1-hop)"]
-        for c in ctx["callees"][:10]:
+        for c in ctx["callees"][:MAX_PROMPT_CALLEES]:
             line = _defend_line(c.get('line_start', '?'))
             ident = _defend_identifier(
                 f"{c.get('file', '?')}:{c.get('name', '?')}",
@@ -2915,7 +3006,8 @@ def _read_source(
     lines = split_lines(text)  # \n model: line ranges come from inventory/SARIF
 
     start = max(0, line_start - 1)
-    end = line_end if line_end is not None else min(start + 50, len(lines))
+    end = (line_end if line_end is not None
+           else min(start + SOURCE_SPAN_FALLBACK_LINES, len(lines)))
     return "\n".join(
         f"{i + 1:4d}  {line}"
         for i, line in enumerate(lines[start:end], start=start)
@@ -3092,7 +3184,7 @@ def _enrich_callers_with_call_sites(
     callers: list[dict[str, Any]],
     target_path: Path,
     function_name: str,
-    context_lines: int = 1,
+    context_lines: int = CALL_SITE_CONTEXT_LINES,
 ) -> None:
     """Add call_site snippets to caller dicts.
 
@@ -3104,7 +3196,7 @@ def _enrich_callers_with_call_sites(
     call_pat = re.compile(
         rf'\b{re.escape(function_name)}\s*\(', re.IGNORECASE,
     )
-    for caller in callers[:10]:
+    for caller in callers[:MAX_CALL_SITE_CALLERS]:
         caller_file = caller.get("file", "")
         if not caller_file:
             continue
@@ -3118,7 +3210,11 @@ def _enrich_callers_with_call_sites(
 
         caller_line = caller.get("line_start", 0)
         search_start = max(0, caller_line - 1) if caller_line else 0
-        search_end = min(len(lines), (caller_line + 80) if caller_line else len(lines))
+        search_end = min(
+            len(lines),
+            (caller_line + CALLER_CALL_SEARCH_SPAN_LINES)
+            if caller_line else len(lines),
+        )
 
         for i in range(search_start, search_end):
             if call_pat.search(lines[i]):
@@ -3370,8 +3466,8 @@ def _enrich_callees_with_source(
     callees: list[dict[str, Any]],
     target_path: Path,
     checklist: dict[str, Any] | None,
-    max_lines: int = 20,
-    max_total_lines: int = 150,
+    max_lines: int = CALLEE_SNIPPET_SPAN_LINES,
+    max_total_lines: int = CALLEE_SNIPPET_TOTAL_LINES,
 ) -> None:
     """Add source snippets to callee dicts.
 
@@ -3456,8 +3552,8 @@ def collect_caller_call_sites(
     function_name: str,
     target_path: Path,
     *,
-    max_callers: int = 10,
-    context_lines: int = 1,
+    max_callers: int = MAX_CALL_SITE_CALLERS,
+    context_lines: int = CALL_SITE_CONTEXT_LINES,
     context_map: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Public seam: 1-hop callers with call-site snippets attached.
