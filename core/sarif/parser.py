@@ -62,12 +62,66 @@ def _coerce_line(value: Any) -> int | None:
     return None
 
 
+# Per-step ``properties`` sanitisation bounds. SARIF threadFlow
+# location properties are producer-supplied (the cross-file taint
+# engine serializes per-hop tier/kind/tags there) but arrive from an
+# UNTRUSTED file, so the carry is allowlisted-by-type and bounded.
+# Raising the caps admits more attacker-shaped bytes into every
+# downstream consumer of dataflow_path (prompts, reports); lowering
+# them truncates legitimate producer vocabulary (tag lists, sanitizer
+# name lists) and consumers lose tier evidence.
+_STEP_PROPS_MAX_KEYS = 16
+_STEP_PROPS_MAX_STRING = 256
+_STEP_PROPS_MAX_LIST = 16
+
+
+def _sanitize_step_properties(props: Any) -> dict[str, Any]:
+    """Bounded, display-inert copy of a threadFlow location's
+    ``properties`` bag.
+
+    Keeps only value shapes the step contract uses — strings
+    (escaped + capped), bools, ints, and lists of strings (each
+    escaped + capped, list capped) — under capped, escaped string
+    keys. Everything else is dropped: an unexpected nested object or
+    float in an untrusted SARIF earns no ride into ``dataflow_path``.
+    Returns ``{}`` (caller omits the key) for non-dict input.
+    """
+    if not isinstance(props, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in props.items():
+        if len(out) >= _STEP_PROPS_MAX_KEYS:
+            break
+        if not isinstance(key, str):
+            continue
+        safe_key = escape_nonprintable(key)[:_STEP_PROPS_MAX_STRING]
+        if isinstance(value, bool):
+            out[safe_key] = value
+        elif isinstance(value, int):
+            out[safe_key] = value
+        elif isinstance(value, str):
+            out[safe_key] = escape_nonprintable(
+                value)[:_STEP_PROPS_MAX_STRING]
+        elif isinstance(value, list):
+            out[safe_key] = [
+                escape_nonprintable(item)[:_STEP_PROPS_MAX_STRING]
+                for item in value[:_STEP_PROPS_MAX_LIST]
+                if isinstance(item, str)
+            ]
+    return out
+
+
 def _path_from_locations(
     locations: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     """Build a {source, sink, steps, total_steps} dict from one
     SARIF threadFlow's locations array. Returns None if there are
-    fewer than 2 locations (no source-to-sink path)."""
+    fewer than 2 locations (no source-to-sink path).
+
+    Each step carries a sanitized copy of the threadFlow location's
+    ``properties`` bag when one is present (the cross-file taint
+    engine's per-hop tier/kind/tags surface); locations without
+    properties produce the exact pre-existing step shape."""
     if len(locations) < 2:
         return None
     path: dict[str, Any] = {
@@ -101,6 +155,9 @@ def _path_from_locations(
             "label": message,
             "snippet": snippet,
         }
+        step_props = _sanitize_step_properties(loc_wrapper.get("properties"))
+        if step_props:
+            step_info["properties"] = step_props
         if idx == 0:
             path["source"] = step_info
         elif idx == len(locations) - 1:
