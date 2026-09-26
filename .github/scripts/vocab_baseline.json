@@ -585,6 +585,16 @@
     "count": 19,
     "kind": "literal"
   },
+  "core/audit/forecast.py::forecast_audit_cost": {
+    "count": 12,
+    "kind": "literal",
+    "note": "forecast result-document field names (an artifact schema forecast.json persists and the report embeds), not a learned name vocabulary"
+  },
+  "core/audit/forecast.py::predicted": {
+    "count": 11,
+    "kind": "literal",
+    "note": "calibration-entry projection of the forecast result-document schema (which predicted fields each forecast-calibration.jsonl record carries), not a learned name vocabulary"
+  },
   "core/audit/goconc.py::_GO_BUILTIN_TYPES": {
     "count": 21,
     "kind": "literal",
