@@ -1014,12 +1014,7 @@ class TestPhase2Gates:
         BOOKS a conclusion — this phase runs after the last full rails
         poll, so nothing downstream would re-book it."""
         import core.audit.security_classifier as sc_mod
-        import core.llm.client as llm_client_mod
 
-        monkeypatch.setattr(
-            llm_client_mod, "LLMClient",
-            lambda *a, **kw: SimpleNamespace(),
-        )
         seen: dict[str, Any] = {}
 
         def fake_classify(outcomes, out_dir, client, *, model_name=None,
@@ -1033,6 +1028,12 @@ class TestPhase2Gates:
         guard = _StubGuard()
         guard.concluded = True
         config = _run_config(tmp_path, guard)
+        # Stub client on the budget seam (as the budget-client test
+        # below does): patching core.llm.client.LLMClient no longer
+        # intercepts construction — it goes through the transcript
+        # seam, whose module body subclasses whatever LLMClient is
+        # bound to at first import.
+        config.llm_budget_client = SimpleNamespace()
         result = OrchestratorResult()
         _orch._run_phase2(result, config)
 

@@ -339,15 +339,18 @@ class TestStudyRunUsesLowPriorityThrottle:
             lambda *a, **kw: studied.append(1),
         )
 
-        import core.llm.client as _client_mod
-        monkeypatch.setattr(
-            _client_mod, "LLMClient",
-            lambda *a, **kw: types.SimpleNamespace(total_cost=0.0),
-        )
-
         throttle = _RecordingThrottle()
+        # Stub client via the documented test seam (llm_budget_client
+        # short-circuits _run_llm_client): patching
+        # core.llm.client.LLMClient no longer intercepts construction
+        # — it goes through the transcript seam, whose module body
+        # subclasses whatever LLMClient is bound to at first import.
         config = OrchestratorConfig(
             target_path=tmp_path, out_dir=tmp_path,
+            llm_budget_client=types.SimpleNamespace(
+                total_cost=0.0,
+                is_budget_exhausted=lambda: False,
+            ),
         )
         _run_loop(config, _queue_with_batches(2), throttle=throttle)
 

@@ -55,10 +55,9 @@ def _queue_with_batches(n_items: int) -> StudyQueue:
 
 
 def _wire(monkeypatch, tmp_path, run_study):
-    """Fake prep + client; install *run_study* as the phase."""
+    """Fake prep; install *run_study* as the phase."""
     import core.audit.orchestrator as _orch
     import core.concepts.study as _study_mod
-    import core.llm.client as _client_mod
 
     def fake_prep(cmd, **kwargs):
         (tmp_path / "study-list.json").write_text("[]")
@@ -66,10 +65,6 @@ def _wire(monkeypatch, tmp_path, run_study):
 
     monkeypatch.setattr(_orch, "_run_study_prep", fake_prep)
     monkeypatch.setattr(_study_mod, "run_study", run_study)
-    monkeypatch.setattr(
-        _client_mod, "LLMClient",
-        lambda *a, **kw: types.SimpleNamespace(total_cost=0.0),
-    )
     # Growing domain model on every reload: the starvation guard must
     # not stop the loop before the breaker under test does.
     concepts = {"n": 0}
@@ -99,7 +94,18 @@ def _run_loop(config, queue):
 
 
 def _config(tmp_path):
-    return OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+    # The stub rides the documented test seam (llm_budget_client short-
+    # circuits _run_llm_client): patching core.llm.client.LLMClient no
+    # longer intercepts construction — it goes through the transcript
+    # seam, whose module body subclasses whatever LLMClient is bound to
+    # at first import.
+    return OrchestratorConfig(
+        target_path=tmp_path, out_dir=tmp_path,
+        llm_budget_client=types.SimpleNamespace(
+            total_cost=0.0,
+            is_budget_exhausted=lambda: False,
+        ),
+    )
 
 
 class TestConsecutiveInvocationFailures:

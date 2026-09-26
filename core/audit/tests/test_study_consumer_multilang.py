@@ -535,12 +535,14 @@ def _stub_prep(monkeypatch, out_dir, calls=None):
 
 
 def _stub_llm(monkeypatch):
-    import core.llm.client as _client_mod
+    # Stub at the orchestrator's construction chokepoint: patching
+    # core.llm.client.LLMClient no longer intercepts — construction
+    # goes through the transcript seam, whose module body subclasses
+    # whatever LLMClient is bound to at first import.
+    import core.audit.orchestrator as _orch
 
-    monkeypatch.setattr(
-        _client_mod, "LLMClient",
-        lambda *a, **kw: types.SimpleNamespace(total_cost=0.0),
-    )
+    stub = types.SimpleNamespace(total_cost=0.0)
+    monkeypatch.setattr(_orch, "_run_llm_client", lambda config: stub)
 
 
 def _stub_run_study(monkeypatch, out_dir, concepts, *, tier="mechanical"):
