@@ -230,7 +230,13 @@ def format_text(report: DescribeReport) -> str:
     # rest of the block describes the extracted tree (not a
     # mystery binary blob).
     if report.archive_label:
-        lines.append(f"  Source: archive {report.archive_label}")
+        # Archive basename is attacker-influenceable (a downloaded
+        # tarball ships whatever name its publisher chose) — escape
+        # before it lands on the operator's terminal.
+        lines.append(
+            "  Source: archive "
+            f"{sanitise_for_terminal(report.archive_label, max_len=120)}"
+        )
 
     # Languages — "C++ (95%, 47k LOC), Python (5%, 2k LOC)".
     # File-share % alone over-represents languages with many
@@ -363,7 +369,11 @@ def format_text(report: DescribeReport) -> str:
         else:
             parts = []
             if s.git.branch:
-                parts.append(s.git.branch)
+                # Branch names are target-controlled. git's ref-format
+                # rules block C0 controls, but bidi overrides (U+202E
+                # etc.) are legal in ref names — and a handcrafted
+                # hostile .git needn't play by the rules at all.
+                parts.append(sanitise_for_terminal(s.git.branch, max_len=64))
             parts.append(f"@ {s.git.commit_short}")
             tail = []
             if s.git.dirty is True:
@@ -480,9 +490,15 @@ def format_text(report: DescribeReport) -> str:
     analysis_target = report.archive_path or s.target_path
     lines.append("")
     lines.append("For host-level setup, run `raptor doctor`.")
+    # The target path is target-derived, not just operator-typed: an
+    # archive's single top-level dir (which /describe descends into)
+    # is named by the archive author, so raw ESC/bidi could land on
+    # the operator's terminal here. Same escape the license section
+    # applies above.
     lines.append(
         f"To start analysis, run `raptor.py agentic --repo "
-        f"{analysis_target}` (runs sandboxed)."
+        f"{sanitise_for_terminal(str(analysis_target), max_len=256)}` "
+        f"(runs sandboxed)."
     )
 
     return "\n".join(lines)
