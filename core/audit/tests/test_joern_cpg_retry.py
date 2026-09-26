@@ -743,3 +743,70 @@ class TestImportFailureHonesty:
         record = load_cpg_build_status(out)
         assert record["reason"] is None
         assert record["cpg_bytes"] == 1
+
+
+class TestImportReasonRendering:
+    """Commit-6 surface: the recorded import reason must reach the
+    report renderer with the ceiling that bound and the tuning key
+    that moves it — while a record WITHOUT the additive fields
+    (pre-change run) keeps the original 'failed to import' wording
+    (pinned by TestReportSurfacing.test_import_failure_named_in_report)."""
+
+    def test_import_timeout_names_wall_and_remedy(self, tmp_path):
+        from core.json import save_json
+        save_json(tmp_path / JOERN_CPG_STATUS_FILENAME, {
+            "target": "/t", "failed": True, "retried": False,
+            "phase": "import", "reason": "import_timeout",
+            "import_timeout_s": 10800,
+            "cpg_bytes": 68_719_476_736,
+            "first_heap_mb": 65536, "first_timeout_s": 7200,
+        })
+        from core.audit.report import generate_report
+        report = generate_report(tmp_path)
+        assert "Joern channel lost" in report["summary"]
+        assert "client-side import wall" in report["summary"]
+        assert "timed out at 10800s" in report["summary"]
+        assert "68719476736 bytes" in report["summary"]
+        assert "joern_import_timeout_s" in report["summary"]
+
+    def test_import_connection_lost_named(self, tmp_path):
+        from core.json import save_json
+        save_json(tmp_path / JOERN_CPG_STATUS_FILENAME, {
+            "target": "/t", "failed": True, "retried": False,
+            "phase": "import", "reason": "import_connection_lost",
+            "first_heap_mb": None, "first_timeout_s": 300,
+        })
+        from core.audit.report import generate_report
+        report = generate_report(tmp_path)
+        assert "server connection was lost during import" in (
+            report["summary"]
+        )
+
+    def test_import_phase_remedy_points_at_import_key(self, tmp_path):
+        # Even a sparse import-phase record (no reason field) gets the
+        # import remedy — the build heap/wall keys cannot move an
+        # import-phase ceiling.
+        from core.json import save_json
+        save_json(tmp_path / JOERN_CPG_STATUS_FILENAME, {
+            "target": "/t", "failed": True, "retried": False,
+            "phase": "import",
+            "first_heap_mb": None, "first_timeout_s": 300,
+        })
+        from core.audit.report import generate_report
+        report = generate_report(tmp_path)
+        assert "failed to import" in report["summary"]
+        assert "joern_import_timeout_s" in report["summary"]
+        assert "joern_heap_ceiling_mb" not in report["summary"]
+
+    def test_build_phase_remedy_unchanged(self, tmp_path):
+        from core.json import save_json
+        save_json(tmp_path / JOERN_CPG_STATUS_FILENAME, {
+            "target": "/t", "failed": True, "retried": False,
+            "reason": "build_failed",
+            "first_heap_mb": 16384, "first_timeout_s": 300,
+        })
+        from core.audit.report import generate_report
+        report = generate_report(tmp_path)
+        assert "The CPG build failed" in report["summary"]
+        assert "joern_heap_ceiling_mb" in report["summary"]
+        assert "joern_import_timeout_s" not in report["summary"]

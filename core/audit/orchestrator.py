@@ -1537,6 +1537,28 @@ def _gap_sloc(gap: dict[str, Any]) -> int:
     )
 
 
+def _compose_joern_wall_s(cpg_timeout_s: int, query_timeout_s: int) -> int:
+    """Compose the Joern idle-stall / post-loop wall from BOTH halves.
+
+    The query half is the DERIVED pre-sweep maximum (import slope
+    included), not the bare query timeout: the pre-sweep re-queue loop
+    raises its window up to that ceiling, and the serverless path runs
+    importCpg + query under one wall — a single legitimate kernel-scale
+    window can sit silent (no progress callbacks) for the whole of it.
+    Composing from the bare value made the idle-stall detector cancel
+    exactly those windows. Too wide costs only a longer wait on a
+    genuinely wedged future (review dispatch continues regardless);
+    too narrow loses the whole taint tier — so the wall tracks the
+    widest window the sweep is allowed to run, and an operator
+    query-timeout override above the cap widens it further, never
+    narrower than cpg + query.
+    """
+    from core.tuning import derived_max_joern_presweep_timeout_s
+    return cpg_timeout_s + derived_max_joern_presweep_timeout_s(
+        query_timeout_s, include_import=True,
+    )
+
+
 def _await_joern_build(
     joern_future: Future, joern_timeout_s: int,
 ) -> Future | None:
@@ -1930,7 +1952,13 @@ def run_orchestrator(
     result = OrchestratorResult()
     _jt = _joern_tunables(overrides=config.joern_overrides)
     if _jt is not None:
-        joern_timeout_s = _jt.cpg_timeout_s + _jt.query_timeout_s
+        # Rationale for the composition lives on _compose_joern_wall_s
+        # — every joern_timeout_s producer MUST go through it, or one
+        # call site re-narrows the stall wall below a legitimate
+        # derived pre-sweep window.
+        joern_timeout_s = _compose_joern_wall_s(
+            _jt.cpg_timeout_s, _jt.query_timeout_s,
+        )
     else:
         joern_timeout_s = 600
 
@@ -1960,12 +1988,19 @@ def run_orchestrator(
             # runs under — the from_tuning fallback number can be
             # smaller than the scope-derived wall on large targets.
             from packages.joern.tunables import resolve_cpg_timeout_s
-            joern_timeout_s = resolve_cpg_timeout_s(
-                _jt, _joern_path,
-                exclude_dirs=_run_exclude_dirs(
-                    config.out_dir, _joern_path,
-                ) + _joern_scope_excludes,
-            ) + _jt.query_timeout_s
+            # Same composition rule: the refined (scope-derived) build
+            # wall re-composes through the helper so it never
+            # re-narrows the window half back to the bare query
+            # timeout.
+            joern_timeout_s = _compose_joern_wall_s(
+                resolve_cpg_timeout_s(
+                    _jt, _joern_path,
+                    exclude_dirs=_run_exclude_dirs(
+                        config.out_dir, _joern_path,
+                    ) + _joern_scope_excludes,
+                ),
+                _jt.query_timeout_s,
+            )
         _joern_timings: dict[str, float] = {}
         joern_server = _start_joern_server_raw(
             _joern_path, config.joern_overrides, _jt,
@@ -23023,21 +23058,34 @@ def _run_critique(
         except Exception:  # noqa: BLE001 — critique must not fail on bookkeeping
             presweep = None
         if presweep and not presweep.get("recovered"):
+            # reason / query_timeout_s are ADDITIVE status fields — a
+            # pre-change record renders the original wording with an
+            # empty suffix.
+            _psw_reason = presweep.get("reason")
+            _psw_detail = ""
+            if _psw_reason:
+                _psw_detail = f" [reason: {_psw_reason}"
+                _psw_window = presweep.get("query_timeout_s")
+                if _psw_reason == "query_timeout" and _psw_window:
+                    _psw_detail += f", window {_psw_window}s"
+                _psw_detail += "]"
             if presweep.get("interrupted"):
                 logger.warning(
                     "critique: Joern pre-sweep window was LOST to a "
-                    "server restart (%d re-queue attempt(s) failed) — "
+                    "server restart (%d re-queue attempt(s) failed)%s — "
                     "taint-flow evidence for this run is incomplete; "
                     "treating missing flows as 'not swept'",
                     presweep.get("requeued", 0),
+                    _psw_detail,
                 )
             else:
                 logger.warning(
                     "critique: Joern pre-sweep query ERRORED "
-                    "(%d error(s)) — taint-flow evidence for this run "
+                    "(%d error(s))%s — taint-flow evidence for this run "
                     "is incomplete; treating missing flows as "
                     "'not swept'",
                     len(presweep.get("errors") or []),
+                    _psw_detail,
                 )
         if presweep is not None:
             config._presweep_loss_warned = True

@@ -1778,13 +1778,30 @@ def _format_summary(report: dict[str, Any]) -> str:
             lines.append(
                 "### ⚠️ Joern pre-sweep window lost"
             )
-            lines.append(
-                f"Interrupted by a server restart and NOT recovered "
-                f"after {requeued} re-queue attempt(s) — this run's "
-                f"taint-flow evidence is incomplete (functions read as "
-                f"'no flows' rather than 'not swept'). Re-run /audit "
-                f"or /agentic to regenerate the sweep."
-            )
+            # reason / query_timeout_s / cpg_bytes are ADDITIVE
+            # status fields — records from before they existed render
+            # the original wording unchanged.
+            if presweep.get("reason") == "query_timeout":
+                window_s = presweep.get("query_timeout_s")
+                window = f" ({window_s}s)" if window_s else ""
+                lines.append(
+                    f"The window's own query budget{window} bound: it "
+                    f"timed out and was NOT recovered after {requeued} "
+                    f"re-queue attempt(s) — this run's taint-flow "
+                    f"evidence is incomplete (functions read as 'no "
+                    f"flows' rather than 'not swept'). Remedy: raise "
+                    f"joern_query_timeout_s in tuning.json (the "
+                    f"CPG-size derivation scales from it), then re-run "
+                    f"/audit or /agentic."
+                )
+            else:
+                lines.append(
+                    f"Interrupted by a server restart and NOT recovered "
+                    f"after {requeued} re-queue attempt(s) — this run's "
+                    f"taint-flow evidence is incomplete (functions read as "
+                    f"'no flows' rather than 'not swept'). Re-run /audit "
+                    f"or /agentic to regenerate the sweep."
+                )
         else:
             # Errored (never interrupted): the record exists exactly
             # because the taint query failed — restart wording here
@@ -1793,13 +1810,26 @@ def _format_summary(report: dict[str, Any]) -> str:
             lines.append(
                 "### ⚠️ Joern pre-sweep errored"
             )
-            lines.append(
-                f"The taint query errored ({n_errors} error(s)) — "
-                f"this run's taint-flow evidence is incomplete "
-                f"(functions read as 'no flows' rather than "
-                f"'not swept'). Re-run /audit or /agentic to "
-                f"regenerate the sweep."
-            )
+            if presweep.get("reason") == "query_timeout":
+                window_s = presweep.get("query_timeout_s")
+                window = f" after {window_s}s" if window_s else ""
+                lines.append(
+                    f"The taint query timed out{window} — the query "
+                    f"budget is the ceiling that bound. This run's "
+                    f"taint-flow evidence is incomplete (functions "
+                    f"read as 'no flows' rather than 'not swept'). "
+                    f"Remedy: raise joern_query_timeout_s in "
+                    f"tuning.json (the CPG-size derivation scales from "
+                    f"it), then re-run /audit or /agentic."
+                )
+            else:
+                lines.append(
+                    f"The taint query errored ({n_errors} error(s)) — "
+                    f"this run's taint-flow evidence is incomplete "
+                    f"(functions read as 'no flows' rather than "
+                    f"'not swept'). Re-run /audit or /agentic to "
+                    f"regenerate the sweep."
+                )
 
     cpg_build = report.get("joern_cpg_build")
     if cpg_build and (cpg_build.get("failed") or cpg_build.get("retried")
@@ -1828,17 +1858,46 @@ def _format_summary(report: dict[str, Any]) -> str:
                 # record from a segment that audited a different
                 # narrowed root.
                 lines.append(f"(build target: {rec_target})")
-            what = (
-                "The CPG built but failed to import into the server"
-                if cpg_build.get("phase") == "import"
-                else "The CPG build failed"
+            # reason / import_timeout_s / cpg_bytes are ADDITIVE
+            # status fields — a record from before they existed hits
+            # every `else` branch and renders the original wording
+            # unchanged.
+            reason = cpg_build.get("reason")
+            import_phase = cpg_build.get("phase") == "import"
+            if reason == "import_timeout":
+                imp_s = cpg_build.get("import_timeout_s")
+                imp_sz = cpg_build.get("cpg_bytes")
+                detail = f" at {imp_s}s" if imp_s else ""
+                if imp_sz:
+                    detail += f" (CPG {imp_sz} bytes)"
+                what = (
+                    f"The CPG built but the client-side import wall "
+                    f"bound: importCpg timed out{detail}"
+                )
+            elif reason == "import_connection_lost":
+                what = (
+                    "The CPG built but the server connection was lost "
+                    "during import"
+                )
+            elif import_phase:
+                what = "The CPG built but failed to import into the server"
+            else:
+                what = "The CPG build failed"
+            # Import-phase failures are governed by the import wall,
+            # not the build heap/wall — point the remedy at the key
+            # that actually moves the binding ceiling.
+            remedy = (
+                "raise joern_import_timeout_s in tuning.json (or leave "
+                "it on auto and it scales with CPG size), or narrow "
+                "--scope."
+                if import_phase
+                else "raise joern_heap_ceiling_mb / joern_cpg_timeout_s "
+                "in tuning.json, or narrow --scope."
             )
             lines.append(
                 f"{what} ({attempts}), so this run carries NO Joern "
                 f"receipts — hypotheses read as 'not looked at', "
-                f"never as refuted. Remedies: raise "
-                f"joern_heap_ceiling_mb / joern_cpg_timeout_s in "
-                f"tuning.json, or narrow --scope."
+                f"never as refuted. Remedies: {remedy}"
             )
         else:
             # Each rescue gets one line so its doubled wall is
