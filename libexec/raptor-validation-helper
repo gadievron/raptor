@@ -3535,7 +3535,28 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         if checklist_exists(out_dir) and (out_dir / "context-map.json").exists():
             pre_rebuild_checklist = read_checklist(out_dir) or None
 
-        checklist = build_checklist(target, str(out_dir))
+        from packages.exploitability_validation.binary_substrate import (
+            BinarySubstrateMissingError,
+        )
+        try:
+            checklist = build_checklist(target, str(out_dir))
+        except BinarySubstrateMissingError as e:
+            # Binary target with no RE substrate: an ACTIONABLE
+            # refusal, not a traceback — the message names every
+            # location searched and the commands that produce a
+            # substrate. Mark the run failed (same lifecycle
+            # consequence as the generic handler below), print the
+            # message line-by-line sanitised (it embeds the escaped
+            # target name), and exit non-zero.
+            with contextlib.suppress(Exception):
+                fail_run(out_dir, str(e))
+            print(
+                "ERROR: "
+                + "\n".join(_sft(line, max_len=300)
+                            for line in str(e).splitlines()),
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
         (out_dir / "build").mkdir(exist_ok=True)
 
@@ -3568,6 +3589,24 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
             _rank_priority_targets(checklist, out_dir)
 
         print(f"Checklist: {checklist['total_files']} files, {checklist['total_items']} items")
+        _substrate = (checklist.get("substrate")
+                      if isinstance(checklist, dict) else None)
+        if isinstance(_substrate, dict) \
+                and _substrate.get("source") == "decompilation":
+            # Identity honesty: sha_verified means the substrate
+            # carries a content stamp matching the target's bytes; an
+            # unverified (name-match-only) pairing must say so on the
+            # operator surface, never read as content-identified.
+            _ident = ("content-verified"
+                      if _substrate.get("sha_verified")
+                      else "name-match only, no content stamp")
+            print(
+                "Substrate: decompilation (decompiler: "
+                f"{_sft(str(_substrate.get('decompiler') or 'unknown'), max_len=40)}; "
+                f"identity: {_ident})"
+                " — findings will be validated against decompiled "
+                "code, not source"
+            )
         print(f"OUTPUT_DIR={out_dir}")
     except Exception as e:
         # Mark the run as failed so /project status / cleanup
