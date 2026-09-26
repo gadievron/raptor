@@ -54,9 +54,18 @@ _TEMPLATE_ENTRY_RE = re.compile(
 )
 
 # Access site: the slot compared as an ANY container. ``a->d.fld`` /
-# ``a.d.fld`` / ``a->fld`` first-argument spellings.
+# ``a.d.fld`` / ``a->fld`` first-argument spellings.  The member
+# chain is bounded ({1,32}, the member-access chain bound the
+# condition scanners use): unbounded, a planted first argument of
+# dotted links with the closing ``,``/``)`` withheld makes the
+# chain/field split ambiguity re-scan the run per split — quadratic
+# on hostile source (measured exp 2.00; bounded, exp 1.0).  Both
+# directions: raising the bound re-opens the split cost; lowering
+# it drops real access sites (32 links is far past any real
+# ``a->d.fld`` spelling).
 _ANY_ACCESS_RE = re.compile(
-    r"\bASN1_TYPE_cmp\s*\(\s*(?:\w+\s*(?:->|\.)\s*)+(?P<field>[\w.]+?)\s*[,)]",
+    r"\bASN1_TYPE_cmp\s*\(\s*(?:\w+\s*(?:->|\.)\s*){1,32}"
+    r"(?P<field>[\w.]+?)\s*[,)]",
 )
 
 
