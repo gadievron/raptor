@@ -968,6 +968,26 @@
    ],
    "verdict": "linear"
   },
+  "core/dataflow/extension_pack.py\u001f_JS_ACCESS_PART_RE": {
+   "digests": [
+    "c3ae36672b1b"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
+   ],
+   "verdict": "linear"
+  },
+  "core/dataflow/extension_pack.py\u001f_JS_TYPE_RE": {
+   "digests": [
+    "ef1b1c0dcf5f"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
+   ],
+   "verdict": "linear"
+  },
   "core/dataflow/extension_pack.py\u001f_PY_TYPE_RE": {
    "digests": [
     "8c8f105cc6d3"

@@ -18,6 +18,16 @@ stdlib packs this was verified against:
 * ``codeql/python-all`` (7.x) — 3-column ``sourceModel``/``sinkModel``
   (type, path, kind), 5-column ``summaryModel``
   (type, path, input, output, kind).
+* ``codeql/javascript-all`` (2.10.x, vendored inside
+  ``codeql/javascript-queries``) — same (type, path) family as
+  python: 3-column ``sourceModel``/``sinkModel``, 5-column
+  ``summaryModel`` (``ApiGraphModelsExtensions.qll``; the trailing
+  ``madId`` column is CLI-assigned, never authored). The upstream
+  pack also declares ``barrierModel``/``barrierGuardModel``
+  extensible predicates, but this layout deliberately EXCLUDES them:
+  a barrier row suppresses findings, and the dynamic-language
+  barrier channel stays closed exactly like python's
+  (:mod:`core.taint.mad_matrix` pins the same rule a layer above).
 
 Languages whose stdlib row shapes have not been verified against a
 real pack are refused loudly rather than emitted speculatively — a
@@ -115,6 +125,19 @@ _LANGUAGE_LAYOUTS: Mapping[str, Mapping[str, str]] = {
         ROLE_SUMMARY: "summaryModel",
         ROLE_BARRIER: "barrierModel",
     },
+    # javascript-all rows share the python (type, path) family —
+    # verified against codeql/javascript-all 2.10.1
+    # (ApiGraphModelsExtensions.qll + ext/*.model.yml). NO barrier
+    # role even though the upstream predicate exists: the
+    # dynamic-language barrier channel stays closed (suppression
+    # direction), matching python — the mad_matrix invariant pins
+    # this exclusion, and rows are refused here with a directed
+    # reason (use QL barrier synthesis instead).
+    "javascript": {
+        ROLE_SOURCE: "sourceModel",
+        ROLE_SINK: "sinkModel",
+        ROLE_SUMMARY: "summaryModel",
+    },
 }
 
 SUPPORTED_LANGUAGES = frozenset(_LANGUAGE_LAYOUTS)
@@ -123,6 +146,7 @@ _STDLIB_PACK = {
     "cpp": "codeql/cpp-all",
     "python": "codeql/python-all",
     "java": "codeql/java-all",
+    "javascript": "codeql/javascript-all",
 }
 
 # ── cell grammars ────────────────────────────────────────────────────
@@ -163,11 +187,129 @@ _ACCESS_PART_RE = re.compile(
 _KIND_RE = re.compile(r"^[a-z][a-z0-9-]*\Z")
 _SIGNATURE_RE = re.compile(r"^[\w \t,:<>*&()\[\]~-]*\Z")
 
+# JavaScript type: `global`, or a lowercase NPM package (one
+# optional `@scope/` prefix) followed by dot-separated CAPITALIZED
+# qualified type names (`express.Request`); a leading ~ on a type
+# segment is the suffix-match convention shared with python
+# (`pkg.~Request`). Deliberately narrower than upstream's
+# parseTypeString: quoted dotted packages (`'pkg.name'.Type`),
+# `(package)` aliases, `file:` types, and uppercase package names
+# (npm forbids them — an unquoted dotted package would silently
+# misparse as package + type upstream) are never emitted, so the
+# grammar refuses them. No whitespace class at all — nothing this
+# emitter writes into a js type cell contains spaces, and \s would
+# re-admit the trailing-newline twin ([ \t] discipline, tightened to
+# empty here).
+_JS_TYPE_RE = re.compile(
+    r"^(@[a-z0-9][a-z0-9._-]*/)?"      # optional @scope/ (npm charset)
+    r"[a-z0-9_][a-z0-9_$-]*"           # package (lowercase npm charset)
+    r"(\.~?[A-Z][\w$-]*)*\Z"           # .Qualified.Type suffixes
+)
+# JavaScript access-path token grammar — the token universe verified
+# against codeql/javascript-all 2.10.1 (shared AccessPathSyntax
+# names + isExtraValidTokenNameInIdentifyingAccessPath), restricted
+# to what this emitter can produce plus upstream-valid headroom:
+#   no-argument: ReturnValue, Instance, Awaited, ArrayElement,
+#     Element, MapValue, AnyMember, NewCall, Call
+#   Member[name(,name)*]         — property names, no dots/spaces
+#   Argument[i]/Parameter[i]     — plain indices or i..j / i.. ranges
+#   WithArity[i] / WithArity[i..j]
+# Deliberately absent: Fuzzy, TypeVar, WithStringArgument,
+# GuardedRouteHandler, Decorated* and negative/N- indices — never
+# emitted, so never admitted. Ranges carry dots INSIDE brackets,
+# which is why js paths use the bracket-aware splitter below instead
+# of a bare split(".").
+_JS_INDEX = r"\d+(\.\.(\d+)?)?"
+_JS_ACCESS_PART_RE = re.compile(
+    r"^(ReturnValue|Instance|Awaited|ArrayElement|Element|MapValue"
+    r"|AnyMember|NewCall|Call"
+    r"|Member\[[\w$-]+(,[\w$-]+)*\]"
+    rf"|(Argument|Parameter)\[{_JS_INDEX}(,{_JS_INDEX})*\]"
+    rf"|WithArity\[{_JS_INDEX}\])\Z"
+)
+
 
 def _valid_access(path: str, *, allow_empty: bool = False) -> bool:
     if not path:
         return allow_empty
     return all(_ACCESS_PART_RE.match(part) for part in path.split("."))
+
+
+def _split_js_access(path: str) -> list[str] | None:
+    """Split a js access path on dots OUTSIDE brackets.
+
+    ``Member[exec].Argument[0..]`` has a dot inside the range token;
+    a bare ``split(".")`` would shear it into invalid fragments (and
+    conversely let an invalid part hide across the shear). Returns
+    ``None`` on unbalanced brackets.
+    """
+    parts: list[str] = []
+    cur: list[str] = []
+    depth = 0
+    for ch in path:
+        if ch == "[":
+            depth += 1
+            cur.append(ch)
+        elif ch == "]":
+            depth -= 1
+            if depth < 0:
+                return None
+            cur.append(ch)
+        elif ch == "." and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    if depth != 0:
+        return None
+    parts.append("".join(cur))
+    return parts
+
+
+def _valid_js_access(path: str, *, allow_empty: bool = False) -> bool:
+    if not path:
+        return allow_empty
+    parts = _split_js_access(path)
+    if parts is None:
+        return False
+    return all(_JS_ACCESS_PART_RE.match(part) for part in parts)
+
+
+def js_coordinate(dotted: str) -> tuple[str, str]:
+    """Split a dotted API name into the js-all ``(type, member path)``.
+
+    The mechanical boundary rule (pinned by tests):
+
+    * one segment → the global object: ``("global", "Member[eval]")``;
+    * a Capitalized first segment is a global class, not a package
+      (npm forbids uppercase package names): ``Buffer.from`` →
+      ``("global", "Member[Buffer].Member[from]")``;
+    * otherwise the first segment is the package; a Capitalized
+      NON-TERMINAL second segment joins the type (the
+      ``package.Type`` instance-property convention of the stock
+      models): ``express.Request.params`` → ``("express.Request",
+      "Member[params]")``;
+    * a TERMINAL Capitalized second segment is the class object
+      exported by the package, addressed as a member (the
+      constructor-call coordinate): ``vm.Script`` → ``("vm",
+      "Member[Script]")``;
+    * everything after the type boundary becomes ``Member[...]``
+      hops: ``fs.promises.readFile`` →
+      ``("fs", "Member[promises].Member[readFile]")``.
+
+    Static members of exported classes (``pkg.Class.static``) land on
+    the instance-typed form — outside this rule's scope; declare such
+    an API only when the instance reading is the intended one. The
+    returned member path may be empty (bare package names).
+    """
+    segments = dotted.split(".")
+    if len(segments) == 1 or segments[0][:1].isupper():
+        type_name, members = "global", segments
+    elif len(segments) >= 3 and segments[1][:1].isupper():
+        type_name, members = ".".join(segments[:2]), segments[2:]
+    else:
+        type_name, members = segments[0], segments[1:]
+    return type_name, ".".join(f"Member[{m}]" for m in members)
 
 
 # ── row model ────────────────────────────────────────────────────────
@@ -304,6 +446,23 @@ def _validate_python(row: ModelRow) -> str | None:
     return None
 
 
+def _validate_javascript(row: ModelRow) -> str | None:
+    if not _JS_TYPE_RE.match(row.type_name or ""):
+        return f"type {row.type_name!r} fails javascript type grammar"
+    # Path is required, python-parity: a bare-type row would mark
+    # the module object itself, which no emitted role means.
+    if not _valid_js_access(row.path):
+        return f"path {row.path!r} fails javascript access grammar"
+    if row.role == ROLE_SUMMARY and not (
+        _valid_js_access(row.access_input) and _valid_js_access(row.access_output)
+    ):
+        return (
+            f"summary access {row.access_input!r}→{row.access_output!r} "
+            "fails javascript access grammar"
+        )
+    return None
+
+
 def _validate_java(row: ModelRow) -> str | None:
     if not _JAVA_PACKAGE_RE.match(row.namespace or ""):
         return f"package {row.namespace!r} fails java grammar"
@@ -339,11 +498,21 @@ def _validate(row: ModelRow, language: str) -> str | None:
                 "predicate; use QL barrier synthesis "
                 "(core/dataflow/barrier_synth.py) for python sanitizers"
             )
+        if language == "javascript" and row.role == ROLE_BARRIER:
+            return (
+                "the javascript layout excludes barrierModel even though "
+                "codeql/javascript-all declares it: a barrier row "
+                "suppresses findings, and the dynamic-language barrier "
+                "channel stays closed exactly like python's "
+                "(core.taint.mad_matrix pins the same rule)"
+            )
         return f"role {row.role!r} unsupported for language {language!r}"
     if language == "cpp":
         return _validate_cpp(row)
     if language == "java":
         return _validate_java(row)
+    if language == "javascript":
+        return _validate_javascript(row)
     return _validate_python(row)
 
 
@@ -375,7 +544,7 @@ def _cells(row: ModelRow, language: str) -> list:
         if row.role == ROLE_BARRIER:
             return base + [row.access_output, row.model_kind, prov]
         return base + [row.access_input, row.access_output, row.model_kind, prov]
-    # python family
+    # (type, path) family — python and javascript share the shapes
     if row.role == ROLE_SUMMARY:
         return [
             row.type_name, row.path,
@@ -602,6 +771,12 @@ def rows_from_taint_specs(
                 lambda i: f"Argument[{i}]")
             common = dict(namespace=ns, name=fn, provenance=provenance,
                           confidence=spec.confidence)
+        elif language == "javascript":
+            js_type, js_members = js_coordinate(spec.function)
+            mod = js_type  # non-empty by construction; see js_coordinate
+            member = js_members
+            common = dict(type_name=js_type, provenance=provenance,
+                          confidence=spec.confidence)
         else:
             mod, fn = _split_python_function(spec.function)
             member = f"Member[{fn}]" if mod else fn
@@ -657,11 +832,16 @@ def rows_from_taint_specs(
                         **common))
         elif spec.role == "sanitiser":
             if language != "cpp":
+                # python-all has no barrierModel predicate;
+                # javascript-all declares one but the layout excludes
+                # it — the dynamic-language barrier channel stays
+                # closed in the suppression direction either way.
                 rejected.append(RejectedRow(
                     row=label,
                     reason="sanitiser specs map to barrierModel, which "
-                           "only codeql/cpp-all provides; use QL barrier "
-                           "synthesis for python",
+                           "only codeql/cpp-all provides here; use QL "
+                           "barrier synthesis for python, and the "
+                           "javascript barrier channel stays closed",
                 ))
                 continue
             kind = None

@@ -47,6 +47,27 @@ def test_python_summary_rows_emissible_for_operator_grade():
     assert result.emissible and result.predicate == "summaryModel"
 
 
+def test_javascript_source_and_sink_rows_emissible():
+    # The emitter's verified javascript layout opens exactly the
+    # python cells: source/sink for any accepted provenance,
+    # summaries operator-grade only, barriers never.
+    assert cell(language="javascript", role="source",
+                kind="module_attribute").predicate == "sourceModel"
+    assert cell(language="javascript", role="source",
+                kind="call_return").predicate == "sourceModel"
+    assert cell(language="javascript", role="sink",
+                kind="dotted_callee").predicate == "sinkModel"
+
+
+def test_javascript_summary_rows_operator_grade_only():
+    ok = cell(language="javascript", role="propagator", kind="dotted_callee")
+    assert ok.emissible and ok.predicate == "summaryModel"
+    refused = cell(language="javascript", role="propagator",
+                   kind="dotted_callee", provenance="iris_refined")
+    assert not refused.emissible
+    assert "operator-grade" in refused.reason
+
+
 # ── pinned invariant: barrier/summary need operator-grade provenance ─
 
 
