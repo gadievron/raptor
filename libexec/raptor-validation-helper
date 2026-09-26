@@ -512,6 +512,33 @@ def _remove_stale_witness_backlog(dest_dir: Path) -> None:
               f"special?)", file=sys.stderr)
 
 
+def _remove_stale_import_marker(dest_dir: Path) -> None:
+    """Remove a findings-import marker left by a previous
+    findings-driven run into the same ``--out``.
+
+    The report generator reads the marker to suppress sweep-shaped
+    coverage stats — a stale one makes a fresh sweep run render as
+    findings-driven (and hide "Functions checked" entirely). Same
+    regular-file-only guard as :func:`_remove_stale_witness_backlog`:
+    a planted special is left alone with a loud note, never operated
+    through.
+    """
+    import stat as _stat_mod
+    path = Path(dest_dir) / "findings-import.json"
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return
+    if _stat_mod.S_ISREG(st.st_mode):
+        path.unlink(missing_ok=True)
+        print("  Stale findings-import marker from a previous "
+              "findings-driven run removed (this run is a sweep)")
+    else:
+        print(f"  ⚠️  findings-import.json is not a regular file "
+              f"(mode=0o{st.st_mode:o}) — left in place (planted "
+              f"special?)", file=sys.stderr)
+
+
 def _route_dark_to_witness_backlog(
     container: dict, dest_dir: Path, source_name: str,
 ) -> int:
@@ -3555,6 +3582,14 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         if findings_path:
             _import_findings_file(findings_path, out_dir / "findings.json",
                                   target=target, include_dark=include_dark)
+        else:
+            # Mode state must reflect THIS invocation both ways (same
+            # doctrine as bridge-config below): a marker and backlog
+            # left by a previous findings-driven run on the same out
+            # dir would make a fresh sweep run report findings-mode
+            # stats and a phantom routed count.
+            _remove_stale_import_marker(out_dir)
+            _remove_stale_witness_backlog(out_dir)
 
         # Durable bridge opt-out marker, rewritten to THIS
         # invocation's truth BOTH ways: later stage boundaries re-run
