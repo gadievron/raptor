@@ -897,3 +897,28 @@ class TestNoExtractorUnambiguousMembers:
                           (".nim", "nim"), (".jl", "julia"),
                           (".f90", "fortran")):
             assert LanguageDetector.NO_EXTRACTOR_EXTENSIONS[ext] == lang
+
+
+class TestScanCapDerivation:
+    """The scan is name-statistics only (~24 us/file measured); the
+    old 10k cap sampled big trees in walk order and distorted the
+    extension counts feeding confidence. Directions: default covers a
+    kernel-scale tree whole; explicit caps are honoured verbatim."""
+
+    def test_default_covers_kernel_scale_counts(self, tmp_path):
+        from packages.codeql.language_detector import LanguageDetector
+        det = LanguageDetector(tmp_path)
+        assert det.max_files == LanguageDetector._MAX_SCAN_FILES
+        assert det.max_files >= 100_000  # a 94k-file tree walks whole
+
+    def test_explicit_cap_honoured_and_warns_with_sample_wording(
+            self, tmp_path, caplog):
+        import logging
+        from packages.codeql.language_detector import LanguageDetector
+        for i in range(12):
+            (tmp_path / f"f{i}.c").write_text("int x;\n")
+        det = LanguageDetector(tmp_path, max_files=5)
+        with caplog.at_level(logging.WARNING):
+            stats = det._scan_repository()
+        assert stats["scanned_files"] == 5
+        assert "walk-order sample" in caplog.text
