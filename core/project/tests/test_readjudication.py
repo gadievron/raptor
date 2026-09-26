@@ -20,6 +20,7 @@ from core.project.readjudication import (
     QUEUE_FILENAME,
     RECORD_CAP,
     SHAPE_CLAIM_AFTER_DISPROOF,
+    SHAPE_INTRA_RUN_SPLIT,
     SHAPE_OVERTURN,
     SITE_RECORD_CAP,
     build_queue_record,
@@ -618,3 +619,163 @@ class TestOverturnDirection:
         ])
         assert contradicted_disproof_count(records) == 0
         assert shape_counts(records) == {SHAPE_OVERTURN: 1}
+
+
+class TestIntraRunSplit:
+    """Seam: a confirmed-tier verdict and a disproof BOTH surviving to
+    one run's end-state is a genuine inconsistency and queues — but
+    only for sources the caller marks final; transient in-pipeline
+    refinement stays excluded, as does a hypothesis beside a disproof."""
+
+    def test_final_final_split_queues(self):
+        records = detect_contradictions(
+            [("run-1", [_claim(status="confirmed"),
+                        _disproof(status="ruled_out")])],
+            final_sources={"run-1"},
+        )
+        assert queued_count(records) == 1
+        rec = records[0]
+        assert rec["shape"] == SHAPE_INTRA_RUN_SPLIT
+        assert rec["action"] == "queued"
+        assert rec["new_claim"]["source"] == "run-1"
+        assert rec["new_claim"]["status"] == "confirmed"
+        assert rec["disproof"]["source"] == "run-1"
+        assert rec["disproof"]["status"] == "ruled_out"
+
+    def test_split_needs_the_final_source_opt_in(self):
+        # Same rows, source not marked final = a live container's
+        # transient refinement; nothing queues.
+        records = detect_contradictions(
+            [("run-1", [_claim(status="confirmed"),
+                        _disproof(status="ruled_out")])],
+        )
+        assert records == []
+
+    def test_hypothesis_beside_disproof_is_progression_not_split(self):
+        # BOTH sides must be final statuses: a hypothesis-tier claim
+        # next to a disproof is ordinary progression even in a
+        # completed run's container.
+        for status in ("not_disproven", "poc_success", "suspicious"):
+            records = detect_contradictions(
+                [("run-1", [_claim(status=status), _disproof()])],
+                final_sources={"run-1"},
+            )
+            assert records == [], status
+
+    def test_two_confirmed_rows_are_not_a_split(self):
+        records = detect_contradictions(
+            [("run-1", [_claim(id="C-1", status="confirmed"),
+                        _claim(id="C-2", status="exploitable")])],
+            final_sources={"run-1"},
+        )
+        assert records == []
+
+    def test_split_quotes_latest_disproof_with_count(self):
+        records = detect_contradictions(
+            [("run-1", [_claim(status="confirmed"),
+                        _disproof(id="D-1"),
+                        _disproof(id="D-2", status="ruled_out")])],
+            final_sources={"run-1"},
+        )
+        assert queued_count(records) == 1
+        rec = records[0]
+        assert rec["disproof"]["id"] == "D-2"
+        assert rec["prior_disproofs_at_site"] == 2
+
+    def test_split_shares_the_site_cap_announced(self):
+        rows = [
+            _claim(id=f"C-{i}", status="confirmed",
+                   vuln_type=f"type-{i}", cwe_id=f"CWE-{300 + i}")
+            for i in range(SITE_RECORD_CAP + 2)
+        ] + [_disproof()]
+        records = detect_contradictions(
+            [("run-1", rows)], final_sources={"run-1"},
+        )
+        assert queued_count(records) == SITE_RECORD_CAP
+        assert suppressed_count(records) == 2
+
+    def test_split_does_not_suppress_the_cross_run_shapes(self):
+        # A final run with a split ALSO overturns an earlier run's
+        # confirmed verdict: both records queue, distinct shapes.
+        records = detect_contradictions(
+            [
+                ("run-1", [_claim(id="C-old", status="confirmed")]),
+                ("run-2", [_claim(id="C-new", status="confirmed"),
+                           _disproof(status="ruled_out")]),
+            ],
+            final_sources={"run-2"},
+        )
+        assert queued_count(records) == 2
+        shapes = shape_counts(records)
+        assert shapes == {SHAPE_OVERTURN: 1, SHAPE_INTRA_RUN_SPLIT: 1}
+
+
+class TestProjectSplitGating:
+    """detect_project_contradictions enables split detection only for
+    COMPLETED runs (per run metadata); live/half-written containers
+    never have their transient pairs promoted."""
+
+    @staticmethod
+    def _run_dir(tmp_path, name, findings, status="completed"):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "findings.json").write_text(
+            json.dumps({"findings": findings}))
+        if status is not None:
+            (d / ".raptor-run.json").write_text(
+                json.dumps({"status": status, "command": "validate"}))
+        return d
+
+    def test_completed_run_split_detected(self, tmp_path):
+        d = self._run_dir(tmp_path, "validate_1", [
+            _claim(status="confirmed"), _disproof(status="ruled_out"),
+        ])
+        records = detect_project_contradictions([d])
+        assert shape_counts(records) == {SHAPE_INTRA_RUN_SPLIT: 1}
+
+    def test_running_run_never_splits(self, tmp_path):
+        d = self._run_dir(tmp_path, "validate_1", [
+            _claim(status="confirmed"), _disproof(status="ruled_out"),
+        ], status="running")
+        assert detect_project_contradictions([d]) == []
+
+    def test_metadata_less_run_fails_closed(self, tmp_path):
+        d = self._run_dir(tmp_path, "validate_1", [
+            _claim(status="confirmed"), _disproof(status="ruled_out"),
+        ], status=None)
+        assert detect_project_contradictions([d]) == []
+
+    def test_delta_validate_shape_reproduced(self, tmp_path):
+        # Synthetic replica of the real cross-run shape: an earlier
+        # validate confirms a site; a later completed validate's
+        # end-state holds BOTH a confirmed and a ruled_out row at that
+        # same site, plus a second site it overturns outright.
+        earlier = self._run_dir(tmp_path, "validate_1", [
+            _claim(id="V1-A", file="plugins/x/setup.php",
+                   function="read_form", status="confirmed"),
+            _claim(id="V1-B", file="functions/render.php",
+                   function="format_body", status="confirmed_unverified"),
+        ])
+        later = self._run_dir(tmp_path, "validate_2", [
+            _claim(id="V2-A", file="plugins/x/setup.php",
+                   function="read_form", status="confirmed"),
+            _disproof(id="V2-A2", file="plugins/x/setup.php",
+                      function="read_form", status="ruled_out"),
+            _disproof(id="V2-B", file="functions/render.php",
+                      function="format_body", status="ruled_out"),
+        ])
+        records = detect_project_contradictions([earlier, later])
+        shapes = shape_counts(records)
+        assert shapes == {SHAPE_OVERTURN: 2, SHAPE_INTRA_RUN_SPLIT: 1}
+        # The overturn-shaped record for the outright-disproven site
+        # quotes the earlier confirmed verdict.
+        overturns = [r for r in records
+                     if record_shape(r) == SHAPE_OVERTURN]
+        by_fn = {r["site"]["function"]: r for r in overturns}
+        assert by_fn["format_body"]["new_claim"]["id"] == "V1-B"
+        assert by_fn["format_body"]["disproof"]["id"] == "V2-B"
+        assert by_fn["read_form"]["new_claim"]["id"] == "V1-A"
+        splits = [r for r in records
+                  if record_shape(r) == SHAPE_INTRA_RUN_SPLIT]
+        assert splits[0]["site"]["function"] == "read_form"
+        assert splits[0]["new_claim"]["id"] == "V2-A"
