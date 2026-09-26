@@ -774,12 +774,62 @@ class ChecklistBudgetExceededError(RuntimeError):
 _CHECKLIST_SHARD_TARGET_BYTES = 64 * 1024 * 1024
 
 
-def _resolve_checklist_path(output_dir: "str | Path") -> "Path":
-    """Resolve checklist.json path, following symlinks."""
+class ChecklistPathError(PermissionError):
+    """A checklist.json symlink resolved outside its containment set.
+
+    The only symlink shape the run lifecycle creates at the checklist
+    slot is the one-level project link ``../checklist.json``
+    (core/run/metadata.py). Anything else at that name was planted:
+    the write accessors replace the RESOLVED target via atomic
+    rename, so an uncontained link turns a checklist save into an
+    arbitrary-file clobber under the run's identity, and the read
+    accessors would launder arbitrary host files into checklist
+    consumers.
+    """
+
+
+def _checklist_target_contained(
+    output_dir: "str | Path", resolved: "Path",
+) -> bool:
+    """True when a checklist symlink's resolved target is contained.
+
+    Containment set: the run's own output dir, or exactly the
+    one-level project slot ``<output_dir>/../checklist.json`` that
+    project mode links to. Absolute plants onto victim files, sibling
+    project slots, and deeper ``../..`` hops all fall outside it.
+    """
     from pathlib import Path
+
+    out_resolved = Path(output_dir).resolve()
+    if resolved == out_resolved.parent / "checklist.json":
+        return True
+    return resolved.is_relative_to(out_resolved)
+
+
+def _resolve_checklist_path(output_dir: "str | Path") -> "Path":
+    """Resolve checklist.json path, following contained symlinks.
+
+    Raises :class:`ChecklistPathError` (before any side effect — the
+    parent mkdir must not create victim-adjacent directories) when
+    the slot holds a symlink whose resolved target escapes the
+    containment set.
+    """
+    from pathlib import Path
+
+    from core.security.log_sanitisation import sanitise_for_terminal
+
     checklist_path = Path(output_dir) / "checklist.json"
     if checklist_path.is_symlink():
-        checklist_path = checklist_path.resolve()
+        resolved = checklist_path.resolve()
+        if not _checklist_target_contained(output_dir, resolved):
+            msg = (
+                f"refusing checklist access: {checklist_path} is a "
+                f"symlink resolving to "
+                f"{sanitise_for_terminal(str(resolved))}, outside the "
+                f"run output dir and the project checklist slot"
+            )
+            raise ChecklistPathError(msg)
+        checklist_path = resolved
     checklist_path.parent.mkdir(parents=True, exist_ok=True)
     return checklist_path
 
@@ -877,6 +927,19 @@ def ensure_runlocal_checklist(output_dir: "str | Path") -> bool:
     if not base.is_symlink():
         return False
     resolved = base.resolve()
+    if not _checklist_target_contained(output_dir, resolved):
+        # Uncontained plant: detach it, but WITHOUT the project-slot
+        # flock below — taking it would O_CREAT a checklist.lock
+        # beside the attacker-chosen target.
+        from core.security.log_sanitisation import sanitise_for_terminal
+        logger.warning(
+            "scoped inventory build: %s is a symlink resolving to %s, "
+            "outside the run output dir and the project checklist "
+            "slot — detaching the planted link without touching the "
+            "target", base, sanitise_for_terminal(str(resolved)),
+        )
+        base.unlink()
+        return True
     project_has_inventory = (
         resolved.is_file() or _sharded_index_path(resolved).is_file()
     )
@@ -963,16 +1026,32 @@ def checklist_exists(output_dir: "str | Path") -> bool:
     from pathlib import Path
 
     base = Path(output_dir) / "checklist.json"
+    if base.is_symlink():
+        # Resolve BEFORE the is_file() probe: an uncontained plant
+        # must read as "no checklist here", not report a victim
+        # file's existence.
+        resolved = base.resolve()
+        if not _checklist_target_contained(output_dir, resolved):
+            from core.security.log_sanitisation import (
+                sanitise_for_terminal,
+            )
+            logger.warning(
+                "checklist_exists: %s is a symlink resolving to %s, "
+                "outside the run output dir and the project "
+                "checklist slot — treating as absent",
+                base, sanitise_for_terminal(str(resolved)),
+            )
+            return False
+        if resolved.is_file():
+            return True
+        # Dangling symlink: the target single-file is gone, but the
+        # sharded dir beside the TARGET may hold the inventory.
+        return _sharded_index_path(resolved).is_file()
     if base.is_file():
         return True
     if (Path(output_dir) / CHECKLIST_DIR_NAME
             / CHECKLIST_INDEX_NAME).is_file():
         return True
-    if base.is_symlink():
-        # Dangling symlink: the target single-file is gone, but the
-        # sharded dir beside the TARGET may hold the inventory.
-        resolved = base.resolve()
-        return _sharded_index_path(resolved).is_file()
     return False
 
 
