@@ -1657,6 +1657,13 @@ def prepare_C(workdir, target=None):
     # finding status. Silent skip when no graph was derived.
     _attach_include_facts(workdir, findings_data)
 
+    # --- Gadget-oracle facts (PHP targets, CWE-502 shapes) ---
+    # Hint-tier gadget-chain evidence, census-qualified. Advisory —
+    # never decides finding status. Silent skip when no artifact or
+    # when the artifact was derived from a different target tree
+    # (one-target rule, fail-closed).
+    _attach_gadget_facts(workdir, findings_data, target=target)
+
     _save_findings(workdir, findings_data)
     failed = sum(1 for f in findings_data["findings"] if f.get("checklist_verified") is False)
     print(f"Inventory check: {failed} failed, {len(findings_data['findings']) - failed} passed")
@@ -1765,6 +1772,84 @@ def _attach_include_facts(workdir, findings_data):
         attached += 1
     if attached:
         print(f"Include-graph facts: attached to {attached} finding(s) "
+              "(hint-tier, census-qualified)")
+
+
+#: Finding shapes the gadget facts attach to: the deserialization
+#: class, or prose naming its mechanism. Bounded, case-insensitive.
+_GADGET_FINDING_RE = re.compile(
+    r"cwe-?502|unseriali[sz]e|deseriali[sz]at|gadget|object\s+injection",
+    re.IGNORECASE,
+)
+
+
+def _attach_gadget_facts(workdir, findings_data, target=None):
+    """Stage C gadget-surface attachment from gadget-chains.json.
+
+    Annotates each deserialization-shaped finding with
+    ``gadget_facts``: the oracle's chains touching the finding's file
+    (or the tree-level chain summary), its unserialize sites, and the
+    MANDATORY completeness qualifier (an absence quote without its
+    census is the dishonest shape the oracle exists to replace).
+    Hint-tier, advisory — the Stage C LLM consults it as evidence;
+    it never decides finding status.
+
+    One-target rule, fail-closed: a shared ``--out`` can hold an
+    artifact derived from a DIFFERENT tree, and its chains/absence
+    census must never attach to this run's findings. No usable
+    ``target`` (or a mismatch) skips the attachment entirely.
+    """
+    try:
+        from core.analysis.gadget_oracle import (
+            gadget_facts_for_file,
+            load_gadget_report,
+            report_matches_target,
+        )
+    except ImportError:
+        return
+    report = load_gadget_report(workdir)
+    if not report:
+        return
+    if not report_matches_target(report, target):
+        return
+    report_target = (report.get("target_path")
+                     if isinstance(report.get("target_path"), str)
+                     else "")
+    known_files = {
+        c.get("file") for c in (report.get("chains") or [])
+        if isinstance(c, dict)
+    } | {
+        s.get("file") for s in (report.get("unserialize_sites") or [])
+        if isinstance(s, dict)
+    }
+    known_files.discard(None)
+    attached = 0
+    for finding in findings_data.get("findings", []):
+        if finding.get("status") == "disproven":
+            continue
+        probe = " ".join(
+            str(finding.get(k, ""))
+            for k in ("cwe", "type", "title", "description", "rule_id")
+        )
+        if not _GADGET_FINDING_RE.search(probe):
+            continue
+        fpath = finding.get("file", "")
+        if not isinstance(fpath, str) or not fpath:
+            continue
+        key = _graph_key_for_finding(
+            sorted(str(f) for f in known_files), report_target, fpath,
+        )
+        if key is None and fpath.replace("\\", "/").startswith("/"):
+            # Foreign absolute path — refuse rather than attaching
+            # another tree's summary (the include-facts discipline).
+            continue
+        facts = gadget_facts_for_file(report, key if key else fpath)
+        if facts is None:
+            continue
+        finding["gadget_facts"] = facts
+        attached += 1
+    if attached:
+        print(f"Gadget-oracle facts: attached to {attached} finding(s) "
               "(hint-tier, census-qualified)")
 
 
