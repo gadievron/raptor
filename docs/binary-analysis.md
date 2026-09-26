@@ -178,12 +178,22 @@ boundary or unchecked flow is emitted without actual evidence.
 
 | Artefact | Ingress RAPTOR looks for | Fuzz follow-on |
 |----------|--------------------------|----------------|
-| Mach-O app | URL/file handlers, XPC listeners, WebView callbacks, bundle metadata | Trace the handler, then extract a narrow harness |
+| Mach-O app | URL/file handlers, XPC listeners (Obj-C callback and C `xpc_*` import forms), IOKit `externalMethod` dispatch, WebView callbacks, bundle metadata | Trace the handler, then extract a narrow harness |
 | ELF executable | Process entry, imported input channels, exported APIs | Campaign only when an input contract exists |
 | ELF kernel module | `unlocked_ioctl`/`compat_ioctl` dispatchers | IOCTL harness or snapshot fuzzing |
-| PE EXE | Process entry, imported input channels | Runtime first unless a harness is already present |
+| PE EXE | Process entry, `ServiceMain` service entries, imported input channels (incl. Winsock and registry reads) | Runtime first unless a harness is already present |
 | PE DLL | Exported APIs bound back to recovered functions | Typed export harness |
 | PE driver | `EvtIoDeviceControl`/`DispatchDeviceControl` dispatchers | IOCTL harness or snapshot fuzzing |
+
+The sink and channel vocabularies are curated SEED sets in
+`core/function_taxonomy` (Win32: shlwapi/MBCS string copies, Rtl
+memory copies, Winsock ingest, registry read primitives, dynamic
+load, SEH markers, `DeviceIoControl`; darwin: IOKit user-client and
+XPC groups) — project-specific vocabulary is learned by the
+study/IRIS channel, never hardcoded. `DeviceIoControl` and
+`IOConnectCall*` classify as boundary-crossing sinks; `LoadLibrary`
+stays a surface (its CVE shape is search-path planting, and its
+ubiquity would drown ranked output).
 
 Architecture is read from the COFF/ELF/Mach-O header, so a 32-bit DLL,
 64-bit EXE and ARM64 driver are not flattened into the same bucket.
