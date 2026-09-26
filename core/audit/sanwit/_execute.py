@@ -68,6 +68,29 @@ _STDOUT_CAP = 64 * 1024
 #: a legitimate cid spelling with daemon-added whitespace.
 _CIDFILE_CAP = 256
 
+#: Container-side wall clock (busybox ``timeout -s KILL`` wrapping
+#: the in-container command). Set ABOVE the parent-side
+#: DOCKER_TIMEOUT_S so the attended path always wins the race and
+#: keeps its richer reporting; the wrapper exists for the container
+#: NO host-side code survives to kill. Larger only extends how long
+#: an orphan burns a core; smaller risks the wrapper firing before
+#: the attended parent's own timeout handling on a slow daemon.
+_CONTAINER_WALL_CLOCK_S = DOCKER_TIMEOUT_S + 30
+
+#: Ownership labels stamped on every witness container (verified-pid
+#: identity of the spawning process) — the dead-owner sweep's key.
+_CHANNEL_LABEL = "raptor.sanwit"
+_OWNER_PID_LABEL = "raptor.sanwit.owner.pid"
+_OWNER_START_LABEL = "raptor.sanwit.owner.start"
+
+#: Dead-owner sweep bound: containers examined per sweep. The
+#: witness runs one container at a time per process, so live rows
+#: are O(sessions); a cap this size only binds when something is
+#: mass-leaking, and then each successive run reaps another batch.
+#: Larger risks a long startup stall against a hostile/wedged
+#: daemon; smaller just spreads the reap over more runs.
+_SWEEP_CAP = 64
+
 #: Container-side RLIMIT_FSIZE (bytes) for the docker tier. Scope
 #: stated precisely: it bounds REGULAR-FILE writes by the
 #: containerized process (e.g. /dev/shm on a read-only rootfs) —
@@ -154,11 +177,38 @@ def _probe_native(php: str) -> tuple[str, str]:
     )
 
 
+def _proc_starttime(pid: int) -> str | None:
+    """starttime of *pid* in clock ticks (field 22 of
+    ``/proc/<pid>/stat``), or ``None`` when unreadable (no procfs,
+    vanished pid). The comm field may contain spaces and parens, so
+    the line is split after the LAST ``)``."""
+    got = read_text_capped(f"/proc/{pid}/stat", 8192)
+    if got is None:
+        return None
+    try:
+        fields = got[0].rsplit(")", 1)[1].split()
+        start = fields[19]  # field 22 overall; 20th after comm
+    except IndexError:
+        return None
+    return start if start.isdigit() else None
+
+
+def _owner_identity() -> tuple[int, str]:
+    """(pid, starttime) of THIS process — the verified-pid identity
+    stamped on every witness container. A pid alone can be recycled;
+    pid + starttime cannot, so a sweeper can distinguish "my owner
+    is gone" from "some process reuses my owner's pid". starttime
+    ``0`` = unverifiable on this host; the sweep never reaps on it."""
+    pid = os.getpid()
+    return pid, _proc_starttime(pid) or "0"
+
+
 def _docker_base_args(
     docker: str,
     script_dir: str | None = None,
     cidfile: str | None = None,
 ) -> list[str]:
+    owner_pid, owner_start = _owner_identity()
     args = [
         docker, "run", "--rm", "--pull=never", "--network=none",
         "--cap-drop=ALL", "--security-opt", "no-new-privileges",
@@ -169,6 +219,15 @@ def _docker_base_args(
         # daemon's log driver, and the daemon busy writing gigabytes
         # of json-file log is exactly what makes kill/rm crawl.
         "--log-driver", "none",
+        # Ownership stamp: every witness container names the process
+        # that spawned it (pid + starttime, the verified-pid
+        # identity). The parent-side cleanup belt only runs on exit
+        # paths the parent LIVES to execute — a SIGKILL'd parent has
+        # none — so the next witness run's dead-owner sweep
+        # (_sweep_dead_owner_containers) reaps by these labels.
+        "--label", f"{_CHANNEL_LABEL}=1",
+        "--label", f"{_OWNER_PID_LABEL}={owner_pid}",
+        "--label", f"{_OWNER_START_LABEL}={owner_start}",
         "--user", "65534:65534",
     ]
     if cidfile:
@@ -180,6 +239,29 @@ def _docker_base_args(
     if script_dir:
         args += ["-v", f"{script_dir}:{script_dir}:ro"]
     args.append(DOCKER_IMAGE)
+    # Container-side wall clock: the in-container command runs under
+    # busybox ``timeout -s KILL`` so an ORPHANED container
+    # self-terminates even when no host-side code survives to kill
+    # it (a SIGKILL'd parent runs no cleanup path; --rm's AutoRemove
+    # needs a live client — a flood probe orphaned this way burned a
+    # CPU core for 75+ minutes). The parent-side deadline stays the
+    # attended-path authority (richer overflow/timeout reporting,
+    # drain, daemon-side rm); this wrapper is the unattended belt.
+    #
+    # Shape, load-bearing: busybox timeout running AS PID 1 fails to
+    # kill its child (verified on the pinned image — the spin
+    # survived indefinitely), so timeout must run as a child of a
+    # resident sh. busybox ash exec-optimizes a single-command -c
+    # string back into PID 1, so the trailing status capture is what
+    # keeps sh resident. The wrapped command (interpreter + script /
+    # payload paths) rides as "$@" positionals appended by the
+    # caller — never inside the -c program text.
+    args += [
+        "sh", "-c",
+        f'timeout -s KILL {_CONTAINER_WALL_CLOCK_S} "$@"; st=$?; '
+        "exit $st",
+        "sh",
+    ]
     return args
 
 
@@ -208,10 +290,15 @@ def _cleanup_container(docker: str, cidfile: str) -> None:
     cid = got[0].strip()
     if not re.fullmatch(r"[0-9a-f]{12,64}", cid):
         return
-    # kill first: the daemon-side SIGKILL stops a flooding process
-    # immediately even when the full remove is slow on a loaded
-    # daemon; rm -f then reaps (both idempotent, best-effort — a
-    # normally-exited --rm container is already gone).
+    _daemon_remove(docker, cid)
+
+
+def _daemon_remove(docker: str, cid: str) -> None:
+    """kill first: the daemon-side SIGKILL stops a flooding process
+    immediately even when the full remove is slow on a loaded
+    daemon; rm -f then reaps (both idempotent, best-effort — a
+    normally-exited --rm container is already gone). *cid* is
+    charset-vetted by every caller before it reaches an argv."""
     for verb in (["kill"], ["rm", "-f"]):
         with contextlib.suppress(OSError, subprocess.TimeoutExpired):
             subprocess.run(  # noqa: S603 — fixed argv; cid charset-checked
@@ -221,8 +308,89 @@ def _cleanup_container(docker: str, cidfile: str) -> None:
             )
 
 
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # EPERM etc.: the pid exists
+    return True
+
+
+_SWEEP_LOCK = threading.Lock()
+_SWEEP_DONE = False
+
+
+def _sweep_dead_owner_containers(docker: str) -> None:
+    """Reap witness containers whose owning process is dead.
+
+    The parent-side cleanup belt covers every exit path the parent
+    LIVES to run; a SIGKILL'd parent has none, and --rm's AutoRemove
+    dies with the client — so an orphaned container (and its flood,
+    if the parent died mid-probe) survives indefinitely. Every
+    container carries its owner's verified-pid identity in labels;
+    this sweep runs once per process, before the first daemon
+    interaction, and removes ONLY on positive death evidence:
+
+    - the labelled pid is gone (kill-0 confirms), or
+    - the pid exists but its /proc starttime differs from the label
+      (the pid was recycled — the owner is dead).
+
+    Unverifiable rows — starttime label ``0``, unreadable /proc for
+    a live pid, malformed labels/cid — are always left alone: never
+    reap another session's container on a guess. Best-effort and
+    bounded (per-call timeouts, ``_SWEEP_CAP`` rows): a wedged or
+    hostile daemon can stall or lie, it cannot block the witness or
+    steer a reap at a live owner's container.
+    """
+    global _SWEEP_DONE
+    with _SWEEP_LOCK:
+        if _SWEEP_DONE:
+            return
+        _SWEEP_DONE = True
+    fmt = (
+        "{{.ID}}\t"
+        f'{{{{.Label "{_OWNER_PID_LABEL}"}}}}\t'
+        f'{{{{.Label "{_OWNER_START_LABEL}"}}}}'
+    )
+    try:
+        proc = subprocess.run(  # noqa: S603 — fixed argv, no target data
+            [docker, "ps", "-a", "--no-trunc",
+             "--filter", f"label={_CHANNEL_LABEL}=1", "--format", fmt],
+            capture_output=True, text=True, env=_safe_env(),
+            timeout=30, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    if proc.returncode != 0:
+        return
+    own_pid = os.getpid()
+    for line in (proc.stdout or "").splitlines()[:_SWEEP_CAP]:
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        cid, pid_s, start_s = (p.strip() for p in parts)
+        if not re.fullmatch(r"[0-9a-f]{12,64}", cid):
+            continue
+        if not (pid_s.isdigit() and start_s.isdigit()):
+            continue
+        if start_s == "0":
+            continue  # owner identity was never verifiable
+        pid = int(pid_s)
+        if pid == own_pid:
+            continue
+        live_start = _proc_starttime(pid)
+        if live_start == start_s:
+            continue  # owner alive, identity verified
+        if live_start is None and _pid_exists(pid):
+            continue  # alive but unverifiable — leave it alone
+        _daemon_remove(docker, cid)
+
+
 def _probe_docker(docker: str) -> tuple[str, str]:
     """(version, "") or ("", refusal reason)."""
+    _sweep_dead_owner_containers(docker)
     cid_dir = tempfile.mkdtemp(prefix="raptor_sanwit_cid_",
                                dir=exec_workdir())
     cidfile = os.path.join(cid_dir, "cid")
@@ -396,7 +564,12 @@ def _execute_docker(
     payloads_file: Path,
 ) -> ExecOutcome:
     """Run the probe in the pinned container (docker provides the
-    containment; core.sandbox cannot wrap a daemon-mediated spawn)."""
+    containment; core.sandbox cannot wrap a daemon-mediated spawn).
+
+    The dead-owner sweep is NOT repeated here: every docker-tier
+    runtime passes through ``_probe_docker`` (capability
+    verification) in this process first, and the sweep is
+    once-per-process."""
     # The container runs uid 65534: the bind-mounted files must be
     # world-readable (path resolution starts AT the mount, so parent
     # directory modes do not apply).
