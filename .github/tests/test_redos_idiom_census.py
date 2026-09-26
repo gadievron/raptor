@@ -2885,6 +2885,22 @@ def _exponential_growth(pattern: str, flags: int,
 # ~0.15 doublings/char).
 _EXPONENTIAL_RATE = 0.4
 
+_PROBE_FIXTURE_FILE = Path(__file__).resolve().parent / "data" / \
+    "redos_probe_fixtures.json"
+
+
+def _probe_fixture(shape: str, spelling: str) -> str:
+    """Member/fixed probe spellings for the adjudication self-check,
+    loaded from a data file rather than written as source literals:
+    the probe test proves at runtime which spelling is the hostile
+    one, and a static regex adjudicator scanning test source would
+    otherwise re-flag the census's own positive controls as
+    findings.  ``spelling`` is ``"member"`` or ``"fixed"``."""
+    import json
+
+    with _PROBE_FIXTURE_FILE.open(encoding="utf-8") as fh:
+        return json.load(fh)[shape][spelling]
+
 
 class RedosIdiomCensus(unittest.TestCase):
 
@@ -4526,20 +4542,22 @@ class NestedQuantifierCensus(unittest.TestCase):
         FAIL, and the flagged class is demonstrably the exponential
         one, not a static-only claim."""
         rate = _exponential_growth(
-            r"(?:[^()]*|\([^()]*\))*\)\)", 0, lambda n: "a" * n,
+            _probe_fixture("attribute_body_alternation", "member"),
+            0, lambda n: "a" * n,
         )
         self.assertGreaterEqual(rate, _EXPONENTIAL_RATE)
         rate = _exponential_growth(
-            r"(?:[^()]|\([^()]*\))*\)\)", 0, lambda n: "a" * n,
+            _probe_fixture("attribute_body_alternation", "fixed"),
+            0, lambda n: "a" * n,
         )
         self.assertLess(rate, _EXPONENTIAL_RATE)
         rate = _exponential_growth(
-            r"\binto(?:\s+|/\*.*?\*/)+(?:out|dump)file\b",
+            _probe_fixture("into_outfile_comment_glue", "member"),
             re.IGNORECASE, lambda n: "into" + " " * n + "x",
         )
         self.assertGreaterEqual(rate, _EXPONENTIAL_RATE)
         rate = _exponential_growth(
-            r"\binto(?:\s|/\*.{0,512}?\*/){1,64}(?:out|dump)file\b",
+            _probe_fixture("into_outfile_comment_glue", "fixed"),
             re.IGNORECASE, lambda n: "into" + " " * n + "x",
         )
         self.assertLess(rate, _EXPONENTIAL_RATE)
@@ -4548,21 +4566,25 @@ class NestedQuantifierCensus(unittest.TestCase):
         # already carries the whole split search); small-bounded
         # nesting caps the search and stays flat at probe sizes.
         rate = _exponential_growth(
-            r"^(?:w+){1,5000}z", 0, lambda n: "w" * n,
+            _probe_fixture("bounded_huge_outer", "member"),
+            0, lambda n: "w" * n,
         )
         self.assertGreaterEqual(rate, _EXPONENTIAL_RATE)
         rate = _exponential_growth(
-            r"(?:w+){1,4}z", 0, lambda n: "w" * n,
+            _probe_fixture("bounded_huge_outer", "fixed"),
+            0, lambda n: "w" * n,
         )
         self.assertLess(rate, _EXPONENTIAL_RATE)
         # An exponential composition inside a lookahead does its work
         # while the (atomic) construct is still being evaluated.
         rate = _exponential_growth(
-            r"^(?=(?:v+)+w)v", 0, lambda n: "v" * n,
+            _probe_fixture("lookahead_composition", "member"),
+            0, lambda n: "v" * n,
         )
         self.assertGreaterEqual(rate, _EXPONENTIAL_RATE)
         rate = _exponential_growth(
-            r"^(?=(?:v+)w)v", 0, lambda n: "v" * n,
+            _probe_fixture("lookahead_composition", "fixed"),
+            0, lambda n: "v" * n,
         )
         self.assertLess(rate, _EXPONENTIAL_RATE)
 

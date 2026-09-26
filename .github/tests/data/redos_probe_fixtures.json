@@ -1,0 +1,18 @@
+{
+ "attribute_body_alternation": {
+  "member": "(?:[^()]*|\\([^()]*\\))*\\)\\)",
+  "fixed": "(?:[^()]|\\([^()]*\\))*\\)\\)"
+ },
+ "bounded_huge_outer": {
+  "member": "^(?:w+){1,5000}z",
+  "fixed": "(?:w+){1,4}z"
+ },
+ "into_outfile_comment_glue": {
+  "member": "\\binto(?:\\s+|/\\*.*?\\*/)+(?:out|dump)file\\b",
+  "fixed": "\\binto(?:\\s|/\\*.{0,512}?\\*/){1,64}(?:out|dump)file\\b"
+ },
+ "lookahead_composition": {
+  "member": "^(?=(?:v+)+w)v",
+  "fixed": "^(?=(?:v+)w)v"
+ }
+}
