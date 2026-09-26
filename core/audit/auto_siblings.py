@@ -352,9 +352,20 @@ def _capture(
     Bounded read at the intake's own file budget — a file the intake
     could not read is not worth capturing."""
     import json
+    import os
 
     from core.audit.hypothesis_intake import MAX_SEED_FILE_BYTES
     from core.source import read_bytes_capped
+    if not os.path.lexists(produced):
+        # Nothing at the path at all: a computed-engine run that
+        # legitimately emitted no seed file. Distinct from a read
+        # failure — a dangling symlink (lexists True, read fails)
+        # stays capture_failed below.
+        return _degrade(
+            out_dir, "no_seed_artifact",
+            f"the siblings engine completed but produced no "
+            f"{produced.name} in {map_dir} — nothing to capture",
+        )
     capped = read_bytes_capped(produced, MAX_SEED_FILE_BYTES)
     if capped is None or capped[1]:
         return _degrade(

@@ -467,6 +467,52 @@ class TestDegrade:
         # The over-budget artifact stays in the MAP dir untouched.
         assert (map_dir / SEEDS_FILENAME).is_file()
 
+    def test_engine_with_no_artifact_degrades_as_no_seed_artifact(
+        self, tmp_path,
+    ):
+        """A computed-engine run that legitimately produces no seed
+        file is "nothing to capture", not a read failure — the
+        receipt must not misattribute the absence as unreadable /
+        over-budget."""
+        binary, sha = _make_binary(tmp_path)
+        map_dir = _write_map_run(tmp_path, binary, sha)
+        out_dir = _audit_dir(tmp_path)
+
+        def _engine(run_dir, *, auto):
+            del run_dir, auto  # completes fine, emits nothing
+            return {"hypothesis_seeds_emitted": 0}
+
+        receipt = run_auto_siblings(out_dir, binary, engine=_engine)
+
+        assert receipt["status"] == "degraded"
+        assert receipt["reason"] == "no_seed_artifact"
+        assert "unreadable" not in receipt["detail"]
+        assert not (out_dir / SEEDS_FILENAME).exists()
+        assert not (map_dir / SEEDS_FILENAME).exists()
+
+    def test_dangling_symlink_artifact_stays_capture_failed(
+        self, tmp_path,
+    ):
+        """lexists distinction: a dangling symlink IS an artifact at
+        the path (something planted/broken) — that stays a read
+        failure, not "no artifact"."""
+        binary, sha = _make_binary(tmp_path)
+        map_dir = _write_map_run(tmp_path, binary, sha)
+        out_dir = _audit_dir(tmp_path)
+
+        def _engine(run_dir, *, auto):
+            del auto
+            (Path(run_dir) / SEEDS_FILENAME).symlink_to(
+                Path(run_dir) / "never-written.json")
+            return {"hypothesis_seeds_emitted": 1}
+
+        receipt = run_auto_siblings(out_dir, binary, engine=_engine)
+
+        assert receipt["status"] == "degraded"
+        assert receipt["reason"] == "capture_failed"
+        assert not (out_dir / SEEDS_FILENAME).exists()
+        del map_dir
+
     def test_engine_failure_degrades_with_escaped_detail(
         self, tmp_path, caplog,
     ):
