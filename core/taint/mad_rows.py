@@ -60,6 +60,10 @@ from core.taint.mad_matrix import (
 from core.taint.packs import (
     SOURCE_KIND_CALL_RETURN,
     PackSet,
+    PropagatorSpec,
+    SanitizerSpec,
+    SinkSpec,
+    SourceSpec,
 )
 
 RECORD_FILENAME = "taint-mad-augmentation.json"
@@ -145,7 +149,7 @@ def _translate_flow_cell(cell: str, language: str) -> str:
     return cell
 
 
-def _sink_label(sink) -> str:
+def _sink_label(sink: SinkSpec) -> str:
     """Rejection label naming exactly one declared sink entry.
 
     ``(kind, match)`` alone is not unique: two packs may declare the
@@ -155,6 +159,63 @@ def _sink_label(sink) -> str:
     join over the labels would wrongly exclude the converted one).
     """
     return f"sink:{sink.kind}:{sink.match or sink.kind}:{sink.sink_class}"
+
+
+def _classes_cell(classes: Sequence[str]) -> str:
+    """Class list rendered for a rejection label: declared order
+    (order is semantic — source kind selection walks the list
+    first-match), comma-joined. Class strings are charset-validated
+    at pack load; label escaping and length-bounding happen once, at
+    record egress (:func:`_bound`), same as every other label field.
+    """
+    return ",".join(classes)
+
+
+def _source_label(src: SourceSpec) -> str:
+    """Rejection label naming exactly one declared source entry.
+
+    Same discrimination as :func:`_sink_label`: ``(kind, match)``
+    alone is not unique — two packs may declare the same source with
+    different taint classes, and the class list alone decides whether
+    a kind mapping exists — so the classes ride in the label.
+    """
+    return (f"source:{src.kind}:{src.match or src.kind}"
+            f":{_classes_cell(src.taint_classes)}")
+
+
+def _sanitizer_label(z: SanitizerSpec) -> str:
+    """Rejection label naming exactly one declared sanitizer entry
+    (same-``(kind, match)`` twins may differ in ``sink_classes``;
+    every sanitizer is a counted refusal on these lanes, so the cell
+    is identity-bearing rather than fate-bearing)."""
+    return (f"sanitizer:{z.kind}:{z.match or z.kind}"
+            f":{_classes_cell(z.sink_classes)}")
+
+
+def _propagator_label(prop: PropagatorSpec) -> str:
+    """Rejection label naming exactly one declared propagator entry.
+
+    Propagators carry no class field; the field that can split the
+    fate of same-``(kind, match)`` twins is PROVENANCE — summary rows
+    require operator-grade provenance at the matrix gate, so an
+    operator twin converts while a learned twin is refused — and it
+    is the discriminator here.
+    """
+    return (f"propagator:{prop.kind}:{prop.match or prop.kind}"
+            f":{prop.provenance}")
+
+
+def _entry_label(
+    entry: SourceSpec | SinkSpec | SanitizerSpec | PropagatorSpec,
+) -> str:
+    """The per-channel rejection label for one pack entry."""
+    if isinstance(entry, SinkSpec):
+        return _sink_label(entry)
+    if isinstance(entry, SourceSpec):
+        return _source_label(entry)
+    if isinstance(entry, SanitizerSpec):
+        return _sanitizer_label(entry)
+    return _propagator_label(entry)
 
 
 def rows_from_pack_set(
@@ -171,18 +232,17 @@ def rows_from_pack_set(
     rows: list[ModelRow] = []
     rejected: list[RejectedRow] = []
 
-    def _cell_or_reject(role: str, entry) -> bool:
+    def _cell_or_reject(
+        role: str,
+        entry: SourceSpec | SinkSpec | SanitizerSpec | PropagatorSpec,
+    ) -> bool:
         cell = mad_emissibility(
             language=language, role=role, kind=entry.kind,
             provenance=entry.provenance,
         )
         if not cell.emissible:
-            if role == "sink":
-                row = _sink_label(entry)
-            else:
-                label = getattr(entry, "match", "") or entry.kind
-                row = f"{role}:{entry.kind}:{label}"
-            rejected.append(RejectedRow(row=row, reason=cell.reason))
+            rejected.append(RejectedRow(
+                row=_entry_label(entry), reason=cell.reason))
             return False
         return True
 
@@ -194,7 +254,7 @@ def rows_from_pack_set(
              if c in PACK_SOURCE_KINDS), None)
         if kind is None:
             rejected.append(RejectedRow(
-                row=f"source:{src.kind}:{src.match}",
+                row=_source_label(src),
                 reason=(
                     f"no models-as-data source kind consumes classes "
                     f"{list(src.taint_classes)!r}"
@@ -204,7 +264,7 @@ def rows_from_pack_set(
         coord = _coordinate(src.match, language)
         if coord is None:
             rejected.append(RejectedRow(
-                row=f"source:{src.kind}:{src.match}",
+                row=_source_label(src),
                 reason="bare-name python coordinate has no "
                        "module-qualified type path",
             ))
@@ -272,7 +332,7 @@ def rows_from_pack_set(
         coord = _coordinate(prop.match, language)
         if coord is None:
             rejected.append(RejectedRow(
-                row=f"propagator:{prop.kind}:{prop.match}",
+                row=_propagator_label(prop),
                 reason="bare-name python coordinate has no "
                        "module-qualified type path",
             ))
@@ -287,6 +347,18 @@ def rows_from_pack_set(
             ))
 
     return PackRowConversion(rows=tuple(rows), rejected=tuple(rejected))
+
+
+def _seam_label(row: ModelRow) -> str:
+    """Rejection label for one row at the provenance seam.
+
+    ``ModelRow.summary()`` alone is not unique: two rows may share the
+    (coordinate, kind) the summary names and differ only in
+    provenance — the exact field the seam's keep/reject decision
+    turns on — so the provenance rides in the label (the same
+    discrimination :func:`_sink_label` gives the pack channel).
+    """
+    return f"{row.summary()}:{row.provenance}"
 
 
 def enforce_mad_provenance(
@@ -307,7 +379,7 @@ def enforce_mad_provenance(
     for row in rows:
         if row.role == ROLE_BARRIER and language in BARRIERLESS_MAD_LANGUAGES:
             rejected.append(RejectedRow(
-                row=row.summary(),
+                row=_seam_label(row),
                 reason=(
                     f"barrier rows stay closed for {language} "
                     "(suppression channel)"
@@ -317,7 +389,7 @@ def enforce_mad_provenance(
         if (row.role in (ROLE_SUMMARY, ROLE_BARRIER)
                 and row.provenance not in OPERATOR_GRADE_PROVENANCE):
             rejected.append(RejectedRow(
-                row=row.summary(),
+                row=_seam_label(row),
                 reason=(
                     f"{row.role} rows require operator-grade provenance "
                     f"({sorted(OPERATOR_GRADE_PROVENANCE)}); "

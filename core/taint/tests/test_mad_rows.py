@@ -44,6 +44,7 @@ from core.taint.packs import (
     FlowEdge,
     PackSet,
     PropagatorSpec,
+    SanitizerSpec,
     SinkSpec,
     SourceSpec,
     default_pack_names,
@@ -111,6 +112,30 @@ def _sink_label(s):
     # is part of the key, because (kind, match) alone cannot name a
     # sink uniquely across packs.
     return f"sink:{s.kind}:{s.match or s.kind}:{s.sink_class}"
+
+
+def _source_label(s):
+    # Pins the source rejection-label format: the taint-class list
+    # (declared order, comma-joined) is part of the key — same
+    # discrimination the sink label carries, because (kind, match)
+    # alone cannot name a source uniquely across packs.
+    return (f"source:{s.kind}:{s.match or s.kind}"
+            f":{','.join(s.taint_classes)}")
+
+
+def _sanitizer_label(s):
+    # Pins the sanitizer rejection-label format: sink_classes is the
+    # class-bearing field same-(kind, match) twins can differ in.
+    return (f"sanitizer:{s.kind}:{s.match or s.kind}"
+            f":{','.join(s.sink_classes)}")
+
+
+def _propagator_label(p):
+    # Pins the propagator rejection-label format: provenance is the
+    # field that can split the fate of same-(kind, match) twins (the
+    # matrix requires operator-grade provenance for summary rows), so
+    # it is the discriminator.
+    return f"propagator:{p.kind}:{p.match or p.kind}:{p.provenance}"
 
 
 def test_javascript_conversion_pins(js_packs):
@@ -194,7 +219,7 @@ def _accounting(conv, pack_set):
     assert n_sink_rej == len(pack_set.sinks) - len(converted_sinks)
     converted_props = [
         p for p in pack_set.propagators
-        if f"propagator:{p.kind}:{p.match}" not in set(rejected_labels)
+        if _propagator_label(p) not in set(rejected_labels)
     ]
     assert n_summary_rows == sum(len(p.flows) for p in converted_props)
     assert n_prop_rej == len(pack_set.propagators) - len(converted_props)
@@ -250,7 +275,7 @@ def test_python_conversion_pins(py_packs):
 def test_python_bare_names_are_counted_coordinate_refusals(py_packs):
     conv = rows_from_pack_set(py_packs, language="python")
     bare = [r for r in conv.rejected if "bare-name" in r.reason]
-    assert "source:call_return:input" in {r.row for r in bare}
+    assert "source:call_return:input:user-input" in {r.row for r in bare}
     staged_types = {r.type_name for r in conv.rows}
     assert "input" not in staged_types
 
@@ -334,6 +359,90 @@ def test_duplicate_kind_match_sinks_stay_uniquely_attributed():
     _accounting(conv, ps)
 
 
+def test_duplicate_kind_match_sources_stay_uniquely_attributed():
+    # Mirror of the duplicate-sink pin for the source channel: two
+    # packs may declare the SAME (kind, match) source with different
+    # taint classes — the class list alone decides whether a kind
+    # mapping exists, so only one twin converts. The refusal label
+    # must carry the classes so it names exactly one entry and the
+    # accounting join cannot exclude the converted twin.
+    dup_convert = SourceSpec(
+        kind="call_return", taint_classes=("user-input",),
+        match="requests.get", provenance="framework_catalog")
+    dup_reject = SourceSpec(
+        kind="call_return", taint_classes=("environment",),
+        match="requests.get", provenance="framework_catalog")
+    ps = _pack_set(sources=(dup_convert, dup_reject))
+    conv = rows_from_pack_set(ps, language="python")
+    # The mapped twin converts — exactly one row, unaffected by the
+    # refusal of its namesake.
+    assert [(r.type_name, r.path, r.model_kind) for r in conv.rows] == [
+        ("requests", "Member[get].ReturnValue", "remote")]
+    # The unmapped twin is a counted refusal whose label names it
+    # unambiguously (classes included).
+    (rej,) = conv.rejected
+    assert rej.row == "source:call_return:requests.get:environment"
+    assert rej.row != _source_label(dup_convert)
+    assert "no models-as-data source kind" in rej.reason
+    # And the arithmetic still balances over the duplicate pair.
+    _accounting(conv, ps)
+
+
+def test_duplicate_kind_match_propagators_stay_uniquely_attributed():
+    # The propagator analogue: PropagatorSpec carries no class field —
+    # the field that can split the fate of same-(kind, match) twins is
+    # provenance (summary rows require operator-grade provenance at
+    # the matrix gate). The refusal label carries it so the learned
+    # twin's refusal cannot be attributed to the operator twin the
+    # accounting join must keep.
+    dup_convert = PropagatorSpec(
+        kind="dotted_callee", match="shlex.join",
+        flows=(FlowEdge(src="Argument[0]", dst="ReturnValue"),),
+        provenance="framework_catalog")
+    dup_reject = PropagatorSpec(
+        kind="dotted_callee", match="shlex.join",
+        flows=(FlowEdge(src="Argument[0]", dst="ReturnValue"),),
+        provenance="iris_refined")
+    ps = _pack_set(propagators=(dup_convert, dup_reject))
+    conv = rows_from_pack_set(ps, language="python")
+    # The operator-grade twin converts — one summary row per flow.
+    assert [(r.role, r.type_name, r.path) for r in conv.rows] == [
+        (ROLE_SUMMARY, "shlex", "Member[join]")]
+    # The learned twin is a counted refusal whose label names it
+    # unambiguously (provenance included).
+    (rej,) = conv.rejected
+    assert rej.row == "propagator:dotted_callee:shlex.join:iris_refined"
+    assert rej.row != _propagator_label(dup_convert)
+    assert "operator-grade" in rej.reason
+    # And the arithmetic still balances over the duplicate pair.
+    _accounting(conv, ps)
+
+
+def test_duplicate_kind_match_sanitizer_labels_stay_distinct():
+    # Sanitizers are ALWAYS counted refusals on these lanes (barrier
+    # channel closed), so same-(kind, match) twins cannot split fate —
+    # but their labels must still name each entry distinctly, and
+    # sink_classes is the class-bearing field twins can differ in.
+    twin_a = SanitizerSpec(
+        kind="dotted_callee", match="shlex.quote", semantics="kill",
+        sink_classes=("command-injection",),
+        provenance="framework_catalog")
+    twin_b = SanitizerSpec(
+        kind="dotted_callee", match="shlex.quote", semantics="kill",
+        sink_classes=("argument-injection",),
+        provenance="framework_catalog")
+    ps = _pack_set(sanitizers=(twin_a, twin_b))
+    conv = rows_from_pack_set(ps, language="python")
+    assert conv.rows == ()
+    labels = [r.row for r in conv.rejected]
+    assert labels == [
+        "sanitizer:dotted_callee:shlex.quote:command-injection",
+        "sanitizer:dotted_callee:shlex.quote:argument-injection",
+    ]
+    assert len(set(labels)) == 2
+    _accounting(conv, ps)
+
+
 def test_learned_propagator_is_a_matrix_refusal():
     ps = _pack_set(propagators=(PropagatorSpec(
         kind="dotted_callee", match="shlex.join",
@@ -364,6 +473,20 @@ def test_learned_summary_rows_are_refused():
     assert conv.rows == ()
     (rej,) = conv.rejected
     assert "operator-grade" in rej.reason
+
+
+def test_seam_refusal_labels_carry_provenance():
+    # Two rows may share the summary() coordinate and differ only in
+    # provenance — the exact field the seam's keep/reject decision
+    # turns on. The refusal label carries it, so the learned twin's
+    # refusal can never be attributed to the operator twin that
+    # passed (the duplicate-twin discrimination, seam edition).
+    kept = _summary("framework_catalog")
+    refused = _summary("iris_refined")
+    conv = enforce_mad_provenance([kept, refused], language="javascript")
+    assert [r.provenance for r in conv.rows] == ["framework_catalog"]
+    (rej,) = conv.rejected
+    assert rej.row == "summary:pkg.Member[fn]:taint:iris_refined"
 
 
 def test_operator_grade_summary_rows_pass():
