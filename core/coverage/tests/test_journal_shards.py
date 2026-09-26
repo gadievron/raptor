@@ -143,8 +143,13 @@ def test_flush_journal_syncs_all_shards(tmp_path, tiny_roll):
     flush_journal(tmp_path)   # must not raise across the shard set
 
 
-def test_compact_journal_shard_aware(tmp_path, tiny_roll, monkeypatch):
+def test_compact_journal_shard_aware(tmp_path, monkeypatch):
     from core.coverage.journal_compact import compact_journal
+    # Compaction dedups within each shard (cross-shard prune is the
+    # loader's). Rows carry run_path + integrity stamps (~650 bytes),
+    # so size shards to hold a few rows each — duplicate re-emissions
+    # must co-locate for the shard-local prune to have work.
+    monkeypatch.setattr(journal_mod, "_JOURNAL_SHARD_ROLL_BYTES", 2000)
     append_entry(tmp_path, _entry(0, cost=2.0))
     for _ in range(10):
         append_entry(tmp_path, _entry(0, reused=True, pad=64))
@@ -187,15 +192,17 @@ def test_shard_bound_appends_to_final_shard(tmp_path, tiny_roll,
     assert len(load_entries(tmp_path)) == 12
 
 
-def test_compact_supersede_multi_shard_spend_carriers(tmp_path, tiny_roll):
+def test_compact_supersede_multi_shard_spend_carriers(tmp_path, monkeypatch):
     """Supersede across a shard set: the aggregated stats must stay
     internally consistent (one spend carrier per dropped cost-bearing
     row, summed over EVERY shard — not just the first), backups use
     the .pre-supersede family per shard, and spend is bit-exact."""
     from core.coverage.journal_compact import compact_journal
     # Three cost-bearing versions per function, appended consecutively
-    # so each function's versions co-locate in one shard (pad sizes
-    # the rows so a shard holds roughly one function's group).
+    # so each function's versions co-locate in one shard (the roll is
+    # sized to hold roughly one function's group of stamped ~650-byte
+    # rows — supersede, like dedup, works within each shard).
+    monkeypatch.setattr(journal_mod, "_JOURNAL_SHARD_ROLL_BYTES", 2100)
     for i in range(8):
         for _ in range(3):
             append_entry(tmp_path, _entry(i, cost=0.25, pad=96))

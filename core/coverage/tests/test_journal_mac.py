@@ -166,6 +166,44 @@ class TestAdditiveFieldForwardCompat:
         assert journal_mac.entry_provenance(entry) == journal_mac.ROW_VERIFIED
         assert "future_field" not in entry.to_dict()
 
+    def test_run_path_stamped_resolved_and_mac_covered(
+            self, tmp_path, monkeypatch):
+        """``append_entry`` stamps the RESOLVED run-dir path into the
+        MAC-covered ``run_path`` field (never caller-supplied) — the
+        findings re-import gate keys raw-receipt scope on it, so an
+        attacker redirecting the field must demote the row. Writing
+        through a symlink alias stamps the real path (writer/reader
+        symmetry)."""
+        import json
+
+        from core.coverage.journal import (
+            ReviewJournalEntry,
+            append_entry,
+            load_entries,
+            now_iso,
+        )
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        real = tmp_path / "real-run"
+        real.mkdir()
+        alias = tmp_path / "alias-run"
+        alias.symlink_to(real)
+        append_entry(alias, ReviewJournalEntry(
+            ts=now_iso(), run_id="alias-run", file="a.c", function="f",
+            verdict="clean", source_hash="", line_start=1, line_end=2,
+            run_path="/attacker/supplied",  # overwritten by the stamp
+        ))
+        entry = load_entries(real)[0]
+        assert entry.run_path == str(real.resolve())
+        assert journal_mac.entry_provenance(entry) == journal_mac.ROW_VERIFIED
+        # Redirecting the persisted field breaks the token.
+        row = json.loads(
+            (real / "review-journal.jsonl").read_text())
+        row["run_path"] = str(tmp_path / "other-run")
+        (real / "review-journal.jsonl").write_text(json.dumps(row) + "\n")
+        tampered = load_entries(real, fresh=True)[0]
+        assert (journal_mac.entry_provenance(tampered)
+                == journal_mac.ROW_TAMPERED)
+
     def test_covered_body_field_round_trips_verified(
             self, tmp_path, monkeypatch):
         from core.coverage.journal import (

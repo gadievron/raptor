@@ -182,6 +182,7 @@ def row_sha256(row: dict) -> str:
 _JOURNAL_DOMAIN = b"review-journal-row\x00"
 _AUDIT_LOG_DOMAIN = b"audit-log-row\x00"
 _PREP_CACHE_DOMAIN = b"prep-cache-artifact\x00"
+_COVERAGE_ROW_DOMAIN = b"coverage-analysed-row\x00"
 
 
 def _mac_message(sha256_hex: str, domain: bytes = _JOURNAL_DOMAIN) -> bytes:
@@ -299,6 +300,72 @@ def verify_prep_cache_row(
     return _verify(row, token, _prep_cache_domain(run_binding))
 
 
+def _coverage_row_domain(tool: str) -> bytes:
+    return (_COVERAGE_ROW_DOMAIN
+            + str(tool).encode("utf-8", "surrogatepass") + b"\x00")
+
+
+def mint_coverage_row(row: dict, tool: str) -> str | None:
+    """Token for one ``functions_analysed`` row of a coverage record.
+
+    Coverage records are the OTHER durable review-suppression lane
+    beside the journal: a ``functions_analysed`` row under a
+    review-grade tool label removes the named function from the gap
+    fold's review queue, and the records live in the same
+    target-writable run/project directories — a dropped
+    ``coverage-llm.json`` naming a function silenced its review with
+    no stamp, no verdict and no source evidence. Same canonical form
+    and key as the journal, own domain.
+
+    Per-ROW, not per-record, deliberately: the mark/unmark CLI and
+    the run-completion snapshot read-modify-write whole records, so a
+    record-level token would re-stamp — launder — any planted row
+    that was sitting in the file when a legitimate writer next saved
+    it. Rows are stamped once at CREATION (record builders, the mark
+    CLI append) and copied verbatim by every RMW writer, so a planted
+    row stays unstamped no matter how many legitimate saves follow.
+
+    TOOL-BOUND: the record's ``tool`` label is part of the domain,
+    because the label is what grades a row's authority — a row
+    legitimately minted for a scanned-tier record (``understand``
+    map-grade marks: examination evidence, never review credit) must
+    not verify when replayed into a review-grade ``coverage-llm.json``.
+    Not run-bound, same rationale as journal rows: records aggregate
+    across runs by design and a replayed stamped row is genuine
+    install history for the row it names.
+
+    ``None`` = persist unstamped — the fold then grants credit only
+    behind the exact full-length source-hash gate
+    (``core.audit.gaps._build_covered_set``), the journal's
+    tolerant-reader compromise. That gate is source-CURRENCY, not
+    authentication: the hash is unkeyed and computable from readable
+    source, so a hash-carrying plant passes it — the gate exists to
+    keep legacy rows credited while refusing hashless plants and
+    stale credit. Authorship assurance is this token, nothing
+    weaker."""
+    return _mint(row, _coverage_row_domain(tool))
+
+
+def verify_coverage_row(row: dict, token: str | None, tool: str) -> bool:
+    """Coverage-row twin of :func:`verify_row`, against the record's
+    ``tool`` label. Consumers that grant a row review-suppression
+    authority MUST fail toward NOT suppressing when this returns
+    False unless the row carries positive source-hash evidence."""
+    return _verify(row, token, _coverage_row_domain(tool))
+
+
+def coverage_row_provenance(row: dict, tool: str) -> str:
+    """Tri-state provenance of one ``functions_analysed`` row dict —
+    same tiers and consumer semantics as :func:`entry_provenance`
+    (``tampered`` is attribution, not a security boundary: consumers
+    give it unstamped-tier authority)."""
+    token = row.get(TOKEN_KEY)
+    if not token:
+        return ROW_UNSTAMPED
+    return (ROW_VERIFIED if verify_coverage_row(row, str(token), tool)
+            else ROW_TAMPERED)
+
+
 def entry_provenance(entry) -> str:
     """Tri-state provenance of a loaded ``ReviewJournalEntry``.
 
@@ -326,13 +393,16 @@ __all__ = [
     "ROW_VERIFIED",
     "TOKEN_KEY",
     "audit_log_run_binding",
+    "coverage_row_provenance",
     "entry_provenance",
     "key_usable",
     "mint_audit_log_row",
+    "mint_coverage_row",
     "mint_prep_cache_row",
     "mint_row",
     "row_sha256",
     "verify_audit_log_row",
+    "verify_coverage_row",
     "verify_prep_cache_row",
     "verify_row",
 ]

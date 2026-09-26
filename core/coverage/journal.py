@@ -364,6 +364,16 @@ class ReviewJournalEntry:
     function: str
     verdict: str
     source_hash: str
+    # ``run_path``: full resolved run-directory path, stamped by
+    # ``append_entry`` at write time (never caller-supplied). The
+    # finding re-import gate grants raw tool receipts only on a
+    # full-path match — ``run_id`` is a basename and basenames
+    # collide across projects (operator-chosen ``--out`` names), so
+    # a byte-copied journal in a same-named sibling run dir must not
+    # resurrect receipts minted against a different codebase. MAC-
+    # covered when present; absent on pre-field rows (those demote
+    # to the receipt-less tier at re-import, never refusal).
+    run_path: str | None = None
     # Receiver-qualified name (``Class.method``) when the inventory
     # metadata carries one. Optional presentation/join identity —
     # ``function`` stays the bare name every key derives from, so
@@ -747,6 +757,15 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
     # a reader would load. No usable key → the row persists unstamped
     # and demotes to the hash-gated legacy tier on read.
     from core.coverage import journal_mac
+    # ``run_path`` is stamped HERE, never caller-supplied: the full
+    # resolved run-dir path is where the row physically lands, and
+    # binding it under the MAC is what lets the finding re-import
+    # gate refuse receipt replay from a byte-copied journal in a
+    # same-BASENAME sibling run dir (run_id alone is a basename).
+    try:
+        entry.run_path = str(Path(out_dir).resolve())
+    except OSError:
+        entry.run_path = str(out_dir)
     row = entry.to_dict()
     row.pop(journal_mac.TOKEN_KEY, None)
     token = journal_mac.mint_row(row)
@@ -2138,6 +2157,7 @@ def _entry_from_dict(raw: dict[str, Any]) -> ReviewJournalEntry:
         function_qualified=raw.get("function_qualified"),
         verdict=raw["verdict"],
         source_hash=raw.get("source_hash", ""),
+        run_path=raw.get("run_path"),
         line_start=_ls,
         line_end=_le,
         cwe=raw.get("cwe"),

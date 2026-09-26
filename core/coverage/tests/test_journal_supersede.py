@@ -113,7 +113,11 @@ class TestMegaAuditWedge:
         oracle_reviewed = reviewed_set(tmp_path)
         oracle_spend = journal_spend_usd(tmp_path)
 
-        budget = 192 * 1024
+        # Sized between the superseded journal (~195 KiB — 40 latest
+        # rows plus 120 spend carriers, every row carrying run_path +
+        # integrity stamps) and the full 4-pass journal, so the wedge
+        # reproduces AND --supersede provably clears it.
+        budget = 208 * 1024
         monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_BYTES", budget)
 
         # The wedge: plain compaction is a no-op (nothing prunable) …
