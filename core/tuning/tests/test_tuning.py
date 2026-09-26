@@ -650,6 +650,16 @@ class TestDerivedImportTimeout:
         assert derive_joern_import_timeout_s(0) == 900
         assert derive_joern_import_timeout_s(-1) == 900
 
+    def test_slope_pinned_exactly_mid_curve(self):
+        # Exact mid-curve pin (100 MiB x 20 s/MiB = 2000 s, between
+        # floor and cap) holds the slope in BOTH directions: the
+        # floor/headroom pins above only fail from below (a silently
+        # doubled slope passes them all), the cap pins only from
+        # above (a halved slope passes those). Any slope change must
+        # move this number and re-argue the calibration.
+        from core.tuning import derive_joern_import_timeout_s
+        assert derive_joern_import_timeout_s(100 * _MIB) == 2000
+
     def test_derived_max_helper(self):
         from core.tuning import derived_max_joern_import_timeout_s
         assert derived_max_joern_import_timeout_s() == 10800
@@ -704,6 +714,20 @@ class TestDerivedPresweepTimeout:
         from core.tuning import derive_joern_presweep_timeout_s
         assert derive_joern_presweep_timeout_s(0, 10**9) == 0
         assert derive_joern_presweep_timeout_s(-5, 10**9) == -5
+
+    def test_slope_pinned_exactly_mid_curve(self):
+        # Exact mid-curve pins hold the slope in BOTH directions (the
+        # headroom pins above only fail from below, the cap pins only
+        # from above — a silently doubled or halved slope would pass
+        # every one of them). 100 MiB x 20 s/MiB = 2000 s; the
+        # subprocess path adds the import slope on the same bytes
+        # (40 s/MiB total = 4000 s). Any slope change must move these
+        # numbers and re-argue the calibration.
+        from core.tuning import derive_joern_presweep_timeout_s
+        assert derive_joern_presweep_timeout_s(300, 100 * _MIB) == 2000
+        assert derive_joern_presweep_timeout_s(
+            300, 100 * _MIB, include_import=True,
+        ) == 4000
 
 
 class TestDerivedMaxPresweepTimeout:
