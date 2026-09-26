@@ -12,10 +12,18 @@ Gate ordering (cost order, short-circuit on first hit):
 4. Input-bound Tier 0        — known-return-type table
 5. Anti-self-refutation      — rescue self-refuted concurrency/lifecycle hyps
 6. Callee-inheritance        — demote thin wrappers flagged for callee's bug
+7. Disassembly cross-check   — binary items whose claim cites
+   argument/register/sibling-differential/operand-width facts the
+   decoded instructions can adjudicate (decompilation-artifact
+   verdicts); resolves its own claim text (hypothesis → hypotheses →
+   body), so it also runs when the hypothesis field is empty
 
 Gates 1-4 are demotion gates (finding/suspicious → clean).
 Gate 5 is a promotion gate (clean → suspicious) for self-refuted hypotheses.
 Gate 6 is a demotion gate (finding/suspicious → clean) for callee attribution.
+Gate 7 is a demotion gate (binary items only) — the one gate that may run a
+sandboxed subprocess, so it is ordered last; its corroborated/inconclusive
+outcomes never change a verdict.
 
 """
 
@@ -70,8 +78,16 @@ def refute_hypothesis(
     checklist: dict[str, Any] | None,
     config,  # OrchestratorConfig
     joern_server=None,
+    tier_counters: dict[str, Any] | None = None,
 ) -> RefutationVerdict | None:
-    """Run refutation gates in cost order.  Return verdict or None."""
+    """Run refutation gates in cost order.  Return verdict or None.
+
+    ``tier_counters`` (when the caller holds the run's TierCounters
+    dict) receives the disasm cross-check gate's per-outcome tallies
+    under the ``disasm_xcheck`` tier — the only gate here that runs a
+    (sandboxed) subprocess and therefore reports like the mechanical
+    verification tiers.
+    """
     # Never refute a finding with mechanical tool confirmation.
     from .evidence_grade import is_tool_evidence
 
@@ -81,7 +97,14 @@ def refute_hypothesis(
 
     hyp = outcome.hypothesis or ""
     if not hyp:
-        return None
+        # Gates 1-6 bind on hypothesis text and have nothing to do.
+        # Binary rows, however, can carry their claim only in
+        # ``hypotheses``/``body`` (observed live: suspicious binary
+        # verdicts journaled with hypothesis empty) — gate 7 resolves
+        # its own claim text, so it still gets its turn.
+        return _refute_by_disasm_xcheck(
+            outcome, checklist, config, tier_counters=tier_counters,
+        )
 
     # Gate 1: Architecture model
     v = _refute_by_architecture(outcome, domain_model, checklist, config)
@@ -110,7 +133,173 @@ def refute_hypothesis(
         if v is not None:
             return v
 
+    # Gate 7: Disassembly cross-check (binary items only; the one
+    # gate that may spawn a sandboxed subprocess, so it runs last)
+    v = _refute_by_disasm_xcheck(
+        outcome, checklist, config, tier_counters=tier_counters,
+    )
+    if v is not None:
+        return v
+
     return None
+
+
+# ---------------------------------------------------------------------------
+# Gate 7: Disassembly cross-check (binary items)
+# ---------------------------------------------------------------------------
+
+# Leading bracketed pipeline markers ("[gate violation: ...]",
+# "[hypothesis-consistency: ...]") stripped before the body-text
+# fallback scans for a claim.
+_BODY_PREFIX_RE = re.compile(r"\A(?:\[[^\]\n]{0,200}\]\s{0,4})+")
+
+
+def _disasm_claim_text(outcome) -> tuple[str, str]:
+    """(claim text, source) for the disasm gate.
+
+    Resolution order mirrors where binary reviews actually record
+    their claim: ``hypothesis``, then the first ``hypotheses`` entry,
+    then the outcome body with bracketed pipeline prefixes stripped.
+    The body leg exists because live binary rows journal suspicious
+    verdicts with an empty hypothesis and the claim in prose; the
+    binding discipline in ``classify_trigger`` (refuse on ambiguity,
+    quoted-prose steering defences) is what makes the wider net safe.
+    """
+    text = getattr(outcome, "hypothesis", "") or ""
+    if text:
+        return text, "hypothesis"
+    for entry in getattr(outcome, "hypotheses", None) or []:
+        if isinstance(entry, dict):
+            etext = entry.get("hypothesis") or entry.get("text") or ""
+        else:
+            etext = str(entry or "")
+        if etext:
+            return etext, "hypotheses"
+    body = getattr(outcome, "body", "") or ""
+    body = _BODY_PREFIX_RE.sub("", body)
+    return body, "body"
+
+
+def _refute_by_disasm_xcheck(
+    outcome,
+    checklist: dict[str, Any] | None,
+    config,
+    tier_counters: dict[str, Any] | None = None,
+) -> RefutationVerdict | None:
+    """Verdict-time instruction cross-check of decompilation-derived
+    ARGUMENT / REGISTER / IMMEDIATE-WIDTH claims on binary items.
+
+    Trigger: the item is binary-sourced (``binary:`` file sentinel)
+    AND the hypothesis matches the bounded trigger taxonomy in
+    :func:`core.audit.disasm_xcheck.classify_trigger` (keyword +
+    structure, never free LLM classification). Verdict-status gating
+    (suspicious+) is the caller's existing contract — every
+    ``refute_hypothesis`` call site already fires only on
+    finding/suspicious outcomes.
+
+    Semantics: ``refuted`` demotes like the other gates (heuristic
+    refuter grade — the refuting instructions are mechanical, but
+    binding the claim text to a register/call site rests on keyword
+    matching), and only on refute-grade evidence (unconditional
+    32/64-bit writes that provably reach the call — see the module
+    docstring's grade rules). ``corroborated`` NEVER promotes: the receipt
+    is attached to the outcome (pipeline-controlled attribute, so a
+    model cannot forge it through review_result) and journaled;
+    corroborate-absence never suppresses anything. Every invocation
+    journals an ``action=disasm_xcheck`` receipt row with the bounded
+    escaped excerpt.
+    """
+    from core.inventory.binary_builder import BINARY_PATH_PREFIX
+
+    if not str(getattr(outcome, "file", "") or "").startswith(
+            BINARY_PATH_PREFIX):
+        return None
+    try:
+        from .disasm_xcheck import classify_trigger, run_disasm_xcheck
+    except ImportError:
+        return None
+    claim, claim_source = _disasm_claim_text(outcome)
+    trigger = classify_trigger(
+        claim,
+        function_name=getattr(outcome, "function", "") or "",
+    )
+    if trigger is None:
+        # Outside the taxonomy: the tier is never invoked — no
+        # subprocess, no journal row, no counter.
+        return None
+
+    from .diagnostics import increment_tier_dict
+
+    def _tally(outcome_str: str) -> None:
+        if tier_counters is None:
+            return
+        field = {
+            "refuted": "refuted",
+            "corroborated": "confirmed",
+            "inconclusive": "inconclusive",
+            "skipped": "skipped",
+        }.get(outcome_str, "errors")
+        increment_tier_dict(tier_counters, "disasm_xcheck", field)
+
+    try:
+        res = run_disasm_xcheck(
+            getattr(config, "target_path", None),
+            outcome.file,
+            outcome.function,
+            claim,
+            checklist=checklist,
+            out_dir=getattr(config, "out_dir", None),
+            trigger=trigger,
+        )
+    except Exception:  # noqa: BLE001 — a channel fault never blocks review
+        logger.debug(
+            "disasm_xcheck failed for %s:%s",
+            outcome.file, outcome.function, exc_info=True,
+        )
+        _tally("error")
+        return None
+
+    _tally(res.outcome)
+
+    # Receipt row — the fail_open/_record_channel_receipt shape, one
+    # per invocation regardless of outcome (honest inconclusives).
+    try:
+        out_dir = getattr(config, "out_dir", None)
+        if out_dir:
+            from .record import append_audit_log
+
+            record = {
+                "action": "disasm_xcheck",
+                "file": outcome.file,
+                "function": outcome.function,
+                "claim_source": claim_source,
+            }
+            record.update(res.to_dict())
+            append_audit_log(out_dir, record)
+    except Exception:  # noqa: BLE001 — records-only failure
+        logger.debug("disasm_xcheck receipt write failed", exc_info=True)
+
+    if res.outcome == "corroborated":
+        # Pipeline-controlled attachment (NOT review_result: parsed
+        # model JSON lands there, and a fabricated key would mint a
+        # mechanical-looking chain entry — the typestate lesson).
+        try:
+            outcome.disasm_xcheck = res.receipt_summary()
+        except Exception:  # noqa: BLE001 — slotted stand-ins in tests
+            logger.debug("disasm_xcheck receipt attach failed",
+                         exc_info=True)
+        return None
+    if res.outcome != "refuted":
+        return None
+    return RefutationVerdict(
+        gate="disasm_xcheck",
+        reason=(
+            f"{res.rule_id}: {res.reason} (decoded-instruction "
+            f"receipt in .audit-log.jsonl)"
+        ),
+        demote_to="clean",
+        refuter_grade="heuristic",
+    )
 
 
 # ---------------------------------------------------------------------------
