@@ -1069,3 +1069,74 @@ class TestPidSuffixDirReaping:
         assert reap_dead_pid_dirs(
             tmp_path, "raptor-pytest-", pid_suffix=True) == []
         assert d.is_dir()
+
+
+class TestPidFileReaping:
+    """Pid-owned scorecard sidecars: the embedded pid is the liveness
+    contract — dead-owner pairs reap regardless of age, live-owner
+    pairs (the flock target especially) survive regardless of age,
+    and non-pid spellings under the shared prefix keep the dir
+    branch's squat semantics."""
+
+    @staticmethod
+    def _dead_pid():
+        proc = subprocess.Popen(["true"])
+        proc.wait(timeout=10)
+        return proc.pid
+
+    @staticmethod
+    def _sidecar_pair(root, pid, mtime=None):
+        pair = []
+        for suffix in (".json", ".json.lock"):
+            f = root / f"raptor-pytest-scorecard-{pid}{suffix}"
+            f.write_text("{}")
+            if mtime is not None:
+                os.utime(f, (mtime, mtime))
+            pair.append(f)
+        return pair
+
+    def test_dead_pid_pair_reaped_even_fresh(self, tmp_root):
+        pair = self._sidecar_pair(tmp_root, self._dead_pid())
+        assert sorted(reap_stale_tmp()) == sorted(pair)
+        assert not any(f.exists() for f in pair)
+
+    def test_live_pid_pair_kept_even_old(self, tmp_root):
+        own = self._sidecar_pair(tmp_root, os.getpid(), mtime=_OLD)
+        parent = self._sidecar_pair(tmp_root, os.getppid(), mtime=_OLD)
+        assert reap_stale_tmp() == []
+        assert all(f.exists() for f in own + parent)
+
+    def test_non_pid_spelling_keeps_squat_semantics(self, tmp_root):
+        # Matches the raptor-pytest- DIR prefix but not the pid-file
+        # grammar: stays a dir candidate, where the S_ISDIR guard
+        # skips a plain file ("squatting on our prefix — not ours").
+        f = tmp_root / "raptor-pytest-scorecard-notes.json"
+        f.write_text("{}")
+        os.utime(f, (_OLD, _OLD))
+        assert reap_stale_tmp() == []
+        assert f.exists()
+
+    def test_pid_file_match_grammar(self):
+        from core.run.tmp_reaper import _pid_file_match
+        pre = "raptor-pytest-scorecard-"
+        assert _pid_file_match(f"{pre}123.json", pre, ".json") == 123
+        assert _pid_file_match(
+            f"{pre}123.json.lock", pre, ".json.lock") == 123
+        # The .json pattern must not swallow the lock sibling.
+        assert _pid_file_match(f"{pre}123.json.lock", pre, ".json") is None
+        # Digits are mandatory and exclusive.
+        assert _pid_file_match(f"{pre}.json", pre, ".json") is None
+        assert _pid_file_match(f"{pre}12x3.json", pre, ".json") is None
+        assert _pid_file_match(f"{pre}123.txt", pre, ".json") is None
+
+    def test_poison_pid_kept_and_sweep_completes(self, tmp_root):
+        # os.kill raises OverflowError (not OSError) for out-of-range
+        # pids: a poison-named euid-owned file must be KEPT while the
+        # rest of the sweep still runs — one hostile name must never
+        # starve every candidate after it.
+        poison = tmp_root / f"raptor-pytest-scorecard-{10**30}.json"
+        poison.write_text("{}")
+        dead = self._sidecar_pair(tmp_root, self._dead_pid())
+        assert sorted(reap_stale_tmp()) == sorted(dead)
+        assert poison.exists()
+        assert not any(f.exists() for f in dead)

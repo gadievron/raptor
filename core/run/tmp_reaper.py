@@ -374,6 +374,55 @@ _ANCHORED_FILE_PATTERNS = (
     ("x2cpg", "stderr"),
 )
 
+# Pid-owned sidecar files. The root conftest points every pytest
+# process's default scorecard ledger at
+# ``raptor-pytest-scorecard-<pid>.json`` (plus its ``.lock`` flock
+# sibling) so test-minted cells never reach production telemetry.
+# Those names start with the ``raptor-pytest-`` DIR prefix above, so
+# the classifier routed them into dir candidates, where the S_ISDIR
+# squat guard skipped them every sweep — they accreted unbounded (one
+# pair per pytest process). The embedded pid is the liveness contract
+# (the reap_dead_pid_dirs precedent): a dead owner's pair is garbage
+# regardless of age, and a LIVE owner's lock sibling must never be
+# unlinked — a second process could then create and "hold" a fresh
+# lock file beside the live holder's flock. Non-pid spellings under
+# the prefix keep the dir-branch squat semantics.
+_PID_FILE_PATTERNS = (
+    ("raptor-pytest-scorecard-", ".json"),
+    ("raptor-pytest-scorecard-", ".json.lock"),
+)
+
+
+def _pid_file_match(name: str, prefix: str, suffix: str) -> int | None:
+    """The embedded pid when *name* is ``<prefix><digits><suffix>``
+    exactly; None otherwise."""
+    if not (name.startswith(prefix) and name.endswith(suffix)):
+        return None
+    digits = name[len(prefix):len(name) - len(suffix)]
+    if not digits or not digits.isdigit():
+        return None
+    return int(digits)
+
+
+def _pid_alive(pid: int) -> bool:
+    """Conservative liveness for the pid-file contract: only a
+    confirmed-dead pid reads False. EPERM means alive under another
+    uid; any other surprise reads alive. Pid reuse at worst delays a
+    reap — the safe direction. OverflowError is in the net because
+    ``os.kill`` raises it (not OSError) for out-of-range pids — a
+    single poison-named file must read "alive" (kept, skipped), never
+    abort the sweep for every entry after it."""
+    if pid <= 0:
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (OSError, OverflowError):
+        return True
+    return True
+
+
 _MAX_AGE_ENV = "RAPTOR_TMP_REAP_MAX_AGE_H"
 _DEFAULT_MAX_AGE_H = 24.0
 
@@ -594,6 +643,7 @@ def _reap(now: float | None) -> list[Path]:
 
     dir_candidates: list[Path] = []
     file_candidates: list[Path] = []
+    pid_file_candidates: list[tuple[Path, int]] = []
     for tmp_root, lane_only in _sweep_roots():
         try:
             names = os.listdir(tmp_root)
@@ -606,6 +656,17 @@ def _reap(now: float | None) -> list[Path]:
                 # belongs to other subsystems entirely.
                 if name.startswith(_LANE_DIR_PREFIX):
                     dir_candidates.append(tmp_root / name)
+                continue
+            # Pid-file patterns are checked FIRST: their names also
+            # match the raptor-pytest- dir prefix, and the dir branch's
+            # S_ISDIR squat guard would silently skip them forever.
+            pid: int | None = None
+            for pre, suf in _PID_FILE_PATTERNS:
+                pid = _pid_file_match(name, pre, suf)
+                if pid is not None:
+                    break
+            if pid is not None:
+                pid_file_candidates.append((tmp_root / name, pid))
                 continue
             if any(name.startswith(p) for p in _dir_prefixes()) or any(
                 _anchored_name_match(name, p)
@@ -623,7 +684,8 @@ def _reap(now: float | None) -> list[Path]:
                 for pre, suf in _ANCHORED_FILE_PATTERNS
             ):
                 file_candidates.append(tmp_root / name)
-    if not dir_candidates and not file_candidates:
+    if (not dir_candidates and not file_candidates
+            and not pid_file_candidates):
         return []
 
     if now is None:
@@ -687,6 +749,26 @@ def _reap(now: float | None) -> list[Path]:
         if st.st_uid != euid:
             continue
         if now - st.st_mtime < max_age:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        reaped.append(path)
+
+    # Pid-owned sidecars: the embedded pid, not age, is the contract —
+    # a dead owner's pair is reaped even when fresh; a live owner's
+    # pair (its flock target in particular) is kept even when old.
+    for path, pid in pid_file_candidates:
+        try:
+            st = path.lstat()
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        if st.st_uid != euid:
+            continue
+        if _pid_alive(pid):
             continue
         try:
             path.unlink()
