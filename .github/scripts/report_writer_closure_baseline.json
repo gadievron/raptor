@@ -613,6 +613,9 @@
     "packages/llm_analysis/checker_followup.py::load_variant_candidates::unsanitised_llm_value::rationale": {
       "note": "rationale is loaded into candidate data records (artifact), not printed; the printing consumers are registered writers"
     },
+    "packages/llm_analysis/context_expansion.py::_build_callee_block::unsanitised_llm_value::name": {
+      "note": "prompt/context construction — callee blocks are injected into LLM prompts (UntrustedBlock through the envelope), not an operator render surface; names are additionally clipped by the caller channel's _clip"
+    },
     "packages/llm_analysis/crash_agent.py::CrashAnalysisAgent.generate_exploit::unsanitised_llm_value::response_content": {
       "note": "response_content is written through the module's _sanitise_artifact_text into artifact files, then rendered by registered writers"
     },

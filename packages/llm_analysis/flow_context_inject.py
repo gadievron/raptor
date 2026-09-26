@@ -325,6 +325,29 @@ def _render_trace(
 # ---------------------------------------------------------------------------
 
 
+def caller_call_sites_block(
+    checklist: dict[str, Any] | None,
+    file_path: str,
+    function: str,
+    repo_path: Path,
+    *,
+    context_map: dict[str, Any] | None = None,
+    max_callers: int = MAX_CALLERS_PER_FINDING,
+) -> UntrustedBlock | None:
+    """Public seam over the caller-channel block builder.
+
+    Same bounded rendering as the per-finding channel; ``max_callers``
+    lets a consumer with a different volume policy (the verdict-
+    triggered context expansion uses the audit-side cap) reuse the
+    builder instead of forking it. Returns ``None`` when no caller
+    resolves.
+    """
+    return _build_caller_block(
+        checklist, file_path, function, repo_path,
+        context_map=context_map, max_callers=max_callers,
+    )
+
+
 def _build_caller_block(
     checklist: dict[str, Any] | None,
     file_path: str,
@@ -332,6 +355,7 @@ def _build_caller_block(
     repo_path: Path,
     *,
     context_map: dict[str, Any] | None = None,
+    max_callers: int = MAX_CALLERS_PER_FINDING,
 ) -> UntrustedBlock | None:
     from core.audit.context import (
         CALL_SITE_CONTEXT_LINES,
@@ -340,7 +364,7 @@ def _build_caller_block(
 
     callers = collect_caller_call_sites(
         checklist, file_path, function, repo_path,
-        max_callers=MAX_CALLERS_PER_FINDING,
+        max_callers=max_callers,
         context_map=context_map,
     )
     if not callers:
