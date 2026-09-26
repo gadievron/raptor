@@ -50,11 +50,22 @@ from core.config import RaptorConfig                    # noqa: E402
 from core.inventory.builder import build_inventory      # noqa: E402
 from core.inventory.lookup import lookup_function       # noqa: E402
 from core.analysis.reach_chokepoint import check_suppress   # noqa: E402
+from packages.semgrep.runner import SCOPE_EXCLUDE_BASELINE  # noqa: E402
 
 
 def _run_semgrep(src_root: Path, configs: list[str]) -> list[dict]:
-    """Run semgrep on ``src_root`` and return findings as a list."""
-    cmd = ["semgrep", "scan", "--json", "--no-git-ignore"]
+    """Run semgrep on ``src_root`` and return findings as a list.
+
+    Scope flags match packages.semgrep.runner.build_cmd: the corpus
+    tree must not steer its own scan scope via planted
+    .semgrepignore/.gitignore files, and the RAPTOR-owned exclude
+    baseline replaces semgrep's built-in default ignores (which
+    --x-ignore-semgrepignore-files also disables).
+    """
+    cmd = ["semgrep", "scan", "--json", "--no-git-ignore",
+           "--x-ignore-semgrepignore-files"]
+    for pattern in SCOPE_EXCLUDE_BASELINE:
+        cmd += ["--exclude", pattern]
     for c in configs:
         cmd += ["--config", c]
     cmd.append(str(src_root))

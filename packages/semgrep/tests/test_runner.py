@@ -1,6 +1,7 @@
 """Tests for the Semgrep runner."""
 
 import json
+import shutil
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -39,10 +40,11 @@ def _make_sarif(rule_id="r1", file="a.py", line=1, count=1) -> str:
     return json.dumps({"runs": [{"results": results}]})
 
 
-def _make_json_output(scanned=None, errors=None, version="1.79.0") -> str:
+def _make_json_output(scanned=None, errors=None, version="1.79.0",
+                      skipped=None) -> str:
     """Build minimal --json-output content."""
     return json.dumps({
-        "paths": {"scanned": scanned or []},
+        "paths": {"scanned": scanned or [], "skipped": skipped or []},
         "errors": errors or [],
         "version": version,
     })
@@ -90,8 +92,78 @@ class TestBuildCmd:
         idx = cmd.index("--config")
         assert cmd[idx + 1] == "p/security-audit"
         assert "--sarif" in cmd
-        assert "--quiet" in cmd
         assert cmd[-1] == "/src"
+
+    def test_target_ignore_files_neutralised(self):
+        """Scan scope must be RAPTOR-owned, never target-owned.
+
+        Without these flags a hostile repo's ``.semgrepignore`` (root
+        or nested) or ``.gitignore`` silently exempts its own subtrees
+        from the scan — empirically verified on semgrep 1.172.0: a
+        planted ``.semgrepignore`` of ``*`` drops every finding with a
+        clean exit, and both flags restore them.
+        """
+        cmd = build_cmd(Path("/src"), "p/x", semgrep_bin="semgrep")
+        assert "--no-git-ignore" in cmd
+        assert "--x-ignore-semgrepignore-files" in cmd
+
+    def test_scope_exclude_baseline_pinned(self):
+        """The RAPTOR-owned exclude baseline is a curated security
+        boundary (dependency/build/artifact names ONLY — adding a
+        first-party-plausible name like ``tests/`` re-opens a
+        name-steerable hiding channel), so its exact contents are
+        pinned literally: any edit must consciously update this test.
+        """
+        from packages.semgrep.runner import SCOPE_EXCLUDE_BASELINE
+        assert SCOPE_EXCLUDE_BASELINE == (
+            "node_modules/",
+            "bower_components/",
+            ".yarn/",
+            ".npm/",
+            "vendor/",
+            "third_party/",
+            "site-packages/",
+            ".venv/",
+            ".tox/",
+            "build/",
+            "dist/",
+            "*.min.js",
+            "*.min.css",
+            "package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "poetry.lock",
+            "Pipfile.lock",
+            "Cargo.lock",
+            "composer.lock",
+            "Gemfile.lock",
+            "go.sum",
+        )
+        # First-party names a target could hide real code under must
+        # never creep in (reject-direction guard for the curation rule).
+        for steerable in ("test/", "tests/", "examples/", "docs/", ".env/"):
+            assert steerable not in SCOPE_EXCLUDE_BASELINE
+
+    def test_scope_exclude_baseline_in_cmd(self):
+        """Every baseline pattern rides as an ``--exclude <pattern>``
+        pair — --x-ignore-semgrepignore-files drops semgrep's built-in
+        default ignores, and these args are what restores the
+        dependency/build/artifact part of that set."""
+        from packages.semgrep.runner import SCOPE_EXCLUDE_BASELINE
+        cmd = build_cmd(Path("/src"), "p/x", semgrep_bin="semgrep")
+        pairs = [
+            (cmd[i], cmd[i + 1])
+            for i, a in enumerate(cmd[:-1]) if a == "--exclude"
+        ]
+        assert pairs == [("--exclude", p) for p in SCOPE_EXCLUDE_BASELINE]
+
+    def test_verbose_not_quiet(self):
+        """``paths.skipped`` is only populated at --verbose (mutually
+        exclusive with --quiet); --quiet both starved skipped_summary
+        and hid semgrep's own skipped-paths notice."""
+        cmd = build_cmd(Path("/src"), "p/x", semgrep_bin="semgrep")
+        assert "--verbose" in cmd
+        assert "--quiet" not in cmd
 
     def test_includes_disable_version_check(self):
         """The post-scan version-check HTTP GET must never fire: its
@@ -186,6 +258,61 @@ class TestRunRuleMocked:
         assert result.semgrep_version == "1.79.0"
         assert result.sarif == sarif
         assert result.elapsed_ms >= 0
+
+    def test_run_surfaces_skipped_summary(self, tmp_path, caplog):
+        """Paths semgrep did NOT scan must reach the result and the
+        log — an empty-findings scan over a heavily skipped tree must
+        not read as a clean verdict."""
+        import logging
+
+        target = tmp_path / "src"
+        target.mkdir()
+        json_output = _make_json_output(
+            scanned=["src/a.py"],
+            skipped=[
+                {"path": "src/vendored/x.js", "reason": "cli_exclude_flags_match"},
+                {"path": "src/huge.py", "reason": "exceeded_size_limit"},
+                {"path": "src/vendored/y.js", "reason": "cli_exclude_flags_match"},
+            ],
+        )
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("subprocess.run") as mock_run:
+            def side_effect(cmd, **kwargs):
+                idx = cmd.index("--json-output")
+                Path(cmd[idx + 1]).write_text(json_output)
+                return MagicMock(stdout=_make_sarif(), stderr="", returncode=0)
+            mock_run.side_effect = side_effect
+            with caplog.at_level(logging.INFO, logger="packages.semgrep.runner"):
+                result = run_rule(target, "p/x", unsandboxed=True)
+
+        assert result.skipped_summary["total"] == 3
+        reasons = result.skipped_summary["reasons"]
+        assert reasons["cli_exclude_flags_match"]["count"] == 2
+        assert reasons["exceeded_size_limit"]["sample"] == ["src/huge.py"]
+        assert result.to_dict()["skipped_summary"] == result.skipped_summary
+        # Log line: counts per reason, no target-derived sample paths.
+        log_text = "\n".join(r.getMessage() for r in caplog.records)
+        assert "3 path(s) skipped" in log_text
+        assert "cli_exclude_flags_match=2" in log_text
+        assert "src/huge.py" not in log_text
+
+    def test_run_no_skips_no_summary_no_log(self, tmp_path, caplog):
+        import logging
+
+        target = tmp_path / "src"
+        target.mkdir()
+        with patch("packages.semgrep.runner.is_available", return_value=True), \
+             patch("subprocess.run") as mock_run:
+            def side_effect(cmd, **kwargs):
+                idx = cmd.index("--json-output")
+                Path(cmd[idx + 1]).write_text(_make_json_output(scanned=["a.py"]))
+                return MagicMock(stdout=_make_sarif(), stderr="", returncode=0)
+            mock_run.side_effect = side_effect
+            with caplog.at_level(logging.INFO, logger="packages.semgrep.runner"):
+                result = run_rule(target, "p/x", unsandboxed=True)
+        assert result.skipped_summary == {}
+        assert "skipped" not in "\n".join(
+            r.getMessage() for r in caplog.records)
 
     def test_run_handles_timeout(self, tmp_path):
         target = tmp_path / "src"
@@ -562,6 +689,101 @@ class TestErrorTruthLive:
         assert result.errors, "invalid rule read as verified silence"
         assert not result.ok
         assert result.findings == []
+
+
+@pytest.mark.skipif(not is_available(), reason="semgrep not installed")
+class TestScanScopeLive:
+    """Real-semgrep regression for target-steered scan scope: semgrep
+    honours the SCANNED repo's ``.semgrepignore`` by default, so a
+    hostile target shipping one line of config could silently exempt
+    its own subtrees (clean exit, empty findings). Runs the real
+    binary (trusted local fixtures, hence unsandboxed=True)."""
+
+    @staticmethod
+    def _eval_rule(tmp_path):
+        rule = tmp_path / "rule.yaml"
+        rule.write_text(
+            "rules:\n"
+            "  - id: eval.use\n"
+            "    pattern: eval(...)\n"
+            "    message: eval use\n"
+            "    languages: [python]\n"
+            "    severity: ERROR\n",
+            encoding="utf-8",
+        )
+        return rule
+
+    def test_planted_semgrepignore_does_not_suppress(self, tmp_path):
+        rule = self._eval_rule(tmp_path)
+        target = tmp_path / "tgt"
+        target.mkdir()
+        (target / "vuln.py").write_text('eval("x")\n', encoding="utf-8")
+        (target / ".semgrepignore").write_text("*\n", encoding="utf-8")
+        result = run_rule(target, str(rule), timeout=120, unsandboxed=True)
+        assert result.ok, result.errors
+        assert any(f.file.endswith("vuln.py") for f in result.findings), (
+            "target-shipped .semgrepignore suppressed the scan scope"
+        )
+
+    @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+    def test_planted_gitignore_untracked_file_still_scanned(self, tmp_path):
+        """--no-git-ignore semantic pin: inside a git repo, semgrep by
+        default drops files matched by the TARGET's ``.gitignore`` —
+        an untracked-but-gitignored source file vanishes from scope.
+        A hostile repo gitignoring its own payload must not work."""
+        import subprocess as sp
+        rule = self._eval_rule(tmp_path)
+        target = tmp_path / "tgt"
+        target.mkdir()
+        sp.run(
+            ["git", "init", "-q", str(target)],
+            check=True, capture_output=True, timeout=60,
+        )
+        (target / ".gitignore").write_text("vuln.py\n", encoding="utf-8")
+        (target / "vuln.py").write_text('eval("x")\n', encoding="utf-8")
+        result = run_rule(target, str(rule), timeout=120, unsandboxed=True)
+        assert result.ok, result.errors
+        assert any(f.file.endswith("vuln.py") for f in result.findings), (
+            "target-shipped .gitignore suppressed an untracked source file"
+        )
+
+    def test_tests_dirname_is_scanned(self, tmp_path):
+        """Steerable-channel pin: semgrep's built-in defaults skip any
+        directory NAMED ``tests/`` — a target could hide real code by
+        picking the name. SCOPE_EXCLUDE_BASELINE deliberately leaves
+        first-party-plausible names in scope."""
+        rule = self._eval_rule(tmp_path)
+        target = tmp_path / "tgt"
+        (target / "tests").mkdir(parents=True)
+        (target / "tests" / "vuln.py").write_text(
+            'eval("x")\n', encoding="utf-8",
+        )
+        result = run_rule(target, str(rule), timeout=120, unsandboxed=True)
+        assert result.ok, result.errors
+        assert any("tests" in f.file and f.file.endswith("vuln.py")
+                   for f in result.findings), (
+            "a dir named tests/ was silently exempted from the scan"
+        )
+
+    def test_baseline_excludes_node_modules_and_reports_skip(self, tmp_path):
+        """The RAPTOR-owned baseline replaces semgrep's built-in
+        defaults for dependency trees: node_modules/ stays out of
+        scope AND the skip is visible in skipped_summary."""
+        rule = self._eval_rule(tmp_path)
+        target = tmp_path / "tgt"
+        (target / "node_modules").mkdir(parents=True)
+        (target / "node_modules" / "dep.py").write_text(
+            'eval("x")\n', encoding="utf-8",
+        )
+        (target / "app.py").write_text('eval("x")\n', encoding="utf-8")
+        result = run_rule(target, str(rule), timeout=120, unsandboxed=True)
+        assert result.ok, result.errors
+        assert any(f.file.endswith("app.py") for f in result.findings)
+        assert not any("node_modules" in f.file for f in result.findings)
+        reasons = result.skipped_summary.get("reasons", {})
+        assert reasons.get("cli_exclude_flags_match", {}).get("count", 0) >= 1, (
+            "baseline exclusion happened but was invisible in skipped_summary"
+        )
 
 
 # Opt-in with ``pytest -m integration``.

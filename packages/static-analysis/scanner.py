@@ -953,6 +953,32 @@ def _semgrep_dropped_files(json_paths: list) -> dict:
     return {p: sorted(t) for p, t in sorted(dropped.items())}
 
 
+def _semgrep_skipped_paths(json_paths: list) -> dict:
+    """Unique skipped-path count per skip reason, across packs.
+
+    Semgrep's ``paths.skipped`` (populated at --verbose — see
+    packages.semgrep.runner.build_cmd) records every path the scan
+    did NOT examine and why: RAPTOR's own exclude baseline
+    (``cli_exclude_flags_match``), size limits, unparsable files.
+    Every pack walks the same tree, so the same skip repeats once per
+    pack — dedupe by (reason, path) so counts mean paths, not
+    paths x packs. Unreadable JSONs are skipped (that pack already
+    failed loudly elsewhere).
+
+    Returns ``{reason: unique path count}``.
+    """
+    seen: dict = {}
+    for jp in json_paths:
+        data = load_json(jp, max_bytes=_MAX_TOOL_JSON_BYTES)
+        paths = data.get("paths") if isinstance(data, dict) else None
+        skipped = paths.get("skipped") if isinstance(paths, dict) else None
+        for e in skipped if isinstance(skipped, list) else []:
+            if isinstance(e, dict) and e.get("path"):
+                reason = str(e.get("reason") or "unspecified")
+                seen.setdefault(reason, set()).add(str(e["path"]))
+    return {r: len(ps) for r, ps in seen.items()}
+
+
 def _semgrep_max_memory_mb(
     n_configs: int,
     max_workers: int,
@@ -3754,6 +3780,33 @@ def main() -> None:
                     f"{_preview}"
                     + (f" (+{_more} more)" if _more else "")
                     + ". Full list in coverage-record files_failed.",
+                    file=sys.stderr,
+                )
+            # Scope visibility: what the scan deliberately or
+            # incidentally never examined, said out loud once per run.
+            # Reason NAMES only on this line (bounded, escaped) —
+            # skipped paths are target-chosen strings and stay in the
+            # per-pack JSONs.
+            _skipped_by_reason = _semgrep_skipped_paths(_all_semgrep_jsons)
+            if _skipped_by_reason:
+                from core.security.log_sanitisation import (
+                    sanitise_for_terminal,
+                )
+                _ordered = sorted(
+                    _skipped_by_reason.items(),
+                    key=lambda kv: (-kv[1], kv[0]),
+                )
+                _shown = sanitise_for_terminal(
+                    ", ".join(f"{r}={n}" for r, n in _ordered[:6]),
+                    max_len=400,
+                )
+                _rest = len(_ordered) - min(6, len(_ordered))
+                _n_skipped = sum(_skipped_by_reason.values())
+                print(
+                    f"semgrep: {_n_skipped} path(s) skipped, not "
+                    f"scanned — {_shown}"
+                    + (f" (+{_rest} more reason(s))" if _rest else "")
+                    + ". Paths in semgrep_<pack>.json paths.skipped.",
                     file=sys.stderr,
                 )
             for json_path in _all_semgrep_jsons:

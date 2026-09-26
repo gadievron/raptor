@@ -49,6 +49,64 @@ _SEMGREP_BIN = "semgrep"
 _DEFAULT_TIMEOUT = 900
 _DEFAULT_RULE_TIMEOUT = 60
 
+# RAPTOR-owned scan-scope baseline, passed as repeated ``--exclude``
+# args by build_cmd (gitignore-style patterns; trailing ``/`` = match
+# directories only — verified honoured on semgrep 1.172.0, skips
+# reported as ``cli_exclude_flags_match`` in paths.skipped).
+#
+# Why this exists: --x-ignore-semgrepignore-files (see build_cmd)
+# disables not only the target's .semgrepignore files but ALSO
+# semgrep's BUILT-IN default ignore set (which only applies when no
+# .semgrepignore exists). This list restores the useful part of that
+# default set from RAPTOR code, where a hostile target cannot edit it.
+#
+# Curation rule — dependency/build/artifact directories and generated
+# files ONLY: names that by ecosystem convention hold third-party or
+# machine-generated content nobody hand-edits. Deliberately ABSENT
+# (diverging from semgrep's built-in defaults, probed on 1.172.0:
+# .env/ .npm/ .tox/ .venv/ .yarn/ build/ dist/ node_modules/ test/
+# tests/ vendor/):
+#   - test/, tests/ — first-party code; skipping by NAME hands the
+#     target a steerable hiding channel (mkdir tests/ && hide the bug;
+#     demonstrated empirically on 1.172.0). Same reasoning keeps
+#     examples/, docs/, scripts/ etc. out of this list.
+#   - .env/ — the bare name collides with ``.env`` secret FILES;
+#     excluding the pattern would blind secrets rules.
+# Both-direction rationale: ADDING an entry re-opens a name-steerable
+# hiding spot (any first-party-plausible name is a hole a target can
+# mkdir its way into); REMOVING one buys back scan cost and finding
+# noise on third-party code RAPTOR does not report on anyway.
+# Operators extend per-run via extra_args --exclude / the scanner's
+# exclude-glob filter; entries here must clear the curation rule.
+SCOPE_EXCLUDE_BASELINE: tuple[str, ...] = (
+    # dependency trees / package-manager state
+    "node_modules/",
+    "bower_components/",
+    ".yarn/",
+    ".npm/",
+    "vendor/",
+    "third_party/",
+    "site-packages/",
+    ".venv/",
+    ".tox/",
+    # build artifacts
+    "build/",
+    "dist/",
+    # generated / minified assets
+    "*.min.js",
+    "*.min.css",
+    # lockfiles (machine-written dependency manifests)
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "Pipfile.lock",
+    "Cargo.lock",
+    "composer.lock",
+    "Gemfile.lock",
+    "go.sum",
+)
+
 
 def is_available() -> bool:
     """Check whether semgrep is on PATH."""
@@ -103,7 +161,15 @@ def build_cmd(
         bin_path,
         "scan",
         "--config", config,
-        "--quiet",
+        # --verbose, not --quiet (the two are mutually exclusive):
+        # only verbose populates ``paths.skipped`` in the --json
+        # output — the record of every path the scan did NOT examine
+        # and why — which run_rule surfaces as skipped_summary.
+        # --quiet also swallowed semgrep's own skipped-paths notice,
+        # so scope suppression was doubly invisible. Verbose chatter
+        # goes to stderr; stdout stays pure SARIF (verified on
+        # semgrep 1.172.0).
+        "--verbose",
         "--metrics", "off",
         # Defaults ON upstream: fires an HTTP GET to semgrep.dev after
         # every scan. Its 1-day cache lives under XDG_CACHE_HOME —
@@ -114,8 +180,35 @@ def build_cmd(
         "--error",
         "--sarif",
         "--disable-nosem",
+        # Scan scope must be RAPTOR-owned, never target-owned. By
+        # default semgrep honours the SCANNED repo's ignore files —
+        # ``.semgrepignore`` (root and nested) and, inside a git
+        # repo, ``.gitignore`` — so a hostile target could ship one
+        # line of config and silently exempt its own subtrees from
+        # the scan (clean exit, empty findings). --disable-nosem
+        # above closes the inline suppression channel; these two
+        # close the file-level one. --no-git-ignore additionally
+        # stops semgrep shelling out to git inside the untrusted
+        # tree. Side effect (verified on 1.172.0): killing the
+        # .semgrepignore machinery also drops semgrep's BUILT-IN
+        # default ignore set (node_modules/, tests/, vendor/, ...),
+        # which only applies when no .semgrepignore file exists —
+        # the SCOPE_EXCLUDE_BASELINE --exclude args below restore
+        # the dependency/build/artifact part of it from RAPTOR code;
+        # tests/-type first-party names stay deliberately IN scope.
+        # RAPTOR-owned scope control (--exclude/--include via
+        # extra_args, the scanner's exclude-glob filter) is
+        # unaffected. --x-ignore-semgrepignore-files is documented
+        # [INTERNAL] upstream: if a future semgrep removes it, every
+        # scan fails LOUDLY (unknown option, rc=2 — surfaced as an
+        # engine error by run_rule and the scanner) rather than
+        # silently reverting to target-steered scope.
+        "--no-git-ignore",
+        "--x-ignore-semgrepignore-files",
         "--timeout", str(rule_timeout),
     ]
+    for pattern in SCOPE_EXCLUDE_BASELINE:
+        cmd.extend(["--exclude", pattern])
     if json_output_path is not None:
         cmd.extend(["--json-output", str(json_output_path)])
     if extra_args:
@@ -447,6 +540,24 @@ def run_rule(
             + (f": {stderr_tail}" if stderr_tail else "")
         )
 
+    # Excluded scope said out loud: every skipped path is a path the
+    # scan did NOT examine, so an empty-findings result over a heavily
+    # skipped tree must not read as a clean verdict. Counts only in
+    # the log line — the sample paths are target-derived and stay on
+    # the result; reason strings come from semgrep's own enum but are
+    # escaped anyway before the operator's log stream.
+    skipped_summary: dict = parsed_json.get("skipped_summary") or {}
+    if skipped_summary:
+        from core.security.log_sanitisation import escape_nonprintable
+        per_reason = ", ".join(
+            f"{escape_nonprintable(reason)}={info.get('count', 0)}"
+            for reason, info in skipped_summary.get("reasons", {}).items()
+        )
+        logger.info(
+            "semgrep '%s': %d path(s) skipped, not scanned — %s",
+            name, skipped_summary.get("total", 0), per_reason,
+        )
+
     return SemgrepResult(
         name=name,
         config=config,
@@ -454,6 +565,7 @@ def run_rule(
         findings=findings,
         files_examined=parsed_json["files_examined"],
         files_failed=parsed_json["files_failed"],
+        skipped_summary=skipped_summary,
         semgrep_version=parsed_json["semgrep_version"],
         returncode=proc.returncode,
         stderr=proc.stderr or "",

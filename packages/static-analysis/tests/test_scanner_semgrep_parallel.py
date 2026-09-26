@@ -554,6 +554,53 @@ class TestSemgrepDroppedFiles:
         bad = tmp_path / "bad.json"
         bad.write_text("{not json")
         assert _scanner_mod._semgrep_dropped_files([bad]) == {}
+
+
+class TestSemgrepSkippedPaths:
+    """Cross-pack ``paths.skipped`` aggregation: unique paths per
+    reason (every pack walks the same tree, so the same skip repeats
+    once per pack — counts must mean paths, not paths x packs)."""
+
+    def _write(self, tmp_path, name, skipped):
+        import json as _json
+        p = tmp_path / name
+        p.write_text(_json.dumps({"paths": {"scanned": ["a.c"],
+                                            "skipped": skipped},
+                                  "errors": []}))
+        return p
+
+    def test_dedupes_across_packs_counts_unique_paths(self, tmp_path):
+        j1 = self._write(tmp_path, "p1.json", [
+            {"path": "node_modules/x.js", "reason": "cli_exclude_flags_match"},
+            {"path": "node_modules/y.js", "reason": "cli_exclude_flags_match"},
+            {"path": "big.c", "reason": "exceeded_size_limit"},
+        ])
+        j2 = self._write(tmp_path, "p2.json", [
+            # same tree, second pack — identical skips must not double
+            {"path": "node_modules/x.js", "reason": "cli_exclude_flags_match"},
+            {"path": "node_modules/y.js", "reason": "cli_exclude_flags_match"},
+            {"path": "big.c", "reason": "exceeded_size_limit"},
+        ])
+        assert _scanner_mod._semgrep_skipped_paths([j1, j2]) == {
+            "cli_exclude_flags_match": 2,
+            "exceeded_size_limit": 1,
+        }
+
+    def test_malformed_entries_and_missing_reason(self, tmp_path):
+        j = self._write(tmp_path, "p.json", [
+            "bogus", None,
+            {"reason": "exceeded_size_limit"},   # no path → not counted
+            {"path": "a.c"},                     # no reason → unspecified
+        ])
+        assert _scanner_mod._semgrep_skipped_paths([j]) == {
+            "unspecified": 1,
+        }
+
+    def test_unreadable_json_and_no_skips(self, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json")
+        empty = self._write(tmp_path, "empty.json", [])
+        assert _scanner_mod._semgrep_skipped_paths([bad, empty]) == {}
 # ---------------------------------------------------------------------------
 # _drop_unreachable_registry_packs — loud degradation + metrics record
 # ---------------------------------------------------------------------------

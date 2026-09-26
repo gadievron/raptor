@@ -317,6 +317,165 @@ class TestOutputBudget:
         assert out["semgrep_version"] == ""
 
 
+class TestSkippedSummary:
+    """``paths.skipped`` → bounded per-reason summary."""
+
+    @staticmethod
+    def _payload(skipped):
+        return json.dumps({
+            "version": "1.99.0",
+            "paths": {"scanned": [], "skipped": skipped},
+            "errors": [],
+        })
+
+    def test_basic_grouping(self):
+        out = parse_json_output(self._payload([
+            {"path": "v/a.js", "reason": "cli_exclude_flags_match"},
+            {"path": "big.py", "reason": "exceeded_size_limit"},
+            {"path": "v/b.js", "reason": "cli_exclude_flags_match"},
+        ]))
+        s = out["skipped_summary"]
+        assert s["total"] == 3
+        assert s["reasons_truncated"] == 0
+        assert s["reasons"]["cli_exclude_flags_match"] == {
+            "count": 2, "sample": ["v/a.js", "v/b.js"],
+        }
+        assert s["reasons"]["exceeded_size_limit"]["count"] == 1
+
+    def test_absent_or_empty_skipped_is_empty_summary(self):
+        assert parse_json_output(self._payload([]))["skipped_summary"] == {}
+        no_key = json.dumps({"paths": {"scanned": []}, "errors": []})
+        assert parse_json_output(no_key)["skipped_summary"] == {}
+        assert parse_json_output("")["skipped_summary"] == {}
+
+    def test_malformed_entries_ignored_missing_reason_bucketed(self):
+        out = parse_json_output(self._payload([
+            "bogus", None, 7,
+            {"path": "a.py"},          # no reason → "unspecified"
+            {"reason": "exceeded_size_limit"},  # no path → counted, no sample
+        ]))
+        s = out["skipped_summary"]
+        assert s["total"] == 2
+        assert s["reasons"]["unspecified"] == {"count": 1, "sample": ["a.py"]}
+        assert s["reasons"]["exceeded_size_limit"] == {"count": 1, "sample": []}
+
+    # Two-direction coverage for BOTH bounds: the at-limit tests below
+    # prove the caps don't over-truncate, the above-limit tests prove
+    # they do truncate, and test_cap_values_are_pinned pins the VALUES
+    # literally — the behavioural tests derive their fixtures from the
+    # constants, so without the literal pin a cap edit would slide
+    # through them unnoticed. Changing a cap in either direction must
+    # be a conscious edit here (see the models constants for the
+    # size/visibility trade-off).
+
+    def test_cap_values_are_pinned(self):
+        from packages.semgrep.models import (
+            _SKIPPED_PATH_MAXLEN,
+            _SKIPPED_REASON_CAP,
+            _SKIPPED_REASON_MAXLEN,
+            _SKIPPED_SAMPLE_CAP,
+        )
+        assert _SKIPPED_SAMPLE_CAP == 5
+        assert _SKIPPED_REASON_CAP == 12
+        assert _SKIPPED_PATH_MAXLEN == 300
+        assert _SKIPPED_REASON_MAXLEN == 100
+
+    def test_sample_cap_at_limit_keeps_all(self):
+        from packages.semgrep.models import _SKIPPED_SAMPLE_CAP
+        entries = [
+            {"path": f"p{i:02d}.py", "reason": "r"}
+            for i in range(_SKIPPED_SAMPLE_CAP)
+        ]
+        s = parse_json_output(self._payload(entries))["skipped_summary"]
+        assert len(s["reasons"]["r"]["sample"]) == _SKIPPED_SAMPLE_CAP
+        assert s["reasons"]["r"]["count"] == _SKIPPED_SAMPLE_CAP
+
+    def test_sample_cap_above_limit_truncates_count_stays_true(self):
+        from packages.semgrep.models import _SKIPPED_SAMPLE_CAP
+        n = _SKIPPED_SAMPLE_CAP + 7
+        entries = [
+            {"path": f"p{i:02d}.py", "reason": "r"} for i in range(n)
+        ]
+        s = parse_json_output(self._payload(entries))["skipped_summary"]
+        # Sample bounded, in semgrep output order; total/count uncapped.
+        assert s["reasons"]["r"]["sample"] == [
+            f"p{i:02d}.py" for i in range(_SKIPPED_SAMPLE_CAP)
+        ]
+        assert s["reasons"]["r"]["count"] == n
+        assert s["total"] == n
+
+    def test_reason_cap_at_limit_keeps_all(self):
+        from packages.semgrep.models import _SKIPPED_REASON_CAP
+        entries = [
+            {"path": "a.py", "reason": f"reason{i:02d}"}
+            for i in range(_SKIPPED_REASON_CAP)
+        ]
+        s = parse_json_output(self._payload(entries))["skipped_summary"]
+        assert len(s["reasons"]) == _SKIPPED_REASON_CAP
+        assert s["reasons_truncated"] == 0
+
+    def test_reason_cap_above_limit_keeps_highest_counts(self):
+        from packages.semgrep.models import _SKIPPED_REASON_CAP
+        extra = 4
+        entries = []
+        # reason00 appears most often, reason01 next, ... — the cap
+        # must keep the highest-count reasons and say how many were cut.
+        n_reasons = _SKIPPED_REASON_CAP + extra
+        for i in range(n_reasons):
+            entries.extend(
+                {"path": f"f{i}_{j}.py", "reason": f"reason{i:02d}"}
+                for j in range(n_reasons - i)
+            )
+        s = parse_json_output(self._payload(entries))["skipped_summary"]
+        assert len(s["reasons"]) == _SKIPPED_REASON_CAP
+        assert s["reasons_truncated"] == extra
+        assert set(s["reasons"]) == {
+            f"reason{i:02d}" for i in range(_SKIPPED_REASON_CAP)
+        }
+        assert s["total"] == len(entries)
+
+    def test_per_string_length_caps(self):
+        from packages.semgrep.models import (
+            _SKIPPED_PATH_MAXLEN,
+            _SKIPPED_REASON_MAXLEN,
+        )
+        s = parse_json_output(self._payload([
+            {"path": "p" * (_SKIPPED_PATH_MAXLEN * 2),
+             "reason": "r" * (_SKIPPED_REASON_MAXLEN * 2)},
+        ]))["skipped_summary"]
+        (reason,) = s["reasons"]
+        assert len(reason) == _SKIPPED_REASON_MAXLEN
+        assert len(s["reasons"][reason]["sample"][0]) == _SKIPPED_PATH_MAXLEN
+
+    def test_hostile_bytes_in_paths_escaped(self):
+        # Skipped paths are target-chosen file names: terminal escape
+        # sequences, OSC titles, BEL and newlines must come out inert.
+        hostile = "src/\x1b]0;pwned\x07/a\nb\x1b[31m.py"
+        s = parse_json_output(self._payload([
+            {"path": hostile, "reason": "cli_exclude_flags_match"},
+        ]))["skipped_summary"]
+        (sample,) = s["reasons"]["cli_exclude_flags_match"]["sample"]
+        assert "\x1b" not in sample
+        assert "\x07" not in sample
+        assert "\n" not in sample
+        assert "\\x1b" in sample and "\\x07" in sample and "\\x0a" in sample
+
+    def test_hostile_bytes_escaped_before_length_cap(self):
+        # Escaping happens BEFORE the length cap: a path that fits the
+        # cap raw but expands past it escaped must still contain zero
+        # raw control bytes in the kept prefix (escape-after-truncate
+        # would let hostile bytes ride inside the cap).
+        from packages.semgrep.models import _SKIPPED_PATH_MAXLEN
+        raw = "\x1b" * (_SKIPPED_PATH_MAXLEN - 1)  # fits raw, 4x escaped
+        s = parse_json_output(self._payload([
+            {"path": raw, "reason": "r"},
+        ]))["skipped_summary"]
+        (sample,) = s["reasons"]["r"]["sample"]
+        assert len(sample) == _SKIPPED_PATH_MAXLEN
+        assert "\x1b" not in sample
+        assert sample.startswith("\\x1b")
+
+
 class TestParseSarifMalformedResults:
     def test_non_dict_results_skipped(self):
         # Non-dict entries in runs[].results previously converted to
