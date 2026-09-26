@@ -709,9 +709,16 @@ _PHP_WORD_BRANCH_CHARS = frozenset("rnigRNIG")
 
 # ``namespace`` declaration head: inside a namespace, an unqualified
 # function name resolves namespace-first, so the one plain-function
-# exemption in _PHP_NONCALL_PAREN_WORDS (``define`` — every other
-# entry is a reserved construct and cannot be shadowed) can bind to a
-# hoisted namespace-local shadow that executes user code.
+# exemption in _PHP_NONCALL_PAREN_WORDS (``define``) can bind to a
+# hoisted namespace-local shadow that executes user code. The other
+# entries are reserved constructs in MODERN PHP and cannot be
+# shadowed there; ``match`` (reserved only since 8.0) and ``fn``
+# (7.4) CAN be user functions in the legacy codebases this walk
+# targets — but a file carrying such a shadow parse-errors under the
+# tree-sitter PHP-8 grammar, so ``blank_noncode`` raises
+# LexicalRefusal and the detector abstains before this word list is
+# ever consulted. The no-shadow guarantee for those two lives in the
+# lexical gate, not in reservedness.
 _PHP_NAMESPACE = re.compile(r"namespace\b", re.IGNORECASE)
 # A brace provably opening a PHP function/method/closure body: a
 # ``function`` keyword with no brace/semicolon between it and the
