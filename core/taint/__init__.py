@@ -24,12 +24,21 @@ Module map:
 * :mod:`core.taint.summary_cache` — bounded, shape-validated summary
   cache keyed on function identity + span content hash + pack/learned
   vocabulary digest + extractor version.
+* :mod:`core.taint.emission` — candidates serialized as
+  SARIF-with-codeFlows and scan-shaped finding dicts at the bounded
+  artifact byte boundary (the enforcing rail).
 
 Nothing here renders verdicts: packs and learned specs configure an
 origination lane whose findings are candidates for the existing
 classifier / validation pipeline.
 """
 
+from core.taint.emission import (
+    EmissionLimits,
+    EmissionReport,
+    emit,
+    sarif_bytes,
+)
 from core.taint.learned_intake import (
     LearnedIntake,
     LearnedSpec,
@@ -77,6 +86,8 @@ __all__ = [
     "SCHEMA_VERSION",
     "SUMMARY_VERSION",
     "Emissibility",
+    "EmissionLimits",
+    "EmissionReport",
     "Flow",
     "FlowEdge",
     "FunctionSummary",
@@ -96,6 +107,7 @@ __all__ = [
     "build_spec_index",
     "curated_sanitizers",
     "emissibility_report",
+    "emit",
     "extract_summary",
     "index_module",
     "index_module_text",
@@ -103,5 +115,6 @@ __all__ = [
     "kill_census",
     "load_packs",
     "mad_emissibility",
+    "sarif_bytes",
     "vocabulary_digest",
 ]
