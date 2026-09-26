@@ -13,6 +13,7 @@ Subcommands:
     rules    — manage synthesized checker rules (Mode 2: save/list/run)
     report   — generate final summary
     feedback — import /validate results into the review journal
+    backlog  — witness-backlog consumer (list / drain dark rows)
     stale    — list annotations with stale source hashes
     ast      — extract function AST subtree and call targets
     critique — identify gaps in tool coverage
@@ -2610,6 +2611,156 @@ def cmd_coverage(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backlog(args: argparse.Namespace) -> int:
+    """Witness-backlog consumer (``witness-backlog.json`` dark rows).
+
+    ``backlog list`` ranks the queue by cheapest-available-witness
+    (no LLM spend, no writes). ``backlog drain`` works it under an
+    explicit ``--budget``: Mode-2 checker synthesis is retargeted at
+    each dark hypothesis, and only a landed tool verdict (confirmed
+    rule receipt + journal row) moves a row — the drain never mints
+    verdicts. Non-interactive by design.
+    """
+    from core.audit.backlog_drain import (
+        DEFAULT_MAX_DISPATCH,
+        BacklogError,
+        drain,
+        rank,
+    )
+
+    sub = getattr(args, "backlog_command", None)
+    if sub not in ("list", "drain"):
+        print("error: usage: raptor-audit backlog {list|drain} ...",
+              file=sys.stderr)
+        return 1
+
+    run_dir = Path(args.out)
+    if not run_dir.is_dir():
+        print(f"error: --out {run_dir} is not a directory", file=sys.stderr)
+        return 1
+    study = Path(args.study_answers) if args.study_answers else None
+
+    def _row_line(record: dict) -> str:
+        # Row fields come from an agent-writable artifact — escape
+        # every value before it reaches the terminal.
+        site = f"{record.get('file')}:{record.get('function')}" \
+               f":{record.get('line')}"
+        bits = [sanitise_for_terminal(site, max_len=200)]
+        cwe = record.get("cwe") or record.get("class") or ""
+        if cwe:
+            bits.append(sanitise_for_terminal(str(cwe), max_len=40))
+        if record.get("study_held"):
+            bits.append("study-held")
+        action = record.get("action")
+        if action:
+            bits.append(str(action))
+        refusal = record.get("refusal")
+        if refusal:
+            bits.append(
+                "refused: "
+                + sanitise_for_terminal(str(refusal), max_len=160)
+            )
+        reason = record.get("reason")
+        if reason and action not in (None, "witnessed"):
+            bits.append(sanitise_for_terminal(str(reason), max_len=160))
+        if record.get("receipt"):
+            bits.append(sanitise_for_terminal(
+                str(record["receipt"]), max_len=160))
+        return "  " + "  ".join(bits)
+
+    if sub == "list":
+        try:
+            _plans, report = rank(run_dir, study_answers=study)
+        except BacklogError as exc:
+            print(f"error: {sanitise_for_terminal(str(exc), max_len=500)}",
+                  file=sys.stderr)
+            return 1
+        b = report.backlog
+        print(f"witness backlog: {b.get('total')} dark row(s), "
+              f"{b.get('listed')} listed"
+              + (" (listing truncated by the producer — unlisted rows "
+                 "are undrainable until re-imported)"
+                 if b.get("listing_truncated") else ""))
+        print(f"  attemptable: {b.get('listed', 0) - report.refused}   "
+              f"refused: {report.refused}   "
+              f"study-held: {report.held_rows}   "
+              f"malformed: {report.malformed}"
+              + (f"   duplicates collapsed: {b['duplicates_collapsed']}"
+                 if b.get("duplicates_collapsed") else ""))
+        src = report.study.get("source") or "none found"
+        print(f"  pending study questions: "
+              f"{report.study.get('pending_questions')} "
+              f"({sanitise_for_terminal(src, max_len=200)})")
+        for record in report.rows:
+            if record.get("malformed"):
+                print("  ⚠️  malformed row refused: "
+                      + sanitise_for_terminal(
+                          str(record.get("reason")), max_len=200))
+                continue
+            print(_row_line(record))
+        if report.rows_truncated:
+            print("  … per-row listing truncated (counts above are exact)")
+        return 0
+
+    # drain (--budget is parse-time validated: positive, finite; the
+    # library re-checks fail-closed for non-CLI callers)
+    target_path = Path(args.target) if args.target else _guess_target(run_dir)
+    if not target_path:
+        print("error: --target required (or set in checklist.json)",
+              file=sys.stderr)
+        return 1
+    models = [args.model] if getattr(args, "model", None) else []
+    try:
+        report = drain(
+            run_dir,
+            Path(target_path),
+            float(args.budget),
+            sample=args.sample,
+            sample_seed=args.sample_seed,
+            study_answers=study,
+            max_dispatch=(
+                args.max_attempts if args.max_attempts
+                else DEFAULT_MAX_DISPATCH
+            ),
+            models=models,
+        )
+    except BacklogError as exc:
+        print(f"error: {sanitise_for_terminal(str(exc), max_len=500)}",
+              file=sys.stderr)
+        return 1
+
+    b = report.backlog
+    print(f"backlog drain {report.run_id}:")
+    print(f"  witnessed: {report.witnessed} (left the backlog on a "
+          f"landed tool verdict)")
+    print(f"  attempted, still dark: {report.attempted}   "
+          f"refused: {report.refused}   "
+          f"study-held: {report.held_rows}   "
+          f"malformed: {report.malformed}"
+          + (f"   duplicates collapsed: {b['duplicates_collapsed']}"
+             if b.get("duplicates_collapsed") else ""))
+    print(f"  spend: ${report.spent_usd:.4f} of ${report.budget_usd:.2f} "
+          f"({report.dispatched} synthesis dispatch(es))")
+    print(f"  backlog total: {b.get('total_before')} -> "
+          f"{b.get('total_after')}")
+    if report.sample:
+        print(f"  calibration sample: {report.sample['drawn']} of "
+              f"{report.sample['population']} attemptable row(s) "
+              f"(seed {report.sample['seed']})")
+    if report.stopped:
+        print(f"  stopped: {report.stopped}")
+    for record in report.rows:
+        if record.get("action") in ("witnessed", "attempted"):
+            print(_row_line(record))
+    print(f"  report: {run_dir / 'drain-report.json'}")
+    if report.stopped == "no-llm":
+        print("error: synthesis unavailable (no LLM client configured, "
+              "or the LLM substrate failed to import) — nothing was "
+              "drained", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_resume(args: argparse.Namespace) -> int:
     """Re-enter a failed/interrupted audit run AS THE SAME RUN.
 
@@ -3140,6 +3291,43 @@ def _resume_auto_siblings(args: argparse.Namespace,
         bool(run_cfg.get("no_auto_siblings"))
         or bool(getattr(args, "no_auto_siblings", False))
     )
+
+
+def _backlog_budget_arg(value: str) -> float:
+    """Parse backlog-drain ``--budget``: a FINITE float > 0.
+
+    Refused at parse time, not downstream: nan passes every ``<=``
+    comparison (all False), so it would slip a sign-only guard AND
+    disarm the drain's spend stop condition (``spent >= budget`` is
+    never True) — an unmetered pass behind a "$nan" cap. inf is the
+    same dishonesty spelled positively, and the drain exists to spend
+    ONLY under an explicit cap.
+    """
+    import math
+    try:
+        budget = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid float value: {value!r}") from exc
+    if not math.isfinite(budget) or budget <= 0:
+        raise argparse.ArgumentTypeError(
+            "--budget must be a positive, finite USD amount — "
+            "synthesis calls spend LLM money")
+    return budget
+
+
+def _backlog_dispatch_cap_arg(value: str) -> int:
+    """Parse backlog-drain ``--max-attempts``: an int >= 1. A zero or
+    negative cap means "dispatch nothing", which no operator asks for
+    by name — refuse at parse time instead of running a no-op pass."""
+    try:
+        cap = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid int value: {value!r}") from exc
+    if cap < 1:
+        raise argparse.ArgumentTypeError("--max-attempts must be >= 1")
+    return cap
 
 
 def _max_workers_arg(value: str) -> int:
@@ -3828,6 +4016,53 @@ def main() -> int:
              "review-journal.jsonl.pre-slim",
     )
 
+    p_backlog = sub.add_parser(
+        "backlog",
+        help="Witness-backlog consumer (dark rows)",
+    )
+    backlog_sub = p_backlog.add_subparsers(dest="backlog_command")
+    p_bl = backlog_sub.add_parser(
+        "list",
+        help="Rank dark rows by cheapest-available-witness "
+             "(no LLM spend, no writes)",
+    )
+    p_bl.add_argument("--out", required=True,
+                      help="Run directory containing witness-backlog.json")
+    p_bl.add_argument("--study-answers", default=None,
+                      help="Explicit study-answers.json ledger for "
+                           "study-first ordering (default: run dir, then "
+                           "newest sibling run dir)")
+    p_bd = backlog_sub.add_parser(
+        "drain",
+        help="Drain dark rows via Mode-2 checker synthesis under an "
+             "explicit budget — rows leave only on a landed tool verdict",
+    )
+    p_bd.add_argument("--out", required=True,
+                      help="Run directory containing witness-backlog.json")
+    p_bd.add_argument("--target", default=None,
+                      help="Target codebase root (default: from "
+                           "checklist.json in the run dir)")
+    p_bd.add_argument("--budget", type=_backlog_budget_arg, required=True,
+                      help="USD cap on synthesis spend — positive and "
+                           "finite (stop condition: no further dispatch "
+                           "once reached)")
+    p_bd.add_argument("--sample", type=int, default=None,
+                      help="Calibration mode: drain a seeded random "
+                           "sample of N attemptable rows")
+    p_bd.add_argument("--sample-seed", type=int, default=0,
+                      help="Seed for --sample (recorded in the report; "
+                           "default 0)")
+    p_bd.add_argument("--study-answers", default=None,
+                      help="Explicit study-answers.json ledger for "
+                           "study-first ordering")
+    p_bd.add_argument("--max-attempts", type=_backlog_dispatch_cap_arg,
+                      default=None,
+                      help="Per-drain synthesis dispatch cap, >= 1 "
+                           "(default: 25)")
+    p_bd.add_argument("--model", default=None,
+                      help="Model for synthesis calls (default: the "
+                           "configured primary)")
+
     p_coverage = sub.add_parser(
         "coverage",
         help="Coverage-store maintenance",
@@ -3887,6 +4122,7 @@ def main() -> int:
         "report": cmd_report,
         "stale": cmd_stale,
         "feedback": cmd_feedback,
+        "backlog": cmd_backlog,
         "critique": cmd_critique,
         "ast": cmd_ast,
         "run": cmd_run,
