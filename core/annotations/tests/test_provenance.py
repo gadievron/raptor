@@ -742,6 +742,30 @@ class TestEraMaterialisation:
             {"source": "agent", "provenance": LEGACY_PRE_ERA},
         )
 
+    def test_durable_tag_beside_stamp_era_keys_demotes(self):
+        # A genuine pre-era note has NO stamp-era metadata: the keys
+        # did not exist when it was written, and the rewrite
+        # materialises the tag alone on LEGACY-classified sections.
+        # A forged note stacking the grandfather tag next to stamp
+        # facts (belt-and-braces forgery: keep the unconditional
+        # grant as fallback if the corroborated path fails) is a
+        # contradiction and demotes.
+        for extra in (
+            {"tty": "stdin"},
+            {"sid": "inherited"},
+            {"envm": "none"},
+            {"parents": "bash,sshd"},
+            {"corroboration": "pre-era"},
+        ):
+            md = {"source": "human", "provenance": LEGACY_PRE_ERA,
+                  **extra}
+            assert not is_human_grade(md), extra
+            # ...and the demotion is unconditional: a pre-era mtime
+            # does not rescue the contradicted tag.
+            assert not is_human_grade(
+                md, note_mtime=STAMP_ERA_START - 86400.0,
+            ), extra
+
 
 def _read_all(base, source_file):
     from core.annotations import read_file_annotations

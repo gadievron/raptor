@@ -660,7 +660,18 @@ def is_human_grade(
     if tag == LEGACY_PRE_ERA:
         # Durable form of a passing legacy fence: materialised by a
         # rewrite that verified the file mtime while it still held.
-        return True
+        # A genuine pre-era note carries NO stamp-era metadata — the
+        # stamp keys did not exist when it was written, and the
+        # rewrite materialises the tag on sections that classify
+        # LEGACY (no ``provenance``/``tty`` key at all), never
+        # adding corroboration keys beside it. Any stamp-era key
+        # next to the tag is a contradiction (a forged note stacking
+        # evidence, or a broken producer): demote, fail-low.
+        return not any(
+            k in metadata
+            for k in (TTY_KEY, SID_KEY, ENV_MARKERS_KEY,
+                      PARENTS_KEY, CORROBORATION_KEY)
+        )
     return (
         tag == LEGACY
         and note_mtime is not None

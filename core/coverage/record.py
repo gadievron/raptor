@@ -547,6 +547,25 @@ def build_from_codeql(sarif_path: Path) -> dict[str, Any] | None:
     return record
 
 
+def _stamp_analysed_rows(rows: list[dict[str, Any]], tool: str) -> None:
+    """Stamp ``functions_analysed`` rows at CREATION time.
+
+    Per-row HMAC under the coverage-row domain
+    (:func:`core.coverage.journal_mac.mint_coverage_row` — see its
+    docstring for why the stamp is per-row and tool-bound). Builders
+    call this on rows THEY constructed in-process; RMW writers
+    (mark/unmark CLI, completion snapshots) copy existing rows
+    verbatim and never re-stamp, so a row planted in the on-disk
+    record can't be laundered through a legitimate save. A missing /
+    unusable key stamps nothing — the fold then holds those rows to
+    the source-hash gate (fail toward re-review)."""
+    from core.coverage import journal_mac
+    for row in rows:
+        token = journal_mac.mint_coverage_row(row, tool)
+        if token:
+            row[journal_mac.TOKEN_KEY] = token
+
+
 def build_from_findings(findings_path: Path, reads_manifest_path: Path | None = None,
                         tool: str = "llm") -> dict[str, Any] | None:
     """Build a coverage record from findings.json + optional reads manifest.
@@ -601,6 +620,18 @@ def build_from_findings(findings_path: Path, reads_manifest_path: Path | None = 
     if all_files:
         record["files_examined"] = all_files
     if functions:
+        # NEVER stamped: these rows are derived from findings.json —
+        # LLM-written AND sandbox-writable run-dir content (the
+        # comment at the top of this builder). Stamping would mint
+        # install-key trust onto attacker-writable input, laundering
+        # a planted findings.json row into a verified coverage row
+        # with unconditional, non-staleness-bound gap-fold credit.
+        # Same rule as build_from_annotations: creation is a trusted
+        # act only when the creation INPUT is trusted. These rows
+        # carry no source hash either, so they earn no gap-fold
+        # review credit at all — findings-bearing functions staying
+        # in review view is the correct direction — while the store
+        # lane still counts them as examination extent.
         record["functions_analysed"] = functions
 
     return record
@@ -676,6 +707,15 @@ def build_from_annotations(
             sources[src] = sources.get(src, 0) + 1
     if not files and not functions:
         return None
+    # Annotation projections are NEVER stamped. The .md substrate is
+    # human-editable plaintext in a target-writable directory, and its
+    # provenance metadata is forgeable — a builder stamp here would
+    # launder a planted annotation into a verified coverage row. Rows
+    # carry the annotation's ``hash`` (the canonical span digest), so
+    # the gap fold grants review credit only behind positive source
+    # evidence: exact hash match against the current source. Hashless
+    # notes re-review (over-review, the safe direction); the durable
+    # importer lane still counts them as examination coverage.
     return {
         "tool": tool_name,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -706,6 +746,7 @@ def build_from_journal(run_dir: Path,
         ``functions_analysed`` with the unresolved counts visible in
         ``journal_statuses``.
     """
+    from core.coverage import journal_mac
     from core.coverage.journal import (
         entry_earns_function_coverage,
         load_entries,
@@ -751,6 +792,18 @@ def build_from_journal(run_dir: Path,
             func_entry["status"] = entry.verdict
         if entry.source_hash:
             func_entry["hash"] = entry.source_hash
+        # The coverage row is a PROJECTION of the journal row, so it
+        # inherits — never upgrades — the journal row's provenance
+        # tier: only a MAC-verified journal entry earns a stamped
+        # coverage row. Unstamped/tampered journal rows (planted
+        # lines, pre-MAC legacy) flow through UNSTAMPED carrying
+        # their source hash, and the gap fold's exact-hash gate
+        # decides — stamping them here would launder a forged
+        # journal line into verified review credit.
+        if journal_mac.entry_provenance(entry) == journal_mac.ROW_VERIFIED:
+            token = journal_mac.mint_coverage_row(func_entry, tool_name)
+            if token:
+                func_entry[journal_mac.TOKEN_KEY] = token
         functions.append(func_entry)
 
     if not functions and not statuses:

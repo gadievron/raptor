@@ -256,10 +256,18 @@ def test_covered_set_tolerates_hostile_container_shapes():
         {"tool": "semgrep", "files": "src/a.c"},
     ]
     assert _build_covered_set(hostile) == set()
-    # Control: the genuine legacy shape still earns its covered key.
+    # The well-formed legacy files{} shape earns no review credit
+    # either (no verdict, no hash, no stamp — and it credited under
+    # ANY non-runtime tool label); a stamped functions_analysed row
+    # is the control that the fold still credits legitimate rows.
     legacy = [{"tool": "semgrep",
                "files": {"src/a.c": {"functions": {"f1": {}}}}}]
-    assert len(_build_covered_set(legacy)) == 1
+    assert _build_covered_set(legacy) == set()
+    from core.coverage import journal_mac
+    row = {"file": "src/a.c", "function": "f1"}
+    row[journal_mac.TOKEN_KEY] = journal_mac.mint_coverage_row(row, "llm")
+    control = [{"tool": "llm", "functions_analysed": [row]}]
+    assert len(_build_covered_set(control)) == 1
 
 
 # ------------------------------------------------------ legit unchanged

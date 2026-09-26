@@ -780,5 +780,12 @@ class TestBuildFromFindingsShapeGuards:
         ]}))
         rec = build_from_findings(p)
         assert rec is not None
-        assert rec["functions_analysed"] == [
-            {"file": "src/a.c", "function": "f"}]
+        rows = rec["functions_analysed"]
+        assert [(fa["file"], fa["function"]) for fa in rows] == [
+            ("src/a.c", "f")]
+        # findings.json is target-writable input: builder rows are
+        # NEVER stamped (creation is a trusted act only when the
+        # creation input is trusted) — they import at machine tier.
+        from core.coverage import journal_mac
+        assert journal_mac.coverage_row_provenance(
+            rows[0], "llm") == journal_mac.ROW_UNSTAMPED
