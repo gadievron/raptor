@@ -11,6 +11,14 @@ one moment where two independent adjudications disagree — exactly when
 a recorded disproof is most worth re-examining — leaves no trace, and
 the disagreement can only be rediscovered by hand-diffing artifacts.
 
+The reverse direction is a contradiction too, at a higher bar: a LATER
+source's disproof against an earlier CONFIRMED-TIER verdict (the
+overturn class — see :data:`CONFIRMED_TIER_STATUSES`). A later disproof
+over a mere hypothesis is ordinary validation progression and never
+queues; a validated verdict being disproven by a different run is not
+progression, it is one of the two adjudications being wrong. Each queue
+record carries a ``shape`` field naming its class.
+
 This module preserves the signal WITHOUT changing any verdict:
 
 * the drop/fold behaviour at both chokepoints is untouched — a queue
@@ -79,6 +87,49 @@ DISPROOF_STATUSES = frozenset({
     "unreachable",
 })
 
+#: Statuses that record a CONFIRMED-TIER (validated) positive verdict —
+#: the rank-5+ family in ``core.project.merge._STATUS_RANK``. This is
+#: the tier boundary for the overturn direction (a LATER source's
+#: disproof contradicting an EARLIER source's claim at the same site):
+#: only a validated claim queues. Adjudicated against the status
+#: vocabulary, member by member:
+#:
+#: * IN — ``exploitable`` (rank 7), ``confirmed_constrained`` /
+#:   ``confirmed_blocked`` (rank 6), ``confirmed`` /
+#:   ``confirmed_unverified`` (rank 5): each asserts "this issue is
+#:   real" as a concluded verdict; a later independent disproof
+#:   OVERTURNS such a verdict rather than progressing it.
+#: * OUT — ``poc_success`` (rank 3): an intermediate pipeline marker (a
+#:   PoC artifact was built; validation had not concluded) that the
+#:   vocabulary itself ranks BELOW the disproof family — a later
+#:   disproof over it is the validation lane finishing its job.
+#: * OUT — ``not_disproven`` (rank 2) and every unranked hypothesis
+#:   grade (audit ``suspicious`` rows, dark rows, scanner defaults): a
+#:   later run disproving a mere hypothesis is the system working as
+#:   designed (/validate consuming /audit output), so queueing it
+#:   would mint a record per ROUTINE validation pass and flood the
+#:   queue; the merge fold already prefers the disproof, and no
+#:   validated verdict is lost.
+CONFIRMED_TIER_STATUSES = frozenset({
+    "exploitable",
+    "confirmed",
+    "confirmed_unverified",
+    "confirmed_blocked",
+    "confirmed_constrained",
+})
+
+#: Queue-record shapes — the ``shape`` field, additive: readers treat
+#: a missing shape as :data:`SHAPE_CLAIM_AFTER_DISPROOF`, the only
+#: class pre-shape queues contained.
+#:
+#: * ``claim_after_disproof`` — a source LATER than a recorded disproof
+#:   asserts the site again (any positive claim, hypothesis included).
+#: * ``disproof_after_confirmed`` — a later source's disproof
+#:   contradicts an earlier source's CONFIRMED-TIER verdict (the
+#:   overturn class; tier boundary above).
+SHAPE_CLAIM_AFTER_DISPROOF = "claim_after_disproof"
+SHAPE_OVERTURN = "disproof_after_confirmed"
+
 #: Cap on free-text fields stored in a queue record. Findings rows are
 #: LLM-authored or import-restored — unbounded prose must not turn the
 #: queue into a multi-megabyte artifact.
@@ -132,6 +183,16 @@ def is_disproof(finding: dict[str, Any]) -> bool:
         return True
     ruling = finding.get("ruling")
     return isinstance(ruling, dict) and ruling.get("status") == "ruled_out"
+
+
+def is_confirmed_tier(finding: dict[str, Any]) -> bool:
+    """True when *finding* records a confirmed-tier positive verdict
+    (see :data:`CONFIRMED_TIER_STATUSES`). A row whose ruling says
+    ``ruled_out`` is never confirmed-tier whatever its status field
+    claims — :func:`is_disproof` wins the overlap conservatively (the
+    row indexes as a disproof, not as an overturnable claim)."""
+    return (_record_status(finding) in CONFIRMED_TIER_STATUSES
+            and not is_disproof(finding))
 
 
 def site_key(finding: dict[str, Any]) -> tuple[str, str, Any] | None:
@@ -260,11 +321,20 @@ def build_queue_record(
     disproof_source: str,
     *,
     prior_disproof_count: int = 1,
+    prior_claim_count: int = 1,
+    shape: str = SHAPE_CLAIM_AFTER_DISPROOF,
 ) -> dict[str, Any]:
-    """One queue record: site identity, the new claim, the matched
-    disproof, and the mechanism comparison. ``action`` is always
-    ``queued`` — the queue NEVER overturns; adjudication happens in a
-    scoped /validate."""
+    """One queue record: site identity, the claim side, the disproof
+    side, and the mechanism comparison. ``action`` is always ``queued``
+    — the queue NEVER overturns; adjudication happens in a scoped
+    /validate.
+
+    ``new_claim`` is the CLAIM-SIDE slot and ``disproof`` the
+    disproof-side slot in EVERY shape (the field name is historical —
+    pre-shape queues only held claim-after-disproof records, where the
+    claim really was the newer item). ``shape`` carries the temporal
+    direction; readers treat a missing shape as
+    :data:`SHAPE_CLAIM_AFTER_DISPROOF`."""
     claim_mech = _mechanisms(claim)
     disproof_mech = _mechanisms(disproof)
     # Tri-state: True/False only when BOTH sides recorded a mechanism;
@@ -275,6 +345,7 @@ def build_queue_record(
     record: dict[str, Any] = {
         "kind": "readjudication",
         "action": "queued",
+        "shape": _cap_text(shape, 40),
         "detected_at": datetime.now(timezone.utc).isoformat(),
         "site": {
             "file": _cap_text(
@@ -297,44 +368,75 @@ def build_queue_record(
         )
     if prior_disproof_count > 1:
         record["prior_disproofs_at_site"] = prior_disproof_count
+    if prior_claim_count > 1:
+        record["prior_confirmed_at_site"] = prior_claim_count
     return record
 
 
 def detect_contradictions(
     sources: Sequence[tuple[str, list[dict[str, Any]]]],
 ) -> list[dict[str, Any]]:
-    """Detect recorded-disproof-vs-later-claim contradictions.
+    """Detect cross-adjudication contradictions, in both directions.
 
     *sources* is ordered OLDEST-first (the same order the merge fold
-    consumes): a contradiction is a non-disproof claim in a source
-    strictly LATER than a source that recorded a disproof at the same
-    site. The reverse order (claim, then disproof) is ordinary
-    validation progression, and a claim+disproof pair inside ONE
-    source is intra-run pipeline progression — neither queues.
+    consumes). Three record shapes:
 
-    One record per (site, claim source, disproof source, claim
-    mechanism); when several disproofs precede the claim, the LATEST
-    one is quoted and ``prior_disproofs_at_site`` carries the count.
+    * :data:`SHAPE_CLAIM_AFTER_DISPROOF` — a non-disproof claim in a
+      source strictly LATER than a source that recorded a disproof at
+      the same site (any claim tier: a fresh hypothesis against a
+      recorded disproof is already a reconsideration signal).
+    * :data:`SHAPE_OVERTURN` — a disproof in a source strictly LATER
+      than a source that recorded a CONFIRMED-TIER verdict at the same
+      site (see :data:`CONFIRMED_TIER_STATUSES` for the adjudicated
+      tier boundary). The direction is deliberately asymmetric: a
+      later disproof over a mere hypothesis is ordinary validation
+      progression and stays unqueued; only a validated verdict being
+      disproven is overturn-shaped.
+    * A claim+disproof pair inside ONE source never queues in either
+      direction — that is in-pipeline refinement.
+
+    One record per (shape, site, claim source, disproof source, newer
+    side's mechanism); when several disproofs (or confirmed claims)
+    precede, the LATEST one is quoted and ``prior_disproofs_at_site``
+    / ``prior_confirmed_at_site`` carries the count.
 
     Bounds — announced, never silent: :data:`SITE_RECORD_CAP` per
     site FIRST (mechanism identity is attacker-influenced free text;
     one flooded site must never occupy the global cap and evict other
     sites' real contradictions — site diversity is the queue's
-    value), then :data:`RECORD_CAP` overall. Every suppression is
-    counted on the terminal truncation record (``suppressed``), which
-    each rendering surface (report section, /project findings notice,
-    merge log, /review) re-states.
+    value), then :data:`RECORD_CAP` overall; both caps are shared
+    across the shapes (a site flooded in one direction cannot annex
+    headroom in another). Every suppression is counted on the
+    terminal truncation record (``suppressed``), which each rendering
+    surface (report section, /project findings notice, merge log,
+    /review) re-states.
     """
     disproofs: dict[tuple, list[tuple[str, dict[str, Any]]]] = {}
+    confirmed: dict[tuple, list[tuple[str, dict[str, Any]]]] = {}
     records: list[dict[str, Any]] = []
     seen: set[tuple] = set()
     site_queued: dict[tuple, int] = {}
     suppressed = 0
+
+    def _admit(pair: tuple, key: tuple) -> bool:
+        """Shared pair-dedup + cap bookkeeping for every shape."""
+        nonlocal suppressed
+        if pair in seen:
+            return False
+        seen.add(pair)
+        if (site_queued.get(key, 0) >= SITE_RECORD_CAP
+                or len(records) >= RECORD_CAP):
+            suppressed += 1
+            return False
+        site_queued[key] = site_queued.get(key, 0) + 1
+        return True
+
     for label, findings in sources:
-        # Claims first, then this source's disproofs are indexed —
-        # so a same-source pair never fires.
-        for finding in findings:
-            if not isinstance(finding, dict) or is_disproof(finding):
+        rows = [f for f in findings if isinstance(f, dict)]
+        # Detection first, then this source's rows are indexed — so a
+        # same-source pair never fires in either direction.
+        for finding in rows:
+            if is_disproof(finding):
                 continue
             key = site_key(finding)
             if key is None:
@@ -342,26 +444,42 @@ def detect_contradictions(
             prior = disproofs.get(key)
             if not prior:
                 continue
-            pair = (key, label, prior[-1][0], _mechanisms(finding))
-            if pair in seen:
+            pair = (SHAPE_CLAIM_AFTER_DISPROOF, key, label,
+                    prior[-1][0], _mechanisms(finding))
+            if not _admit(pair, key):
                 continue
-            seen.add(pair)
-            if (site_queued.get(key, 0) >= SITE_RECORD_CAP
-                    or len(records) >= RECORD_CAP):
-                suppressed += 1
-                continue
-            site_queued[key] = site_queued.get(key, 0) + 1
             disproof_label, disproof_row = prior[-1]
             records.append(build_queue_record(
                 finding, label, disproof_row, disproof_label,
                 prior_disproof_count=len(prior),
             ))
-        for finding in findings:
-            if not isinstance(finding, dict) or not is_disproof(finding):
+        for finding in rows:
+            if not is_disproof(finding):
                 continue
             key = site_key(finding)
-            if key is not None:
+            if key is None:
+                continue
+            prior = confirmed.get(key)
+            if not prior:
+                continue
+            pair = (SHAPE_OVERTURN, key, prior[-1][0], label,
+                    _mechanisms(finding))
+            if not _admit(pair, key):
+                continue
+            claim_label, claim_row = prior[-1]
+            records.append(build_queue_record(
+                claim_row, claim_label, finding, label,
+                prior_claim_count=len(prior),
+                shape=SHAPE_OVERTURN,
+            ))
+        for finding in rows:
+            key = site_key(finding)
+            if key is None:
+                continue
+            if is_disproof(finding):
                 disproofs.setdefault(key, []).append((label, finding))
+            elif is_confirmed_tier(finding):
+                confirmed.setdefault(key, []).append((label, finding))
     if suppressed:
         records.append({
             "kind": "readjudication",
@@ -426,12 +544,38 @@ def suppressed_count(records: Sequence[dict[str, Any]]) -> int:
     return total
 
 
+def record_shape(record: dict[str, Any]) -> str:
+    """The record's shape; a missing / non-string shape reads as
+    :data:`SHAPE_CLAIM_AFTER_DISPROOF` (the only class pre-shape
+    queues contained)."""
+    shape = record.get("shape")
+    if isinstance(shape, str) and shape:
+        return shape
+    return SHAPE_CLAIM_AFTER_DISPROOF
+
+
+def shape_counts(records: Sequence[dict[str, Any]]) -> dict[str, int]:
+    """Queued records per shape (marker records excluded)."""
+    counts: dict[str, int] = {}
+    for record in records:
+        if not isinstance(record, dict) or record.get("action") != "queued":
+            continue
+        shape = record_shape(record)
+        counts[shape] = counts.get(shape, 0) + 1
+    return counts
+
+
 def contradicted_disproof_count(records: Sequence[dict[str, Any]]) -> int:
-    """Distinct recorded disproofs the queue contradicts — the honest
-    headline number ("N recorded disproofs contradicted")."""
+    """Distinct recorded disproofs that later claims contradict — the
+    honest headline number ("N recorded disproofs contradicted").
+    Claim-after-disproof records only: in the other shapes the
+    ``disproof`` slot holds the NEWER item (the contradicting signal,
+    not a contradicted disposition), so counting it would inflate."""
     seen: set[tuple] = set()
     for record in records:
         if not isinstance(record, dict) or record.get("action") != "queued":
+            continue
+        if record_shape(record) != SHAPE_CLAIM_AFTER_DISPROOF:
             continue
         disproof = record.get("disproof")
         disproof = disproof if isinstance(disproof, dict) else {}
@@ -506,16 +650,22 @@ def write_queue(
 
 
 __all__ = [
+    "CONFIRMED_TIER_STATUSES",
     "DISPROOF_STATUSES",
     "QUEUE_FILENAME",
     "RECORD_CAP",
+    "SHAPE_CLAIM_AFTER_DISPROOF",
+    "SHAPE_OVERTURN",
     "SITE_RECORD_CAP",
     "build_queue_record",
     "contradicted_disproof_count",
     "detect_contradictions",
     "detect_project_contradictions",
+    "is_confirmed_tier",
     "is_disproof",
     "queued_count",
+    "record_shape",
+    "shape_counts",
     "site_key",
     "suppressed_count",
     "write_queue",
