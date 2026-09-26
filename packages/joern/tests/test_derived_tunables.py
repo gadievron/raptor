@@ -116,6 +116,27 @@ class TestEstimateInScopeSloc:
         from packages.joern.runner import estimate_in_scope_sloc
         assert estimate_in_scope_sloc(tmp_path) == 0
 
+    def test_symlinked_source_carries_no_bytes(self, tmp_path):
+        # A planted symlink named like source must not pull
+        # out-of-tree bytes into the estimate (an inflated estimate
+        # grows the derived CPG wall, so a hung frontend burns longer
+        # before the kill).
+        from packages.joern.runner import (
+            _EST_SOURCE_BYTES_PER_LINE,
+            estimate_in_scope_sloc,
+        )
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        big = outside / "big.c"
+        big.write_bytes(b"x" * 320000)
+        tree = tmp_path / "tree"
+        tree.mkdir()
+        (tree / "a.c").write_bytes(b"x" * 640)
+        (tree / "planted.c").symlink_to(big)
+        assert estimate_in_scope_sloc(tree) == (
+            640 // _EST_SOURCE_BYTES_PER_LINE
+        )
+
 
 class TestResolveCpgTimeout:
     def test_non_auto_passthrough(self, tmp_path):
