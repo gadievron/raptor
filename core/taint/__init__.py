@@ -15,6 +15,8 @@ Module map:
 * :mod:`core.taint.learned_intake` — the bounded intake through which
   project-learned specs (:mod:`core.iris`) enter the same in-memory
   model, tier-tagged ``learned``.
+* :mod:`core.taint.mad_matrix` — per-kind emissibility of pack entries
+  as CodeQL models-as-data rows, with counted refusals.
 
 Nothing here renders verdicts: packs and learned specs configure an
 origination lane whose findings are candidates for the existing
@@ -25,6 +27,12 @@ from core.taint.learned_intake import (
     LearnedIntake,
     LearnedSpec,
     intake_learned_specs,
+)
+from core.taint.mad_matrix import (
+    Emissibility,
+    MatrixReport,
+    emissibility_report,
+    mad_emissibility,
 )
 from core.taint.packs import (
     DEFAULT_PACKS_DIR,
@@ -44,9 +52,11 @@ from core.taint.packs import (
 __all__ = [
     "DEFAULT_PACKS_DIR",
     "SCHEMA_VERSION",
+    "Emissibility",
     "FlowEdge",
     "LearnedIntake",
     "LearnedSpec",
+    "MatrixReport",
     "PackLoadError",
     "PackSet",
     "PropagatorSpec",
@@ -55,6 +65,8 @@ __all__ = [
     "SourceSpec",
     "TaintPack",
     "curated_sanitizers",
+    "emissibility_report",
     "intake_learned_specs",
     "load_packs",
+    "mad_emissibility",
 ]
