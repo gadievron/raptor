@@ -325,6 +325,10 @@ This is the KNighter pattern: one hypothesis → sweep the whole codebase.
 Rules are stored in the project's rule library and can be replayed across
 runs.
 
+The same synthesis channel also runs on demand for chain-less suspicious
+hypotheses during a run, and post-run against the witness backlog's dark
+rows (see "Witness-backlog drain" under Post-run Workflows).
+
 
 ## Vocabulary Packs
 
@@ -469,6 +473,60 @@ or `referee: llm_only_ruling`), and referee-blocked disprovals are
 excluded from the model scorecard (an LLM-vs-LLM disagreement is not
 ground truth).  This mirrors G2 in the demotion direction: tool output
 is the verdict; LLM-only signals neither promote nor fully demote.
+
+### Witness-backlog drain
+
+`/validate`'s findings import routes dark rows (hypotheses no tool could
+adjudicate either way) into `witness-backlog.json` instead of spending
+validation budget on them.  The backlog consumer works that queue with
+non-executing witnesses: the Mode 2 on-demand checker synthesis is
+retargeted at each dark row's stated hypothesis.
+
+```bash
+libexec/raptor-audit backlog list --out "$OUTPUT_DIR"
+libexec/raptor-audit backlog drain --out "$OUTPUT_DIR" \
+    --target "$TARGET_PATH" --budget 5.00
+```
+
+`list` ranks the queue by cheapest-available-witness without spending
+anything: rows whose hypothesis names a pattern synthesis can target (a
+concrete cluster CWE, or a mechanism the keyword dispatch recognises)
+rank first, and rows with PENDING study questions on the same
+function/file rank behind their questions (study-first ordering — a row
+that is dark because a domain contract is unknown is cheaper to drain
+after the study loop answers the question).  Rows the on-demand policy
+refuses (not-tool-verifiable classes, no stated harm) are recorded and
+never attempted.
+
+`drain` works the ranked queue under the mandatory `--budget` USD cap
+(a positive, finite amount — synthesis calls cost; mechanical engine
+runs are free).  It is a post-run pass: a run directory whose recorded
+worker is still alive is refused — wait for the run to finish (or kill
+it) first.  The consumer never mints verdicts:
+
+- A row leaves the backlog only on a landed tool verdict — a
+  synthesized rule that passed both mechanical controls (positive
+  control at the row's site, dual control on fixtures) AND whose
+  journal entry actually landed.  Witnessed rows are journaled
+  `suspicious` through the orchestrator's own write path with the
+  `<engine>:synth-<rule_id>` receipt recorded; the receipt is
+  self-matched (distilled from the row's own site), so it corroborates
+  without promoting — promotion stays with the review lanes.
+- Failed or refused synthesis leaves the row dark, with a per-row
+  attempt record in `drain-report.json` and a persisted attempt counter
+  on the backlog row (sites past 3 attempts stay parked).  The counter
+  is keyed on the site, not the listing: exact duplicates collapse at
+  load and share one counter, and one drain dispatches at most one
+  synthesis per `file:function` site — duplicate listings never buy
+  extra attempts or extra journal rows.
+
+Drain entries carry the finding-grade `backlog-drain` journal producer:
+they never suppress audit gaps, fold into coverage, or serve as reused
+verdicts.  `--sample N` (with `--sample-seed`) drains a seeded random
+calibration sample of the attemptable rows instead of the whole ranked
+queue.  `--study-answers <path>` points at an explicit
+`study-answers.json` ledger when the run dir (or its newest project
+sibling) does not carry one.
 
 ### Staleness check
 
