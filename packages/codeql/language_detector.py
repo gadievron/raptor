@@ -212,16 +212,31 @@ class LanguageDetector:
     # File suffixes to ignore (endswith match)
     IGNORE_SUFFIXES = (".lock", ".min.js", ".bundle.js")
 
-    def __init__(self, repo_path: Path, max_files: int = 10000) -> None:
+    # Scan-size limit. The walk is name/suffix STATISTICS only — no
+    # file contents are read — measured at ~24 us/file (a 94k-file
+    # kernel tree walks whole in ~2.3 s). Both directions: LOWER
+    # samples the tree in walk order and the extension counts feeding
+    # language confidence become order-dependent (a kernel-scale repo
+    # under the old 10k cap scored rust from whichever slice the walk
+    # met first); HIGHER only buys wall time on pathological trees or
+    # network filesystems — at this ceiling the worst case is ~12 s,
+    # and the cap stays the escape hatch for anything beyond it.
+    _MAX_SCAN_FILES = 500_000
+
+    def __init__(self, repo_path: Path,
+                 max_files: int | None = None) -> None:
         """
         Initialize language detector.
 
         Args:
             repo_path: Path to repository
-            max_files: Maximum files to scan (performance limit)
+            max_files: Maximum files to scan (performance limit;
+                None derives the class default — see _MAX_SCAN_FILES)
         """
         self.repo_path = Path(repo_path)
-        self.max_files = max_files
+        self.max_files = (
+            max_files if max_files is not None else self._MAX_SCAN_FILES
+        )
 
         if not self.repo_path.exists():
             msg = f"Repository path does not exist: {repo_path}"
@@ -468,7 +483,10 @@ class LanguageDetector:
                 # Performance limit
                 if stats["scanned_files"] >= self.max_files:
                     logger.warning(
-                        "Reached max file scan limit (%s), detection may be incomplete",
+                        "Reached max file scan limit (%s) — language "
+                        "statistics computed from a walk-order sample; "
+                        "confidence scores for long-tail languages may "
+                        "be distorted",
                         self.max_files
                     )
                     break
