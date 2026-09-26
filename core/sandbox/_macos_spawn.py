@@ -1239,6 +1239,25 @@ def run_sandboxed(cmd: list[str], *,
     # timeout path fire the DESIGNED teardown channel first — closing
     # death_w makes the still-alive shim killpg the sandbox group and
     # exit — with a killpg of the shim's own session as the backstop.
+    # Parent-copy fd closes, exactly once per NUMBER: the teardown
+    # path closes death_w to fire the shim's death-pipe watcher, and
+    # the outer finally closes it again as the lifecycle owner. The
+    # second close of an already-freed number is not idempotent-safe
+    # like a double close on an OPEN fd — the number can be recycled
+    # by anything that opened a descriptor in between (the teardown's
+    # own ps probes, the Popen's stdio pipes) and the stale close then
+    # lands on a live unrelated fd.
+    _closed_parent_fds: set[int] = set()
+
+    def _close_parent_fd_once(fd: int) -> None:
+        if fd in _closed_parent_fds:
+            return
+        _closed_parent_fds.add(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
     def _teardown_shim_tree(process) -> None:
         """Kill the shim and its sandbox subtree on timeout/abort."""
         # 0. Snapshot the process table FIRST, while the tree is still
@@ -1254,10 +1273,7 @@ def run_sandboxed(cmd: list[str], *,
         #    EOF and SIGKILLs the sandbox process group + child, then
         #    exits. This reaches the sandbox-exec pgrp, which is NOT
         #    in the shim's own process group.
-        try:
-            os.close(death_w)
-        except OSError:
-            pass
+        _close_parent_fd_once(death_w)
         try:
             process.wait(timeout=5)
         except (subprocess.TimeoutExpired, OSError):
@@ -1291,6 +1307,27 @@ def run_sandboxed(cmd: list[str], *,
                 "macOS sandbox teardown: descendant sweep failed",
                 exc_info=True,
             )
+        # 4. The abort exception — not a cleanup crash — must reach
+        #    the caller: after this teardown returns, the re-raise
+        #    unwinds through Popen.__exit__, which re-closes whatever
+        #    file objects are still on .stdout/.stderr/.stdin. A pipe
+        #    fd invalidated behind the file object's back (observed
+        #    on a darwin CI host: EBADF out of __exit__'s
+        #    stdout.close() on the fail-closed audit-scoping refusal,
+        #    replacing the SandboxSetupError the caller was owed)
+        #    turns that close into a crash that masks the refusal.
+        #    Close each stream via its file object exactly once with
+        #    OSError suppressed, then detach the attribute so
+        #    __exit__ skips it. The abort paths never return output,
+        #    so nothing downstream reads these streams.
+        for _attr in ("stdout", "stderr", "stdin"):
+            _stream = getattr(process, _attr, None)
+            if _stream is not None:
+                try:
+                    _stream.close()
+                except OSError:
+                    pass
+                setattr(process, _attr, None)
 
     # Status-channel harvest: close our write end, then drain the read
     # end to EOF. Idempotent (memoised) because both the normal path
@@ -1459,14 +1496,14 @@ def run_sandboxed(cmd: list[str], *,
     finally:
         # Close our copies and drain the status channel (idempotent —
         # the normal path already harvested before its backstop
-        # sweep). _harvest_status closes status_w first: with our
-        # write end gone and the shim reaped, the drain returns the
-        # accumulated bytes then EOF, never blocks.
+        # sweep, and the abort paths already closed death_w; the
+        # once-per-number guard keeps this pass from re-closing a
+        # freed number that something else has since been handed).
+        # _harvest_status closes status_w first: with our write end
+        # gone and the shim reaped, the drain returns the accumulated
+        # bytes then EOF, never blocks.
         for _fd in (death_r, death_w):
-            try:
-                os.close(_fd)
-            except OSError:
-                pass
+            _close_parent_fd_once(_fd)
         _status_bytes = _harvest_status()
         if audit_streamer is not None:
             try:

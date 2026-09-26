@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 
 import pytest
 
@@ -351,6 +352,91 @@ def test_spawn_fails_closed_when_scoping_cannot_be_established(
             **mode_kwargs,
         )
     assert stub.stopped is True  # streamer still cleaned up
+
+
+def test_fail_closed_refusal_survives_stdio_fd_invalidation(
+        tmp_path, monkeypatch, fake_sandbox_exec):
+    """The refusal — not a crash in cleanup — must reach the caller.
+
+    Observed on a darwin CI host: the fail-closed audit-scoping abort
+    surfaced as OSError EBADF out of Popen.__exit__'s stdout.close()
+    (the pipe fd went bad behind the file object's back during
+    teardown), replacing the SandboxSetupError the caller was owed.
+    Inject the same invalidation at the teardown's sweep step — after
+    the shim is reaped, before the re-raise unwinds through __exit__
+    — and pin that the refusal still propagates."""
+    from core.sandbox import _macos_spawn
+    from core.sandbox.errors import SandboxSetupError
+
+    stub = _StubStreamer(register_raises=True)
+    monkeypatch.setattr(seatbelt_audit, "start_log_streamer",
+                        lambda run_dir, **kwargs: stub)
+
+    spawned: list[subprocess.Popen] = []
+    real_popen = subprocess.Popen
+
+    class _RecordingPopen(real_popen):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)
+            spawned.append(self)
+
+    monkeypatch.setattr(subprocess, "Popen", _RecordingPopen)
+
+    invalidated: list[int] = []
+
+    def _sweep_and_invalidate(root_pid: int, **kwargs: object) -> set[int]:
+        # The shim's Popen is the one whose argv carries the seatbelt
+        # shim script (teardown's own ps probes are recorded too).
+        shim = next(p for p in spawned
+                    if any("raptor-seatbelt-shim" in str(a)
+                           for a in p.args))
+        if shim.stdout is not None:
+            invalidated.append(shim.stdout.fileno())
+            os.close(shim.stdout.fileno())
+        return set()
+
+    monkeypatch.setattr(_macos_spawn, "_sweep_descendants",
+                        _sweep_and_invalidate)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    with pytest.raises(SandboxSetupError):
+        _macos_spawn.run_sandboxed(
+            [_TRUE],
+            output=str(out_dir),
+            audit_mode=True,
+            audit_run_dir=str(out_dir),
+            capture_output=True, text=True, timeout=30,
+            audit_required=True,
+        )
+    assert stub.stopped is True  # streamer still cleaned up
+    # Vacuity guard: teardown step 3 swallows sweep exceptions
+    # (Exception → logged warning), so a broken shim-argv match or an
+    # already-detached stdout would skip the injection and this test
+    # would pass without pinning anything. Prove the probe fired.
+    assert invalidated, "stdio invalidation was never injected"
+
+
+def test_success_path_still_delivers_captured_output(
+        tmp_path, monkeypatch, fake_sandbox_exec):
+    """Direction pin for the abort-path stream detach: the normal
+    completion path keeps its streams — captured output still flows
+    back through communicate untouched."""
+    from core.sandbox import _macos_spawn
+
+    stub = _StubStreamer()
+    monkeypatch.setattr(seatbelt_audit, "start_log_streamer",
+                        lambda run_dir, **kwargs: stub)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    result = _macos_spawn.run_sandboxed(
+        ["/bin/echo", "raptor-stream-pin"],
+        output=str(out_dir),
+        audit_mode=True,
+        audit_run_dir=str(out_dir),
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0
+    assert "raptor-stream-pin" in result.stdout
 
 
 def test_spawn_proceeds_with_warning_when_scoping_optional(
