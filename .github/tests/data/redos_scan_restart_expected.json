@@ -70,7 +70,7 @@
    "digests": [
     "2da2d1408533"
    ],
-   "exp": 1.03,
+   "exp": 1.2,
    "verdict": "linear"
   },
   "core/analysis/taint_multi_lang.py\u001fassert_re": {
@@ -154,7 +154,7 @@
    "digests": [
     "7bac92ef17b0"
    ],
-   "exp": 0.98,
+   "exp": 1.07,
    "verdict": "linear"
   },
   "core/audit/auth_witnesses.py\u001f_GETTER_DECL_RE": {
@@ -175,7 +175,7 @@
    "digests": [
     "c8f8ffc78d2c"
    ],
-   "exp": 1.0,
+   "exp": 1.08,
    "verdict": "linear"
   },
   "core/audit/binary_layer0.py\u001f_CALLEE_RE": {
@@ -304,18 +304,32 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "core/audit/codeql_validation.py\u001f_REGION_LABEL_HEAD_RE": {
+   "digests": [
+    "639fad5eb837"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/codeql_validation.py\u001f_REGION_LABEL_RE": {
+   "digests": [
+    "f5cd46dcd8b5"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "core/audit/compile_probe.py\u001f_BUILTIN_EXPR_RE": {
    "digests": [
     "aa7b1d8b05bf"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/compile_probe.py\u001f_DETERMINE_BUILTIN_RE": {
    "digests": [
     "35c6628de792"
    ],
-   "exp": 1.08,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/compile_probe.py\u001f_IDENT_EXPR_RE": {
@@ -329,7 +343,7 @@
    "digests": [
     "0f64f014c82d"
    ],
-   "exp": 1.97,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/audit/compiler_sweep.py\u001f_DIAG_SUPPRESSION_RE": {
@@ -596,7 +610,7 @@
    "digests": [
     "a56ab90d3d8a"
    ],
-   "exp": 0.99,
+   "exp": 1.27,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001fwrapper_re": {
@@ -694,14 +708,14 @@
    "digests": [
     "c7576fa032bf"
    ],
-   "exp": 1.96,
+   "exp": 2.16,
    "verdict": "adjudicated"
   },
   "core/audit/dark_verify/_resolve.py\u001f_PY_EXT_SUFFIX_GLOBS[3]": {
    "digests": [
     "9337696cf86c"
    ],
-   "exp": 1.97,
+   "exp": 1.94,
    "verdict": "adjudicated"
   },
   "core/audit/decompiler_sanitise.py\u001f_CLASS_MEMBER_RE": {
@@ -778,7 +792,7 @@
    "digests": [
     "7ebd359a4d82"
    ],
-   "exp": 1.02,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/integer_truncation_checker.py\u001f_ALLOC_RE": {
@@ -820,7 +834,7 @@
    "digests": [
     "f7b4a925ef64"
    ],
-   "exp": 1.15,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/joern_verify.py\u001f[`'\\\"]?\\b([A-Za-z_][A-Za-z0-9_]*)[`'\\\"]?": {
@@ -975,7 +989,7 @@
    "digests": [
     "ae40fb5f77d0"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/path_feasibility.py\u001fif_patterns": {
@@ -1038,21 +1052,21 @@
    "digests": [
     "0d3f53af0a22"
    ],
-   "exp": 0.88,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b\\w{0,256}len\\w*\\s*[<>=!]+": {
    "digests": [
     "d017fec15766"
    ],
-   "exp": 1.02,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b\\w{0,256}size\\w*\\s*[<>=!]+": {
    "digests": [
     "451711e8fcea"
    ],
-   "exp": 0.99,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\bexecv\\w*\\s*\\(": {
@@ -1213,7 +1227,7 @@
    "digests": [
     "6791b0fd26a9"
    ],
-   "exp": 1.06,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/audit/ptr_lifecycle.py\u001f_RCU_DEREF_RE": {
@@ -1248,7 +1262,7 @@
    "digests": [
     "87a22b640da8"
    ],
-   "exp": 1.09,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/audit/release_order.py\u001f[\\w\\*\\s]\\b([A-Za-z_]\\w*)\\s*[,)]": {
@@ -1290,7 +1304,7 @@
    "digests": [
     "a0cc73423185"
    ],
-   "exp": 1.1,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/audit/return_contracts.py\u001fdecl_re": {
@@ -1578,7 +1592,7 @@
    "digests": [
     "8fe688d1a940"
    ],
-   "exp": 0.98,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/concepts/study.py\u001f\\b(struct\\s+\\w+|[A-Za-z_]\\w{3,}_[A-Za-z_": {
@@ -1690,7 +1704,7 @@
    "digests": [
     "37de29a408f1"
    ],
-   "exp": 1.98,
+   "exp": 2.21,
    "verdict": "adjudicated"
   },
   "core/inventory/extractors.py\u001fPATTERNS[1]": {
@@ -1837,7 +1851,7 @@
    "digests": [
     "44a2e5aa9242"
    ],
-   "exp": 0.98,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/inventory/translation_view.py\u001f_CALL_IN_BODY": {
@@ -1851,49 +1865,49 @@
    "digests": [
     "5f33a892b9ad"
    ],
-   "exp": 1.8,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[2]": {
    "digests": [
     "74f670123f14"
    ],
-   "exp": 1.73,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[3]": {
    "digests": [
     "0fb08c380bf3"
    ],
-   "exp": 1.82,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[4]": {
    "digests": [
     "70e776e25c31"
    ],
-   "exp": 1.93,
+   "exp": 2.04,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[5]": {
    "digests": [
     "88e933d23e53"
    ],
-   "exp": 2.05,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[6]": {
    "digests": [
     "29eb48db7b62"
    ],
-   "exp": 2.06,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[7]": {
    "digests": [
     "8eba6201f599"
    ],
-   "exp": 2.0,
+   "exp": 1.61,
    "verdict": "adjudicated"
   },
   "core/license/detector.py\u001f(?:please\\s+)?see\\s+(?:the\\s+file\\s+)?((": {
@@ -2488,6 +2502,13 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "packages/exploitability_validation/binary_substrate.py\u001flines[4]": {
+   "digests": [
+    "003157c804da"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "packages/exploitability_validation/symbolic_witness.py\u001f_ATTRIBUTE_RE": {
    "digests": [
     "89a444c9286b"
@@ -2499,7 +2520,7 @@
    "digests": [
     "db21eb0cc688"
    ],
-   "exp": 2.0,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "packages/joern/runner.py\u001f_CALL_RE": {
@@ -2771,13 +2792,6 @@
   "packages/web/fuzzer.py\u001fbasic_payloads[13]": {
    "digests": [
     "856b9d79f725"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "packages/exploitability_validation/binary_substrate.py\u001flines[4]": {
-   "digests": [
-    "003157c804da"
    ],
    "exp": 1.0,
    "verdict": "linear"
