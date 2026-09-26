@@ -47,6 +47,7 @@ from ._util import (
 )
 from core.source import read_text_capped
 
+from .diagnostics import warn_unknown_tier
 from .run_memo import BoundedMemo
 from core.source.lines import split_lines
 
@@ -941,7 +942,12 @@ def _tick_tier(
     result: PropagationResult,
 ) -> None:
     """Increment a tier counter based on propagation result."""
-    if tier_counters is None or tier not in tier_counters:
+    if tier_counters is None:
+        # Telemetry is off for this call — nothing to book, nothing
+        # to warn about.
+        return
+    if tier not in tier_counters:
+        warn_unknown_tier(tier)
         return
     tc = tier_counters[tier]
     if result.resolved and result.resolution == "confirmed":
