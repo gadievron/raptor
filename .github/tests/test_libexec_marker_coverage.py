@@ -7,8 +7,9 @@ script (not factored into a shared helper) so it cannot be subverted
 by a single helper-module compromise and so it remains visible at the
 top of every script during code review. The same reasoning covers the
 other launcher-preamble surfaces: the bounded symlink-resolution loop,
-the dangerous-env-strip sourcing line, and the
-sys.path-then-process_init setup pair.
+the dangerous-env-strip sourcing line, the
+sys.path-then-process_init setup pair, and the interpreter-isolation
+guard on the authority/consent surfaces (IsolationGuardTests).
 
 The cost of that decision is copy drift: the 72 trust-marker copies had
 diverged into 13 hash-distinct bodies before these lints existed. This
@@ -44,6 +45,7 @@ the CLI tests and test_symlink_hop_bound.py).
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import os
 import re
@@ -142,6 +144,74 @@ PY_PROLOGUE = (
     "# ruff: noqa: RUF100, I001",
     "# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)",
 )
+
+# ─── interpreter-isolation guard ─────────────────────────────────────
+
+# Authority/consent surfaces: launchers whose records or verdicts rest
+# on in-process checks an interpreter-startup hook (PYTHONPATH
+# sitecustomize, user-site .pth/usercustomize — the latter with zero
+# environment variables) could monkeypatch before the first script
+# line. Each carries the `-S python3 -I` shebang AND the byte-pinned
+# re-exec guard below, placed before every non-__future__ import.
+# Membership is a decision, both directions: a new authority surface
+# joins here in a reviewed change; blanket -I on non-authority
+# launchers is deliberately out of scope (it would break
+# PYTHONPATH-dependent dev flows and pip --user dependency
+# resolution for tools that carry no context-derived authority).
+ISOLATION_SURFACES = frozenset({
+    "raptor-annotate",          # mints source=human provenance stamps
+    "raptor-coverage-summary",  # --mark operator grant (review grade)
+    "raptor-may-ask",           # sole interactivity authority for
+                                # AskUserQuestion consent decisions
+    "raptor-review",            # human verdict rows (fp mint surface)
+    "raptor-sage-mcp-guard",    # enforces the operator-authorized
+                                # boot-payload stamp on live sessions
+    "raptor-wsl-consent",       # standing host-consent grant ceremony
+})
+
+ISOLATION_SHEBANG = "#!/usr/bin/env -S python3 -I"
+
+_ISO_SENTINEL = "# ─── interpreter-isolation guard"
+_ISO_END_SENTINEL = "─── end interpreter-isolation guard"
+
+ISOLATION_GUARD_TEMPLATE = r'''# ─── interpreter-isolation guard (do not import; inline by design) ───
+# fmt: off
+# This launcher is an authority/consent surface: its checks
+# (invocation context, operator-approved records) run in-process,
+# and interpreter-startup hooks run BEFORE this file's first line —
+# a PYTHONPATH sitecustomize, or a .pth/usercustomize.py in the
+# user site, the latter with ZERO environment variables set — so a
+# hook can monkeypatch those checks (demonstrated against
+# detect_invocation_context). Isolated mode closes both at the
+# interpreter level: -I ignores PYTHON* variables and never enables
+# the user site, so on the shebang route (env -S python3 -I)
+# neither hook shape ever loads. This re-exec extends the closure
+# to every other route (`python3 <script>`): execv replaces the
+# process in place — same pid, fds, controlling terminal, session
+# and parent chain, so TTY and ancestry gates observe the unchanged
+# invocation context — and cannot loop, because the re-execed
+# interpreter's sys.flags.isolated is 1. __main__-gated: importing
+# this file never re-execs the importer. Honest bound
+# (docs/security.md): on the `python3 <script>` route the hook has
+# ALREADY run when this guard fires, so a hook written against the
+# guard itself can neuter it; the shebang route is isolated from
+# the first instruction, and same-user writes to RAPTOR's own files
+# or the interpreter's startup surface remain the trust edge. Repo
+# imports still work under -I: the sys.path setup below is
+# Path(__file__)-relative, never PYTHONPATH-derived.
+import os  # noqa: E402
+import sys  # noqa: E402
+if __name__ == "__main__" and not sys.flags.isolated:
+    os.execv(
+        sys.executable,
+        [sys.executable, "-I", os.path.abspath(__file__), *sys.argv[1:]],
+    )
+    # execv does not return; reached only if a startup hook neutered
+    # it in this unisolated interpreter — refuse to run the authority
+    # checks on hooked code.
+    raise SystemExit(97)
+# fmt: on
+# ─── end interpreter-isolation guard ─────────────────────────────────'''
 
 # ─── sys.path preamble ───────────────────────────────────────────────
 
@@ -392,6 +462,20 @@ def _trust_block(text: str) -> str | None:
     return "\n".join(lines[starts[0] : ends[0] + 1])
 
 
+def _isolation_block(text: str) -> str | None:
+    """The sentinel-delimited isolation guard, or None when absent or
+    malformed (zero or multiple sentinels)."""
+    lines = text.splitlines()
+    starts = [
+        i for i, ln in enumerate(lines)
+        if _ISO_SENTINEL in ln and "end" not in ln
+    ]
+    ends = [i for i, ln in enumerate(lines) if _ISO_END_SENTINEL in ln]
+    if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+        return None
+    return "\n".join(lines[starts[0] : ends[0] + 1])
+
+
 def _symhops_blocks(text: str) -> list[str]:
     """Every `_symhops=0` block: init-var line through unset line."""
     lines = text.splitlines()
@@ -462,16 +546,20 @@ class LibexecMarkerCoverageTests(unittest.TestCase):
         Heuristic: the sentinel must appear within the first 100 lines.
         That's loose enough to permit long module docstrings but tight
         enough to catch a check accidentally pushed to the bottom of
-        the file.
+        the file. Lines belonging to the interpreter-isolation guard
+        (which sits ABOVE the trust check on the authority surfaces,
+        by design — see IsolationGuardTests) don't count against the
+        budget.
         """
         late = []
         for path in _libexec_scripts():
-            lines = path.read_text(
-                encoding="utf-8", errors="replace",
-            ).splitlines()
+            text = path.read_text(encoding="utf-8", errors="replace")
+            lines = text.splitlines()
+            iso = _isolation_block(text)
+            iso_lines = len(iso.splitlines()) if iso else 0
             for i, line in enumerate(lines, 1):
                 if _SENTINEL in line:
-                    if i > 100:
+                    if i - iso_lines > 100:
                         late.append(f"{path.name}: line {i}")
                     break
         self.assertEqual(
@@ -565,6 +653,151 @@ class TrustBlockIdentityTests(unittest.TestCase):
                 "prologue after the shebang (PY_PROLOGUE):\n"
                 + "\n".join(problems)
             ),
+        )
+
+
+class IsolationGuardTests(unittest.TestCase):
+    """The authority/consent surfaces carry the -I shebang and the
+    byte-pinned re-exec guard; nothing else does. Behavioural proof
+    (forge inertness, argv/fd/tty preservation, loop-freedom) lives in
+    test_interpreter_isolation.py — this class pins identity, coverage
+    and placement only.
+    """
+
+    def test_carrier_set_matches_declared_surfaces(self):
+        """Both directions: every declared surface carries the guard
+        sentinel, and no undeclared script does. Adding a carrier (a
+        new authority surface) or removing one is a reviewed decision
+        made here, next to the justification table.
+        """
+        carriers = {
+            p.name
+            for p in _python_scripts()
+            if _ISO_SENTINEL
+            in p.read_text(encoding="utf-8", errors="replace")
+        }
+        self.assertEqual(
+            carriers, set(ISOLATION_SURFACES),
+            msg="isolation-guard carrier set no longer matches "
+                "ISOLATION_SURFACES — declare the newcomer (with its "
+                "authority justification) or investigate the removal",
+        )
+
+    def test_guard_blocks_match_golden_template(self):
+        problems = []
+        for name in sorted(ISOLATION_SURFACES):
+            text = (LIBEXEC / name).read_text(
+                encoding="utf-8", errors="replace",
+            )
+            block = _isolation_block(text)
+            if block is None:
+                problems.append(
+                    f"{name}: malformed guard (need exactly one start "
+                    "and one end sentinel, in order)"
+                )
+            elif block != ISOLATION_GUARD_TEMPLATE:
+                problems.append(f"{name}: guard deviates from template")
+        self.assertEqual(
+            problems, [],
+            msg=(
+                "isolation guards drifted from the golden template "
+                "(copy ISOLATION_GUARD_TEMPLATE verbatim; there is no "
+                "per-script parameterization):\n" + "\n".join(problems)
+            ),
+        )
+
+    def test_surfaces_carry_the_isolated_shebang(self):
+        """Belt half of the closure: on the dispatch route (bin/raptor
+        and the settings-allowlisted `libexec/raptor-*` command shapes
+        exec the script path, so the kernel reads the shebang) the
+        interpreter starts isolated at the FIRST instruction — startup
+        hooks never load at all, which the in-process guard alone
+        cannot guarantee.
+        """
+        problems = []
+        for name in sorted(ISOLATION_SURFACES):
+            first = _shebang(LIBEXEC / name)
+            if first != ISOLATION_SHEBANG:
+                problems.append(f"{name}: {first!r}")
+        self.assertEqual(
+            problems, [],
+            msg=f"authority surfaces must open with "
+                f"{ISOLATION_SHEBANG!r}:\n" + "\n".join(problems),
+        )
+
+    def test_guard_precedes_the_trust_block(self):
+        """Order: the guard must be the first executable code so the
+        re-exec happens before anything else runs in a possibly-hooked
+        interpreter; the trust check then runs (once) in the isolated
+        child."""
+        problems = []
+        for name in sorted(ISOLATION_SURFACES):
+            lines = (LIBEXEC / name).read_text(
+                encoding="utf-8", errors="replace",
+            ).splitlines()
+            iso = next(
+                (i for i, ln in enumerate(lines)
+                 if _ISO_SENTINEL in ln and "end" not in ln), None,
+            )
+            trust = next(
+                (i for i, ln in enumerate(lines)
+                 if _SENTINEL in ln and "end" not in ln), None,
+            )
+            if iso is None or trust is None or iso >= trust:
+                problems.append(
+                    f"{name}: iso at {iso}, trust at {trust}"
+                )
+        self.assertEqual(
+            problems, [],
+            msg="the isolation guard must precede the trust-marker "
+                "check:\n" + "\n".join(problems),
+        )
+
+    def test_guard_is_the_first_statement(self):
+        """Nothing importable/hookable runs before the guard: the first
+        statement after the module docstring (and the compiler-directive
+        `from __future__` import, which must lexically come first) is
+        the guard's own `import os`.
+        """
+        problems = []
+        for name in sorted(ISOLATION_SURFACES):
+            text = (LIBEXEC / name).read_text(
+                encoding="utf-8", errors="replace",
+            )
+            lines = text.splitlines()
+            iso_start = next(
+                i for i, ln in enumerate(lines, 1)
+                if _ISO_SENTINEL in ln and "end" not in ln
+            )
+            iso_end = next(
+                i for i, ln in enumerate(lines, 1)
+                if _ISO_END_SENTINEL in ln
+            )
+            body = list(ast.parse(text).body)
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                body = body[1:]  # module docstring
+            if (
+                body
+                and isinstance(body[0], ast.ImportFrom)
+                and body[0].module == "__future__"
+            ):
+                body = body[1:]
+            if not body or not (iso_start < body[0].lineno < iso_end):
+                where = body[0].lineno if body else "none"
+                problems.append(
+                    f"{name}: first statement at line {where}, guard "
+                    f"spans {iso_start}-{iso_end}"
+                )
+        self.assertEqual(
+            problems, [],
+            msg="code precedes the isolation guard (the guard must be "
+                "the first statement after docstring/__future__):\n"
+                + "\n".join(problems),
         )
 
 
@@ -813,6 +1046,7 @@ class RuffImmunityTests(unittest.TestCase):
         return (
             tuple(lines[1:3]),                     # prologue
             _trust_block(text),                    # trust-marker block
+            _isolation_block(text),                # isolation guard
             tuple(
                 ln for ln in lines
                 if "sys.path.insert" in ln
