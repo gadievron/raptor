@@ -468,3 +468,60 @@ class TestCFamilyExtensionParity(unittest.TestCase):
             td._C_FAMILY_EXTS,
             td._C_SOURCE_EXTS | td._CPP_SOURCE_EXTS,
         )
+
+
+class TestTerseExecutableDetection(unittest.TestCase):
+    """TE (Terse Executable) UEFI images: classify-and-decline."""
+
+    def test_te_magic_detected_with_machine_arch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # "VZ" signature + IA-32 machine + padding.
+            path = _write(tmp, "driver.efi",
+                          b"VZ" + (0x8664).to_bytes(2, "little")
+                          + b"\x00" * 60)
+            info = detect(path)
+        self.assertEqual(info.kind, "te")
+        self.assertEqual(info.arch, "x86_64")
+        self.assertFalse(info.can_fuzz_here)
+        self.assertIsNone(info.recommended_fuzzer)
+
+    def test_te_kind_is_not_a_pe_kind(self):
+        """Two downstream consumers key Windows behavior off the
+        "pe-" prefix (platform labelling, driver-symbol ingress
+        probing); a "pe-te" spelling would hand UEFI firmware both.
+        The kind must never grow that prefix."""
+        with tempfile.TemporaryDirectory() as tmp:
+            info = detect(_write(tmp, "img.te", b"VZ" + b"\x00" * 62))
+        self.assertEqual(info.kind, "te")
+        self.assertFalse(info.kind.startswith("pe-"))
+
+    def test_te_emits_not_analysed_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            info = detect(_write(tmp, "img.te", b"VZ" + b"\x00" * 62))
+        self.assertTrue(any(b.startswith("te_not_analysed")
+                            for b in info.blockers))
+
+    def test_truncated_te_still_classifies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            info = detect(_write(tmp, "stub.te", b"VZ"))
+        self.assertEqual(info.kind, "te")
+        self.assertEqual(info.arch, "unknown")
+
+    def test_unknown_te_machine_falls_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            info = detect(_write(tmp, "odd.te",
+                                 b"VZ\xbc\x0e" + b"\x00" * 60))
+        self.assertEqual(info.kind, "te")
+        self.assertEqual(info.arch, "machine_0xebc")
+
+    def test_mz_path_undisturbed_by_te_branch(self):
+        """An MZ image carrying "VZ" bytes right behind the DOS
+        magic is still PE; a VZ image is never PE."""
+        with tempfile.TemporaryDirectory() as tmp:
+            data = bytearray(_pe_fixture(0x8664))
+            data[2:4] = b"VZ"
+            pe_info = detect(_write(tmp, "prog.exe", bytes(data)))
+            te_info = detect(_write(tmp, "img.te",
+                                    b"VZ" + b"\x00" * 62))
+        self.assertEqual(pe_info.kind, "pe-exe")
+        self.assertEqual(te_info.kind, "te")
