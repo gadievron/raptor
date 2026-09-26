@@ -221,12 +221,9 @@ def write_checklist_from_bookmarks(
     from core.inventory import checklist_exists, save_checklist
     if checklist_exists(output_dir):
         try:
-            from core.json import load_json
-
-            from .context_inject import _MAX_CACHE_BYTES
-            existing = load_json(checklist_path,
-                                 max_bytes=_MAX_CACHE_BYTES)
-            if isinstance(existing, dict):
+            from core.inventory import read_checklist
+            existing = read_checklist(output_dir)
+            if existing:
                 existing_names = set()
                 for fe in existing.get("files", []):
                     for it in fe.get("items", []):

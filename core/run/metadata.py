@@ -1641,16 +1641,24 @@ def _promote_checklist(project_dir: Path) -> None:
             # on-disk form qualifies — single file or a run-local
             # sharded dir.
             has_single = cl.exists() and not cl.is_symlink()
+            # ``not cl.is_symlink()`` on the sharded arm too: with a
+            # dangling project symlink still in the slot, the accessor
+            # read below would resolve THROUGH it to the project's own
+            # sharded checklist — self-promotion.
             has_sharded = (
                 (d / "checklist" / "index.json").is_file()
                 and not (d / "checklist").is_symlink()
+                and not cl.is_symlink()
             )
             if not has_single and not has_sharded:
                 continue
         except OSError:
             continue
         if has_single:
-            data = load_json(cl, max_bytes=RUN_ARTIFACT_MAX_BYTES)
+            # Promotion must read the run-LOCAL file only — the
+            # accessor would follow a symlinked slot back to the
+            # project checklist (self-promotion).
+            data = load_json(cl, max_bytes=RUN_ARTIFACT_MAX_BYTES)  # checklist-direct-read: run-local only, symlink-excluded above
         else:
             from core.inventory import read_checklist
             data = read_checklist(d)
@@ -2158,8 +2166,8 @@ def _snapshot_run_coverage(output_dir: Path,
             if _is_out_root(run_dir.parent):
                 return  # same out-root boundary as _journal_project_dir
             proj = run_dir.parent
-        checklist_path = proj / "checklist.json"
-        if not checklist_path.exists():
+        from core.inventory import checklist_exists, read_checklist
+        if not checklist_exists(proj):
             return                       # standalone run — no durable project store
         from core.coverage.importer import (
             _inventory_paths,
@@ -2172,13 +2180,10 @@ def _snapshot_run_coverage(output_dir: Path,
             StoreWriteOverBudget,
             coverage_store_lock,
         )
-        from core.json import load_json
 
-        from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
-        # Run-dir artifact — same budget class as the importer's
-        # own reads of this file.
-        checklist = load_json(checklist_path,
-                              max_bytes=RUN_ARTIFACT_MAX_BYTES)
+        # Accessor read: flock + the sharded checklist/ layout, under
+        # the checklist budget class.
+        checklist = read_checklist(proj)
         if not checklist:
             return
         cov_path = proj / "coverage.json"

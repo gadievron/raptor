@@ -64,7 +64,7 @@ def test_resume_accepts_elf_binary_target(tmp_path, capsys):
     # Past the target-shape gate: the refusal is the missing checklist,
     # not a bogus "target not found" for a file that exists.
     assert "target not found" not in captured.err
-    assert "no checklist.json" in captured.err
+    assert "no checklist in" in captured.err
 
 
 def test_resume_accepts_directory_target(tmp_path, capsys):
@@ -76,7 +76,7 @@ def test_resume_accepts_directory_target(tmp_path, capsys):
     captured = capsys.readouterr()
     assert rc == 1
     assert "target not found" not in captured.err
-    assert "no checklist.json" in captured.err
+    assert "no checklist in" in captured.err
 
 
 def test_resume_still_rejects_non_binary_file_target(tmp_path, capsys):

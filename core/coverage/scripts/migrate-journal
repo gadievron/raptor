@@ -186,12 +186,11 @@ def _iter_annotation_entries(project_dir: Path) -> Iterable[Dict[str, Any]]:
 
 def _iter_checked_by_entries(project_dir: Path) -> Iterable[Dict[str, Any]]:
     """Yield entry dicts from checklist ``checked_by`` labels."""
-    path = project_dir / "checklist.json"
-    if not path.is_file():
-        return
-    # Best-effort: None on a missing/oversize/malformed file.
-    checklist = load_json(path, max_bytes=_MAX_CHECKLIST_BYTES)
-    if not isinstance(checklist, dict):
+    # Accessor read: either on-disk checklist form; missing or
+    # malformed reads as {}.
+    from core.inventory import read_checklist
+    checklist = read_checklist(project_dir)
+    if not checklist:
         return
     for fe in iter_file_entries(checklist):
         file_path = fe.get("path")

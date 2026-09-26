@@ -1140,7 +1140,8 @@ def _build_standalone_pocs(target, build_dir):
 
 
 def prepare_A(workdir, target=None):
-    checklist = load_json(Path(workdir) / "checklist.json")
+    from core.inventory import read_checklist
+    checklist = read_checklist(Path(workdir))
     existing = load_json(Path(workdir) / "findings.json")
     if not checklist:
         print("✗ checklist.json not found", file=sys.stderr)
@@ -1589,7 +1590,8 @@ def prepare_C(workdir, target=None):
             print(f"  WARN: {_sft(str(fid), max_len=120)} stage_b_summary incomplete", file=sys.stderr)
 
     # --- Pre-check findings against inventory ---
-    checklist = load_json(Path(workdir) / "checklist.json")
+    from core.inventory import read_checklist
+    checklist = read_checklist(Path(workdir))
     if not checklist:
         print("✗ checklist.json not found — cannot run stage C", file=sys.stderr)
         sys.exit(1)
@@ -1891,8 +1893,8 @@ def prepare_D(workdir, target=None):
     # point. D-1's skill section reads the richer signal first;
     # the simpler flag is kept for skills that haven't been
     # updated.
-    inventory_path = Path(workdir) / "checklist.json"
-    inventory = load_json(inventory_path) if inventory_path.is_file() else None
+    from core.inventory import read_checklist
+    inventory = read_checklist(Path(workdir)) or None
     try:
         from core.inventory.fixture_detection import detect_fixture
     except ImportError:
@@ -3529,10 +3531,9 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
         # the same directory.  build_checklist will overwrite it with current hashes,
         # so we capture the old hashes now for stale-file detection.
         pre_rebuild_checklist = None
-        checklist_path = out_dir / "checklist.json"
-        if checklist_path.exists() and (out_dir / "context-map.json").exists():
-            from core.json import load_json
-            pre_rebuild_checklist = load_json(checklist_path)
+        from core.inventory import checklist_exists, read_checklist
+        if checklist_exists(out_dir) and (out_dir / "context-map.json").exists():
+            pre_rebuild_checklist = read_checklist(out_dir) or None
 
         checklist = build_checklist(target, str(out_dir))
 

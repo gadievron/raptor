@@ -1789,14 +1789,18 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # --- build checklist ---
     checklist_path = out_dir / "checklist.json"
+    from core.inventory import checklist_exists as _checklist_exists
     # Target-match gate on an inherited/pre-existing checklist: an
     # inventory recorded against a DIFFERENT target must never seed
     # this run (lifecycle start refuses the project symlink for
     # mismatches, but a reused --out dir or a symlink minted before
     # that gate can still be sitting here). Discarding the run-LOCAL
     # copy leaves any project-level original untouched; the rebuild
-    # below then inventories the actual target.
-    if checklist_path.exists():
+    # below then inventories the actual target. The gate must see
+    # BOTH on-disk forms — a single-file probe here plus the
+    # form-aware rebuild probe below would silently audit this
+    # target against another target's sharded inventory.
+    if _checklist_exists(out_dir) or checklist_path.is_symlink():
         _stale_recorded = _mismatched_checklist_target(
             checklist_path, target_path,
         )
@@ -1814,28 +1818,38 @@ def cmd_run(args: argparse.Namespace) -> int:
                 file=sys.stderr, flush=True,
             )
             try:
+                import time as _time
+                _ts = _time.strftime(
+                    "%Y%m%dT%H%M%SZ", _time.gmtime())
+
+                def _free_aside(base_name: str) -> Path:
+                    # Timestamp + counter so a SECOND mismatch in the
+                    # same dir cannot replace() over the first
+                    # set-aside (that would silently destroy the
+                    # earlier evidence).
+                    aside = out_dir / f"{base_name}-{_ts}"
+                    n = 1
+                    while aside.exists():
+                        aside = out_dir / f"{base_name}-{_ts}.{n}"
+                        n += 1
+                    return aside
+
                 if checklist_path.is_symlink():
                     # Drop only the LINK; the project-level checklist
                     # it points at belongs to the other target's runs.
                     checklist_path.unlink()
-                else:
+                elif checklist_path.is_file():
                     # A real file is evidence — set it aside, never
-                    # delete a run artifact. Timestamp + counter so a
-                    # SECOND mismatch in the same dir cannot replace()
-                    # over the first set-aside (that would silently
-                    # destroy the earlier evidence).
-                    import time as _time
-                    _ts = _time.strftime(
-                        "%Y%m%dT%H%M%SZ", _time.gmtime())
-                    _aside = out_dir / (
-                        f"checklist.json.mismatched-target-{_ts}")
-                    _n = 1
-                    while _aside.exists():
-                        _aside = out_dir / (
-                            "checklist.json.mismatched-target-"
-                            f"{_ts}.{_n}")
-                        _n += 1
-                    checklist_path.replace(_aside)
+                    # delete a run artifact.
+                    checklist_path.replace(_free_aside(
+                        "checklist.json.mismatched-target"))
+                _shard_dir = out_dir / "checklist"
+                if _shard_dir.is_dir() and not _shard_dir.is_symlink():
+                    # A run-LOCAL sharded layout is evidence too — set
+                    # the whole dir aside so the discriminator cannot
+                    # keep serving the other target's inventory.
+                    os.rename(_shard_dir, _free_aside(
+                        "checklist.mismatched-target"))
             except OSError as exc:
                 print(
                     f"error: could not discard mismatched checklist: {exc}",
@@ -1843,7 +1857,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 )
                 _lifecycle_fail(out_dir, "mismatched checklist not removable")
                 return 1
-    if not checklist_path.exists():
+    if not _checklist_exists(out_dir):
         # The builder's contract is two positionals: <target> <output_dir>
         # (it has no --out flag).
         # This fires after lifecycle start: an uncaught TimeoutExpired
@@ -1930,7 +1944,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             "threat-model auto-load failed", exc_info=True)
 
     # --- load checklist for context assembly (callers, reachability) ---
-    checklist_data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
+    from core.inventory import read_checklist as _read_checklist
+    checklist_data = _read_checklist(out_dir) or None
 
     # --- binary oracle ---
     binary_verdicts = None
@@ -2429,12 +2444,10 @@ def _check_legacy_state(project_dir: Path) -> str | None:
                     break
             except OSError:
                 continue
-    cl_path = project_dir / "checklist.json"
-    if cl_path.is_file():
+    from core.inventory import checklist_exists, read_checklist
+    if checklist_exists(project_dir):
         try:
-            cl = load_json(
-                cl_path, strict=True, max_bytes=_MAX_CHECKLIST_BYTES,
-            ) or {}
+            cl = read_checklist(project_dir)
             for fe in cl.get("files", []):
                 for item in fe.get("items", fe.get("functions", [])) or []:
                     checked = item.get("checked_by") or []
@@ -2641,10 +2654,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
         print(f"error: target not found: {target_path}", file=sys.stderr)
         return 1
 
-    checklist_path = out_dir / "checklist.json"
-    if not checklist_path.exists():
+    from core.inventory import checklist_exists
+    if not checklist_exists(out_dir):
         print(
-            f"error: no checklist.json in {out_dir} — the run died "
+            f"error: no checklist in {out_dir} — the run died "
             "before its inventory was built; nothing to resume. "
             "Start a new run.",
             file=sys.stderr,
@@ -2822,7 +2835,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
     # --- rebuild pipeline opts from the ORIGINAL run config ---
     from core.audit.pipeline import AuditPipelineOpts, run_audit_pipeline
 
-    checklist_data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
+    from core.inventory import read_checklist
+    checklist_data = read_checklist(out_dir) or None
 
     # Binary-oracle verdicts were enriched into checklist.json during
     # segment 1 — re-extract, no re-analysis needed.
@@ -3192,10 +3206,11 @@ def _mismatched_checklist_target(
     downstream readers' own failure modes.
     """
     try:
-        data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
+        from core.inventory import read_checklist_meta
+        data = read_checklist_meta(checklist_path.parent)
     except (OSError, ValueError):
         return None
-    if not isinstance(data, dict):
+    if not data:
         return None
     recorded = str(data.get("target_path") or "")
     if not recorded or not Path(recorded).is_absolute():
@@ -3244,12 +3259,10 @@ def _guess_target(out_dir: Path) -> Path | None:
     to a different tree. On mismatch the guess is refused with an
     error telling the operator to pass ``--target`` explicitly.
     """
-    checklist_path = out_dir / "checklist.json"
-    if checklist_path.exists():
+    from core.inventory import checklist_exists, read_checklist_meta
+    if checklist_exists(out_dir):
         try:
-            data = load_json(
-                checklist_path, strict=True, max_bytes=_MAX_CHECKLIST_BYTES,
-            ) or {}
+            data = read_checklist_meta(out_dir)
             tp = data.get("target_path")
             if tp:
                 from core.run.metadata import corroborate_target_path

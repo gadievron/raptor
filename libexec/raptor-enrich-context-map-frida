@@ -80,14 +80,10 @@ def main() -> int:
         return 0
     search_dirs = [workdir, workdir.parent]
 
-    target_path = None
-    checklist_path = workdir / "checklist.json"
-    if checklist_path.is_file():
-        # Best-effort: load_json returns None on a missing, oversize,
-        # or malformed file.
-        cl = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
-        if isinstance(cl, dict):
-            target_path = cl.get("target_path")
+    # Meta accessor: best-effort target recovery from either
+    # on-disk checklist form (missing/malformed reads as {}).
+    from core.inventory import read_checklist_meta
+    target_path = read_checklist_meta(workdir).get("target_path")
 
     # checklist.json is a mutable run artefact — corroborate against
     # the target_path sealed into .raptor-run.json at run start.

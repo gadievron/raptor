@@ -74,8 +74,9 @@ def main() -> int:
         )
         return 1
 
-    checklist = load_json(understand_dir / "checklist.json") or {}
-    if not isinstance(checklist, dict):
+    from core.inventory import read_checklist
+    checklist = read_checklist(understand_dir)
+    if not checklist:
         print(
             "raptor-enrich-context-map-imports: checklist.json missing "
             "or invalid; skipping", file=sys.stderr,
