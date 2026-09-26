@@ -1330,13 +1330,24 @@ def enrich_checklist(checklist: dict[str, Any], context_map: dict[str, Any],
             )
 
     if output_dir:
-        from core.inventory import save_checklist
+        from core.inventory import ChecklistBudgetExceededError, save_checklist
         # The enriched checklist mixes mechanical inventory with
         # LLM-derived priority markers from the context-map — stamp it
         # untrusted before the mechanical writer default applies.
         stamp_provenance(checklist, _BRIDGE_GENERATOR, untrusted=True,
                          overwrite_generator=False)
-        save_checklist(output_dir, checklist)
+        try:
+            save_checklist(output_dir, checklist)
+        except ChecklistBudgetExceededError as exc:
+            # Persisting is best-effort: the in-memory enrichment is
+            # what the caller consumes, and losing it to an oversize
+            # serialisation would un-prioritise every entry point and
+            # sink for the rest of the run. The on-disk checklist
+            # keeps its previous (pre-enrichment) content.
+            logger.warning(
+                "understand_bridge: enriched checklist not persisted "
+                "(%s) — in-memory enrichment still applies", exc,
+            )
 
     return checklist
 
