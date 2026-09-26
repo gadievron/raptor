@@ -240,6 +240,18 @@ class RaptorConfig:
     # java suite via --additional-packs. Additive detection only.
     CODEQL_SOURCE_SUMMARIES_ENABLED: bool = True
 
+    # Taint-pack models-as-data augmentation on the /codeql agent:
+    # the shipped taint seed packs (core/taint/data/packs) plus the
+    # project's operator-grade IRIS taint specs are emitted as
+    # models-as-data extension packs and staged into the STANDARD
+    # python/javascript suites via --additional-packs, and the run
+    # writes taint-mad-augmentation.json naming exactly which sink
+    # surfaces were augmented. Additive detection only — barrier rows
+    # never emit. Default off (zero cost when disabled); per-run CLI
+    # opt-in: the `--taint-crossfile` flag family
+    # (`--taint-crossfile-mad` on /codeql and /agentic).
+    CODEQL_TAINT_MAD_ENABLED: bool = False
+
     # Record-only sanitizer-cut post-pass over scan SARIF findings
     # (core/analysis/sanitizer_cut_postpass.py): value-bound gate
     # verdicts are written to suppressions.jsonl as evidence

@@ -108,6 +108,14 @@ def run_autonomous_workflow(args: argparse.Namespace) -> None:
     if getattr(args, "no_learned_models", False):
         RaptorConfig.CODEQL_LEARNED_MODELS_ENABLED = False
 
+    # Positive opt-in (default-off direction) for the taint-pack
+    # models-as-data augmentation; the tolerant read of the wider
+    # flag-family member composes with entry points that only carry
+    # --taint-crossfile.
+    if (getattr(args, "taint_crossfile_mad", False)
+            or getattr(args, "taint_crossfile", False)):
+        RaptorConfig.CODEQL_TAINT_MAD_ENABLED = True
+
     # Same process-scoped pattern for threat models. Explicit negative
     # beats positive when both are passed.
     if getattr(args, "threat_models", None):
@@ -458,6 +466,16 @@ Examples:
              "specs emitted as a models-as-data pack, baseline vs "
              "augmented diff; flips "
              "RaptorConfig.CODEQL_LEARNED_MODELS_ENABLED).",
+    )
+    parser.add_argument(
+        "--taint-crossfile-mad", action="store_true",
+        help="Stage the taint seed packs (plus the project's "
+             "operator-grade IRIS taint specs) as models-as-data "
+             "extension packs on the standard python/javascript "
+             "suites, and write taint-mad-augmentation.json naming "
+             "the augmented sink surfaces (flips "
+             "RaptorConfig.CODEQL_TAINT_MAD_ENABLED). Additive "
+             "detection only; default off.",
     )
     parser.add_argument(
         "--threat-models",

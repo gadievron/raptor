@@ -2076,6 +2076,16 @@ Examples:
              "marker (raptor project trust build).",
     )
     parser.add_argument("--no-visualizations", action="store_true", help="Disable dataflow visualizations for CodeQL findings")
+    parser.add_argument(
+        "--taint-crossfile-mad", action="store_true",
+        help="Stage the taint seed packs (plus the project's "
+             "operator-grade IRIS taint specs) as CodeQL "
+             "models-as-data extension packs on the standard "
+             "python/javascript suites (forwarded to the CodeQL "
+             "agent, which writes taint-mad-augmentation.json naming "
+             "the augmented sink surfaces). Additive detection only; "
+             "default off.",
+    )
 
     # Compiler-analyzer scan channel (forwarded to the scanner subprocess
     # like --traced-build is forwarded to the codeql agent).
@@ -3550,6 +3560,13 @@ def main() -> int:
             codeql_cmd.append("--extended")
         if args.codeql_cli:
             codeql_cmd.extend(["--codeql-cli", args.codeql_cli])
+        # Taint-pack models-as-data augmentation: the tolerant read
+        # of the wider flag-family member means enabling cross-file
+        # taint as a whole also augments the CodeQL suites, without
+        # an argparse dependency between the two flags.
+        if (getattr(args, "taint_crossfile_mad", False)
+                or getattr(args, "taint_crossfile", False)):
+            codeql_cmd.append("--taint-crossfile-mad")
         logger.debug("Running: Scanning code with CodeQL")
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
         # Explicit ``env=RaptorConfig.get_safe_env()`` — strips

@@ -143,6 +143,13 @@ class CodeQLWorkflowResult:
     #: (wrappers found, rows emitted, refusal counts).
     source_summaries: dict | None = None
 
+    #: Taint-pack models-as-data augmentation record: the per-language
+    #: cells of taint-mad-augmentation.json (which sink kinds/classes/
+    #: CWEs the standard suites were given rows for). Present only
+    #: when the --taint-crossfile flag family enabled the pass.
+    #: Additive; consumers tolerate its absence.
+    taint_mad: dict | None = None
+
     # Languages whose database creation executed repo build logic
     # (explicit command or CodeQL autobuild) WITHOUT the operator's
     # trust assertion (--traced-build / --build-command / the
@@ -713,6 +720,15 @@ class CodeQLAgent:
             source_summaries_cell = self._run_source_summaries_pass(
                 successful_dbs)
 
+            # Taint-pack models-as-data augmentation (default off; the
+            # --taint-crossfile flag family enables it): the shipped
+            # taint seed packs plus the project's operator-grade IRIS
+            # rows are staged into the standard python/javascript
+            # suites, and the run records exactly which sink surfaces
+            # were augmented. Additive detection only.
+            taint_mad_cell = self._run_taint_pack_models_pass(
+                successful_dbs)
+
             analysis_results = self.query_runner.analyze_all_databases(
                 successful_dbs,
                 self.out_dir,
@@ -836,6 +852,7 @@ class CodeQLAgent:
                 threat_model_overlap=threat_model_overlap,
                 learned_models=learned_models,
                 source_summaries=source_summaries_cell,
+                taint_mad=taint_mad_cell,
                 untrusted_build_languages=untrusted_build_languages,
             )
 
@@ -908,6 +925,159 @@ class CodeQLAgent:
         except Exception as exc:  # noqa: BLE001 — never kill the scan
             logger.warning("source-summaries pass failed: %s", exc)
             return None
+
+    def _run_taint_pack_models_pass(self, successful_dbs) -> dict | None:
+        """Stage the taint seed packs as models-as-data for the
+        standard suites, and record what was augmented.
+
+        Per augmentable language (python, javascript) with a
+        successful DB: convert the shipped taint packs
+        (:func:`core.taint.mad_rows.rows_from_pack_set`) plus the
+        project's IRIS taint specs — the IRIS batch passes through
+        :func:`~core.taint.mad_rows.enforce_mad_provenance`, so
+        learned rows may only widen (source/sink) while summary rows
+        require operator-grade provenance and barrier rows never
+        emit. The emitted pack is staged into
+        ``query_runner.additional_model_packs`` so the STANDARD suite
+        run consumes it via ``--additional-packs``, and the run
+        writes ``taint-mad-augmentation.json`` naming exactly which
+        sink kinds/classes/CWEs got rows — the record a consumer
+        needs before treating an augmented no-flow result as
+        informative for a given sink surface.
+
+        Default off (``RaptorConfig.CODEQL_TAINT_MAD_ENABLED``) —
+        zero cost when disabled. Returns the per-language record
+        cells, or None when disabled / no language qualifies / no
+        rows survived. Failures degrade to a warning; they never
+        kill the scan.
+        """
+        if not getattr(RaptorConfig, "CODEQL_TAINT_MAD_ENABLED", False):
+            return None
+        langs = [lang for lang in ("python", "javascript")
+                 if lang in successful_dbs]
+        if not langs:
+            return None
+        try:
+            from core.dataflow.extension_pack import (
+                ROLE_SINK,
+                rows_from_taint_specs,
+                write_extension_pack,
+            )
+            from core.taint.mad_rows import (
+                AugmentationCell,
+                augmented_surfaces,
+                enforce_mad_provenance,
+                rows_from_pack_set,
+                write_augmentation_record,
+            )
+            from core.taint.packs import default_pack_names, load_packs
+        except ImportError:
+            logger.debug("taint-mad pass unavailable", exc_info=True)
+            return None
+
+        specs = []
+        try:
+            from core.iris.api import load_project_specs
+            specs = load_project_specs(
+                out_dir=self.out_dir, target_path=self.repo_path,
+            ) or []
+        except Exception:  # noqa: BLE001 — the pack channel still runs
+            logger.debug("taint-mad: IRIS spec load failed", exc_info=True)
+
+        cells = []
+        for lang in langs:
+            try:
+                names = default_pack_names(lang)
+                pack_set = load_packs(names, target_root=self.repo_path)
+                conv = rows_from_pack_set(pack_set, language=lang)
+                rows = list(conv.rows)
+                rejected = list(conv.rejected)
+                iris_rows = 0
+                tier_counts: dict[str, int] = {}
+                if specs:
+                    iris_conv = rows_from_taint_specs(specs, language=lang)
+                    seam = enforce_mad_provenance(
+                        iris_conv.rows, language=lang)
+                    rows.extend(seam.rows)
+                    rejected.extend(iris_conv.rejected)
+                    rejected.extend(seam.rejected)
+                    iris_rows = len(seam.rows)
+                    for spec in specs:
+                        tier = getattr(
+                            spec.evidence_tier, "value",
+                            str(spec.evidence_tier))
+                        tier_counts[tier] = tier_counts.get(tier, 0) + 1
+                if not rows:
+                    logger.info(
+                        "taint-mad: %s produced no rows "
+                        "(%d refusal(s))", lang, len(rejected))
+                    continue
+                out = self.out_dir / "taint-mad" / lang
+                result = write_extension_pack(
+                    rows, language=lang, out_dir=out,
+                    pack_name=f"raptor/taint-mad-{lang}",
+                )
+                rejected.extend(result.rejected)
+                if result.rows_written == 0:
+                    logger.warning(
+                        "taint-mad: every %s row was rejected at "
+                        "emission (%d rejection(s))",
+                        lang, len(result.rejected))
+                    continue
+                packs_cfg = dict(
+                    self.query_runner.additional_model_packs or {})
+                packs_cfg.setdefault(lang, []).append(
+                    (str(out), result.pack_name))
+                self.query_runner.additional_model_packs = packs_cfg
+                classes, cwes, source_kinds = augmented_surfaces(
+                    pack_set, rows)
+                provenance_counts: dict[str, int] = {}
+                for row in rows:
+                    provenance_counts[row.provenance] = (
+                        provenance_counts.get(row.provenance, 0) + 1)
+                cells.append(AugmentationCell(
+                    language=lang,
+                    pack_name=result.pack_name,
+                    pack_dir=str(result.pack_dir),
+                    model_file=str(result.model_file),
+                    packs=tuple(names),
+                    rows_written=result.rows_written,
+                    counts=tuple(sorted(result.counts.items())),
+                    augmented_sink_kinds=tuple(sorted({
+                        r.model_kind for r in rows
+                        if r.role == ROLE_SINK
+                    })),
+                    augmented_sink_classes=classes,
+                    augmented_cwes=cwes,
+                    augmented_source_kinds=source_kinds,
+                    summary_rows=int(
+                        result.counts.get("summaryModel", 0)),
+                    row_provenance=tuple(
+                        sorted(provenance_counts.items())),
+                    iris_specs=len(specs),
+                    iris_rows=iris_rows,
+                    iris_evidence_tiers=tuple(
+                        sorted(tier_counts.items())),
+                    rejected=tuple(rejected),
+                ))
+                logger.info(
+                    "taint-mad: %s pack staged for the standard suite "
+                    "(%d row(s): %s; %d refusal(s))",
+                    lang, result.rows_written,
+                    ", ".join(f"{k}={v}"
+                              for k, v in sorted(result.counts.items())),
+                    len(rejected),
+                )
+            except Exception as exc:  # noqa: BLE001 — never kill the scan
+                logger.warning("taint-mad pass failed for %s: %s",
+                               lang, exc)
+        if not cells:
+            return None
+        try:
+            write_augmentation_record(self.out_dir, cells)
+        except Exception as exc:  # noqa: BLE001 — record is best-effort
+            logger.warning("taint-mad: record write failed: %s", exc)
+        return {c.language: c.to_dict() for c in cells}
 
     def _run_learned_models_pass(self, successful_dbs) -> dict | None:
         """Emit learned taint specs as a model pack and measure the diff.
@@ -1340,6 +1510,15 @@ Examples:
              "add noise on a specific target.",
     )
     parser.add_argument(
+        "--taint-crossfile-mad", action="store_true",
+        help="Stage the taint seed packs (plus the project's "
+             "operator-grade IRIS taint specs) as models-as-data "
+             "extension packs on the standard python/javascript "
+             "suites, and write taint-mad-augmentation.json naming "
+             "the augmented sink surfaces. Additive detection only; "
+             "default off.",
+    )
+    parser.add_argument(
         "--threat-models",
         help="Comma-separated CodeQL threat models to enable on the "
              "standard suite (default: local). Passed as repeated "
@@ -1408,6 +1587,16 @@ Examples:
     if args.no_learned_models:
         from core.config import RaptorConfig
         RaptorConfig.CODEQL_LEARNED_MODELS_ENABLED = False
+
+    # Positive opt-in (default-off direction) for the taint-pack
+    # models-as-data augmentation. The tolerant read of the wider
+    # flag-family member lets a spawner that only knows
+    # --taint-crossfile enable this pass too, without an argparse
+    # dependency between the two flags.
+    if (getattr(args, "taint_crossfile_mad", False)
+            or getattr(args, "taint_crossfile", False)):
+        from core.config import RaptorConfig
+        RaptorConfig.CODEQL_TAINT_MAD_ENABLED = True
 
     # Same process-scoped pattern for threat models. Explicit negative
     # beats positive when both are passed.
