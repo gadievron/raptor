@@ -838,6 +838,20 @@ class TestFileBindingHazard:
         assert "namespace" in res.reason
 
 
+class TestExtractionCache:
+    def test_precheck_and_leg_share_one_extraction(self):
+        # sanwit_can_adjudicate (chain-builder precheck) and
+        # run_sanwit_check both extract; the memo makes the second
+        # call free — same frozen object, one parse of the source.
+        from core.audit.sanwit import _extract_cached
+
+        _extract_cached.cache_clear()
+        r1 = _extract_cached(_SRC_SHELL, ("escapeshellcmd",))
+        r2 = _extract_cached(_SRC_SHELL, ("escapeshellcmd",))
+        assert r1 is r2
+        assert _extract_cached.cache_info().hits == 1
+
+
 class TestCanAdjudicate:
     def test_mirrors_the_refusal_ladder(self, tmp_path, monkeypatch):
         from core.audit.sanwit import sanwit_can_adjudicate

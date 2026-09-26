@@ -25,6 +25,7 @@ the sanitizer chain itself.
 
 from __future__ import annotations
 
+import bisect
 import re
 from dataclasses import dataclass
 
@@ -53,6 +54,25 @@ _STEP_ALLOWLIST: dict[str, tuple[str, ...]] = {
 ALLOWED_STEP_CALLABLES: frozenset[str] = frozenset(
     name for names in _STEP_ALLOWLIST.values() for name in names
 )
+
+#: Chain-length ceiling. Real sanitizer chains are a handful of
+#: steps; a longer extraction is almost certainly a mis-anchored
+#: walk and would bloat probe/receipts. Larger admits stranger
+#: chains at receipt-size cost; smaller starts refusing real
+#: multi-step rewrites. Enforced DURING extraction (a hostile source
+#: cannot buy unbounded loop work past the ceiling) and re-checked
+#: by the callers on the finished extraction.
+MAX_CHAIN_STEPS = 12
+
+#: Carrier-move ceiling (aliases + transforms that move the chain to
+#: a new variable). Real chains move carriers a handful of times;
+#: this bounds the assembly loop's per-move work even if a future
+#: edit reintroduces a per-move scan (the divergence check was
+#: exactly that — quadratic until the mention index below). Larger
+#: only admits generated/hostile shapes no idiom produces; smaller
+#: starts refusing real rename-heavy rewrites. Refusal on overflow —
+#: never a truncated chain.
+_MAX_CARRIER_MOVES = 64
 
 #: Constant spellings admitted as non-data arguments (the
 #: htmlspecialchars/htmlentities flag vocabulary), plus bare
@@ -655,18 +675,70 @@ def _flatten_spine(
 
 # ── chain assembly ───────────────────────────────────────────────────
 
-# Deterministic on hostile statement text: every adjacent repeat pair
-# is character-disjoint (`\w` never matches whitespace — unlike a raw
-# byte-range identifier class it admits no NEL/NBSP overlap — and `=`
-# is in neither class), so each split point is unique and a failing
-# anchored match backtracks O(n), never O(n^2).  Pinned linear by the
-# redos-idiom census pump oracle; CPU pins in
+# Deterministic on hostile statement text: left of the failable `=`,
+# the adjacent repeats are character-disjoint (`\w` never matches
+# whitespace — unlike a raw byte-range identifier class it admits no
+# NEL/NBSP overlap — and `=` is in neither class), so those split
+# points are unique. The `\s*(.+)$` tail DOES overlap on whitespace,
+# but it sits after the only failable atoms: at the single anchored
+# attempt its ambiguity resolves in one bounded retreat (`.+` needs
+# one char; `$` steps back at most once under DOTALL), never a
+# per-position re-walk. A failing match backtracks O(n), not O(n^2).
+# Pinned linear by the redos-idiom census pump oracle; CPU pins in
 # tests/test_sanwit_extract_linear.py.
 _ASSIGN_RE = re.compile(r"^\$([A-Za-z_]\w*)\s*=(?![=>])\s*(.+)$", re.DOTALL)
 
 
 def _mentions_var(text: str, var: str) -> bool:
     return re.search(rf"\${re.escape(var)}\b", text) is not None
+
+
+#: Simple-variable token: the same surface `_mentions_var` matches
+#: (`$name` at a word boundary — `$$x` matches at the inner `$`,
+#: `${x}` matches neither way), captured once per statement so
+#: divergence queries need no re-scan.
+_VAR_TOKEN_RE = re.compile(r"\$([A-Za-z_]\w*)")
+
+
+def _mention_index(stmts: list[_Stmt]) -> dict[str, list[int]]:
+    """var name -> ascending statement indices mentioning ``$var``.
+
+    One pass over the statement text (findall per statement), built
+    once per extraction: the divergence checks below used to re-scan
+    every remaining statement per carrier move, which made a pumped
+    alias chain quadratic through the production entry point
+    (measured 53s at 16k one-line aliases). A token is a mention iff
+    `_mentions_var` matches: the token run is maximal, so its end is
+    a word boundary, and any `\\$name\\b` match is itself a maximal
+    token."""
+    index: dict[str, list[int]] = {}
+    for i, stmt in enumerate(stmts):
+        for name in set(_VAR_TOKEN_RE.findall(stmt.text)):
+            index.setdefault(name, []).append(i)
+    return index
+
+
+def _first_use_after(
+    index: dict[str, list[int]],
+    stmts: list[_Stmt],
+    var: str,
+    after: int,
+) -> _Stmt | None:
+    """First statement past *after* still touching an abandoned
+    carrier — O(log n) over the precomputed mention index.
+
+    When the chain's carrier moves (alias or transform into a new
+    variable), the OLD variable still holds the pre-move value; any
+    later use of it means the sink may see a value the extracted
+    chain does not describe — mis-attribution in either direction,
+    so the caller refuses."""
+    positions = index.get(var)
+    if not positions:
+        return None
+    at = bisect.bisect_right(positions, after)
+    if at >= len(positions):
+        return None
+    return stmts[positions[at]]
 
 
 def _blank_strings(text: str) -> str:
@@ -692,21 +764,6 @@ def _blank_strings(text: str) -> str:
         elif ch in ("'", '"'):
             state = ch
     return "".join(out)
-
-
-def _divergent_use(old: str, rest: list[_Stmt]) -> _Stmt | None:
-    """First later statement still touching an abandoned carrier.
-
-    When the chain's carrier moves (alias or transform into a new
-    variable), the OLD variable still holds the pre-move value; any
-    later use of it means the sink may see a value the extracted
-    chain does not describe — mis-attribution in either direction,
-    so the caller refuses.
-    """
-    for stmt in rest:
-        if _mentions_var(stmt.text, old):
-            return stmt
-    return None
 
 
 def _body_depth(source: str) -> int:
@@ -789,6 +846,12 @@ def extract_chain(
         # the chain cannot continue, only the boundary discipline
         # below applies (to the assembled variable).
         boundary = f"inline assembly at line {anchor.line}"
+    # One pass over the statements up front; every divergence query
+    # below is then O(log n) instead of a rescan of the remaining
+    # statements per carrier move (the quadratic the pumped alias
+    # chain exploited).
+    mention_idx = _mention_index(stmts)
+    carrier_moves = 0
     while boundary is None and idx < len(stmts):
         stmt = stmts[idx]
         text = stmt.text.rstrip().rstrip(";").strip()
@@ -806,7 +869,9 @@ def extract_chain(
             # the two copies can diverge and the sink may consume the
             # one the chain does not describe.
             if am.group(1) != current:
-                used = _divergent_use(current, stmts[idx + 1:])
+                used = _first_use_after(
+                    mention_idx, stmts, current, idx,
+                )
                 if used is not None:
                     return ExtractionRefusal(
                         f"carrier ${current} is aliased to "
@@ -814,6 +879,14 @@ def extract_chain(
                         f"still used at line {used.line} — the "
                         "copies can diverge; cannot bind the chain "
                         "to the sink value"
+                    )
+                carrier_moves += 1
+                if carrier_moves > _MAX_CARRIER_MOVES:
+                    return ExtractionRefusal(
+                        f"chain moves its carrier more than "
+                        f"{_MAX_CARRIER_MOVES} times (line "
+                        f"{stmt.line}) — no real sanitizer chain "
+                        "does; cannot attribute the sink value"
                     )
             current = am.group(1)
             idx += 1
@@ -845,7 +918,9 @@ def extract_chain(
                 # Transform into a NEW variable: same divergence
                 # hazard as the alias branch — the old carrier still
                 # holds the pre-transform value.
-                used = _divergent_use(current, stmts[idx + 1:])
+                used = _first_use_after(
+                    mention_idx, stmts, current, idx,
+                )
                 if used is not None:
                     return ExtractionRefusal(
                         f"carrier ${current} is transformed into "
@@ -854,7 +929,25 @@ def extract_chain(
                         "copies can diverge; cannot bind the chain "
                         "to the sink value"
                     )
+                carrier_moves += 1
+                if carrier_moves > _MAX_CARRIER_MOVES:
+                    return ExtractionRefusal(
+                        f"chain moves its carrier more than "
+                        f"{_MAX_CARRIER_MOVES} times (line "
+                        f"{stmt.line}) — no real sanitizer chain "
+                        "does; cannot attribute the sink value"
+                    )
             steps.extend(more)
+            if len(steps) > MAX_CHAIN_STEPS:
+                # Enforced DURING extraction (the callers re-check
+                # the finished extraction): past the ceiling the
+                # walk is a mis-anchor, and refusing here means a
+                # hostile source cannot buy loop work beyond it.
+                return ExtractionRefusal(
+                    f"extracted chain exceeds the "
+                    f"{MAX_CHAIN_STEPS}-step ceiling at line "
+                    f"{stmt.line}"
+                )
             current = am.group(1)
             idx += 1
             continue
