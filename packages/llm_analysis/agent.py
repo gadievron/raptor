@@ -1795,7 +1795,19 @@ class AutonomousSecurityAgentV2:
 
         stats = self._expansion_stats
         stats["expansions_triggered"] += 1
-        if stats["expansions_performed"] >= MAX_EXPANSIONS_PER_RUN:
+        # Cap accounting: every ATTEMPT burns a slot — performed
+        # expansions and failed ones alike (performed + errors) — so
+        # an error-heavy run can never exceed the cap's worst-case
+        # spend. `expansions_performed` itself stays honest: it counts
+        # only expansions whose second LLM call was actually issued
+        # (spend estimates multiply it by per-call cost), so a
+        # pre-call failure burns its slot through `errors` without
+        # inflating `performed`. A post-call failure counts in both
+        # and burns two slots — conservative by design.
+        if (
+            stats["expansions_performed"] + stats["errors"]
+            >= MAX_EXPANSIONS_PER_RUN
+        ):
             stats["skipped_cap"] += 1
             logger.info(
                 "⊘ Context expansion skipped for %s (%s): per-run cap "
@@ -1811,8 +1823,8 @@ class AutonomousSecurityAgentV2:
             return None
 
         original_context = vuln.surrounding_context
+        llm_called = False
         try:
-            stats["expansions_performed"] += 1
             logger.info(
                 "🔎 Context expansion for %s (%s): re-running with "
                 "±%d-line window + 1-hop callers/callees",
@@ -1884,6 +1896,11 @@ class AutonomousSecurityAgentV2:
             with transcript_subject(
                 f"{vuln.finding_id}::context-expansion",
             ):
+                # "Performed" means the second LLM call was actually
+                # issued — counted at the transport boundary, not at
+                # attempt start, so pre-call failures never inflate it.
+                stats["expansions_performed"] += 1
+                llm_called = True
                 raw_second, _full_response = self.llm.generate_structured(
                     prompt=prompt,
                     schema=analysis_schema,
@@ -1952,7 +1969,9 @@ class AutonomousSecurityAgentV2:
             first_analysis["context_expansion"] = {
                 "triggered": True,
                 "reason": reason,
-                "performed": True,
+                # Honest: True only when the second LLM call was
+                # actually issued before the failure.
+                "performed": llm_called,
                 "error": detail,
             }
             return None

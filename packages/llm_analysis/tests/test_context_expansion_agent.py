@@ -269,6 +269,61 @@ class TestExpansionRerun:
         assert "error" in record
         assert agent._expansion_stats["errors"] == 1
         assert agent._expansion_stats["expansions_changed_verdict"] == 0
+        # The failed call WAS issued to the transport, so it counts
+        # as performed (the spend may have happened).
+        assert agent._expansion_stats["expansions_performed"] == 1
+
+    def test_precall_failure_burns_cap_slot_but_not_performed(
+        self, tmp_path,
+    ):
+        # Honest-counter contract: `expansions_performed` counts
+        # second LLM calls actually issued (spend estimates multiply
+        # it by per-call cost), so a failure BEFORE the call — the
+        # expanded re-read here — must not inflate it. The attempt
+        # still burns a cap slot (performed + errors gate), so an
+        # error-heavy run can never exceed the cap's worst case.
+        _write_target(tmp_path)
+        llm = _QueueLLM([
+            _analysis("low", exploitable=True),   # F1 first pass
+            _analysis("low", exploitable=False),  # F2 first pass
+        ])
+        agent = _agent(tmp_path, llm, context_expansion=True)
+        vuln = _make_vuln(tmp_path, "F1")
+        original = vuln.read_vulnerable_code
+
+        def _failing_reread(*args, **kwargs):
+            if kwargs.get("context_lines"):
+                return False  # only the expanded re-read fails
+            return original(*args, **kwargs)
+
+        vuln.read_vulnerable_code = _failing_reread
+        with patch(
+            "packages.llm_analysis.context_expansion."
+            "MAX_EXPANSIONS_PER_RUN", 1,
+        ):
+            assert agent.analyze_vulnerability(vuln) is True
+            second = _make_vuln(tmp_path, "F2")
+            agent.analyze_vulnerability(second)
+
+        assert agent._expansion_stats == {
+            "expansions_triggered": 2,
+            "expansions_performed": 0,
+            "expansions_changed_verdict": 0,
+            "skipped_cap": 1,
+            "errors": 1,
+        }
+        record = vuln.analysis["context_expansion"]
+        assert record["performed"] is False
+        assert "error" in record
+        # The failed attempt consumed the (patched) single cap slot:
+        # F2's trigger is skipped at cap.
+        assert (
+            second.analysis["context_expansion"]["skipped"]
+            == "expansion_cap"
+        )
+        # Exactly one LLM call per finding — the failed attempt never
+        # reached the transport.
+        assert len(llm.calls) == 2
 
 
 class TestRails:
