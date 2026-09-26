@@ -1702,7 +1702,12 @@ def run_audit_postpass(args: argparse.Namespace, target: Path, out_dir: Path) ->
     phase: dict = {"enabled": True, "completed": False}
     t0 = time.time()
     try:
-        audit_dir = start_lifecycle("audit", target)
+        # Child phase of the agentic run: thread its project pin so
+        # the audit run lands in the same project (the child stub
+        # otherwise re-resolves ambiently and races mid-run switches
+        # of the machine-wide default).
+        audit_dir = start_lifecycle("audit", target,
+                                    parent_run_dir=out_dir)
         if audit_dir is None:
             phase["skipped_reason"] = "lifecycle start failed"
             return phase
