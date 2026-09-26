@@ -92,6 +92,115 @@ _MAX_RETAINED_ENTRIES = 300_000
 # stream past prunable duplicates several times the retained budget.
 _READ_BUDGET_MULTIPLIER = 4
 
+# ── Journal shards ───────────────────────────────────────────────────
+#
+# The retained budgets above are PER-SHARD bounds: the appender rolls
+# to a numbered sibling (``review-journal.002.jsonl``, ``.003``, …)
+# before the active file could cross them, and the loader reads the
+# contiguous shard set as one journal. Kernel-scale runs journal more
+# UNIQUE rows (hypothesis + verdict + study receipts per function ×
+# 10^5 functions) than any single file budget can hold — compaction
+# only folds duplicates, so without rolling, a big run's journal
+# reads incomplete and `require_complete_entries` refuses the resume
+# spend authorization for exactly the runs that need it most.
+# ``review-journal.jsonl`` is always shard 1 — single-shard journals
+# stay byte-identical to the historical format.
+
+# Roll threshold for the ACTIVE shard. Trade-off, both directions:
+# LOWER means more shard files (per-shard fixed load overhead, more
+# fsync/compact targets); HIGHER pushes a full shard toward the
+# loader's per-shard retained budget, whose prune-exit margin (90%)
+# would read a legitimately full shard as incomplete. 3/4 of the
+# retained budget leaves the loader a full prune margin.
+_JOURNAL_SHARD_ROLL_BYTES = (_MAX_JOURNAL_BYTES * 3) // 4
+
+# Shard-count bound. Trade-off, both directions: LOWER stops rolling
+# on a legitimate mega-run (its final shard then grows past the
+# reader budget and the journal reads incomplete until compacted);
+# HIGHER scales a hostile plant fan-out and the loader's worst-case
+# aggregate work linearly. 64 shards ≈ 12 GiB of journal — an order
+# of magnitude past the largest projected kernel-scale journal.
+_MAX_JOURNAL_SHARDS = 64
+
+_JOURNAL_SHARD_RE = re.compile(r"^review-journal\.(\d{3,})\.jsonl$")
+
+
+def _journal_shard_name(n: int) -> str:
+    """On-disk name of shard *n* (1-based; shard 1 is the historical
+    single file)."""
+    if n == 1:
+        return JOURNAL_FILENAME
+    return f"review-journal.{n:03d}.jsonl"
+
+
+def journal_shard_paths(out_dir: Path) -> list[Path]:
+    """The journal's contiguous shard set, in append order.
+
+    Always starts with ``review-journal.jsonl`` (whether or not it
+    exists yet) and extends through consecutively numbered siblings.
+    The scan is contiguity-by-construction: a planted high-numbered
+    file does not extend the set (the loader flags non-contiguous
+    leftovers separately, see ``_orphan_shard_names``).
+    """
+    out_dir = Path(out_dir)
+    paths = [out_dir / JOURNAL_FILENAME]
+    n = 2
+    while n <= _MAX_JOURNAL_SHARDS:
+        p = out_dir / _journal_shard_name(n)
+        try:
+            if not p.exists():
+                break
+        except OSError:
+            break
+        paths.append(p)
+        n += 1
+    return paths
+
+
+def _orphan_shard_names(out_dir: Path, known: int) -> list[str]:
+    """Numbered shard files BEYOND the contiguous set — evidence that
+    an interior shard was deleted (rows silently invisible), so the
+    load must flag incomplete rather than pretend the survivors are
+    the whole journal."""
+    names: list[str] = []
+    try:
+        candidates = sorted(p.name for p in Path(out_dir).iterdir())
+    except OSError:
+        return names
+    for name in candidates:
+        m = _JOURNAL_SHARD_RE.match(name)
+        if m and int(m.group(1)) > known:
+            names.append(name)
+    return names[:8]
+
+
+def _append_shard_path(out_dir: Path) -> Path:
+    """The shard the next append lands in: the last contiguous shard,
+    or — once it crosses the roll threshold — the next number.
+
+    Cross-process note: two appenders can both observe the threshold
+    crossing and both open the SAME next shard (O_CREAT without
+    O_EXCL) — they simply share it, serialised by its flock. A shard
+    can exceed the threshold by the appends that raced the roll; the
+    threshold's margin below the reader budget absorbs that.
+    """
+    paths = journal_shard_paths(out_dir)
+    last = paths[-1]
+    try:
+        size = last.stat().st_size
+    except OSError:
+        size = 0
+    if size < _JOURNAL_SHARD_ROLL_BYTES:
+        return last
+    if len(paths) >= _MAX_JOURNAL_SHARDS:
+        logger.warning(
+            "journal: shard bound (%d) reached in %s — appending to "
+            "the final shard past its roll threshold; %s",
+            _MAX_JOURNAL_SHARDS, out_dir, compact_hint(out_dir),
+        )
+        return last
+    return Path(out_dir) / _journal_shard_name(len(paths) + 1)
+
 # domain-model.json is a small RAPTOR-written study artifact.
 _MAX_DOMAIN_MODEL_BYTES = 64 * 1024 * 1024
 
@@ -556,9 +665,14 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
     Raises ``OSError`` — notably ELOOP when the journal path is a
     symlink (O_NOFOLLOW). No per-entry fsync — the caller can
     ``flush_journal()`` at batch end.
+
+    Appends land in the journal's ACTIVE shard
+    (:func:`_append_shard_path`): once a shard crosses the roll
+    threshold, subsequent rows open the next numbered sibling, so no
+    single file grows past the loader's per-shard retained budgets.
     """
-    journal_path = out_dir / JOURNAL_FILENAME
     out_dir.mkdir(parents=True, exist_ok=True)
+    journal_path = _append_shard_path(out_dir)
     # Provenance stamp (core.coverage.journal_mac): the fold trusts
     # rows for review suppression and $0 verdict reuse, so each row
     # carries a MAC over its own canonical content. Stamped on the
@@ -635,20 +749,23 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
 
 
 def flush_journal(out_dir: Path) -> None:
-    """fsync the journal file — call at batch/run boundaries.
+    """fsync the journal file(s) — call at batch/run boundaries.
 
     Same fd discipline as the appender: the pre-fix bare ``O_RDONLY``
     open followed a planted symlink (fsync of a FOREIGN file) and
     blocked forever on a writer-less FIFO (a read-side open of a FIFO
     waits for a writer). Best-effort: a refused/missing journal is
     silently skipped, like the old ``is_file()`` probe's negative.
+    Every shard is synced — a batch can span a roll boundary, so the
+    just-sealed shard needs the sync as much as the active one.
     """
     from core.source import open_regular
-    fh = open_regular(out_dir / JOURNAL_FILENAME, "rb")
-    if fh is None:
-        return
-    with fh:
-        os.fsync(fh.fileno())
+    for shard in journal_shard_paths(out_dir):
+        fh = open_regular(shard, "rb")
+        if fh is None:
+            continue
+        with fh:
+            os.fsync(fh.fileno())
 
 
 # ── Read ─────────────────────────────────────────────────────────────
@@ -735,6 +852,17 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
 def load_entries_checked(out_dir: Path) -> JournalLoad:
     """Streaming, memory-bounded journal load with completeness flag.
 
+    Reads the journal's whole CONTIGUOUS shard set
+    (:func:`journal_shard_paths`) as one journal, in append order.
+    The memory bounds below apply PER SHARD (the appender rolls
+    before a shard can cross them); completeness requires every shard
+    to load completely, and a missing interior shard or a
+    non-contiguous leftover (evidence of a deleted shard) flags the
+    load incomplete. Duplicate re-emission rows are pruned across
+    shard boundaries at the end of a multi-shard load — resume
+    segments re-emit reused verdicts, and segment boundaries need not
+    align with shard rolls.
+
     Memory bounds (the old whole-file st_size refusal failed OPEN —
     an over-cap journal loaded as ``[]`` and a resume re-reviewed the
     entire run):
@@ -750,7 +878,77 @@ def load_entries_checked(out_dir: Path) -> JournalLoad:
       bounds the read loop itself against multi-GiB plants and
       writers growing the file mid-read.
     """
-    journal_path = out_dir / JOURNAL_FILENAME
+    out_dir = Path(out_dir)
+    shards = journal_shard_paths(out_dir)
+    entries: list[ReviewJournalEntry] = []
+    sizes: list[int] = []
+    pruned_total = 0
+    incomplete_reason: str | None = None
+    for i, shard in enumerate(shards):
+        (shard_entries, shard_sizes, shard_pruned,
+         shard_reason, missing) = _load_one_journal_file(shard)
+        if missing:
+            if len(shards) > 1:
+                # Numbered shards exist but this one is gone: rows
+                # were lost, not never written.
+                incomplete_reason = incomplete_reason or (
+                    f"journal shard {shard.name} is missing from a "
+                    f"multi-shard journal"
+                )
+            continue
+        entries.extend(shard_entries)
+        sizes.extend(shard_sizes)
+        pruned_total += shard_pruned
+        if shard_reason and incomplete_reason is None:
+            incomplete_reason = (
+                f"{shard.name}: {shard_reason}" if i else shard_reason
+            )
+    orphans = _orphan_shard_names(out_dir, len(shards))
+    if orphans and incomplete_reason is None:
+        incomplete_reason = (
+            "non-contiguous journal shard file(s) "
+            f"{', '.join(orphans)} — an interior shard was deleted"
+        )
+    if pruned_total or len(shards) > 1:
+        # Final pass so the load is FULLY deduplicated across shard
+        # boundaries too (single-shard loads without any budget
+        # crossing keep their historical row-for-row output).
+        freed_rows, _freed = _prune_reemission_rows(entries, sizes)
+        pruned_total += freed_rows
+    if pruned_total:
+        logger.warning(
+            "journal: %s exceeded the retained-entry budget or spans "
+            "shards — pruned %d duplicate re-emission row(s) at load "
+            "(newest per identity kept; no verdict or spend evidence "
+            "lost); %s",
+            out_dir / JOURNAL_FILENAME, pruned_total,
+            compact_hint(out_dir),
+        )
+    if incomplete_reason:
+        logger.warning(
+            "journal: PARTIAL load of %s — %s (%d entries loaded); "
+            "read-only consumers degrade, spend-authorizing consumers "
+            "refuse; %s",
+            out_dir / JOURNAL_FILENAME, incomplete_reason, len(entries),
+            compact_hint(out_dir),
+        )
+    return JournalLoad(
+        entries=entries,
+        complete=incomplete_reason is None,
+        pruned=pruned_total,
+        reason=incomplete_reason,
+    )
+
+
+def _load_one_journal_file(
+    journal_path: Path,
+) -> tuple[list[ReviewJournalEntry], list[int], int, str | None, bool]:
+    """Load ONE journal shard file under the per-shard bounds.
+
+    Returns ``(entries, raw_sizes, pruned, incomplete_reason,
+    missing)`` — *missing* means the file does not exist at all
+    (distinct from exists-but-refused, which sets a reason).
+    """
     # fd-discipline open (core.source.open_regular): the journal sits
     # in the sandbox-writable run dir, and the previous
     # is_symlink()/is_file() probes raced a swap — a symlink swapped
@@ -762,7 +960,8 @@ def load_entries_checked(out_dir: Path) -> JournalLoad:
     fh = open_regular(journal_path, "rb")
     if fh is None:
         # Absent journal: empty AND complete (a run with no reviews
-        # has no prior state to protect). A journal that EXISTS but
+        # has no prior state to protect; the multi-shard caller flags
+        # a missing INTERIOR shard itself). A journal that EXISTS but
         # refused the disciplined open (permissions, planted
         # non-regular file) is incomplete: for a resume, "cannot read
         # the verdicts" must not read as "there are none".
@@ -770,11 +969,9 @@ def load_entries_checked(out_dir: Path) -> JournalLoad:
         with contextlib.suppress(OSError):
             exists = journal_path.exists()
         if exists:
-            return JournalLoad(
-                complete=False,
-                reason="journal exists but refused the read open",
-            )
-        return JournalLoad()
+            return ([], [], 0,
+                    "journal exists but refused the read open", False)
+        return [], [], 0, None, True
 
     entries: list[ReviewJournalEntry] = []
     # Read raw BYTES and hand each line to the parser individually. A
@@ -946,41 +1143,15 @@ def load_entries_checked(out_dir: Path) -> JournalLoad:
             "journal: failed to read %s: %s", journal_path, exc,
         )
         incomplete_reason = incomplete_reason or f"read failed: {exc}"
-    if pruned_total:
-        # Final pass so a pruned load is FULLY deduplicated —
-        # mid-stream prunes keep the newest row seen so far, and
-        # later re-emissions of the same identity would otherwise
-        # leave the result depending on where the budget crossings
-        # happened to fall.
-        freed_rows, _freed = _prune_reemission_rows(entries, sizes)
-        pruned_total += freed_rows
     if corrupt:
         logger.warning(
             "journal: skipped %d corrupt line(s) in %s "
             "(%d entries loaded)",
             corrupt, journal_path, len(entries),
         )
-    if pruned_total:
-        logger.warning(
-            "journal: %s exceeded the retained-entry budget — pruned "
-            "%d duplicate re-emission row(s) at load (newest per "
-            "identity kept; no verdict or spend evidence lost); %s",
-            journal_path, pruned_total, compact_hint(out_dir),
-        )
-    if incomplete_reason:
-        logger.warning(
-            "journal: PARTIAL load of %s — %s (%d entries loaded); "
-            "read-only consumers degrade, spend-authorizing consumers "
-            "refuse; %s",
-            journal_path, incomplete_reason, len(entries),
-            compact_hint(out_dir),
-        )
-    return JournalLoad(
-        entries=entries,
-        complete=incomplete_reason is None,
-        pruned=pruned_total,
-        reason=incomplete_reason,
-    )
+    # The caller (load_entries_checked) runs the final dedup pass and
+    # emits the prune / partial-load warnings over the whole shard set.
+    return entries, sizes, pruned_total, incomplete_reason, False
 
 
 def _discard_to_newline(fh: Any, budget: int) -> tuple[int, bool]:
