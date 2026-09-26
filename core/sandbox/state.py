@@ -170,6 +170,12 @@ _sandbox_landlock_only_warned = False
 # Namespace-preserving bind-tree fallback. The posture is static enough for a
 # process-level warning; per-call reporting still records every affected run.
 _mountless_backend_warned = False
+# NPROC-pressure twin of the flag above: the bind-tree spawn degraded
+# because the child's forks raced a finite RLIMIT_NPROC (per-uid task
+# count at the ceiling), not because the capability is missing. Its own
+# key so the pressure diagnosis and the genuine capability/policy
+# diagnosis each get their one loud surfacing per process.
+_nproc_pressure_degrade_warned = False
 # Consent banner: a non-default consent source (the
 # RAPTOR_ALLOW_DEGRADED_UNTRUSTED waiver) lowered the untrusted
 # containment floor for this process. Once per process; the per-call
