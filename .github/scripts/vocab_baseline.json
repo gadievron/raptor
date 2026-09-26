@@ -1820,6 +1820,16 @@
     "kind": "literal",
     "note": "summary serialization field names (FunctionSummary.to_dict JSON keys, shape-validated on cache load), not name vocabulary \u2014 same class as the finding-dict field-name entries"
   },
+  "core/taint/engine.py::to_dict": {
+    "count": 10,
+    "kind": "literal",
+    "note": "candidate record serialization field names (taint_class/source/sink/hops/steps/alternatives/killed_origins/...), not name vocabulary \u2014 same class as the summaries to_dict entry"
+  },
+  "core/taint/paths.py::to_dict": {
+    "count": 14,
+    "kind": "literal",
+    "note": "step record serialization field names (the codeFlows step contract: file/line spans, tier/tags/sanitizers, excerpt fields), not name vocabulary \u2014 same class as the summaries to_dict entry"
+  },
   "core/trajectories/test_store.py::base": {
     "count": 10,
     "kind": "literal"

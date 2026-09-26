@@ -9,6 +9,16 @@ class)`` seeded from the extracted route models and pack-declared
 sources, producing in-memory CANDIDATE RECORDS (source → sink with a
 function-level hop chain) for the downstream emission phase.
 
+Post-fixpoint, each kept candidate is RECONSTRUCTED into renderable
+detail (:mod:`core.taint.paths` defines the step-record contract the
+emission phase serializes as codeFlows): per-step file:line spans
+resolved against the inventory, bounded+escaped excerpts, tainted
+parameter names where the memos know them, and a bounded set of
+ALTERNATIVE paths/sources the witness collapse folded away — fed by
+a small per-key retention of non-witness arrivals recorded during
+propagation (byte-accounted like all other retention; see the cost
+rails).
+
 ## Consuming doctrine — originate and prioritize, never refute
 
 Inherited verbatim from the callgraph and route models: this engine
@@ -125,15 +135,28 @@ touches — each factor capped by a named rail:
       O(functions) or O(candidates) — the once-per-file lesson,
       generalised to once-per-node.
     × RETAINED BYTES — time is not the only spend: memoized indexes,
-      plans, binding signatures and the fact state all LIVE in RAM,
-      and every one of those is target-shaped (one dense in-cap
-      module retains two orders of magnitude more AST than its file
-      size). The whole retention set is byte-accounted against
+      plans, binding signatures, the fact state and the per-key
+      alternative arrivals all LIVE in RAM, and every one of those
+      is target-shaped (one dense in-cap module retains two orders
+      of magnitude more AST than its file size; alternative
+      retention is keys × MAX_ALT_ARRIVALS_PER_KEY). The whole
+      retention set is byte-accounted against
       MAX_RETAINED_BYTES: caches (plans, indexes) evict
       least-recently-used and rebuild on demand (counted — thrash
       burns the summary cap and the wall, never RAM), non-cache
-      state (fact keys, binding signatures) refuses new entries
-      counted. Host memory is never the enforcement mechanism.
+      state (fact keys, binding signatures, alternative arrivals)
+      refuses new entries counted. Host memory is never the
+      enforcement mechanism.
+
+Path reconstruction runs POST-fixpoint and is bounded by its own
+product — candidates (≤ MAX_CANDIDATES) × path hops (≤
+MAX_PATH_HOPS) × alternatives (≤ MAX_ALTERNATIVES_PER_CANDIDATE per
+candidate, drawn from ≤ MAX_ALT_ARRIVALS_PER_KEY per key) — with
+the wall budget checked per candidate: past budget the remaining
+candidates ship hop chains without step detail, counted
+(``reconstruction_skipped_wall``). Excerpt reads ride the same LRU
+module-index cache (reloads counted, files capped) — reconstruction
+adds no unaccounted retention.
 
 Summary extraction and module indexing are the expensive per-node /
 per-file steps; both are memoized (once per node / once per file),
@@ -178,6 +201,18 @@ from core.analysis.route_models import (
     RouteRecord,
 )
 from core.taint.learned_intake import LearnedIntake
+from core.taint.paths import (
+    MAX_ALT_ARRIVALS_PER_KEY,
+    MAX_ALTERNATIVES_PER_CANDIDATE,
+    MAX_EXCERPT_CHARS,
+    AlternativePath,
+    KilledOrigin,
+    SinkSite,
+    Step,
+    StepRenderer,
+    descriptor_bytes_estimate,
+    killed_origins,
+)
 from core.taint.packs import (
     SOURCE_KIND_ROUTE_PARAM,
     TIER_LEARNED,
@@ -202,7 +237,9 @@ DOCTRINE = "originate_and_prioritize_only"
 
 #: Bump when the candidate/result SHAPE or the propagation semantics
 #: change in a way persisted results must not survive.
-ENGINE_VERSION = 1
+#: 2 = candidates carry reconstructed step detail, alternatives and
+#: killed-class provenance.
+ENGINE_VERSION = 2
 
 # ── named caps ───────────────────────────────────────────────────────
 # Each cap names both directions; hitting any of them appends a
@@ -311,6 +348,20 @@ ENGINE_WALL_BUDGET_S = 300.0
 #: pipeline-stage footprint at the cost of cache-rebuild time.
 MAX_RETAINED_BYTES = 1_073_741_824  # 1 GiB
 
+#: Serialized-artifact estimate threshold — MARKER ONLY, no
+#: truncation here (the sixth cost dimension): name-shaped fields
+#: ride verbatim into every hop, step and alternative, so the
+#: serialized result is target-shaped in name length × candidates ×
+#: steps — hostile-length node ids amplify a full run into the
+#: hundreds of MB. This engine phase only measures
+#: (``stats.artifact_bytes_estimate``) and flags the threshold
+#: (``artifact_bytes`` marker) so the consumer sees the exposure;
+#: the ENFORCING rail (bounded name fields / per-record byte caps)
+#: belongs at the emission boundary where serialization happens.
+#: Higher tolerates bigger honest artifacts before flagging; lower
+#: flags sooner on name-heavy trees.
+MAX_ARTIFACT_BYTES = 67_108_864  # 64 MiB
+
 # Byte estimators for the retention rail. Estimates lean HIGH
 # (conservative direction: over-estimating retention evicts earlier,
 # never later — a loose estimate costs rebuild time, a tight one
@@ -342,6 +393,24 @@ _PLAN_BYTES_BASE = 4_096
 _FACT_BYTES_EST = 896
 _SIG_BYTES_BASE = 160
 _SIG_BYTES_PER_PARAM = 64
+# One retained alternative arrival: a record holding a pred tuple, a
+# SHARED Hop reference (entry hops are precomputed per successor and
+# shared by every arrival through it) and an int, plus its list
+# slot — measured 304 B/record with FRESH pred key tuples
+# (tracemalloc over 10k records; in-run preds usually alias the
+# fact-state keys, so the marginal cost is lower still). 512 B is
+# the high-leaning estimator (same conservative direction as the
+# rest: over-estimating refuses earlier, never later).
+_ALT_BYTES_EST = 512
+# Serialized-artifact scaffolding per record (JSON keys, quotes,
+# numbers, delimiters) for the artifact_bytes_estimate counter —
+# name/excerpt text is summed exactly, these cover the fixed shape
+# and lean HIGH so the marker fires early, never late (measured
+# est/actual 1.01 on an ordinary-name 500-candidate shape and 1.00
+# on an 8 KiB-name shape where text dominates).
+_CAND_SCAFFOLD_BYTES = 384
+_HOP_SCAFFOLD_BYTES = 128
+_KILLED_ORIGIN_SCAFFOLD_BYTES = 48
 
 # ── tiers / markers ─────────────────────────────────────────────────
 
@@ -404,6 +473,10 @@ class EngineLimits:
     max_frontier_records: int = MAX_FRONTIER_RECORDS
     max_retained_bytes: int = MAX_RETAINED_BYTES
     wall_budget_s: float = ENGINE_WALL_BUDGET_S
+    max_alt_arrivals_per_key: int = MAX_ALT_ARRIVALS_PER_KEY
+    max_alternatives_per_candidate: int = MAX_ALTERNATIVES_PER_CANDIDATE
+    max_excerpt_chars: int = MAX_EXCERPT_CHARS
+    artifact_bytes_marker: int = MAX_ARTIFACT_BYTES
     #: Per-function extraction budgets (the summary layer's own).
     summary_limits: Limits = field(default_factory=Limits)
 
@@ -422,8 +495,10 @@ class Hop:
     that fed the hop (``assumed_propagation``, ``binding_approx``,
     ``sanitizer_demoted``, ``learned``, ``binding_all_params``);
     ``sanitizer_hops`` the sanitizer callees the flow passed
-    through. All name fields are target-derived text — escape
-    before rendering.
+    through; ``killed`` the sink classes transform-killed on the
+    flow that fed the hop (the per-step provenance behind a
+    candidate's killed set). All name fields are target-derived
+    text — escape before rendering.
     """
 
     function: str
@@ -432,6 +507,7 @@ class Hop:
     line: int
     tags: tuple[str, ...] = ()
     sanitizer_hops: tuple[str, ...] = ()
+    killed: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -439,6 +515,7 @@ class Hop:
             "kind": self.kind, "line": self.line,
             "tags": list(self.tags),
             "sanitizer_hops": list(self.sanitizer_hops),
+            "killed": list(self.killed),
         }
 
 
@@ -458,8 +535,13 @@ class Candidate:
     after the witness stopped improving. The hop chain remains ONE
     real witness path; converging flows share a fact key, so both
     alternative PATHS and alternative SOURCES to the same sink
-    collapse into that witness (deterministic under the FIFO order;
-    the reconstruction phase widens). Eviction priority when the
+    collapse into that witness (deterministic under the FIFO order).
+    Reconstruction widens at result assembly: ``steps`` renders the
+    witness (plus a terminal sink step) as the step records of
+    :mod:`core.taint.paths`; ``alternatives`` carries a bounded,
+    deterministically selected set of the folded routes and their
+    sources; ``killed_origins`` attributes each killed class to the
+    witness step whose flow carried the kill. Eviction priority when the
     candidate cap binds is deterministic and documented: curated/
     pack sink specs survive learned sink specs; within a spec tier
     higher path tiers survive first, then shorter paths, then stable
@@ -480,6 +562,9 @@ class Candidate:
     hops: tuple[Hop, ...]
     path_tier: str
     killed: tuple[str, ...] = ()
+    steps: tuple[Step, ...] = ()
+    alternatives: tuple[AlternativePath, ...] = ()
+    killed_origins: tuple[KilledOrigin, ...] = ()
 
     def source_dict(self) -> dict[str, object]:
         return dict(self.source)
@@ -501,6 +586,9 @@ class Candidate:
             "hops": [h.to_dict() for h in self.hops],
             "path_tier": self.path_tier,
             "killed": list(self.killed),
+            "steps": [s.to_dict() for s in self.steps],
+            "alternatives": [a.to_dict() for a in self.alternatives],
+            "killed_origins": [k.to_dict() for k in self.killed_origins],
             "derived_from_target": True,
         }
 
@@ -672,6 +760,18 @@ class _Seed:
     head_hop: Hop | None = None
 
 
+@dataclass(frozen=True)
+class _AltArrival:
+    """One non-witness arrival retained at a fact key — the raw
+    material reconstruction widens the witness collapse from. The
+    hop is a SHARED reference to a precomputed entry hop; retention
+    per record is byte-accounted (``_ALT_BYTES_EST``)."""
+
+    pred: tuple[str, object]
+    hop: Hop
+    tier_rank: int
+
+
 @dataclass
 class _FactState:
     """Joined lattice state for one key + its current witness."""
@@ -683,6 +783,8 @@ class _FactState:
     pred: tuple[str, object]
     #: The hop that entered this key on the witness path.
     hop: Hop
+    #: Bounded non-witness arrivals (deduped; byte-accounted).
+    alts: list[_AltArrival] = field(default_factory=list)
 
 
 _FactKey = tuple[str, int, str]  # (node_id, param_index, taint_class)
@@ -763,11 +865,12 @@ class _Engine:
         self.seeds: list[_Seed] = []
         self.candidates: dict[tuple, Candidate] = {}
         self._cand_priority: dict[tuple, tuple] = {}
-        #: identity -> (emitting fact key or None, the sink hit's own
-        #: killed set): lets result() recompute each candidate's
-        #: killed tuple from the FINAL lattice state.
-        self._cand_state: dict[tuple, tuple[_FactKey | None,
-                                            frozenset[str]]] = {}
+        #: identity -> (emitting fact key or None, the sink hit, the
+        #: witness hops' parameter indices): lets result() recompute
+        #: each candidate's killed tuple from the FINAL lattice
+        #: state and reconstruct step detail + alternatives.
+        self._cand_state: dict[tuple, tuple[
+            _FactKey | None, _SinkHit, tuple[int | None, ...]]] = {}
         self._worst_key: tuple | None = None
         self._nodes_by_file: dict[str, list[CallGraphNode]] | None = None
         self.frontier: list[FrontierRecord] = []
@@ -1135,6 +1238,7 @@ class _Engine:
                 function=edge.dst, tier=_TIER_BY_RANK[tier_rank],
                 kind=edge.kind, line=line, tags=tuple(sorted(tags)),
                 sanitizer_hops=flow.hops,
+                killed=tuple(sorted(flow.killed)),
             ),
         )
 
@@ -1392,12 +1496,13 @@ class _Engine:
             source = self._source_descriptor(plan, kind, match)
             hops = (Hop(function=plan.node_id, tier=SEED_HOP_TIER,
                         kind="seed", line=hit.line, tags=hit.tags,
-                        sanitizer_hops=hit.sanitizer_hops),)
+                        sanitizer_hops=hit.sanitizer_hops,
+                        killed=tuple(sorted(hit.killed))),)
             for cls in classes:
                 self._emit_candidate(
                     sink_function=plan.node_id, hit=hit,
                     taint_class=cls, joined_killed=hit.killed,
-                    hops=hops, source=source,
+                    hops=hops, hop_params=(None,), source=source,
                 )
         seed_memo: dict[tuple[str, str, int], int] = {}
         for (succ, classes, killed, markers, san_hops,
@@ -1412,7 +1517,8 @@ class _Engine:
                     head_hop=Hop(function=plan.node_id,
                                  tier=SEED_HOP_TIER, kind="seed",
                                  line=line, tags=markers,
-                                 sanitizer_hops=san_hops),
+                                 sanitizer_hops=san_hops,
+                                 killed=tuple(sorted(killed))),
                 ))
             for cls in classes:
                 for pi in succ.params:
@@ -1463,26 +1569,67 @@ class _Engine:
             self._count("facts_created")
             self._push(key)
             return
+        if tier_rank < cur.tier_rank or killed < cur.killed:
+            # The improving arrival becomes the witness (depth
+            # included) and the DISPLACED witness is retained as an
+            # alternative arrival — it was a real path. An arrival
+            # that improves the JOIN without strictly bettering the
+            # witness (e.g. an incomparable killed set whose
+            # intersection shrinks the state) leaves witness and
+            # depth untouched — the recorded depth describes the
+            # WITNESS path, and the hop cap is checked against it,
+            # so a stale witness can never inflate the join's depth
+            # allowance.
+            displaced = _AltArrival(pred=cur.pred, hop=cur.hop,
+                                    tier_rank=cur.tier_rank)
+            cur.pred = pred
+            cur.hop = hop
+            cur.depth = depth
+            self._record_alt(cur, displaced)
+        else:
+            # Non-witness arrival: a converging route (possibly a
+            # different SOURCE) the collapse would otherwise hide —
+            # retained bounded for reconstruction.
+            self._record_alt(cur, _AltArrival(pred=pred, hop=hop,
+                                              tier_rank=tier_rank))
         new_rank = min(cur.tier_rank, tier_rank)
         new_killed = cur.killed & killed
         if new_rank == cur.tier_rank and new_killed == cur.killed:
             return
-        if tier_rank < cur.tier_rank or killed < cur.killed:
-            # The improving arrival becomes the witness (depth
-            # included). An arrival that improves the JOIN without
-            # strictly bettering the witness (e.g. an incomparable
-            # killed set whose intersection shrinks the state)
-            # leaves witness and depth untouched — the recorded
-            # depth describes the WITNESS path, and the hop cap is
-            # checked against it, so a stale witness can never
-            # inflate the join's depth allowance.
-            cur.pred = pred
-            cur.hop = hop
-            cur.depth = depth
         cur.tier_rank = new_rank
         cur.killed = new_killed
         self._count("fact_improvements")
         self._push(key)
+
+    def _record_alt(self, cur: _FactState, alt: _AltArrival) -> None:
+        """Retain one non-witness arrival at a key: deduped against
+        the witness and the recorded set, capped per key
+        (``alt_arrivals``), byte-accounted (non-cache state — over
+        the byte budget new records refuse counted, existing ones
+        stay). Duplicate identities keep the best tier seen.
+
+        Precedence interaction, deliberate: reserving these bytes
+        can EVICT plan/index caches (the reserve path always spends
+        caches before refusing non-cache state) — alternative
+        retention trades cache-rebuild wall for witness-widening
+        RAM, exactly like fact keys do; rebuilds stay counted and
+        bounded by MAX_SUMMARIES + the wall."""
+        if alt.pred == cur.pred and alt.hop == cur.hop:
+            return
+        for i, existing in enumerate(cur.alts):
+            if existing.pred == alt.pred and existing.hop == alt.hop:
+                if alt.tier_rank < existing.tier_rank:
+                    cur.alts[i] = alt
+                return
+        if len(cur.alts) >= self.limits.max_alt_arrivals_per_key:
+            self._mark_cap("alt_arrivals")
+            self._count("alt_arrivals_capped")
+            return
+        if not self._reserve_retained(_ALT_BYTES_EST, keep=frozenset()):
+            self._count("alt_arrivals_refused_bytes")
+            return
+        cur.alts.append(alt)
+        self._count("alt_arrivals_recorded")
 
     def _push(self, key: _FactKey) -> None:
         if key in self.queued:
@@ -1523,10 +1670,11 @@ class _Engine:
             if hit.sink_class and hit.sink_class in combined:
                 self._count("candidates_killed")
                 continue
+            hops, hop_params = self._witness_chain(key)
             self._emit_candidate(
                 sink_function=node_id, hit=hit, taint_class=cls,
                 joined_killed=combined,
-                hops=self._witness_chain(key),
+                hops=hops, hop_params=hop_params,
                 source=self._source_of(key),
                 fact_key=key,
             )
@@ -1561,32 +1709,39 @@ class _Engine:
 
     # -- witness / source reconstruction ---------------------------------------
 
-    def _witness_chain(self, key: _FactKey) -> tuple[Hop, ...]:
+    def _witness_chain(
+        self, key: _FactKey,
+    ) -> tuple[tuple[Hop, ...], tuple[int | None, ...]]:
         """Walk predecessor links back to the seed (bounded; a
         witness loop — possible after witness replacement inside a
         cycle — truncates with a counted marker rather than
-        fabricating a chain)."""
+        fabricating a chain). Returns the hop chain plus the
+        parameter index each hop's taint entered through (``None``
+        for the in-body-source head hop), both seed → sink order."""
         hops: list[Hop] = []
+        params: list[int | None] = []
         seen: set[_FactKey] = set()
         cur: _FactKey | None = key
         while cur is not None:
             if cur in seen or len(hops) > self.limits.max_path_hops:
                 self._count("witness_truncated")
-                return tuple(reversed(hops))
+                break
             seen.add(cur)
             st = self.state.get(cur)
             if st is None:  # pragma: no cover - internal invariant
                 self._count("witness_truncated")
-                return tuple(reversed(hops))
+                break
             hops.append(st.hop)
+            params.append(cur[1])
             kind, parent = st.pred
             if kind == "seed":
                 seed = self.seeds[parent]  # type: ignore[index]
                 if seed.head_hop is not None:
                     hops.append(seed.head_hop)
-                return tuple(reversed(hops))
+                    params.append(None)
+                break
             cur = parent  # type: ignore[assignment]
-        return tuple(reversed(hops))  # pragma: no cover
+        return tuple(reversed(hops)), tuple(reversed(params))
 
     def _source_of(self, key: _FactKey) -> tuple[tuple[str, object], ...]:
         seen: set[_FactKey] = set()
@@ -1609,6 +1764,7 @@ class _Engine:
     def _emit_candidate(
         self, *, sink_function: str, hit: _SinkHit, taint_class: str,
         joined_killed: frozenset[str], hops: tuple[Hop, ...],
+        hop_params: tuple[int | None, ...],
         source: tuple[tuple[str, object], ...],
         fact_key: _FactKey | None = None,
     ) -> None:
@@ -1641,8 +1797,8 @@ class _Engine:
                 # re-propagation): replace in place, no cap effect.
                 self.candidates[identity] = candidate
                 self._cand_priority[identity] = priority
-                self._cand_state[identity] = (fact_key,
-                                              frozenset(hit.killed))
+                self._cand_state[identity] = (fact_key, hit,
+                                              hop_params)
                 self._worst_key = None
             # An identity-equal re-emission with a no-better witness
             # still refreshed the LATTICE (that is why it re-popped);
@@ -1666,7 +1822,7 @@ class _Engine:
             self._count_eviction(evicted.spec_tier)
         self.candidates[identity] = candidate
         self._cand_priority[identity] = priority
-        self._cand_state[identity] = (fact_key, frozenset(hit.killed))
+        self._cand_state[identity] = (fact_key, hit, hop_params)
         if self._worst_key is not None:
             if priority > self._cand_priority[self._worst_key]:
                 self._worst_key = identity
@@ -1715,6 +1871,220 @@ class _Engine:
             c.source,
         )
 
+    # -- path reconstruction (post-fixpoint) ------------------------------------
+
+    def _make_renderer(self) -> StepRenderer:
+        """Step renderer over the engine's own lookups: the graph's
+        node table for spans, the LRU module-index cache for excerpt
+        lines (reloads counted, files capped), and the EXISTING plan
+        / signature memos for parameter names — reconstruction never
+        triggers a new summary extraction (a missing memo is an
+        honest, counted omission)."""
+        file_module: dict[str, str] = {}
+        for n in self.graph.nodes:
+            file_module.setdefault(n.file_path, n.module)
+
+        def node_lookup(node_id: str) -> tuple[str, int] | None:
+            node = self.graph.node(node_id)
+            if node is None:
+                return None
+            return node.file_path, node.line
+
+        def line_lookup(file_path: str, line: int) -> str | None:
+            module = file_module.get(file_path)
+            if module is None:
+                return None
+            idx = self._index_for(file_path, module)
+            if idx is None or not idx.ok:
+                return None
+            if 1 <= line <= len(idx.lines):
+                return idx.lines[line - 1]
+            return None
+
+        def param_lookup(node_id: str, index: int) -> str:
+            plan = self.plans.get(node_id)
+            if plan is not None and 0 <= index < len(plan.params):
+                return plan.params[index]
+            sig = self.bind_sigs.get(node_id)
+            if (isinstance(sig, _BindSig)
+                    and 0 <= index < len(sig.params)):
+                return sig.params[index]
+            return ""
+
+        return StepRenderer(
+            node_lookup=node_lookup, line_lookup=line_lookup,
+            param_lookup=param_lookup,
+            max_excerpt_chars=self.limits.max_excerpt_chars,
+        )
+
+    def _final_entries(
+        self, key: _FactKey, *, forbid: frozenset[_FactKey] = frozenset(),
+    ) -> tuple[list[tuple[_FactKey | None, Hop]],
+               tuple[tuple[str, object], ...]] | None:
+        """Final-state witness walk from ``key`` to its seed as
+        ``(param-bearing key or None, hop)`` entries in seed → sink
+        order, plus the seed's source descriptor. ``None`` when the
+        walk loops, truncates, or crosses a ``forbid`` key (an
+        alternative prefix re-entering its own branch point) —
+        dropped rather than fabricated."""
+        entries: list[tuple[_FactKey | None, Hop]] = []
+        seen: set[_FactKey] = set(forbid)
+        cur: _FactKey | None = key
+        while cur is not None:
+            if cur in seen or len(entries) > self.limits.max_path_hops:
+                return None
+            seen.add(cur)
+            st = self.state.get(cur)
+            if st is None:
+                return None
+            entries.append((cur, st.hop))
+            kind, parent = st.pred
+            if kind == "seed":
+                seed = self.seeds[parent]  # type: ignore[index]
+                if seed.head_hop is not None:
+                    entries.append((None, seed.head_hop))
+                entries.reverse()
+                return entries, seed.descriptor
+            cur = parent  # type: ignore[assignment]
+        return None  # pragma: no cover - loop exits via the guards
+
+    @staticmethod
+    def _path_sig(
+        entries: list[tuple[_FactKey | None, Hop]],
+    ) -> tuple[tuple[str, int, str], ...]:
+        return tuple((h.function, h.line, h.kind) for _, h in entries)
+
+    def _alternatives(
+        self, fact_key: _FactKey | None, candidate: Candidate,
+        sink: SinkSite, renderer: StepRenderer,
+    ) -> tuple[AlternativePath, ...]:
+        """Widen the witness collapse: bounded alternative paths (and
+        the alternative SOURCES they carry) to this candidate's sink,
+        assembled from the per-key alternative arrivals over the
+        FINAL lattice state. Deterministic selection: best path tier
+        first, then shorter, then stable (branch position, hop) —
+        with distinct sources admitted ahead of same-source path
+        variants so a folded second source is never starved out by a
+        flood of route variants. Truncated/looping branch walks are
+        dropped counted, never rendered partially."""
+        lim = self.limits.max_alternatives_per_candidate
+        if fact_key is None or lim <= 0:
+            return ()
+        witness = self._final_entries(fact_key)
+        if witness is None:
+            return ()
+        wentries, _ = witness
+        found: list[tuple[tuple, tuple[tuple[str, object], ...],
+                          tuple, list[tuple[_FactKey | None, Hop]]]] = []
+        for pos, (k, _hop) in enumerate(wentries):
+            if k is None:
+                continue
+            st = self.state.get(k)
+            if st is None or not st.alts:
+                continue
+            suffix = wentries[pos + 1:]
+            for alt in st.alts:
+                if alt.pred[0] == "seed":
+                    seed = self.seeds[alt.pred[1]]  # type: ignore[index]
+                    prefix: list[tuple[_FactKey | None, Hop]] = (
+                        [(None, seed.head_hop)]
+                        if seed.head_hop is not None else [])
+                    source = seed.descriptor
+                else:
+                    walked = self._final_entries(
+                        alt.pred[1],  # type: ignore[arg-type]
+                        forbid=frozenset({k}))
+                    if walked is None:
+                        self._count("alternatives_dropped_truncated")
+                        continue
+                    prefix, source = walked
+                entries = [*prefix, (k, alt.hop), *suffix]
+                sig = self._path_sig(entries)
+                rank = max(
+                    (_TIER_RANK.get(h.tier, _HEURISTIC_RANK)
+                     for _, h in entries), default=0)
+                prio = (rank, len(entries), pos,
+                        alt.hop.function, alt.hop.line, alt.hop.kind)
+                found.append((prio, source, sig, entries))
+        if not found:
+            return ()
+        found.sort(key=lambda t: (t[0], t[2], t[1]))
+        witness_sig = tuple((h.function, h.line, h.kind)
+                            for h in candidate.hops)
+        seen_paths = {(candidate.source, witness_sig)}
+        seen_sources = {candidate.source}
+        selected: list[tuple[tuple[tuple[str, object], ...],
+                             list[tuple[_FactKey | None, Hop]]]] = []
+        # Truncation is counted per DISTINCT dropped path: a path a
+        # full pass 1 skips is seen again by pass 2, so a per-skip
+        # counter would double-count — the audit number must equal
+        # the real drops.
+        dropped: set[tuple] = set()
+        # Pass 1: one alternative per DISTINCT folded source.
+        for _prio, source, sig, entries in found:
+            if (source, sig) in seen_paths or source in seen_sources:
+                continue
+            if len(selected) >= lim:
+                dropped.add((source, sig))
+                continue
+            selected.append((source, entries))
+            seen_paths.add((source, sig))
+            seen_sources.add(source)
+            self._count("alt_sources_surfaced")
+        # Pass 2: fill remaining slots with path variants in order.
+        for _prio, source, sig, entries in found:
+            if (source, sig) in seen_paths:
+                continue
+            if len(selected) >= lim:
+                dropped.add((source, sig))
+                continue
+            selected.append((source, entries))
+            seen_paths.add((source, sig))
+        if dropped:
+            self._mark_cap("alternatives")
+            self._count("alternatives_capped", len(dropped))
+        out: list[AlternativePath] = []
+        for source, entries in selected:
+            steps = renderer.render(
+                [(k[1] if k is not None else None, h)
+                 for k, h in entries],
+                sink=sink, with_excerpts=False)
+            rank = max(
+                (_TIER_RANK.get(h.tier, _HEURISTIC_RANK)
+                 for _, h in entries), default=0)
+            out.append(AlternativePath(
+                source=source, steps=steps,
+                path_tier=_TIER_BY_RANK[rank]))
+            self._count("alternatives_rendered")
+        return tuple(out)
+
+    @staticmethod
+    def _artifact_bytes(c: Candidate) -> int:
+        """Serialized-size estimate for one candidate — the
+        measurement half of the artifact-bytes dimension (see
+        MAX_ARTIFACT_BYTES). Cheap sums over already-built records;
+        the enforcing rail lives at the emission boundary."""
+        total = (_CAND_SCAFFOLD_BYTES
+                 + len(c.taint_class) + len(c.sink_function)
+                 + len(c.sink_class) + len(c.sink_cwe)
+                 + len(c.sink_match) + len(c.sink_confidence)
+                 + len(c.spec_tier) + len(c.pack) + len(c.path_tier)
+                 + descriptor_bytes_estimate(c.source)
+                 + sum(len(k) + 4 for k in c.killed))
+        for h in c.hops:
+            total += (_HOP_SCAFFOLD_BYTES + len(h.function)
+                      + len(h.tier) + len(h.kind)
+                      + sum(len(t) + 4 for t in h.tags)
+                      + sum(len(s) + 4 for s in h.sanitizer_hops)
+                      + sum(len(k) + 4 for k in h.killed))
+        total += sum(s.bytes_estimate() for s in c.steps)
+        total += sum(a.bytes_estimate() for a in c.alternatives)
+        for ko in c.killed_origins:
+            total += (_KILLED_ORIGIN_SCAFFOLD_BYTES
+                      + len(ko.sink_class)
+                      + sum(len(s) + 4 for s in ko.sanitizers))
+        return total
+
     # -- result ------------------------------------------------------------------
 
     def result(self) -> PropagationResult:
@@ -1727,18 +2097,49 @@ class _Engine:
         # exactly the anti-documented direction. Suppression is
         # unaffected: killed sets only shrink, so a candidate emitted
         # live can never become killed here.
+        #
+        # Reconstruction happens here too — post-fixpoint, bounded by
+        # candidates × hops × alternatives, wall-checked per
+        # candidate: past budget the remaining candidates keep their
+        # hop chains but ship no step detail, counted.
+        renderer = self._make_renderer()
         final: list[Candidate] = []
         for identity, candidate in self.candidates.items():
-            fact_key, hit_killed = self._cand_state[identity]
+            fact_key, hit, hop_params = self._cand_state[identity]
             joined = (self.state[fact_key].killed
                       if fact_key is not None and fact_key in self.state
                       else frozenset())
-            killed = tuple(sorted(joined | hit_killed))
+            killed = tuple(sorted(joined | hit.killed))
             if killed != candidate.killed:
                 candidate = replace(candidate, killed=killed)
                 self._count("candidates_killed_refreshed")
+            if self._over_wall():
+                self._count("reconstruction_skipped_wall")
+                final.append(candidate)
+                continue
+            sink = SinkSite(
+                function=candidate.sink_function,
+                line=candidate.sink_line,
+                tags=hit.tags, sanitizers=hit.sanitizer_hops,
+                killed=tuple(sorted(hit.killed)),
+            )
+            steps = renderer.render(
+                list(zip(hop_params, candidate.hops)), sink=sink)
+            candidate = replace(
+                candidate,
+                steps=steps,
+                alternatives=self._alternatives(
+                    fact_key, candidate, sink, renderer),
+                killed_origins=killed_origins(killed, steps),
+            )
             final.append(candidate)
+        for name, n in sorted(renderer.stats.items()):
+            self._count(name, n)
         ordered = sorted(final, key=self._priority)
+        artifact_bytes = sum(self._artifact_bytes(c) for c in ordered)
+        if artifact_bytes > self.limits.artifact_bytes_marker:
+            self._mark_cap("artifact_bytes")
+        self.stats["artifact_bytes_estimate"] = artifact_bytes
         self.stats["candidates_kept"] = len(ordered)
         self.stats["fact_keys"] = len(self.state)
         self.stats["retained_bytes_estimate"] = self.retained_bytes
