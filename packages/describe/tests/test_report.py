@@ -394,6 +394,67 @@ class TestLicenseLinesEscaped:
             assert raw not in out
 
 
+class TestTargetDerivedLinesEscaped:
+    """Target-derived strings beyond the license section: the footer's
+    analysis-target path (an archive's top-level dir name is chosen by
+    the archive author), the archive-source label (a downloaded
+    tarball's basename is publisher-chosen), and the git branch name
+    (bidi overrides are legal in ref names; a handcrafted .git needn't
+    honour ref-format at all). All must land escaped."""
+
+    HOSTILE = "\x1b]0;pwned\x07\x9b2J‮evil"
+    RAW = ("\x1b", "\x07", "\x9b", "‮")
+
+    def test_footer_target_path_escaped(self):
+        out = format_text(_report(_shape(
+            target_path=Path(f"/targets/x{self.HOSTILE}dir"),
+        )))
+        assert "raptor.py agentic --repo" in out
+        for raw in self.RAW:
+            assert raw not in out
+        # Escaped form of the path still lands in the footer.
+        assert "/targets/x" in out
+
+    def test_footer_archive_path_escaped(self):
+        report = DescribeReport(
+            target_shape=_shape(),
+            tool_checks=[],
+            target_type_defaults=None,
+            estimate_summary=None,
+            archive_label=f"rel-{self.HOSTILE}.tar.gz",
+            archive_path=Path(f"/downloads/rel-{self.HOSTILE}.tar.gz"),
+        )
+        out = format_text(report)
+        assert "Source: archive" in out
+        for raw in self.RAW:
+            assert raw not in out
+
+    def test_git_branch_escaped(self):
+        from packages.describe.git_provenance import GitProvenance
+        out = format_text(_report(_shape(git=GitProvenance(
+            branch=f"feat/{self.HOSTILE}",
+            commit_short="1a2b3c4",
+            dirty=False,
+            last_commit_date="2026-05-30T14:22:11+00:00",
+        ))))
+        assert "Git:" in out and "@ 1a2b3c4" in out
+        for raw in self.RAW:
+            assert raw not in out
+
+    def test_hostile_dirname_end_to_end(self, tmp_path):
+        # Through the real describe build: a target dir whose NAME
+        # carries ESC + bidi (exactly what extracting a hostile
+        # archive's single top-level dir produces) renders inert.
+        hostile_dir = tmp_path / f"pkg-{self.HOSTILE}"
+        hostile_dir.mkdir()
+        (hostile_dir / "main.c").write_text("int main(){return 0;}")
+        report = build_describe_report(hostile_dir)
+        out = format_text(report)
+        assert "raptor.py agentic --repo" in out
+        for raw in self.RAW:
+            assert raw not in out
+
+
 class TestFormatJsonAsciiEncoded:
     def test_c1_controls_never_raw(self):
         """The --json lane prints this string to the operator terminal;
