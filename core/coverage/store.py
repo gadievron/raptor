@@ -383,6 +383,13 @@ class CoverageStore:
         # function per render.
         self._finding_index: dict[str, dict[str, int]] = {}
         self._line_index: dict[str, tuple[list[int], list[int]]] = {}
+        # Set when an EXISTING store exceeded the read budget at
+        # construction: this instance then holds an empty view of a
+        # durable union that is still on disk, and save() refuses (a
+        # small save from a degraded instance would atomically replace
+        # the whole union — the exact silent-destruction direction the
+        # write budget exists to prevent).
+        self._load_degraded_over_budget = False
         if self.path.exists():
             # A corrupt / unreadable store must not crash every coverage
             # consumer — degrade to empty (the store is largely reconstructible
@@ -396,19 +403,46 @@ class CoverageStore:
             # same warn-and-start-empty path as a corrupt one
             # (load_json strict raises ValueError on oversize).
             from core.json.utils import load_json
+            over_budget_size: int | None = None
             try:
-                data = load_json(
-                    self.path, strict=True, max_bytes=_MAX_STORE_BYTES,
-                )
-            except (ValueError, OSError, RecursionError) as exc:
-                # RecursionError: Python <= 3.13's stdlib parser is
-                # recursive — a nesting-bomb coverage.json (orjson
-                # absent) must degrade to empty like any other corrupt
-                # store, per the contract above.
-                _get_logger(__name__).warning(
-                    "coverage store %s: unreadable (%s); starting empty",
-                    self.path, exc)
+                size = self.path.stat().st_size
+                if size > _MAX_STORE_BYTES:
+                    over_budget_size = size
+            except OSError:
+                pass
+            if over_budget_size is not None:
+                # Over-budget is NOT the corrupt-store case: the
+                # durable union on disk is (presumably) intact, just
+                # bigger than the reader admits. Degrading silently
+                # here made every consumer see empty coverage AND left
+                # this instance one save() away from replacing the
+                # union — say exactly what happened and name the
+                # remedy.
+                self._load_degraded_over_budget = True
+                _get_logger(__name__).error(
+                    "coverage store %s is %d bytes — over the %d-byte "
+                    "read budget. This process sees EMPTY coverage "
+                    "(function verdicts, found_then_lost re-review "
+                    "flags, and tool coverage are all invisible) and "
+                    "this store instance REFUSES to save. Compact it "
+                    "first: libexec/raptor-audit coverage compact %s",
+                    self.path, over_budget_size, _MAX_STORE_BYTES,
+                    self.path)
                 data = {}
+            else:
+                try:
+                    data = load_json(
+                        self.path, strict=True, max_bytes=_MAX_STORE_BYTES,
+                    )
+                except (ValueError, OSError, RecursionError) as exc:
+                    # RecursionError: Python <= 3.13's stdlib parser is
+                    # recursive — a nesting-bomb coverage.json (orjson
+                    # absent) must degrade to empty like any other corrupt
+                    # store, per the contract above.
+                    _get_logger(__name__).warning(
+                        "coverage store %s: unreadable (%s); starting empty",
+                        self.path, exc)
+                    data = {}
             if not isinstance(data, dict):
                 data = {}
             self.version = data.get("version", SCHEMA_VERSION)
@@ -866,15 +900,120 @@ class CoverageStore:
         oversized save erases everything; refusing the write keeps the
         on-disk store readable and the loss visible instead of silent.
         """
-        content = dumps_artifact(self.to_dict(), sort_keys=True) + "\n"
+        if self._load_degraded_over_budget:
+            # Refusing cuts both ways: this instance keeps whatever
+            # marks callers added after construction unpersisted (they
+            # re-derive from per-run records on the next healthy
+            # load); saving instead would atomically replace the
+            # whole on-disk union with this instance's near-empty
+            # view. The union is the durable layer — refuse.
+            raise StoreWriteOverBudget(
+                f"coverage store at {self.path} exceeded the "
+                f"{_MAX_STORE_BYTES}-byte read budget at load and "
+                "this instance degraded to empty — saving would "
+                "replace the durable coverage union with it. Compact "
+                "the store first: libexec/raptor-audit coverage "
+                f"compact {self.path}"
+            )
+        # Compact serialisation (indent=None): the store is a
+        # byte-budgeted artifact, and the indented form spends the
+        # read budget on whitespace (measured ~1.5-2x on list-heavy
+        # documents). Trade-off, both directions: compact halves the
+        # on-disk size a project accumulates before hitting the
+        # budget; indented is directly human-readable — but the store
+        # is machine-merged state inspected via jq/summary tooling,
+        # not hand-edited, so budget headroom wins.
+        content = dumps_artifact(
+            self.to_dict(), indent=None, sort_keys=True) + "\n"
         size = len(content.encode("utf-8"))
         if size > _MAX_STORE_BYTES:
             raise StoreWriteOverBudget(
                 f"coverage store at {self.path} would serialize to "
                 f"{size} bytes (over the {_MAX_STORE_BYTES} byte read "
                 "budget) — refusing to write a store its own reader "
-                "must degrade to empty"
+                "must degrade to empty; compact the on-disk store "
+                "with libexec/raptor-audit coverage compact "
+                f"{self.path} and re-run"
             )
         write_text_atomically(self.path, content,
                               tmp_prefix=".~savejson-")
         return self.path
+
+
+# ── On-disk compaction ───────────────────────────────────────────────
+
+#: Elevated read bound for the operator-invoked compaction path ONLY:
+#: it exists to read stores the normal budget refuses (RAPTOR's own
+#: merged artifact, opened deliberately by the operator to shrink it),
+#: while still bounding a hostile plant. 4x the read budget covers the
+#: worst indented-vs-compact inflation with margin.
+_COMPACT_READ_MAX_BYTES = 4 * _MAX_STORE_BYTES
+
+
+def _store_backup_path(path: Path) -> Path:
+    """First free ``.pre-compact`` sibling — an existing backup is
+    never overwritten."""
+    base = path.with_name(path.name + ".pre-compact")
+    if not base.exists():
+        return base
+    n = 2
+    while True:
+        candidate = base.with_name(f"{base.name}.{n}")
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
+def compact_store_file(path: Path) -> tuple[int, int]:
+    """Rewrite an on-disk coverage store in its compact, normalised
+    form — the remedial path for a store past the read budget.
+
+    Reads under an elevated bound (:data:`_COMPACT_READ_MAX_BYTES`),
+    re-normalises through the same schema pass a healthy load applies
+    (malformed rows dropped, interval form canonical), and atomically
+    replaces the file ONLY when the result fits the read budget; the
+    original is preserved as ``coverage.json.pre-compact``. Returns
+    ``(bytes_before, bytes_after)``.
+
+    Raises ``ValueError`` when the file is missing/unparseable and
+    :class:`StoreWriteOverBudget` when even the compact form exceeds
+    the budget (the union genuinely outgrew it — the file is left
+    untouched; shrink the project, then delete the store and let the
+    per-run-record backfill rebuild it).
+    """
+    from core.json.utils import load_json
+
+    p = Path(path)
+    try:
+        before = p.stat().st_size
+    except OSError as exc:
+        msg = f"no coverage store at {p}: {exc}"
+        raise ValueError(msg) from exc
+    data = load_json(p, strict=True, max_bytes=_COMPACT_READ_MAX_BYTES)
+    if not isinstance(data, dict):
+        msg = f"coverage store at {p} is not a JSON object"
+        raise ValueError(msg)
+    version = data.get("version", SCHEMA_VERSION)
+    check_version(version, SCHEMA_VERSION, str(p))
+    out = {
+        "version": version,
+        "generated_at": _now_iso(),
+        "target": data.get("target"),
+        "content_id": data.get("content_id"),
+        "files": normalise_loaded_files(data.get("files", {}) or {},
+                                        str(p)),
+    }
+    content = dumps_artifact(out, indent=None, sort_keys=True) + "\n"
+    after = len(content.encode("utf-8"))
+    if after > _MAX_STORE_BYTES:
+        raise StoreWriteOverBudget(
+            f"coverage store at {p} still serialises to {after} bytes "
+            f"compacted (over the {_MAX_STORE_BYTES}-byte read budget) "
+            "— the durable union genuinely outgrew the budget. File "
+            "left untouched; shrink the project's runs, then delete "
+            "the store and let the per-run-record backfill rebuild it."
+        )
+    backup = _store_backup_path(p)
+    os.link(str(p), str(backup))
+    write_text_atomically(p, content, tmp_prefix=".~savejson-")
+    return before, after
