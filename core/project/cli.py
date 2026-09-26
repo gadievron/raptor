@@ -397,6 +397,40 @@ def main() -> None:
         "name", nargs="?", default=None,
         help="Project name (default: active)")
 
+    # ledger — engagement artifact ledger over the project target
+    p_ledger = sub.add_parser(
+        "ledger",
+        help=("Engagement artifact ledger — enumerate the project "
+              "target into per-artifact rows with coverage "
+              "denominators"),
+        usage=("raptor project ledger <build|status|show> "
+               "[<artifact>] [<name>] [caps flags]"),
+        **_F,
+    )
+    p_ledger.add_argument(
+        "action", choices=("build", "status", "show"),
+        help=("Action: build (enumerate the target), status "
+              "(coverage table), show <artifact-id>"))
+    p_ledger.add_argument(
+        "artifact", nargs="?", default=None,
+        help="Artifact id (required for show)")
+    p_ledger.add_argument(
+        "name", nargs="?", default=None,
+        help="Project name (default: active)")
+    p_ledger.add_argument(
+        "--max-archive-children", type=int, default=None,
+        metavar="<n>",
+        help="Per-archive extracted-member cap for this build")
+    p_ledger.add_argument(
+        "--max-archive-bytes", type=int, default=None, metavar="<n>",
+        help="Per-archive extracted-byte cap for this build")
+    p_ledger.add_argument(
+        "--max-archive-depth", type=int, default=None, metavar="<n>",
+        help="Nested-archive expansion depth cap for this build")
+    p_ledger.add_argument(
+        "--no-expand", action="store_true",
+        help="Classify archives without extracting any members")
+
     # trust / untrust — per-project trust markers
     p_trust = sub.add_parser(
         "trust",
@@ -1089,6 +1123,9 @@ def main() -> None:
 
         elif args.subcommand == "graph":
             _handle_graph(mgr, args)
+
+        elif args.subcommand == "ledger":
+            _handle_ledger(mgr, args)
 
         elif args.subcommand in ("trust", "untrust"):
             _handle_trust(mgr, args)
@@ -2067,6 +2104,122 @@ def _handle_graph(mgr, args: argparse.Namespace) -> None:
                 f"{total_nodes} nodes, {total_edges} edges"))
         else:
             print(f"No artefacts found to rebuild from in '{name}'.")
+
+
+def _handle_ledger(mgr, args: argparse.Namespace) -> None:
+    """Engagement artifact ledger verbs (build / status / show).
+
+    Rendering discipline: every target-derived value the ledger holds
+    reaches this terminal only through the module's own escape-at-
+    render helpers (`core.security.log_sanitisation` contract).
+    """
+    # Positional reshuffle (the ``binary clear <project>`` idiom):
+    # build/status take no artifact, so their lone positional is the
+    # project name — without this, ``ledger build myproj`` would bind
+    # ``myproj`` to the artifact slot and silently run against the
+    # ACTIVE project instead.
+    if args.action in ("build", "status") and args.artifact and not args.name:
+        args.name, args.artifact = args.artifact, None
+    name = args.name or _get_active_project()
+    if not name:
+        print(_red("No project specified. "
+                   "Use: raptor project ledger <action> [...] <name>, "
+                   "or set an active project first."))
+        return
+    p = mgr.load(name)
+    if not p:
+        print(_red(f"Project '{name}' not found."))
+        return
+
+    from core.engagement.ledger import (
+        LedgerCaps,
+        build_ledger,
+        load_ledger,
+        render_artifact_lines,
+        render_status_lines,
+    )
+    output_dir = Path(p.output_dir)
+
+    if args.action == "build":
+        target = Path(p.target)
+        if not target.is_dir():
+            print(_red(
+                f"Project target is not a directory: "
+                f"{sanitise_for_terminal(str(target), max_len=200)}"))
+            return
+        for flag, value in (
+            ("--max-archive-children", args.max_archive_children),
+            ("--max-archive-bytes", args.max_archive_bytes),
+            ("--max-archive-depth", args.max_archive_depth),
+        ):
+            if value is not None and value < 0:
+                print(_red(f"{flag} must be >= 0 (got {value})"))
+                return
+        defaults = LedgerCaps()
+        caps = LedgerCaps(
+            max_archive_children=(
+                args.max_archive_children
+                if args.max_archive_children is not None
+                else defaults.max_archive_children),
+            max_archive_total_bytes=(
+                args.max_archive_bytes
+                if args.max_archive_bytes is not None
+                else defaults.max_archive_total_bytes),
+            max_archive_depth=(
+                args.max_archive_depth
+                if args.max_archive_depth is not None
+                else defaults.max_archive_depth),
+            expand_archives=not args.no_expand,
+        )
+        doc = build_ledger(target, output_dir, caps=caps)
+        counts = doc.get("counts") or {}
+        print(_green(
+            f"Ledger built: {counts.get('rows', 0)} row(s) → "
+            f"{output_dir / 'ledger.json'}"))
+        for cls, n in sorted((counts.get("by_class") or {}).items()):
+            print(f"  {cls:<20s} {n:>5d}")
+        residuals = doc.get("residuals") or []
+        if residuals:
+            print(f"  {len(residuals)} residual(s) — "
+                  "see `raptor project ledger status`")
+        return
+
+    ledger = load_ledger(output_dir)
+    if ledger is None:
+        print(f"Project '{name}': no ledger. "
+              "Run `raptor project ledger build` first.")
+        return
+
+    if args.action == "status":
+        for line in render_status_lines(ledger, output_dir):
+            print(line)
+        return
+
+    if args.action == "show":
+        if not args.artifact:
+            print(_red("Usage: raptor project ledger show "
+                       "<artifact-id> [<name>]"))
+            return
+        matches = [
+            row for row in ledger.get("rows") or []
+            if row.get("artifact_id") == args.artifact
+        ]
+        if not matches:
+            matches = [
+                row for row in ledger.get("rows") or []
+                if str(row.get("artifact_id", "")).startswith(
+                    args.artifact)
+            ]
+        if not matches:
+            print(_red(
+                "No artifact matches "
+                f"{sanitise_for_terminal(args.artifact, max_len=120)}"))
+            return
+        for i, row in enumerate(matches):
+            if i:
+                print()
+            for line in render_artifact_lines(row):
+                print(line)
 
 
 def _handle_trust(mgr, args: argparse.Namespace) -> None:
