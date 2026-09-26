@@ -64,6 +64,33 @@ Chain with `/understand` for richer context:
 The `/understand` output is imported automatically by Stage 0 -- no manual
 `--out` alignment is needed.  See [Integration](#integration) below.
 
+Validate a compiled binary directly (requires an RE substrate -- a prior
+Ghidra import, project Ghidra attach, or binary `--study` run):
+
+```bash
+/validate ./firmware.elf
+```
+
+Stage 0 detects the binary by magic bytes, discovers the RE substrate
+(co-located run artifacts, project sibling runs, the project's
+`ghidra-attach` cache, then `out/ghidra-import-<stem>/` -- every candidate
+identity-gated to this binary), and builds the inventory over decompiled
+function units.  A content-verified re-database (its `binary_sha256` stamp
+matches the target's actual bytes) always outranks an unverified one,
+regardless of which run directory is newer; a name-match-only selection is
+recorded as `sha_verified: false` and labeled as such on the stage-0
+output line.  Malformed candidate files are rejected with a recorded
+reason, never crash discovery.  An existing decomp-tree is referenced in place; when only
+a re-database exists, the tree is materialized into the run directory
+(never the target's own directory).  Every inventory row carries
+`source: "decompilation"` plus the RE-database provenance (address, `fid`,
+decompiler), and the report states in one line that findings were
+validated against decompilation, not source.  A matching
+`binary-validation-handoff.json` from `/binary map` is imported into
+`attack-paths.json` with its per-flow missing evidence as blockers.
+Without any substrate, Stage 0 refuses and names what it looked for and
+the commands that produce one.  Nothing executes the target.
+
 ## Pipeline Stages
 
 ### Stage 0 -- Inventory (Mechanical)
