@@ -7413,7 +7413,8 @@ class TestPerPassWallClockPhases:
 
         target, out = _presweep_target(tmp_path)
 
-        def fake_start(path, overrides, jt, exclude_dirs=(),
+        def fake_start(path, overrides, jt, out_dir=None,
+                       exclude_dirs=(), scope_exclude_dirs=(),
                        timings_out=None):
             if timings_out is not None:
                 timings_out["cpg_build_s"] = 7.5
