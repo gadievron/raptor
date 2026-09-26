@@ -21,6 +21,7 @@ from .libfuzzer_runner import LibFuzzerRunner, LibFuzzerResult, LibFuzzerStats
 from .atheris_runner import AtherisRunner, AtherisResult
 from .atheris_harness import AtherisHarnessSpec, write_atheris_harness
 from .cargofuzz_runner import CargoFuzzRunner, CargoFuzzResult
+from .jazzer_runner import JazzerRunner, JazzerResult
 from .harness_generator import HarnessGenerator, HarnessSpec, GeneratedHarness
 from .telemetry import FuzzingTelemetry, CampaignStats, FuzzEvent
 from packages.binary_analysis import (
@@ -53,6 +54,8 @@ __all__ = [
     "GeneratedHarness",
     "HarnessGenerator",
     "HarnessSpec",
+    "JazzerResult",
+    "JazzerRunner",
     "LibFuzzerResult",
     "LibFuzzerRunner",
     "LibFuzzerStats",
