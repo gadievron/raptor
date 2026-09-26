@@ -38,12 +38,12 @@ from typing import Any
 from core.json.utils import load_json, save_json
 from core.run.resume import (
     SpanDriftRecord,
-    _safe_target_join,
-    _spend_value,
     hash_whole_file,
     load_run_config,
     persist_spend_floor,
+    safe_target_join,
     save_run_config,
+    spend_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -207,7 +207,7 @@ class CheckpointStore:
                 rels.add(rel)
         hashes: dict[str, str] = {}
         for rel in sorted(rels)[:_MAX_DRIFT_FILES]:
-            resolved = _safe_target_join(self.target, rel)
+            resolved = safe_target_join(self.target, rel)
             hashes[rel] = (
                 hash_whole_file(resolved)
                 if resolved is not None and resolved.is_file() else ""
@@ -263,7 +263,7 @@ class CheckpointStore:
             isinstance(i, dict) for i in items
         ):
             return None
-        cost = _spend_value(data.get("cost_usd"))
+        cost = spend_value(data.get("cost_usd"))
         raw_hashes = data.get("file_hashes")
         file_hashes = {
             k: v for k, v in raw_hashes.items()
