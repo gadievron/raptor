@@ -127,31 +127,41 @@ _STDLIB_PACK = {
 
 # ── cell grammars ────────────────────────────────────────────────────
 
+# All grammars anchor with \Z, never $: in Python re, $ also matches
+# just BEFORE a trailing newline, so "name\n" would validate as
+# "name" while remaining a distinct string — two visually identical
+# cells that dedup, diff, and downstream joins treat as different.
+# \Z anchors at the absolute end only. For the same reason the
+# whitespace the cpp/signature/access grammars allow is [ \t], never
+# \s: \s includes \n, which would re-admit the invisible-byte twin
+# mid-cell (json.dumps contains it in the YAML, but dedup and joins
+# would still see two "identical" names).
+
 # C/C++ namespace: alnum plus :: < > , * & space ~ -. No quotes,
 # backslashes, or control characters can pass.
-_CPP_NAMESPACE_RE = re.compile(r"^[A-Za-z_~][\w:<>,*&\s~-]*$")
+_CPP_NAMESPACE_RE = re.compile(r"^[A-Za-z_~][\w:<>,*& \t~-]*\Z")
 _CPP_TYPE_RE = _CPP_NAMESPACE_RE
 # Function name: a plain (optionally destructor) identifier.
-_CPP_NAME_RE = re.compile(r"^~?[A-Za-z_]\w*$")
+_CPP_NAME_RE = re.compile(r"^~?[A-Za-z_]\w*\Z")
 # Java package (dotted identifiers; empty = default package), type
 # (identifier, nested via $ or .), name, and "(Type,Type)" signature
 # of erased simple types — the stdlib ext-file conventions.
-_JAVA_PACKAGE_RE = re.compile(r"^([A-Za-z_]\w*(\.[A-Za-z_]\w*)*)?$")
-_JAVA_TYPE_RE = re.compile(r"^[A-Za-z_]\w*([.$][A-Za-z_]\w*)*$")
-_JAVA_NAME_RE = re.compile(r"^[A-Za-z_]\w*$")
-_JAVA_SIGNATURE_RE = re.compile(r"^\([\w\s,.<>\[\]$]*\)$")
+_JAVA_PACKAGE_RE = re.compile(r"^([A-Za-z_]\w*(\.[A-Za-z_]\w*)*)?\Z")
+_JAVA_TYPE_RE = re.compile(r"^[A-Za-z_]\w*([.$][A-Za-z_]\w*)*\Z")
+_JAVA_NAME_RE = re.compile(r"^[A-Za-z_]\w*\Z")
+_JAVA_SIGNATURE_RE = re.compile(r"^\([\w \t,.<>\[\]$]*\)\Z")
 # Python dotted type path; a leading ~ on a segment is the stdlib
 # "match by name suffix" convention (e.g. asyncpg.~Connection).
-_PY_TYPE_RE = re.compile(r"^~?[A-Za-z_]\w*(\.~?[A-Za-z_]\w*)*$")
+_PY_TYPE_RE = re.compile(r"^~?[A-Za-z_]\w*(\.~?[A-Za-z_]\w*)*\Z")
 # Access-path component grammar shared by both families:
 #   Member[x], Argument[0], Argument[*1], Argument[0,query:],
 #   Parameter[0], ReturnValue, Subscript[0], Awaited, Element, Field[x]
 _ACCESS_PART_RE = re.compile(
     r"^(ReturnValue|Awaited|Element|MapKey|MapValue"
-    r"|(Member|Argument|Parameter|Subscript|Field)\[[\w\s,.:*+-]*\])$"
+    r"|(Member|Argument|Parameter|Subscript|Field)\[[\w \t,.:*+-]*\])\Z"
 )
-_KIND_RE = re.compile(r"^[a-z][a-z0-9-]*$")
-_SIGNATURE_RE = re.compile(r"^[\w\s,:<>*&()\[\]~-]*$")
+_KIND_RE = re.compile(r"^[a-z][a-z0-9-]*\Z")
+_SIGNATURE_RE = re.compile(r"^[\w \t,:<>*&()\[\]~-]*\Z")
 
 
 def _valid_access(path: str, *, allow_empty: bool = False) -> bool:
@@ -407,10 +417,10 @@ def write_extension_pack(
         )
         raise ValueError(msg)
     name = pack_name or f"{_DEFAULT_PACK_PREFIX}-{language}"
-    if not re.match(r"^[a-z][\w-]*/[a-z][\w-]*$", name):
+    if not re.match(r"^[a-z][\w-]*/[a-z][\w-]*\Z", name):
         msg = f"pack_name {name!r} is not a valid scope/name"
         raise ValueError(msg)
-    if not re.match(r"^\d+\.\d+\.\d+$", pack_version):
+    if not re.match(r"^\d+\.\d+\.\d+\Z", pack_version):
         msg = f"pack_version {pack_version!r} is not semver"
         raise ValueError(msg)
 

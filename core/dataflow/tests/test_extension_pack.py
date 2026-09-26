@@ -350,3 +350,68 @@ class TestRowsFromCandidateValidators:
             [self._candidate()], language="python",
         )
         assert not conv.rows and "cpp-only" in conv.rejected[0].reason
+
+
+# ---------------------------------------------------------------------
+# Trailing-newline anchors
+# ---------------------------------------------------------------------
+
+
+class TestTrailingNewlineAnchors:
+    r"""Every cell grammar must anchor with \Z: with $, "name\n"
+    validates as "name" while remaining a distinct string — two
+    visually identical cells that dedup and downstream joins treat as
+    different (and a provenance-gated name could be restated modulo
+    an invisible byte)."""
+
+    CASES = {
+        "cpp": [
+            _row(namespace="ns\n"),
+            _row(name="do_exec\n"),
+            _row(signature="(char*)\n"),
+            _row(access_input="Argument[*0]\n"),
+            _row(model_kind="command-injection\n"),
+        ],
+        "python": [
+            _row(name="", type_name="os.system\n", path="Argument[0]"),
+            _row(name="", type_name="os.system", path="Argument[0]\n"),
+            _row(name="", type_name="os.system", path="Argument[0]",
+                 model_kind="command-injection\n"),
+        ],
+        "java": [
+            _row(namespace="com.example\n", type_name="Runner",
+                 signature="()"),
+            _row(namespace="com.example", type_name="Runner\n",
+                 signature="()"),
+            _row(namespace="com.example", type_name="Runner",
+                 name="do_exec\n", signature="()"),
+            _row(namespace="com.example", type_name="Runner",
+                 signature="()\n"),
+        ],
+    }
+
+    @pytest.mark.parametrize("language", sorted(CASES))
+    def test_trailing_newline_cells_rejected(self, language, tmp_path):
+        rows = self.CASES[language]
+        result = write_extension_pack(rows, language=language,
+                                      out_dir=tmp_path)
+        assert result.rows_written == 0, result.counts
+        assert len(result.rejected) == len(rows)
+
+    def test_trailing_newline_pack_name_and_version_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="scope/name"):
+            write_extension_pack([], language="cpp", out_dir=tmp_path,
+                                 pack_name="raptor/learned\n")
+        with pytest.raises(ValueError, match="semver"):
+            write_extension_pack([], language="cpp", out_dir=tmp_path,
+                                 pack_version="0.0.0\n")
+
+    def test_clean_cells_still_pass(self, tmp_path):
+        result = write_extension_pack(
+            [_row(namespace="ns"),
+             _row(name="", type_name="os.system", path="Argument[0]")],
+            language="cpp", out_dir=tmp_path,
+        )
+        # the python-shaped row fails cpp grammar; the cpp row emits —
+        # the anchors tightened nothing but the trailing-newline class
+        assert result.counts.get("sinkModel") == 1
