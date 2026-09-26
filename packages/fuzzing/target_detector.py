@@ -12,6 +12,9 @@ Supported target kinds:
   - pe-exe         : Windows PE executable
   - pe-dll         : Windows DLL
   - pe-sys         : Windows kernel driver (.sys)
+  - te             : TE (Terse Executable) UEFI image — classified,
+                     deliberately not analysed
+
   - java-class     : Java class file
   - java-archive   : Java JAR archive
   - apk            : Android APK archive
@@ -138,6 +141,17 @@ def _detect_file(path: Path) -> TargetInfo:
     # PE (Windows): MZ header at offset 0
     if magic[:2] == b"MZ":
         return _detect_pe(path, magic, suffix, sys_platform)
+
+    # TE (Terse Executable, UEFI PI firmware): "VZ" at offset 0 — a
+    # stripped-down PE relative with NO DOS stub and NO COFF header,
+    # so nothing on the MZ path above ever sees one and the PE facts
+    # extractor does not parse it. The kind is "te", deliberately
+    # NOT a "pe-" kind: downstream consumers key Windows behavior
+    # off the "pe-" prefix (the target_kind -> OS platform label,
+    # the Windows driver-symbol ingress probing), and a UEFI image
+    # must inherit neither.
+    if magic[:2] == b"VZ":
+        return _detect_te(path, magic)
 
     if magic[:4] == b"\xca\xfe\xba\xbe":
         return TargetInfo(
@@ -465,6 +479,55 @@ def _detect_pe(
     return info
 
 
+# COFF machine value -> arch label, shared by the PE header probe
+# and the TE header probe (TE reuses the COFF machine vocabulary at
+# its own fixed offset).
+_COFF_MACHINE_ARCH = {
+    0x014C: "i386",
+    0x8664: "x86_64",
+    0x01C0: "arm",
+    0x01C4: "armv7",
+    0xAA64: "arm64",
+    0x0200: "ia64",
+}
+
+
+def _detect_te(path: Path, magic: bytes) -> TargetInfo:
+    """TE (Terse Executable) UEFI image: classify and decline.
+
+    The machine field sits at offset 2, directly behind the "VZ"
+    signature — already inside the magic bytes read, so
+    classification costs no further IO. Nothing else is parsed:
+    there is no DOS/COFF header for the PE facts path, and
+    radare2's te loader is deliberately not engaged either — a
+    low-mileage parser pointed at hostile firmware images is a poor
+    trade for facts nothing downstream consumes yet; revisit with a
+    dedicated firmware lane.
+    """
+    arch = "unknown"
+    if len(magic) >= 4:
+        machine = int.from_bytes(magic[2:4], "little")
+        arch = _COFF_MACHINE_ARCH.get(machine,
+                                      f"machine_{machine:#x}")
+    return TargetInfo(
+        path=path,
+        kind="te",
+        arch=arch,
+        description=f"TE (Terse Executable) UEFI image ({arch})",
+        can_fuzz_here=False,
+        blockers=[
+            "te_not_analysed: TE images are classified but not "
+            "analysed — no DOS/COFF header for the PE facts path, "
+            "and the radare2 te loader is deliberately not engaged "
+            "against hostile firmware images.",
+        ],
+        hints=[
+            "Use a firmware analysis toolchain (e.g. UEFITool) to "
+            "unpack and inspect the image.",
+        ],
+    )
+
+
 def _pe_arch(path: Path) -> str:
     """Read the PE COFF machine field rather than guessing x86_64."""
     try:
@@ -480,14 +543,7 @@ def _pe_arch(path: Path) -> str:
     if len(header) < 6 or header[:4] != b"PE\x00\x00":
         return "unknown"
     machine = int.from_bytes(header[4:6], "little")
-    return {
-        0x014C: "i386",
-        0x8664: "x86_64",
-        0x01C0: "arm",
-        0x01C4: "armv7",
-        0xAA64: "arm64",
-        0x0200: "ia64",
-    }.get(machine, f"machine_{machine:#x}")
+    return _COFF_MACHINE_ARCH.get(machine, f"machine_{machine:#x}")
 
 
 def _detect_rust_crate(crate_dir: Path) -> TargetInfo:

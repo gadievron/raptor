@@ -431,6 +431,21 @@ def build_manifest(
     identity_kind, identity_value = _module_identity(
         binary, target.kind, analysed_slice,
     )
+    intake_data: dict[str, Any] = {
+        "target_kind": target.kind,
+        "arch": target.arch,
+        "size_bytes": stat.st_size,
+        "executable": bool(stat.st_mode & 0o111),
+    }
+    if target.kind == "te":
+        # TE (Terse Executable) UEFI images are classified and
+        # declined: no DOS/COFF header for the PE facts path, and
+        # the radare2 te loader is deliberately not engaged (a
+        # low-mileage parser against hostile firmware images buys
+        # facts nothing downstream consumes yet — revisit with a
+        # firmware lane). The marker makes the decline
+        # record-visible; from_dict readers are extra-key tolerant.
+        intake_data["markers"] = ["te_not_analysed"]
     intake_evidence = make_evidence(
         digest,
         kind="binary_intake",
@@ -441,12 +456,7 @@ def build_manifest(
         reproducible=True,
         tool="target_detector",
         location=str(binary),
-        data={
-            "target_kind": target.kind,
-            "arch": target.arch,
-            "size_bytes": stat.st_size,
-            "executable": bool(stat.st_mode & 0o111),
-        },
+        data=intake_data,
     )
     return BinaryManifest(
         schema_version=1,
