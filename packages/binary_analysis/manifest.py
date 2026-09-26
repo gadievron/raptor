@@ -433,6 +433,7 @@ def build_manifest(
     if target.kind == "macho":
         slices, slice_evidence = inspect_macho_slices(binary, digest)
         app_bundle, bundle_evidence = inspect_app_bundle(binary, digest)
+    facts_evidence = _format_facts_evidence(binary, digest, target.kind)
     analysed_slice = select_slice(
         slices,
         requested_slice_arch,
@@ -500,8 +501,44 @@ def build_manifest(
         slices=slices,
         analysed_slice=analysed_slice,
         app_bundle=app_bundle,
-        evidence=[intake_evidence, *signal_evidence, *slice_evidence, *bundle_evidence],
+        evidence=[intake_evidence, *signal_evidence, *slice_evidence, *bundle_evidence, *facts_evidence],
     )
+
+
+def _format_facts_evidence(
+    binary: Path, digest: str, target_kind: str,
+) -> list[BinaryEvidenceRecord]:
+    """Per-kind format-facts evidence — the PE / Mach-O facts arms.
+
+    PE kinds attach the shallow header facts (sections, imports /
+    exports, mitigation booleans, load-config skim, stripped-ness
+    signals) as one ``pe_facts`` HEADER_BACKED record; Mach-O
+    attaches the per-slice load-command facts as ``macho_facts``.
+    ELF kinds deliberately have no arm here: the binary-oracle /
+    identity paths already read the ELF facts they need, and the
+    facts extractor's build-id probe would spawn a second sandboxed
+    readelf per manifest for data no manifest consumer reads yet.
+
+    Enrichment only, mirroring ``_module_identity``: any extraction
+    failure leaves the manifest facts-free rather than failing the
+    intake (the extractors' own malformed-input contracts return
+    ``None`` instead of raising; the net is belt-and-braces against
+    substrate import problems).
+    """
+    try:
+        if target_kind.startswith("pe-"):
+            from core.binary.pe import extract_pe_facts, pe_facts_evidence
+            facts = extract_pe_facts(binary)
+            if facts is not None:
+                return [pe_facts_evidence(digest, binary, facts)]
+        elif target_kind == "macho":
+            from .macho import extract_macho_facts, macho_facts_evidence
+            mfacts = extract_macho_facts(binary)
+            if mfacts is not None:
+                return [macho_facts_evidence(digest, binary, mfacts)]
+    except Exception:  # noqa: BLE001 — enrichment only; the manifest survives
+        logger.debug("format facts extraction failed", exc_info=True)
+    return []
 
 
 __all__ = ["BinaryManifest", "RuntimeSignal", "build_manifest",
