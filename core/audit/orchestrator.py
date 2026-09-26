@@ -1266,8 +1266,16 @@ def _make_tier_counters() -> dict[str, TierCounters]:
         "joern_flow": TierCounters(),
         "coccinelle_flow": TierCounters(),
         "joern_dominance": TierCounters(),
+        # Cross-function Joern verify leg (cross_function_verify).
+        "joern_xf": TierCounters(),
         "ptr_lifecycle": TierCounters(),
         "lock_region": TierCounters(),
+        # RE-context chain sweeps (Ghidra xref/type enrichment).
+        "integer_truncation": TierCounters(),
+        "proto_length": TierCounters(),
+        "struct_field": TierCounters(),
+        # Sanitizer-witness chain channel.
+        "sanwit": TierCounters(),
         # Binary-only gate; registered unconditionally like every
         # tier — the diagnostics renderer suppresses all-zero tiers
         # (format_tier_diagnostics), so source-only runs never print
