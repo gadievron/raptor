@@ -190,6 +190,34 @@ Architecture is read from the COFF/ELF/Mach-O header, so a 32-bit DLL,
 Managed artefacts (JAR/APK, .NET, Go, Rust) are recorded as runtime
 signals for future adapters.
 
+TE (Terse Executable) UEFI images are recognised by their `VZ`
+signature and classified as their own kind, `te` — never as a PE
+variant, so they receive neither the Windows platform label nor the
+Windows driver-symbol probing. Intake records a `te_not_analysed`
+marker: the image is identified (kind, machine architecture) and
+deliberately not parsed further; use a firmware analysis toolchain
+for the image contents.
+
+### PE Signing Facts
+
+The PE facts record carries two signing fields:
+
+- `authenticode_present` — the image's security directory claims an
+  Authenticode certificate blob.
+- `claimed_signer` — the subject common name of the certificate the
+  signature's first SignerInfo names, recovered by a bounded skim of
+  the PKCS#7 structure.
+
+Both are **claims read from the file, not verification results**. No
+signature, digest, or certificate chain is checked, and no trust or
+validity decision is made — a hostile file controls every byte of
+these fields, including the signer name. Treat `claimed_signer` as
+attacker-authored text for correlation and display: it never gates,
+suppresses, or ranks anything, and reports escape it before
+rendering. An empty `claimed_signer` with `authenticode_present`
+true means the blob did not yield a claim; the record's `caps_hit`
+markers (`authenticode_*`, `signer_*`) say why.
+
 ### Parser Boundary Extraction
 
 For GUI apps, XPC listeners, URL handlers and protocol callbacks, the
