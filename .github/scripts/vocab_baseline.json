@@ -1184,6 +1184,16 @@
     "count": 18,
     "kind": "literal"
   },
+  "core/engagement/ledger.py::_base_row": {
+    "count": 14,
+    "kind": "literal",
+    "note": "artifact-row persistence schema keys for the engagement ledger document (class/tier/identity/links/exposure/status slots documented in the module docstring) — storage schema keys, not a learned name vocabulary"
+  },
+  "core/engagement/ledger.py::doc": {
+    "count": 10,
+    "kind": "literal",
+    "note": "top-level ledger.json document schema keys (schema_version/caps/rows/reverse_needed/collisions/residuals) — storage schema keys, not a learned name vocabulary"
+  },
   "core/env/build.py::_validate_aux_name": {
     "count": 17,
     "kind": "literal",

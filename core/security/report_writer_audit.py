@@ -530,6 +530,13 @@ _REPORT_WRITER_FILES = (
     # target-derived file/function names and verbatim announcement
     # bodies printed to the operator terminal by libexec/raptor-audit.
     "core/audit/_util.py",
+    # Engagement artifact ledger renderers (render_status_lines /
+    # render_artifact_lines): row paths, identity values, DT_NEEDED
+    # names and residual messages originate in a hostile install
+    # tree. Terminal writer — sanitise_for_terminal grade via its
+    # _esc() helper; the printing CLI (core/project/cli.py) is
+    # registered separately.
+    "core/engagement/ledger.py",
     "core/llm/multi_model/replay.py",
     "core/progress/__init__.py",
     "core/project/cli.py",
