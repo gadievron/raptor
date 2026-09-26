@@ -237,6 +237,17 @@ def _lead_from_result(res: Any, *, file: str, function: str,
                 for e in pe.exhibits
             ],
         })
+        _attach_family(lead, pe)
+    return lead
+
+
+def _attach_family(lead: dict[str, Any], pe: Any) -> dict[str, Any]:
+    """Thread the receipt's conforming-member identities onto a lead
+    under ``family_functions`` — additive: only dimensions whose
+    detectors disclose members carry the key (the receipt already
+    caps the list)."""
+    if pe is not None and getattr(pe, "family", None):
+        lead["family_functions"] = [m.to_dict() for m in pe.family]
     return lead
 
 
@@ -1027,7 +1038,7 @@ def run_consistency_prepass(
                     ),
                     "cwe": dev.cwe,
                 })
-                leads.append({
+                leads.append(_attach_family({
                     "dimension": DIMENSION_INTERFACE,
                     "callee": dev.property_name,
                     "file": dev.file,
@@ -1057,7 +1068,7 @@ def run_consistency_prepass(
                             if dev.peer_evidence else []
                         )
                     ],
-                })
+                }, dev.peer_evidence))
 
     # ── enum×switch completeness — detection-grade, C/C++ first ─────
     if not _over_budget():
@@ -1736,7 +1747,7 @@ def run_consistency_prepass(
                     ),
                     "cwe": dev.cwe,
                 })
-                leads.append({
+                leads.append(_attach_family({
                     "dimension": DIMENSION_BOUNDARY_UNIT,
                     "callee": dev.group_key,
                     "file": dev.file,
@@ -1766,7 +1777,7 @@ def run_consistency_prepass(
                             if dev.peer_evidence else []
                         )
                     ],
-                })
+                }, dev.peer_evidence))
 
     # ── uniformly-weak families — hint-tier records, never leads ────
     # The all-members-weak case produces no deviant for any majority

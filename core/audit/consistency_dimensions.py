@@ -46,7 +46,7 @@ from .callsite_consistency import (
     parse_source_cached,
 )
 from .fail_open_roles import SecurityFlag, security_flag_role
-from .peer_evidence import PeerEvidence, PeerExhibit
+from .peer_evidence import FamilyMember, PeerEvidence, PeerExhibit
 from typing import TYPE_CHECKING
 from core.source.lines import split_lines
 
@@ -1541,14 +1541,21 @@ def detect_interface_deviations(
                         if positive else
                         f"{fn} lacks {asym.property_name}")
 
+            conforming_names = sorted(
+                line_of.keys() - set(asym.minority_siblings),
+            )
             exhibits = [
                 PeerExhibit(
                     file_of.get(fn, ""), line_of.get(fn, 0),
                     _phrase(fn, positive=True),
                 )
-                for fn in sorted(
-                    line_of.keys() - set(asym.minority_siblings),
-                )[:3]
+                for fn in conforming_names[:3]
+            ]
+            family = [
+                FamilyMember(
+                    file_of.get(fn, ""), fn, line_of.get(fn, 0),
+                )
+                for fn in conforming_names
             ]
             total = asym.majority_count + asym.minority_count
             for fn in asym.minority_siblings:
@@ -1578,6 +1585,7 @@ def detect_interface_deviations(
                             _phrase(fn, positive=False),
                         ),
                         exhibits=exhibits,
+                        family=list(family),
                         contract_source="majority",
                         # In-band sampling marker: the vote ran over
                         # a seeded sample of an oversized family.

@@ -34,6 +34,17 @@ DETECTION_VARIANT_SUFFIX = "-majority"
 # Cap on conforming-sibling exhibits carried per receipt (§4.1).
 MAX_EXHIBITS = 3
 
+# Cap on conforming-member identities disclosed per receipt (the
+# ``family`` list — who the peers ARE, as opposed to the quotable
+# ``exhibits``). Lower and a downstream consumer that must execute
+# several conforming members loses its candidate pool as soon as a
+# few members prove non-executable; higher and every lead record and
+# review prompt that carries the receipt grows by a page of member
+# identities that no consumer reads past the first dozen. 12 keeps
+# headroom over the largest per-receipt consumer demand while staying
+# a single screenful in serialized form.
+MAX_FAMILY_DISCLOSED = 12
+
 # Contract sources that are registry-grade (promote-capable premise),
 # in §2.2 strength order. ``type_witness`` is the §3.6 argument-shape
 # premise: a deterministic declared-type fact (sizeof over a pointer
@@ -85,6 +96,25 @@ class PeerExhibit:
         }
 
 
+@dataclass(frozen=True)
+class FamilyMember:
+    """One conforming peer's identity — which function, where. The
+    disclosure a consumer needs to LOCATE a peer (as opposed to the
+    quotable :class:`PeerExhibit`, which shows what the peer looks
+    like but not reliably who it is)."""
+
+    file: str
+    function: str
+    line: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "file": self.file,
+            "function": self.function,
+            "line": self.line,
+        }
+
+
 @dataclass
 class PeerEvidence:
     """Majority-vs-deviant receipt for one consistency claim (§4.1)."""
@@ -100,6 +130,12 @@ class PeerEvidence:
     ratio: float = 0.0
     deviant: PeerExhibit | None = None
     exhibits: list[PeerExhibit] = field(default_factory=list)
+    #: Conforming-member identities (capped, see
+    #: :data:`MAX_FAMILY_DISCLOSED`). OPTIONAL: producers that hold
+    #: their members' enclosing functions disclose them here so a
+    #: consumer can locate the peers; serialization is additive
+    #: (emitted only when set) and readers must tolerate absence.
+    family: list[FamilyMember] = field(default_factory=list)
     contract_source: str = "none"
     provenance: str = ""  # e.g. "iris_spec:xref_backed", "wur:harvested"
     #: Similarity-weighted membership (clone-family formation): the
@@ -115,6 +151,8 @@ class PeerEvidence:
     def __post_init__(self) -> None:
         if len(self.exhibits) > MAX_EXHIBITS:
             self.exhibits = self.exhibits[:MAX_EXHIBITS]
+        if len(self.family) > MAX_FAMILY_DISCLOSED:
+            self.family = self.family[:MAX_FAMILY_DISCLOSED]
 
     @property
     def registry_grade(self) -> bool:
@@ -153,6 +191,8 @@ class PeerEvidence:
         }
         if self.deviant is not None:
             d["deviant"] = self.deviant.to_dict()
+        if self.family:
+            d["family"] = [m.to_dict() for m in self.family]
         if self.weighted_n is not None:
             d["weighted_n"] = round(self.weighted_n, 3)
         if self.weighted_conforming is not None:

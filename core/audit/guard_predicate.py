@@ -58,7 +58,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from .peer_evidence import PeerEvidence, PeerExhibit
+from .peer_evidence import FamilyMember, PeerEvidence, PeerExhibit
 
 logger = logging.getLogger(__name__)
 
@@ -718,6 +718,10 @@ def _evidence(
         exhibits=[
             PeerExhibit(s.file, s.line, s.snippet)
             for s in conforming[:3]
+        ],
+        family=[
+            FamilyMember(s.file, s.enclosing_function, s.line)
+            for s in conforming
         ],
         contract_source="majority",
         provenance=f"guard_predicate:{deviant.leg}",

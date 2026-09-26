@@ -46,7 +46,7 @@ import random
 from dataclasses import dataclass
 from typing import Any
 
-from .peer_evidence import PeerEvidence, PeerExhibit
+from .peer_evidence import FamilyMember, PeerEvidence, PeerExhibit
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +242,10 @@ def detect_boundary_unit_deviations(
             PeerExhibit(m.file, m.line, m.snippet)
             for m in conforming[:3]
         ]
+        family = [
+            FamilyMember(m.file, m.enclosing_function, m.line)
+            for m in conforming
+        ]
         for m in members:
             if value_of(m) == modal:
                 continue
@@ -269,6 +273,7 @@ def detect_boundary_unit_deviations(
                     ratio=c / n,
                     deviant=PeerExhibit(m.file, m.line, m.snippet),
                     exhibits=exhibits,
+                    family=list(family),
                     contract_source="majority",
                     provenance=f"boundary_unit:{kind}",
                 ),
