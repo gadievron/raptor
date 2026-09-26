@@ -364,6 +364,37 @@ def _pinned_or_parent_project_dir(out_dir):
     return None
 
 
+def _resolved_run_id(out_dir: Path | None) -> str:
+    """Run-attribution identity for journal rows: the RESOLVED run-dir
+    basename — the exact identity the graded export compares MAC-covered
+    ``run_id`` stamps against (``export_graded_from_journal`` resolves
+    its own directory before comparing, and the record CLI stamps the
+    same resolved shape). Unresolved, a relative ``out_dir`` spelling
+    ("." from inside the run dir) has ``name == ""``, so the row would
+    carry no attribution and the run's own record could never grade
+    run-scoped. A still-empty resolved name (the filesystem root) or a
+    resolution failure falls back toward the no-attribution sentinel,
+    which the export grades at the marked install-grandfather tier —
+    a statement of NO attribution, never an attribution to a foreign
+    run. ``None`` (no run dir at all) keeps the historical empty
+    stamp, the sentinel's other consumer-side spelling.
+
+    Every orchestrator journal-writer stamps ``run_id`` through this
+    helper; the write-site census
+    (core/audit/tests/test_run_id_stamp_census.py) trips on any new
+    direct derivation from ``out_dir``.
+    """
+    if out_dir is None:
+        return ""
+    from core.coverage.journal import RUN_ID_UNATTRIBUTED
+    run_dir = Path(out_dir)
+    try:
+        name = run_dir.resolve().name
+    except OSError:
+        name = run_dir.name
+    return name or RUN_ID_UNATTRIBUTED
+
+
 # ── Narrowed exception sets for best-effort blocks ──────────────────
 # suppress(Exception) narrowing sweep: miswiring-class exceptions
 # (TypeError, AttributeError, KeyError, NameError, ImportError on
@@ -8510,7 +8541,7 @@ def _run_audit_body(
         collector = Collector(
             out_dir=config.out_dir,
             target_path=config.target_path,
-            run_id=config.out_dir.name if config.out_dir else "",
+            run_id=_resolved_run_id(config.out_dir),
         )
         # Buffered audit-log rows must survive a FORCED SIGTERM exit
         # (watchdog expiry / second TERM) — journal rows are appended
@@ -9992,7 +10023,7 @@ def _run_audit_body(
             target_path=Path(config.target_path),
             out_dir=config.out_dir,
             gaps=gaps,
-            run_id=(config.out_dir.name if config.out_dir else ""),
+            run_id=_resolved_run_id(config.out_dir),
         )
         # Journalled but NOT tallied as reviewed — counted like the
         # other mechanical-row writers so the console summary's
@@ -10058,7 +10089,7 @@ def _run_audit_body(
                 append_journal_for_outcome(
                     out_dir=config.out_dir,
                     target_path=config.target_path,
-                    run_id=(config.out_dir.name if config.out_dir else ""),
+                    run_id=_resolved_run_id(config.out_dir),
                     outcome=_o,
                     gap={
                         "line_start": plf.get("line_start", 0),
@@ -10121,7 +10152,7 @@ def _run_audit_body(
                 append_journal_for_outcome(
                     out_dir=config.out_dir,
                     target_path=config.target_path,
-                    run_id=(config.out_dir.name if config.out_dir else ""),
+                    run_id=_resolved_run_id(config.out_dir),
                     outcome=co,
                     gap={
                         "line_start": co.line,
@@ -12617,12 +12648,13 @@ def _commit_outcome(
 
     from .collector import append_journal_for_outcome
 
-    # ``run_id`` derived from the run-dir basename to match Collector's
-    # convention (see Collector construction ~orchestrator.py:1810).
-    # Without this every ``_commit_outcome`` journal entry would carry
-    # an empty ``run_id``, breaking cross-run queries and the project
-    # index's provenance.
-    run_id = config.out_dir.name if config.out_dir else ""
+    # ``run_id`` derived from the RESOLVED run-dir basename — the
+    # shared ``_resolved_run_id`` identity every journal writer (and
+    # the Collector construction) stamps. Without it every
+    # ``_commit_outcome`` journal entry would carry an empty
+    # ``run_id``, breaking cross-run queries and the project index's
+    # provenance.
+    run_id = _resolved_run_id(config.out_dir)
     append_journal_for_outcome(
         out_dir=config.out_dir,
         target_path=config.target_path,
@@ -22637,7 +22669,7 @@ def _journal_provisional_promotion(
         append_journal_for_outcome(
             out_dir=config.out_dir,
             target_path=config.target_path,
-            run_id=(config.out_dir.name if config.out_dir else ""),
+            run_id=_resolved_run_id(config.out_dir),
             outcome=outcome,
             gap=jgap,
         )
@@ -28841,7 +28873,7 @@ def _rejournal_final_statuses(
             append_journal_for_outcome(
                 out_dir=config.out_dir,
                 target_path=config.target_path,
-                run_id=(config.out_dir.name if config.out_dir else ""),
+                run_id=_resolved_run_id(config.out_dir),
                 outcome=outcome,
                 gap=gap,
             )
