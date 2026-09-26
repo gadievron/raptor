@@ -1,11 +1,12 @@
 """Tests for the contradiction-triggered re-adjudication queue.
 
-The queue preserves the disproof-vs-later-claim contradiction signal
-that the merge fold and the /validate import used to destroy silently.
-Two directions are pinned throughout: the signal IS emitted for a
-later claim against a recorded disproof, and it is NOT emitted for
-ordinary validation progression (claim first, disproof later) or for
-intra-source pairs — and nothing anywhere overturns a verdict.
+The queue preserves the cross-adjudication contradiction signal that
+the merge fold and the /validate import used to destroy silently.
+Both directions of every class are pinned throughout: the signal IS
+emitted for a later claim against a recorded disproof and for a later
+disproof against a confirmed-tier verdict, and it is NOT emitted for
+ordinary validation progression (hypothesis first, disproof later) or
+for intra-source pairs — and nothing anywhere overturns a verdict.
 """
 
 import json
@@ -15,15 +16,21 @@ from pathlib import Path
 from core.json import load_jsonl
 from core.project.merge import merge_findings, merge_runs
 from core.project.readjudication import (
+    CONFIRMED_TIER_STATUSES,
     QUEUE_FILENAME,
     RECORD_CAP,
+    SHAPE_CLAIM_AFTER_DISPROOF,
+    SHAPE_OVERTURN,
     SITE_RECORD_CAP,
     build_queue_record,
     contradicted_disproof_count,
     detect_contradictions,
     detect_project_contradictions,
+    is_confirmed_tier,
     is_disproof,
     queued_count,
+    record_shape,
+    shape_counts,
     site_key,
     suppressed_count,
     write_queue,
@@ -126,7 +133,9 @@ class TestDetectContradictions:
         assert rec["mechanism_match"] is True
 
     def test_reverse_order_is_progression_not_contradiction(self):
-        # Claim first, disproof later = normal validation flow.
+        # Hypothesis-tier claim first, disproof later = normal
+        # validation flow (the overturn shape only fires when the
+        # prior claim is confirmed-tier — see TestOverturnDirection).
         records = detect_contradictions([
             ("run-1", [_claim()]),
             ("run-2", [_disproof()]),
@@ -459,3 +468,153 @@ class TestReportSection:
         assert "\n# fake heading" not in md
         assert "\n# injected" not in md
         assert "\x1b" not in md
+
+
+class TestConfirmedTierPredicate:
+
+    def test_confirmed_tier_statuses(self):
+        for status in CONFIRMED_TIER_STATUSES:
+            assert is_confirmed_tier(_claim(status=status)), status
+
+    def test_hypothesis_and_disproof_statuses_are_not_confirmed_tier(self):
+        # poc_success is an intermediate pipeline marker (ranked below
+        # the disproof family by the merge vocabulary), not a verdict.
+        for status in ("not_disproven", "poc_success", "suspicious",
+                       "dark", "disproven", "ruled_out", ""):
+            assert not is_confirmed_tier(_claim(status=status)), status
+
+    def test_ruling_ruled_out_wins_the_overlap(self):
+        # status claims confirmed, ruling records ruled_out — the row
+        # is a disproof, never an overturnable claim.
+        row = _claim(status="confirmed", ruling={"status": "ruled_out"})
+        assert is_disproof(row)
+        assert not is_confirmed_tier(row)
+
+
+class TestOverturnDirection:
+    """Seam: a later run's disproof against an earlier CONFIRMED-TIER
+    verdict is overturn-shaped and queues; a later disproof over a
+    mere hypothesis is ordinary validation progression and stays
+    unqueued. Nothing is ever auto-overturned."""
+
+    def test_disproof_after_confirmed_queues(self):
+        records = detect_contradictions([
+            ("run-1", [_claim(status="confirmed")]),
+            ("run-2", [_disproof(status="ruled_out")]),
+        ])
+        assert queued_count(records) == 1
+        rec = records[0]
+        assert rec["shape"] == SHAPE_OVERTURN
+        assert rec["action"] == "queued"
+        assert rec["new_claim"]["source"] == "run-1"
+        assert rec["new_claim"]["status"] == "confirmed"
+        assert rec["disproof"]["source"] == "run-2"
+        assert rec["disproof"]["status"] == "ruled_out"
+        assert rec["mechanism_match"] is True
+
+    def test_every_confirmed_tier_status_queues(self):
+        for status in sorted(CONFIRMED_TIER_STATUSES):
+            records = detect_contradictions([
+                ("run-1", [_claim(status=status)]),
+                ("run-2", [_disproof()]),
+            ])
+            assert queued_count(records) == 1, status
+            assert records[0]["shape"] == SHAPE_OVERTURN
+
+    def test_hypothesis_tier_prior_stays_unqueued(self):
+        # Negative control: /validate disproving an /audit hypothesis
+        # (or an unconcluded poc_success) is the system working —
+        # queueing it would mint a record per routine validation pass.
+        for status in ("not_disproven", "poc_success", "suspicious",
+                       "dark"):
+            records = detect_contradictions([
+                ("run-1", [_claim(status=status)]),
+                ("run-2", [_disproof()]),
+            ])
+            assert records == [], status
+
+    def test_same_source_disproof_after_confirmed_not_queued(self):
+        # In-pipeline refinement inside ONE source never queues here.
+        records = detect_contradictions([
+            ("run-1", [_claim(status="confirmed"), _disproof()]),
+        ])
+        assert records == []
+
+    def test_ruling_ruled_out_prior_never_indexes_as_confirmed(self):
+        row = _claim(status="confirmed", ruling={"status": "ruled_out"})
+        records = detect_contradictions([
+            ("run-1", [row]),
+            ("run-2", [_disproof()]),
+        ])
+        assert records == []
+
+    def test_latest_confirmed_quoted_with_count(self):
+        records = detect_contradictions([
+            ("run-1", [_claim(id="C-1", status="confirmed")]),
+            ("run-2", [_claim(id="C-2", status="exploitable")]),
+            ("run-3", [_disproof()]),
+        ])
+        assert queued_count(records) == 1
+        rec = records[0]
+        assert rec["new_claim"]["id"] == "C-2"
+        assert rec["prior_confirmed_at_site"] == 2
+
+    def test_shape_stamped_on_claim_after_disproof_records(self):
+        records = detect_contradictions([
+            ("run-1", [_disproof()]),
+            ("run-2", [_claim()]),
+        ])
+        assert records[0]["shape"] == SHAPE_CLAIM_AFTER_DISPROOF
+        assert record_shape(records[0]) == SHAPE_CLAIM_AFTER_DISPROOF
+
+    def test_record_shape_tolerates_missing_field(self):
+        # Pre-shape queue files read as the legacy class.
+        assert record_shape({"action": "queued"}) == \
+            SHAPE_CLAIM_AFTER_DISPROOF
+
+    def test_overturn_respects_site_cap_announced(self):
+        # Mechanism-varied disproofs flooding one confirmed site are
+        # bounded by the shared per-site cap, announced.
+        flood = [
+            _disproof(id=f"D-{i}", vuln_type=f"type-{i}",
+                      cwe_id=f"CWE-{900 + i}")
+            for i in range(SITE_RECORD_CAP + 4)
+        ]
+        records = detect_contradictions([
+            ("run-1", [_claim(status="confirmed")]),
+            ("run-2", flood),
+        ])
+        assert queued_count(records) == SITE_RECORD_CAP
+        assert suppressed_count(records) == 4
+
+    def test_shapes_share_the_site_cap(self):
+        # One flooded site cannot annex extra headroom by splitting
+        # its records across the two directions.
+        claims = [
+            _claim(id=f"C-{i}", vuln_type=f"ctype-{i}",
+                   cwe_id=f"CWE-{100 + i}")
+            for i in range(3)
+        ]
+        disproofs = [
+            _disproof(id=f"D-{i}", vuln_type=f"dtype-{i}",
+                      cwe_id=f"CWE-{200 + i}")
+            for i in range(3)
+        ]
+        records = detect_contradictions([
+            ("run-1", [_disproof(id="D-base"),
+                       _claim(id="C-base", status="confirmed")]),
+            ("run-2", claims + disproofs),
+        ])
+        assert queued_count(records) == SITE_RECORD_CAP
+        assert suppressed_count(records) == 1
+
+    def test_headline_count_excludes_overturns(self):
+        # contradicted_disproof_count counts contradicted DISPROOFS
+        # only; the overturn record's disproof slot holds the NEW
+        # signal, not a contradicted disposition.
+        records = detect_contradictions([
+            ("run-1", [_claim(status="confirmed")]),
+            ("run-2", [_disproof()]),
+        ])
+        assert contradicted_disproof_count(records) == 0
+        assert shape_counts(records) == {SHAPE_OVERTURN: 1}
