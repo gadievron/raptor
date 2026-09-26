@@ -85,6 +85,37 @@ STATUS_CANCELLED = "cancelled"
 # core.run.tmp_reaper.reap_stale_runs (failed/cancelled only).
 STATUS_INTERRUPTED = "interrupted"
 
+#: ``extra``-dict markers that stamp a terminal transition as a
+#: HEURISTIC verdict — written by machinery that judged a run it did
+#: not start (the abandon sweeps' ``abandon_sweep``, the lifecycle
+#: hook's Stop-path ``hook_finalize``). The precedence rule in
+#: :func:`_update_status` keys on them, both directions:
+#:
+#:   * a REAL (marker-less) terminal transition — the owner's own
+#:     complete/fail/cancel/interrupt — SUPERSEDES a heuristic
+#:     terminal state regardless of arrival order (the recovery
+#:     clause overrides it and consumes the marker);
+#:   * a heuristic write NEVER overrides an existing terminal state
+#:     (the marked-write no-op clause — the heuristic lost the race);
+#:   * real vs real keeps first-writer-wins (the terminal guard).
+#:
+#: Pre-fix only ``abandon_sweep`` (heuristic FAILURES) had this
+#: discipline; the hook's Stop-path completions were unmarked, so a
+#: hook that misjudged an IN-FLIGHT run's dead-looking worker stamped
+#: a FINAL ``completed`` that the owner's real ``fail_run`` was then
+#: refused against — a failed scan read Completed forever (observed
+#: as the openant exit-path flake under peak parallel-test load).
+_HEURISTIC_FINALIZE_MARKERS = ("abandon_sweep", "hook_finalize")
+
+
+def _heuristic_marks(extra: Any) -> list[str]:
+    """The heuristic-finalisation markers present in an ``extra``
+    dict (``[]`` for anything that is not a dict — metadata is
+    sandbox-adjacent file content, so shape is never assumed)."""
+    if not isinstance(extra, dict):
+        return []
+    return [m for m in _HEURISTIC_FINALIZE_MARKERS if extra.get(m)]
+
 # `_cleanup_abandoned` freshness threshold. A sibling run in
 # status=running that was created within this many seconds is treated
 # as a concurrent in-flight run, not as an Esc-then-retry abandon.
@@ -2245,7 +2276,8 @@ def _append_coverage_progress(proj: Path, run_dir: Path, store,
 
 
 def _already_terminal(output_dir: Path, caller: str,
-                      allow_refail: bool = False) -> bool:
+                      allow_refail: bool = False,
+                      incoming_extra: dict[str, Any] | None = None) -> bool:
     """Shared pre-check for the non-complete finalisers (fail_run /
     cancel_run / interrupt_run): True when the run is ALREADY terminal
     and the finaliser must return before ANY side effect.
@@ -2268,6 +2300,18 @@ def _already_terminal(output_dir: Path, caller: str,
     tests; the side effects on that lane are overwrite-idempotent.
     Best-effort — ``_update_status`` re-validates under the metadata
     lock.
+
+    ``incoming_extra`` (the caller's ``extra`` dict, or None): a REAL
+    (heuristic-marker-less) finaliser is NOT blocked by a terminal
+    state that was itself stamped by a heuristic finaliser (see
+    ``_HEURISTIC_FINALIZE_MARKERS``) — the real verdict proceeds to
+    the locked ``_update_status``, whose recovery clause adjudicates
+    the override. Without this, a lifecycle hook that misjudged an
+    in-flight run's worker as dead stamped ``completed`` and this
+    pre-check refused the owner's genuine ``fail_run`` outright — the
+    failed run read Completed forever. The side effects the real
+    finaliser then re-runs against the heuristically-stamped dir are
+    the same overwrite-idempotent set as the refail lane.
     """
     meta_now = _load_meta(Path(output_dir) / RUN_METADATA_FILE)
     if not isinstance(meta_now, dict):
@@ -2276,6 +2320,11 @@ def _already_terminal(output_dir: Path, caller: str,
     if status not in _TERMINAL_STATUSES:
         return False
     if allow_refail and status == STATUS_FAILED:
+        return False
+    if (not _heuristic_marks(incoming_extra)
+            and _heuristic_marks(meta_now.get("extra"))):
+        # Real verdict vs heuristic stamp: real wins regardless of
+        # arrival order — let _update_status adjudicate under the lock.
         return False
     logger.warning(
         "%s: %s is already %r — refusing without side effects "
@@ -2297,7 +2346,8 @@ def fail_run(output_dir: Path, error: str | None = None,
     hooks) simply make no claim.
     """
     ensure_run_command(output_dir, expected_command)
-    if _already_terminal(output_dir, "fail_run", allow_refail=True):
+    if _already_terminal(output_dir, "fail_run", allow_refail=True,
+                         incoming_extra=extra):
         return
     extra = extra or {}
     if error:
@@ -2325,7 +2375,7 @@ def cancel_run(output_dir: Path, extra: dict[str, Any] | None = None,
     :func:`ensure_run_command`.
     """
     ensure_run_command(output_dir, expected_command)
-    if _already_terminal(output_dir, "cancel_run"):
+    if _already_terminal(output_dir, "cancel_run", incoming_extra=extra):
         return
     _finalize_sandbox_summary(output_dir)
     _triage_verdict = _finalize_sandbox_triage(output_dir)
@@ -2351,7 +2401,7 @@ def interrupt_run(output_dir: Path, reason: str | None = None,
     :func:`ensure_run_command`.
     """
     ensure_run_command(output_dir, expected_command)
-    if _already_terminal(output_dir, "interrupt_run"):
+    if _already_terminal(output_dir, "interrupt_run", incoming_extra=extra):
         return
     extra = dict(extra or {})
     if reason:
@@ -2890,49 +2940,60 @@ def _update_status(output_dir: Path, status: str,
             msg = f"Malformed {RUN_METADATA_FILE} in {output_dir} — expected JSON object"
             raise ValueError(msg)  # noqa: TRY004
         current = metadata.get("status")
-        if (current in _TERMINAL_STATUSES and status == STATUS_FAILED
-                and (extra or {}).get("abandon_sweep")):
-            # A sweep-stamped FAILED write onto an ALREADY-TERMINAL
-            # status is a no-op: the sweep judged the run from a stale
+        incoming_marks = _heuristic_marks(extra)
+        if current in _TERMINAL_STATUSES and incoming_marks:
+            # A heuristic-marked write (abandon sweep, lifecycle-hook
+            # Stop finalisation) onto an ALREADY-TERMINAL status is a
+            # no-op: the heuristic judged the run from a stale
             # status=running read and lost the race — the earlier
             # terminal state is the truth. Merging instead (the
             # pre-fix behaviour for failed→failed, which skips the
             # terminal guard below) overwrote a REAL failure's error
             # with the sweep's message and planted the marker, so a
             # later stray complete_run laundered the genuine failure
-            # to completed via the recovery clause. Sweep-first
+            # to completed via the recovery clause. Same-status writes
+            # are caught too: a heuristic ``completed`` merged onto a
+            # real ``completed`` would plant its marker and hand a
+            # later stray fail_run the recovery clause. Heuristic-first
             # orderings are unaffected: their write lands on
             # status=running, and the consume/recovery clauses below
             # still let the real finaliser supersede it.
             logger.info(
-                "Ignoring sweep-stamped failed write onto terminal "
-                "status %r in %s (the sweep lost the race)",
-                current, output_dir,
+                "Ignoring %s-stamped %r write onto terminal status %r "
+                "in %s (the heuristic finaliser lost the race)",
+                "/".join(incoming_marks), status, current, output_dir,
             )
             return
         if current in _TERMINAL_STATUSES and current != status:
-            # Recovery clause: a ``failed`` stamped by an abandon sweep
-            # (``extra.abandon_sweep``) is a heuristic verdict, not a
-            # real terminal transition. If the sweep was wrong (the run
-            # was live), its real finaliser must not be refused — pre-
-            # fix a wrongly-abandoned paid run could never record its
-            # actual completion. The override clears the sweep's
-            # markers so the true outcome isn't contaminated.
-            swept_extra = metadata.get("extra")
-            if (current == STATUS_FAILED
-                    and isinstance(swept_extra, dict)
-                    and swept_extra.get("abandon_sweep")):
+            # Recovery clause: a terminal status stamped by a heuristic
+            # finaliser (abandon sweep's ``failed``, lifecycle hook's
+            # Stop-path ``completed``/``failed`` — see
+            # ``_HEURISTIC_FINALIZE_MARKERS``) is a judged verdict, not
+            # a real terminal transition. If the heuristic was wrong
+            # (the run was live), the run's own finaliser must not be
+            # refused — pre-fix a wrongly-abandoned paid run could
+            # never record its actual completion, and a hook-stamped
+            # ``completed`` on an in-flight run silently beat the
+            # owner's real ``fail_run`` (a failed scan read Completed
+            # forever). Only REAL writes reach here: heuristic-marked
+            # incoming writes returned in the no-op clause above.
+            # The override clears the heuristic's markers and error so
+            # the true outcome isn't contaminated.
+            stamped_extra = metadata.get("extra")
+            stored_marks = _heuristic_marks(stamped_extra)
+            if stored_marks:
                 logger.warning(
-                    "Overriding sweep-stamped abandon %r → %r in %s "
-                    "(the abandon sweep misjudged a live run)",
-                    current, status, output_dir,
+                    "Overriding %s-stamped %r → %r in %s "
+                    "(the heuristic finaliser misjudged a live run)",
+                    "/".join(stored_marks), current, status, output_dir,
                 )
-                swept_extra.pop("abandon_sweep", None)
-                # The error field was set by the same sweep that set
-                # the flag — drop it so the true outcome isn't
-                # contaminated by the wrong abandon reason.
-                swept_extra.pop("error", None)
-                metadata["extra"] = swept_extra
+                for _mark in _HEURISTIC_FINALIZE_MARKERS:
+                    stamped_extra.pop(_mark, None)
+                # The error field was set by the same heuristic that
+                # set the marker — drop it so the true outcome isn't
+                # contaminated by the wrong abandon/exit reason.
+                stamped_extra.pop("error", None)
+                metadata["extra"] = stamped_extra
             else:
                 logger.warning(
                     "Refusing to overwrite terminal status %r → %r in %s "
@@ -2942,22 +3003,27 @@ def _update_status(output_dir: Path, status: str,
                 return
         metadata["status"] = status
 
-        # A GENUINE failure supersedes a prior sweep-stamped abandon:
-        # consume the marker when a FAILED write arrives whose incoming
-        # extra does not itself carry it. Without this, the extras
-        # merge below preserved abandon_sweep alongside the real error,
-        # and a later complete_run took the recovery branch — flipping
-        # a genuinely failed run to completed and deleting the real
-        # error (the exact laundering the terminal guard exists to
-        # prevent).
-        if status == STATUS_FAILED and not (extra or {}).get("abandon_sweep"):
+        # A GENUINE terminal write supersedes a prior heuristic stamp:
+        # consume the markers when a real (unmarked) terminal write
+        # arrives. Without this, the extras merge below preserved the
+        # marker alongside the real outcome, and a later stray
+        # finaliser took the recovery branch — flipping a genuinely
+        # failed run to completed (or vice versa) and deleting the
+        # real error (the exact laundering the terminal guard exists
+        # to prevent). Covers the same-status lanes the recovery
+        # clause skips: failed→failed refail merges and a real
+        # complete_run landing on a hook-stamped ``completed``.
+        if status in _TERMINAL_STATUSES and not incoming_marks:
             _prior_extra = metadata.get("extra")
-            if (isinstance(_prior_extra, dict)
-                    and _prior_extra.pop("abandon_sweep", None)):
-                logger.info(
-                    "abandon_sweep marker consumed by a real failure in "
-                    "%s — the failed status is now terminal", output_dir,
-                )
+            if isinstance(_prior_extra, dict):
+                _consumed = [m for m in _HEURISTIC_FINALIZE_MARKERS
+                             if _prior_extra.pop(m, None)]
+                if _consumed:
+                    logger.info(
+                        "%s marker consumed by a real %r write in %s — "
+                        "the status is now terminal",
+                        "/".join(_consumed), status, output_dir,
+                    )
 
         if record_timing:
             now = datetime.now(timezone.utc)

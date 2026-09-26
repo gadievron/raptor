@@ -188,6 +188,39 @@ def _pick_failure_run(matching: list, command: str) -> "Path | None":
     return newest[0] if newest else None
 
 
+def _too_young_to_judge(meta: dict) -> bool:
+    """True when the run started so recently that the Stop path must
+    not judge it yet.
+
+    The Stop finalisation is a heuristic: it infers "the tool call
+    ended" from the recorded worker credential reading dead. On a run
+    that JUST started, that inference is at its weakest — the pipeline
+    may still be mid-flight (its own finaliser milliseconds away) while
+    the recorded parent shell has already been replaced. Reuse the
+    abandon-sweep freshness floor: within it, skip and let the run's
+    own finaliser (or a later Stop / the SessionEnd reap) settle it.
+
+    Fail direction: a missing/unparseable/future-dated timestamp is
+    NOT young — the hook may act, so a corrupt stamp can never park a
+    run in ``running`` forever.
+    """
+    from datetime import datetime, timezone
+
+    from core.run.metadata import _ABANDON_FRESHNESS_S
+
+    ts = meta.get("timestamp")
+    if not isinstance(ts, str):
+        return False
+    try:
+        started = datetime.fromisoformat(ts)
+    except ValueError:
+        return False
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    age_s = (datetime.now(timezone.utc) - started).total_seconds()
+    return 0 <= age_s < _ABANDON_FRESHNESS_S
+
+
 def main():
     if len(sys.argv) < 2 or sys.argv[1] not in ("stop", "session-end", "tool-failure"):
         print(f"Usage: {Path(__file__).name} stop|session-end|tool-failure",
@@ -353,15 +386,31 @@ def main():
                 # ran.)
                 if worker_liveness_for_meta(meta)[0]:
                     continue
+                # Freshness floor: a run this young is judged from the
+                # weakest evidence (see _too_young_to_judge) — leave it
+                # for its own finaliser or a later Stop/SessionEnd.
+                if _too_young_to_judge(meta):
+                    continue
                 try:
                     has_failure = (d / FAILURE_MARKER).exists()
                 except OSError:
                     has_failure = False
                 try:
+                    # ``hook_finalize`` marks this as a heuristic
+                    # verdict: if the liveness inference misjudged (the
+                    # run was in fact mid-flight), the run's real
+                    # finaliser overrides the stamped status — see the
+                    # recovery clause in
+                    # core.run.metadata._update_status, which pops the
+                    # marker and the error on override. Unmarked, a
+                    # wrong Stop-path ``completed`` was FINAL: the
+                    # terminal guard then refused the owner's genuine
+                    # fail_run and a failed scan read Completed forever.
                     if has_failure:
-                        fail_run(d, "tool exited with error")
+                        fail_run(d, "tool exited with error",
+                                 extra={"hook_finalize": True})
                     else:
-                        complete_run(d)
+                        complete_run(d, extra={"hook_finalize": True})
                     (d / FAILURE_MARKER).unlink(missing_ok=True)
                 except (OSError, ValueError) as e:
                     # Missing/malformed .raptor-run.json or an unlink
