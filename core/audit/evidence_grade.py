@@ -44,6 +44,7 @@ class EvidenceSource(str, enum.Enum):
     DYNAMIC_FRIDA = "dynamic:frida"
     DYNAMIC_CRASH = "dynamic:crash"
     DARK_VERIFY = "mechanical:dark_verify"
+    DIFFERENTIAL = "mechanical:differential"
     SANWIT = "mechanical:sanwit"
     GADGET_ORACLE = "mechanical:gadget_oracle"
     COMPILATION = "mechanical:compilation"
@@ -80,6 +81,10 @@ _SOURCE_CONFIDENCE: dict[EvidenceSource, Confidence] = {
     EvidenceSource.DYNAMIC_FRIDA: Confidence.HIGH,
     EvidenceSource.DYNAMIC_CRASH: Confidence.MEDIUM,
     EvidenceSource.DARK_VERIFY: Confidence.HIGH,
+    # Differential family execution: sandboxed member runs compared
+    # under an explicit contract — executed evidence, same grade as a
+    # dark witness.
+    EvidenceSource.DIFFERENTIAL: Confidence.HIGH,
     # Sanitizer-sufficiency witness receipts are executed evidence,
     # but detection-grade by the channel's discipline (they speak to
     # the defense, not the attack path): MEDIUM, never HIGH.
@@ -102,6 +107,13 @@ VALID_EVIDENCE_TOOLS: frozenset = frozenset({
     "compiler",
     "compilation", "dynamic:sanitizer", "dynamic:crash", "frida:runtime",
     "dark_verify:confirmed", "dark_verify:refuted",
+    # Differential family execution: the deviant accepted an input
+    # every executed conforming peer rejected (directional divergence
+    # under an acceptance contract), or a dual-controlled metamorphic
+    # relation was violated on the executed target. Both are executed
+    # witness receipts; the pass mints no refuting stamp — family
+    # agreement on a handful of vectors is only a failure to promote.
+    "differential:confirmed", "differential:relation-violation",
     # core/symbolic (angr): a solver-derived concrete input, replayed
     # in a sandbox. A replayed crash is execution evidence; a bare
     # solve is a solver proof of reachability/PC-control within the
@@ -117,7 +129,7 @@ VALID_EVIDENCE_TOOLS: frozenset = frozenset({
 # refutation gates, the G2 finding gate, and the promotion alarm.
 _TOOL_NAMESPACES = frozenset(VALID_EVIDENCE_TOOLS | {
     "prefilter", "critique", "sweep", "sarif_cache",
-    "dynamic", "frida", "dark_verify", "precondition",
+    "dynamic", "frida", "dark_verify", "differential", "precondition",
     "fail_open", "consistency", "ptr_lifecycle", "lock_region",
     "resource_bounds", "release_order", "protocol_state",
     # Sanitizer-sufficiency witness (core.audit.sanwit): every stamp
@@ -469,6 +481,25 @@ _RECEIPT_MAP: dict[str, tuple] = {
     "dark_verify:confirmed": (EvidenceSource.DARK_VERIFY, "confirmed by executed dark witness"),
     "dark_verify:refuted": (EvidenceSource.DARK_VERIFY, "refuted by executed dark witness"),
     "dark_verify": (EvidenceSource.DARK_VERIFY, "dark verification witness"),
+    "differential:confirmed": (
+        EvidenceSource.DIFFERENTIAL,
+        (
+            "confirmed by differential family execution: the deviant "
+            "accepted an input every executed conforming peer rejected"
+        ),
+    ),
+    "differential:relation-violation": (
+        EvidenceSource.DIFFERENTIAL,
+        (
+            "confirmed by executed metamorphic witness: a "
+            "dual-controlled relation's equivalence pair diverged on "
+            "the target"
+        ),
+    ),
+    "differential": (
+        EvidenceSource.DIFFERENTIAL,
+        "differential execution witness",
+    ),
     # Sanitizer-sufficiency witness. Stamps are three-segment
     # (``sanwit:insufficient:<context>``) and the lookup consults the
     # exact part then the bare NAMESPACE — so the bare row below is

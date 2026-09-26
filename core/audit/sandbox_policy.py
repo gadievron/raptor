@@ -202,7 +202,7 @@ _LLM_PHASES = frozenset({
     "unclassified", "concept_discovery", "rule_refinement", "stress",
     "triage", "prefilter", "clean_check", "sweep", "synthesis",
     "dynamic", "reachability", "propagation", "attacker_synthesis",
-    "dark_verify", "report", "deepen", "study",
+    "dark_verify", "differential", "report", "deepen", "study",
     # On-demand checker synthesis books its own call class; a resumed
     # segment books the prior segments' spend as a pseudo-phase.
     # Both are ledger rows, not tool invocations (each warned as an

@@ -119,6 +119,7 @@ class PhaseCostLedger:
         "error_retry",
         "re_review",
         "dark_verify",
+        "differential",
         "report",
     )
 

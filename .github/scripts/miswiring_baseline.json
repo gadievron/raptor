@@ -304,6 +304,9 @@
     "artifacts:write_only_artifact::delta.md": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:write_only_artifact::differential-results.json": {
+      "note": "operator/LLM-facing run output: per-lead differential execution records written by the post-loop pass for review, same reader contract as dark-verify-results.json"
+    },
     "artifacts:write_only_artifact::disagreements.json": {
       "note": "operator-facing layer-resolution audit trail (layer_resolution.write_disagreements); surfaced when the atomic-write idiom became visible to the writer classifier"
     },

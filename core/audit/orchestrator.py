@@ -1159,6 +1159,9 @@ class ReviewOutcome:
     _CONFIRMED_EVIDENCE = frozenset({
         "dark_verify:confirmed", "dynamic:crash", "frida:runtime",
         "validate:observed_runtime", "validate:replayed_crash",
+        # Differential family execution: sandboxed member runs
+        # compared under an explicit contract — executed evidence.
+        "differential:confirmed", "differential:relation-violation",
     })
 
     def compute_tier(self) -> str:
@@ -10412,6 +10415,36 @@ def _run_audit_body(
     except Exception:
         logger.debug("dark verification pass failed", exc_info=True)
 
+    # --- Differential family execution (census leads) ---
+    # Peer-vs-deviant witness runs over the consistency pre-pass's
+    # surviving leads, plus the metamorphic relation witness on the
+    # deviant alone. Own execution namespace ("differential") so a
+    # divergence receipt and a consistency receipt never corroborate
+    # each other as independent tools; the fold never demotes. Before
+    # the absent-promotion demoter so differential-confirmed outcomes
+    # carry the runtime evidence that vetoes the absent verdict.
+    differential_outcomes: list[Any] = []
+    try:
+        _pass_ledger.start_phase("differential")
+        _diff_client = _run_llm_client(config)
+        differential_outcomes = _run_differential_verification(
+            result,
+            config,
+            consistency_prepass,
+            llm_client=lambda p, s: (
+                _diff_client.generate(
+                    p,
+                    system_prompt=s or None,
+                ).content
+            ),
+            start_time=start_time,
+        )
+    except Exception:
+        logger.debug(
+            "differential verification pass failed", exc_info=True,
+        )
+    _pass_ledger.start_phase("post_loop_checks")
+
     # --- Binary-oracle demotion of promotions in absent functions ---
     # After dark verification so witness-confirmed outcomes carry the
     # runtime evidence that vetoes the absent verdict.
@@ -10609,6 +10642,12 @@ def _run_audit_body(
         except Exception:
             logger.debug(
                 "consistency export outcomes failed", exc_info=True,
+            )
+        try:
+            export_outcomes.extend(differential_outcomes)
+        except Exception:
+            logger.debug(
+                "differential export outcomes failed", exc_info=True,
             )
         graded = export_findings(
             export_outcomes,
@@ -32041,3 +32080,631 @@ def _run_dark_verification(
     if records:
         results_path = config.out_dir / "dark-verify-results.json"
         save_json(results_path, records)
+
+
+def _run_differential_verification(
+    result: OrchestratorResult,
+    config: OrchestratorConfig,
+    consistency_prepass: dict[str, Any],
+    llm_client: Callable | None = None,
+    start_time: float | None = None,
+) -> list[Any]:
+    """Differential family execution over the census pre-pass's leads.
+
+    For each eligible lead (dimension/family-keyed gate — NOT the CWE
+    dispatch table), the LLM proposes shared argument vectors and a
+    comparison contract; the deviant and its conforming family members
+    then execute the IDENTICAL vector in separate sandboxed witness
+    processes, and the classifier compares the authenticated protocol
+    observations. When the family comparison finds no direction, a
+    triple-controlled metamorphic relation witness gets one shot at
+    the deviant.
+
+    Verdict integrity — the properties every consumer relies on:
+
+    - The fold NEVER demotes. ``family-agrees`` and ``relation-holds``
+      are failures to promote and nothing more (agreement on a handful
+      of vectors is not absence of the bug); ``inconclusive`` verdicts
+      are fail-closed records. The only outcome writes are promotions.
+    - Promotion never comes from majority statistics. The two
+      promote-capable verdicts are directional confirmation (deviant
+      accepts what every executed conforming peer rejects, under an
+      acceptance contract, with the census family floor met by the
+      EXECUTED conforming set) and a family-validated relation
+      violation (channel controls passed on the target AND the
+      deciding pair held on every executed conforming peer — a
+      relation only the proposer vouches for never promotes).
+    - One execution namespace: every stamp this pass mints is
+      ``differential:*``. A divergence receipt and a consistency
+      receipt must never corroborate each other as independent tools,
+      so the namespace is deliberately disjoint from ``consistency``.
+    - Relations and vectors are run-scoped: nothing here persists
+      them beyond the run records.
+
+    Promoted leads with no existing outcome become synthesized
+    outcomes (the census pre-pass precedent — the hypothesis exists in
+    the lead before the finding, so G1 holds); the returned list is
+    merged into the graded export by the caller. Records land in
+    ``differential-results.json``; a containment-floor refusal keeps
+    the record-then-raise contract (one unverifiable-environment row,
+    persist, re-raise).
+    """
+    if llm_client is None:
+        return []
+    leads = (consistency_prepass or {}).get("leads") or []
+    if not leads:
+        return []
+
+    from core.witness.sandbox_outcome import (
+        refusal_detail,
+        refusal_summary_line,
+    )
+
+    # ``except ()`` matches nothing: on a core.sandbox-less install the
+    # executors already fail closed (verdict="error", no execution) and
+    # a floor refusal cannot occur, so the arm simply never fires.
+    try:
+        from core.sandbox import SandboxFloorError
+        _floor_errors: tuple[type[BaseException], ...] = (SandboxFloorError,)
+    except ImportError:
+        _floor_errors = ()
+
+    from .consistency_stats import (
+        floor_overrides_from_run_config,
+        resolve_floors,
+    )
+    from .dark_verify import (
+        execute_witness,
+        floor_refusal_result,
+        language_for_file,
+    )
+    from .differential import (
+        DIMENSION_FLOOR_KEY,
+        MAX_CONFORMING_EXECUTED,
+        MIN_CONFORMING_EXECUTED,
+        OBS_ERROR,
+        VERDICT_CONFIRMED,
+        VERDICT_FAMILY_AGREES,
+        VERDICT_INCONCLUSIVE,
+        VERDICT_NONDIRECTIONAL,
+        VERDICT_RELATION_VIOLATED,
+        DifferentialBudget,
+        DifferentialVector,
+        MemberObservation,
+        VectorVerdict,
+        build_member_spec,
+        build_relation_prompt,
+        build_vector_prompt,
+        classify_lead,
+        classify_relation,
+        classify_vector,
+        differential_applicable,
+        observation_from_result,
+        parse_relation_response,
+        parse_vector_response,
+        usable_family,
+        validate_relation_on_family,
+    )
+
+    # Eligibility gate: dimension/family-keyed, refusals recorded so
+    # telemetry can say why leads were skipped.
+    eligible: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    for lead in leads:
+        if not isinstance(lead, dict):
+            continue
+        ok, reason = differential_applicable(lead)
+        if ok:
+            eligible.append(lead)
+        else:
+            skipped.append({
+                "file": str(lead.get("file") or ""),
+                "function": str(lead.get("function") or ""),
+                "dimension": str(lead.get("dimension") or ""),
+                "reason": reason,
+            })
+
+    # Per-dimension family floors: registry defaults unless the audit
+    # run-config carries validated overrides — same override surface
+    # and same loud fall-back-to-defaults as the census pre-pass (the
+    # promotion gate and the pre-pass must hold one lead to ONE floor).
+    try:
+        floors = resolve_floors(
+            floor_overrides_from_run_config(config.out_dir)
+            if config.out_dir is not None else None,
+        )
+    except ValueError as exc:
+        logger.warning(
+            "differential floors: override rejected (%s) — defaults "
+            "apply", exc,
+        )
+        floors = resolve_floors(None)
+
+    model_id = (
+        config.models[0]
+        if config.models and config.models[0] != "default"
+        else ""
+    )
+    budget = DifferentialBudget()
+    _env_gate = _make_dispatch_gate(
+        config,
+        stop_check=lambda: _environment_stop_booked(config, result),
+    )
+
+    def _stopped() -> bool:
+        # Environment gate + budget rails at every LLM/witness
+        # dispatch point, same poll the dark-verify pass runs.
+        return (_env_gate is not None and _env_gate()) or (
+            start_time is not None
+            and _check_budget(config, start_time, result)
+        )
+
+    records: list[dict[str, Any]] = []
+
+    def _record_floor_refusal(spec: Any, exc: BaseException) -> NoReturn:
+        # Record-then-raise: the refusal is host-deterministic (every
+        # later member execution would refuse identically), so record
+        # one structured unverifiable-environment row, persist what
+        # the pass has, and re-raise — a misconfigured host fails the
+        # run loudly once instead of minting N inconclusive vectors.
+        refusal = floor_refusal_result(spec, spec.language, exc)
+        records.append({
+            "kind": "floor-refusal",
+            "file": spec.file,
+            "function": spec.function,
+            "verdict": refusal.verdict,
+            "match_detail": refusal.match_detail,
+        })
+        if config.out_dir is not None:
+            save_json(
+                config.out_dir / "differential-results.json", records,
+            )
+        logger.error(
+            "differential execution refused: %s",
+            refusal_summary_line(refusal_detail(exc) or {}),
+        )
+        raise exc
+
+    def _observe(
+        spec: Any, *, member: str, file: str,
+    ) -> MemberObservation:
+        """One member execution → its authenticated observation."""
+        try:
+            witness_result = execute_witness(
+                spec, config.target_path, audit_run_dir=config.out_dir,
+            )
+        except _floor_errors as exc:
+            _record_floor_refusal(spec, exc)
+        return observation_from_result(
+            witness_result, member=member, file=file,
+        )
+
+    def _build_spec(
+        file: str, function: str, lang: str, vector: DifferentialVector,
+    ) -> Any | None:
+        return build_member_spec(
+            finding_key=f"{file}:{function}",
+            file=file,
+            function=function,
+            language=lang,
+            vector=vector,
+            target_root=config.target_path,
+        )
+
+    # First outcome per (file, function): the fold's single write
+    # target for a promoted deviant.
+    by_key: dict[tuple[str, str], Any] = {}
+    for o in result.outcomes:
+        by_key.setdefault((o.file, o.function), o)
+
+    synthesized: list[Any] = []
+
+    def _promote(
+        lead: dict[str, Any], stamp: str, *, checked_by: str,
+    ) -> dict[str, str]:
+        """The ONE write path this pass has into outcome state.
+
+        Chain-extends the deviant's receipt (never replacing engine
+        provenance) and promotes to finding; when the review loop
+        produced no outcome for the deviant, synthesizes one — the
+        lead's hypothesis existed before the finding, so G1 holds.
+        There is deliberately NO demote counterpart anywhere in this
+        pass.
+        """
+        from .evidence_grade import is_tool_evidence as _is_tool_ev
+
+        file = str(lead.get("file") or "")
+        function = str(lead.get("function") or "")
+        outcome = by_key.get((file, function))
+        if outcome is not None:
+            prior = getattr(outcome, "status", "")
+            outcome.status = "finding"
+            _prior_ev = getattr(outcome, "evidence_tool", "") or ""
+            if stamp in _prior_ev:
+                pass
+            elif _prior_ev and _is_tool_ev(_prior_ev):
+                outcome.evidence_tool = f"{_prior_ev}+{stamp}"
+            else:
+                outcome.evidence_tool = stamp
+            if prior != "finding":
+                result.findings += 1
+                if prior in ("dark", "dormant"):
+                    result.dormant -= 1
+                elif prior == "suspicious":
+                    result.suspicious -= 1
+                elif prior == "clean":
+                    result.clean -= 1
+                elif prior == "error":
+                    result.errors -= 1
+            return {"applied": "chain-extend", "prior_status": prior}
+
+        description = str(lead.get("description") or "")
+        co = SimpleNamespace(
+            file=file,
+            function=function,
+            line=int(lead.get("line") or 0),
+            status="finding",
+            body=(
+                f"[differential:{lead.get('dimension', '')}] "
+                f"{description}"
+            ),
+            hypothesis=description,
+            hypotheses=None,
+            review_result={
+                "hypothesis": description,
+                "cwe_class": str(lead.get("cwe") or ""),
+            },
+            evidence_tool=stamp,
+            tools_dispatched={"differential"},
+            discovered_by="differential_execution",
+            model="",
+            cost_usd=0.0,
+            duration_s=0.0,
+        )
+        by_key[(file, function)] = co
+        synthesized.append(co)
+        try:
+            from .collector import append_journal_for_outcome
+
+            append_journal_for_outcome(
+                out_dir=config.out_dir,
+                target_path=config.target_path,
+                run_id=_resolved_run_id(config.out_dir),
+                outcome=co,
+                gap={
+                    "line_start": co.line,
+                    "line_end": None,
+                    "strategies": ["differential-execution"],
+                },
+                checked_by=[checked_by],
+            )
+            with result._lock:
+                result.post_loop_mechanical += 1
+        except Exception:
+            logger.debug(
+                "differential journal append failed for %s:%s",
+                file, function, exc_info=True,
+            )
+        return {"applied": "synthesized", "prior_status": ""}
+
+    n_confirmed = 0
+    n_relation_violations = 0
+    executed_leads = 0
+    stopped_reason = ""
+
+    for lead in eligible:
+        if _stopped():
+            stopped_reason = "budget/deadline/environment exhausted"
+            break
+        over = budget.over_reason()
+        if over is not None:
+            stopped_reason = over
+            break
+
+        file = str(lead.get("file") or "")
+        function = str(lead.get("function") or "")
+        dimension = str(lead.get("dimension") or "")
+        lang = language_for_file(file) or ""
+        family_floor = int(floors.value(DIMENSION_FLOOR_KEY[dimension]))
+        executed_leads += 1
+
+        members = usable_family(lead)
+        executed_members = members[:MAX_CONFORMING_EXECUTED]
+        # Members selected out before execution: the verdict never
+        # extends to them, and the record says so.
+        excluded = [
+            {
+                "member": str(m.get("function") or ""),
+                "reason": "over family cap",
+            }
+            for m in members[MAX_CONFORMING_EXECUTED:]
+        ]
+
+        prompt, system = build_vector_prompt(
+            lead, executed_members, model_id=model_id,
+        )
+        try:
+            response = llm_client(prompt, system)
+        # Silent skip is intentional: an LLM failure just drops this
+        # lead from differential execution.
+        except Exception:  # noqa: BLE001
+            continue
+        parsed = parse_vector_response(response)
+        if parsed is None:
+            records.append({
+                "kind": "family-differential",
+                "file": file,
+                "function": function,
+                "dimension": dimension,
+                "verdict": VERDICT_INCONCLUSIVE,
+                "reason": "no usable vector proposal",
+            })
+            continue
+        contract, vectors = parsed
+
+        vector_verdicts: list[VectorVerdict] = []
+        # Members whose spec never built (unresolvable module path,
+        # kwargs outside Python): named in the excluded rows so the
+        # record says the verdict never extended to them — silence
+        # would read as "executed and conformed".
+        spec_failed: dict[str, str] = {}
+        for i, vector in enumerate(vectors):
+            if _stopped():
+                stopped_reason = "budget/deadline/environment exhausted"
+                break
+            deviant_spec = _build_spec(file, function, lang, vector)
+            if deviant_spec is None:
+                # The vector cannot execute faithfully on this lane
+                # (e.g. kwargs outside Python) — inconclusive, and no
+                # execution is charged.
+                vector_verdicts.append(classify_vector(
+                    contract, None, [], vector_index=i,
+                ))
+                continue
+            member_specs: list[tuple[str, str, Any]] = []
+            for m in executed_members:
+                m_file = str(m.get("file") or "")
+                m_func = str(m.get("function") or "")
+                spec = _build_spec(m_file, m_func, lang, vector)
+                if spec is not None:
+                    member_specs.append((m_func, m_file, spec))
+                else:
+                    spec_failed.setdefault(m_func, "spec-build-failed")
+
+            # Charge-before-run, staged: the deviant first — an
+            # invalid deviant poisons the vector and its peers are
+            # never spent on it.
+            if not budget.try_charge(1):
+                stopped_reason = budget.over_reason() or ""
+                break
+            deviant_obs = _observe(
+                deviant_spec, member=function, file=file,
+            )
+            if deviant_obs.kind == OBS_ERROR:
+                vector_verdicts.append(classify_vector(
+                    contract, deviant_obs, [], vector_index=i,
+                ))
+                continue
+            if not budget.try_charge(len(member_specs)):
+                stopped_reason = budget.over_reason() or ""
+                break
+            conforming_obs = [
+                _observe(spec, member=m_func, file=m_file)
+                for m_func, m_file, spec in member_specs
+            ]
+            vector_verdicts.append(classify_vector(
+                contract, deviant_obs, conforming_obs, vector_index=i,
+            ))
+
+        lead_verdict = classify_lead(
+            contract, vector_verdicts,
+            family_floor=family_floor,
+            excluded=excluded + [
+                {"member": m_func, "reason": reason}
+                for m_func, reason in spec_failed.items()
+            ],
+        )
+        rec: dict[str, Any] = {
+            "kind": "family-differential",
+            "file": file,
+            "function": function,
+            "dimension": dimension,
+        }
+        rec.update(lead_verdict.to_dict())
+        promoted = False
+        if (
+            lead_verdict.verdict == VERDICT_CONFIRMED
+            and lead_verdict.meets_family_floor
+        ):
+            rec["fold"] = _promote(
+                lead, "differential:confirmed",
+                checked_by="differential:family",
+            )
+            promoted = True
+            n_confirmed += 1
+        elif lead_verdict.verdict == VERDICT_CONFIRMED:
+            # Directional, but the executed conforming set is below
+            # the census family floor: recorded, never promoted (and
+            # never demoted — nothing in this pass demotes).
+            rec["fold"] = {
+                "applied": "none",
+                "reason": (
+                    "census family floor not met by the executed "
+                    "conforming set"
+                ),
+            }
+        rec["promoted"] = promoted
+        records.append(rec)
+        if stopped_reason:
+            break
+        if promoted:
+            continue
+
+        # Metamorphic relation witness: one shot at the deviant alone,
+        # only when the family comparison executed validly but found
+        # no direction (an inconclusive family means the deviant
+        # itself is unlikely to execute — no budget is spent re-proving
+        # that).
+        if lead_verdict.verdict not in (
+            VERDICT_NONDIRECTIONAL, VERDICT_FAMILY_AGREES,
+        ):
+            continue
+        if _stopped():
+            stopped_reason = "budget/deadline/environment exhausted"
+            break
+        prompt, system = build_relation_prompt(lead, model_id=model_id)
+        try:
+            response = llm_client(prompt, system)
+        except Exception:  # noqa: BLE001
+            continue
+        relation = parse_relation_response(response)
+        if relation is None or relation.differ is None:
+            records.append({
+                "kind": "metamorphic",
+                "file": file,
+                "function": function,
+                "dimension": dimension,
+                "verdict": VERDICT_INCONCLUSIVE,
+                "reason": "no usable relation proposal",
+            })
+            continue
+
+        # Execution plan: determinism control (the first equivalence
+        # pair's left vector, twice), sensitivity control (the
+        # should-differ pair), then the equivalence pairs. All specs
+        # build before anything is charged or run — a partially
+        # executable relation could never classify.
+        det_vec = relation.pairs[0][0]
+        plan: list[DifferentialVector] = [
+            det_vec, det_vec, relation.differ[0], relation.differ[1],
+        ]
+        for left, right in relation.pairs:
+            plan.extend((left, right))
+        specs = [_build_spec(file, function, lang, v) for v in plan]
+        if any(s is None for s in specs):
+            records.append({
+                "kind": "metamorphic",
+                "file": file,
+                "function": function,
+                "dimension": dimension,
+                "verdict": VERDICT_INCONCLUSIVE,
+                "reason": "relation vector not executable on this lane",
+            })
+            continue
+        if not budget.try_charge(len(specs)):
+            stopped_reason = budget.over_reason() or ""
+            records.append({
+                "kind": "metamorphic",
+                "file": file,
+                "function": function,
+                "dimension": dimension,
+                "verdict": VERDICT_INCONCLUSIVE,
+                "reason": f"skipped over budget: {stopped_reason}",
+            })
+            break
+        obs = [
+            _observe(s, member=function, file=file) for s in specs
+        ]
+        relation_verdict = classify_relation(
+            relation,
+            determinism=(obs[0], obs[1]),
+            sensitivity=(obs[2], obs[3]),
+            pairs=[
+                (obs[4 + 2 * j], obs[5 + 2 * j])
+                for j in range(len(relation.pairs))
+            ],
+        )
+        if (
+            relation_verdict.verdict == VERDICT_RELATION_VIOLATED
+            and relation_verdict.controls_passed
+        ):
+            # Relation-validity control: the channel controls proved
+            # the comparison can see differences on the target — never
+            # that the proposed equivalence is a true invariant. The
+            # deciding pair re-executes over the conforming peers; a
+            # relation the family also violates is a false relation
+            # and poisons the witness instead of promoting.
+            deciding = relation.pairs[relation_verdict.pair_index]
+            peer_specs: list[tuple[str, str, Any, Any]] = []
+            for m in executed_members:
+                m_file = str(m.get("file") or "")
+                m_func = str(m.get("function") or "")
+                left_spec = _build_spec(m_file, m_func, lang, deciding[0])
+                right_spec = _build_spec(m_file, m_func, lang, deciding[1])
+                if left_spec is not None and right_spec is not None:
+                    peer_specs.append(
+                        (m_func, m_file, left_spec, right_spec),
+                    )
+            # All-or-nothing charge: a partially validated family
+            # could never vouch for the relation.
+            if not budget.try_charge(2 * len(peer_specs)):
+                stopped_reason = budget.over_reason() or ""
+                records.append({
+                    "kind": "metamorphic",
+                    "file": file,
+                    "function": function,
+                    "dimension": dimension,
+                    "verdict": VERDICT_INCONCLUSIVE,
+                    "reason": (
+                        f"relation validation skipped over budget: "
+                        f"{stopped_reason}"
+                    ),
+                })
+                break
+            peer_pairs = [
+                (
+                    _observe(left_spec, member=m_func, file=m_file),
+                    _observe(right_spec, member=m_func, file=m_file),
+                )
+                for m_func, m_file, left_spec, right_spec in peer_specs
+            ]
+            relation_verdict = validate_relation_on_family(
+                relation_verdict, peer_pairs,
+                quorum=MIN_CONFORMING_EXECUTED,
+            )
+
+        m_rec: dict[str, Any] = {
+            "kind": "metamorphic",
+            "file": file,
+            "function": function,
+            "dimension": dimension,
+        }
+        m_rec.update(relation_verdict.to_dict())
+        m_promoted = False
+        if (
+            relation_verdict.verdict == VERDICT_RELATION_VIOLATED
+            and relation_verdict.controls_passed
+            and relation_verdict.family_validated
+        ):
+            m_rec["fold"] = _promote(
+                lead, "differential:relation-violation",
+                checked_by="differential:metamorphic",
+            )
+            m_promoted = True
+            n_relation_violations += 1
+        m_rec["promoted"] = m_promoted
+        records.append(m_rec)
+
+    if stopped_reason:
+        logger.info(
+            "differential verification stopped — %s (%d/%d leads "
+            "executed)",
+            stopped_reason, executed_leads, len(eligible),
+        )
+
+    if records and config.out_dir is not None:
+        save_json(config.out_dir / "differential-results.json", records)
+    if config.out_dir is not None:
+        with contextlib.suppress(Exception):
+            append_audit_log(config.out_dir, {
+                "action": "differential_verification",
+                "leads_total": len(leads),
+                "leads_eligible": len(eligible),
+                "leads_executed": executed_leads,
+                "executions": budget.executions,
+                "confirmed": n_confirmed,
+                "relation_violations": n_relation_violations,
+                "stopped": stopped_reason,
+                "skipped_ineligible": skipped[:20],
+            })
+    return synthesized
