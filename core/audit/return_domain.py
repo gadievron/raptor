@@ -62,6 +62,21 @@ _SENTINEL = -1
 # Self-limits (return-census discipline: a detector must bound its own
 # work and stamp truncation rather than stall the prep phase).
 _DEFAULT_BUDGET_S = 20.0
+# Deliberately NOT derived from sweep size (unlike the census budget
+# in callsite_consistency): raising this buys nothing on large trees
+# today — findings are gated by ``proven_wider = wider and not
+# truncated`` and BOTH supporting walks truncate structurally on any
+# root with more than _MAX_WALK_FILES C-family files (a kernel tree
+# has ~64k: the definition walk never reaches mm//fs//kernel/ in walk
+# order, and the truncated constants walk is excluded from its cache
+# so it repeats per derivation). A bigger wall-clock budget converts
+# a 20s zero-yield sweep into a minutes-long zero-yield sweep. The
+# real fix is a walk-cap/indexing redesign (cache the complete
+# per-root enumeration, indexed definition lookup) — until it lands
+# the fixed budget is the honest bound. The truncation gate also
+# fail-closes a wrong-definition hazard the capped walk creates
+# (walk-order matches in tools//samples/ shadowing the real kernel
+# definitions); do not relax it independently.
 _MAX_HOPS = 2
 _MAX_DEFINITIONS = 4
 _MAX_SITES_PER_FILE = 200
