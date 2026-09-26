@@ -35,6 +35,7 @@ _VALID_KEYS = frozenset({
     "joern_heap_mb",
     "joern_heap_ceiling_mb",
     "joern_cpg_timeout_s",
+    "joern_import_timeout_s",
     "joern_query_timeout_s",
     "max_semgrep_workers",
     "max_codeql_workers",
@@ -70,7 +71,8 @@ _KEY_COMMENTS = {
     "joern_heap_mb": "MB of JVM heap for Joern (auto = 25% system RAM, min 1024, capped by joern_heap_ceiling_mb)",
     "joern_heap_ceiling_mb": "MB cap on the DERIVED Joern heap (auto = min(25% RAM, 65536)); explicit joern_heap_mb values are never capped",
     "joern_cpg_timeout_s": "seconds before CPG generation is killed (auto = derived from in-scope source size at build time)",
-    "joern_query_timeout_s": "seconds before a single Joern query is killed",
+    "joern_import_timeout_s": "seconds before a CPG import into the Joern server is killed (auto = derived from the serialized CPG size at import time)",
+    "joern_query_timeout_s": "seconds before a single Joern query is killed (the pre-sweep window additionally scales this by CPG size)",
     "max_semgrep_workers": "parallel Semgrep scans (auto = half available CPUs)",
     "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
     "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
@@ -93,6 +95,7 @@ _DEFAULTS = {
     "joern_heap_mb": "auto",
     "joern_heap_ceiling_mb": "auto",
     "joern_cpg_timeout_s": "auto",
+    "joern_import_timeout_s": "auto",
     "joern_query_timeout_s": 300,
     # Worker counts default to hardware-aware auto: the per-process
     # jobs/threads division at the dispatch sites makes half-CPU
@@ -277,6 +280,122 @@ def derived_max_joern_cpg_timeout_s() -> int:
     return _JOERN_CPG_TIMEOUT_CAP_S
 
 
+#: Sentinel resolved value for ``joern_import_timeout_s: "auto"``. The
+#: derivation needs the serialized CPG size, which only the import
+#: site knows (the file exists there) — the static resolver produces
+#: this marker and ``JoernTunables.from_tuning`` translates it into
+#: ``import_timeout_auto`` plus a usable fallback number that
+#: ``resolve_import_timeout_s`` refines from ``cpg.bin``'s st_size.
+JOERN_IMPORT_TIMEOUT_DERIVED = 0
+
+# CPG-import timeout curve. The serialized CPG size (cpg.bin bytes)
+# is the one mechanical scale signal available client-side at import
+# time, and the import wall is CLIENT-side work: on a kernel-scale
+# target a CPG in the ~200 MiB class failed to finish a server
+# importCpg within 1800 s while the server itself sat idle at a small
+# fraction of its tens-of-GiB heap — the binding ceiling was the
+# import wall, not server memory or load. 20 s/MiB maps that graph to
+# roughly an hour, ~2x the observed-insufficient budget; a leaner
+# slope re-buys the same
+# killed-legitimate-import class this derivation replaces, while a
+# fatter one makes a genuinely wedged import cost hours before the
+# kill.
+_JOERN_IMPORT_S_PER_MIB = 20.0
+# Floor 900 s: identical to the historical static default, so small
+# CPGs keep today's wedged-import kill latency; lower re-creates the
+# pre-derivation class where a medium import (an observed ~575k-SLOC
+# import took ~610 s) dies under a short flat wall. Cap 10,800 s
+# (3 h, covers ~540 MiB on the slope): beyond it an unattended run
+# pays half a working day for a wedged import — and a hostile or
+# degenerate multi-TB cpg.bin must not buy unbounded wall; a
+# genuinely larger graph needs an explicit joern_import_timeout_s
+# (the cap is a derivation bound, not a validation bound).
+_JOERN_IMPORT_TIMEOUT_FLOOR_S = 900
+_JOERN_IMPORT_TIMEOUT_CAP_S = 10800
+
+
+def derive_joern_import_timeout_s(cpg_bytes: int | None) -> int:
+    """CPG-import timeout derived from the serialized CPG size.
+
+    Linear in ``cpg_bytes`` through the calibration slope (see the
+    constants above), floored and capped. ``None``/non-positive
+    (size unknown) returns the floor — the historical static default.
+    """
+    if not cpg_bytes or cpg_bytes <= 0:
+        return _JOERN_IMPORT_TIMEOUT_FLOOR_S
+    derived = math.ceil(
+        (cpg_bytes / (1024.0 * 1024.0)) * _JOERN_IMPORT_S_PER_MIB
+    )
+    return max(
+        _JOERN_IMPORT_TIMEOUT_FLOOR_S,
+        min(derived, _JOERN_IMPORT_TIMEOUT_CAP_S),
+    )
+
+
+def derived_max_joern_import_timeout_s() -> int:
+    """The largest import timeout the derivation can produce.
+
+    Import-retry consumers use it as their raise-on-retry upper
+    bound — and as the fail-fast marker: a first attempt that already
+    ran at this bound cannot be rescued by a bigger budget.
+    """
+    return _JOERN_IMPORT_TIMEOUT_CAP_S
+
+
+# Pre-sweep window budget curve. The bulk pre-sweep runs the full
+# standard-sink catalog's whole-CPG dataflow solves in ONE
+# submission, so its runtime scales with graph size while the
+# configured joern_query_timeout_s is sized for a single query. The
+# solve is heavier per byte than the deserialise, but the only
+# calibration datum is one-sided (a kernel-scale CPG in the ~200 MiB
+# class was killed at a flat 300 s and recorded zero flows), so the
+# slope reuses the import curve's 20 s/MiB — roughly an hour for that
+# graph, >12x the budget that killed it — pending a measured
+# completion. Floor:
+# the configured per-query timeout (small CPGs keep today's budget
+# and kill latency). Cap 7,200 s (2 h): the window holds the
+# single-threaded REPL — and every review worker's query behind
+# it — so a genuinely wedged solve must not park the run for the
+# import/build caps' longer walls; a graph that honestly needs more
+# needs an explicit joern_query_timeout_s (floor scaling keeps the
+# operator's number authoritative upward).
+_JOERN_PRESWEEP_S_PER_MIB = 20.0
+_JOERN_PRESWEEP_TIMEOUT_CAP_S = 7200
+
+
+def derive_joern_presweep_timeout_s(
+    query_timeout_s: int,
+    cpg_bytes: int | None,
+    *,
+    include_import: bool = False,
+) -> int:
+    """Bulk pre-sweep window budget derived from the CPG size.
+
+    Floor: ``query_timeout_s`` (the configured per-query budget —
+    small CPGs keep it unchanged, and an operator-raised number stays
+    authoritative upward). Unknown/non-positive size keeps the floor.
+    Non-positive ``query_timeout_s`` passes through unchanged (0 is
+    some callers' "no budget" sentinel and must not be inflated).
+
+    ``include_import=True`` is the subprocess (non-server) path: its
+    single wall covers the in-JVM ``importCpg`` deserialise AND the
+    solve, so the import slope is added on top (no import floor — the
+    query-timeout floor already covers JVM boot + import on small
+    graphs) and the cap widens by the import cap.
+    """
+    if query_timeout_s <= 0:
+        return query_timeout_s
+    cap = _JOERN_PRESWEEP_TIMEOUT_CAP_S
+    slope = _JOERN_PRESWEEP_S_PER_MIB
+    if include_import:
+        cap += _JOERN_IMPORT_TIMEOUT_CAP_S
+        slope += _JOERN_IMPORT_S_PER_MIB
+    if not cpg_bytes or cpg_bytes <= 0:
+        return query_timeout_s
+    derived = math.ceil((cpg_bytes / (1024.0 * 1024.0)) * slope)
+    return max(query_timeout_s, min(derived, cap))
+
+
 def derived_max_joern_heap_mb() -> int:
     """The largest heap the derivation can produce: the resolved
     ceiling, dead-zone-adjusted.
@@ -393,12 +512,19 @@ def _resolve_cpg_timeout_auto() -> int:
     return JOERN_CPG_TIMEOUT_DERIVED
 
 
+def _resolve_import_timeout_auto() -> int:
+    """``joern_import_timeout_s: "auto"`` → the derived-at-import-time
+    sentinel (see :data:`JOERN_IMPORT_TIMEOUT_DERIVED`)."""
+    return JOERN_IMPORT_TIMEOUT_DERIVED
+
+
 _AUTO_RESOLVERS = {
     "codeql_ram_mb": _detect_ram_mb,
     "codeql_threads": _detect_threads,
     "joern_heap_mb": _detect_joern_heap_mb,
     "joern_heap_ceiling_mb": _detect_joern_heap_ceiling_mb,
     "joern_cpg_timeout_s": _resolve_cpg_timeout_auto,
+    "joern_import_timeout_s": _resolve_import_timeout_auto,
     "max_semgrep_workers": _detect_semgrep_workers,
     "max_codeql_workers": _detect_codeql_workers,
     "max_fuzz_parallel": _detect_fuzz_parallel,
@@ -424,6 +550,7 @@ class Tuning:
     joern_heap_mb: int
     joern_heap_ceiling_mb: int
     joern_cpg_timeout_s: int
+    joern_import_timeout_s: int
     joern_query_timeout_s: int
     max_semgrep_workers: int
     max_codeql_workers: int
@@ -684,10 +811,14 @@ def get_tuning() -> Tuning:
 
 __all__ = [
     "JOERN_CPG_TIMEOUT_DERIVED",
+    "JOERN_IMPORT_TIMEOUT_DERIVED",
     "Tuning",
     "derive_joern_cpg_timeout_s",
+    "derive_joern_import_timeout_s",
+    "derive_joern_presweep_timeout_s",
     "derived_max_joern_cpg_timeout_s",
     "derived_max_joern_heap_mb",
+    "derived_max_joern_import_timeout_s",
     "get_tuning",
     "load_tuning",
 ]

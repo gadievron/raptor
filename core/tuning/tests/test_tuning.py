@@ -408,6 +408,7 @@ class TestTuningFrozen(unittest.TestCase):
             joern_heap_mb=2048,
             joern_heap_ceiling_mb=65536,
             joern_cpg_timeout_s=300,
+            joern_import_timeout_s=900,
             joern_query_timeout_s=300,
             max_semgrep_workers=4, max_codeql_workers=2,
             max_fuzz_parallel=1,
@@ -593,3 +594,113 @@ class TestDerivedCpgTimeout:
         monkeypatch.setattr(t, "_cached", None)
         monkeypatch.setattr(t, "_cached_stat", None)
         assert t.derived_max_joern_heap_mb() == 64 * 1024
+
+
+_MIB = 1024 * 1024
+
+
+class TestDerivedImportTimeout:
+    """CPG-size-derived import timeout curve and the auto sentinel."""
+
+    def test_auto_resolves_to_derived_sentinel(self, tmp_path):
+        from core.tuning import JOERN_IMPORT_TIMEOUT_DERIVED, load_tuning
+        path = tmp_path / "tuning.json"
+        path.write_text(json.dumps({"joern_import_timeout_s": "auto"}))
+        t = load_tuning(path)
+        assert t.joern_import_timeout_s == JOERN_IMPORT_TIMEOUT_DERIVED
+
+    def test_default_is_auto_sentinel(self, tmp_path):
+        from core.tuning import JOERN_IMPORT_TIMEOUT_DERIVED, load_tuning
+        path = tmp_path / "tuning.json"
+        path.write_text("{}")
+        assert (load_tuning(path).joern_import_timeout_s
+                == JOERN_IMPORT_TIMEOUT_DERIVED)
+
+    def test_static_value_unchanged(self, tmp_path):
+        from core.tuning import load_tuning
+        path = tmp_path / "tuning.json"
+        path.write_text(json.dumps({"joern_import_timeout_s": 3600}))
+        assert load_tuning(path).joern_import_timeout_s == 3600
+
+    def test_curve_floor_keeps_historical_default(self):
+        # Direction 1: small CPGs keep today's 900 s kill latency —
+        # the derivation must never TIGHTEN the historical budget.
+        from core.tuning import derive_joern_import_timeout_s
+        assert derive_joern_import_timeout_s(10 * _MIB) == 900
+        assert derive_joern_import_timeout_s(1) == 900
+
+    def test_kernel_scale_cpg_clears_the_failed_budget(self):
+        # Calibration datum: a ~190 MiB kernel-scale CPG failed to
+        # import within 1800 s. The derived wall must clear that
+        # observed-insufficient budget with real headroom.
+        from core.tuning import derive_joern_import_timeout_s
+        derived = derive_joern_import_timeout_s(190 * _MIB)
+        assert derived >= 2 * 1800
+        assert derived <= 10800
+
+    def test_curve_cap_bounds_hostile_sizes(self):
+        # Direction 2: a hostile / degenerate multi-TB cpg.bin must
+        # not buy unbounded wall — the cap is absolute.
+        from core.tuning import derive_joern_import_timeout_s
+        assert derive_joern_import_timeout_s(4 * 1024**4) == 10800
+
+    def test_unknown_size_falls_back_to_floor(self):
+        from core.tuning import derive_joern_import_timeout_s
+        assert derive_joern_import_timeout_s(None) == 900
+        assert derive_joern_import_timeout_s(0) == 900
+        assert derive_joern_import_timeout_s(-1) == 900
+
+    def test_derived_max_helper(self):
+        from core.tuning import derived_max_joern_import_timeout_s
+        assert derived_max_joern_import_timeout_s() == 10800
+
+
+class TestDerivedPresweepTimeout:
+    """CPG-size-derived bulk pre-sweep window budget."""
+
+    def test_floor_is_configured_query_timeout(self):
+        # Direction 1: small CPGs keep the configured per-query
+        # budget unchanged (no inflation of the historical default).
+        from core.tuning import derive_joern_presweep_timeout_s
+        assert derive_joern_presweep_timeout_s(300, 5 * _MIB) == 300
+        assert derive_joern_presweep_timeout_s(300, None) == 300
+        assert derive_joern_presweep_timeout_s(300, 0) == 300
+
+    def test_operator_raised_floor_stays_authoritative(self):
+        from core.tuning import derive_joern_presweep_timeout_s
+        # An operator-raised query timeout above the derived value
+        # passes through unchanged (floor scaling, upward authority).
+        assert derive_joern_presweep_timeout_s(9000, 190 * _MIB) == 9000
+
+    def test_kernel_scale_cpg_clears_the_killing_budget(self):
+        # Calibration datum: a ~190 MiB kernel-scale CPG's bulk sweep
+        # was killed at a flat 300 s and recorded zero flows. The
+        # derived window must clear that budget with real headroom.
+        from core.tuning import derive_joern_presweep_timeout_s
+        derived = derive_joern_presweep_timeout_s(300, 190 * _MIB)
+        assert derived >= 10 * 300
+        assert derived <= 7200
+
+    def test_cap_bounds_hostile_sizes(self):
+        # Direction 2: the REPL is single-threaded — one wedged
+        # window must not park the run beyond the cap, no matter how
+        # large (or hostile) the CPG size signal is.
+        from core.tuning import derive_joern_presweep_timeout_s
+        assert derive_joern_presweep_timeout_s(300, 4 * 1024**4) == 7200
+
+    def test_include_import_widens_budget_and_cap(self):
+        from core.tuning import derive_joern_presweep_timeout_s
+        # The subprocess path's single wall covers importCpg + solve:
+        # the import slope is added, and the cap widens accordingly.
+        server_side = derive_joern_presweep_timeout_s(300, 190 * _MIB)
+        local = derive_joern_presweep_timeout_s(
+            300, 190 * _MIB, include_import=True)
+        assert local > server_side
+        assert derive_joern_presweep_timeout_s(
+            300, 4 * 1024**4, include_import=True) == 7200 + 10800
+
+    def test_non_positive_query_timeout_passes_through(self):
+        # 0 is some callers' "no budget" sentinel — never inflate it.
+        from core.tuning import derive_joern_presweep_timeout_s
+        assert derive_joern_presweep_timeout_s(0, 10**9) == 0
+        assert derive_joern_presweep_timeout_s(-5, 10**9) == -5

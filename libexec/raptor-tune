@@ -168,6 +168,7 @@ def _show() -> None:
         ("joern_heap_mb", t.joern_heap_mb, "MB"),
         ("joern_heap_ceiling_mb", t.joern_heap_ceiling_mb, "MB"),
         ("joern_cpg_timeout_s", t.joern_cpg_timeout_s, "s"),
+        ("joern_import_timeout_s", t.joern_import_timeout_s, "s"),
         ("joern_query_timeout_s", t.joern_query_timeout_s, "s"),
         ("max_semgrep_workers", t.max_semgrep_workers, ""),
         ("max_codeql_workers", t.max_codeql_workers, ""),
@@ -185,6 +186,10 @@ def _show() -> None:
                 # The auto sentinel: the number is derived from the
                 # in-scope source size at CPG-build time, not here.
                 shown, unit = "derived at build time", ""
+            if name == "joern_import_timeout_s" and value == 0:
+                # The auto sentinel: derived from the serialized CPG
+                # size at import time, not here.
+                shown, unit = "derived at import time", ""
             display = f"auto ({shown}{' ' + unit if unit else ''})"
         else:
             display = f"{value}{' ' + unit if unit else ''}"
