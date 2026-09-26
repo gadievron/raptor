@@ -202,6 +202,227 @@ class TestRegisterBindingDiscipline:
         assert t.register == "r8"
 
 
+class TestParamTokenBinding:
+    """Decompiler positional vocabulary (param_N / argN) binds.
+
+    Binary-item hypotheses quote Ghidra/r2 pseudo-C identifiers, not
+    register spellings — the taxonomy must speak that vocabulary or
+    the channel never engages on its own target class. A positional
+    binding is a decl-order HEURISTIC, though: it engages the channel
+    but is marked ``positional_register`` (corroborate-only), and a
+    token that is not the claim's SUBJECT never binds at all.
+    """
+
+    def test_present_param_token_never_binds_no_arg_claim(self):
+        # "only param_1 is passed" names the argument that IS there;
+        # binding it would point the dropped-argument predicate at
+        # the present argument's register (essentially always
+        # written) and mint a near-unconditional false refutation of
+        # a TRUE claim. The register-unbound sibling lane stays open.
+        t = classify_trigger(
+            "the decompilation shows no length argument at the call "
+            "to FUN_00101200 — only param_1 is passed",
+        )
+        assert t is not None
+        assert t.kind == TRIGGER_SIBLING_ARGUMENT
+        assert t.register is None
+        assert "FUN_00101200" in t.callees
+
+    def test_param_token_liveness_claim_binds_corroborate_only(self):
+        t = classify_trigger(
+            "param_3 is never set before the call to FUN_00101200",
+        )
+        assert t is not None
+        assert t.kind == TRIGGER_REGISTER_LIVENESS
+        assert t.register == "rdx"
+        # Decl-order heuristic (FP args shift the integer slots) —
+        # engages the channel, never refute grade.
+        assert t.positional_register is True
+
+    def test_bare_and_uppercase_spellings_bind(self):
+        t = classify_trigger(
+            "arg2 is never initialized before the indirect call",
+        )
+        assert t is not None
+        assert t.register == "rsi"
+        assert t.positional_register is True
+        t = classify_trigger(
+            "Param_4 is not initialized before the call to parse_hdr",
+        )
+        assert t is not None
+        assert t.register == "rcx"
+        assert t.positional_register is True
+
+    def test_argN_is_positional_not_ordinal_vocabulary(self):
+        # "arg2" also matches the numeric arm of the ordinal regex
+        # ("arg 2"); the decompiler-token span must win so pseudo-C
+        # vocabulary never acquires ordinal (refute-grade) standing.
+        t = classify_trigger(
+            "arg2 is never initialized before the indirect call",
+        )
+        assert t is not None
+        assert t.positional_register is True
+        # The spaced prose spelling stays ordinal vocabulary.
+        t = classify_trigger("arg 5 is never passed to check_size")
+        assert t is not None
+        assert t.register == "r8"
+        assert t.positional_register is False
+
+    def test_last_register_position_binds_and_stack_positions_poison(
+        self,
+    ):
+        # Both directions of the SysV position cap: param_6 is the
+        # last register argument (r9); param_7 names a STACK argument
+        # — no register exists, so the binding refuses rather than
+        # guessing.
+        t = classify_trigger(
+            "param_6 is never set before the call to check_size",
+        )
+        assert t is not None
+        assert t.register == "r9"
+        assert t.positional_register is True
+        assert classify_trigger(
+            "param_7 is never set before the call to check_size",
+        ) is None
+
+    def test_stack_position_poisons_cooccurring_subject_token(self):
+        # Both tokens are liveness SUBJECTS; param_7 names a stack
+        # argument, so silently ignoring it would misattribute the
+        # claim to param_1's register. The poison refuses the whole
+        # binding.
+        assert classify_trigger(
+            "param_7 and param_1 are never set before the call to "
+            "check_size",
+        ) is None
+
+    def test_present_role_tokens_leave_sibling_lane_open(self):
+        # Tokens asserted PRESENT ("are the only arguments") are not
+        # the claim's subject — excluded before any position check,
+        # so even the stack-position spelling cannot poison the
+        # register-unbound sibling lane.
+        t = classify_trigger(
+            "no count argument is passed to FUN_00512340 — param_7 "
+            "and param_1 are the only arguments in the decompilation",
+        )
+        assert t is not None
+        assert t.kind == TRIGGER_SIBLING_ARGUMENT
+        assert t.register is None
+
+    def test_r2_stack_offset_spelling_never_binds(self):
+        # radare2 names stack slots arg_8h (hex OFFSET, not position).
+        assert classify_trigger(
+            "arg_8h is never set before the call to check_size",
+        ) is None
+
+    def test_present_param_token_yields_to_explicit_register(self):
+        # param_1 is quoted as the argument the pseudo-C DOES pass;
+        # the claim's subject is rdx. The explicit spelling binds at
+        # its established (refute-grade) standing.
+        t = classify_trigger(
+            "the pseudo-C passes param_1 but rdx is never set before "
+            "the call to memcpy",
+        )
+        assert t is not None
+        assert t.kind == TRIGGER_REGISTER_LIVENESS
+        assert t.register == "rdx"
+        assert t.positional_register is False
+
+    def test_subject_param_token_explicit_register_conflict_refuses(
+        self,
+    ):
+        # param_1 is the liveness subject (rdi) but rdx is also
+        # named: two distinct families → refuse rather than guess.
+        assert classify_trigger(
+            "param_1 is never set before the call to memcpy — rdx "
+            "holds the copy",
+        ) is None
+
+    def test_two_distinct_param_positions_refuse(self):
+        assert classify_trigger(
+            "param_1 and param_3 are never set before the call to "
+            "check_size",
+        ) is None
+
+    def test_param_token_agreeing_with_ordinal_keeps_ordinal_grade(
+        self,
+    ):
+        t = classify_trigger(
+            "the third argument (param_3) is never passed to "
+            "check_size",
+        )
+        assert t is not None
+        assert t.register == "rdx"
+        # The reviewer's own ordinal word carries the binding; the
+        # agreeing decompiler token does not downgrade it.
+        assert t.positional_register is False
+
+
+class TestParamTokenRoleDiscipline:
+    """Role-mismatched decompiler tokens never become the subject.
+
+    Modeled on the observed misattribution shapes: a token asserted
+    PRESENT, a token quoted inside pseudo-C call text, and a token
+    that is a memory-dereference subject each steer the binding at a
+    register the claim's truth-condition never constrained.
+    """
+
+    def test_quoted_pseudo_c_call_argument_never_binds(self):
+        t = classify_trigger(
+            "FUN_00101200(param_1) is called with no size argument — "
+            "the 16-byte header length is never supplied",
+        )
+        assert t is not None
+        assert t.kind == TRIGGER_SIBLING_ARGUMENT
+        assert t.register is None
+        assert "FUN_00101200" in t.callees
+
+    def test_memory_field_subject_never_binds_register_liveness(self):
+        # "the length field of param_2" is a claim about pointed-to
+        # memory; no register-liveness predicate exists for it, and
+        # no other trigger class fires.
+        assert classify_trigger(
+            "the length field of param_2 is not initialized before "
+            "the call to parse_hdr",
+        ) is None
+
+    def test_deref_operator_subjects_never_bind(self):
+        assert classify_trigger(
+            "*param_2 is never initialized before the call to "
+            "parse_hdr",
+        ) is None
+        assert classify_trigger(
+            "param_2->len is never set before the call to parse_hdr",
+        ) is None
+
+
+class TestOrdinalParenthetical:
+    def test_bounded_parenthetical_between_ordinal_and_noun_binds(
+        self,
+    ):
+        t = classify_trigger(
+            "the third (length) argument is never passed to "
+            "check_size",
+        )
+        assert t is not None
+        assert t.kind == TRIGGER_DROPPED_ARGUMENT
+        assert t.register == "rdx"
+
+    def test_overlong_parenthetical_does_not_bind(self):
+        # Both directions of the 24-char parenthetical bound: past it
+        # the ordinal stays unbound and the claim stays outside the
+        # taxonomy.
+        assert classify_trigger(
+            "the third (a very long parenthetical annotation body) "
+            "argument is never passed to check_size",
+        ) is None
+
+    def test_nested_parenthetical_does_not_bind(self):
+        assert classify_trigger(
+            "the third ((len)) argument is never passed to "
+            "check_size",
+        ) is None
+
+
 class TestCalleeExtraction:
     def test_validated_by_shape(self):
         t = classify_trigger(
@@ -1769,6 +1990,110 @@ class TestGuessedBiasCap:
         )
         assert res.outcome == "refuted"
         assert res.window["bias_source"] == dx.BIAS_SOURCE_SEGMENTS
+
+
+_OBJDUMP_PRESENT_ONLY = """\
+/tmp/x/fixture:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+000000000040100f <target_fn>:
+  40100f:\t89 df                \tmov    edi,ebx
+  401011:\te8 ea 01 00 00       \tcall   401200 <FUN_00101200>
+  401016:\tc3                   \tret
+"""
+
+_OBJDUMP_RDX_WRITTEN = """\
+/tmp/x/fixture:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+000000000040100f <target_fn>:
+  40100f:\t48 89 c7             \tmov    rdi,rax
+  401012:\t48 89 ca             \tmov    rdx,rcx
+  401015:\te8 e6 01 00 00       \tcall   401200 <FUN_00101200>
+  40101a:\tc3                   \tret
+"""
+
+
+class TestPositionalBindingEndToEnd:
+    """True claims carried in decompiler vocabulary are never
+    refuted: a param_N position→register mapping is a decl-order
+    guess, so it engages the channel (corroborate / inconclusive)
+    but can never back a demotion."""
+
+    def test_present_arg_claim_takes_sibling_lane_not_refutation(
+        self, fake_binary, monkeypatch, tmp_path,
+    ):
+        # TRUE claim: the length argument really is absent (only edi
+        # is set up). Binding param_1 (the PRESENT argument) would
+        # check rdi — written — and refute a true claim; the claim
+        # must route to the register-unbound sibling lane instead.
+        _patch_objdump(monkeypatch, _OBJDUMP_PRESENT_ONLY)
+        res = run_disasm_xcheck(
+            fake_binary, "binary:fixture", "target_fn",
+            "the decompilation shows no length argument at the call "
+            "to FUN_00101200 — only param_1 is passed",
+            checklist=_checklist("target_fn", 0x40100F, 0x8),
+            out_dir=tmp_path,
+        )
+        assert res.outcome != "refuted"
+        assert res.rule_id == dx.RULE_SIBLING_ARGUMENT
+        assert res.outcome == "inconclusive"
+        assert res.reason == dx.REASON_SIBLING_SUBSTRATE
+
+    def test_positional_liveness_refute_is_capped(
+        self, fake_binary, monkeypatch, tmp_path,
+    ):
+        # For f(char *, double, size_t) Ghidra's param_3 is the
+        # size_t in RSI (2nd integer slot); the positional mapping
+        # binds RDX — written here for unrelated reasons while RSI
+        # really is never set. The claim is TRUE for its denoted
+        # register, so the refutation must cap to inconclusive.
+        _patch_objdump(monkeypatch, _OBJDUMP_RDX_WRITTEN)
+        res = run_disasm_xcheck(
+            fake_binary, "binary:fixture", "target_fn",
+            "param_3 is never set before the call to FUN_00101200",
+            checklist=_checklist("target_fn", 0x40100F, 0xC),
+            out_dir=tmp_path,
+        )
+        assert res.outcome == "inconclusive"
+        assert res.reason == dx.REASON_POSITIONAL_BINDING
+        assert res.window["refute_capped"] == "positional-binding"
+        assert res.window["capped_reason"]
+
+    def test_positional_corroborate_passes_through(
+        self, fake_binary, monkeypatch, tmp_path,
+    ):
+        # The same positional binding may still ENGAGE and
+        # corroborate: rdx genuinely never written → the liveness
+        # claim stands, uncapped.
+        _patch_objdump(monkeypatch, _OBJDUMP_PRESENT_ONLY)
+        res = run_disasm_xcheck(
+            fake_binary, "binary:fixture", "target_fn",
+            "param_3 is never set before the call to FUN_00101200",
+            checklist=_checklist("target_fn", 0x40100F, 0x8),
+            out_dir=tmp_path,
+        )
+        assert res.outcome == "corroborated"
+        assert "refute_capped" not in res.window
+
+    def test_explicit_register_refute_is_not_capped(
+        self, fake_binary, monkeypatch, tmp_path,
+    ):
+        # Control: the register-spelling vocabulary keeps its
+        # established refute grade.
+        _patch_objdump(monkeypatch, _OBJDUMP_RDX_WRITTEN)
+        res = run_disasm_xcheck(
+            fake_binary, "binary:fixture", "target_fn",
+            "rdx is never set before the call to FUN_00101200",
+            checklist=_checklist("target_fn", 0x40100F, 0xC),
+            out_dir=tmp_path,
+        )
+        assert res.outcome == "refuted"
+        assert "refute_capped" not in res.window
 
 
 # ---------------------------------------------------------------------------

@@ -140,6 +140,7 @@ REASON_WRITE_NOT_REFUTE_GRADE = "write-present-not-refute-grade"
 REASON_SIBLING_SUBSTRATE = "sibling-substrate-unavailable"
 REASON_SIBLING_SAMPLE_TRUNCATED = "sibling-sample-truncated"
 REASON_GUESSED_BIAS = "bias-convention-unverified"
+REASON_POSITIONAL_BINDING = "positional-binding-not-refute-grade"
 
 # ── bounds ──────────────────────────────────────────────────────────
 # Every limit is two-directional by design; see the regression tests.
@@ -309,10 +310,77 @@ _LIVENESS_RE = re.compile(
     re.IGNORECASE,
 )
 _ORDINAL_RE = re.compile(
+    # A short parenthetical between ordinal and noun ("the third
+    # (length) argument") is reviewer prose, not structure — tolerated
+    # up to a bounded span; nested or newline-carrying parentheticals
+    # stay outside the match.
     r"\b(first|second|third|fourth|fifth|sixth)\s{1,4}"
+    r"(?:\([^()\n]{1,24}\)\s{1,4})?"
     r"(?:argument|parameter|arg)\b"
     r"|\b(?:argument|parameter|arg)\s{0,2}#?\s{0,2}([1-6])\b",
     re.IGNORECASE,
+)
+#: Decompiler positional parameter tokens (``param_3``, ``arg2``) —
+#: Ghidra/r2 pseudo-C names arguments this way, and binary-item
+#: hypotheses quote that vocabulary instead of register spellings.
+#: The position→register mapping below (position N → the Nth SysV
+#: INTEGER argument register) is a HEURISTIC, not a fact: Ghidra
+#: numbers ``param_N`` in declaration order with FP arguments
+#: included, so for ``f(char*, double, size_t)`` the token
+#: ``param_3`` denotes the SECOND integer slot (rsi), not rdx — and
+#: the checklist metadata carries no signature to verify against.
+#: A positional binding therefore ENGAGES the channel (corroborate /
+#: inconclusive) but is never refute grade — see the positional cap
+#: in :func:`run_disasm_xcheck` — and role-mismatched tokens (quoted
+#: as PRESENT arguments, or memory-dereference subjects) never bind
+#: at all (:func:`_bind_register`). The trailing ``\b`` excludes r2
+#: stack-offset spellings (``arg_8h`` — hex suffix, not a position).
+_PARAM_TOKEN_RE = re.compile(
+    r"\b(?:param|arg)_?([1-9][0-9]?)\b",
+    re.IGNORECASE,
+)
+#: Positional token asserted PRESENT — "only param_1 is passed",
+#: "param_7 and param_1 are the only arguments". A present-role
+#: token is the argument the claim says IS there; binding it as the
+#: dropped/liveness SUBJECT would point the predicates at a register
+#: that is essentially always written and mint a near-unconditional
+#: false refutation of a TRUE claim. Bounded conjunction skip: up to
+#: three ", param_N" / "and param_N" continuations before the verb.
+_PARAM_PRESENT_POST_RE = re.compile(
+    r"\A(?:\s{0,4}(?:,|and)\s{0,4}(?:param|arg)_?[0-9]{1,2}){0,3}"
+    r"\s{0,4}(?:is|are|was|were|gets?)\s{1,4}"
+    r"(?:passed|supplied|provided|present|forwarded"
+    r"|(?:the\s{1,4})?only\s{1,4}(?:argument|parameter|arg)s?"
+    r"|(?:the\s{1,4})?(?:argument|parameter|arg)s?\b)",
+    re.IGNORECASE,
+)
+#: Present-role, pre-context form: "called with param_1",
+#: "passes param_1", "only param_1 ...".
+_PARAM_PRESENT_PRE_RE = re.compile(
+    r"\b(?:only|with|pass(?:es|ing|ed)?|receives?|takes?|given"
+    r"|supplie[sd])\s{1,4}\Z",
+    re.IGNORECASE,
+)
+#: Quoted pseudo-C call text — ``FUN_00101200(param_1)``: an open
+#: paren glued to an identifier with no close paren yet means the
+#: token is an argument INSIDE that call expression, i.e. asserted
+#: present, never the claim's subject.
+_PARAM_CALL_ARG_PRE_RE = re.compile(
+    r"[A-Za-z0-9_]\([^()\n]{0,80}\Z",
+)
+#: Memory-dereference subject — "the length field of param_2",
+#: ``*param_2``, ``param_2->len``, ``param_2.len``, ``param_2[``:
+#: the claim is about the pointed-to MEMORY, not about the argument
+#: register's liveness, so a register binding would adjudicate a
+#: predicate the claim never stated.
+_PARAM_DEREF_PRE_RE = re.compile(
+    r"(?:\*|&|->)\s{0,2}\Z"
+    r"|\b(?:fields?|members?|bytes?|contents?|value|length|size)"
+    r"\s{1,4}(?:of|in|at|inside|within)\s{1,4}(?:the\s{1,4})?\Z",
+    re.IGNORECASE,
+)
+_PARAM_DEREF_POST_RE = re.compile(
+    r"\A(?:->|\.(?=[A-Za-z_])|\[)",
 )
 _WIDTH_RE = re.compile(
     r"\bonly\s{1,4}(?:the\s{1,4})?(?:first\s{1,4}|low(?:er)?\s{1,4})?"
@@ -361,10 +429,19 @@ class DisasmTrigger:
     register: str | None = None  # canonical 64-bit family name
     callees: tuple[str, ...] = ()
     claimed_width: int | None = None  # bytes
+    #: True when ``register`` derives SOLELY from decompiler
+    #: positional tokens (``param_N``/``argN``) — a decl-order
+    #: heuristic, never refute grade (see the positional cap in
+    #: :func:`run_disasm_xcheck`).
+    positional_register: bool = False
 
 
-def _bind_register(text: str) -> str | None:
+def _bind_register(text: str) -> tuple[str | None, bool]:
     """Disciplined register binding — refuse rather than guess.
+
+    Returns ``(register, positional)``: the bound canonical family
+    (or None), and whether the binding derives SOLELY from decompiler
+    positional tokens (``param_N``/``argN`` — never refute grade).
 
     The claim text quotes attacker-influenced material (decompilation
     identifiers, string literals the model echoes), so first-match
@@ -374,30 +451,75 @@ def _bind_register(text: str) -> str | None:
     reviewer's own register mention. Rules:
 
     * multiple DISTINCT explicit families mentioned → refuse (None);
-    * multiple distinct ordinal positions → refuse;
-    * explicit family and ordinal-mapped family disagree → refuse;
-    * rsp/rbp spellings never bind (excluded from the vocabulary).
+    * multiple distinct ordinal/positional positions → refuse;
+    * explicit family and position-mapped family disagree → refuse;
+    * rsp/rbp spellings never bind (excluded from the vocabulary);
+    * decompiler param tokens (``param_3``/``arg2``) bind their SysV
+      integer-slot position ONLY when the token is the claim's
+      subject: a token asserted PRESENT ("only param_1 is passed",
+      "called with param_1", quoted inside pseudo-C call text) is
+      the argument the claim says IS there and never becomes the
+      dropped/liveness subject; a memory-dereference token ("the
+      length field of param_2", ``*param_2``, ``param_2->x``) is a
+      claim about pointed-to memory and never binds register
+      liveness at all;
+    * a decompiler token is never read as ordinal-word vocabulary
+      (``arg2`` overlaps the "arg 2" spelling of :data:`_ORDINAL_RE`
+      but stays positional — corroborate-only);
+    * any STACK-position subject token (``param_7``+ — no argument
+      register exists) poisons the whole binding: silently ignoring
+      it would misattribute a stack-argument claim to whichever
+      register-position token co-occurs in the same sentence.
     """
     explicit = {
         _HYP_REG_CANON[m.group(1).lower()]
         for m in _HYP_REG_RE.finditer(text)
     }
+    param_spans = [m.span() for m in _PARAM_TOKEN_RE.finditer(text)]
     ordinals = set()
     for m in _ORDINAL_RE.finditer(text):
+        if any(m.start() < e and s < m.end() for s, e in param_spans):
+            # The numeric arm of _ORDINAL_RE also matches decompiler
+            # spellings ("arg2"); those are positional vocabulary,
+            # adjudicated below — never refute-grade ordinal words.
+            continue
         if m.group(1):
             pos = _ORDINAL_WORDS[m.group(1).lower()]
         else:
             pos = int(m.group(2))
         ordinals.add(SYSV_ARG_REGISTERS[pos - 1])
-    if len(explicit) > 1 or len(ordinals) > 1:
-        return None
-    if explicit and ordinals and explicit != ordinals:
-        return None
+    positional = set()
+    for m in _PARAM_TOKEN_RE.finditer(text):
+        pre, post = text[: m.start()], text[m.end():]
+        if (
+            _PARAM_DEREF_PRE_RE.search(pre)
+            or _PARAM_DEREF_POST_RE.match(post)
+        ):
+            continue  # memory subject — not a register-liveness claim
+        if (
+            _PARAM_PRESENT_POST_RE.match(post)
+            or _PARAM_PRESENT_PRE_RE.search(pre)
+            or _PARAM_CALL_ARG_PRE_RE.search(pre)
+        ):
+            continue  # asserted PRESENT — never the claim's subject
+        pos = int(m.group(1))
+        if pos > len(SYSV_ARG_REGISTERS):
+            return None, False
+        positional.add(SYSV_ARG_REGISTERS[pos - 1])
+    if len(explicit) > 1 or len(ordinals | positional) > 1:
+        return None, False
+    if explicit and (ordinals or positional) \
+            and explicit != (ordinals | positional):
+        return None, False
     if explicit:
-        return next(iter(explicit))
+        return next(iter(explicit)), False
     if ordinals:
-        return next(iter(ordinals))
-    return None
+        # An agreeing positional token merely corroborates the
+        # ordinal word; the ordinal keeps its established grade.
+        return next(iter(ordinals)), False
+    if positional:
+        return next(iter(positional)), True
+    return None, False
 
 
 def _bind_callees(text: str, self_name: str = "") -> tuple[str, ...]:
@@ -431,7 +553,7 @@ def classify_trigger(
     text = str(hypothesis or "")[:MAX_HYPOTHESIS_CHARS]
     if not text:
         return None
-    register = _bind_register(text)
+    register, positional = _bind_register(text)
     callees = _bind_callees(text, self_name=function_name)
 
     # Class 1: dropped/missing argument with a bound register — the
@@ -447,6 +569,7 @@ def classify_trigger(
             kind=TRIGGER_DROPPED_ARGUMENT,
             register=register,
             callees=callees,
+            positional_register=positional,
         )
 
     # Class 2: register-unbound count/length/size-argument claim with
@@ -465,6 +588,7 @@ def classify_trigger(
             kind=TRIGGER_REGISTER_LIVENESS,
             register=register,
             callees=callees,
+            positional_register=positional,
         )
 
     # Class 4: immediate/operand width ("only 4 bytes are validated").
@@ -480,6 +604,7 @@ def classify_trigger(
                 register=register,
                 callees=callees,
                 claimed_width=width,
+                positional_register=positional,
             )
     return None
 
@@ -1943,6 +2068,21 @@ def run_disasm_xcheck(
     else:
         result = _check_immediate_width(trigger, window, base)
 
+    if result.outcome == "refuted" and trigger.positional_register:
+        # A register bound solely from decompiler positional tokens
+        # (``param_N``/``argN``) rests on a GUESSED position→register
+        # mapping: Ghidra numbers parameters in declaration order
+        # (floating-point arguments included), so param_3 need not
+        # live in the third SysV INTEGER register. Same doctrine as
+        # the guessed-bias cap below — a guessed premise may
+        # corroborate and enrich, never back a demotion.
+        result.outcome = "inconclusive"
+        result.window = {
+            **result.window,
+            "refute_capped": "positional-binding",
+            "capped_reason": result.reason,
+        }
+        result.reason = REASON_POSITIONAL_BINDING
     if (
         result.outcome == "refuted"
         and bias_source == BIAS_SOURCE_NAME
