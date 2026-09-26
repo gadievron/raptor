@@ -244,7 +244,6 @@ _BUILD_CHECKLIST = _RAPTOR_DIR / "libexec" / "raptor-build-checklist"
 MAX_VALIDATE_FINDINGS = 50
 
 _LIFECYCLE_TIMEOUT_S = 30   # lifecycle helpers are mechanical; should be instant
-_CHECKLIST_TIMEOUT_S = 300  # build_checklist parses every source file
 
 
 # Reason prefix stamped on SkillDispatchResult.skipped_reason when the
@@ -593,14 +592,33 @@ def fail_lifecycle(output_dir: Path | None, message: str) -> None:
 def build_checklist(target: Path, output_dir: Path) -> bool:
     """Run libexec/raptor-build-checklist. Returns True on success.
 
+    The child runs under the shared work-scaled bound
+    (``core.audit.checklist_timeout`` — the same sizing rule and
+    RAPTOR_CHECKLIST_BUILD_TIMEOUT_S override as the raptor-audit
+    call sites; a flat 300s here live-failed on large binary
+    targets on the audit surface). This surface degrades instead of
+    refusing on an invalid override — a pre-pass builder failure is
+    already a warn-and-continue path, so a malformed env value logs
+    a warning and the computed scaled bound applies.
+
     See `start_lifecycle` for the env=safe_env rationale.
     """
+    from core.audit.checklist_timeout import (
+        checklist_build_timeout_s,
+        scaled_checklist_build_timeout_s,
+    )
     from core.config import RaptorConfig
     safe_env = RaptorConfig.get_safe_env()
     try:
+        timeout_s = checklist_build_timeout_s(target, output_dir)
+    except ValueError as e:
+        logger.warning(
+            "build_checklist: %s — using the work-scaled bound", e)
+        timeout_s = scaled_checklist_build_timeout_s(target, output_dir)
+    try:
         proc = subprocess.run(
             [str(_BUILD_CHECKLIST), str(target), str(output_dir)],
-            capture_output=True, text=True, timeout=_CHECKLIST_TIMEOUT_S,
+            capture_output=True, text=True, timeout=timeout_s,
             env=safe_env, check=False,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
