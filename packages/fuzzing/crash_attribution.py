@@ -27,7 +27,9 @@ producing finding with no schema change.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -188,11 +190,33 @@ def _root_orig_seeds(
 
 
 def load_seed_provenance(manifest_path: Path) -> dict[str, dict]:
-    """Seed filename -> provenance entry from ``smt-seeds-manifest.json``."""
+    """Seed filename -> provenance entry from ``smt-seeds-manifest.json``.
+
+    The manifest name is predictable and sits in the reused run dir
+    the previous campaign's sandboxed target could write, and this
+    reader runs in the unsandboxed parent — so a planted SYMLINK at
+    the name is refused without being followed (``load_json_bounded``
+    refuses FIFOs/devices on the opened fd but follows symlinks by
+    name; following one here would read an operator-readable file and
+    republish excerpts of it as crash provenance). The lstat probe is
+    honest for the pre-planted threat this flow contains; any
+    non-regular occupant degrades to "no provenance", never a crash.
+    """
+    manifest_path = Path(manifest_path)
+    try:
+        if not stat.S_ISREG(os.lstat(manifest_path).st_mode):
+            logger.warning(
+                "SMT seed manifest is not a regular file (planted "
+                "symlink/FIFO in the reused run dir?) — ignored: %s",
+                manifest_path)
+            return {}
+    except OSError as exc:
+        logger.warning("SMT seed manifest unreadable (%s): %s", manifest_path, exc)
+        return {}
     try:
         # RAPTOR-written run artifact; ValueError covers malformed
         # JSON and the byte-budget refusal.
-        data = load_json_bounded(Path(manifest_path), max_bytes=64 * 1024 * 1024)
+        data = load_json_bounded(manifest_path, max_bytes=64 * 1024 * 1024)
     except (OSError, ValueError) as exc:
         logger.warning("SMT seed manifest unreadable (%s): %s", manifest_path, exc)
         return {}
@@ -205,7 +229,17 @@ def load_seed_provenance(manifest_path: Path) -> dict[str, dict]:
             type(data).__name__, manifest_path,
         )
         return out
-    seeds = data.get("seeds")
+    return _provenance_from_entries(data.get("seeds"))
+
+
+def _provenance_from_entries(seeds: object) -> dict[str, dict]:
+    """Seed filename -> provenance entry from a manifest ``seeds`` list.
+
+    Tolerates any shape (non-list entries, non-dict entries, missing
+    ``seed`` keys) by skipping — a malformed entry degrades to "no
+    provenance for that seed", never a crash.
+    """
+    out: dict[str, dict] = {}
     for entry in seeds if isinstance(seeds, list) else []:
         if isinstance(entry, dict) and entry.get("seed"):
             out[str(entry["seed"])] = entry
@@ -220,9 +254,40 @@ def attribute_crashes(
 
     A crash is attributed only when every root of its recorded mutation
     chain is the same seed AND that seed is in the SMT manifest.
+
+    ``manifest_path`` is read back from disk through the hardened
+    :func:`load_seed_provenance` (non-regular occupants refused). Note
+    the CONTENT of a regular file in a reused, target-writable run dir
+    is still whatever its last writer chose — a caller that synthesised
+    the seeds itself must prefer :func:`attribute_crashes_from_seeds`
+    with the in-memory manifest, as the /fuzz CLI does.
     """
+    return _attribute(crashes, load_seed_provenance(manifest_path))
+
+
+def attribute_crashes_from_seeds(
+    crashes: list[Crash],
+    seeds: object,
+) -> AttributionSummary:
+    """Attribution from an IN-MEMORY manifest ``seeds`` list.
+
+    For the caller that synthesised the seeds in this same process
+    (``--from-smt-witness``): the provenance comes from the manifest
+    object the synthesis returned, never a read-back of
+    ``smt-seeds-manifest.json`` from the reused run dir — the disk copy
+    sits where the campaign's sandboxed target could swap its content
+    between the pre-campaign write and a post-campaign read, and where
+    a previous campaign could plant one wholesale for a run that never
+    synthesised seeds at all.
+    """
+    return _attribute(crashes, _provenance_from_entries(seeds))
+
+
+def _attribute(
+    crashes: list[Crash],
+    provenance: dict[str, dict],
+) -> AttributionSummary:
     summary = AttributionSummary(total_crashes=len(crashes))
-    provenance = load_seed_provenance(manifest_path)
     if not provenance:
         summary.unattributed = len(crashes)
         return summary
@@ -279,6 +344,22 @@ def attribute_crashes(
     return summary
 
 
-def manifest_path_for_run(run_out_dir: Path) -> Path:
-    """Where ``--from-smt-witness`` wrote the manifest for this run."""
-    return Path(run_out_dir) / SEED_DIR_NAME / MANIFEST_NAME
+def manifest_path_for_run(run_out_dir: Path) -> Path | None:
+    """Where ``--from-smt-witness`` wrote the manifest for this run,
+    or ``None`` when something other than a real directory occupies
+    the seed-dir name.
+
+    The seed synthesis refuses a plant at the smt-seeds name and
+    leaves it in place — so this post-campaign read-back must not
+    traverse it either: a planted symlink-to-directory would route the
+    manifest read through an attacker-chosen directory whose content
+    then labels crash provenance. An ABSENT name is benign (the path
+    is returned; the caller's ``is_file()`` finds nothing)."""
+    seed_dir = Path(run_out_dir) / SEED_DIR_NAME
+    try:
+        st = os.lstat(seed_dir)
+    except OSError:
+        return seed_dir / MANIFEST_NAME
+    if not stat.S_ISDIR(st.st_mode):
+        return None
+    return seed_dir / MANIFEST_NAME
