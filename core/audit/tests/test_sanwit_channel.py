@@ -1215,6 +1215,140 @@ class TestDockerCaptureBounds:
         assert not calls.exists()
 
 
+class TestOrphanContainment:
+    """A SIGKILL'd parent runs NO exit path: the cidfile belt and
+    --rm both die with it, and an orphaned container (observed: a
+    flood probe burning a core for 75+ minutes) survives until
+    something else acts. Two independent legs pin the recovery: the
+    container-side wall clock (self-termination without any host
+    help) and the labelled dead-owner sweep (next witness run reaps
+    by verified-pid identity)."""
+
+    def test_owner_labels_and_wall_clock_in_args(self):
+        args = sanwit_execute._docker_base_args("/usr/bin/docker", "/s")
+        pid, start = sanwit_execute._owner_identity()
+        assert f"{sanwit_execute._CHANNEL_LABEL}=1" in args
+        assert f"{sanwit_execute._OWNER_PID_LABEL}={pid}" in args
+        assert f"{sanwit_execute._OWNER_START_LABEL}={start}" in args
+        # The wrapper heads the in-container command (right after
+        # the image) so EVERY witness container self-terminates: a
+        # resident sh (busybox timeout as PID 1 cannot kill; ash
+        # exec-optimizes without the status capture) runs timeout
+        # over the caller-appended "$@" positionals.
+        img = args.index(sanwit_execute.DOCKER_IMAGE)
+        assert args[img + 1:img + 3] == ["sh", "-c"]
+        program = args[img + 3]
+        bound = sanwit_execute._CONTAINER_WALL_CLOCK_S
+        assert program.startswith(f'timeout -s KILL {bound} "$@"')
+        assert "; st=$?" in program  # keeps sh resident (no exec-opt)
+        assert args[img + 4] == "sh"  # $0; the command follows as $@
+        assert args[img + 4] == args[-1]
+        # Two directions: the unattended belt must exist, but the
+        # attended parent deadline must keep winning the race.
+        assert bound > sanwit_execute.DOCKER_TIMEOUT_S
+
+    def test_self_starttime_is_verifiable(self):
+        start = sanwit_execute._proc_starttime(os.getpid())
+        assert start is not None and start.isdigit()
+        pid, owner_start = sanwit_execute._owner_identity()
+        assert (pid, owner_start) == (os.getpid(), start)
+
+    def _sweep_shim(self, tmp_path, rows: list[str]):
+        calls = tmp_path / "calls"
+        ps_out = tmp_path / "ps-out"
+        ps_out.write_text("".join(r + "\n" for r in rows))
+        shim = tmp_path / "docker-shim"
+        shim.write_text(
+            "#!/bin/sh\n"
+            f'if [ "$1" = "ps" ]; then cat "{ps_out}"; exit 0; fi\n'
+            f'echo "$@" >> "{calls}"\n'
+        )
+        shim.chmod(0o755)
+        return shim, calls
+
+    def _run_sweep(self, monkeypatch, shim):
+        monkeypatch.setattr(sanwit_execute, "_SWEEP_DONE", False)
+        sanwit_execute._sweep_dead_owner_containers(str(shim))
+
+    def test_sweep_reaps_only_positively_dead_owners(
+        self, tmp_path, monkeypatch,
+    ):
+        import subprocess as sp
+        import sys as _sys
+
+        # A pid with POSITIVE death evidence: a real child that has
+        # exited. Even if the pid is recycled between here and the
+        # sweep, the fabricated starttime cannot match — both
+        # branches are death evidence, so the row always reaps.
+        child = sp.run(
+            [_sys.executable, "-c", "import os; print(os.getpid())"],
+            capture_output=True, text=True, check=True,
+        )
+        dead_pid = child.stdout.strip()
+        live_pid = os.getpid()
+        live_start = sanwit_execute._proc_starttime(live_pid)
+        init_start = sanwit_execute._proc_starttime(1)
+        rows = [
+            f"{'a' * 64}\t{dead_pid}\t123456",       # dead -> reap
+            f"{'b' * 64}\t{live_pid}\t{live_start}",  # own pid -> skip
+            f"{'d' * 64}\t{dead_pid}\t0",     # unverifiable -> skip
+            f"{'e' * 64}\tnotapid\t123",      # malformed -> skip
+            f"ZZZ\t{dead_pid}\t123",          # bad cid -> skip
+            "onlyonefield",                   # malformed -> skip
+        ]
+        if init_start is not None:
+            # A live pid whose starttime CANNOT match the label: the
+            # labelled owner's pid was recycled — death evidence.
+            rows.append(f"{'c' * 64}\t1\t{init_start}999")
+        shim, calls = self._sweep_shim(tmp_path, rows)
+        self._run_sweep(monkeypatch, shim)
+        got = calls.read_text() if calls.exists() else ""
+        assert f"kill {'a' * 64}" in got
+        assert f"rm -f {'a' * 64}" in got
+        if init_start is not None:
+            assert f"rm -f {'c' * 64}" in got
+        for skipped in ("b", "d", "e"):
+            assert skipped * 64 not in got
+        assert "ZZZ" not in got
+
+    def test_sweep_leaves_a_live_verified_owner_alone(
+        self, tmp_path, monkeypatch,
+    ):
+        # pid 1 with its REAL starttime: alive and identity-verified
+        # (not our own pid, so this exercises the liveness branch,
+        # not the own-pid skip).
+        init_start = sanwit_execute._proc_starttime(1)
+        if init_start is None:
+            pytest.skip("no readable /proc/1/stat on this host")
+        rows = [f"{'f' * 64}\t1\t{init_start}"]
+        shim, calls = self._sweep_shim(tmp_path, rows)
+        self._run_sweep(monkeypatch, shim)
+        assert not calls.exists()
+
+    def test_sweep_runs_once_per_process(self, tmp_path, monkeypatch):
+        count = tmp_path / "count"
+        shim = tmp_path / "docker-shim"
+        shim.write_text(
+            "#!/bin/sh\n"
+            f'echo x >> "{count}"\n'
+            "exit 0\n"
+        )
+        shim.chmod(0o755)
+        monkeypatch.setattr(sanwit_execute, "_SWEEP_DONE", False)
+        sanwit_execute._sweep_dead_owner_containers(str(shim))
+        sanwit_execute._sweep_dead_owner_containers(str(shim))
+        assert count.read_text().count("x") == 1
+
+    def test_sweep_survives_a_broken_daemon(self, tmp_path, monkeypatch):
+        shim = tmp_path / "docker-shim"
+        shim.write_text("#!/bin/sh\nexit 1\n")
+        shim.chmod(0o755)
+        self._run_sweep(monkeypatch, shim)  # must not raise
+        missing = tmp_path / "no-such-docker"
+        monkeypatch.setattr(sanwit_execute, "_SWEEP_DONE", False)
+        sanwit_execute._sweep_dead_owner_containers(str(missing))
+
+
 class TestChildEnv:
     """Every witness spawn's environment comes from the shared
     fail-closed helper with target-facing markers stripped: the

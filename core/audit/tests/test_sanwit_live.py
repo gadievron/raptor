@@ -231,6 +231,163 @@ class TestDockerContainment:
         )
 
 
+class TestOrphanRecovery:
+    """Re-enacts the observed incident: a probe client SIGKILL'd
+    mid-run leaves its container alive — the parent has no exit path
+    to run the cidfile belt and --rm's AutoRemove needs a live
+    client (a flood probe orphaned this way burned a core for 75+
+    minutes). Two independent recovery legs, pinned live: the
+    container-side wall clock and the labelled dead-owner sweep."""
+
+    def _cid_of(self, cidfile, timeout_s: float = 60.0) -> str:
+        import time
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if cidfile.exists():
+                cid = cidfile.read_text().strip()
+                if cid:
+                    return cid
+            time.sleep(0.2)
+        return ""
+
+    def _listed(self, docker: str, cid: str, *, all_states: bool) -> bool:
+        import subprocess
+
+        q = subprocess.run(
+            [docker, "ps", "-q", "--no-trunc",
+             *(["-a"] if all_states else []),
+             "--filter", f"id={cid}"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        return bool(q.stdout.strip())
+
+    def test_sigkilled_client_orphan_self_terminates(
+        self, runtime, tmp_path, monkeypatch,
+    ):
+        """The container-side ``timeout -s KILL`` wrapper stops the
+        burn with NO host-side help at all."""
+        import os
+        import signal
+        import subprocess
+        import time
+
+        from core.audit.sanwit import _execute as ex
+
+        if runtime.tier != "docker":
+            pytest.skip("orphan re-enactment is docker-tier only")
+        monkeypatch.setattr(ex, "_CONTAINER_WALL_CLOCK_S", 5)
+        cidfile = tmp_path / "cid"
+        cmd = [
+            *ex._docker_base_args(
+                runtime.docker_path, cidfile=str(cidfile),
+            ),
+            "php", "-r", "while(true);",  # the CPU-burn shape
+        ]
+        proc = subprocess.Popen(  # noqa: S603 — fixed argv
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=ex._safe_env(),
+        )
+        cid = self._cid_of(cidfile)
+        try:
+            assert cid, "container never started (no cid)"
+            # Wait for RUNNING before killing the client — a SIGKILL
+            # landing between create and start leaves a Created
+            # container and the test would pass vacuously.
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline and not self._listed(
+                runtime.docker_path, cid, all_states=False,
+            ):
+                time.sleep(0.2)
+            assert self._listed(
+                runtime.docker_path, cid, all_states=False,
+            ), "container never reached the running state"
+            os.kill(proc.pid, signal.SIGKILL)  # the incident, exactly
+            proc.wait(timeout=10)
+            # Non-vacuity of the orphan condition itself: the client
+            # is dead, the container is not (the wrapper's 5s bound
+            # dwarfs this check).
+            assert self._listed(
+                runtime.docker_path, cid, all_states=False,
+            ), "client death alone stopped the container (vacuous)"
+            # Daemon-latency tolerant: the wrapper fires at 5s; the
+            # bound proven is "self-terminates promptly, never rides
+            # the 90s witness timeout or worse".
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                if not self._listed(
+                    runtime.docker_path, cid, all_states=False,
+                ):
+                    break
+                time.sleep(1)
+            assert not self._listed(
+                runtime.docker_path, cid, all_states=False,
+            ), "orphaned container survived the container wall clock"
+        finally:
+            if cid:
+                ex._daemon_remove(runtime.docker_path, cid)
+
+    def test_sweep_reaps_dead_owner_but_not_live_owner(
+        self, runtime, monkeypatch,
+    ):
+        import subprocess
+        import sys as _sys
+
+        from core.audit.sanwit import _execute as ex
+
+        if runtime.tier != "docker":
+            pytest.skip("orphan re-enactment is docker-tier only")
+
+        child = subprocess.run(
+            [_sys.executable, "-c", "import os; print(os.getpid())"],
+            capture_output=True, text=True, check=True,
+        )
+        dead_pid = child.stdout.strip()
+
+        def start(owner_pid: str, owner_start: str) -> str:
+            args = ex._docker_base_args(runtime.docker_path)
+            args.insert(args.index("run") + 1, "-d")
+            for i, a in enumerate(args):
+                if a.startswith(f"{ex._OWNER_PID_LABEL}="):
+                    args[i] = f"{ex._OWNER_PID_LABEL}={owner_pid}"
+                elif a.startswith(f"{ex._OWNER_START_LABEL}="):
+                    args[i] = f"{ex._OWNER_START_LABEL}={owner_start}"
+            args += ["php", "-r", "sleep(60);"]
+            proc = subprocess.run(  # noqa: S603 — fixed argv
+                args, capture_output=True, text=True, timeout=60,
+                env=ex._safe_env(), check=True,
+            )
+            return proc.stdout.strip()
+
+        own_pid, own_start = ex._owner_identity()
+        orphan = mine = ""
+        try:
+            orphan = start(dead_pid, "123456")
+            mine = start(str(own_pid), own_start)
+            monkeypatch.setattr(ex, "_SWEEP_DONE", False)
+            ex._sweep_dead_owner_containers(runtime.docker_path)
+            # The sweep's kill initiates daemon-side AutoRemove on a
+            # --rm container; removal completes asynchronously, so
+            # poll (bounded) rather than racing it.
+            import time
+
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline and self._listed(
+                runtime.docker_path, orphan, all_states=True,
+            ):
+                time.sleep(1)
+            assert not self._listed(
+                runtime.docker_path, orphan, all_states=True,
+            ), "dead-owner container survived the sweep"
+            assert self._listed(
+                runtime.docker_path, mine, all_states=True,
+            ), "sweep reaped a live verified owner's container"
+        finally:
+            for cid in (orphan, mine):
+                if cid:
+                    ex._daemon_remove(runtime.docker_path, cid)
+
+
 class TestReceiptScoping:
     def test_interpreter_version_recorded(self, runtime):
         res = _check(
