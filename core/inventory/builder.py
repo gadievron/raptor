@@ -63,6 +63,7 @@ from .extractors import compute_interstitial_items, count_sloc, extract_items
 from .languages import (
     LANGUAGE_MAP,
     RECORD_ONLY_EXTENSIONS,
+    SCRIPT_PER_FILE_LANGUAGES,
     detect_language,
     detect_language_from_content,
     language_extensions,
@@ -1927,11 +1928,20 @@ def _process_single_file(
                     stamp_script_handler_items(
                         items_list, language, content,
                     )
+                    # Gated on the DETECTED language (the stamp
+                    # producer's own scope), never the cached record:
+                    # on any other language a genuine True stamp
+                    # cannot exist, so a stamp planted on e.g. a C
+                    # record must not get a fresh span_hash minted
+                    # for it here.
+                    script_lang = ((language or '').lower()
+                                   in SCRIPT_PER_FILE_LANGUAGES)
                     try:
                         from core.staleness import hash_spans_text
                         unhashed = [
                             it for it in items_list
-                            if isinstance(it, dict)
+                            if script_lang
+                            and isinstance(it, dict)
                             and it.get('kind') == 'interstitial'
                             and it.get('script_handler') is True
                             and not it.get('span_hash')

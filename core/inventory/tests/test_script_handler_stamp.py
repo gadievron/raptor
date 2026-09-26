@@ -518,6 +518,36 @@ class TestSpanReconciliation:
         assert reconcile_interstitial_items(items, "php", content) is False
         assert items == snapshot
 
+    def test_non_script_plant_gets_no_hash_minted(self, tmp_path):
+        # A C record with a planted True stamp (and a flipped cached
+        # language field): reconcile and stamping are gated on the
+        # DETECTED language, and the span-hash backfill must be too —
+        # a forged stamp must not be laundered with freshly minted
+        # span_hash evidence on the reuse path.
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "count.c").write_text(_C_FILE)
+        out = tmp_path / "out"
+        build_inventory(str(target), str(out))
+
+        ck_path = out / "checklist.json"
+        ck = json.loads(ck_path.read_text())
+        planted = 0
+        for f in ck.get("files", []):
+            if f.get("path") == "count.c":
+                f["language"] = "php"  # cached field must not steer
+                for it in f.get("items", []):
+                    if it.get("kind") == "interstitial":
+                        it[SCRIPT_HANDLER_FIELD] = True
+                        it.pop("span_hash", None)
+                        planted += 1
+        assert planted
+        ck_path.write_text(json.dumps(ck))
+
+        reused = build_inventory(str(target), str(out))
+        for it in _interstitials(_items_by_file(reused)["count.c"]):
+            assert "span_hash" not in it
+
     def test_reconcile_is_a_no_op_outside_script_languages(self):
         from core.inventory.script_handler import (
             reconcile_interstitial_items,
