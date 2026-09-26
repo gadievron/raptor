@@ -42,7 +42,9 @@ class TestProcessFindingsCallsTheMethod:
 
     def test_call_is_inside_analyze_vulnerability_branch(self):
         text = AGENT_PY.read_text(encoding="utf-8")
-        ana_idx = text.index("if self.analyze_vulnerability(vuln):")
+        ana_idx = text.index(
+            "if self.analyze_vulnerability(vuln, checklist=checklist):"
+        )
         post_text = text[ana_idx:]
         emit_offset = post_text.index(
             "self._emit_journal_entry(vuln, checklist)"

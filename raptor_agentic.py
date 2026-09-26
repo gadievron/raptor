@@ -2506,6 +2506,18 @@ Examples:
              "this budget never gates it. Default 0.60.",
     )
     parser.add_argument(
+        "--context-expansion",
+        action="store_true",
+        help="Sequential-path classifier only: re-run each explicitly "
+             "uncertain verdict (confidence=low or a full abstention) "
+             "once with a doubled context window plus 1-hop "
+             "caller/callee context; the re-run replaces the verdict "
+             "only when strictly more confident. Bounded per run — "
+             "each expansion is one extra analysis call. Requires "
+             "--sequential (ignored with a warning otherwise). "
+             "Default off.",
+    )
+    parser.add_argument(
         "--trust-repo",
         action="store_true",
         help="Trust the target repo's config and skip safety checks. Covers the "
@@ -4449,6 +4461,21 @@ def main() -> int:
             analysis_cmd.append("--execute-exploits")
         if args.no_execute_exploits:
             analysis_cmd.append("--no-execute-exploits")
+        # Verdict-triggered context expansion rides the SEQUENTIAL
+        # analysis child only — the orchestrated Phase 4 path has its
+        # own per-finding dispatch and does not consume the flag. On
+        # a non-sequential run the child is prep-only (no LLM path),
+        # so forwarding would be a silent no-op: warn instead.
+        if getattr(args, "context_expansion", False):
+            if args.sequential:
+                analysis_cmd.append("--context-expansion")
+            else:
+                print(
+                    "⚠️  --context-expansion applies to the sequential "
+                    "classifier only — ignored on this run "
+                    "(add --sequential)",
+                    file=sys.stderr,
+                )
 
         # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
         if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
