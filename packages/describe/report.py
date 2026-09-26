@@ -42,7 +42,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from packages.fuzzing.harness_census import FuzzHarnessCensus
 
 import json
 from core.security.log_sanitisation import sanitise_for_terminal
@@ -85,6 +88,12 @@ class DescribeReport:
     # point at a path that no longer exists — analysis commands
     # accept the archive itself.
     archive_path: Path | None = None
+    # Shipped fuzz harnesses (packages.fuzzing.harness_census) —
+    # detection only, same read-only posture as the rest of
+    # /describe (no target code executed, no toolchain probes).
+    # None when the census found nothing OR its substrate failed:
+    # either way the renderers omit the section (no noise).
+    fuzz_census: FuzzHarnessCensus | None = None
 
 
 def build_describe_report(
@@ -105,6 +114,7 @@ def build_describe_report(
     checks = check_tool_readiness(shape)
     preview = _target_type_defaults(shape)
     estimate = _scorecard_estimate(target_path)
+    census = _fuzz_harness_census(target_path)
     return DescribeReport(
         target_shape=shape,
         tool_checks=checks,
@@ -112,7 +122,25 @@ def build_describe_report(
         estimate_summary=estimate,
         archive_label=archive_label,
         archive_path=archive_path,
+        fuzz_census=census,
     )
+
+
+def _fuzz_harness_census(target_path: Path) -> FuzzHarnessCensus | None:
+    """Shipped-harness census, or None when empty / substrate failed.
+
+    The census keeps /describe's read-only posture: one bounded
+    static sweep, no target code executed, no subprocess spawns
+    (packages/fuzzing/harness_census.py pins this). Best-effort like
+    every other /describe sub-detector — a census failure never
+    fails the report.
+    """
+    try:
+        from packages.fuzzing.harness_census import census_fuzz_harnesses
+        census = census_fuzz_harnesses(target_path)
+    except Exception:  # noqa: BLE001
+        return None
+    return census if census.engines else None
 
 
 def _scorecard_estimate(target_path: Path) -> str | None:
@@ -383,6 +411,36 @@ def format_text(report: DescribeReport) -> str:
         cmd_w = max(len(r.command) for r in recs)
         lines.extend(f"  {r.command:<{cmd_w}}  — {r.reason}" for r in recs)
 
+    # Shipped fuzz harnesses — per-engine counts + one ready-to-run
+    # /fuzz pointer each. Omitted entirely when the census is empty
+    # (no noise). Example target names are target-derived: already
+    # charset-vetted by the census, and escaped again here per the
+    # escape-at-render convention (engine names + hints are
+    # operator-authored constants; the substituted path is escaped).
+    if report.fuzz_census is not None and report.fuzz_census.engines:
+        census = report.fuzz_census
+        total = census.total_harnesses
+        partial = " (counts partial)" if census.truncated else ""
+        lines.append("")
+        lines.append(
+            f"Fuzz harnesses shipped ({total}){partial}:"
+        )
+        for eng in census.engines:
+            head = f"  {eng.engine}: {eng.count}"
+            if eng.examples:
+                names = ", ".join(
+                    sanitise_for_terminal(n, max_len=64)
+                    for n in eng.examples
+                )
+                more = eng.count - len(eng.examples)
+                suffix = f", +{more} more" if more > 0 else ""
+                head += f" ({names}{suffix})"
+            lines.append(head)
+            lines.append(
+                "      "
+                f"{sanitise_for_terminal(eng.invocation_hint, max_len=300)}"
+            )
+
     # Tool applicability — target-level signals only. Host-level
     # checks (binary presence, LLM keys, env) live in /doctor.
     # Header says ``checks`` not ``gaps`` because the section
@@ -488,6 +546,13 @@ def format_json(report: DescribeReport) -> str:
             }
         ),
         "estimate_summary": report.estimate_summary,
+        # Shipped fuzz harnesses (census shape mirrors
+        # FuzzHarnessCensus.to_dict). None when the census found
+        # nothing / failed — same omission rule as the text render.
+        "fuzz_harnesses": (
+            None if report.fuzz_census is None
+            else report.fuzz_census.to_dict()
+        ),
         "archive_label": report.archive_label,
         "archive_path": (
             str(report.archive_path)
