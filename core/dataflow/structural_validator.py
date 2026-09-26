@@ -76,6 +76,14 @@ class StepVerification:
     exists: bool
     call_link_to_next: bool | None = None
     has_indirection: bool = False
+    # A broken link (call_link_to_next=False) whose endpoint step
+    # properties carry a sub-``resolved_static`` tier or an
+    # ``assumed_propagation``/``binding_approx`` tag — the producer
+    # itself declared the hop beyond source-static derivation, so
+    # tree-sitter's failure to re-derive it is not refutation
+    # evidence. Only ever True for producers that serialize per-step
+    # tier properties (the cross-file taint engine).
+    link_tier_gated: bool = False
     sanitizer_calls: list[str] = field(default_factory=list)
     branch_guards: list[str] = field(default_factory=list)
     detail: str = ""
@@ -93,6 +101,10 @@ class StepVerification:
             d["call_link_to_next"] = self.call_link_to_next
         if self.has_indirection:
             d["has_indirection"] = True
+        # Present-only (like has_indirection) so evidence dicts for
+        # producers without step tiers stay byte-identical.
+        if self.link_tier_gated:
+            d["link_tier_gated"] = True
         if self.sanitizer_calls:
             d["sanitizer_calls"] = self.sanitizer_calls
         if self.branch_guards:
@@ -422,6 +434,39 @@ def _extract_branch_guards_from_content(
     return guards
 
 
+#: Step tags that mark a hop as producer-approximated even when the
+#: tier field reads static: ``assumed_propagation`` (taint-all-params
+#: fallback at an unresolvable call) and ``binding_approx``
+#: (receiver/binding guessed by convention).
+_SUB_STATIC_TAGS = frozenset({"assumed_propagation", "binding_approx"})
+
+#: The one tier value that IS source-static derivation. Any other
+#: tier string (``resolved_convention``, ``heuristic_dynamic``,
+#: ``unresolved`` — or an unknown future value, conservatively) marks
+#: the step as beyond what tree-sitter can be expected to re-derive.
+_TIER_RESOLVED_STATIC = "resolved_static"
+
+
+def _step_sub_static(step: dict) -> bool:
+    """True when the step's serialized properties place it below
+    source-static resolution — a tier other than ``resolved_static``,
+    or an approximation tag. Steps without properties (every producer
+    except the cross-file taint engine) are never sub-static, which is
+    what keeps the tier gate producer-scoped."""
+    props = step.get("properties")
+    if not isinstance(props, dict):
+        return False
+    tier = props.get("tier")
+    if isinstance(tier, str) and tier and tier != _TIER_RESOLVED_STATIC:
+        return True
+    tags = props.get("tags")
+    if isinstance(tags, (list, tuple)):
+        return any(
+            isinstance(t, str) and t in _SUB_STATIC_TAGS for t in tags
+        )
+    return False
+
+
 def _build_all_steps(dataflow_path: dict) -> list[dict]:
     """Build the ordered step list from a dataflow_path dict."""
     source = dataflow_path.get("source")
@@ -560,6 +605,7 @@ def validate_structurally(
 
         call_link: bool | None = None
         has_indirection = False
+        link_tier_gated = False
         if i < len(steps) - 1:
             next_step = steps[i + 1]
             next_resolved = _resolve_file(next_step, repo_path)
@@ -587,12 +633,26 @@ def validate_structurally(
                         func_resolved and next_func_resolved
                     ),
                 )
+            # Tier gate on a would-be refutation: when either endpoint
+            # of the broken link carries producer-declared sub-static
+            # properties (dispatch-table hop, assumed propagation),
+            # tree-sitter cannot re-derive the edge the producer's
+            # heuristic rode — its absence is not evidence the chain
+            # is broken. Same doctrine as the attribution_resolved
+            # downgrade in _check_call_link; recorded on the
+            # verification so _compute_verdict demotes refuted →
+            # inconclusive instead of losing the signal.
+            if call_link is False and (
+                _step_sub_static(step) or _step_sub_static(next_step)
+            ):
+                link_tier_gated = True
 
         verifications.append(StepVerification(
             step_index=i, file=file_path_str, line=line,
             function=func_name, exists=True,
             call_link_to_next=call_link,
             has_indirection=has_indirection,
+            link_tier_gated=link_tier_gated,
             sanitizer_calls=sanitizer_calls,
             branch_guards=guards,
         ))
@@ -618,7 +678,19 @@ def _compute_verdict(
 
     links = [v for v in verifications if v.call_link_to_next is not None]
     confirmed_links = [v for v in links if v.call_link_to_next is True]
-    broken_links = [v for v in links if v.call_link_to_next is False]
+    # Tier-gated broken links (producer-declared sub-static hop at an
+    # endpoint) are demoted out of the refutation set: they behave
+    # like "could not verify", never like "proven broken". Empty for
+    # every producer that serializes no step tiers, so the verdict
+    # branches below are unchanged for those.
+    broken_links = [
+        v for v in links
+        if v.call_link_to_next is False and not v.link_tier_gated
+    ]
+    tier_gated_links = [
+        v for v in links
+        if v.call_link_to_next is False and v.link_tier_gated
+    ]
     indirect_links = [v for v in verifications if v.has_indirection and v.call_link_to_next is None]
 
     evidence = [v.to_dict() for v in verifications]
@@ -650,7 +722,8 @@ def _compute_verdict(
             confidence="high" if not missing else "medium",
         )
 
-    if confirmed_links and not broken_links and not missing:
+    if confirmed_links and not broken_links and not missing \
+            and not tier_gated_links:
         return StructuralResult(
             verdict="confirmed",
             reasoning=(
@@ -669,6 +742,11 @@ def _compute_verdict(
             reasoning=(
                 f"{len(confirmed_links)}/{len(links)} call link(s) verified"
                 + (f"; {len(indirect_links)} indirect" if indirect_links else "")
+                + (
+                    f"; {len(tier_gated_links)} unverifiable "
+                    "(sub-static hop)"
+                    if tier_gated_links else ""
+                )
                 + (f"; {len(missing)} step(s) not found" if missing else "")
             ),
             evidence=evidence,
@@ -682,6 +760,11 @@ def _compute_verdict(
         parts.append(f"{len(confirmed_links)} verified")
     if broken_links:
         parts.append(f"{len(broken_links)} broken")
+    if tier_gated_links:
+        parts.append(
+            f"{len(tier_gated_links)} broken-link refutation(s) demoted "
+            "(sub-static hop tier)"
+        )
     if indirect_links:
         parts.append(f"{len(indirect_links)} indirect")
 
