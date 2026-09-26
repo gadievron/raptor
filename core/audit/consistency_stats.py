@@ -132,11 +132,14 @@ def floors_registry() -> tuple[FloorSpec, ...]:
     live inline constants (lazy imports: the owning modules import
     this one for scoring, so the reference direction must resolve at
     call time, not import time)."""
+    from . import boundary_unit as bu
     from . import callsite_consistency as cc
     from . import clone_drift as cd_clone
     from . import consistency_dimensions as cd
     from . import consistency_verify as cv
     from . import enum_switch as es
+    from . import guard_predicate as gp
+    from . import path_symmetry as ps
 
     def spec(dimension: str, name: str, default: int | float, kind: str,
              overridable: bool, consumer: str) -> FloorSpec:
@@ -223,6 +226,31 @@ def floors_registry() -> tuple[FloorSpec, ...]:
              KIND_RATIO, True,
              "consistency_verify.guard_presence_verdict SMT-witness "
              "promote gate"),
+        # guard-predicate.
+        spec("guard-predicate", "min_sites",
+             gp.GUARD_PREDICATE_MIN_SITES, KIND_MIN_SITES, True,
+             "guard_predicate.detect_guard_predicate_deviations"),
+        spec("guard-predicate", "ratio", gp.GUARD_PREDICATE_RATIO,
+             KIND_RATIO, True,
+             "guard_predicate.detect_guard_predicate_deviations"),
+        spec("guard-predicate", "promote_ratio", cd.RATIO_PROMOTE,
+             KIND_RATIO, True,
+             "consistency_verify.guard_predicate_verdict SMT-witness "
+             "promote gate"),
+        # path-symmetry.
+        spec("path-symmetry", "min_pairs",
+             ps.PATH_SYMMETRY_MIN_PAIRS, KIND_MIN_SITES, True,
+             "path_symmetry.detect_path_symmetry_deviations"),
+        spec("path-symmetry", "ratio", ps.PATH_SYMMETRY_RATIO,
+             KIND_RATIO, True,
+             "path_symmetry.detect_path_symmetry_deviations"),
+        # boundary-unit.
+        spec("boundary-unit", "min_sites",
+             bu.BOUNDARY_UNIT_MIN_SITES, KIND_MIN_SITES, True,
+             "boundary_unit.detect_boundary_unit_deviations"),
+        spec("boundary-unit", "ratio", bu.BOUNDARY_UNIT_RATIO,
+             KIND_RATIO, True,
+             "boundary_unit.detect_boundary_unit_deviations"),
         # enum-switch.
         spec("enum-switch", "min_switches", es.ENUM_SWITCH_MIN_GROUP,
              KIND_MIN_SITES, True,

@@ -661,6 +661,15 @@ _RECEIPT_MAP: dict[str, tuple] = {
             "token-containment receipts)"
         ),
     ),
+    "consistency:guard-predicate": (
+        EvidenceSource.TREE_SITTER,
+        (
+            "a guard predicate deviates from its peers' (off-by-one "
+            "operator, missing null arm, signedness mix) and "
+            "condition_smt witnesses the value space the deviant "
+            "admits beyond them (solver witness + peer receipts)"
+        ),
+    ),
     "consistency": (
         EvidenceSource.TREE_SITTER,
         "peer-majority consistency evidence (PeerEvidence receipts)",

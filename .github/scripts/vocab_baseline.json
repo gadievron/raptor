@@ -410,7 +410,7 @@
     "note": "framework-internal enum/namespace vocabulary (not target API names)"
   },
   "core/audit/consistency_prepass.py::run_consistency_prepass": {
-    "count": 13,
+    "count": 15,
     "kind": "literal",
     "note": "framework-internal enum/namespace vocabulary (not target API names)"
   },

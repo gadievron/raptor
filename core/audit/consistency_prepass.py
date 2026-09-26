@@ -1484,6 +1484,290 @@ def run_consistency_prepass(
                     security_relevant=True,
                 ))
 
+    # ── guard-predicate dimension — adjudicated, SMT escalation ─────
+    if not _over_budget():
+        try:
+            from .guard_predicate import (
+                DIMENSION_GUARD_PREDICATE,
+                KIND_SIGNEDNESS_MIX,
+                detect_guard_predicate_deviations,
+            )
+            from .consistency_verify import guard_predicate_verdict
+            gp_devs, gp_stats = detect_guard_predicate_deviations(
+                source_texts,
+                min_sites=int(
+                    floors.value("guard-predicate.min_sites"),
+                ),
+                ratio=float(floors.value("guard-predicate.ratio")),
+            )
+        except Exception:
+            _dim_failed("guard-predicate")
+            logger.debug("consistency prepass: guard-predicate "
+                         "census failed", exc_info=True)
+            gp_devs, gp_stats = [], {}
+        for reason_key, count in (
+            gp_stats.get("inconclusive_reasons") or {}
+        ).items():
+            telemetry["inconclusive_reasons"][reason_key] = (
+                telemetry["inconclusive_reasons"].get(reason_key, 0)
+                + count
+            )
+        if gp_stats.get("caps_hit"):
+            telemetry["guard_predicate_caps_hit"] = True
+        if gp_devs:
+            counts = _dim(DIMENSION_GUARD_PREDICATE)
+            for dev in gp_devs:
+                try:
+                    res = guard_predicate_verdict(
+                        dev, context=ctx, inventory=inventory,
+                        source_texts=source_texts,
+                        joern_server=_joern_arg(),
+                        floors=floors,
+                    )
+                    _charge_joern(res)
+                except Exception:
+                    logger.debug("consistency prepass: guard-"
+                                 "predicate verdict failed",
+                                 exc_info=True)
+                    continue
+                counts[res.outcome] = counts.get(res.outcome, 0) + 1
+                if res.outcome == "refuted":
+                    continue
+                if res.outcome not in ("confirmed", "inconclusive"):
+                    continue
+                promoted = (
+                    res.outcome == "confirmed"
+                    and not res.rule_id.endswith("-majority")
+                )
+                mechanical.append({
+                    "file": dev.file,
+                    "function": dev.enclosing_function,
+                    # SMT-witnessed upgrades ride the EXISTING
+                    # condition_smt detector ids (the guard-presence
+                    # precedent) so downstream consumers treat them
+                    # exactly like condition_smt hits; plain outliers
+                    # keep their own id.
+                    "detector": (
+                        (
+                            "signed_mismatch_smt"
+                            if dev.kind == KIND_SIGNEDNESS_MIX
+                            else "insufficient_guard_smt"
+                        )
+                        if promoted else "guard_predicate_deviation"
+                    ),
+                    "line": dev.line,
+                    "description": res.reason[:400],
+                    "callee": dev.group_key,
+                    "rule_id": res.rule_id,
+                    "cwe": dev.cwe,
+                })
+                if res.outcome == "inconclusive":
+                    reason_key = res.reason.split(":", 1)[0]
+                    telemetry["inconclusive_reasons"][reason_key] = (
+                        telemetry["inconclusive_reasons"].get(
+                            reason_key, 0,
+                        ) + 1
+                    )
+                    continue
+                if promoted:
+                    pe = res.peer_evidence
+                    source_key = pe.contract_source if pe else "none"
+                    telemetry["contract_sources"][source_key] = (
+                        telemetry["contract_sources"].get(source_key, 0)
+                        + 1
+                    )
+                    status = _status_for(res, detection=False)
+                    if status == "finding":
+                        telemetry["promotions"] += 1
+                    if len(findings) < MAX_FINDINGS:
+                        findings.append({
+                            "file": dev.file,
+                            "function": dev.enclosing_function,
+                            "line": dev.line,
+                            "callee": dev.group_key,
+                            "dimension": DIMENSION_GUARD_PREDICATE,
+                            "rule_id": res.rule_id,
+                            "evidence_tool": res.rule_id,
+                            "status": status,
+                            "detection_grade": False,
+                            "cwe": dev.cwe,
+                            "hypothesis": (
+                                f"{dev.conforming}/{dev.n} sites "
+                                f"guard {dev.group_key} with "
+                                f"`{dev.majority_repr}`; "
+                                f"{dev.enclosing_function} uses "
+                                f"`{dev.deviant_repr}` at "
+                                f"{dev.file}:{dev.line} and "
+                                f"condition_smt witnesses the "
+                                f"admitted value space"
+                            ),
+                            "description": res.reason,
+                            "receipts": res.to_dict(),
+                        })
+                leads.append(_lead_from_result(
+                    res,
+                    file=dev.file,
+                    function=dev.enclosing_function,
+                    line=dev.line,
+                    security_relevant=True,
+                ))
+
+    # ── path-symmetry dimension — detection-grade, lead-only ────────
+    if not _over_budget():
+        try:
+            from .path_symmetry import (
+                DIMENSION_PATH_SYMMETRY,
+                detect_path_symmetry_deviations,
+            )
+            ps_devs, ps_stats = detect_path_symmetry_deviations(
+                source_texts,
+                domain_model=domain_model,
+                min_pairs=int(
+                    floors.value("path-symmetry.min_pairs"),
+                ),
+                ratio=float(floors.value("path-symmetry.ratio")),
+            )
+        except Exception:
+            _dim_failed("path-symmetry")
+            logger.debug("consistency prepass: path-symmetry census "
+                         "failed", exc_info=True)
+            ps_devs, ps_stats = [], {}
+        for reason_key, count in (
+            ps_stats.get("inconclusive_reasons") or {}
+        ).items():
+            telemetry["inconclusive_reasons"][reason_key] = (
+                telemetry["inconclusive_reasons"].get(reason_key, 0)
+                + count
+            )
+        if ps_stats.get("caps_hit"):
+            telemetry["path_symmetry_caps_hit"] = True
+        if ps_devs:
+            counts = _dim(DIMENSION_PATH_SYMMETRY)
+            for dev in ps_devs:
+                counts["confirmed"] += 1
+                mechanical.append({
+                    "file": dev.file,
+                    "function": dev.enclosing_function,
+                    "detector": "path_symmetry_deviation",
+                    "line": dev.line,
+                    "description": dev.description,
+                    "callee": dev.counterpart,
+                    "rule_id": (
+                        dev.peer_evidence.rule_id
+                        if dev.peer_evidence else ""
+                    ),
+                    "cwe": dev.cwe,
+                })
+                leads.append({
+                    "dimension": DIMENSION_PATH_SYMMETRY,
+                    "callee": dev.counterpart,
+                    "file": dev.file,
+                    "function": dev.enclosing_function,
+                    "line": dev.line,
+                    "rule_id": (
+                        dev.peer_evidence.rule_id
+                        if dev.peer_evidence else ""
+                    ),
+                    "description": dev.description[:300],
+                    "security_relevant": dev.cwe == "CWE-862",
+                    "n": dev.n,
+                    "conforming": dev.conforming,
+                    "ratio": dev.ratio,
+                    "score": round(
+                        lead_strength_score(dev.conforming, dev.n), 4,
+                    ),
+                    "formation": (
+                        dev.peer_evidence.formation
+                        if dev.peer_evidence else ""
+                    ),
+                    "contract_source": "majority",
+                    "sites": [
+                        f"{e.file}:{e.line} {e.snippet}".strip()
+                        for e in (
+                            dev.peer_evidence.exhibits
+                            if dev.peer_evidence else []
+                        )
+                    ],
+                })
+
+    # ── boundary/unit dimension — detection-grade, lead-only ────────
+    if not _over_budget():
+        try:
+            from .boundary_unit import (
+                DIMENSION_BOUNDARY_UNIT,
+                KIND_BOUND_EXPR,
+                detect_boundary_unit_deviations,
+            )
+            bu_devs, bu_stats = detect_boundary_unit_deviations(
+                source_texts,
+                min_sites=int(
+                    floors.value("boundary-unit.min_sites"),
+                ),
+                ratio=float(floors.value("boundary-unit.ratio")),
+            )
+        except Exception:
+            _dim_failed("boundary-unit")
+            logger.debug("consistency prepass: boundary-unit census "
+                         "failed", exc_info=True)
+            bu_devs, bu_stats = [], {}
+        for reason_key, count in (
+            bu_stats.get("inconclusive_reasons") or {}
+        ).items():
+            telemetry["inconclusive_reasons"][reason_key] = (
+                telemetry["inconclusive_reasons"].get(reason_key, 0)
+                + count
+            )
+        if bu_stats.get("caps_hit"):
+            telemetry["boundary_unit_caps_hit"] = True
+        if bu_devs:
+            counts = _dim(DIMENSION_BOUNDARY_UNIT)
+            for dev in bu_devs:
+                counts["confirmed"] += 1
+                mechanical.append({
+                    "file": dev.file,
+                    "function": dev.enclosing_function,
+                    "detector": "boundary_unit_deviation",
+                    "line": dev.line,
+                    "description": dev.description,
+                    "callee": dev.group_key,
+                    "rule_id": (
+                        dev.peer_evidence.rule_id
+                        if dev.peer_evidence else ""
+                    ),
+                    "cwe": dev.cwe,
+                })
+                leads.append({
+                    "dimension": DIMENSION_BOUNDARY_UNIT,
+                    "callee": dev.group_key,
+                    "file": dev.file,
+                    "function": dev.enclosing_function,
+                    "line": dev.line,
+                    "rule_id": (
+                        dev.peer_evidence.rule_id
+                        if dev.peer_evidence else ""
+                    ),
+                    "description": dev.description[:300],
+                    "security_relevant": dev.kind == KIND_BOUND_EXPR,
+                    "n": dev.n,
+                    "conforming": dev.conforming,
+                    "ratio": dev.ratio,
+                    "score": round(
+                        lead_strength_score(dev.conforming, dev.n), 4,
+                    ),
+                    "formation": (
+                        dev.peer_evidence.formation
+                        if dev.peer_evidence else ""
+                    ),
+                    "contract_source": "majority",
+                    "sites": [
+                        f"{e.file}:{e.line} {e.snippet}".strip()
+                        for e in (
+                            dev.peer_evidence.exhibits
+                            if dev.peer_evidence else []
+                        )
+                    ],
+                })
+
     # ── uniformly-weak families — hint-tier records, never leads ────
     # The all-members-weak case produces no deviant for any majority
     # comparator; the record rides BESIDE the lead flow (its own key,

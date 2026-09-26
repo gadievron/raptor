@@ -150,11 +150,14 @@ class TestFloorsRegistry:
         # Sibling-drift fence: the registry references the inline
         # constants; a constant edit that misses the registry (or
         # vice versa) fails here.
+        from core.audit import boundary_unit as bu
         from core.audit import callsite_consistency as cc
         from core.audit import clone_drift as clone
         from core.audit import consistency_dimensions as cd
         from core.audit import consistency_verify as cv
         from core.audit import enum_switch as es
+        from core.audit import guard_predicate as gp
+        from core.audit import path_symmetry as ps
         expected = {
             "return-check.lead_min_sites": cc.MIN_CALL_SITES,
             "return-check.lead_majority_threshold":
@@ -181,6 +184,14 @@ class TestFloorsRegistry:
             "guard-presence.min_sites": cd.MIN_GROUP_SITES,
             "guard-presence.ratio": cd.CONSISTENCY_RATIO,
             "guard-presence.promote_ratio": cd.RATIO_PROMOTE,
+            "guard-predicate.min_sites":
+                gp.GUARD_PREDICATE_MIN_SITES,
+            "guard-predicate.ratio": gp.GUARD_PREDICATE_RATIO,
+            "guard-predicate.promote_ratio": cd.RATIO_PROMOTE,
+            "path-symmetry.min_pairs": ps.PATH_SYMMETRY_MIN_PAIRS,
+            "path-symmetry.ratio": ps.PATH_SYMMETRY_RATIO,
+            "boundary-unit.min_sites": bu.BOUNDARY_UNIT_MIN_SITES,
+            "boundary-unit.ratio": bu.BOUNDARY_UNIT_RATIO,
             "enum-switch.min_switches": es.ENUM_SWITCH_MIN_GROUP,
             "enum-switch.ratio": es.ENUM_SWITCH_RATIO,
             "clone-drift.similarity": clone.CLONE_SIMILARITY,
@@ -245,16 +256,38 @@ class TestDetectorBindingDriftFence:
          "guard-presence.min_sites"),
         ("detect_guard_presence_deviations", "ratio",
          "guard-presence.ratio"),
+        # Module-qualified entries (censuses living outside
+        # consistency_dimensions).
+        ("guard_predicate:detect_guard_predicate_deviations",
+         "min_sites", "guard-predicate.min_sites"),
+        ("guard_predicate:detect_guard_predicate_deviations",
+         "ratio", "guard-predicate.ratio"),
+        ("path_symmetry:detect_path_symmetry_deviations",
+         "min_pairs", "path-symmetry.min_pairs"),
+        ("path_symmetry:detect_path_symmetry_deviations",
+         "ratio", "path-symmetry.ratio"),
+        ("boundary_unit:detect_boundary_unit_deviations",
+         "min_sites", "boundary-unit.min_sites"),
+        ("boundary_unit:detect_boundary_unit_deviations",
+         "ratio", "boundary-unit.ratio"),
     )
 
     def test_detector_signature_defaults_match_the_registry(self):
+        import importlib
         import inspect
 
         from core.audit import consistency_dimensions as cd
 
         defaults = {s.key: s.default for s in floors_registry()}
         for fn_name, param, key in self._BINDINGS:
-            fn = getattr(cd, fn_name)
+            if ":" in fn_name:
+                mod_name, fn_name = fn_name.split(":", 1)
+                mod = importlib.import_module(
+                    f"core.audit.{mod_name}",
+                )
+            else:
+                mod = cd
+            fn = getattr(mod, fn_name)
             actual = inspect.signature(fn).parameters[param].default
             assert actual == defaults[key], (
                 f"{fn_name}({param}=...) signature default "
