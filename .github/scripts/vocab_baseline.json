@@ -2577,6 +2577,11 @@
     "count": 14,
     "kind": "alternation"
   },
+  "packages/llm_analysis/agent.py::_toolloop_stats": {
+    "count": 10,
+    "kind": "literal",
+    "note": "context tool-loop run-report counter names (loops/turns/served/refused/cap-hit stats block) \u2014 enforcement-stats field names, not a name vocabulary; same class as the baselined enforcement-stats and record-shape entries"
+  },
   "packages/llm_analysis/agent.py::convert_validated_to_agent_format": {
     "count": 15,
     "kind": "literal"

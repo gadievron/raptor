@@ -882,7 +882,8 @@ class AutonomousSecurityAgentV2:
                  execute_sanitizers: list | None = None,
                  deep_validate: bool = False,
                  deep_validate_disabled: bool = False,
-                 context_expansion: bool = False) -> None:
+                 context_expansion: bool = False,
+                 context_toolloop: bool = False) -> None:
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -977,6 +978,35 @@ class AutonomousSecurityAgentV2:
             "expansions_changed_verdict": 0,
             "skipped_cap": 0,
             "errors": 0,
+        }
+        # --context-toolloop: opt-in bounded retrieval loop for the
+        # same explicitly-uncertain verdicts — instead of the one-shot
+        # expansion the model may REQUEST specific context (read_span
+        # / list_callers / list_callees) across a capped number of
+        # turns before its forced verdict. Supersedes the one-shot
+        # when both flags are on (one trigger, one budget, one second
+        # look per finding). Default OFF; when off the analysis path
+        # is exactly the pre-flag pipeline (differential-tested).
+        # Vocabulary/validation/rails live in
+        # packages.llm_analysis.context_toolloop; the stats are
+        # counted-never-silent and feed the run report. Counter
+        # semantics mirror the expansion's honest accounting:
+        # ``loops_performed`` counts loops whose first extra LLM call
+        # was actually issued, ``turns_performed`` counts issued
+        # calls, and the shared cap gate burns a slot per attempt
+        # (performed or errored).
+        self.context_toolloop = bool(context_toolloop)
+        self._toolloop_stats = {
+            "loops_triggered": 0,
+            "loops_performed": 0,
+            "loops_changed_verdict": 0,
+            "skipped_cap": 0,
+            "errors": 0,
+            "turns_performed": 0,
+            "tool_calls_served": 0,
+            "tool_calls_refused": 0,
+            "turn_cap_hits": 0,
+            "byte_cap_hits": 0,
         }
         # P23 guard-dominance chokepoint: lazy warm-CPG Joern server.
         # ``_probed`` distinguishes "never tried" from "tried, cold
@@ -1579,19 +1609,34 @@ class AutonomousSecurityAgentV2:
             # downstream) sees the settled verdict. getattr keeps the
             # flag-off default and partially-constructed test agents
             # on the exact pre-flag path.
-            if getattr(self, "context_expansion", False):
+            # --context-toolloop rides the SAME trigger: when both
+            # flags are on, the tool loop supersedes the one-shot
+            # expansion — one trigger, one shared budget, one second
+            # look per finding, never both.
+            if getattr(self, "context_expansion", False) or getattr(
+                self, "context_toolloop", False,
+            ):
                 from packages.llm_analysis.context_expansion import (
                     expansion_trigger,
                 )
                 _reason = expansion_trigger(analysis)
                 if _reason is not None:
-                    expanded = self._expand_context_and_rerun(
-                        vuln, analysis, _reason,
-                        meta=meta,
-                        extra_blocks=tuple(extra_blocks),
-                        analysis_schema=analysis_schema,
-                        checklist=checklist,
-                    )
+                    if getattr(self, "context_toolloop", False):
+                        expanded = self._toolloop_and_rerun(
+                            vuln, analysis, _reason,
+                            meta=meta,
+                            extra_blocks=tuple(extra_blocks),
+                            analysis_schema=analysis_schema,
+                            checklist=checklist,
+                        )
+                    else:
+                        expanded = self._expand_context_and_rerun(
+                            vuln, analysis, _reason,
+                            meta=meta,
+                            extra_blocks=tuple(extra_blocks),
+                            analysis_schema=analysis_schema,
+                            checklist=checklist,
+                        )
                     if expanded is not None:
                         analysis = expanded
                         vuln.analysis = analysis
@@ -1803,11 +1848,19 @@ class AutonomousSecurityAgentV2:
         # (spend estimates multiply it by per-call cost), so a
         # pre-call failure burns its slot through `errors` without
         # inflating `performed`. A post-call failure counts in both
-        # and burns two slots — conservative by design.
-        if (
-            stats["expansions_performed"] + stats["errors"]
-            >= MAX_EXPANSIONS_PER_RUN
-        ):
+        # and burns two slots — conservative by design. The budget is
+        # SHARED with the context tool loop (symmetric with the
+        # loop-side check in _toolloop_and_rerun): trigger-site
+        # supersession means both features never co-run on one finding
+        # today, but the cap must hold even if a future fallback path
+        # lets them co-spend within one run.
+        spent = (
+            stats["expansions_performed"]
+            + stats["errors"]
+            + self._toolloop_stats["loops_performed"]
+            + self._toolloop_stats["errors"]
+        )
+        if spent >= MAX_EXPANSIONS_PER_RUN:
             stats["skipped_cap"] += 1
             logger.info(
                 "⊘ Context expansion skipped for %s (%s): per-run cap "
@@ -1975,6 +2028,313 @@ class AutonomousSecurityAgentV2:
                 "error": detail,
             }
             return None
+
+    def _toolloop_and_rerun(
+        self,
+        vuln: VulnerabilityContext,
+        first_analysis: dict[str, Any],
+        reason: str,
+        *,
+        meta: dict[str, Any],
+        extra_blocks: tuple,
+        analysis_schema: dict[str, Any],
+        checklist: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Bounded retrieval tool loop for an explicitly uncertain verdict.
+
+        Same trigger, same expanded starting context and same join
+        contract as ``_expand_context_and_rerun`` — but instead of one
+        blind wider re-ask, the model may spend up to
+        ``MAX_TOOLLOOP_TURNS - 1`` turns REQUESTING specific context
+        (``context_requests`` in the augmented schema: read_span /
+        list_callers / list_callees, validated and served by
+        ``packages.llm_analysis.context_toolloop``) before rendering
+        its verdict; the final allowed turn uses the base schema, so
+        the loop mechanically ends in a verdict. Each turn is one LLM
+        call under its own transcript subject
+        (``<finding_id>::toolloop::turn<N>`` — record/replay stays
+        deterministic per turn).
+
+        Budget is SHARED with the one-shot expansion: one triggered
+        second look (loop or expansion) per slot, gated on the same
+        attempt accounting (performed + errors across both features),
+        so enabling the loop never raises the number of findings that
+        get re-examined — only the per-finding call count, bounded by
+        the turn cap.
+
+        Returns the chosen analysis dict, or ``None`` when the first
+        verdict stands untouched (cap reached / re-read failed / LLM
+        call failed) — every such path is counted and annotated, never
+        silent. Never raises. A stated confident verdict is never
+        demoted: the join is ``join_verdicts`` unchanged.
+        """
+        from packages.llm_analysis.context_expansion import (
+            EXPANDED_FINDING_CONTEXT_LINES,
+            MAX_EXPANSIONS_PER_RUN,
+            expansion_context_blocks,
+            join_verdicts,
+        )
+        from packages.llm_analysis.context_toolloop import (
+            CONTEXT_REQUESTS_FIELD,
+            MAX_TOOLLOOP_TURNS,
+            ToolLoopState,
+            augment_schema,
+            build_toolloop_record,
+            has_requests,
+            run_turn_requests,
+        )
+
+        stats = self._toolloop_stats
+        stats["loops_triggered"] += 1
+        # Shared budget with --context-expansion: both features spend
+        # the same MAX_EXPANSIONS_PER_RUN slots, one per attempted
+        # second look, with the expansion's honest attempt accounting
+        # (performed + errors) on both counters.
+        spent = (
+            self._expansion_stats["expansions_performed"]
+            + self._expansion_stats["errors"]
+            + stats["loops_performed"]
+            + stats["errors"]
+        )
+        if spent >= MAX_EXPANSIONS_PER_RUN:
+            stats["skipped_cap"] += 1
+            logger.info(
+                "⊘ Context tool loop skipped for %s (%s): shared "
+                "per-run cap of %d reached",
+                vuln.finding_id, reason, MAX_EXPANSIONS_PER_RUN,
+            )
+            first_analysis["context_toolloop"] = {
+                "triggered": True,
+                "reason": reason,
+                "performed": False,
+                "skipped": "expansion_cap",
+            }
+            return None
+
+        original_context = vuln.surrounding_context
+        llm_called = False
+        state = None
+        try:
+            logger.info(
+                "🔎 Context tool loop for %s (%s): ±%d-line window + "
+                "up to %d retrieval turns",
+                vuln.finding_id, reason, EXPANDED_FINDING_CONTEXT_LINES,
+                MAX_TOOLLOOP_TURNS,
+            )
+            if not vuln.read_vulnerable_code(
+                context_lines=EXPANDED_FINDING_CONTEXT_LINES,
+            ):
+                raise RuntimeError("expanded-context re-read failed")
+
+            function_name = meta.get("name") or ""
+            hop_blocks = expansion_context_blocks(
+                checklist, vuln.file_path or "", function_name,
+                Path(vuln.repo_path),
+            )
+            state = ToolLoopState.for_repo(
+                vuln.repo_path,
+                checklist=checklist,
+                finding_file=vuln.file_path or "",
+            )
+
+            from core.llm.response_validation import (
+                attempt_quality_retry,
+                validate_structured_response,
+            )
+            from packages.llm_analysis.prompts import (
+                build_analysis_prompt_bundle,
+            )
+
+            result_blocks: tuple = ()
+            turn_records: list[dict[str, Any]] = []
+            second: dict[str, Any] | None = None
+            end_reason = "verdict"
+            for turn in range(1, MAX_TOOLLOOP_TURNS + 1):
+                # Requesting is closed on the final turn (the loop
+                # must end in a verdict) and once the per-finding
+                # byte budget is spent (nothing more can be served).
+                request_allowed = turn < MAX_TOOLLOOP_TURNS
+                if request_allowed and state.byte_budget_exhausted():
+                    request_allowed = False
+                    end_reason = "byte_cap"
+                elif not request_allowed:
+                    end_reason = "turn_cap"
+                schema = (
+                    augment_schema(analysis_schema)
+                    if request_allowed else analysis_schema
+                )
+                # Rebuilt each turn: identical inputs except the
+                # accumulated tool-result blocks. Per-turn cost stays
+                # bounded — file splits are cached on the loop state,
+                # and the appended blocks are byte-capped.
+                bundle = build_analysis_prompt_bundle(
+                    rule_id=vuln.rule_id,
+                    level=vuln.level,
+                    file_path=vuln.file_path,
+                    start_line=vuln.start_line,
+                    end_line=vuln.end_line,
+                    message=vuln.message,
+                    code=vuln.full_code,
+                    surrounding_context=vuln.surrounding_context,
+                    has_dataflow=vuln.has_dataflow,
+                    dataflow_source=vuln.dataflow_source,
+                    dataflow_sink=vuln.dataflow_sink,
+                    dataflow_steps=vuln.dataflow_steps,
+                    metadata=meta,
+                    repo_path=str(vuln.repo_path),
+                    cwe_id=vuln.cwe_id,
+                    function_name=function_name,
+                    file_includes=meta.get("includes") or (),
+                    function_calls_made=(
+                        meta.get("calls") or meta.get("callees") or ()
+                    ),
+                    extra_blocks=(
+                        tuple(extra_blocks) + hop_blocks + result_blocks
+                    ),
+                    verified_outcomes=(
+                        self._get_verified_outcomes()
+                        if self.use_verified_exemplars else ()
+                    ),
+                    budget_tokens=self._prompt_budget(),
+                    exemplar_usage={},
+                )
+                prompt = next(
+                    m.content for m in bundle.messages if m.role == "user"
+                )
+                system_prompt = next(
+                    m.content for m in bundle.messages if m.role == "system"
+                )
+                # One subject per turn: each turn is its own work item
+                # for record/replay (a retry within the turn shares
+                # the turn's subject, same as the base call's).
+                with transcript_subject(
+                    f"{vuln.finding_id}::toolloop::turn{turn}",
+                ):
+                    # Honest accounting at the transport boundary —
+                    # see _expand_context_and_rerun.
+                    stats["turns_performed"] += 1
+                    if not llm_called:
+                        stats["loops_performed"] += 1
+                        llm_called = True
+                    raw_turn, _full_response = self.llm.generate_structured(
+                        prompt=prompt,
+                        schema=schema,
+                        system_prompt=system_prompt,
+                        task_type=TaskType.ANALYSE,
+                    )
+                    if raw_turn is None:
+                        raise RuntimeError("tool loop returned no analysis")
+                    validated = validate_structured_response(
+                        raw_turn, schema,
+                    )
+                    # Strip the request field in every case — it never
+                    # rides a persisted analysis dict. (On base-schema
+                    # turns validation already dropped it.)
+                    requests = validated.data.pop(
+                        CONTEXT_REQUESTS_FIELD, None,
+                    )
+                    if request_allowed and has_requests(requests):
+                        # Request turn: serve (or refuse) each request
+                        # and loop. No quality retry here — a request
+                        # turn legitimately abstains on the verdict
+                        # fields, and a retry would be a wasted paid
+                        # call.
+                        block, records = run_turn_requests(
+                            requests, state,
+                        )
+                        turn_records.append(
+                            {"turn": turn, "requests": records},
+                        )
+                        if block is not None:
+                            result_blocks = result_blocks + (block,)
+                        continue
+                    # Verdict turn: the model answered (or the final /
+                    # byte-capped turn forced the base schema). Only
+                    # here is the quality retry worth paying for.
+                    validated = attempt_quality_retry(
+                        self.llm, validated, prompt, schema,
+                        system_prompt=system_prompt,
+                        task_type=TaskType.ANALYSE,
+                        threshold=0.5,
+                    )
+                    validated.data.pop(CONTEXT_REQUESTS_FIELD, None)
+                    second = validated.data
+                    break
+
+            if second is None:  # pragma: no cover — loop invariant
+                raise RuntimeError("tool loop ended without a verdict")
+            if end_reason == "turn_cap":
+                stats["turn_cap_hits"] += 1
+            elif end_reason == "byte_cap":
+                stats["byte_cap_hits"] += 1
+
+            # Same CVSS derivation the base verdict got — the join
+            # may promote this dict to the finding's analysis.
+            from packages.cvss import score_finding
+            score_finding(second)
+
+            chosen, replaced = join_verdicts(first_analysis, second)
+            if replaced:
+                stats["loops_changed_verdict"] += 1
+                logger.info(
+                    "✓ Context tool loop replaced the verdict for %s "
+                    "(final verdict more confident)",
+                    vuln.finding_id,
+                )
+            else:
+                logger.info(
+                    "✓ Context tool loop kept the first verdict for %s "
+                    "(final verdict not more confident)",
+                    vuln.finding_id,
+                )
+                # The standing verdict was rendered on the ORIGINAL
+                # window — restore it so the persisted context matches
+                # the verdict that stands.
+                vuln.surrounding_context = original_context
+            kinds = {b.kind for b in hop_blocks}
+            chosen["context_toolloop"] = build_toolloop_record(
+                reason=reason,
+                first=first_analysis,
+                final=second,
+                replaced=replaced,
+                turns=turn_records,
+                end_reason=end_reason,
+                total_result_bytes=state.total_result_bytes,
+                window_lines=EXPANDED_FINDING_CONTEXT_LINES,
+                caller_context_attached="caller-call-sites" in kinds,
+                callee_context_attached="callee-sources" in kinds,
+            )
+            return chosen
+        except Exception as e:  # noqa: BLE001
+            stats["errors"] += 1
+            vuln.surrounding_context = original_context
+            from core.security.log_sanitisation import (
+                sanitise_for_terminal as _sft,
+            )
+            detail = _sft(str(e), max_len=200)
+            logger.warning(
+                "Context tool loop failed for %s — first verdict "
+                "stands: %s",
+                vuln.finding_id, detail,
+            )
+            first_analysis["context_toolloop"] = {
+                "triggered": True,
+                "reason": reason,
+                # Honest: True only when at least one loop LLM call
+                # was actually issued before the failure.
+                "performed": llm_called,
+                "error": detail,
+            }
+            return None
+        finally:
+            # Served/refused fold into the run stats EXACTLY once, on
+            # every exit path — success and failure alike. Folding on
+            # the success path and again in the except handler would
+            # double-count when a failure lands between the fold and
+            # the return.
+            if state is not None:
+                stats["tool_calls_served"] += state.served
+                stats["tool_calls_refused"] += state.refused
 
     def _tier1_pre_flight(self, vuln: VulnerabilityContext) -> str:
         """Run IRIS Tier 1 against `vuln` if a CodeQL DB is available.
@@ -4008,6 +4368,9 @@ class AutonomousSecurityAgentV2:
         # (zeros included): counted-never-silent.
         if getattr(self, "context_expansion", False):
             report["context_expansion"] = dict(self._expansion_stats)
+        # Tool-loop stats — same flag-gated contract.
+        if getattr(self, "context_toolloop", False):
+            report["context_toolloop"] = dict(self._toolloop_stats)
 
         # Save report
         report_file = self.out_dir / "autonomous_analysis_report.json"
@@ -4123,6 +4486,29 @@ class AutonomousSecurityAgentV2:
                     MAX_EXPANSIONS_PER_RUN,
                     _es["skipped_cap"],
                     _es["errors"],
+                )
+            if getattr(self, "context_toolloop", False):
+                from packages.llm_analysis.context_expansion import (
+                    MAX_EXPANSIONS_PER_RUN as _cap,
+                )
+                _ts = self._toolloop_stats
+                logger.info(
+                    "✓ Context tool loop: %d triggered, %d performed "
+                    "(%d turns), %d changed verdict (shared cap %d; "
+                    "%d skipped at cap, %d errors); tool calls "
+                    "%d served / %d refused; %d turn-cap, "
+                    "%d byte-cap",
+                    _ts["loops_triggered"],
+                    _ts["loops_performed"],
+                    _ts["turns_performed"],
+                    _ts["loops_changed_verdict"],
+                    _cap,
+                    _ts["skipped_cap"],
+                    _ts["errors"],
+                    _ts["tool_calls_served"],
+                    _ts["tool_calls_refused"],
+                    _ts["turn_cap_hits"],
+                    _ts["byte_cap_hits"],
                 )
             logger.info("")
             if dataflow_validated > 0:

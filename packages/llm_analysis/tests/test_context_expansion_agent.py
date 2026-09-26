@@ -126,6 +126,13 @@ def _agent(tmp_path: Path, llm: _QueueLLM, *, context_expansion: bool):
             "skipped_cap": 0,
             "errors": 0,
         },
+        # Mirrors the real constructor: the expansion-side cap check
+        # reads the tool loop's counters (shared budget, symmetric
+        # with the loop-side check).
+        _toolloop_stats={
+            "loops_performed": 0,
+            "errors": 0,
+        },
     )
     agent.out_dir.mkdir(exist_ok=True)
     agent._prompt_budget = lambda: 0
