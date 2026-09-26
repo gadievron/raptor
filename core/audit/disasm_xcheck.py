@@ -39,9 +39,13 @@ a write only refutes a "register/argument missing" claim when
    the not-taken path — but still block corroboration), and
 3. the write provably reaches the call within the decoded window:
    either BRANCH-FREE-CONNECTED (no control-transfer instruction
-   between write and call AND no in-window branch target strictly
+   between write and call, no in-window branch target strictly
    between them — a jump landing between the two means the call is
-   reachable without the write) or ENTRY-DOMINATING (the write sits
+   reachable without the write — AND no in-window jump whose target
+   cannot be decoded: an indirect/jump-table dispatch could land
+   anywhere in the window, including between the two, so its mere
+   presence poisons branch-free grade the way truncation poisons
+   corroboration) or ENTRY-DOMINATING (the write sits
    in the function's straight-line entry region, before the first
    control-transfer instruction of a window that starts at the
    function entry: no in-window path can reach any later instruction
@@ -1038,6 +1042,28 @@ def _branch_targets(insns: tuple[_Insn, ...]) -> frozenset[int]:
     return frozenset(out)
 
 
+def _has_unresolved_jump(insns: tuple[_Insn, ...]) -> bool:
+    """True when any in-window jump/branch carries no decodable direct
+    target — an indirect ``jmp rax`` / ``jmp QWORD PTR [...]``
+    (jump-table dispatch, indirect tail call) or an operand the
+    bounded parser cannot read. Such a jump's landing site is
+    invisible to :func:`_branch_targets`, yet it can lie strictly
+    between a write and a call, so its presence poisons BRANCH-FREE
+    refute grade window-wide (conservative, like truncation blocking
+    corroboration). ENTRY-DOMINATING grade is unaffected: the entry
+    region is straight-line by construction, so every in-window path
+    passes an entry write before reaching any control transfer,
+    including the unresolved jump — control flow entering the window
+    from OUTSIDE remains the documented residual for both legs."""
+    for insn in insns:
+        m0 = insn.mnemonic.lower()
+        if not (m0.startswith("j") or m0.startswith("loop")):
+            continue
+        if not _CALL_ADDR_RE.match(insn.operands.strip().lower()):
+            return True
+    return False
+
+
 def _first_operand(operands: str) -> str:
     return operands.split(",", 1)[0].strip().lower()
 
@@ -1201,10 +1227,14 @@ def _analyze_site(
     Refute grade (``strong``) requires the write to provably reach
     the call within the window: branch-free-connected (no
     control-transfer instruction between write and call, no in-window
-    branch target strictly between them) or entry-dominating (in the
-    straight-line entry region of a window that starts at the
-    function entry — every in-window path passes it; see module
-    docstring for the external-entry limitation).
+    branch target strictly between them, and no in-window jump with
+    an undecodable target — an indirect dispatch could land between
+    the two, so :func:`_has_unresolved_jump` poisons this leg
+    window-wide) or entry-dominating (in the straight-line entry
+    region of a window that starts at the function entry — every
+    in-window path passes it before reaching any control transfer,
+    indirect dispatch included; see module docstring for the
+    external-entry limitation).
 
     ``entry_reach`` is :func:`_entry_reachable` for windows whose
     first instruction IS the function entry, else ``None``. When
@@ -1218,6 +1248,7 @@ def _analyze_site(
     call_unreachable_from_entry = (
         entry_reach is not None and call_index not in entry_reach
     )
+    unresolved_jump = _has_unresolved_jump(insns)
 
     steps = 0
     j = call_index - 1
@@ -1237,6 +1268,7 @@ def _analyze_site(
                 and not out.strong
                 and not cf_between
                 and not call_unreachable_from_entry
+                and not unresolved_jump
                 and not any(
                     insn.address < t <= call_addr for t in targets
                 )
