@@ -131,7 +131,7 @@ class TestDepthGrowth:
 
         from core.audit.ts_extract import _PARSE_CACHE
 
-        def cost(depth: int) -> float:
+        def cost_once(depth: int) -> float:
             src = _nested_switch_tower(depth)
             _PARSE_CACHE.clear()
             t0 = time.process_time()
@@ -139,7 +139,14 @@ class TestDepthGrowth:
             assert got is not None and len(got) == depth
             return time.process_time() - t0
 
-        cost(50)  # warm-up (imports, grammar load)
+        def cost(depth: int) -> float:
+            # Min-of-3: process_time still jitters under a loaded
+            # box (scheduler/cache contention); the minimum is the
+            # honest algorithmic cost, and a cubic shape (~8x per
+            # doubling) still fails the 4x ratio by an order.
+            return min(cost_once(depth) for _ in range(3))
+
+        cost_once(50)  # warm-up (imports, grammar load)
         small = max(cost(300), 0.005)
         large = cost(600)
         assert large <= 4 * small + 0.05, (small, large)
