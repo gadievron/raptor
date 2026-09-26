@@ -23,6 +23,7 @@ sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.atomic_fs import write_text_atomically
 from core.json import save_json
+from core.llm.context_window import FINDING_CONTEXT_LINES
 from core.llm.methodology import load_methodology
 from core.llm.scorecard import fast_tier_model_name, run_cheap_fp_check
 from core.llm.task_types import TaskType
@@ -553,7 +554,7 @@ class AutonomousCodeQLAnalyzer:
         self,
         finding: CodeQLFinding,
         repo_path: Path,
-        context_lines: int = 50
+        context_lines: int = FINDING_CONTEXT_LINES
     ) -> str:
         """
         Read vulnerable code with surrounding context.
@@ -561,7 +562,9 @@ class AutonomousCodeQLAnalyzer:
         Args:
             finding: CodeQLFinding object
             repo_path: Repository root path
-            context_lines: Lines before/after to include
+            context_lines: Lines before/after to include (default:
+                the shared classifier window — see
+                core.llm.context_window for the sizing rationale)
 
         Returns:
             Source code with context

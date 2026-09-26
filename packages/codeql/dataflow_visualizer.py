@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.atomic_fs import write_text_atomically
+from core.llm.context_window import DATAFLOW_STEP_CONTEXT_LINES
 from core.logging import get_logger
 from core.source import read_text_capped
 from packages.codeql.dataflow_validator import DataflowPath
@@ -206,8 +207,14 @@ class DataflowVisualizer:
                         )
                         continue
 
-                    start = max(0, line_no - 6)
-                    end = min(len(lines), line_no + 5)
+                    # Same per-node window the analysis prompt's
+                    # dataflow snippets use: the HTML report is the
+                    # operator's view of what the classifier judged —
+                    # a diverging report window would show the
+                    # operator more (or less) context than the
+                    # analysis actually saw.
+                    start = max(0, line_no - DATAFLOW_STEP_CONTEXT_LINES - 1)
+                    end = min(len(lines), line_no + DATAFLOW_STEP_CONTEXT_LINES)
 
                     context = []
                     for i in range(start, end):
