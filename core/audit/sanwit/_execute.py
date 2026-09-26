@@ -101,11 +101,15 @@ _SWEEP_INSPECT_CAP = 64 * 1024
 
 #: Whole-sweep wall budget. Without it the worst case against a
 #: wedged daemon is every per-call timeout in sequence (~90s per
-#: reaped row) — the sweep is a best-effort belt and must never
-#: stall the witness for more than about this long plus one
-#: in-flight call (<=30s). Rows left unprocessed surface again on
-#: the next witness process. Larger stalls a run behind a wedged
-#: daemon; smaller spreads a mass-reap over more runs.
+#: reaped row x the row cap, ~1.6h). The budget is checked BETWEEN
+#: rows, so a row admitted just under it can still spend its full
+#: per-row processing past it — inspect + kill + rm, up to 3 x 30s —
+#: and the initial listing call runs BEFORE the budget clock starts,
+#: so the sweep's entry-to-exit worst case is ~240s (30s listing +
+#: 120s budget + ~90s final row). Rows left unprocessed surface
+#: again on the next witness process.
+#: Larger stalls a run behind a wedged daemon; smaller spreads a
+#: mass-reap over more runs.
 _SWEEP_BUDGET_S = 120
 
 #: Container-side RLIMIT_FSIZE (bytes) for the docker tier. Scope
@@ -316,6 +320,11 @@ def _pid_exists(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
+    except OverflowError:
+        # Belt for future unvetted callers (the sweep length-caps
+        # pids before this): a pid too large for a C int cannot name
+        # a real process — skip-not-crash semantics.
+        return False
     except OSError:
         return True  # EPERM etc.: the pid exists
     return True
@@ -389,16 +398,37 @@ def _sweep_dead_owner_containers(docker: str) -> None:
             continue  # not (or no longer) a witness container
         pid_s = labels.get(_OWNER_PID_LABEL, "")
         start_s = labels.get(_OWNER_START_LABEL, "")
+        # ASCII-anchored AND length-capped, NOT str.isdigit():
+        # isdigit() admits superscript/circled digits ("²") that
+        # int() then rejects, and an uncapped digit run mints a
+        # bignum that os.kill() cannot take (OverflowError) — either
+        # hostile image-inherited label crashed the sweep and the
+        # runtime resolution above it. pid_max is <= 2^22 (7 digits);
+        # 10 digits is generous headroom that still fits a C int.
+        # starttime is the kernel's %llu tick count — 20 digits is
+        # unsigned-64's full print width, and the value is only ever
+        # STRING-compared against the kernel's own rendering (never
+        # int()'d), so the width cap alone bounds the identity
+        # surface; no numeric range check is needed.
         if not (
-            isinstance(pid_s, str) and pid_s.isdigit()
-            and isinstance(start_s, str) and start_s.isdigit()
+            isinstance(pid_s, str)
+            and re.fullmatch(r"[0-9]{1,10}", pid_s)
+            and isinstance(start_s, str)
+            and re.fullmatch(r"[0-9]{1,20}", start_s)
         ):
-            continue
+            continue  # not a real owner identity: not ours, skip
         if start_s == "0":
             continue  # owner identity was never verifiable
         pid = int(pid_s)
         if pid == own_pid:
             continue
+        # Shared starttime helper, one belt fewer than the old local
+        # copy: the LIVE read is not digit-vetted, so a garbage parse
+        # on a live pid would read as identity MISMATCH (the reap
+        # direction) rather than unverifiable (skip). Unreachable in
+        # practice — the kernel prints the field as %llu and the
+        # last-paren split defeats comm spoofing — stated, not
+        # papered over.
         live_start = proc_starttime(pid)
         if live_start == start_s:
             continue  # owner alive, identity verified
