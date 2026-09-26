@@ -119,6 +119,16 @@ class TestPrepassCensusLane:
             {"a.c": "int x;\n"}, budget_s=0.1)
         assert result["telemetry"].get("budget_exceeded")
 
+    def test_wall_time_covers_the_census(self, monkeypatch):
+        # Telemetry pin: wall_time_s reports the WHOLE prepass wall.
+        # The derived-mode deadline re-anchor after the census must
+        # not subtract the census's share from the reported figure
+        # (the deadline anchor and the telemetry anchor are different
+        # clocks).
+        cp, _calls = self._capture_census(monkeypatch, sleep_s=0.25)
+        result = cp.run_consistency_prepass({"a.c": "int x;\n"})
+        assert result["telemetry"]["wall_time_s"] >= 0.25
+
     def test_truncated_cached_census_is_a_miss(self, tmp_path):
         # Pre-derive segments cached 30s-truncated censuses; serving
         # them on fingerprint match would pin the truncation forever.
