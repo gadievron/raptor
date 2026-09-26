@@ -80,6 +80,17 @@ class DarkVerifyResult:
     actual_exception: str = ""
     match_detail: str = ""
     oracle_reliability: str = "decisive"
+    # What the harness protocol itself reported, independent of the
+    # expectation-relative verdict: "returned" | "exception" |
+    # "import_error" | "binding_error" | "arg_binding_error" (the
+    # vector never bound the callable's signature — the target body
+    # never ran). Stamped only from an
+    # authenticated protocol line; every other path (crash, timeout,
+    # sandbox refusal, unauthenticated or malformed output) leaves the
+    # default "" so consumers that need a raw observation can tell
+    # "the call completed and we saw what it did" apart from "the
+    # verdict was derived without a trustworthy observation".
+    observed_status: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -90,4 +101,5 @@ class DarkVerifyResult:
             "actual_exception": self.actual_exception,
             "match_detail": self.match_detail,
             "oracle_reliability": self.oracle_reliability,
+            "observed_status": self.observed_status,
         }

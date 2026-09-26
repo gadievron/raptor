@@ -1,7 +1,8 @@
 """Harness generators for each supported language.
 
 Every harness writes JSON to stdout in the same shape:
-  {"status": "returned"|"exception"|"import_error", ...}
+  {"status": "returned"|"exception"|"import_error"|"binding_error"
+             |"arg_binding_error", ...}
 
 This lets the shared classifier (_classify_json_output) handle all
 interpreted languages uniformly.
@@ -180,6 +181,20 @@ def generate_witness_script(
     that appeared after validation, a stale or mismatched
     environment).  Plants that would execute are the static engine's
     job to refuse pre-execution.
+
+    Argument-binding gate: before the call, ``inspect.signature(...)
+    .bind(*args, **kwargs)`` checks the vector against the target's
+    signature WITHOUT calling it; a bind failure reports
+    ``arg_binding_error`` — the target body never ran, so the failure
+    characterises the witness arguments, not the code under test.
+    Counting a call-boundary TypeError as the function "rejecting"
+    the input would mint semantic verdicts out of pure signature
+    mismatch.  The gate must not swallow the target's OWN TypeErrors
+    either: when ``inspect.signature`` cannot describe the callable
+    (C-implemented, ``__signature__``-less builtins) the precheck is
+    skipped, and the belt in the except arm reclassifies only
+    TypeErrors whose traceback never entered a callee frame — an
+    exception raised inside the target keeps status ``exception``.
     """
     args_json = json.dumps(spec.args)
     kwargs_json = json.dumps(spec.kwargs)
@@ -187,7 +202,7 @@ def generate_witness_script(
     expected_file = target_str + "/" + spec.file.replace("\\", "/")
     token = _checked_token(witness_token)
     return textwrap.dedent(f"""\
-        import sys, json, os.path
+        import sys, json, os.path, inspect
         _tok = {token!r}
         sys.path.insert(0, {target_str!r})
         try:
@@ -211,8 +226,37 @@ def generate_witness_script(
         _args = json.loads({args_json!r})
         _kwargs = json.loads({kwargs_json!r})
         try:
+            _sig = inspect.signature({spec.function})
+        except (TypeError, ValueError):
+            _sig = None
+        if _sig is not None:
+            try:
+                _sig.bind(*_args, **_kwargs)
+            except TypeError as e:
+                print(json.dumps({{
+                    "status": "arg_binding_error",
+                    "token": _tok,
+                    "message": str(e),
+                }}))
+                sys.exit(0)
+        try:
             _result = {spec.function}(*_args, **_kwargs)
             print(json.dumps({{"status": "returned", "token": _tok, "value": repr(_result)}}))
+        except TypeError as e:
+            _tb = e.__traceback__
+            if _tb is None or _tb.tb_next is None:
+                print(json.dumps({{
+                    "status": "arg_binding_error",
+                    "token": _tok,
+                    "message": str(e),
+                }}))
+            else:
+                print(json.dumps({{
+                    "status": "exception",
+                    "token": _tok,
+                    "type": type(e).__name__,
+                    "message": str(e),
+                }}))
         except Exception as e:
             print(json.dumps({{
                 "status": "exception",

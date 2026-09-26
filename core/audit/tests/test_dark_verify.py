@@ -251,6 +251,98 @@ class TestWitnessScriptRuntimeBinding:
         assert data["status"] == "binding_error"
 
 
+class TestWitnessScriptArgBinding:
+    """The pre-call argument-binding gate: a vector that cannot bind
+    the target's signature reports ``arg_binding_error`` (the target
+    body never ran — its failure is the witness's, not the code's),
+    while the target's OWN TypeErrors keep status ``exception``."""
+
+    def _run(self, script):
+        import subprocess
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=30,
+        )
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+
+    def _tree(self, tmp_path, body):
+        (tmp_path / "pkg").mkdir(exist_ok=True)
+        (tmp_path / "pkg" / "mod.py").write_text(body, encoding="utf-8")
+        return tmp_path
+
+    def _spec(self, args):
+        return DarkWitnessSpec(
+            finding_key="f1", file="pkg/mod.py",
+            function="check", module_path="pkg.mod", args=args,
+        )
+
+    def test_unbindable_vector_reports_arg_binding_error(self, tmp_path):
+        # Required second parameter, one-element vector: the guard
+        # body never runs, and the boundary refusal must not read as
+        # a semantic rejection.
+        root = self._tree(
+            tmp_path,
+            "def check(index, limit):\n"
+            "    if index >= limit:\n"
+            "        raise ValueError('oob')\n"
+            "    return index\n",
+        )
+        script = generate_witness_script(
+            self._spec([4]), root, witness_token="ab12")
+        data = self._run(script)
+        assert data["status"] == "arg_binding_error"
+        assert data["token"] == "ab12"
+        assert "limit" in data["message"]
+
+    def test_binding_vector_still_calls(self, tmp_path):
+        root = self._tree(
+            tmp_path,
+            "def check(index, limit=4):\n"
+            "    if index >= limit:\n"
+            "        raise ValueError('oob')\n"
+            "    return index\n",
+        )
+        script = generate_witness_script(
+            self._spec([1]), root, witness_token="ab12")
+        data = self._run(script)
+        assert data["status"] == "returned"
+        assert data["value"] == "1"
+
+    def test_target_own_typeerror_keeps_exception_status(self, tmp_path):
+        # The gate must not swallow the target's own TypeError: the
+        # vector binds, the body runs and raises — a real observation
+        # of the code under test.
+        root = self._tree(
+            tmp_path,
+            "def check(index):\n"
+            "    raise TypeError('inner semantics')\n",
+        )
+        script = generate_witness_script(
+            self._spec([1]), root, witness_token="ab12")
+        data = self._run(script)
+        assert data["status"] == "exception"
+        assert data["type"] == "TypeError"
+
+    def test_uninspectable_callable_belt_reclassifies(self, tmp_path):
+        # ``inspect.signature`` cannot describe this callable, so the
+        # precheck is skipped — the traceback belt catches the
+        # call-boundary TypeError instead (no callee frame entered).
+        root = self._tree(
+            tmp_path,
+            "class _C:\n"
+            "    @property\n"
+            "    def __signature__(self):\n"
+            "        raise ValueError('opaque')\n"
+            "    def __call__(self, a, b):\n"
+            "        return a\n"
+            "check = _C()\n",
+        )
+        script = generate_witness_script(
+            self._spec([4]), root, witness_token="ab12")
+        data = self._run(script)
+        assert data["status"] == "arg_binding_error"
+
+
 class TestClassifyBindingError:
     def _spec(self, **kw):
         return DarkWitnessSpec(

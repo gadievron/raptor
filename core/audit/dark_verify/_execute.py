@@ -833,6 +833,7 @@ def _classify_json_output(
         return DarkVerifyResult(
             finding_key=spec.finding_key, verdict="error", language=language,
             match_detail=f"import failed: {data.get('message', '')}",
+            observed_status="import_error",
         )
 
     if status == "binding_error":
@@ -845,6 +846,25 @@ def _classify_json_output(
                 f"module binding failed at load time: "
                 f"{data.get('message', '')}"
             ),
+            observed_status="binding_error",
+        )
+
+    if status == "arg_binding_error":
+        # The arguments never bound the target's signature — the call
+        # boundary refused the vector before any target code ran, so
+        # the failure characterises the witness arguments, not the
+        # code under test. No verdict may be minted in EITHER
+        # direction: an expected TypeError must not read as confirmed
+        # off a mis-shaped vector, and a boundary refusal must never
+        # read as the function semantically rejecting the input.
+        return DarkVerifyResult(
+            finding_key=spec.finding_key, verdict="error",
+            language=language,
+            match_detail=(
+                f"arguments do not bind the target signature: "
+                f"{data.get('message', '')}"
+            ),
+            observed_status="arg_binding_error",
         )
 
     expected_exc = spec.expected_exception
@@ -860,6 +880,7 @@ def _classify_json_output(
                         language=language,
                         actual_exception=f"{exc_type}: {exc_msg}",
                         match_detail="error message contains prediction",
+                        observed_status="exception",
                     )
                 return DarkVerifyResult(
                     finding_key=spec.finding_key, verdict="refuted",
@@ -869,6 +890,7 @@ def _classify_json_output(
                         f"expected error message containing "
                         f"{expected_exc!r}, got: {exc_msg[:200]}"
                     ),
+                    observed_status="exception",
                 )
             if exc_type == expected_exc:
                 return DarkVerifyResult(
@@ -876,12 +898,14 @@ def _classify_json_output(
                     language=language,
                     actual_exception=f"{exc_type}: {exc_msg}",
                     match_detail="exception type matches prediction",
+                    observed_status="exception",
                 )
             return DarkVerifyResult(
                 finding_key=spec.finding_key, verdict="refuted",
                 language=language,
                 actual_exception=f"{exc_type}: {exc_msg}",
                 match_detail=f"expected {expected_exc}, got {exc_type}",
+                observed_status="exception",
             )
         # No exception was predicted: an unexpected exception proves
         # the witness (arguments, import path, harness) is wrong about
@@ -895,6 +919,7 @@ def _classify_json_output(
                 "unexpected exception — witness stated no exception "
                 "expectation; not accepted as confirmation"
             ),
+            observed_status="exception",
         )
 
     if status == "returned":
@@ -907,6 +932,7 @@ def _classify_json_output(
                     f"expected {expected_exc} exception, "
                     f"but function returned normally"
                 ),
+                observed_status="returned",
             )
         # A return-value match may only confirm when the witness's
         # stated expectation IS a return-value check. A spec that
@@ -927,6 +953,7 @@ def _classify_json_output(
                         "carries no sanitizers, so the crash could not "
                         "have been observed; not a refutation"
                     ),
+                    observed_status="returned",
                 )
             return DarkVerifyResult(
                 finding_key=spec.finding_key, verdict="refuted",
@@ -935,6 +962,7 @@ def _classify_json_output(
                     "expected crash/sanitizer signal, but function "
                     "returned normally"
                 ),
+                observed_status="returned",
             )
         if spec.expected_return is not None:
             if language in ("c", "cpp") and _pointer_return(spec):
@@ -946,6 +974,7 @@ def _classify_json_output(
                         "(see _c_format_for_type), so the predicted "
                         "value cannot be compared; not a refutation"
                     ),
+                    observed_status="returned",
                 )
             if language == "python":
                 # Python harness uses repr(), which includes quotes for strings
@@ -970,16 +999,19 @@ def _classify_json_output(
                     finding_key=spec.finding_key, verdict="confirmed",
                     language=language, actual_return=actual_repr,
                     match_detail="return value matches prediction",
+                    observed_status="returned",
                 )
             return DarkVerifyResult(
                 finding_key=spec.finding_key, verdict="refuted",
                 language=language, actual_return=actual_repr,
                 match_detail=f"expected {expected_repr}, got {actual_repr}",
+                observed_status="returned",
             )
         return DarkVerifyResult(
             finding_key=spec.finding_key, verdict="inconclusive",
             language=language, actual_return=actual_repr,
             match_detail="no expected value to compare against",
+            observed_status="returned",
         )
 
     return DarkVerifyResult(
