@@ -1848,6 +1848,11 @@
     "count": 24,
     "kind": "literal"
   },
+  "core/taint/mad_rows.py::to_dict": {
+    "count": 15,
+    "kind": "literal",
+    "note": "serializer field manifest for the taint-mad-augmentation.json record cell (persistence schema keys mirroring the AugmentationCell dataclass fields, not a learned name vocabulary; the sink/source/CWE vocabularies inside the values come from the taint packs and IRIS)"
+  },
   "core/testing/git_hermeticity.py::GIT_ENV_STRIP": {
     "count": 18,
     "kind": "literal",
