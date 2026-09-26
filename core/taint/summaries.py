@@ -142,7 +142,7 @@ from core.taint.packs import (
 
 #: Bump when the summary SHAPE or the transfer semantics change in a
 #: way cached summaries must not survive. Part of every cache key.
-SUMMARY_VERSION = 1
+SUMMARY_VERSION = 2
 
 # ── named caps ───────────────────────────────────────────────────────
 # Each cap names both directions. Over ANY of them the function
@@ -359,6 +359,9 @@ class SinkEvent:
     tier: str
     pack: str
     flows: tuple[Flow, ...] = ()
+    #: Spec-declared class gate, carried verbatim so the engine can
+    #: apply it per arriving taint class (empty = every class).
+    only_taint_classes: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -367,6 +370,7 @@ class SinkEvent:
             "confidence": self.confidence, "tier": self.tier,
             "pack": self.pack,
             "flows": [f.to_dict() for f in self.flows],
+            "only_taint_classes": list(self.only_taint_classes),
         }
 
 
@@ -1938,6 +1942,7 @@ class _Extraction:
             line=line, confidence=spec.confidence, tier=spec.tier,
             pack=spec.pack,
             flows=tuple(sorted(live, key=_flow_sort_key)),
+            only_taint_classes=spec.only_taint_classes,
         ))
 
     def _match_learned_sink(

@@ -42,7 +42,12 @@ Format summary (``schema_version`` 1):
   the second-order storage half). ``unless_kwargs`` suppresses a hit
   only when the kwarg value is a LITERAL as written at the call site
   (``shell=False``); a computed value never suppresses — degradation
-  is toward the sink firing, not away from it.
+  is toward the sink firing, not away from it. An optional
+  ``only_taint_classes`` list restricts the sink to flows of the
+  named taint classes (empty/absent = every class) — for sinks whose
+  defect mechanism depends on what the value IS, so a
+  data-sensitivity claim never re-fires on another pack's injection
+  flow into the same callee.
 * ``sanitizers``: ``semantics: "kill"`` drops taint tags for the
   named sink classes; ``semantics: "tag"`` keeps taint flowing and
   records the sanitizer hop for downstream classification. Kill is
@@ -271,6 +276,15 @@ class SinkSpec:
     #: (name, literal) pairs; a hit is suppressed only when the call
     #: site carries the kwarg as exactly this LITERAL token.
     unless_kwargs: tuple[tuple[str, str], ...] = ()
+    #: Taint classes this sink consumes. Empty means every class (the
+    #: pre-existing behaviour, and the right one for injection sinks:
+    #: the flaw is where the value LANDS). Non-empty restricts the
+    #: sink to flows of the named classes — for sinks whose defect
+    #: mechanism depends on what the value IS (a credential reaching
+    #: argv is CWE-214; a route parameter reaching the same argv is
+    #: not), so a data-sensitivity sink never re-reports another
+    #: pack's injection flow under the wrong label.
+    only_taint_classes: tuple[str, ...] = ()
     store_key: str = ""
     provenance: str = ""
     rationale: str = ""
@@ -685,6 +699,11 @@ def _parse_sinks(
             # exact-confidence claim on it would overstate every hit.
             errors.add(where, "method_name sinks must declare confidence \"heuristic\"")
         unless_kwargs = _check_unless_kwargs(errors, where, entry)
+        only_taint_classes: tuple[str, ...] = ()
+        if "only_taint_classes" in entry:
+            only_taint_classes = _check_class_list(
+                errors, where, entry, "only_taint_classes",
+            )
         store_key = _check_str(
             errors, where, entry, "store_key", _STORE_KEY_RE,
             required=kind == SINK_KIND_STORED_WRITE, max_len=64,
@@ -700,6 +719,7 @@ def _parse_sinks(
             kind=kind, match=match, sink_class=sink_class, cwe=cwe,
             args=args, kwargs=kwargs, receiver_hint=receiver_hint,
             confidence=str(confidence), unless_kwargs=unless_kwargs,
+            only_taint_classes=only_taint_classes,
             store_key=store_key, provenance=provenance, rationale=rationale,
             tier=TIER_PACK, pack=pack, framework=framework,
         ))

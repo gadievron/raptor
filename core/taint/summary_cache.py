@@ -202,6 +202,7 @@ def _sink_from(data: Any) -> SinkEvent:
         tier=_need(data, "tier", _STR),
         pack=_need(data, "pack", _STR),
         flows=_flows_from(data, "flows"),
+        only_taint_classes=_str_tuple(data, "only_taint_classes"),
     )
 
 

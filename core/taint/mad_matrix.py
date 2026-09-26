@@ -123,12 +123,16 @@ class Emissibility:
 
 def mad_emissibility(
     *, language: str, role: str, kind: str, provenance: str,
+    class_gated: bool = False,
 ) -> Emissibility:
     """Decide one cell of the emissibility matrix.
 
     ``role`` is the PACK role (``source`` / ``sink`` / ``sanitizer`` /
     ``propagator``); ``kind`` the pack entry kind; ``provenance`` the
     entry's provenance value (learned entries carry ``iris_refined``).
+    ``class_gated`` marks a sink carrying ``only_taint_classes``: a
+    models-as-data row has no taint-class dimension, so emitting one
+    would drop the gate and re-fire the sink on every flow — refused.
     """
     mad_role = _PACK_ROLE_TO_MAD.get(role)
     if mad_role is None:
@@ -182,6 +186,15 @@ def mad_emissibility(
             False,
             reason=kind_reason or f"{role} kind {kind!r} has no row shape",
         )
+    if class_gated:
+        return Emissibility(
+            False,
+            reason=(
+                "class-gated sink (only_taint_classes): models-as-data "
+                "rows carry no taint-class dimension, so a row would "
+                "drop the gate and fire this sink on every tracked flow"
+            ),
+        )
     return Emissibility(True, predicate=layout[mad_role])
 
 
@@ -229,6 +242,7 @@ def emissibility_report(pack_set: PackSet, *, language: str) -> MatrixReport:
         cell = mad_emissibility(
             language=language, role=role, kind=entry.kind,
             provenance=entry.provenance,
+            class_gated=bool(getattr(entry, "only_taint_classes", ())),
         )
         if cell.emissible:
             counts[cell.predicate] = counts.get(cell.predicate, 0) + 1

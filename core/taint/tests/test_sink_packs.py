@@ -1,18 +1,26 @@
 """Content pins for the recall-domain sink packs (second-order
-stores, secrets flow, template engines).
+stores, secrets flow, template engines) and the sink class gate.
 
-These packs are pure data on the sealed pack format: every pin here
-loads them through the UNCHANGED loader and matches them through the
-UNCHANGED extractor — the assertions are about the data (pairing
-closure, vocabulary membership, per-entry claims), never about new
-code paths."""
+The packs are data on the sealed pack format: the pins here load them
+through the shared loader and match them through the shared extractor
+— the assertions are about the data (pairing closure, vocabulary
+membership, per-entry claims). The one engine seam the secrets pack
+depends on — ``only_taint_classes``, the sink class gate that keeps a
+data-sensitivity sink from re-reporting another pack's injection flow
+— is pinned here in both directions (off-class flows gated out,
+secret flows still detected)."""
 
 from __future__ import annotations
 
 import pytest
 
+from core.analysis.package_callgraph import build_package_callgraph
+from core.analysis.route_models import build_route_models
+from core.inventory.call_graph import extract_call_graph_python
+from core.inventory.extractors import PythonExtractor
+from core.taint.engine import PropagationResult, propagate
 from core.taint.learned_intake import intake_learned_specs
-from core.taint.mad_matrix import emissibility_report
+from core.taint.mad_matrix import emissibility_report, mad_emissibility
 from core.taint.packs import (
     PackSet,
     default_pack_names,
@@ -47,6 +55,31 @@ def pack_named(seed_packs: PackSet, name: str):
     matches = [p for p in seed_packs.packs if p.name == name]
     assert len(matches) == 1, f"{name} must ship exactly once"
     return matches[0]
+
+
+def propagate_tree(
+    tmp_path, files: dict[str, str], packs: PackSet,
+) -> PropagationResult:
+    """Real builder chain end to end (inventory extractors → package
+    callgraph → route models → engine), the test_engine plumbing."""
+    records = []
+    for rel, content in sorted(files.items()):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        items = [
+            i.to_dict() for i in PythonExtractor().extract(rel, content)
+        ]
+        records.append({
+            "path": rel,
+            "language": "python",
+            "items": items,
+            "call_graph": extract_call_graph_python(content).to_dict(),
+        })
+    inventory = {"files": records}
+    graph = build_package_callgraph(inventory)
+    routes = build_route_models(inventory, graph)
+    return propagate(graph, routes, packs, target_root=tmp_path)
 
 
 # ── second-order-stores ──────────────────────────────────────────────
@@ -235,6 +268,92 @@ def test_argv_claim_carries_no_shell_suppression(seed_packs: PackSet):
     assert runs["secret-exposure"].cwe == "CWE-214"
 
 
+def test_user_input_argv_flow_is_not_a_secret_finding(
+    tmp_path, seed_packs: PackSet,
+):
+    """The class gate in the flow direction that matters most: a route
+    parameter reaching subprocess.run is ONE finding — the
+    command-injection claim. The argv-visibility entry consumes only
+    secret-classed flows, and the off-class suppression is counted,
+    never silent."""
+    files = {
+        "app/__init__.py": "",
+        "app/views.py": (
+            "import subprocess\n"
+            "from flask import Flask\n"
+            "\n"
+            "app = Flask(__name__)\n"
+            "\n"
+            "@app.route('/run/<cmd>')\n"
+            "def run_cmd(cmd):\n"
+            "    subprocess.run(cmd, shell=True)\n"
+            "    return 'ok'\n"
+        ),
+    }
+    res = propagate_tree(tmp_path, files, seed_packs)
+    runs = [c for c in res.candidates if c.sink_match == "subprocess.run"]
+    assert [c.sink_class for c in runs] == ["command-injection"]
+    assert res.stat("candidates_class_gated") >= 1
+
+
+def test_secret_to_argv_flow_survives_the_class_gate(
+    tmp_path, seed_packs: PackSet,
+):
+    """The positive direction the narrowing must preserve: a genuine
+    credential read handed to subprocess.run argv is still detected,
+    with the finding naming its own defect mechanism (CWE-214 on the
+    secret class)."""
+    files = {
+        "app/__init__.py": "",
+        "app/deploy.py": (
+            "import os\n"
+            "\n"
+            "from .exec_layer import launch\n"
+            "\n"
+            "def deploy():\n"
+            "    token = os.environ.get('API_TOKEN')\n"
+            "    return launch(token)\n"
+        ),
+        "app/exec_layer.py": (
+            "import subprocess\n"
+            "\n"
+            "def launch(token):\n"
+            "    subprocess.run(token)\n"
+            "    return None\n"
+        ),
+    }
+    res = propagate_tree(tmp_path, files, seed_packs)
+    secrets = [c for c in res.candidates
+               if c.sink_class == "secret-exposure"]
+    assert len(secrets) == 1
+    assert secrets[0].sink_match == "subprocess.run"
+    assert secrets[0].sink_cwe == "CWE-214"
+    assert secrets[0].taint_class == "secret"
+
+
+def test_off_class_local_flow_never_reaches_a_gated_sink(
+    tmp_path, seed_packs: PackSet,
+):
+    """Same gate on the in-body source path: request data logged in
+    the function that read it is not a secret-exposure finding, and
+    the suppression is counted."""
+    files = {
+        "app/__init__.py": "",
+        "app/views.py": (
+            "import logging\n"
+            "\n"
+            "from flask import request\n"
+            "\n"
+            "def audit():\n"
+            "    logging.info(request.get_data())\n"
+        ),
+    }
+    res = propagate_tree(tmp_path, files, seed_packs)
+    assert not [c for c in res.candidates
+                if c.sink_class == "secret-exposure"]
+    assert res.stat("candidates_class_gated") >= 1
+
+
 def test_redaction_sanitizers_are_tag_only(seed_packs: PackSet):
     """Redaction completeness is a call-site property — the pack may
     record the hop but never kill the flow."""
@@ -246,19 +365,74 @@ def test_redaction_sanitizers_are_tag_only(seed_packs: PackSet):
 
 
 def test_secrets_rows_emit_or_refuse_accountably(seed_packs: PackSet):
-    """Dotted secrets rows emit models-as-data rows; the method_name
-    logger entries land in the counted refusals with the per-kind
-    reason."""
+    """Every secrets sink is class-gated, and a models-as-data row has
+    no taint-class dimension — so ALL of them land in the counted
+    refusals (method_name entries with the per-kind reason, dotted
+    entries with the class-gate reason). Sources and ungated sinks
+    from the other packs still emit."""
     report = emissibility_report(seed_packs, language="python")
     reasons = {r.row: r.reason for r in report.rejected}
     assert "method_name" in reasons["sink:method_name:info"]
     assert "method_name" in reasons["sink:method_name:debug"]
-    emitted_ok = {
-        "sink:dotted_callee:logging.info",
-        "sink:dotted_callee:urllib.parse.urlencode",
-        "source:call_return:os.environ.get",
-    }
+    for row in ("sink:dotted_callee:logging.info",
+                "sink:dotted_callee:urllib.parse.urlencode",
+                "sink:dotted_callee:subprocess.run"):
+        assert "class-gated" in reasons[row], row
+    emitted_ok = {"source:call_return:os.environ.get"}
     assert not (emitted_ok & set(reasons))
+    # The command-injection subprocess.run row from web-injection-core
+    # shares the refused row's coordinate but is ungated — it must
+    # still emit, so the label above can only be the secrets entry.
+    assert report.emissible_rows > 0
+
+
+def test_class_gated_cell_refuses_in_the_matrix():
+    """Unit pin on the matrix cell: an otherwise-emissible sink cell
+    flips to a reasoned refusal when the entry is class-gated."""
+    open_cell = mad_emissibility(
+        language="python", role="sink", kind="dotted_callee",
+        provenance="framework_catalog",
+    )
+    assert open_cell.emissible
+    gated = mad_emissibility(
+        language="python", role="sink", kind="dotted_callee",
+        provenance="framework_catalog", class_gated=True,
+    )
+    assert not gated.emissible
+    assert "class-gated" in gated.reason
+
+
+def test_every_secrets_sink_declares_the_class_gate(
+    seed_packs: PackSet,
+):
+    """A secret-exposure claim depends on what the value IS, so every
+    sink of that class must restrict itself to secret-classed flows —
+    an ungated one would re-report every tracked flow into a shared
+    coordinate under the wrong label (the subprocess.run seam)."""
+    exposure = [s for s in seed_packs.sinks
+                if s.sink_class == "secret-exposure"]
+    assert exposure
+    for sink in exposure:
+        assert sink.only_taint_classes == ("secret",), sink.match
+
+
+def test_shared_coordinates_across_packs_are_class_disjoint(
+    seed_packs: PackSet,
+):
+    """Regression pin for the adjudicated semantics: when two shipped
+    packs claim the same (kind, match) coordinate, at most one claim
+    may be ungated — a second ungated claim would fire twice on every
+    flow into the coordinate, re-creating the double-finding seam a
+    new pack could otherwise ship silently."""
+    by_coord: dict[tuple[str, str], list] = {}
+    for sink in seed_packs.sinks:
+        by_coord.setdefault((sink.kind, sink.match), []).append(sink)
+    for coord, sinks in by_coord.items():
+        ungated = [s for s in sinks if not s.only_taint_classes]
+        assert len(ungated) <= 1, (
+            f"{coord}: ungated claims from "
+            f"{sorted(s.pack for s in ungated)} double-fire every flow"
+        )
 
 
 # ── template-engines ─────────────────────────────────────────────────

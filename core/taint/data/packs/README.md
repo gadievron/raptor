@@ -21,6 +21,15 @@ format):
 * match fields are exact dotted names / identifiers — no regex;
 * `method_name` sinks must declare `confidence: "heuristic"`;
 * `unless_kwargs` values match literal call-site tokens only;
+* sinks may declare `only_taint_classes` — a non-empty list
+  restricting the sink to flows of the named taint classes (the
+  engine skips off-class flows, counted as `candidates_class_gated`).
+  Omit it for injection sinks, where the flaw is where the value
+  LANDS; declare it where the defect mechanism depends on what the
+  value IS (`secrets-flow` gates every `secret-exposure` sink on the
+  `secret` class so it never re-reports an injection flow into a
+  shared coordinate such as `subprocess.run`). Class-gated sinks are
+  refused as models-as-data rows — a row would drop the gate;
 * sanitizers may not restate a curated
   `core/dataflow/known_safe_calls.py` callee (that table is merged in
   automatically: transform entries kill, validate entries tag);
@@ -52,8 +61,9 @@ consumes the label; the label itself is free-form lowercase).
   deserialization sink.
 * `secrets-flow` — credential sources (getpass, env reads, keyring,
   boto3 credentials) and secret-exposure sinks (logging, print,
-  query-string encoding, exception messages, subprocess argv);
-  tag-only redaction sanitizers.
+  query-string encoding, exception messages, subprocess argv), all
+  gated with `only_taint_classes: ["secret"]`; tag-only redaction
+  sanitizers.
 * `template-engines` — constructor-level SSTI sinks the core pack
   lacks: from_string surfaces (jinja2 dotted + receiver-hinted
   method form, native-types jinja2, django Engine), tornado, bottle,

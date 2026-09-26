@@ -683,6 +683,15 @@ class _SinkHit:
     killed: frozenset[str]
     tags: tuple[str, ...]
     sanitizer_hops: tuple[str, ...]
+    #: Spec-declared class gate: non-empty restricts this sink to
+    #: flows of the named taint classes (empty = every class).
+    only_taint_classes: tuple[str, ...] = ()
+
+    def accepts(self, taint_class: str) -> bool:
+        """Class-gate check — every dispatch site routes through this
+        one predicate so a gated sink can never fire off-class."""
+        return (not self.only_taint_classes
+                or taint_class in self.only_taint_classes)
 
 
 @dataclass
@@ -1197,6 +1206,7 @@ class _Engine:
                     confidence=event.confidence, spec_tier=spec_tier,
                     pack=event.pack, killed=frozenset(flow.killed),
                     tags=flow.markers, sanitizer_hops=flow.hops,
+                    only_taint_classes=event.only_taint_classes,
                 )
                 pi = _flow_param_index(flow)
                 if pi is not None:
@@ -1499,6 +1509,9 @@ class _Engine:
                         sanitizer_hops=hit.sanitizer_hops,
                         killed=tuple(sorted(hit.killed))),)
             for cls in classes:
+                if not hit.accepts(cls):
+                    self._count("candidates_class_gated")
+                    continue
                 self._emit_candidate(
                     sink_function=plan.node_id, hit=hit,
                     taint_class=cls, joined_killed=hit.killed,
@@ -1666,6 +1679,11 @@ class _Engine:
         st = self.state[key]
         # Sinks in this function fed by this parameter.
         for hit in plan.sinks_by_param.get(pi, ()):
+            if not hit.accepts(cls):
+                # Class-gated sink, off-class flow: not a finding of
+                # this sink's defect mechanism — counted, never silent.
+                self._count("candidates_class_gated")
+                continue
             combined = st.killed | hit.killed
             if hit.sink_class and hit.sink_class in combined:
                 self._count("candidates_killed")

@@ -265,6 +265,34 @@ def test_unless_kwargs_literal_token_only(tmp_path, value):
            "unless_kwargs")
 
 
+def test_only_taint_classes_parses_typed(tmp_path):
+    ps = load_one(
+        tmp_path, mutate_entry("sinks", 0, only_taint_classes=["secret"]),
+    )
+    (sink,) = ps.sinks
+    assert sink.only_taint_classes == ("secret",)
+
+
+def test_absent_only_taint_classes_means_every_class(tmp_path):
+    """No gate declared = the pre-existing fire-on-any-class
+    behaviour; every shipped injection sink relies on this."""
+    ps = load_one(tmp_path, VALID_PACK)
+    (sink,) = ps.sinks
+    assert sink.only_taint_classes == ()
+
+
+@pytest.mark.parametrize("value", [
+    [],                # a declared gate must name classes
+    "secret",          # not a list
+    ["Secret!"],       # class grammar violation
+    ["*"],             # no wildcard gate — name the classes or omit
+    [7],               # non-string
+])
+def test_only_taint_classes_validated(tmp_path, value):
+    refuse(tmp_path, mutate_entry("sinks", 0, only_taint_classes=value),
+           "only_taint_classes")
+
+
 def test_wildcard_kill_sanitizer_refused(tmp_path):
     data = mutate_entry("sanitizers", 0, sink_classes=["*"])
     refuse(tmp_path, data, "explicit sink_classes")
