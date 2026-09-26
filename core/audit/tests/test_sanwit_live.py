@@ -224,8 +224,17 @@ class TestDockerContainment:
         # never riding the witness timeout", not a fixed small wall
         # time.
         assert elapsed < DOCKER_TIMEOUT_S - 10
-        time.sleep(2)
-        leftovers = running() - before
+        # The daemon-side `docker rm -f` is issued before execute_probe
+        # returns, but on a loaded daemon its effect can land seconds
+        # later — poll for the empty state instead of trusting one
+        # fixed grace, so the assertion tests containment (cleanup WAS
+        # issued and completes) rather than daemon latency.
+        deadline = time.monotonic() + 30
+        while True:
+            leftovers = running() - before
+            if not leftovers or time.monotonic() >= deadline:
+                break
+            time.sleep(1)
         assert not leftovers, (
             f"flood left container(s) running: {sorted(leftovers)}"
         )
