@@ -136,8 +136,7 @@ def _struct_definitions(sl: dict) -> list[dict]:
     return struct_defs
 
 
-def _load_pending_reading_list(output_dir: Path) -> list[dict]:
-    rl_path = output_dir / "reading-list.json"
+def _pending_items(rl_path: Path) -> list[dict]:
     if not rl_path.is_file():
         return []
     raw = load_json(rl_path, max_bytes=_MAX_STUDY_ARTIFACT_BYTES)
@@ -147,6 +146,10 @@ def _load_pending_reading_list(output_dir: Path) -> list[dict]:
         i for i in raw.get("items", [])
         if not i.get("resolved") and not i.get("unresolvable")
     ]
+
+
+def _load_pending_reading_list(output_dir: Path) -> list[dict]:
+    return _pending_items(output_dir / "reading-list.json")
 
 
 # ------------------------------------------------------------------
@@ -168,13 +171,42 @@ def _detect_concepts_dir(output_dir: Path) -> Path | None:
     return None
 
 
-def _load_prior_knowledge(output_dir: Path, concepts_dir: Path | None) -> None:
+def _load_prior_knowledge(
+    output_dir: Path,
+    concepts_dir: Path | None,
+    *,
+    explicit_focus: bool = False,
+) -> None:
     if concepts_dir is None:
         return
     for name in ("domain-model.json", "reading-list.json", "patterns.json"):
         prior = concepts_dir / name
         target = output_dir / name
         if prior.is_file() and not target.is_file():
+            if name == "reading-list.json" and explicit_focus:
+                # Store-inherited scope must not override operator
+                # focus: run_study re-scopes the ENTIRE item set to
+                # the pending questions of the run-local reading list
+                # (_scope_items_for_reading_list), so copying a
+                # mature project store's list (hundreds of pending
+                # questions, some belonging to other trees) into a
+                # run the operator focused with --identifier or
+                # --concept hands the study to the store, not the
+                # operator. The store list is untouched — the
+                # legitimate resume shape (no explicit focus) still
+                # inherits it, and a run-local list already on disk
+                # is always honoured as-is. Counts only in the line:
+                # question text is target-derived free text.
+                n_pending = len(_pending_items(prior))
+                print(
+                    "study-loop: explicit focus given — not "
+                    f"inheriting the project reading list "
+                    f"({n_pending} pending question(s) stay in the "
+                    "store; a run without --identifier/--concept "
+                    "resumes them)",
+                    file=sys.stderr,
+                )
+                continue
             try:
                 # Atomic: a torn copy (crash mid-write) leaves e.g. a
                 # malformed reading-list.json that load_json reads as
@@ -1188,7 +1220,12 @@ def main() -> int:
     if concepts_dir:
         print(f"study-loop: project concepts dir: {concepts_dir}",
               file=sys.stderr)
-    _load_prior_knowledge(output_dir, concepts_dir)
+    _load_prior_knowledge(
+        output_dir, concepts_dir,
+        # Operator-typed focus channels only: bridge seeds are
+        # derived attention and do not suppress the inherited list.
+        explicit_focus=bool(parsed.identifier or parsed.concept),
+    )
 
     libexec_dir = Path(__file__).resolve().parent
     prep_bin = str(libexec_dir / "raptor-study-prep")
