@@ -1509,20 +1509,19 @@ def _setup_checklist_symlink(run_dir: Path,
     # checklist is vetted too). Costs one bounded JSON parse at run
     # start — the price of not silently steering a whole run's review
     # loop, coverage, and journal at the wrong tree's item list.
-    if target and project_checklist.exists():
-        from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
-        from core.json import load_json as _load_json
+    from core.inventory import checklist_exists
+    if target and checklist_exists(project_dir):
+        # Meta accessor: reads the sharded layout's index manifest
+        # when the project slot is sharded (the single-file probe
+        # alone silently skipped the gate there), full single files
+        # otherwise. Unreadable/corrupt checklists read as {} — the
+        # guard only acts on a POSITIVE mismatch.
+        from core.inventory import read_checklist_meta
         recorded: str = ""
         try:
-            _data = _load_json(
-                project_checklist, max_bytes=RUN_ARTIFACT_MAX_BYTES,
-            )
-            if isinstance(_data, dict):
-                recorded = str(_data.get("target_path") or "")
+            recorded = str(
+                read_checklist_meta(project_dir).get("target_path") or "")
         except (OSError, ValueError):
-            # Unreadable/corrupt project checklist: leave the verdict
-            # to the downstream readers that already own that failure
-            # mode; the guard only acts on a POSITIVE mismatch.
             recorded = ""
         if recorded and Path(recorded).is_absolute():
             # RuntimeError alongside OSError: on Python 3.10-3.12,
@@ -1595,7 +1594,7 @@ def _promote_checklist(project_dir: Path) -> None:
     and copies it to project_dir/checklist.json, merging checked_by
     from older checklists.
     """
-    from core.json import load_json, save_json
+    from core.json import load_json
 
     try:
         children = list(project_dir.iterdir())
@@ -1637,11 +1636,24 @@ def _promote_checklist(project_dir: Path) -> None:
             if not d.is_dir() or d.name.startswith((".", "_")):
                 continue
             cl = d / "checklist.json"
-            if not cl.exists() or cl.is_symlink():
+            # Run-LOCAL checklists only: a symlinked slot is the
+            # project's own checklist (self-promotion). Either
+            # on-disk form qualifies — single file or a run-local
+            # sharded dir.
+            has_single = cl.exists() and not cl.is_symlink()
+            has_sharded = (
+                (d / "checklist" / "index.json").is_file()
+                and not (d / "checklist").is_symlink()
+            )
+            if not has_single and not has_sharded:
                 continue
         except OSError:
             continue
-        data = load_json(cl, max_bytes=RUN_ARTIFACT_MAX_BYTES)
+        if has_single:
+            data = load_json(cl, max_bytes=RUN_ARTIFACT_MAX_BYTES)
+        else:
+            from core.inventory import read_checklist
+            data = read_checklist(d)
         if not data:
             continue
         if isinstance(data, dict) and data.get("scope"):
@@ -1659,7 +1671,16 @@ def _promote_checklist(project_dir: Path) -> None:
     if promoted is None:
         return
 
-    save_json(project_dir / "checklist.json", promoted)
+    # Accessor write: an over-budget promoted inventory lands in the
+    # sharded layout instead of a single file every reader refuses.
+    from core.inventory import ChecklistBudgetExceededError, save_checklist
+    try:
+        save_checklist(project_dir, promoted)
+    except ChecklistBudgetExceededError as exc:
+        from core.logging import get_logger
+        get_logger(__name__).warning(
+            "checklist promotion skipped: %s", exc,
+        )
 
 
 def _finalize_sandbox_summary(output_dir: Path) -> None:
@@ -1928,7 +1949,8 @@ def _journal_project_dir(out_dir: Path) -> Path | None:
         # beneath it (the pin walk stops at the out-root; this direct
         # parent probe needs the same boundary).
         return None
-    if (parent / "checklist.json").exists() or (
+    from core.inventory import checklist_exists
+    if checklist_exists(parent) or (
         parent / "coverage.json"
     ).exists():
         return parent

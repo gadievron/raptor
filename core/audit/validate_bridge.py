@@ -283,7 +283,8 @@ def _stale_history_files(
     — freshness unknown, callers must treat every record as stale for
     suppressive decisions.
     """
-    checklist = _load_json(candidate_dir / "checklist.json")
+    from core.inventory import read_checklist
+    checklist = read_checklist(candidate_dir)
     if not checklist:
         return None
     hashes: dict[str, str] = {}
@@ -577,7 +578,8 @@ def _check_target_match(
     target_path: Path,
 ) -> bool:
     """Check if a candidate output dir is for the same target."""
-    checklist = _load_json(candidate_dir / "checklist.json")
+    from core.inventory import read_checklist
+    checklist = read_checklist(candidate_dir)
     # A checklist without a target (e.g. /validate writes its stage
     # checklist with target=None) must not veto the match — fall back
     # to the run manifest instead of comparing None to the path.

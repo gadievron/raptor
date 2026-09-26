@@ -63,10 +63,9 @@ EXIT_GATE_FAIL = 2
 CORPUS_DIR = Path(__file__).parent
 LABELS_DIR = CORPUS_DIR / "labels"
 
-# Byte budgets for the runner's artifact reads: checklists and
-# results files track corpus size (256 MiB, the checklist budget
-# class); cost-breakdown sidecars are small summaries.
-_MAX_CHECKLIST_BYTES = 256 * 1024 * 1024
+# Byte budgets for the runner's artifact reads: results files track
+# corpus size (256 MiB); cost-breakdown sidecars are small summaries.
+# (Checklist reads route through core.inventory.read_checklist.)
 _MAX_RESULTS_BYTES = 256 * 1024 * 1024
 _MAX_SIDECAR_BYTES = 8 * 1024 * 1024
 
@@ -801,8 +800,8 @@ def _build_checklist(
     out_dir: Path,
 ) -> bool:
     """Build checklist for a target (mechanical, no LLM)."""
-    checklist_path = out_dir / "checklist.json"
-    if checklist_path.exists():
+    from core.inventory import checklist_exists
+    if checklist_exists(out_dir):
         return True
 
     print(f"  Building checklist for {target_dir.name}...", flush=True)
@@ -899,9 +898,9 @@ def _load_inventoried_functions(audit_dir: Path | None) -> set:
     """
     if audit_dir is None:
         return set()
-    ck_path = audit_dir / "checklist.json"
-    ck = load_json(ck_path, max_bytes=_MAX_CHECKLIST_BYTES)
-    if not isinstance(ck, dict):
+    from core.inventory import read_checklist
+    ck = read_checklist(audit_dir)
+    if not ck:
         return set()
     from core.inventory.script_handler import script_handler_stamp
     result = set()

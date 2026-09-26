@@ -446,8 +446,9 @@ def run_edge_pass(
         if pin.authoritative:
             project_dir = pin_project_dir(config.out_dir)
         else:
+            from core.inventory import checklist_exists
             parent = Path(config.out_dir).parent
-            if (parent / "checklist.json").exists() or (
+            if checklist_exists(parent) or (
                     parent / "coverage.json").exists():
                 project_dir = parent
     except Exception:  # noqa: BLE001 — store discovery is best-effort

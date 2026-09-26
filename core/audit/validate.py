@@ -414,8 +414,11 @@ def _dispatch_validate_unsafe(
         selection_file = validate_dir / "selected-findings.json"
         _copy_findings_for_validate(findings_path, selection_file)
 
+        from core.inventory import checklist_exists
         audit_checklist = audit_out_dir / "checklist.json"
-        if audit_checklist.is_file():
+        # Either on-disk form qualifies (the pointer names the SLOT
+        # path; the /validate reader resolves the form itself).
+        if checklist_exists(audit_out_dir):
             save_json(
                 validate_dir / "parent-checklist-pointer.json",
                 {

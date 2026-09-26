@@ -141,9 +141,10 @@ def _derive_directory_target(out_dir: Path) -> str | None:
     meta = load_run_metadata(out_dir) or {}
     candidate = meta.get("target_path")
     if not (isinstance(candidate, str) and candidate):
-        checklist = _load_json(out_dir / "checklist.json")
-        candidate = (checklist.get("target_path")
-                     if isinstance(checklist, dict) else None)
+        # Meta accessor: sharded checklists answer target_path from
+        # the index manifest without loading the file inventory.
+        from core.inventory import read_checklist_meta
+        candidate = read_checklist_meta(out_dir).get("target_path")
         if not (isinstance(candidate, str) and candidate):
             return None
         if corroborate_target_path(out_dir, candidate):

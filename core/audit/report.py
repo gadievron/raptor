@@ -29,7 +29,6 @@ from core.security.prompt_output_sanitise import sanitise_string
 _MAX_RUN_META_BYTES = 1024 * 1024
 _MAX_STATE_BYTES = 8 * 1024 * 1024
 _MAX_FINDINGS_BYTES = 64 * 1024 * 1024
-_MAX_CHECKLIST_BYTES = 256 * 1024 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -1505,8 +1504,8 @@ def _find_unrecorded_reads(
     unrecorded functions descending.
     """
     manifest_path = out_dir / READS_MANIFEST
-    checklist_path = out_dir / "checklist.json"
-    if not manifest_path.exists() or not checklist_path.exists():
+    from core.inventory import checklist_exists
+    if not manifest_path.exists() or not checklist_exists(out_dir):
         return []
 
     # Chokepoint reader, never a bespoke parser: the manifest sits in
@@ -1518,8 +1517,9 @@ def _find_unrecorded_reads(
     if not read_paths:
         return []
 
-    checklist = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
-    if checklist is None:
+    from core.inventory import read_checklist
+    checklist = read_checklist(out_dir)
+    if not checklist:
         return []
 
     recorded_funcs: set[str] = set()

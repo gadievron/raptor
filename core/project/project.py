@@ -1831,8 +1831,8 @@ class ProjectManager:
         checklist build failure logs and leaves the pre-existing
         behaviour (snapshot deferred to the next lifecycle run).
         """
-        checklist_path = project.output_path / "checklist.json"
-        if checklist_path.exists() or not adopted:
+        from core.inventory import checklist_exists
+        if checklist_exists(project.output_path) or not adopted:
             return
         target = Path(project.target)
         if not target.exists():

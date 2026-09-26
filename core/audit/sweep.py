@@ -56,11 +56,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Sibling-run checklist.json parses in a per-run loop; big targets
-# legitimately reach tens of MiB — the checklist budget class.
-_MAX_CHECKLIST_BYTES = 256 * 1024 * 1024
-
-
 _ROLE_RE = _re.compile(r"^//\s*@role:\s*(\w+)", _re.MULTILINE)
 
 
@@ -480,11 +475,9 @@ def _load_checklist_hashes(run_dir: Path) -> dict[str, str]:
     Same shape understand_bridge gates on; empty when the run carries
     no checklist (plain /scan runs).
     """
-    path = run_dir / "checklist.json"
-    if not path.is_file():
-        return {}
-    checklist = load_json(path, max_bytes=_MAX_CHECKLIST_BYTES)
-    if not isinstance(checklist, dict):
+    from core.inventory import read_checklist
+    checklist = read_checklist(run_dir)
+    if not checklist:
         return {}
     out: dict[str, str] = {}
     for f in checklist.get("files", []):

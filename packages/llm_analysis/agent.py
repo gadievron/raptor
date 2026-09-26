@@ -4095,7 +4095,16 @@ def main() -> None:
     checklist = None
     if args.checklist:
         # Non-strict: checklist is optional metadata, pipeline continues without it
-        checklist = load_json(args.checklist)
+        _cl_arg = Path(args.checklist)
+        if _cl_arg.name == "checklist.json":
+            # The flag names the run's checklist SLOT: read through
+            # the accessor so the sharded checklist/ layout (and the
+            # project symlink) resolve — a bare load_json reads
+            # nothing once a big target's inventory goes sharded.
+            from core.inventory import read_checklist
+            checklist = read_checklist(_cl_arg.parent) or None
+        else:
+            checklist = load_json(args.checklist)
         if checklist:
             logger.info("Loaded inventory checklist: %s", args.checklist)
         else:
