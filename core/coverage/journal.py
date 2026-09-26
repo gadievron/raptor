@@ -2272,10 +2272,23 @@ PRODUCER_AGENTIC = "agentic"
 #: explicitly by the feedback writer.
 PRODUCER_VALIDATE = "validate"
 
+#: Witness-backlog drain entries (``raptor-audit backlog drain``
+#: journaling a synthesized-checker receipt for ONE parked dark
+#: hypothesis). Finding-grade like /agentic and /validate entries: a
+#: mechanical witness for a single hypothesis is evidence at that
+#: site, never a function review — drain rows must not suppress audit
+#: gaps, fold into coverage, or be reused as $0 verdicts. Only
+#: stamped explicitly by the drain writer.
+PRODUCER_BACKLOG_DRAIN = "backlog-drain"
+
 #: Producers whose entries record per-FINDING work, not function
 #: reviews. Everything else (audit, unknown-but-legacy) is
 #: function-grade.
-_FINDING_GRADE_PRODUCERS = frozenset({PRODUCER_AGENTIC, PRODUCER_VALIDATE})
+_FINDING_GRADE_PRODUCERS = frozenset({
+    PRODUCER_AGENTIC,
+    PRODUCER_VALIDATE,
+    PRODUCER_BACKLOG_DRAIN,
+})
 
 #: Machine-generated run-id shapes that identify /agentic-side
 #: producers for legacy entries written before the ``producer`` field

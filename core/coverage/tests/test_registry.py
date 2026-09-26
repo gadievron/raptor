@@ -54,6 +54,15 @@ def test_machine_annotations_are_hint_tier_not_reviewed():
     assert classify("annotations") == ("llm", "analysed")
 
 
+def test_backlog_drain_is_static_but_never_review_credit():
+    # backlog-drain journal rows carry a synthesized STATIC checker
+    # witness (pattern-scanner extent, not an LLM review), so the
+    # category is static -- but the depth stays at the unknown/scanned
+    # default: drain marks must never count as reviewed or clear the
+    # LLM-review gap (both-direction with the reviewed tools above).
+    assert classify("backlog-drain") == ("static", "scanned")
+
+
 def test_journal_records_are_review_grade():
     # coverage-journal.json (build_from_journal; /agentic) derives every
     # functions_analysed entry from a per-function review-journal verdict,

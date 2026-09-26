@@ -59,6 +59,17 @@ _REGISTRY = {
     # deliberately identical to the default so a registry regression
     # can never promote scanner marks into review credit.
     "openant": (CATEGORY_LLM, DEPTH_SCANNED),
+    # "backlog-drain" = a witness-backlog drain landed a tool-witnessed
+    # suspicious row for this function (core/audit/backlog_drain.py,
+    # finding-grade journal producer). The witness is a synthesized
+    # STATIC checker (Semgrep/Coccinelle rule) matching the row's own
+    # site — pattern-scanner extent, not a per-function LLM review, so
+    # static category. Depth is deliberately identical to the
+    # unknown/scanned default: registering here only fixes the CATEGORY
+    # (so extent views attribute drain marks to the static tier) — a
+    # registry regression can never promote drain marks into review
+    # credit or drop the function out of the LLM-review gap.
+    "backlog-drain": (CATEGORY_STATIC, DEPTH_SCANNED),
     "audit": (CATEGORY_LLM, DEPTH_ANALYSED),
     # "journal" = a coverage record derived from review-journal entries
     # (build_from_journal; /agentic writes coverage-journal.json). Every
