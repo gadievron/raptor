@@ -936,3 +936,51 @@ class TestRefreshProjectQueue:
         monkeypatch.setattr(readj, "PROJECT_SWEEP_BYTE_BUDGET",
                             10 * 1024 * 1024)
         assert readj.refresh_project_queue(proj) is not None
+
+
+class TestReportSectionShapes:
+    """The report section words each queued record by its shape and
+    breaks the summary line down per class."""
+
+    @staticmethod
+    def _render(records):
+        from core.project.report import render_grouped_findings_markdown
+        return render_grouped_findings_markdown(
+            [_claim()], "proj", readjudication=records)
+
+    def test_overturn_and_split_worded_by_shape(self):
+        records = detect_contradictions(
+            [
+                ("run-1", [_claim(status="confirmed")]),
+                ("run-2", [_claim(id="C-2", status="confirmed"),
+                           _disproof(status="ruled_out")]),
+            ],
+            final_sources={"run-2"},
+        )
+        md = self._render(records)
+        assert "1 confirmed verdict(s) disproven by a later run" in md
+        assert "1 intra-run final-verdict split(s)" in md
+        assert "(overturn-shaped)" in md
+        assert "intra-run split in run-2" in md
+        assert "both final" in md
+        assert "Nothing is auto-overturned" in md
+
+    def test_legacy_wording_kept_for_claim_shape(self):
+        records = detect_contradictions([
+            ("run-1", [_disproof()]),
+            ("run-2", [_claim()]),
+        ])
+        md = self._render(records)
+        assert ("1 recorded disproof(s) contradicted by new signals — "
+                "re-adjudication queue") in md
+        assert "buffer_overflow claim from run-2" in md
+        assert "vs recorded disproven from run-1" in md
+
+    def test_foreign_shape_counted_honestly(self):
+        records = detect_contradictions([
+            ("run-1", [_disproof()]),
+            ("run-2", [_claim()]),
+        ])
+        records[0]["shape"] = "somebody-elses-shape"
+        md = self._render(records)
+        assert "1 contradiction signal(s)" in md

@@ -617,8 +617,10 @@ def _route_dark_to_witness_backlog(
 def _queue_import_readjudication(
     container: dict, dest: Path, source_name: str,
 ) -> None:
-    """Cross-check incoming ``--findings`` rows against disproofs the
-    run dir already recorded.
+    """Cross-check incoming ``--findings`` rows against verdicts the
+    run dir already recorded — new claims against recorded disproofs,
+    and incoming disproofs against recorded confirmed-tier verdicts
+    (the overturn shape; see core.project.readjudication).
 
     Pipeline handoff shares ``--out`` across runs, so a prior pass's
     verdicts sit in *dest* (findings.json) until this import
@@ -668,7 +670,7 @@ def _queue_import_readjudication(
         n = queued_count(records)
         if n:
             print(f"  ⚠️  {n} incoming finding(s) contradict recorded "
-                  f"disproofs — re-adjudication queue: {QUEUE_FILENAME} "
+                  f"verdicts — re-adjudication queue: {QUEUE_FILENAME} "
                   f"(nothing auto-overturned; adjudicate the queued "
                   f"sites with a scoped /validate)")
     except Exception as e:  # noqa: BLE001 — additive trail, never import-fatal

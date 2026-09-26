@@ -2714,9 +2714,13 @@ def _print_findings(project, detailed: bool=False) -> None:
     # Best-effort: an additive signal must never break the view.
     try:
         from .readjudication import (
+            SHAPE_CLAIM_AFTER_DISPROOF,
+            SHAPE_INTRA_RUN_SPLIT,
+            SHAPE_OVERTURN,
             contradicted_disproof_count,
             detect_project_contradictions,
             queued_count,
+            shape_counts,
             suppressed_count,
         )
         readj_records = detect_project_contradictions(run_dirs)
@@ -2726,10 +2730,25 @@ def _print_findings(project, detailed: bool=False) -> None:
             # A capped queue must never read as complete.
             capped = (f" +{n_suppressed} further not recorded "
                       f"(record caps)" if n_suppressed else "")
+            counts = shape_counts(readj_records)
+            parts = []
+            if counts.get(SHAPE_CLAIM_AFTER_DISPROOF):
+                parts.append(
+                    f"{contradicted_disproof_count(readj_records)} "
+                    f"recorded disproof(s) contradicted by newer signals")
+            if counts.get(SHAPE_OVERTURN):
+                parts.append(
+                    f"{counts[SHAPE_OVERTURN]} confirmed verdict(s) "
+                    f"disproven by a later run")
+            if counts.get(SHAPE_INTRA_RUN_SPLIT):
+                parts.append(
+                    f"{counts[SHAPE_INTRA_RUN_SPLIT]} intra-run "
+                    f"final-verdict split(s)")
+            if not parts:
+                parts.append(f"{n_queued} contradiction signal(s)")
             print()
             print(
-                f"⚠️  {contradicted_disproof_count(readj_records)} recorded "
-                f"disproof(s) contradicted by newer signals "
+                f"⚠️  {'; '.join(parts)} "
                 f"({n_queued} queued{capped}) — re-adjudication queue; run "
                 f"`/project report` to write the queue artifact. "
                 f"Nothing is auto-overturned."

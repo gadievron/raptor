@@ -309,18 +309,42 @@ def render_grouped_findings_markdown(
     if queued:
         from core.project.readjudication import (
             QUEUE_FILENAME,
+            SHAPE_CLAIM_AFTER_DISPROOF,
+            SHAPE_INTRA_RUN_SPLIT,
+            SHAPE_OVERTURN,
             contradicted_disproof_count,
+            record_shape,
+            shape_counts,
             suppressed_count,
         )
-        n_disproofs = contradicted_disproof_count(queued)
+        counts = shape_counts(queued)
+        parts = []
+        if counts.get(SHAPE_CLAIM_AFTER_DISPROOF):
+            parts.append(
+                f"{contradicted_disproof_count(queued)} recorded "
+                f"disproof(s) contradicted by new signals"
+            )
+        if counts.get(SHAPE_OVERTURN):
+            parts.append(
+                f"{counts[SHAPE_OVERTURN]} confirmed verdict(s) "
+                f"disproven by a later run (overturn-shaped)"
+            )
+        if counts.get(SHAPE_INTRA_RUN_SPLIT):
+            parts.append(
+                f"{counts[SHAPE_INTRA_RUN_SPLIT]} intra-run "
+                f"final-verdict split(s)"
+            )
+        if not parts:
+            # Foreign-shaped records (the queue file is agent-writable
+            # and readers tolerate unknown shapes): count honestly.
+            parts.append(f"{len(queued)} contradiction signal(s)")
         lines.append("## Re-adjudication queue")
         lines.append("")
         lines.append(
-            f"{n_disproofs} recorded disproof(s) contradicted by new "
-            f"signals — re-adjudication queue ({len(queued)} queued "
-            f"signal(s); full records in `{QUEUE_FILENAME}`). Nothing "
-            f"is auto-overturned: adjudicate with a scoped /validate "
-            f"on the queued sites."
+            f"{'; '.join(parts)} — re-adjudication queue ({len(queued)} "
+            f"queued signal(s); full records in `{QUEUE_FILENAME}`). "
+            f"Nothing is auto-overturned: adjudicate with a scoped "
+            f"/validate on the queued sites."
         )
         n_suppressed = suppressed_count(readjudication)
         if n_suppressed:
@@ -346,15 +370,37 @@ def render_grouped_findings_markdown(
             location = str(site.get("file") or "?")
             if site.get("function"):
                 location += f"::{site.get('function')}"
-            claim_mech = ", ".join(
-                str(m) for m in claim.get("mechanism") or []) or "?"
-            lines.append(
-                f"- **{_md_heading(location)}** — new "
-                f"{_md_heading(claim_mech)} claim from "
-                f"{_md_heading(claim.get('source') or '?')} vs recorded "
-                f"{_md_heading(disproof.get('status') or 'disproof')} from "
-                f"{_md_heading(disproof.get('source') or '?')}"
-            )
+            shape = record_shape(record)
+            if shape == SHAPE_OVERTURN:
+                lines.append(
+                    f"- **{_md_heading(location)}** — prior "
+                    f"{_md_heading(claim.get('status') or 'confirmed')} "
+                    f"verdict from "
+                    f"{_md_heading(claim.get('source') or '?')} disproven "
+                    f"by later "
+                    f"{_md_heading(disproof.get('status') or 'disproof')} "
+                    f"from {_md_heading(disproof.get('source') or '?')} "
+                    f"(overturn-shaped)"
+                )
+            elif shape == SHAPE_INTRA_RUN_SPLIT:
+                lines.append(
+                    f"- **{_md_heading(location)}** — intra-run split in "
+                    f"{_md_heading(claim.get('source') or '?')}: "
+                    f"{_md_heading(claim.get('status') or 'confirmed')} "
+                    f"and "
+                    f"{_md_heading(disproof.get('status') or 'disproof')} "
+                    f"both final"
+                )
+            else:
+                claim_mech = ", ".join(
+                    str(m) for m in claim.get("mechanism") or []) or "?"
+                lines.append(
+                    f"- **{_md_heading(location)}** — new "
+                    f"{_md_heading(claim_mech)} claim from "
+                    f"{_md_heading(claim.get('source') or '?')} vs recorded "
+                    f"{_md_heading(disproof.get('status') or 'disproof')} "
+                    f"from {_md_heading(disproof.get('source') or '?')}"
+                )
             if record.get("mechanism_match") is False:
                 lines.append(
                     f"  - {_md_heading(record.get('mechanism_note') or 'mechanism mismatch')}")

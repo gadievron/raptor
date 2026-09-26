@@ -403,7 +403,7 @@ def merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
             capped = (f" (+{n_suppressed} further not recorded — "
                       f"record caps)" if n_suppressed else "")
             logger.info(
-                "%d recorded disproof contradiction(s) queued for "
+                "%d cross-adjudication contradiction(s) queued for "
                 "re-adjudication%s → %s",
                 readjudication_queued, capped, queue_path,
             )

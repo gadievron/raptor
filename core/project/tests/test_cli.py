@@ -659,3 +659,50 @@ class TestMergeDotPrefixAndLengthGate(unittest.TestCase):
         text, s1, _s2 = self._merge("s" * 300)
         self.assertIn("refus", text.lower())
         self.assertTrue(s1)
+
+
+class TestFindingsReadjudicationNotice(unittest.TestCase):
+    """/project findings surfaces the re-adjudication signal broken
+    down by shape — counts only, nothing overturned in the view."""
+
+    @staticmethod
+    def _run(base: Path, name: str, findings, status="completed") -> Path:
+        run_dir = base / name
+        run_dir.mkdir(parents=True)
+        (run_dir / "findings.json").write_text(
+            json.dumps({"findings": findings}), encoding="utf-8")
+        (run_dir / ".raptor-run.json").write_text(
+            json.dumps({"status": status, "command": "validate"}),
+            encoding="utf-8")
+        return run_dir
+
+    def test_overturn_and_split_counts_in_notice(self):
+        site = {"file": "a.php", "function": "handler", "line": 4,
+                "vuln_type": "xss", "cwe_id": "CWE-79"}
+        with TemporaryDirectory() as d:
+            old = self._run(Path(d), "run_a",
+                            [dict(site, id="A-1", status="confirmed")])
+            new = self._run(Path(d), "run_b", [
+                dict(site, id="B-1", status="confirmed"),
+                dict(site, id="B-2", status="ruled_out"),
+            ])
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                # get_run_dirs contract is NEWEST-first.
+                _print_findings(_FakeProject([new, old]))
+            out = buf.getvalue()
+            self.assertIn("1 confirmed verdict(s) disproven by a later run",
+                          out)
+            self.assertIn("1 intra-run final-verdict split(s)", out)
+            self.assertIn("Nothing is auto-overturned.", out)
+
+    def test_no_contradiction_no_notice(self):
+        with TemporaryDirectory() as d:
+            run = self._run(Path(d), "run_a", [{
+                "id": "A-1", "file": "a.php", "function": "handler",
+                "line": 4, "status": "confirmed",
+            }])
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _print_findings(_FakeProject([run]))
+            self.assertNotIn("re-adjudication", buf.getvalue())
