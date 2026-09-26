@@ -15,9 +15,10 @@ import plistlib
 import struct
 import subprocess
 import xml.parsers.expat
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Protocol, TypeVar
 
 from core.sandbox import run_trusted
 
@@ -369,6 +370,32 @@ _ARCH_ALIASES = {
 }
 
 
+class _HasArch(Protocol):
+    arch: str
+
+
+_SliceT = TypeVar("_SliceT", bound=_HasArch)
+
+
+def match_slice_arch(
+    slices: Sequence[_SliceT],
+    requested_arch: str,
+) -> _SliceT | None:
+    """The ONE alias-normalised arch match every slice-record
+    consumer shares (analysis slices via
+    :func:`resolve_requested_slice`, per-slice facts records via the
+    normalized-facts aggregation layer): first slice whose ``arch``
+    equals the alias-normalised request, or ``None`` when the binary
+    carries no such slice. Consumers must never reimplement the
+    alias loop — two copies would let the manifest and a facts
+    consumer disagree about which ISA an arch name selects."""
+    wanted = _ARCH_ALIASES.get(str(requested_arch), str(requested_arch))
+    for item in slices:
+        if item.arch == wanted:
+            return item
+    return None
+
+
 def resolve_requested_slice(
     slices: list[MachOSlice],
     requested_arch: str,
@@ -377,11 +404,7 @@ def resolve_requested_slice(
     when the binary carries no such slice (alias-normalised). The one
     shared resolution both the manifest and the r2 flag derivation
     consume — they must never disagree about which ISA is analysed."""
-    wanted = _ARCH_ALIASES.get(str(requested_arch), str(requested_arch))
-    for item in slices:
-        if item.arch == wanted:
-            return item
-    return None
+    return match_slice_arch(slices, requested_arch)
 
 
 def select_slice(
@@ -503,10 +526,38 @@ _MAX_ENTROPY_SECTION_BYTES = 4 * 1024 * 1024
 _MAX_ENTROPY_TOTAL_BYTES = 64 * 1024 * 1024
 _MAX_ENTROPY_SECTIONS = 2_048
 
+# mach_header flag bits surfaced as named booleans (the raw flags
+# u32 stays on the record so unmapped bits are never lost).
+_MH_PIE = 0x200000
+_MH_ALLOW_STACK_EXECUTION = 0x20000
+_MH_NO_HEAP_EXECUTION = 0x1000000
+
+# Stack-canary symbol names hunted by the bounded symtab-strings
+# scan (C `__stack_chk_*` carries the extra leading underscore in
+# Mach-O symbol naming). CONSTANTS, never target text — the record
+# stores which of these fixed names were found, so no attacker
+# bytes ride the field.
+_STACK_CANARY_SYMBOLS: tuple[bytes, ...] = (
+    b"___stack_chk_fail",
+    b"___stack_chk_guard",
+)
+# File-level budget for the symtab-strings scan, shared across every
+# slice of a fat container (same aliasing rationale as the entropy
+# and name budgets above: 64 fat entries must not multiply a
+# per-slice IO bound). strsize is an attacker u32 and never a read
+# budget; real string tables run tens of KB to a few MB, so 8 MiB
+# per slice / 64 MiB per file truncates nothing real, while a
+# crafted strsize cannot buy more than the budget. A truncated scan
+# is marker-visible (`symtab_strings_capped`) — the canary answer
+# then covers only the scanned window, honestly.
+_MAX_STRTAB_SCAN_BYTES = 8 * 1024 * 1024
+_MAX_STRTAB_SCAN_TOTAL_BYTES = 64 * 1024 * 1024
+
 # Load-command types this walk parses. LC_REQ_DYLD (0x80000000) is
 # part of the command value where <mach-o/loader.h> defines it so.
 _LC_REQ_DYLD = 0x80000000
 _LC_SEGMENT = 0x1
+_LC_SYMTAB = 0x2
 _LC_UNIXTHREAD = 0x5
 _LC_DYSYMTAB = 0xB
 _LC_LOAD_DYLIB = 0xC
@@ -572,6 +623,7 @@ _S_ZEROFILL_TYPES = {0x1, 0x4, 0x12}
 # (fail-open, mirroring the ELF export-type doctrine).
 _LC_PARSED_FIXED_SIZE: dict[int, int] = {
     _LC_SEGMENT: 56,
+    _LC_SYMTAB: 24,
     _LC_DYSYMTAB: 80,
     _LC_LOAD_DYLIB: 24,
     _LC_LOAD_WEAK_DYLIB: 24,
@@ -623,6 +675,8 @@ class _WalkBudgets:
     entropy_measured: int = 0
     name_bytes_remaining: int = field(
         default_factory=lambda: _MAX_TOTAL_NAME_BYTES)
+    strtab_scan_remaining: int = field(
+        default_factory=lambda: _MAX_STRTAB_SCAN_TOTAL_BYTES)
 
 
 @dataclass
@@ -689,6 +743,13 @@ class MachOSliceFacts:
     size: int = 0                 # slice size as resolved by the walk
     filetype: int = 0             # raw value — fail open on unknown
     flags: int = 0                # raw mach_header flags
+    # Named mach_header flag booleans (the raw ``flags`` stays on
+    # the record so unmapped bits are never lost). Header CLAIMS —
+    # dyld consumes the same bits, but nothing here proves the
+    # loader honoured them.
+    pie: bool = False                      # MH_PIE
+    allow_stack_execution: bool = False    # MH_ALLOW_STACK_EXECUTION
+    no_heap_execution: bool = False        # MH_NO_HEAP_EXECUTION
     ncmds_declared: int = 0
     ncmds_walked: int = 0
     sizeofcmds_declared: int = 0
@@ -706,6 +767,21 @@ class MachOSliceFacts:
     # export trie and symbol-table contents stay unparsed by design).
     # Empty dict = no LC_DYSYMTAB seen.
     dysymtab: dict[str, int] = field(default_factory=dict)
+    # LC_SYMTAB header claims (symoff/nsyms/stroff/strsize) — the
+    # stripped-ness denominators (nsyms == 0, or LC_DYSYMTAB's
+    # nlocalsym == 0, is the classic strip evidence). The nlist
+    # entries themselves stay unparsed by design; only the string
+    # REGION feeds the bounded canary scan below. Empty dict = no
+    # LC_SYMTAB seen.
+    symtab: dict[str, int] = field(default_factory=dict)
+    # Which of the fixed ``_STACK_CANARY_SYMBOLS`` names the bounded
+    # symtab-strings scan found (sorted; constants, never target
+    # text). NAME-PRESENCE evidence only: the names live in the
+    # slice's declared string-table region, so a crafted file can
+    # plant or omit them — an indicator for triage, never a verified
+    # import and never suppression-grade. Empty list = none found
+    # (or no scannable symtab — the markers say which).
+    stack_canary_symbols: list[str] = field(default_factory=list)
     # Min-OS / platform: LC_BUILD_VERSION preferred over the legacy
     # LC_VERSION_MIN_* family regardless of command order;
     # ``min_os_source`` says which one populated the fields.
@@ -920,6 +996,10 @@ def _extract_slice_facts_stream(
     facts.cpu_subtype = cpu_subtype
     facts.filetype = filetype          # raw value — fail open
     facts.flags = flags
+    facts.pie = bool(flags & _MH_PIE)
+    facts.allow_stack_execution = bool(
+        flags & _MH_ALLOW_STACK_EXECUTION)
+    facts.no_heap_execution = bool(flags & _MH_NO_HEAP_EXECUTION)
     facts.ncmds_declared = ncmds
     facts.sizeofcmds_declared = sizeofcmds
 
@@ -941,6 +1021,10 @@ def _extract_slice_facts_stream(
         cmds_start=cmds_start, region_end=region_end, ncmds=ncmds_walk,
     )
     _measure_section_entropy(
+        f, facts, caps, slice_offset=slice_offset,
+        slice_end=slice_end, budgets=budgets,
+    )
+    _scan_symtab_strings(
         f, facts, caps, slice_offset=slice_offset,
         slice_end=slice_end, budgets=budgets,
     )
@@ -1138,6 +1222,22 @@ def _parse_load_command(
         if name is not None:
             budgets.name_bytes_remaining -= len(name.encode("utf-8"))
             facts.rpaths.append(name)
+    elif cmd == _LC_SYMTAB:
+        if facts.symtab:
+            return                      # first wins
+        payload = _read_exact(f, start + 8, 16)
+        if payload is None:
+            caps.add("lc_payload_unreadable")
+            return
+        symoff, nsyms, stroff, strsize = struct.unpack(
+            f"{endian}IIII", payload)
+        # Header claims only — the nlist entries stay unparsed by
+        # design (see the field docs); the string REGION is consumed
+        # by the bounded canary scan after the walk.
+        facts.symtab = {
+            "symoff": symoff, "nsyms": nsyms,
+            "stroff": stroff, "strsize": strsize,
+        }
     elif cmd == _LC_DYSYMTAB:
         if facts.dysymtab:
             return                      # first wins
@@ -1335,6 +1435,71 @@ def _measure_section_entropy(
             section.entropy = _shannon_entropy(data)
 
 
+def _scan_symtab_strings(
+    f: BinaryIO, facts: MachOSliceFacts, caps: set[str], *,
+    slice_offset: int, slice_end: int, budgets: _WalkBudgets,
+) -> None:
+    """Bounded scan of the LC_SYMTAB string-table region for the
+    fixed stack-canary symbol names (``_STACK_CANARY_SYMBOLS``).
+
+    Walk invariant (c) again: ``stroff``/``strsize`` are attacker
+    u32s relative to the slice start — the read is clamped to the
+    slice extent (already folded with file EOF), the per-slice scan
+    window, and the FILE-level scan budget shared across fat slices.
+    A window smaller than the declared strsize is marker-visible
+    (``symtab_strings_capped``): the canary answer then covers only
+    the scanned bytes, honestly. The hunted names are module
+    constants — nothing target-derived lands on the record.
+    """
+    strsize = facts.symtab.get("strsize", 0)
+    stroff = facts.symtab.get("stroff", 0)
+    if not facts.symtab or strsize <= 0:
+        return                     # no scannable string region claimed
+    if stroff <= 0:
+        # A nonzero-size string region claimed at offset 0 points at
+        # the mach header, not a string table — the declared region
+        # is unscannable. Marker-visible: a silent return here would
+        # let downstream canary derivation read "symtab present, no
+        # degradation markers" as a complete no-canary scan.
+        caps.add("symtab_strings_unreadable")
+        return
+    if budgets.strtab_scan_remaining <= 0:
+        caps.add("symtab_strings_capped")
+        return
+    absolute = slice_offset + stroff
+    if absolute > _MAX_SEEK_OFFSET or absolute >= slice_end:
+        caps.add("symtab_strings_unreadable")
+        return
+    count = min(strsize, _MAX_STRTAB_SCAN_BYTES,
+                budgets.strtab_scan_remaining,
+                slice_end - absolute)
+    try:
+        f.seek(absolute)
+        window = f.read(count)
+    except OSError:
+        # Belt-and-braces behind the offset screen: a kernel refusal
+        # costs this scan, not the record.
+        caps.add("symtab_strings_unreadable")
+        return
+    if not window:
+        caps.add("symtab_strings_unreadable")
+        return
+    budgets.strtab_scan_remaining -= len(window)
+    if len(window) < strsize:
+        caps.add("symtab_strings_capped")
+    found = [
+        name.decode("ascii")
+        for name in _STACK_CANARY_SYMBOLS
+        # NUL-anchored on both sides so a superstring symbol name
+        # cannot alias; index 0 of a real string table is a NUL
+        # byte, so the leading anchor also covers a name at the
+        # table start.
+        if b"\x00" + name + b"\x00" in window
+        or window.startswith(name + b"\x00")
+    ]
+    facts.stack_canary_symbols = sorted(found)
+
+
 def macho_facts_evidence(
     binary_sha256: str, path: Path, facts: MachOFacts,
 ) -> BinaryEvidenceRecord:
@@ -1369,6 +1534,7 @@ __all__ = [
     "inspect_app_bundle",
     "inspect_macho_slices",
     "macho_facts_evidence",
+    "match_slice_arch",
     "resolve_requested_slice",
     "select_slice",
 ]
