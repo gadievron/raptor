@@ -21,6 +21,9 @@ Module map:
   transfer pass (param→return, param→call-arg, param→sink, sanitizer
   kill/tag with census and demote-on-shadow) the interprocedural
   worklist composes.
+* :mod:`core.taint.summary_cache` — bounded, shape-validated summary
+  cache keyed on function identity + span content hash + pack/learned
+  vocabulary digest + extractor version.
 
 Nothing here renders verdicts: packs and learned specs configure an
 origination lane whose findings are candidates for the existing
@@ -64,6 +67,11 @@ from core.taint.summaries import (
     index_module_text,
     kill_census,
 )
+from core.taint.summary_cache import (
+    SummaryCache,
+    vocabulary_digest,
+)
+
 __all__ = [
     "DEFAULT_PACKS_DIR",
     "SCHEMA_VERSION",
@@ -83,6 +91,7 @@ __all__ = [
     "SinkSpec",
     "SourceSpec",
     "SpecIndex",
+    "SummaryCache",
     "TaintPack",
     "build_spec_index",
     "curated_sanitizers",
@@ -94,4 +103,5 @@ __all__ = [
     "kill_census",
     "load_packs",
     "mad_emissibility",
+    "vocabulary_digest",
 ]
