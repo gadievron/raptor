@@ -56,7 +56,7 @@ def _spec_dict(tmp_path: Path, cve: str = CVE, fix: str = FIX) -> dict:
     return {
         "cve_id": cve, "repo_url": "https://github.com/drupal/drupal",
         "fix_commit": fix, "local_clone": str(tmp_path / "clone"),
-        "language": "php", "cwe": "CWE-94",
+        "language": "php", "file_suffixes": [".php"], "cwe": "CWE-94",
     }
 
 
