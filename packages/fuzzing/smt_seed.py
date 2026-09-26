@@ -30,6 +30,19 @@ offsets, so a value-at-offset splice has no mechanical basis today.
 Every artifact carries a manifest entry naming the producing finding /
 attack path, the variable, and the witness value, so a crash found
 from one is traceable back to the finding that predicted it.
+
+Plant containment: every filesystem touch this flow makes under the
+run dir goes through a predictable name the previous campaign's
+sandboxed target could occupy, and this module runs in the
+UNSANDBOXED parent. Containment sits at the flow entry —
+:func:`ensure_real_seed_dir` vets the seed-dir name itself before any
+write (a plant there redirects or kills EVERY artifact at once) — and
+per name behind it: seeds are O_EXCL/O_NOFOLLOW exclusive creates,
+the dictionary writes and the manifest write refuse a plant loudly
+and skip. On every plant shape the posture is the same: warn (escaped,
+bounded rendering), skip the touch, leave the plant in place —
+removing a target-planted object is a destructive step this flow
+never takes — and never crash the /fuzz run.
 """
 
 from __future__ import annotations
@@ -46,6 +59,7 @@ from typing import Any
 
 from core.atomic_fs import write_new_bytes, write_text_atomically
 from core.json import load_json, save_json
+from core.run.safe_io import safe_run_mkdir
 from core.security.log_sanitisation import sanitise_for_terminal
 from core.source import read_text_capped
 
@@ -179,6 +193,57 @@ def _write_seed_exclusive(seed_path: Path, data: bytes) -> str | None:
     return None
 
 
+def ensure_real_seed_dir(seed_dir: str | Path) -> str | None:
+    """Entry containment for the seed dir: create it, or accept only a
+    pre-existing REAL directory. Returns a refusal reason on any plant
+    shape, ``None`` when the directory is safe to use.
+
+    The seed dir sits at a predictable name (``SEED_DIR_NAME``) inside
+    the reused run dir the previous campaign's sandboxed target could
+    write, and every artifact of the ``--from-smt-witness`` flow —
+    built-in corpus seeds, witness seeds, ``smt-witness.dict``, the
+    manifest — is written through this name by the unsandboxed parent,
+    which then reads the campaign corpus back through it. The old
+    ``mkdir(parents=True, exist_ok=True)`` was the wrong gate twice
+    over:
+
+    * a planted regular FILE or DANGLING SYMLINK raised
+      ``FileExistsError`` (``exist_ok`` tolerates only a real
+      directory) — uncaught through the bare /fuzz CLI handler, the
+      whole run died before any campaign;
+    * a planted SYMLINK to an attacker-chosen DIRECTORY passed
+      silently (CPython's ``exist_ok`` re-check is ``is_dir()``, which
+      FOLLOWS symlinks), so the parent wrote all seeds, the
+      dictionary, and the manifest into the attacker's directory —
+      ``save_json``'s ``os.replace`` CLOBBERING anything there named
+      like the manifest — and the campaign corpus was read back
+      through the attacker's directory.
+
+    Delegates to :func:`core.run.safe_io.safe_run_mkdir` — the same
+    O_NOFOLLOW-honest create-or-verify the run dir itself gets one
+    level up: absent → created ``0o700`` (fchmod through an
+    ``O_DIRECTORY | O_NOFOLLOW`` handle, never by name); pre-existing
+    real directory owned by the current user and not world-writable →
+    accepted; ANY other occupant of the name (regular file, dangling
+    symlink, symlink to a directory, FIFO, foreign or world-writable
+    dir) → refused. Callers refuse loudly and skip every write AND
+    read under the name — ``read_text_capped`` hardens only the final
+    component, so a symlinked seed dir would still redirect the
+    dictionary read-back through its parent — and leave the plant in
+    place.
+    """
+    seed_dir = Path(seed_dir)
+    try:
+        seed_dir.parent.mkdir(parents=True, exist_ok=True)
+        safe_run_mkdir(seed_dir)
+    except OSError as exc:
+        # UnsafeRunDirError is a PermissionError → OSError; a failed
+        # parent mkdir (planted file on the parent path) lands here
+        # too. The reason feeds the manifest and the log site.
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
 def collect_witnesses(source_dir: Path) -> tuple[list[WitnessRecord], list[dict]]:
     """Scan a run output dir for witness records from both producers.
 
@@ -263,9 +328,49 @@ def synthesize_seeds(
 
     Returns the manifest dict. ``skipped`` entries from collection are
     carried into the manifest so the audit trail is complete.
+
+    Plant containment (the run dir is reused and was writable by the
+    previous campaign's sandboxed target):
+
+    * ``out_dir`` itself is vetted by :func:`ensure_real_seed_dir`
+      before ANY write. On refusal (file / dangling symlink /
+      symlink-to-directory / any non-real-dir occupant of the name)
+      NOTHING is written — the returned manifest carries the reason
+      under ``seed_dir_refused`` plus a ``skipped`` record, and the
+      plant is left in place.
+    * A directory planted at the MANIFEST name inside a real seed dir
+      is refused loudly and the manifest file is skipped —
+      ``os.replace`` cannot swap a directory and this writer never
+      removes a target-planted tree. Seeds and the dictionary are
+      unaffected by that shape, and the returned in-memory manifest
+      still drives the run (the earlier claim that seeds AND the
+      manifest always survive a plant was wrong for exactly this
+      shape: the ``IsADirectoryError`` used to crash the whole run).
     """
     out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    refusal = ensure_real_seed_dir(out_dir)
+    if refusal is not None:
+        logger.warning(
+            "refusing SMT witness synthesis: %s is not usable as the "
+            "seed dir (%s) — a planted object in the reused run dir? "
+            "left in place; nothing written",
+            sanitise_for_terminal(str(out_dir)),
+            sanitise_for_terminal(refusal, max_len=200))
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "witnesses": len(records),
+            "seed_count": 0,
+            "dict_entries": 0,
+            "dict_file": None,
+            "caps_hit": [],
+            "seeds": [],
+            "skipped": [
+                *(skipped or []),
+                {"file": str(out_dir),
+                 "reason": f"seed dir refused: {refusal}"},
+            ],
+            "seed_dir_refused": refusal,
+        }
 
     seeds: list[dict] = []
     dict_entries: dict[str, str] = {}  # token name -> escaped value
@@ -381,8 +486,8 @@ def synthesize_seeds(
         except OSError as exc:
             logger.warning(
                 "witness dictionary not written (%s: %s) — a planted "
-                "object at %s? left in place; seeds and manifest are "
-                "unaffected",
+                "object at %s? left in place; seeds are unaffected and "
+                "the manifest write is guarded on its own",
                 type(exc).__name__,
                 sanitise_for_terminal(str(exc), max_len=200),
                 sanitise_for_terminal(str(dict_path)))
@@ -397,8 +502,24 @@ def synthesize_seeds(
         "caps_hit": sorted(set(caps_hit)),
         "seeds": seeds,
         "skipped": all_skipped,
+        "seed_dir_refused": None,
     }
-    save_json(out_dir / MANIFEST_NAME, manifest, sort_keys=True)
+    # Same containment as the dictionary write above, for the same
+    # reason: the manifest name is exactly as predictable, and
+    # save_json's os.replace cannot swap a planted DIRECTORY
+    # (IsADirectoryError used to propagate up through the bare /fuzz
+    # CLI handler and kill the run before any campaign). Warn and
+    # skip; the in-memory manifest still drives the run.
+    try:
+        save_json(out_dir / MANIFEST_NAME, manifest, sort_keys=True)
+    except OSError as exc:
+        logger.warning(
+            "witness manifest not written (%s: %s) — a planted object "
+            "at %s? left in place; seeds and dictionary are unaffected "
+            "and the in-memory manifest still drives the run",
+            type(exc).__name__,
+            sanitise_for_terminal(str(exc), max_len=200),
+            sanitise_for_terminal(str(out_dir / MANIFEST_NAME)))
     return manifest
 
 
@@ -517,11 +638,21 @@ def synthesize_from_run_dir(source_dir: Path, run_out_dir: Path) -> dict:
 
     Returns the manifest augmented with ``seed_dir`` and
     ``merged_dict`` keys. Logs the one-line operator summary.
+
+    When the seed-dir name itself is planted (``seed_dir_refused`` set
+    by :func:`synthesize_seeds`), the dictionary merge is skipped too:
+    nothing was written, and reading ``smt-witness.dict`` back would
+    traverse the planted name — ``read_text_capped`` refuses a symlink
+    only at the FINAL component, so a symlinked seed dir would still
+    route the read through the attacker-chosen directory.
     """
     records, skipped = collect_witnesses(Path(source_dir))
     seed_dir = Path(run_out_dir) / SEED_DIR_NAME
     manifest = synthesize_seeds(records, seed_dir, skipped=skipped)
-    merged = merge_witness_dict(seed_dir, run_out_dir)
+    if manifest.get("seed_dir_refused"):
+        merged = None
+    else:
+        merged = merge_witness_dict(seed_dir, run_out_dir)
     manifest["seed_dir"] = str(seed_dir)
     manifest["merged_dict"] = str(merged) if merged else None
     logger.info(
