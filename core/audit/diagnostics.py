@@ -89,6 +89,33 @@ def read_function_source(
 # 32-worker cap.
 _TIER_COUNTER_LOCK = threading.Lock()
 
+# Unknown tiers already warned about (once per tier per process).
+# Telemetry must never crash a run, but an unregistered tier's
+# tallies vanish from the tier-effectiveness table — that has to be
+# loud, or a channel erroring 100% of the time stays invisible in
+# exactly the surface built to expose channel degradation.
+_UNKNOWN_TIERS_WARNED: set[str] = set()
+
+
+def warn_unknown_tier(tier: str) -> None:
+    """Warn (once per process) that *tier* has no registry entry.
+
+    Called by every tier-counter increment path when the tier is
+    missing from the counters dict: the increment is dropped, and
+    this is the only trace. Registration lives in the orchestrator's
+    ``_make_tier_counters()``.
+    """
+    with _TIER_COUNTER_LOCK:
+        if tier in _UNKNOWN_TIERS_WARNED:
+            return
+        _UNKNOWN_TIERS_WARNED.add(tier)
+    logger.warning(
+        "tier %r is not registered in _make_tier_counters() — its "
+        "telemetry increments are dropped and the tier-effectiveness "
+        "table will never show it",
+        tier,
+    )
+
 
 def increment_tier_dict(
     tier_counters: dict[str, Any],
@@ -106,6 +133,8 @@ def increment_tier_dict(
         with _TIER_COUNTER_LOCK:
             current = getattr(tier_counters[tier], field, 0)
             setattr(tier_counters[tier], field, current + value)
+    else:
+        warn_unknown_tier(tier)
 
 
 def increment_tier(
@@ -121,6 +150,7 @@ def increment_tier(
     """
     tc = result.tier_counters.get(tier)
     if tc is None:
+        warn_unknown_tier(tier)
         return
     with _TIER_COUNTER_LOCK:
         if outcome_str == "confirmed":
@@ -150,6 +180,7 @@ def tally_substrate_skip_language(
     language for the report."""
     tc = tier_counters.get(tier)
     if tc is None:
+        warn_unknown_tier(tier)
         return
     lang = language or "unknown"
     with _TIER_COUNTER_LOCK:
