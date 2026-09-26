@@ -1025,6 +1025,12 @@ class OrchestratorConfig:
     # bounded rebuild as fallback when prep produced none.
     consistency_census: dict[str, Any] | None = None
     consistency_source_texts: dict[str, str] | None = None
+    # Reuse-guard facts frozen when the census is stashed: the
+    # coverage-key snapshot (immune to later growth of any live
+    # text dict) and cache-reload provenance (a reloaded census may
+    # lack the Joern supplement a fresh build would get).
+    consistency_census_keys: frozenset[str] | None = None
+    consistency_census_cached: bool = False
     # The prepass's harvested wur contract witnesses (source texts +
     # target headers). Must travel with the census: the chain-side
     # harvest only sees source_texts, and header-declared contracts
@@ -4864,6 +4870,44 @@ def _load_call_edges_from_store(
     return True
 
 
+def _reusable_prepass_census(config, source_texts, *,
+                             joern_server=None):
+    """The prepass census, iff valid for *source_texts* — else None.
+
+    Validity is three-fold; None = the battery rebuilds, exactly as
+    before the reuse existed.
+
+    COVERAGE: the census only stands in for a fresh build when it was
+    built over a superset of the battery's text set (compared against
+    the coverage-key snapshot frozen at build time — never against a
+    live dict that may have grown since). An under-covering census
+    under-counts sites per callee and skews the majority statistics
+    toward false deviations; a superset census only ADDS sites
+    (richer majorities, same direction).
+
+    COMPLETENESS: a census whose build hit its site cap / deadline
+    carries partial per-callee counts — its majorities must not
+    replace the battery's own build.
+
+    PROVENANCE: with a live Joern server, a prep-cache-reloaded
+    census may lack the cross-file supplement a fresh build would
+    get; the battery's build (which WOULD be supplemented) wins.
+    """
+    prep_census = getattr(config, "consistency_census", None)
+    prep_keys = getattr(config, "consistency_census_keys", None)
+    if not prep_census or prep_keys is None:
+        return None
+    if not prep_keys >= set(source_texts):
+        return None
+    if any(getattr(c, "truncated", False)
+           for c in prep_census.values()):
+        return None
+    if joern_server is not None and getattr(
+            config, "consistency_census_cached", False):
+        return None
+    return prep_census
+
+
 def _prep_call_edges(context_map: dict[str, Any], config,
                      checklist: dict[str, Any] | None) -> None:
     """The prep seam's call-edge flow, in one testable unit.
@@ -6331,6 +6375,66 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     except Exception:
         logger.debug("semantic consistency check failed", exc_info=True)
 
+    # Standing consistency pre-pass (§2.3/§2.4): usage-enum census +
+    # return-census.json, LLM-free verdicts on census deviants,
+    # flag/mode + cleanup comparators, capped checklist leads, and the
+    # acknowledged-discard → fail_open handoff hypotheses. Runs
+    # BEFORE the mechanical-detector battery so the battery's
+    # callsite-consistency detector can reuse the census it builds
+    # (one census per prep). Its lead/handoff seeding stays AFTER the
+    # battery: seeding grows the gap set, and the battery reviews the
+    # pre-seed set by design.
+    _phase("prep_consistency_prepass")
+    consistency_prepass: dict[str, Any] = {}
+    try:
+        from .consistency_prepass import run_consistency_prepass
+
+        prepass_texts = _gap_source_texts()
+        if prepass_texts:
+            consistency_prepass = run_consistency_prepass(
+                prepass_texts,
+                target_path=config.target_path,
+                out_dir=config.out_dir,
+                annotations_dir=getattr(config, "annotations_dir", None),
+                inventory=getattr(config, "inventory", None),
+                context_map=context_map,
+                domain_model=prep_domain_model,
+                joern_server=joern_server,
+                # Interface-implementor parity consumes the
+                # resolver's mechanical layers (L2 dispatch-site, L4
+                # type-cohort) — groups already built above.
+                peer_groups=peer_groups,
+            )
+            # Thread the standing census (and the texts it was built
+            # over — census_verdict needs them for exhibits, snippets
+            # and the wur harvest) to the battery's reuse seam and
+            # the in-chain consistency dispatch. An empty census
+            # (build failed / budget) stays None so the channel's
+            # bounded rebuild fallback applies.
+            config.consistency_census = (
+                consistency_prepass.get("census") or None
+            )
+            if config.consistency_census is not None:
+                config.consistency_source_texts = prepass_texts
+                # Reuse-guard facts, frozen at build time: the
+                # coverage-key snapshot must not track later growth
+                # of any live dict, and cache-reload provenance
+                # gates reuse when a live Joern server would have
+                # supplemented a fresh build.
+                config.consistency_census_keys = frozenset(
+                    prepass_texts,
+                )
+                config.consistency_census_cached = bool(
+                    consistency_prepass.get("census_cached", False),
+                )
+                _prep_wur = consistency_prepass.get("wur_functions")
+                if _prep_wur:
+                    config.consistency_wur_functions = frozenset(
+                        _prep_wur,
+                    )
+    except Exception:
+        logger.debug("consistency prepass failed", exc_info=True)
+
     _phase("prep_mechanical_detectors")
     mechanical_findings: dict[str, list[dict[str, Any]]] = {}
     guard_clean_keys: set[str] = set()
@@ -6386,50 +6490,19 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     except Exception:
         logger.debug("perlasm asm-check routing failed", exc_info=True)
 
-    # Standing consistency pre-pass (§2.3/§2.4): usage-enum census +
-    # return-census.json, LLM-free verdicts on census deviants,
-    # flag/mode + cleanup comparators, capped checklist leads, and the
-    # acknowledged-discard → fail_open handoff hypotheses.
-    _phase("prep_consistency_prepass")
-    consistency_prepass: dict[str, Any] = {}
+    # Consistency-prepass result routing + gap seeding. The prepass
+    # itself ran BEFORE the battery (census reuse); everything that
+    # grows or annotates the gap set — and the mechanical-record
+    # routing, which needs the battery's mechanical_findings dict —
+    # lands here, exactly where it always did.
+    _phase("prep_consistency_seeding")
     try:
         from .consistency_prepass import (
-            run_consistency_prepass,
             seed_consistency_leads,
             seed_fail_open_handoffs,
         )
 
-        prepass_texts = _gap_source_texts()
-        if prepass_texts:
-            consistency_prepass = run_consistency_prepass(
-                prepass_texts,
-                target_path=config.target_path,
-                out_dir=config.out_dir,
-                annotations_dir=getattr(config, "annotations_dir", None),
-                inventory=getattr(config, "inventory", None),
-                context_map=context_map,
-                domain_model=prep_domain_model,
-                joern_server=joern_server,
-                # Interface-implementor parity consumes the
-                # resolver's mechanical layers (L2 dispatch-site, L4
-                # type-cohort) — groups already built above.
-                peer_groups=peer_groups,
-            )
-            # Thread the standing census (and the texts it was built
-            # over — census_verdict needs them for exhibits, snippets
-            # and the wur harvest) to the in-chain consistency
-            # dispatch. An empty census (build failed / budget) stays
-            # None so the channel's bounded rebuild fallback applies.
-            config.consistency_census = (
-                consistency_prepass.get("census") or None
-            )
-            if config.consistency_census is not None:
-                config.consistency_source_texts = prepass_texts
-                _prep_wur = consistency_prepass.get("wur_functions")
-                if _prep_wur:
-                    config.consistency_wur_functions = frozenset(
-                        _prep_wur,
-                    )
+        if consistency_prepass:
             for mf in consistency_prepass.get("mechanical", []):
                 key = f"{mf['file']}:{mf['function']}"
                 mechanical_findings.setdefault(key, []).append(mf)
@@ -6470,7 +6543,8 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
                         **(consistency_prepass.get("telemetry") or {}),
                     })
     except Exception:
-        logger.debug("consistency prepass failed", exc_info=True)
+        logger.debug("consistency prepass seeding failed",
+                     exc_info=True)
 
     # Context-map sink seeding: the map phase records sink details
     # whose reachability prose can state a finding in all but name
@@ -11736,6 +11810,20 @@ def _run_mechanical_detectors(
     def _det_callsite_consistency() -> list[Any]:
         from .callsite_consistency import detect_callsite_deviations
 
+        # Census reuse: the consistency prepass already built (and
+        # cached) a census for this run — rebuilding here paid the
+        # whole per-site scope-walk cost a second time per run (at
+        # kernel scale, minutes). Reuse is gated on coverage,
+        # completeness, and cache provenance (see
+        # _reusable_prepass_census). A superset census can carry
+        # deviations for files OUTSIDE the battery's text set: those
+        # are the prepass's business (already routed by its own
+        # channel) and must not enter this detector's records — the
+        # in-set filter below keeps the reuse path's output domain
+        # identical to a fresh build over source_texts.
+        _reuse_census = _reusable_prepass_census(
+            config, source_texts, joern_server=joern_server,
+        )
         return [
             (
                 cd.file,
@@ -11747,7 +11835,9 @@ def _run_mechanical_detectors(
             )
             for cd in detect_callsite_deviations(
                 source_texts, joern_server=joern_server,
+                census=_reuse_census,
             )
+            if _reuse_census is None or cd.file in source_texts
         ]
 
     def _det_block_sibling() -> list[Any]:
