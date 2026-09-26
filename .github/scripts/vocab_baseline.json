@@ -588,9 +588,10 @@
     "kind": "literal",
     "note": "framework-internal enum/namespace vocabulary (not target API names); grew to 13 with the five-channel programme's resource_bounds/release_order/protocol_state namespaces"
   },
-  "core/audit/executor.py::_process_glance_batch": {
+  "core/audit/executor.py::_process_glance_batch_inner": {
     "count": 10,
-    "kind": "literal"
+    "kind": "literal",
+    "note": "renamed from _process_glance_batch (the counted-review-call wrapper split moved the body into the _inner function); same previously-baselined list, content unchanged"
   },
   "core/audit/fail_open_census.py::_lead_from": {
     "count": 12,
@@ -1196,6 +1197,11 @@
     "count": 12,
     "kind": "literal",
     "note": "docker/compose failure-class enum (Literal type): infra failure taxonomy for stderr classification, not target API names"
+  },
+  "core/coverage/journal_checkpoint.py::checkpoint_journal": {
+    "count": 11,
+    "kind": "literal",
+    "note": "closed record schema, not a name vocabulary: the checkpoint hysteresis state record written to the run dir (the exact fields _load_state validates on read; the two sides must stay in lockstep)"
   },
   "core/coverage/registry.py::_REGISTRY": {
     "count": 25,
