@@ -218,6 +218,44 @@ rendering. An empty `claimed_signer` with `authenticode_present`
 true means the blob did not yield a claim; the record's `caps_hit`
 markers (`authenticode_*`, `signer_*`) say why.
 
+### Format Facts (PE / Mach-O / ELF)
+
+Each format tier exposes a shallow facts extractor (header claims
+only, hostile-input bounded, per-field degradation with `caps_hit`
+markers), and `core.binary.facts` normalizes the three into one
+record shape — sizes, sections, linked libraries, import/export
+counts, per-format mitigation map, entry point, stripped-ness and
+debug references. The intake attaches the PE and Mach-O facts to the
+binary manifest as `pe_facts` / `macho_facts` evidence, and
+`/describe` renders the normalized record when pointed at a single
+binary.
+
+Mitigation fields are **header claims, not verification**:
+
+- PE: `aslr` / `high_entropy_va` / `dep` / `cfg` / `no_seh` from
+  DllCharacteristics; `stack_cookie` (a configured /GS SecurityCookie
+  slot) and `safeseh` (PE32 only — PE32+ records unknown by
+  definition, the x64 unwind model replaces SafeSEH) from a bounded
+  load-config skim. Read `no_seh` and `safeseh` together: `no_seh`
+  yes moots a registered handler table (the image uses no SEH at
+  all). Stripped-ness signals: debug-directory presence and the COFF
+  symbol-count claim.
+- Mach-O: `pie` / `allow_stack_execution` / `no_heap_execution` from
+  the mach_header flags; `stack_canary` from a bounded scan of the
+  LC_SYMTAB string-table region for the `___stack_chk_*` names —
+  name-presence evidence a crafted file can plant or omit, never a
+  verified import and never suppression-grade.
+
+A fact a tier cannot answer is `unknown`/`None`, never a fabricated
+no — a capped or unreadable scan window refuses to render a
+confident answer, and a degraded PE optional header renders every
+DllCharacteristics-derived flag unknown rather than a default no.
+
+Two normalized fields keep format-native semantics: `arch` carries
+each extractor's own vocabulary unmapped, and `entrypoint` is the
+AddressOfEntryPoint RVA on PE but the LC_MAIN `entryoff` **file
+offset** on Mach-O — never compare them across formats.
+
 ### Parser Boundary Extraction
 
 For GUI apps, XPC listeners, URL handlers and protocol callbacks, the
