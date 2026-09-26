@@ -128,11 +128,23 @@ def _base(tool_label: str) -> str:
 
 
 def classify(tool_label: str) -> tuple[str, str]:
-    """Return ``(category, depth)`` for a tool label."""
+    """Return ``(category, depth)`` for a tool label.
+
+    A ``:machine`` suffix is a generic demotion marker: producers
+    (``import_annotations``, ``import_functions_analysed``) append it
+    to rows whose review claim could not be verified (no human-grade
+    provenance / no MAC / no current source hash). Such a label keeps
+    its base category but never grades above scanned depth — the mark
+    remains real examination evidence, but must not clear the
+    function from the LLM-review gap the way a verified review does.
+    """
     exact = _EXACT.get(tool_label)
     if exact is not None:
         return exact
-    return _REGISTRY.get(_base(tool_label), _DEFAULT)
+    category, depth = _REGISTRY.get(_base(tool_label), _DEFAULT)
+    if depth == DEPTH_ANALYSED and tool_label.endswith(":machine"):
+        return (category, DEPTH_SCANNED)
+    return (category, depth)
 
 
 def category_of(tool_label: str) -> str:

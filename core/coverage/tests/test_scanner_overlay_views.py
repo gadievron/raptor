@@ -14,6 +14,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from core.coverage import journal_mac
 from core.coverage.store_summary import (
     coverage_view,
     format_no_lane_residual,
@@ -24,6 +27,25 @@ from core.coverage.store_summary import (
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "libexec" / "raptor-coverage-summary"
+
+@pytest.fixture(autouse=True)
+def _isolated_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+
+
+def _stamped(rows, tool):
+    # Honest review-grade producers MAC-stamp every functions_analysed
+    # row (record.py mints at build time); an unstamped row imports at
+    # machine tier — extent only, no review credit.
+    out = []
+    for row in rows:
+        row = dict(row)
+        token = journal_mac.mint_coverage_row(row, tool)
+        if token:
+            row[journal_mac.TOKEN_KEY] = token
+        out.append(row)
+    return out
+
 
 _CHECKLIST = {
     "files": [
@@ -59,7 +81,7 @@ def _run_dir(tmp_path, overlay_rows=None, scanner_coverage=None,
     if reviewed_rows is not None:
         (d / "coverage-audit.json").write_text(json.dumps({
             "tool": "audit", "timestamp": "t",
-            "functions_analysed": reviewed_rows,
+            "functions_analysed": _stamped(reviewed_rows, "audit"),
         }))
     return d
 
@@ -211,8 +233,8 @@ def test_handler_span_scanner_grade_is_extent_not_review(tmp_path):
     # intersection — the reviewed set walks the full item inventory.
     (d / "coverage-audit.json").write_text(json.dumps({
         "tool": "audit", "timestamp": "t",
-        "functions_analysed": [
-            {"file": "web/index.php", "function": "handler:top"}],
+        "functions_analysed": _stamped(
+            [{"file": "web/index.php", "function": "handler:top"}], "audit"),
     }))
     rows2 = scanner_overlay_view([d], _HANDLER_CHECKLIST,
                                  d / "cov-d.json", None)

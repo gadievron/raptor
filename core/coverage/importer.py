@@ -642,7 +642,52 @@ def import_functions_analysed(
         tool, provenance, record_version=record.get("version"),
     ) if provenance else None
     marked = 0
+    demoted = 0
     inv_index = _inventory_name_index(inventory_paths)
+    # Row-authority tiering, same three tiers as the audit gap fold
+    # (core.audit.gaps._build_covered_set): coverage records live in
+    # target-writable run/project directories, and the store mark is
+    # the OTHER durable review-suppression surface beside the fold —
+    # without this gate a planted functions_analysed row imported
+    # under a review-grade label cleared the function from every
+    # store-derived gap view. MAC-verified rows import under the
+    # record's tool label; unstamped/tampered rows import under the
+    # label only behind the exact current-source-hash gate (and never
+    # for finding-class rows, which have no re-import route); every
+    # other row demotes to ``<tool>:machine`` — the mark survives as
+    # examination evidence but grades scanned-depth (see
+    # ``core.coverage.registry.classify``). Only review-grade labels
+    # are tiered: scanned/runtime labels grant no review credit, so
+    # demotion would be pure label churn.
+    from core.audit._util import safe_join
+    from core.staleness import hash_spans
+
+    from . import journal_mac
+    from .registry import CATEGORY_LLM, DEPTH_ANALYSED, classify
+
+    review_grade = classify(tool) == (CATEGORY_LLM, DEPTH_ANALYSED)
+    hash_cache: dict[str, dict[str, str]] = {}
+
+    def _hash_current(f: str, lo: int, hi: int | None, stored: str) -> bool:
+        if not checklist_target or not stored:
+            return False
+        key = f"{lo}-{hi}"
+        per_span = hash_cache.setdefault(f, {})
+        if key not in per_span:
+            resolved = safe_join(Path(checklist_target), f)
+            current = ""
+            if resolved is not None and resolved.is_file():
+                try:
+                    current = hash_spans(
+                        resolved, [(lo, hi if hi is not None else lo)])[0]
+                except OSError:
+                    current = ""
+            per_span[key] = current
+        # Exact, full-length equality — a short stored prefix never
+        # matches; "" (unreadable / span past cap) never matches.
+        current = per_span[key]
+        return bool(current) and stored == current
+
     for fa in fa_list:
         if not isinstance(fa, dict) or not isinstance(fa.get("file"), str):
             continue
@@ -661,10 +706,25 @@ def import_functions_analysed(
         if rng is None:
             continue
         lo, hi = rng
-        store.mark(f, lo, hi if hi is not None else lo, tool)
+        effective = tool
+        if review_grade and (journal_mac.coverage_row_provenance(fa, tool)
+                             != journal_mac.ROW_VERIFIED):
+            stored = fa.get("hash")
+            if (fa.get("status") in ("finding", "suspicious")
+                    or not isinstance(stored, str)
+                    or not _hash_current(f, lo, hi, stored)):
+                effective = f"{tool}:machine"
+                demoted += 1
+        store.mark(f, lo, hi if hi is not None else lo, effective)
         if stamp:
-            store.stamp_coverage(f, tool, **stamp)
+            store.stamp_coverage(f, effective, **stamp)
         marked += 1
+    if demoted:
+        logger.info(
+            "coverage import: %d of %d functions_analysed row(s) from "
+            "%r imported at machine tier (unverified provenance, no "
+            "matching current source hash) — examination evidence "
+            "kept, review credit withheld", demoted, marked, tool)
     return marked
 
 
