@@ -1093,6 +1093,11 @@
     "count": 14,
     "kind": "literal"
   },
+  "core/concepts/token_map.py::_PHP_KEYWORDS": {
+    "count": 31,
+    "kind": "literal",
+    "note": "closed PHP language-keyword taxonomy: identifiers the PHP-lite lexer excludes from call-event extraction because the language grammar reserves them (control flow, constructs, include forms) — language keywords, not a learned name vocabulary (the learned vocabulary is DomainModel.token_checks; TOKEN_SEED_RE is the <=9-name discovery seed)"
+  },
   "core/config/__init__.py::DANGEROUS_ENV_VARS": {
     "count": 72,
     "kind": "literal"
