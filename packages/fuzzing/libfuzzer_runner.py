@@ -28,6 +28,7 @@ from core.config import RaptorConfig
 from core.paths import confine
 from core.logging import get_logger
 from core.sandbox import run as _sandbox_run
+from core.security.log_sanitisation import sanitise_for_terminal
 from packages.fuzzing.output_hygiene import strip_terminal_controls
 
 logger = get_logger()
@@ -506,8 +507,20 @@ class LibFuzzerRunner:
             ("leak-", result.leak_inputs),
         ):
             for path in self.crashes_dir.glob(f"{prefix}*"):
-                if path.is_file():
-                    target_list.append(path)
+                # lstat-honest: crashes_dir is inside the sandboxed
+                # (attacker-built) target's write grant, and these
+                # listings feed crash records, finding counts, and the
+                # coverage bridge's replay selection. A planted
+                # ``crash-* -> <host file>`` must not enter them as if
+                # it were a campaign artifact.
+                if path.is_symlink() or not path.is_file():
+                    logger.warning(
+                        "libfuzzer: refusing non-regular crash "
+                        "artifact %s",
+                        sanitise_for_terminal(str(path)),
+                    )
+                    continue
+                target_list.append(path)
 
         result.stats.crashes = len(result.crashes)
         result.stats.timeouts = len(result.timeouts)

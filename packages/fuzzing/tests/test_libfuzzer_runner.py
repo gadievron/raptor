@@ -165,6 +165,65 @@ class TestCampaignVerdictAndArtifacts(unittest.TestCase):
             # failed run.
             self.assertFalse(result.campaign_failed)
 
+    def _run_with_planted(self, tmp: Path, plant):
+        harness = tmp / "fuzz_target"
+        harness.write_text("#!/bin/sh\nexit 0\n")
+        harness.chmod(0o755)
+        out_dir = tmp / "out"
+
+        def fake_sandbox_run(cmd, **kwargs):
+            plant(out_dir / "crashes")
+
+            class Result:
+                returncode = 77
+
+            return Result()
+
+        with patch("packages.fuzzing.libfuzzer_runner._sandbox_run",
+                   side_effect=fake_sandbox_run):
+            runner = LibFuzzerRunner(
+                harness_path=harness, output_dir=out_dir,
+                max_total_time=1,
+            )
+            return runner.run()
+
+    def test_symlinked_crash_artifact_is_refused(self):
+        # A hostile harness can plant ``crash-<x> -> <host file>`` in
+        # its writable crashes dir; dereferencing it would launder the
+        # symlink into result listings that downstream stages read as
+        # regular crash inputs.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            victim = tmp / "victim"
+            victim.write_bytes(b"host secret")
+
+            def plant(crashes: Path) -> None:
+                (crashes / "crash-aaaa").symlink_to(victim)
+                (crashes / "crash-bbbb").write_bytes(b"real")
+
+            with self.assertLogs("raptor", level="WARNING") as logs:
+                result = self._run_with_planted(tmp, plant)
+            self.assertEqual(len(result.crashes), 1)
+            self.assertEqual(result.crashes[0].name, "crash-bbbb")
+            self.assertTrue(any(
+                "non-regular crash artifact" in r.getMessage()
+                for r in logs.records))
+
+    def test_non_regular_leak_artifact_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+
+            def plant(crashes: Path) -> None:
+                os.mkfifo(crashes / "leak-cafef00d")
+
+            with self.assertLogs("raptor", level="WARNING") as logs:
+                result = self._run_with_planted(tmp, plant)
+            self.assertEqual(len(result.leak_inputs), 0)
+            self.assertEqual(result.total_findings(), 0)
+            self.assertTrue(any(
+                "non-regular crash artifact" in r.getMessage()
+                for r in logs.records))
+
     def test_streams_are_file_backed_not_captured(self):
         # The harness's output must never be buffered unbounded in
         # this process — file-backed streams only, then a bounded
