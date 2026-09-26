@@ -401,6 +401,34 @@ _EXIT_STMT_RE = re.compile(
 _LABEL_RE = re.compile(r"^\s*(?:case\b(?:[^:]*[^:\s])?|[A-Za-z_]\w*)\s*:(?!:)")
 
 
+#: Label recognition on the JOINED logical region (the tail+between
+#: window after splice normalisation and literal/comment blanking,
+#: line texts joined on spaces).  C allows the label identifier and
+#: its colon on separate lines — physical (``ok`` / ``:``) or
+#: splice-assembled (``ok\`` + ``:``) — which the per-line
+#: ``_LABEL_RE`` check cannot see; joined, the label is one
+#: ``identifier :`` at a statement boundary.  A boundary (region
+#: start, ``;``, ``{``, ``}``) must precede the identifier: a
+#: ternary's ``? a : b`` arm or a bitfield's ``x : 3`` width has no
+#: boundary before its colon-bearing token, so neither matches.
+#: The case-arm expression mirrors ``_LABEL_RE``'s gating (it must
+#: end on non-whitespace) so the trailing ``\s*`` owns the
+#: whitespace run alone — no quadratic overlap.
+_REGION_LABEL_RE = re.compile(
+    r"(?:^|[;{}])\s*(?:case\b(?:[^:;{}]*[^:;{}\s])?|[A-Za-z_]\w*)\s*:(?!:)"
+)
+
+
+#: Label split across the window seam: the region ENDS in a bare
+#: label head (identifier / case expression at a statement boundary)
+#: and the colon leads the STEP's own line — the label targets the
+#: step statement itself.
+_REGION_LABEL_HEAD_RE = re.compile(
+    r"(?:^|[;{}])\s*(?:case\b(?:[^:;{}]*[^:;{}\s])?|[A-Za-z_]\w*)\s*$"
+)
+_STEP_COLON_LEAD_RE = re.compile(r"^\s*:(?!:)")
+
+
 def _exit_only_body(body: str) -> bool:
     """True when the guarded body's last statement leaves the flow."""
     stmts = [s.strip() for s in body.split(";") if s.strip()]
@@ -564,6 +592,14 @@ def _step_guard_polarity(
     code minted a false NEGATED assertion (the suppress direction).
     A splice off the window's last line runs INTO the step line;
     that window has no faithful text, so it abstains.
+
+    Goto-target labels are re-checked on the joined logical region
+    after normalisation and blanking: C allows the label identifier
+    and its colon on separate lines — plain two-line or
+    splice-assembled — and a colon can lead the step's own line
+    (window seam).  The per-line label check cannot see either form,
+    and the missed label minted a false POSITIVE assertion for a
+    step every goto path reaches with the guard false.
     """
     if any(_LABEL_RE.match(ln) for ln in between):
         # A label between the guard and the step is a goto target:
@@ -595,6 +631,19 @@ def _step_guard_polarity(
     region = " ".join(
         p.strip() for p in blanked if p.strip()
     ).strip()
+    if _REGION_LABEL_RE.search(region) or (
+        _REGION_LABEL_HEAD_RE.search(region)
+        and _STEP_COLON_LEAD_RE.match(step_line)
+    ):
+        # Label recognised on the LOGICAL region: an identifier and
+        # its colon on separate physical lines (plain two-line label
+        # or splice-assembled), or a label head whose colon leads the
+        # step's own line (window seam), is invisible to the per-line
+        # between-check above — but it is still a goto target between
+        # the guard and the step (or on the step itself): another
+        # path reaches the step without evaluating the guard, so
+        # neither polarity is assertable.
+        return None
     if re.search(r"\belse\b", region):
         return None
     if region.startswith("{"):

@@ -1405,6 +1405,161 @@ class TestGuardPolarityLabels:
         assert receipts == []
 
 
+class TestGuardPolarityMultiLineLabels:
+    """C allows a label's identifier and colon on separate lines; the
+    per-line between-check saw neither half, judged the arm still
+    open, and asserted the guard POSITIVELY for a step every goto
+    path reaches with the guard false — the false-suppression
+    direction.  Labels are re-checked on the joined logical region."""
+
+    def test_two_line_label_in_open_arm_drops_condition(
+        self, tmp_path: Path,
+    ):
+        # Plain two-line label, no splice: `ok` and `:` on separate
+        # physical lines are ONE label — a goto target inside the
+        # still-open arm, so another path reaches the step with the
+        # guard FALSE and neither polarity is assertable.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) {\n"                    # 2
+            "ok\n"                                    # 3
+            ":\n"                                     # 4
+            "        sink(d, s, len);\n"              # 5  <- step
+            "    }\n"                                 # 6
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 5)], target, {}) == []
+
+    def test_spliced_label_in_open_arm_drops_condition(
+        self, tmp_path: Path,
+    ):
+        # Splice-assembled variant: `ok\` + `:` is the logical line
+        # `ok:`.  The splice normalisation joins it, but the label
+        # judgement ran on raw physical lines — same wrong positive.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) {\n"                    # 2
+            "ok\\\n"                                  # 3
+            ":\n"                                     # 4
+            "        sink(d, s, len);\n"              # 5  <- step
+            "    }\n"                                 # 6
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 5)], target, {}) == []
+
+    def test_two_line_case_label_drops_condition(self, tmp_path: Path):
+        # Duff's-device shape: a case arm interleaved into the guarded
+        # block, its expression and colon on separate lines — the
+        # switch dispatch reaches the step without the guard.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(char *d, int len) {\n"            # 1
+            "    if (len < 0) {\n"                    # 2
+            "    case 1\n"                            # 3
+            "        :\n"                             # 4
+            "        sink(d, len);\n"                 # 5  <- step
+            "    }\n"                                 # 6
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 5)], target, {}) == []
+
+    def test_label_at_window_seam_drops_condition(self, tmp_path: Path):
+        # The label head is the LAST between line and its colon leads
+        # the step's own line: the label targets the step statement
+        # itself — the goto path reaches it with the guard false.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) {\n"                    # 2
+            "ok\n"                                    # 3
+            ": sink(d, s, len);\n"                    # 4  <- step
+            "    }\n"                                 # 5
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 4)], target, {}) == []
+
+    def test_ternary_colon_keeps_positive_arm(self, tmp_path: Path):
+        # No over-correction, harvest level: a ternary's `? a : b`
+        # colon has no statement boundary before its identifier, so
+        # it is NOT a label — the provable positive assertion (a true
+        # prune input) survives.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) {\n"                    # 2
+            "        log(s ? d : s);\n"               # 3
+            "        sink(d, s, len);\n"              # 4  <- step
+            "    }\n"                                 # 5
+            "}\n",
+        )
+        conds = _path_conditions([("src/vuln.c", 4)], target, {})
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("len < 0", False),
+        ]
+
+    def test_live_two_line_label_flow_survives_real_smt_prune(
+        self, tmp_path: Path,
+    ):
+        # The suppress-direction consequence, end to end: the missed
+        # two-line label minted a positive `len < 0` for a step the
+        # goto path reaches with len >= 0; paired with the downstream
+        # positive `len >= 0` guard, z3 proved the LIVE path
+        # "mutually exclusive" and minted a proof-grade
+        # smt_path_infeasible.  The finding must be kept.
+        pytest.importorskip("z3")
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) {\n"                    # 2
+            "ok\n"                                    # 3
+            ":\n"                                     # 4
+            "        sink(d, s, len);\n"              # 5  <- step
+            "    }\n"                                 # 6
+            "    if (len >= 0) {\n"                   # 7
+            "        sink(d, s, len);\n"              # 8  <- step
+            "    }\n"                                 # 9
+            "}\n",
+        )
+        sarif = _sarif_with_flow([("src/vuln.c", 5), ("src/vuln.c", 8)])
+        kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
+        assert (kept, pruned) == (1, 0)
+        assert receipts == []
+
+    def test_open_arm_positive_still_feeds_true_prunes(
+        self, tmp_path: Path,
+    ):
+        # No over-correction, end to end: a genuine label-free open
+        # arm (with a benign ternary colon in it) still asserts the
+        # positive, and the genuinely contradictory pair still earns
+        # its suppression.
+        pytest.importorskip("z3")
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) {\n"                    # 2
+            "        log(s ? d : s);\n"               # 3
+            "        sink(d, s, len);\n"              # 4  <- step
+            "    }\n"                                 # 5
+            "    if (len >= 0) {\n"                   # 6
+            "        sink(d, s, len);\n"              # 7  <- step
+            "    }\n"                                 # 8
+            "}\n",
+        )
+        sarif = _sarif_with_flow([("src/vuln.c", 4), ("src/vuln.c", 7)])
+        kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
+        assert (kept, pruned) == (0, 1)
+        assert receipts[0]["verdict"] == "smt_path_infeasible"
+
+
 def _write_ff_twin_source(tmp_path: Path, pad: str) -> Path:
     r"""Guarded sink with planted contradictory guards ABOVE it and a
     comment whose content is attacker-chosen (*pad*).  \n-model layout
