@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -287,9 +288,9 @@ class TestCli:
 
 
 class TestRunSideEnvHygiene:
-    """The spawned target inherits _run_side's subprocess env and runs
-    unsandboxed — operator credentials must never be readable via
-    getenv from target code, 'built yourself' notwithstanding."""
+    """The spawned target inherits _run_side's subprocess env — even
+    inside the sandbox, operator credentials must never be readable
+    via getenv from target code, 'built yourself' notwithstanding."""
 
     def _capture_env(self, tmp_path: Path, monkeypatch) -> dict:
         import subprocess as sp
@@ -327,6 +328,69 @@ class TestRunSideEnvHygiene:
         env = seen["env"]
         assert env["RAPTOR_DIR"]
         assert env["PYTHONPATH"] == env["RAPTOR_DIR"]
+
+
+class TestRunSideSandboxDispatch:
+    """The suspected-exploitable target must never spawn raw on the
+    host: _run_side must dispatch through libexec/raptor-frida (the
+    sandboxed route every other programmatic frida launch uses)."""
+
+    def _capture_cmd(self, tmp_path: Path, monkeypatch,
+                     *, poc: Path | None) -> dict:
+        import subprocess as sp
+
+        monkeypatch.setenv(
+            "RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
+        seen: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            seen.update(kwargs)
+            return sp.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(patch_oracle.subprocess, "run", fake_run)
+        binary = tmp_path / "vuln"
+        binary.write_bytes(b"\x7fELF")
+        script = tmp_path / "watch.js"
+        script.write_text("// noop")
+        side = tmp_path / "side"
+        side.mkdir()
+        patch_oracle._run_side(binary, script, side,
+                               poc=poc, duration=1.0)
+        return seen
+
+    def test_spawn_routes_through_sandboxed_wrapper(self, tmp_path,
+                                                    monkeypatch):
+        seen = self._capture_cmd(tmp_path, monkeypatch, poc=None)
+        cmd = seen["cmd"]
+        # argv[0] is the sandboxing wrapper, never a bare python
+        # running packages.frida.cli on the host.
+        assert cmd[0].endswith(os.path.join("libexec", "raptor-frida"))
+        assert "packages.frida.cli" not in cmd
+        assert "--spawn" in cmd
+        # Explicit out dir: the wrapper must not mint a lifecycle dir.
+        assert "--out" in cmd
+        assert cmd[cmd.index("--out") + 1] == str(
+            (tmp_path / "side").resolve())
+
+    def test_poc_rides_stdin_flag_not_oracle_stdin(self, tmp_path,
+                                                   monkeypatch):
+        import subprocess as sp
+
+        poc = tmp_path / "poc.bin"
+        poc.write_bytes(b"AAAA")
+        seen = self._capture_cmd(tmp_path, monkeypatch, poc=poc)
+        cmd = seen["cmd"]
+        # The PoC reaches the target via the CLI's --stdin rebind
+        # INSIDE the sandbox (the wrapper grants the file's parent to
+        # the read set) — not by piping the file into the wrapper.
+        assert "--stdin" in cmd
+        assert cmd[cmd.index("--stdin") + 1] == str(poc.resolve())
+        assert seen["stdin"] is sp.DEVNULL
+
+    def test_no_poc_means_no_stdin_flag(self, tmp_path, monkeypatch):
+        seen = self._capture_cmd(tmp_path, monkeypatch, poc=None)
+        assert "--stdin" not in seen["cmd"]
 
 
 class TestTerminalEscapeScrub:
@@ -408,7 +472,8 @@ class TestRunSideBoundedCapture:
             return sp.CompletedProcess(cmd, rc)
 
         monkeypatch.setattr(po.subprocess, "run", fake_run)
-        monkeypatch.setattr(po, "_frida_python", lambda: "/usr/bin/env")
+        monkeypatch.setenv(
+            "RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
         binary = tmp_path / "target"
         binary.write_bytes(b"\x7fELF")
         script = tmp_path / "hook.js"

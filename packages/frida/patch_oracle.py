@@ -27,9 +27,10 @@ Verdicts (``verdict`` in the report):
 With several sinks, the runs are compared on ANY watched sink firing
 — per-sink counts are in the report when a finer reading matters.
 
-The target binaries run under frida WITHOUT a sandbox (same trust
-stance as the raw runner): only verify patches on binaries you built
-yourself.
+The target binaries run under the sandboxed frida dispatch
+(``libexec/raptor-frida`` → ``packages.frida.sandboxed``): frida
+profile, network deny in spawn mode, reads restricted, writes
+confined to the side run directory.
 """
 
 from __future__ import annotations
@@ -52,56 +53,47 @@ __all__ = ["verify_patch"]
 
 # Worst case per side: run duration + the runner's own bounded
 # stages (script-load 30s + flush 5s + detach 10s + kill 5s) +
-# spawn slack.
+# sandbox setup + spawn slack.
 _SIDE_TIMEOUT_SLACK = 60.0
 
 _FINDING_ID = "patch-oracle"
 
 
-def _frida_python() -> str:
-    """Interpreter that has frida-python importable.
-
-    The frida CLI is often a pipx/venv install whose bindings are
-    not visible to ``sys.executable``; its shebang names the
-    interpreter that can actually run ``packages.frida.cli``.
-    """
-    frida_bin = shutil.which("frida")
-    if frida_bin:
-        try:
-            with open(frida_bin, encoding="utf-8",
-                      errors="replace") as f:
-                shebang = f.readline(256).strip()
-            if shebang.startswith("#!"):
-                python = shebang[2:].strip().split()[0]
-                if os.path.isfile(python):
-                    return python
-        except OSError:
-            pass
-    return sys.executable
-
-
 def _run_side(binary: Path, script_path: Path, side_dir: Path,
               poc: Path | None, duration: float) -> None:
-    """Run one sink-watch session; raises RuntimeError on failure."""
+    """Run one sink-watch session; raises RuntimeError on failure.
+
+    The session goes through ``libexec/raptor-frida`` — the same
+    sandboxed dispatch every other programmatic frida launch uses
+    (``active.observe_target`` / ``active.watch_sinks``): frida
+    profile, network deny for spawn mode, restricted reads, writes
+    confined to the side directory. The spawned target is a build of
+    the analysed (untrusted) project being driven into a suspected-
+    exploitable sink by a PoC — exactly the code that must not run
+    raw on the host ("built yourself" does not mean "audited
+    yourself").
+    """
     # Same credential-stripped environment as every other frida
-    # launch (active._safe_env): the spawned target inherits this env
-    # from the CLI process, runs unsandboxed, and "built yourself"
-    # does not mean "audited yourself" — operator credentials must
-    # not be readable via getenv from target code. _safe_env keeps
-    # RAPTOR_DIR/PYTHONPATH so the CLI module itself still imports.
+    # launch (active._safe_env): even inside the sandbox the spawned
+    # target must not read operator credentials via getenv. _safe_env
+    # keeps RAPTOR_DIR/PYTHONPATH (wrapper + CLI imports) and the
+    # CLAUDECODE dispatch trust marker the wrapper checks.
     from packages.frida.active import _safe_env
     env = _safe_env()
+    libexec = Path(os.environ["RAPTOR_DIR"]) / "libexec" / "raptor-frida"
     cmd = [
-        _frida_python(), "-m", "packages.frida.cli",
+        str(libexec),
         "--target", str(binary.resolve()),
-        "--script", str(script_path),
-        "--out", str(side_dir),
+        "--script", str(script_path.resolve()),
+        "--out", str(side_dir.resolve()),
         "--duration", str(duration),
         "--spawn",
     ]
-    # frida spawn inherits the controller's stdio, so the PoC input
-    # reaches the target by feeding it to the CLI process.
-    stdin_ctx = open(poc, "rb") if poc is not None else None  # noqa: SIM115
+    if poc is not None:
+        # PoC delivery: the CLI rebinds its own stdin from the file
+        # inside the sandbox (the wrapper grants the file's parent
+        # to the read set) — same shape as active.watch_sinks.
+        cmd.extend(["--stdin", str(Path(poc).resolve())])
     # Capture to temp FILES, never an in-memory buffer: the spawned
     # target inherits the CLI's stdio and can flood it without limit
     # — only a bounded tail is ever needed for the failure message.
@@ -111,8 +103,7 @@ def _run_side(binary: Path, script_path: Path, side_dir: Path,
                 tempfile.TemporaryFile() as err_fh:
             proc = subprocess.run(
                 cmd,
-                stdin=(stdin_ctx if stdin_ctx is not None
-                       else subprocess.DEVNULL),
+                stdin=subprocess.DEVNULL,
                 stdout=out_fh, stderr=err_fh,
                 timeout=duration + _SIDE_TIMEOUT_SLACK,
                 env=env,
@@ -144,9 +135,6 @@ def _run_side(binary: Path, script_path: Path, side_dir: Path,
         # the (target-derived) command line — escape it.
         msg = f"frida session against {binary} hung: {_sft(str(e))}"
         raise RuntimeError(msg) from e
-    finally:
-        if stdin_ctx is not None:
-            stdin_ctx.close()
 
 
 def _judge_side(side_dir: Path, binary: Path, sinks: Sequence[str],
