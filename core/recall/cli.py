@@ -303,6 +303,40 @@ def _cmd_verify_enforced(args: argparse.Namespace) -> int:
     return 0 if result["clean"] else 1
 
 
+def _cmd_flip_gate(args: argparse.Namespace) -> int:
+    from core.recall.flip_gate import (
+        FlipGateError,
+        evaluate_flip_gate,
+        load_reports,
+        render_public,
+    )
+
+    try:
+        baseline = load_reports(args.baseline)
+        candidate = load_reports(args.candidate)
+        result = evaluate_flip_gate(
+            baseline, candidate, fp_ceiling=args.fp_ceiling,
+            min_uplift=args.min_uplift,
+            profiles=(args.baseline_profile, args.candidate_profile),
+            allow_legacy_baseline=args.allow_legacy_baseline)
+    except (OSError, ValueError, FlipGateError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    report_path = args.report or (
+        (args.candidate if args.candidate.is_dir()
+         else args.candidate.parent) / "flip-gate-report.json")
+    try:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        save_json(report_path, result)
+    except OSError as exc:
+        print(f"error: cannot write report: {exc}", file=sys.stderr)
+        return 2
+    # stdout stays number-free (hide-gaps): verdict + mechanism names;
+    # every figure lives in the report file.
+    print(render_public(result, report_path))
+    return 0 if result["passed"] else 1
+
+
 def _cmd_compare(args: argparse.Namespace) -> int:
     try:
         base = _load_report_file(args.base)
@@ -353,6 +387,51 @@ def main(argv: list[str] | None = None) -> int:
     cmp_p.add_argument("base", type=Path)
     cmp_p.add_argument("new", type=Path)
     cmp_p.set_defaults(func=_cmd_compare)
+
+    fg_p = sub.add_parser(
+        "flip-gate",
+        help="three-part default-flip gate vs a frozen baseline: "
+             "recall uplift + clean-region FP ceiling + "
+             "no-displacement; stdout is pass/fail + mechanism names "
+             "only (numbers go to the local report file); exit 1 on "
+             "FAIL, 2 when the sides are not comparable")
+    fg_p.add_argument("--baseline", type=Path, required=True,
+                      help="frozen baseline reports: the "
+                           "out/eval-baselines/<id>/ dir (scanned "
+                           "recursively) or a single report.json")
+    fg_p.add_argument("--candidate", type=Path, required=True,
+                      help="candidate run reports: dir or report.json")
+    fg_p.add_argument("--baseline-profile", default="agentic",
+                      help="declared detection profile every frozen-"
+                           "baseline report must carry (closed "
+                           "vocabulary; default: agentic)")
+    fg_p.add_argument("--candidate-profile", default="agentic-taint",
+                      help="declared detection profile every candidate "
+                           "report must carry (default: agentic-taint; "
+                           "same-profile build-vs-build comparisons "
+                           "must declare both sides explicitly)")
+    fg_p.add_argument("--allow-legacy-baseline", action="store_true",
+                      help="grandfather a frozen baseline whose "
+                           "reports predate the clean_region_total/"
+                           "label_digest pins: ABSENT pins are "
+                           "accepted on the baseline side only "
+                           "(present-but-mismatched still refuses, "
+                           "the candidate side always requires them) "
+                           "and the grandfather is called out on "
+                           "stdout. Clean remedy: re-freeze the "
+                           "baseline with the current scorer")
+    fg_p.add_argument("--fp-ceiling", type=int, default=0,
+                      help="allowed clean-region FP growth over the "
+                           "baseline (default 0: no growth)")
+    fg_p.add_argument("--min-uplift", type=float, default=0.0,
+                      help="required aggregate recall uplift margin; "
+                           "uplift must exceed it strictly (default "
+                           "0: any positive uplift)")
+    fg_p.add_argument("--report", type=Path, default=None,
+                      help="numeric report path (default: "
+                           "flip-gate-report.json beside the "
+                           "candidate)")
+    fg_p.set_defaults(func=_cmd_flip_gate)
 
     cen_p = sub.add_parser(
         "census",

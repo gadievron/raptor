@@ -21,6 +21,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
+from core.recall.manifest import compute_label_digest
+
 
 if TYPE_CHECKING:
     from core.recall.matcher import MatchResult
@@ -70,6 +72,14 @@ class RecallReport:
     #: findings on labelled-clean regions — secondary, not recall
     clean_region_fp_count: int = 0
     clean_region_fps: list[dict[str, Any]] = field(default_factory=list)
+    #: label-set pins the flip gate verifies on both sides: the size
+    #: of the clean-region population the FP count was measured
+    #: against, and a content digest over the manifest's label set
+    #: (see manifest.compute_label_digest) — a pruned clean_regions
+    #: list between freeze and candidate run must refuse the gate,
+    #: not blind the ceiling.
+    clean_region_total: int = 0
+    label_digest: str = ""
     toolchain: dict[str, str] = field(default_factory=dict)
     run_output_dir: str | None = None
 
@@ -95,6 +105,8 @@ class RecallReport:
             "missed": self.missed,
             "clean_region_fp_count": self.clean_region_fp_count,
             "clean_region_fps": self.clean_region_fps,
+            "clean_region_total": self.clean_region_total,
+            "label_digest": self.label_digest,
             "toolchain": self.toolchain,
             "run_output_dir": self.run_output_dir,
         }
@@ -180,6 +192,8 @@ def score(
         missed=missed,
         clean_region_fp_count=len(clean_fps),
         clean_region_fps=clean_fps,
+        clean_region_total=len(manifest.clean_regions),
+        label_digest=compute_label_digest(manifest),
         toolchain=toolchain if toolchain is not None else {},
         run_output_dir=run_output_dir,
     )

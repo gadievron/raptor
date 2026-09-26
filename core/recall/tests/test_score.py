@@ -9,6 +9,7 @@ from core.recall.manifest import (
     Provenance,
     RecallManifest,
     Tolerance,
+    compute_label_digest,
 )
 from core.recall.matcher import MatchResult
 from core.recall.score import (
@@ -21,12 +22,19 @@ from core.recall.score import (
 _PROV = Provenance(kind="benchmark", suite="s", case="c")
 
 
-def _manifest() -> RecallManifest:
+def _manifest(*, clean_regions=(), profile="scan-codeql",
+              expected=()) -> RecallManifest:
     return RecallManifest(
         name="fixture", repo_url="https://example.org/r",
         pinned_sha="deadbeefcafe", local_path="out/f", language="java",
-        profile="scan-codeql", expected=[], tolerance=Tolerance(),
+        profile=profile, expected=list(expected),
+        clean_regions=list(clean_regions), tolerance=Tolerance(),
     )
+
+
+def _clean_region(eid="clean-1") -> ExpectedFinding:
+    return ExpectedFinding(id=eid, file="src/B.java", cwe="CWE-78",
+                           provenance=_PROV, line_start=1)
 
 
 def _mr(cwe: str, matched: bool, tools=(), eid="e") -> MatchResult:
@@ -94,6 +102,45 @@ class TestReportShape:
         md = render_markdown(rep)
         assert "CWE-78" in md and "miss-1" in md
         assert LABEL_CLASS in md
+
+
+class TestLabelSetPins:
+    def test_report_stamps_clean_region_total_and_digest(self):
+        m = _manifest(clean_regions=[_clean_region(),
+                                     _clean_region("clean-2")])
+        rep = score(m, [_mr("CWE-78", True)], [])
+        assert rep.clean_region_total == 2
+        assert rep.label_digest == compute_label_digest(m)
+        d = rep.to_dict()
+        assert d["clean_region_total"] == 2
+        assert d["label_digest"] == rep.label_digest
+        assert len(rep.label_digest) == 64
+
+    def test_digest_ignores_profile_but_not_labels(self):
+        # The flip pair differs in profile BY DESIGN — the digest must
+        # compare equal across it, and change when label content does.
+        clean = [_clean_region(), _clean_region("clean-2")]
+        base = _manifest(clean_regions=clean, profile="agentic")
+        cand = _manifest(clean_regions=clean, profile="agentic-taint")
+        assert compute_label_digest(base) == compute_label_digest(cand)
+        pruned = _manifest(clean_regions=clean[:1], profile="agentic")
+        assert compute_label_digest(pruned) != compute_label_digest(base)
+
+    def test_digest_sensitive_to_expected_and_order(self):
+        e1 = ExpectedFinding(id="a", file="f.java", cwe="CWE-78",
+                             provenance=_PROV, line_start=1)
+        e2 = ExpectedFinding(id="b", file="g.java", cwe="CWE-89",
+                             provenance=_PROV, line_start=2)
+        d12 = compute_label_digest(_manifest(expected=[e1, e2]))
+        d21 = compute_label_digest(_manifest(expected=[e2, e1]))
+        assert d12 != compute_label_digest(_manifest(expected=[e1]))
+        # Order-sensitive on purpose: a reordered label file is a
+        # changed label file (re-freeze, never guess).
+        assert d12 != d21
+
+    def test_digest_deterministic(self):
+        m = _manifest(clean_regions=[_clean_region()])
+        assert compute_label_digest(m) == compute_label_digest(m)
 
 
 class TestSegregationGuard:
