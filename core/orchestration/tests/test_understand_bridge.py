@@ -1420,6 +1420,34 @@ class TestEnrichChecklist:
         )
         assert db_file["functions"][0]["priority"] == "high"
 
+    def test_over_budget_persist_keeps_in_memory_enrichment(
+            self, tmp_path, monkeypatch, caplog):
+        # The persist step is best-effort: a checklist whose serialised
+        # form exceeds the single-file write budget must not blow the
+        # whole enrichment out of the pipeline — the in-memory markers
+        # are what the caller consumes; the write failure is warned.
+        import core.inventory
+        from core.inventory import ChecklistBudgetExceededError
+
+        def _boom(*_a, **_k):
+            raise ChecklistBudgetExceededError("over the write budget")
+
+        monkeypatch.setattr(core.inventory, "save_checklist", _boom)
+        checklist = copy.deepcopy(MINIMAL_CHECKLIST)
+        with caplog.at_level(
+                "WARNING",
+                logger="core.orchestration.understand_bridge"):
+            result = enrich_checklist(
+                checklist, copy.deepcopy(MINIMAL_CONTEXT_MAP),
+                output_dir=str(tmp_path))
+
+        routes_file = next(
+            f for f in result["files"]
+            if f["path"] == "src/routes/query.py"
+        )
+        assert routes_file["functions"][0]["priority"] == "high"
+        assert any("checklist" in r.getMessage() for r in caplog.records)
+
     def test_priority_targets_carry_resolved_entry_and_sink_details(self):
         # Each priority_target should include resolved file/line/name from
         # the entry_points/sink_details lists, so consumers don't have to
