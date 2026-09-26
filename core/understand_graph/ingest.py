@@ -576,6 +576,10 @@ def ingest_audit_hypotheses(run_dir: Path, target_path: Optional[str] = None,
     entries = load_entries(run_dir)
     if not entries:
         return None
+    try:
+        from core.coverage.journal_sidecar import hydrate_entry
+    except ImportError:
+        hydrate_entry = None  # type: ignore[assignment]
 
     snap_id = make_snapshot_id(
         target, _hash_json([e.to_dict() for e in entries]),
@@ -588,8 +592,19 @@ def ingest_audit_hypotheses(run_dir: Path, target_path: Optional[str] = None,
         conn.execute("BEGIN IMMEDIATE")
         _upsert_snapshot(conn, snap_id, target, run_dir, producer="audit")
         for entry in entries:
+            # Provenance graded on the row AS LOADED (a verified
+            # slim-tier stub's token covers the stub, not the
+            # hydrated view); THEN hydrate so the graph mints the
+            # same hypothesis nodes it would have pre-slim.
+            # Unresolvable stubs keep their inline view (tool_verdict
+            # nodes still mint; that row's hypothesis nodes degrade
+            # away with the offloaded field).
+            provenance = journal_mac.entry_provenance(entry)
+            if hydrate_entry is not None \
+                    and getattr(entry, "body_offload", None):
+                entry = hydrate_entry(run_dir, entry) or entry
             minted += _ingest_journal_row(
-                conn, snap_id, entry, journal_mac.entry_provenance(entry))
+                conn, snap_id, entry, provenance)
         if not minted:
             conn.execute("ROLLBACK")
             return None

@@ -321,13 +321,16 @@ class TestHardStops:
 
         orig_writer = journal_compact._spend_carrier_line
 
-        def forged(entry: ReviewJournalEntry,
-                   raw: dict) -> bytes | None:
+        def forged(entry: ReviewJournalEntry, raw: dict,
+                   *args: object) -> bytes | None:
+            # *args: tolerate additive positional params on the real
+            # writer (the slim tier's archive-suffix) — this double
+            # only forges the cost value.
             raw = dict(raw)
             cost = raw.get("cost_usd")
             if isinstance(cost, (int, float)):
                 raw["cost_usd"] = cost * 2
-            return orig_writer(entry, raw)
+            return orig_writer(entry, raw, *args)
 
         monkeypatch.setattr(
             journal_compact, "_spend_carrier_line", forged)
@@ -394,13 +397,16 @@ class TestHostileRows:
 
         orig_writer = journal_compact._spend_carrier_line
 
-        def forged(entry: ReviewJournalEntry,
-                   raw: dict) -> bytes | None:
+        def forged(entry: ReviewJournalEntry, raw: dict,
+                   *args: object) -> bytes | None:
+            # *args: tolerate additive positional params on the real
+            # writer (the slim tier's archive-suffix) — this double
+            # only forges the cost value.
             raw = dict(raw)
             cost = raw.get("cost_usd")
             if isinstance(cost, (int, float)):
                 raw["cost_usd"] = cost * 2
-            return orig_writer(entry, raw)
+            return orig_writer(entry, raw, *args)
 
         monkeypatch.setattr(
             journal_compact, "_spend_carrier_line", forged)

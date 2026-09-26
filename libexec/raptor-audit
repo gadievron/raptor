@@ -2496,11 +2496,22 @@ def cmd_journal(args: argparse.Namespace) -> int:
     row is replaced in place by a small spend-carrier row, so the
     journal spend floor is preserved exactly; the full original is
     preserved as ``review-journal.jsonl.pre-supersede``.
+
+    ``--slim-clean`` (implies ``--supersede``) adds the offload tier:
+    the surviving eligible clean/dormant rows' fat fields (body,
+    hypotheses, and the per-row domain-knowledge snapshot lists) move
+    to the run's ``review-journal-bodies.jsonl`` sidecar, leaving
+    loader-valid stub rows with integrity-checked pointers — the
+    remedy for a claim-dominated journal that stays over the loader
+    budget even after superseding. Claim rows keep their bodies
+    inline; verdicts, coverage keys, and the spend floor are
+    unchanged; the full original is preserved as
+    ``review-journal.jsonl.pre-slim``.
     """
     if getattr(args, "journal_command", None) != "compact":
         print(
             "error: usage: raptor-audit journal compact <out-dir> "
-            "[--supersede]",
+            "[--supersede] [--slim-clean]",
             file=sys.stderr,
         )
         return 1
@@ -2509,9 +2520,13 @@ def cmd_journal(args: argparse.Namespace) -> int:
         print(f"error: {out_dir} is not a directory", file=sys.stderr)
         return 1
     supersede = bool(getattr(args, "supersede", False))
+    slim_clean = bool(getattr(args, "slim_clean", False))
+    if slim_clean:
+        supersede = True
     from core.coverage.journal_compact import CompactRefused, compact_journal
     try:
-        stats = compact_journal(out_dir, supersede=supersede)
+        stats = compact_journal(
+            out_dir, supersede=supersede, slim_clean=slim_clean)
     except CompactRefused as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -2528,6 +2543,13 @@ def cmd_journal(args: argparse.Namespace) -> int:
         )
     print(f"  rows:  {stats.rows_before} -> {stats.rows_after} "
           f"({dropped_bits})")
+    if slim_clean:
+        print(
+            f"  slim:  {stats.slimmed_rows} clean/dormant row(s) "
+            f"offloaded to review-journal-bodies.jsonl "
+            f"({stats.offloaded_bytes} bytes freed; claim rows stay "
+            "inline)"
+        )
     print(
         f"  bytes: {stats.bytes_before} -> {stats.bytes_after} "
         f"({ratio})"
@@ -2537,7 +2559,13 @@ def cmd_journal(args: argparse.Namespace) -> int:
             f"  kept verbatim: {stats.kept_unparseable} line(s) the "
             "reader cannot parse (never deleted)"
         )
-    if supersede:
+    if slim_clean:
+        print(
+            f"  spend floor: ${stats.spend_usd_after:.2f} (preserved "
+            "exactly — slimmed rows keep cost_usd inline; dropped "
+            "rows' costs carried by spend-carrier rows)"
+        )
+    elif supersede:
         print(
             f"  spend floor: ${stats.spend_usd_after:.2f} (preserved "
             "exactly — dropped rows' costs carried by spend-carrier "
@@ -3785,6 +3813,19 @@ def main() -> int:
              "preserved by in-place spend-carrier rows; the full "
              "original is archived as "
              "review-journal.jsonl.pre-supersede",
+    )
+    p_jcompact.add_argument(
+        "--slim-clean",
+        action="store_true",
+        help="Also offload the surviving clean/dormant rows' fat "
+             "fields (body, hypotheses, domain-knowledge snapshot "
+             "lists) to the review-journal-bodies.jsonl sidecar, "
+             "leaving loader-valid stub rows — for claim-dominated "
+             "journals still over the loader budget after "
+             "--supersede (which this flag implies). Claim rows keep "
+             "their bodies inline; verdicts, coverage, and the spend "
+             "floor are unchanged; the full original is archived as "
+             "review-journal.jsonl.pre-slim",
     )
 
     p_coverage = sub.add_parser(

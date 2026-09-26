@@ -2028,6 +2028,9 @@ def _fold_journal_into_covered(
                     source_label="same-run",
                     reuse_stats=reuse_stats,
                     strategy_backfill=_strategy_backfill_from(own_entries),
+                    # Slim-tier stubs hydrate from THIS run's sidecar
+                    # for the context-staleness relevance diff.
+                    sidecar_dir=out_dir,
                 )
             else:
                 from .journal import (
@@ -2113,6 +2116,7 @@ def _context_staleness(
     key: str,
     domain_ctx: dict,
     current_strategies_fn,
+    hydrate_fn=None,
 ) -> str | None:
     """AR-7 context-staleness: has the domain model gained knowledge
     this review lacked AND that is relevant to this function?
@@ -2134,6 +2138,19 @@ def _context_staleness(
       strategies mark the entry stale. Unstamped concepts (empty
       ``related_strategies``) intersect nothing — storm-safe: the
       source-hash and strategy-set gates still catch real drift.
+
+    Slim-tier stubs (``journal compact --slim-clean`` offloads the
+    snapshot lists to the run sidecar): the relevance diff must see
+    the review's REAL snapshot, so an offloaded entry hydrates
+    through *hydrate_fn* first — bare empty lists would read as "the
+    review lacked every concept" and mass-mark stale (a re-review
+    storm). When the lists are needed but cannot be hydrated (no
+    sidecar route — project-index rows — or an unresolvable/tampered
+    record), the entry reads STALE with an explicit reason: refusing
+    the $0 reuse and re-reviewing is the journal's standing safe
+    direction, never trusting unverifiable context. Hydration is
+    lazy — a matching canonical hash still short-circuits fresh
+    without touching the sidecar.
     """
     entry_hash = getattr(entry, "domain_model_hash", None)
     if not entry_hash:
@@ -2150,6 +2167,20 @@ def _context_staleness(
     if not current:
         return None                      # can't assess relevance
     cur_set = set(current)
+    try:
+        from core.coverage.journal_sidecar import entry_context_offloaded
+        context_offloaded = entry_context_offloaded(entry)
+    except ImportError:
+        context_offloaded = False
+    if context_offloaded:
+        hydrated = hydrate_fn(entry) if hydrate_fn is not None else None
+        if hydrated is None:
+            return (
+                "context offloaded (domain model changed and the "
+                "review's snapshot lists are in the run sidecar, "
+                "which is unavailable here)"
+            )
+        entry = hydrated
     concepts_available = set(
         getattr(entry, "domain_concepts_available", None) or [])
     relevant = [
@@ -2177,6 +2208,7 @@ def _reuse_ineligibility(
     current_model: str | None,
     domain_ctx: dict | None = None,
     recorded_strategies: list | None = None,
+    hydrate_fn=None,
 ) -> str | None:
     """Why a hash-verified prior entry may NOT be imported as a
     reused verdict. ``None`` when it is eligible.
@@ -2252,7 +2284,8 @@ def _reuse_ineligibility(
             return "strategy set changed"
     if domain_ctx is not None:
         stale = _context_staleness(
-            entry, key, domain_ctx, current_strategies_fn)
+            entry, key, domain_ctx, current_strategies_fn,
+            hydrate_fn=hydrate_fn)
         if stale is not None:
             return stale
     return None
@@ -2270,6 +2303,8 @@ def _reuse_block_class(reason: str) -> str:
         return "model_changed"
     if reason.startswith("strategy set"):
         return "strategy_changed"
+    if reason.startswith("context offloaded"):
+        return "context_offloaded"
     return "domain_model_context"
 
 
@@ -2483,6 +2518,7 @@ def _verify_entries_fold(
     reuse_stats: dict | None = None,
     strategy_backfill=None,
     known_run_ids: set[str] | None = None,
+    sidecar_dir: Path | None = None,
 ) -> None:
     """Hash-verify journal *entries* and fold them into ``covered``.
 
@@ -2530,10 +2566,35 @@ def _verify_entries_fold(
     field — from a verified sibling row, so the eligibility screen
     compares the review's REAL briefing instead of refusing every
     corrected function as ``strategy_changed`` forever.
+
+    ``sidecar_dir`` (optional): the run directory whose
+    ``review-journal-bodies.jsonl`` sidecar can hydrate slim-tier
+    stubs for the context-staleness relevance diff. The same-run fold
+    passes its own out dir; the project-index fold passes None —
+    index rows carry no route back to their producing run's sidecar,
+    so an offloaded index row whose domain hash drifted refuses reuse
+    (``context_offloaded``) and re-reviews, the safe direction.
     """
     from core.coverage import journal_mac
 
     from .journal import is_agent_mark, is_function_grade, is_mechanical_echo
+
+    def _hydrate_from_sidecar(entry: Any) -> Any:
+        # None on any resolution failure — the staleness gate then
+        # refuses reuse (fail toward re-review, never toward
+        # trusting unverifiable context).
+        if sidecar_dir is None:
+            return None
+        try:
+            from core.coverage.journal_sidecar import hydrate_entry
+            return hydrate_entry(sidecar_dir, entry)
+        except Exception:  # noqa: BLE001 — sidecar is run-dir content; containment boundary
+            logger.debug(
+                "journal-fold: sidecar hydration failed", exc_info=True)
+            return None
+
+    hydrate_fn = (
+        _hydrate_from_sidecar if sidecar_dir is not None else None)
 
     def _credit(key: str, line_start: int) -> None:
         covered.add(key)
@@ -2865,6 +2926,7 @@ def _verify_entries_fold(
                     current_model=current_model,
                     domain_ctx=domain_ctx,
                     recorded_strategies=recorded_strategies,
+                    hydrate_fn=hydrate_fn,
                 )
                 if reason is not None:
                     cls = _reuse_block_class(reason)
