@@ -143,16 +143,6 @@
    ],
    "verdict": "linear"
   },
-  "core/audit/asn1_template_mismatch.py\u001f_ANY_ACCESS_RE": {
-   "digests": [
-    "aa25ce8c7261"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
   "core/audit/block_sibling_analysis.py\u001f_IF_ELIF_RE": {
    "digests": [
     "7045099b6369"
