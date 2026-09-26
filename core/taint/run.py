@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from core.atomic_fs import write_text_atomically
-from core.json import load_json, save_json
+from core.json import save_json
 from core.taint.emission import (
     PRODUCER,
     EmissionLimits,
@@ -104,15 +104,18 @@ def _load_inventory(target_root: Path, out_dir: Path) -> dict:
     """Reuse the run's ``checklist.json`` when the pipeline already
     built it; otherwise build a fresh inventory in memory (no file
     side effects — the checklist stays the inventory phase's
-    artifact)."""
-    checklist = out_dir / "checklist.json"
-    if checklist.exists():
-        data = load_json(checklist, strict=False)
-        if isinstance(data, dict) and isinstance(data.get("files"), list):
-            return data
+    artifact). The read goes through ``core.inventory.read_checklist``
+    for its flock, project-symlink resolution, and sharded-layout
+    support — a raw JSON load here could tear against a concurrent
+    ``update_checklist`` or miss a project-mode symlink."""
+    from core.inventory import read_checklist
+    data = read_checklist(out_dir)
+    if isinstance(data.get("files"), list):
+        return data
+    if (out_dir / "checklist.json").exists():
         logger.warning(
             "cross-file taint: %s unreadable or shape-drifted — "
-            "rebuilding the inventory", checklist)
+            "rebuilding the inventory", out_dir / "checklist.json")
     from core.inventory import build_inventory
     return build_inventory(str(target_root))
 
