@@ -35,6 +35,8 @@ from typing import Any, TYPE_CHECKING
 
 from core.json import save_json
 from core.sandbox import SandboxSetupError
+from core.security.log_sanitisation import sanitise_for_terminal
+from core.source import read_bytes_capped
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -53,6 +55,13 @@ _GCOV_TIMEOUT_S = 60
 # source size (low MB at the extreme); anything past the cap is
 # adversarial and gets truncated before parsing.
 _MAX_CAPTURE_BYTES = 4 * 1024 * 1024
+
+# Host-side cap on a single stdin replay input. Fuzz inputs are small
+# (AFL's default max is 1 MiB); 4 MiB matches the witness-intake cap,
+# so anything the bridge refuses here was never going to become a
+# witness either. Oversize means adversarial (or useless) — skip, never
+# truncate: a truncated input replays a DIFFERENT execution.
+_MAX_STDIN_INPUT_BYTES = 4 * 1024 * 1024
 
 _FUNC_RE = re.compile(r"^Function '(.+)'$")
 _FILE_RE = re.compile(r"^File '(.+)'$")
@@ -88,8 +97,18 @@ def _default_runner(
     for arg in cmd[1:]:
         try:
             p = Path(arg)
-            if p.is_file():
-                readable.add(str(p.resolve().parent))
+            # Read grants derive from lstat-honest paths only: the
+            # args come from target-writable dirs (queue/crashes
+            # entries, gcov data in the attacker-built tree), and
+            # resolving a symlinked arg grants its TARGET's parent —
+            # for a planted entry that hands the untrusted binary a
+            # read grant on an attacker-chosen host directory. A
+            # refused arg simply earns no grant; the sandbox then
+            # denies the read and that one replay fails, which is
+            # survivable.
+            if p.is_symlink() or not p.is_file():
+                continue
+            readable.add(str(p.resolve().parent))
         except OSError:
             continue
 
@@ -152,12 +171,23 @@ def find_corpus_inputs(
     seen: set[Path] = set()
 
     def _add_dir(d: Path) -> None:
-        if not d.is_dir():
+        # lstat-honest selection over target-writable dirs: replay
+        # derives host-side reads (stdin mode) and sandbox read
+        # grants (file mode) from each selected input, so a planted
+        # symlink — at a directory component or at an entry — must
+        # never place a non-campaign file on the replay list.
+        if d.is_symlink() or not d.is_dir():
             return
         for f in sorted(d.iterdir()):
             if len(inputs) >= max_inputs:
                 return
-            if not f.is_file() or f.name == "README.txt":
+            if f.name == "README.txt":
+                continue
+            if f.is_symlink() or not f.is_file():
+                logger.warning(
+                    "corpus replay: refusing non-regular input %s",
+                    sanitise_for_terminal(str(f)),
+                )
                 continue
             rp = f.resolve()
             if rp in seen:
@@ -171,16 +201,21 @@ def find_corpus_inputs(
     # tolerated for operator-staged inputs but never produced.
     _add_dir(out_dir / "merged_crashes")
     _add_dir(afl_dir / "merged_crashes")
-    if afl_dir.is_dir():
-        for inst in sorted(afl_dir.iterdir()):
+    if afl_dir.is_dir() and not afl_dir.is_symlink():
+        # Instance dirs are target-writable names too: a symlinked
+        # instance routes crashes/queue at a foreign tree of REAL
+        # files that the per-entry check cannot see.
+        instances = [inst for inst in sorted(afl_dir.iterdir())
+                     if not inst.is_symlink()]
+        for inst in instances:
             _add_dir(inst / "crashes")
-        for inst in sorted(afl_dir.iterdir()):
+        for inst in instances:
             _add_dir(inst / "queue")
     # libFuzzer campaigns keep their working corpus and artifacts
     # under <out>/libfuzzer/ — without this branch they replayed zero
     # inputs and the bridge's coverage came only from stale counters.
     libfuzzer_dir = out_dir / "libfuzzer"
-    if libfuzzer_dir.is_dir():
+    if libfuzzer_dir.is_dir() and not libfuzzer_dir.is_symlink():
         _add_dir(libfuzzer_dir / "crashes")
         _add_dir(libfuzzer_dir / "corpus")
     return inputs
@@ -224,10 +259,25 @@ def replay_corpus(
                     timeout=_REPLAY_TIMEOUT_S,
                 )
             else:
+                # Host-side read of a target-writable file: capped and
+                # fd-honest (O_NOFOLLOW + fstat(S_ISREG) under the
+                # hood). An unbounded by-name read_bytes() would
+                # materialise a target-planted multi-GB file in host
+                # RAM and follow a symlink at HOST (not sandbox)
+                # privilege straight into the attacker binary's stdin.
+                read = read_bytes_capped(inp, _MAX_STDIN_INPUT_BYTES)
+                if read is None or read[1]:
+                    logger.warning(
+                        "corpus replay: skipping %s (non-regular, "
+                        "unreadable, or over %d bytes)",
+                        sanitise_for_terminal(str(inp)),
+                        _MAX_STDIN_INPUT_BYTES,
+                    )
+                    continue
                 runner(
                     [str(binary)],
                     cwd=build_dir,
-                    stdin_bytes=inp.read_bytes(),
+                    stdin_bytes=read[0],
                     timeout=_REPLAY_TIMEOUT_S,
                 )
             replayed += 1

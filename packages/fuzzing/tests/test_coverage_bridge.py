@@ -228,6 +228,48 @@ class TestCorpusDiscovery:
         inputs = find_corpus_inputs(tmp_path)
         assert [f.name for f in inputs] == ["id:000000"]
 
+    def test_symlinked_entry_refused(self, tmp_path, caplog):
+        """A target-planted ``id:… -> <host file>`` in queue/crashes
+        must never be selected: file-mode replay derives a sandbox
+        read grant from the input's RESOLVED parent, handing the
+        untrusted binary a read of the symlink target's directory."""
+        secret = tmp_path / "credentials"
+        secret.write_bytes(b"AKIA-SECRET")
+        afl = tmp_path / "afl" / "main"
+        (afl / "queue").mkdir(parents=True)
+        (afl / "queue" / "id:000000").write_bytes(b"q")
+        (afl / "queue" / "id:000099").symlink_to(secret)
+
+        with caplog.at_level("WARNING"):
+            inputs = find_corpus_inputs(tmp_path)
+
+        assert [f.name for f in inputs] == ["id:000000"]
+        assert any("non-regular input" in r.getMessage()
+                   for r in caplog.records)
+
+    def test_symlinked_dir_components_refused(self, tmp_path):
+        """Symlinked directory components (instance dir, queue dir,
+        the afl/libfuzzer roots) route enumeration at a foreign tree
+        of REAL files the per-entry check cannot see."""
+        foreign = tmp_path / "foreign"
+        foreign.mkdir()
+        (foreign / "id:000001").write_bytes(b"host data")
+        foreign_inst = tmp_path / "foreign-inst"
+        (foreign_inst / "queue").mkdir(parents=True)
+        (foreign_inst / "queue" / "id:000002").write_bytes(b"host data")
+
+        out = tmp_path / "out"
+        afl = out / "afl"
+        afl.mkdir(parents=True)
+        inst = afl / "main"
+        inst.mkdir()
+        (inst / "queue").symlink_to(foreign)
+        (afl / "evilinst").symlink_to(foreign_inst)
+        (out / "merged_crashes").symlink_to(foreign)
+        (out / "libfuzzer").symlink_to(foreign)
+
+        assert find_corpus_inputs(out) == []
+
 
 class TestReplay:
     def test_file_mode_passes_input_as_argv(self, tmp_path):
@@ -275,6 +317,95 @@ class TestReplay:
             input_mode="file", runner=runner,
         )
         assert n == 1
+
+    def test_stdin_mode_refuses_symlinked_input(self, tmp_path, caplog):
+        """TOCTOU leg: an input swapped to a symlink after selection
+        must be refused by the fd-honest host-side read, never piped
+        into the attacker's binary."""
+        secret = tmp_path / "credentials"
+        secret.write_bytes(b"AKIA-SECRET")
+        link = tmp_path / "id:000000"
+        link.symlink_to(secret)
+        good = tmp_path / "id:000001"
+        good.write_bytes(b"data")
+        calls = []
+
+        def runner(cmd, *, cwd=None, stdin_bytes=None, timeout=0):
+            calls.append(stdin_bytes)
+
+        with caplog.at_level("WARNING"):
+            n = replay_corpus(
+                tmp_path / "bin", [link, good],
+                input_mode="stdin", runner=runner,
+            )
+
+        assert n == 1
+        assert calls == [b"data"]
+        assert any("corpus replay: skipping" in r.getMessage()
+                   for r in caplog.records)
+
+    def test_stdin_mode_skips_oversize_input(self, tmp_path, caplog):
+        """Oversize inputs are skipped whole — a truncated input
+        replays a DIFFERENT execution, and an unbounded read is a
+        host-memory DoS lever for a target-written file."""
+        from packages.fuzzing import coverage_bridge as mod
+
+        big = tmp_path / "id:000000"
+        big.write_bytes(b"x" * (mod._MAX_STDIN_INPUT_BYTES + 1))
+        calls = []
+
+        def runner(cmd, *, cwd=None, stdin_bytes=None, timeout=0):
+            calls.append(stdin_bytes)
+
+        with caplog.at_level("WARNING"):
+            n = replay_corpus(
+                tmp_path / "bin", [big], input_mode="stdin",
+                runner=runner,
+            )
+
+        assert n == 0
+        assert calls == []
+
+
+class TestDefaultRunnerGrants:
+    def test_symlinked_arg_earns_no_read_grant(self, tmp_path,
+                                               monkeypatch):
+        """The sandbox read allowlist derives from argv paths; a
+        symlinked arg must not grant its resolved TARGET's parent
+        (e.g. a queue entry pointing into a credentials directory)."""
+        import core.sandbox as sandbox_mod
+        from packages.fuzzing.coverage_bridge import _default_runner
+
+        secret_dir = tmp_path / "secrets"
+        secret_dir.mkdir()
+        (secret_dir / "credentials").write_bytes(b"AKIA-SECRET")
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        good = corpus / "id:000000"
+        good.write_bytes(b"data")
+        planted = corpus / "id:000099"
+        planted.symlink_to(secret_dir / "credentials")
+        binary = tmp_path / "bin" / "target"
+        binary.parent.mkdir()
+        binary.write_bytes(b"\x7fELF")
+
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["readable"] = kwargs.get("readable_paths")
+            import subprocess as sp
+            return sp.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(sandbox_mod, "run", fake_run)
+
+        _default_runner(
+            [str(binary), str(good), str(planted)],
+            cwd=tmp_path,
+        )
+
+        readable = set(seen["readable"])
+        assert str(corpus.resolve()) in readable
+        assert str(secret_dir.resolve()) not in readable
 
 
 class TestEmit:
