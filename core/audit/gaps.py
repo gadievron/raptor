@@ -2062,8 +2062,11 @@ def _fold_journal_into_covered(
                 # tier (is_agent_mark): a non-operator assertion
                 # carries no evidence gate and must not retire the
                 # function.
+                # fresh=True: this fold suppresses re-review on a
+                # resume — resume decisions never read the
+                # process-local journal load cache.
                 covered.update(
-                    e.key for e in load_entries(out_dir)
+                    e.key for e in load_entries(out_dir, fresh=True)
                     if e.verdict not in ("error", "dark")
                     and is_function_grade(e)
                     and not getattr(e, "provisional", None)
