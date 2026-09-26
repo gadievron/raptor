@@ -694,3 +694,23 @@ class TestTranscriptRoundTrip:
         assert replay_client.providers == {}
         assert replay_client.total_cost == 0.0
         assert replay_client.transcript_session.misses == []
+
+
+class TestCliWiring:
+    def test_analyze_cli_defines_and_threads_the_flag(self):
+        import inspect
+        src = inspect.getsource(agent_mod.main)
+        assert '"--context-toolloop"' in src
+        assert "context_toolloop=args.context_toolloop" in src
+        # The /analyze console summary surfaces the loop counters
+        # (the eval protocol reads them).
+        assert 'report.get("context_toolloop")' in src
+
+    def test_agentic_forwards_only_on_sequential(self):
+        root = Path(__file__).resolve().parents[3]
+        src = (root / "raptor_agentic.py").read_text(encoding="utf-8")
+        assert '"--context-toolloop"' in src
+        # Forwarding is gated on --sequential (the orchestrated path
+        # does not consume the flag).
+        gate = src.split('analysis_cmd.append("--context-toolloop")')[0]
+        assert gate.rstrip().endswith("if args.sequential:")

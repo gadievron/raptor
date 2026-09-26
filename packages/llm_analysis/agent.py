@@ -4825,6 +4825,20 @@ def main() -> None:
              "packages/llm_analysis/context_expansion.py for the "
              "trigger, join rule, and caps). Default off.",
     )
+    ap.add_argument(
+        "--context-toolloop",
+        action="store_true",
+        help="Opt-in bounded retrieval tool loop for explicitly "
+             "uncertain verdicts: instead of the one-shot expansion "
+             "the model may REQUEST specific extra context through a "
+             "closed read-only vocabulary (read_span / list_callers / "
+             "list_callees, repo-confined) over at most a fixed number "
+             "of turns, then must verdict on what it has. Shares the "
+             "per-run budget with --context-expansion and supersedes "
+             "it when both are on (see "
+             "packages/llm_analysis/context_toolloop.py for the "
+             "vocabulary, caps, and refusal accounting). Default off.",
+    )
 
     args = ap.parse_args()
 
@@ -4903,6 +4917,7 @@ def main() -> None:
         deep_validate=args.deep_validate,
         deep_validate_disabled=args.no_deep_validate,
         context_expansion=args.context_expansion,
+        context_toolloop=args.context_toolloop,
     )
 
     # Load checklist for metadata lookup
@@ -5005,6 +5020,18 @@ def main() -> None:
                 f"Context expansions: {ce['expansions_triggered']} "
                 f"triggered, {ce['expansions_performed']} performed, "
                 f"{ce['expansions_changed_verdict']} changed verdict"
+            )
+        # Context tool-loop stats — present only on --context-toolloop
+        # runs (same eval-protocol contract as the expansion block).
+        tl = report.get("context_toolloop")
+        if tl:
+            print(
+                f"Context tool loops: {tl['loops_triggered']} "
+                f"triggered, {tl['loops_performed']} performed "
+                f"({tl['turns_performed']} turns), "
+                f"{tl['loops_changed_verdict']} changed verdict; "
+                f"tool calls {tl['tool_calls_served']} served / "
+                f"{tl['tool_calls_refused']} refused"
             )
         print(f"LLM cost: ${report['llm_stats']['total_cost']:.4f}")
         print(f"Output: {out_dir}")

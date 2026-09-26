@@ -2518,6 +2518,18 @@ Examples:
              "Default off.",
     )
     parser.add_argument(
+        "--context-toolloop",
+        action="store_true",
+        help="Sequential-path classifier only: bounded read-only "
+             "retrieval tool loop for explicitly uncertain verdicts — "
+             "the model may request specific extra context "
+             "(read_span / list_callers / list_callees, repo-confined, "
+             "hard turn/byte caps) then must verdict on what it has. "
+             "Shares the per-run budget with --context-expansion and "
+             "supersedes it when both are on. Requires --sequential "
+             "(ignored with a warning otherwise). Default off.",
+    )
+    parser.add_argument(
         "--trust-repo",
         action="store_true",
         help="Trust the target repo's config and skip safety checks. Covers the "
@@ -4472,6 +4484,20 @@ def main() -> int:
             else:
                 print(
                     "⚠️  --context-expansion applies to the sequential "
+                    "classifier only — ignored on this run "
+                    "(add --sequential)",
+                    file=sys.stderr,
+                )
+        # The context tool loop rides the same sequential-only seam,
+        # for the same reason: the orchestrated Phase 4 path never
+        # consumes the flag, so forwarding it there would be a silent
+        # no-op.
+        if getattr(args, "context_toolloop", False):
+            if args.sequential:
+                analysis_cmd.append("--context-toolloop")
+            else:
+                print(
+                    "⚠️  --context-toolloop applies to the sequential "
                     "classifier only — ignored on this run "
                     "(add --sequential)",
                     file=sys.stderr,
