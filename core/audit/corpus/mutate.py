@@ -119,6 +119,33 @@ _CASE_ARM_RE = re.compile(
     r"(?:return\b[^;]*|(?:goto\s+\w+|break|continue)\s*);\s*$",
 )
 
+# Compound-guard head with a leading bare-identifier null arm:
+# `if (p && REST)`.  The rest is bounded to one line and must not
+# open a block or end the statement; `[^;{]*` subsumes its own
+# surrounding whitespace (single star, linear — the consumer strips
+# the group).
+_NULL_ARM_RE = re.compile(
+    r"^(?P<ind>\s*)if\s*\(\s*(?P<base>[A-Za-z_]\w*)\s*&&"
+    r"(?P<rest>[^;{]*)\)(?P<tail>.*)$",
+)
+
+# Generic single-line checked early exit: `if (COND) return ...;` /
+# `... goto err;`.  COND excludes `;`/`{`/`}` so the match never
+# spans statements; the exit alternation is the _EARLY_EXIT_RE
+# language (same fold: `[^;]*` subsumes trailing whitespace).
+_CHECK_EXIT_RE = re.compile(
+    r"^\s*if\s*\([^;{}]*\)\s*"
+    r"(?:return\b[^;]*|(?:goto\s+\w+|break|continue)\s*);\s*$",
+)
+
+# Relational bound with a bare-identifier bound expression ending the
+# condition clause: `< n;` / `<= n)` — the identifier the shift
+# rewrites to `IDENT + 1`.
+_BOUND_IDENT_RE = re.compile(
+    r"(?<![<>=!&|-])(?P<op><=|>=|<(?![<=])|>(?![>=]))"
+    r"(?P<sp>\s*)(?P<ident>[A-Za-z_]\w*)(?=\s*[;)])",
+)
+
 
 def _candidate_lines(span: tuple[int, int], line: int | None) -> range:
     if line is not None:
@@ -214,6 +241,54 @@ def find_site(
             "shapes)"
         )
 
+    if operator == "drop-null-arm":
+        for i in _candidate_lines(span, line):
+            m = _NULL_ARM_RE.match(_line_at(i))
+            if not m or (callee and m.group("base") != callee):
+                continue
+            rest = m.group("rest").strip()
+            if not rest:
+                continue
+            repl = f"{m.group('ind')}if ({rest}){m.group('tail')}"
+            return [(i, i, [repl])], i
+        raise MutationError(
+            "no-matching-site: no `if (IDENT && ...)` compound "
+            "guard with a leading null arm in the span"
+            + (f" for base {callee!r}" if callee else "")
+        )
+
+    if operator == "drop-paired-check":
+        for i in _candidate_lines(span, line):
+            if not _CHECK_EXIT_RE.match(_line_at(i)):
+                continue
+            return [(i, i, [])], i
+        raise MutationError(
+            "no-matching-site: no single-line `if (...) "
+            "return/goto ...;` check in the span"
+        )
+
+    if operator == "shift-bound":
+        for i in _candidate_lines(span, line):
+            text = _line_at(i)
+            head = text.strip()
+            if line is None and not head.startswith(
+                ("if", "for", "while"),
+            ):
+                continue
+            m = _BOUND_IDENT_RE.search(text)
+            if not m or (callee and m.group("ident") != callee):
+                continue
+            shifted = (
+                text[:m.start()] + m.group("op") + m.group("sp")
+                + m.group("ident") + " + 1" + text[m.end():]
+            )
+            return [(i, i, [shifted])], i
+        raise MutationError(
+            "no-matching-site: no relational comparison against a "
+            "bare identifier bound on an if/for/while line in the "
+            "span (pass --line for other shapes)"
+        )
+
     if operator == "swap-order":
         for i in _candidate_lines(span, line):
             if i + 1 > span[1]:
@@ -267,7 +342,12 @@ _DIMENSION_DETECTORS = {
     "ordering": {"ordering_deviation"},
     "cleanup": {"cleanup_deviation"},
     "return-check": set(),
-    "guard-predicate": set(),
+    "guard-predicate": {
+        "guard_predicate_deviation", "insufficient_guard_smt",
+        "signed_mismatch_smt",
+    },
+    "path-symmetry": {"path_symmetry_deviation"},
+    "boundary-unit": {"boundary_unit_deviation"},
     "interface": {"interface_deviation"},
     "enum-switch": {"enum_switch_deviation"},
 }

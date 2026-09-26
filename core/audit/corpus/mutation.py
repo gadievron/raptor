@@ -74,6 +74,9 @@ MUTATION_OPERATORS = (
     "drop-return-check",
     "drop-slot-guard",
     "drop-case-arm",
+    "drop-null-arm",
+    "drop-paired-check",
+    "shift-bound",
 )
 
 # operator -> (consistency dimension exercised, default CWE).  The
@@ -84,7 +87,13 @@ MUTATION_OPERATORS = (
 # (CWE-401), a dropped return check is an unchecked return (CWE-252),
 # a guard dropped from one interface-slot implementation is the same
 # NULL dereference exercised through the interface parity dimension
-# (CWE-476), and a removed case arm is a missing enum case (CWE-478).
+# (CWE-476), a removed case arm is a missing enum case (CWE-478),
+# a null arm dropped from a compound guard dereferences NULL through
+# the guard-predicate dimension (CWE-476), a validation check dropped
+# from one side of a verb pair is missing input validation exercised
+# through the path-symmetry dimension (CWE-20), and a shifted loop
+# bound is an off-by-one exercised through the boundary/unit
+# dimension (CWE-193).
 OPERATOR_INFO: dict[str, tuple[str, str]] = {
     "drop-guard": ("guard-presence", "CWE-476"),
     "swap-order": ("ordering", "CWE-696"),
@@ -93,6 +102,9 @@ OPERATOR_INFO: dict[str, tuple[str, str]] = {
     "drop-return-check": ("return-check", "CWE-252"),
     "drop-slot-guard": ("interface", "CWE-476"),
     "drop-case-arm": ("enum-switch", "CWE-478"),
+    "drop-null-arm": ("guard-predicate", "CWE-476"),
+    "drop-paired-check": ("path-symmetry", "CWE-20"),
+    "shift-bound": ("boundary-unit", "CWE-193"),
 }
 
 # Spec size caps: a mutation is ONE small mechanical edit; anything

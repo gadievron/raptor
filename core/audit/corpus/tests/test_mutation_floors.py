@@ -67,10 +67,14 @@ BASELINE_FLOORS = [
     ("ordering.c", "op_d", "swap-order", {}, False, True),
     ("cleanup.c", "job_d", "remove-pair-release",
      {"callee": "dev_close"}, True, True),
-    ("flip_bound.c", "sum_d", "flip-bound", {}, False, False),
+    ("flip_bound.c", "sum_d", "flip-bound", {}, False, True),
     ("iface.c", "raw_send", "drop-slot-guard", {}, False, True),
     ("enum_switch.c", "handle_d", "drop-case-arm",
      {"callee": "PKT_RESET"}, False, True),
+    ("null_arm.c", "h_d", "drop-null-arm", {}, False, True),
+    ("pair_check.c", "set_level", "drop-paired-check", {}, False,
+     True),
+    ("flip_bound.c", "sum_d", "shift-bound", {}, False, True),
 ]
 
 
@@ -140,13 +144,21 @@ def test_baseline_floor(
 
 
 def test_flip_bound_baseline_floor_pin():
-    """Pins the current baseline floor for this operator; update the
-    expected values when a consuming dimension lands (a change here
-    without one means an unexpected consumer claimed the dimension
-    name)."""
+    """Pins the operator's floor now that the guard-predicate
+    dimension consumes it: the flipped bound is DETECTED, and the
+    hit rides the dimension's own census (a change here without a
+    consuming-dimension change means the dimension regressed or an
+    unexpected consumer claimed the name)."""
     _, outcome = _run_case(
         "flip_bound.c", "sum_d", "flip-bound", {}, False,
     )
     assert outcome["dimension"] == "guard-predicate"
-    assert outcome["detected"] is False
-    assert outcome["post_hits"] == []
+    assert outcome["detected"] is True
+    rule_ids = {h.get("rule_id", "") for h in outcome["post_hits"]}
+    assert any(
+        r.startswith("consistency:guard-predicate") for r in rule_ids
+    ), rule_ids
+    detectors = {
+        h.get("detector", "") for h in outcome["post_hits"]
+    }
+    assert "guard_predicate_deviation" in detectors, detectors

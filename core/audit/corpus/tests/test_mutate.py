@@ -134,6 +134,63 @@ class TestFindSite:
         assert site == 5
         assert edits == [(5, 5, [])]
 
+    def test_drop_null_arm(self):
+        src = _lines(
+            "int h(struct pkt *p, int max)\n"
+            "{\n"
+            "    if (p && p->len < max)\n"
+            "        return consume(p);\n"
+            "    return -1;\n"
+            "}\n",
+        )
+        edits, site = mutate.find_site(src, (1, 6), "drop-null-arm")
+        assert site == 3
+        assert edits == [(3, 3, ["    if (p->len < max)"])]
+
+    def test_drop_null_arm_refuses_simple_guards(self):
+        with pytest.raises(MutationError, match="no-matching-site"):
+            mutate.find_site(
+                _lines(GUARD_TWO_LINE_SRC), (1, 7), "drop-null-arm",
+            )
+
+    def test_drop_paired_check(self):
+        src = _lines(
+            "int set_gain(int v)\n"
+            "{\n"
+            "    if (v < 0) return -1;\n"
+            "    g_gain = v;\n"
+            "    return 0;\n"
+            "}\n",
+        )
+        edits, site = mutate.find_site(
+            src, (1, 6), "drop-paired-check",
+        )
+        assert site == 3
+        assert edits == [(3, 3, [])]
+
+    def test_shift_bound(self):
+        edits, site = mutate.find_site(
+            _lines(LOOP_SRC), (1, 8), "shift-bound",
+        )
+        assert site == 4
+        assert edits[0][2] == [
+            "    for (i = 0; i < n + 1; i++) {",
+        ]
+
+    def test_shift_bound_skips_literal_bounds(self):
+        src = _lines(
+            "int s(int *a)\n"
+            "{\n"
+            "    int i, t = 0;\n"
+            "    for (i = 0; i < 16; i++) {\n"
+            "        t += a[i];\n"
+            "    }\n"
+            "    return t;\n"
+            "}\n",
+        )
+        with pytest.raises(MutationError, match="no-matching-site"):
+            mutate.find_site(src, (1, 8), "shift-bound")
+
     def test_line_out_of_span_refused(self):
         with pytest.raises(MutationError, match="line-out-of-span"):
             mutate.find_site(
