@@ -36,6 +36,11 @@ from core.json import load_json, save_json
 from core.llm.client import _is_auth_error
 from core.llm.coerce import to_lower_token_safe
 from core.llm.config import LLMConfig
+from core.llm.context_window import (
+    DATAFLOW_STEP_CONTEXT_LINES,
+    FINDING_CONTEXT_LINES,
+    NO_LINE_INFO_HEAD_LINES,
+)
 from core.llm.detection import detect_llm_availability
 from core.llm.providers import ClaudeCodeProvider
 from core.llm.task_types import TaskType
@@ -445,13 +450,15 @@ class VulnerabilityContext:
                 end_idx = min(len(lines), end_line)
                 self.full_code = "\n".join(lines[start_idx:end_idx])
 
-                # Get surrounding context (50 lines before and after)
-                context_start = max(0, start_idx - 50)
-                context_end = min(len(lines), end_idx + 50)
+                # Surrounding context: the shared classifier window
+                # (FINDING_CONTEXT_LINES before and after) — see
+                # core.llm.context_window for the sizing rationale.
+                context_start = max(0, start_idx - FINDING_CONTEXT_LINES)
+                context_end = min(len(lines), end_idx + FINDING_CONTEXT_LINES)
                 self.surrounding_context = "\n".join(lines[context_start:context_end])
             else:
-                # If no line numbers, take first 100 lines
-                self.full_code = "\n".join(lines[:100])
+                # No line numbers: untargeted head-of-file fallback.
+                self.full_code = "\n".join(lines[:NO_LINE_INFO_HEAD_LINES])
                 self.surrounding_context = self.full_code
 
             return True
@@ -460,7 +467,8 @@ class VulnerabilityContext:
             return False
 
     def _read_code_at_location(
-        self, file_uri: str, line: int, context_lines: int = 5,
+        self, file_uri: str, line: int,
+        context_lines: int = DATAFLOW_STEP_CONTEXT_LINES,
     ) -> str:
         """
         Read code at a specific location with surrounding context.
@@ -469,6 +477,8 @@ class VulnerabilityContext:
             file_uri: File URI from SARIF
             line: Line number (1-indexed)
             context_lines: Number of lines before/after to include
+                (default: the shared per-dataflow-node window — see
+                core.llm.context_window for the sizing rationale)
 
         Returns:
             Code snippet with context
