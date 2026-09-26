@@ -14132,6 +14132,26 @@ class StudyQueue:
     def enqueue(self, item: StudyRequest) -> None:
         concept = _extract_concept_from_question(item.question)
         with self._not_empty:
+            if self._consumer_done:
+                # The consumer has exited — nothing will ever dequeue
+                # this item, and (pre-fix) its concept still entered
+                # _pending_concepts, where it re-armed the executor's
+                # suppression gate FOREVER: the all-work-held wait
+                # released held tasks (consumer done) only for the
+                # dispatch path to re-hold them against a pending set
+                # nobody could ever study — a zero-CPU release/re-hold
+                # livelock. Reviews completing after the consumer's
+                # early exit (stale batches, budget, drain) are the
+                # producers. Drop with a debug note —
+                # behaviour-equivalent for study (the question would
+                # never have been studied either way) and
+                # side-effect-free for liveness.
+                logger.debug(
+                    "study-queue: dropping question enqueued after "
+                    "consumer exit (nothing will study it): %s",
+                    item.question,
+                )
+                return
             if concept and concept.lower() in self._studied_concepts:
                 # Already studied: re-adding would re-arm the
                 # executor's suppression hold for a concept study can
@@ -14241,6 +14261,19 @@ class StudyQueue:
     def signal_consumer_done(self) -> None:
         with self._not_empty:
             self._consumer_done = True
+            # Concepts still pending at consumer exit are TERMINAL —
+            # nothing will ever study them — so they fold into the
+            # studied set rather than merely clearing: the enqueue
+            # drop-check then refuses later re-asks of the same
+            # concepts (quarantined-answer questions stay pending in
+            # the reading-list ledger by design and are re-asked by
+            # re-reviews every segment; a batch the consumer never
+            # dequeued before its early exit never entered the studied
+            # set either). A bare clear left those re-asks free to
+            # re-populate the pending set after this signal — the
+            # zombie state behind the executor's release/re-hold
+            # livelock.
+            self._studied_concepts |= self._pending_concepts
             self._pending_concepts.clear()
         self._notify_executor()
 

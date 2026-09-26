@@ -33,6 +33,24 @@ class ExecutorConfig:
 
 _PROGRESS_CHECKPOINT_INTERVAL = 60.0
 
+#: How long the async executor's all-work-held branch waits for a
+#: study-progress wakeup before re-evaluating the held set. Module
+#: constant (was an inline literal) so the stall watchdog's tests can
+#: shrink the cycle instead of sleeping wall-clock seconds.
+_ALL_HELD_WAIT_S = 30.0
+
+#: Consecutive all-work-held wait cycles with an UNCHANGED held set
+#: and an idle/finished study consumer before the stall watchdog
+#: force-releases the held tasks. Trade-off, both directions: too low
+#: and a slow-but-live consumer wakeup (mark_studied racing the cycle
+#: boundary) gets force-released a cycle early — harmless, the tasks
+#: just review without the study context, but it forfeits enrichment;
+#: too high and a genuine hold/release livelock (the wedge this
+#: breaker exists for) burns that many more silent 30s cycles before
+#: the run makes progress again. Three cycles ≈ 90s of provable
+#: no-progress is decisive either way.
+_ALL_HELD_STALL_CYCLES = 3
+
 
 @dataclass
 class ExecutorStats:
@@ -642,6 +660,18 @@ async def _run_async_body(
         """Return True if task should be held (suppressed)."""
         if study_queue is None or concept_index_ref is None:
             return False
+        if getattr(study_queue, "consumer_done", False):
+            # The study consumer has exited — no pending concept can
+            # ever be studied again, so holding work for one is a
+            # provable no-progress state. Pre-fix, a review completing
+            # AFTER the consumer's exit could re-populate the pending
+            # set (a reading-list re-ask nobody would ever consume) and
+            # this check then re-held every task `_release_held`'s
+            # consumer-done branch had just released — a silent
+            # release/re-hold livelock at the all-work-held wait
+            # (observed live: zero CPU, one coroutine ticking every
+            # wait interval, forever).
+            return False
         ci = concept_index_ref[0] if concept_index_ref else None
         if ci is None:
             return False
@@ -681,10 +711,15 @@ async def _run_async_body(
                 released.append(held_tasks.pop(key))
         return released
 
-    def _dispatch_ready(tasks: list[Any]) -> None:
-        """Route ready tasks: glance-tier into batch queue, others individual."""
+    def _dispatch_ready(tasks: list[Any], *, suppress: bool = True) -> None:
+        """Route ready tasks: glance-tier into batch queue, others individual.
+
+        ``suppress=False`` skips the study-suppression hold — the
+        stall watchdog's force-release path, where holding again is
+        exactly the failure being broken.
+        """
         for task in tasks:
-            if _check_suppression(task):
+            if suppress and _check_suppression(task):
                 continue
             if (
                 batch_review_fn
@@ -839,6 +874,79 @@ async def _run_async_body(
                 stats.completed += 1
             await _after_completion()
 
+    # ── All-work-held stall watchdog ─────────────────────────────────
+    # Livelock breaker for the hold/release cycle: when every wait
+    # cycle re-evaluates an IDENTICAL held set while the study
+    # consumer is provably making no progress (exited, or idle on an
+    # empty queue), waiting longer cannot change anything — after
+    # _ALL_HELD_STALL_CYCLES such cycles the held tasks are
+    # force-released past the suppression gate (fail toward progress:
+    # they review without the study context, exactly what an
+    # unsuppressed task does). One loud line when it fires; with the
+    # consumer-done guards upstream it should never fire — it exists
+    # for the livelock variants those guards don't know about yet.
+    held_stall = {"snap": None, "count": 0}
+
+    def _consumer_stall_fingerprint() -> tuple | None:
+        """A hashable "the consumer cannot make progress" state, or
+        None while progress is still possible (mid-batch, queued work,
+        or a queue implementation this cannot introspect)."""
+        if study_queue is None:
+            return ("no-consumer",)
+        if getattr(study_queue, "consumer_done", False):
+            return ("done",)
+        drain_state = getattr(study_queue, "drain_state", None)
+        if drain_state is None:
+            return None
+        try:
+            progress, queue_empty, working = drain_state()
+        except Exception:  # noqa: BLE001 — watchdog must never break the loop
+            return None
+        if working or not queue_empty:
+            return None
+        return ("idle", progress)
+
+    def _held_stall_tick() -> bool:
+        """Count consecutive no-progress wait cycles; True = break the
+        stall now."""
+        consumer = _consumer_stall_fingerprint()
+        if consumer is None:
+            held_stall["snap"] = None
+            held_stall["count"] = 0
+            return False
+        snap = (
+            tuple(sorted(
+                (key, frozenset(blocked))
+                for key, blocked in hold_set.items()
+            )),
+            consumer,
+        )
+        if snap == held_stall["snap"]:
+            held_stall["count"] += 1
+        else:
+            held_stall["snap"] = snap
+            held_stall["count"] = 0
+        return held_stall["count"] >= _ALL_HELD_STALL_CYCLES
+
+    def _force_release_held() -> None:
+        blocking = sorted({c for s in hold_set.values() for c in s})
+        logger.error(
+            "executor: %d task(s) held for study of concept(s) %s "
+            "across %d wait cycles with no study progress possible "
+            "(consumer %s) — force-releasing them for review without "
+            "the study context",
+            len(held_tasks), ", ".join(blocking) or "?",
+            held_stall["count"],
+            "exited" if getattr(study_queue, "consumer_done", False)
+            else "idle",
+        )
+        released = list(held_tasks.values())
+        hold_set.clear()
+        held_tasks.clear()
+        held_stall["snap"] = None
+        held_stall["count"] = 0
+        _dispatch_ready(released, suppress=False)
+
     initial = graph.pop_ready(ec.max_workers)
     _dispatch_ready(initial)
 
@@ -876,11 +984,19 @@ async def _run_async_body(
             # above, or cleared by the stop path).
             if not hold_set:
                 break
-            # All work is held — wait for study to complete
+            # All work is held — wait for study to complete. The
+            # stall watchdog bounds this: an unchanged held set with a
+            # consumer that can no longer make progress force-releases
+            # instead of waiting forever (see _held_stall_tick).
+            if _held_stall_tick():
+                _force_release_held()
+                continue
             if study_event is not None:
                 study_event.clear()
                 try:
-                    await asyncio.wait_for(study_event.wait(), timeout=30.0)
+                    await asyncio.wait_for(
+                        study_event.wait(), timeout=_ALL_HELD_WAIT_S,
+                    )
                 except asyncio.TimeoutError:
                     pass
                 continue
