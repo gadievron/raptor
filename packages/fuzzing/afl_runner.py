@@ -5,6 +5,7 @@ RAPTOR AFL++ Runner
 Orchestrates AFL++ fuzzing campaigns with parallel workers.
 """
 
+import contextlib
 import os
 import re
 import shutil
@@ -1261,6 +1262,12 @@ class AFLRunner:
                     open_exclusive_artifact(dest), "wb",
                 ) as out_fh, f.open("rb") as src_fh:
                     shutil.copyfileobj(src_fh, out_fh)
+                # The hardlink path shares the inode, so the crash's
+                # timestamps ride along for free; the copy must carry
+                # them too — triage orders crashes by mtime.
+                # Best-effort: metadata loss never fails the merge.
+                with contextlib.suppress(OSError):
+                    shutil.copystat(f, dest)
         return merged
 
     @staticmethod

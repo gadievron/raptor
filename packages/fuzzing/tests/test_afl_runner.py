@@ -261,6 +261,35 @@ class TestMergeCrashFiles:
             / "id:000001,sig:06,src:000002,op:havoc,rep:2,instance:secondary1"
         ).read_bytes() == b"b"
 
+    def test_copy_fallback_preserves_crash_mtime(
+        self, tmp_path, monkeypatch,
+    ):
+        # The hardlink path shares the inode, so the crash's
+        # timestamps ride along for free; the exclusive-create copy
+        # fallback (cross-device merge dirs) must carry them too —
+        # triage orders crashes by mtime.
+        runner = self._make_runner(tmp_path)
+        self._plant_crash(tmp_path, "main",
+                          "id:000000,sig:11,src:000000,op:havoc,rep:1", b"a")
+        src = self._plant_crash(
+            tmp_path, "secondary1",
+            "id:000001,sig:06,src:000002,op:havoc,rep:2", b"b")
+        stamp = 946684800  # 2000-01-01 — unmistakably not "now"
+        os.utime(src, (stamp, stamp))
+
+        def _no_hardlink(self, target):
+            raise OSError("cross-device link")
+
+        monkeypatch.setattr(Path, "hardlink_to", _no_hardlink)
+        result = runner._merge_crash_files(
+            runner._collect_all_crash_files())
+        dest = (
+            result
+            / "id:000001,sig:06,src:000002,op:havoc,rep:2,instance:secondary1"
+        )
+        assert dest.read_bytes() == b"b"
+        assert int(dest.stat().st_mtime) == stamp
+
     def test_merge_is_idempotent(self, tmp_path):
         runner = self._make_runner(tmp_path)
         self._plant_crash(tmp_path, "main",
