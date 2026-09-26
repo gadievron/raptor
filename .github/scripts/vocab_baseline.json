@@ -1830,6 +1830,16 @@
     "kind": "literal",
     "note": "step record serialization field names (the codeFlows step contract: file/line spans, tier/tags/sanitizers, excerpt fields), not name vocabulary \u2014 same class as the summaries to_dict entry"
   },
+  "core/taint/emission.py::result": {
+    "count": 11,
+    "kind": "literal",
+    "note": "SARIF result properties serialization field names (detection_tier/path_tier/spec_tier/killed_origins/...), not name vocabulary \u2014 same class as the engine/paths to_dict entries"
+  },
+  "core/taint/emission.py::_scan_finding": {
+    "count": 13,
+    "kind": "literal",
+    "note": "scan-shaped finding dict field names (the parse_sarif_findings key shape: finding_id/rule_id/startLine/dataflow_path/...), not name vocabulary \u2014 same class as the engine/paths to_dict entries"
+  },
   "core/trajectories/test_store.py::base": {
     "count": 10,
     "kind": "literal"
