@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""End-to-end smoke for the ELF engagement chain — no LLM calls.
+
+Builds a real debug binary with the host toolchain, enumerates it
+into a REAL ledger (``core.engagement.ledger.build_ledger`` — real
+classifier, real content identity), then drives the REAL chain module
+end to end. The heavy analysis children (Ghidra, the study, the
+audit) are replaced by stub executables in a shim ``libexec`` — every
+spawn still goes through the module's real subprocess seam (list
+argv, sanitised env, process groups), every handoff file is really
+written and re-read, and the ledger write-back is the real flock'd
+read-modify-write. What the stubs fake is the ANALYSIS, never the
+SEQUENCING — which is exactly the layer this harness proves:
+
+  1. mechanical-only sweep → analysed, LLM stages recorded degraded
+  2. same sweep again      → nothing-to-do, zero child spawns
+  3. full run, audit child failing → stage failure recorded, resumable
+  4. full run, audit healthy → resumes AT audit (earlier stages not
+     re-spawned), verdicted, attesting verdict written back
+  5. full run again (twice) → nothing-to-do, zero spawns, and the
+     ledger row KEEPS its terminal verdicted/attesting status
+  6. the real launcher's usage surface (--help, bad ledger dir)
+
+Dev-time proof harness: lives in the subsystem ``scripts/`` dir, runs
+outside the launcher (``Path(__file__)``-relative setup), needs a C
+compiler on PATH. Exit 0 = all proofs hold.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO))
+
+from core.engagement import chain_elf  # noqa: E402
+from core.engagement.ledger import build_ledger, load_ledger  # noqa: E402
+from core.json import load_json  # noqa: E402
+
+_C_SOURCE = """
+#include <stdio.h>
+#include <string.h>
+
+int parse_input(const char *s) {
+    char buf[32];
+    strncpy(buf, s, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = 0;
+    return (int)strlen(buf);
+}
+
+int main(int argc, char **argv) {
+    if (argc > 1)
+        return parse_input(argv[1]);
+    puts("chain-smoke target");
+    return 0;
+}
+"""
+
+def _stub_common(ws: Path) -> str:
+    # The workspace path is BAKED into each stub at generation time:
+    # children run under the module's sanitised env (allowlist +
+    # ``LC_`` prefixes only), so a custom variable would be scrubbed.
+    return f"""#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, {str(REPO)!r})
+WS = Path({str(ws)!r})
+def log(tag):
+    with open(WS / "spawn-log.txt", "a", encoding="utf-8") as fh:
+        fh.write(tag + chr(10))
+def out_dir():
+    return Path(sys.argv[sys.argv.index("--out") + 1])
+"""
+
+
+_STUB_BODIES = {
+    "raptor-binary": """
+sub = sys.argv[1]
+log("raptor-binary " + sub)
+if sub == "investigate":
+    d = out_dir(); d.mkdir(parents=True, exist_ok=True)
+    (d / "binary-investigation.json").write_text(
+        json.dumps({"ok": True}), encoding="utf-8")
+# siblings: exits 0 without seeds (no peer clusters on one binary)
+sys.exit(0)
+""",
+    "raptor-ghidra": """
+log("raptor-ghidra " + sys.argv[1])
+d = out_dir(); d.mkdir(parents=True, exist_ok=True)
+binary = sys.argv[2]
+(d / "re-database.json").write_text(json.dumps({
+    "source_tool": "chain-smoke-stub",
+    "binary_path": binary,
+    "architecture": "x86:LE:64:default",
+    "functions": [
+        {"name": "parse_input", "address": 4096, "size": 64},
+        {"name": "main", "address": 8192, "size": 128},
+    ],
+}), encoding="utf-8")
+sys.exit(0)
+""",
+    "raptor-binary-study": """
+log("raptor-binary-study")
+d = Path(sys.argv[2]); d.mkdir(parents=True, exist_ok=True)
+(d / "domain-model.json").write_text(
+    json.dumps({"concepts": []}), encoding="utf-8")
+sys.exit(0)
+""",
+    "raptor-audit": """
+log("raptor-audit " + sys.argv[1])
+if (WS / "audit-fail-flag").exists():
+    sys.exit(3)
+if sys.argv[1] == "resume":
+    d = Path(sys.argv[2])
+else:
+    d = out_dir()
+d.mkdir(parents=True, exist_ok=True)
+(d / "audit-run-config.json").write_text("{}", encoding="utf-8")
+from core.coverage.journal import ReviewJournalEntry, append_entry
+append_entry(d, ReviewJournalEntry(
+    ts="2026-01-01T00:00:00+00:00", run_id="chain-smoke",
+    file="binary:app", function="parse_input", verdict="clean",
+    source_hash="deadbeef1234"))
+(d / "audit-report.json").write_text(
+    json.dumps({"done": True}), encoding="utf-8")
+sys.exit(0)
+""",
+}
+
+_checks = 0
+
+
+def check(cond: bool, what: str) -> None:
+    global _checks
+    _checks += 1
+    if cond:
+        print(f"  ok  {what}")
+    else:
+        print(f"  FAIL {what}")
+        sys.exit(1)
+
+
+def spawn_counts(ws: Path) -> dict[str, int]:
+    log = ws / "spawn-log.txt"
+    counts: dict[str, int] = {}
+    if log.is_file():
+        for line in log.read_text(encoding="utf-8").splitlines():
+            counts[line] = counts.get(line, 0) + 1
+    return counts
+
+
+def main() -> int:
+    cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    if not cc:
+        print("chain-smoke: no C compiler on PATH — cannot build the "
+              "target binary", file=sys.stderr)
+        return 1
+
+    ws = Path(tempfile.mkdtemp(prefix="chain-smoke-"))
+    ok = False
+    try:
+        # ── target + real ledger ────────────────────────────────────
+        install = ws / "install" / "bin"
+        install.mkdir(parents=True)
+        src = ws / "app.c"
+        src.write_text(_C_SOURCE, encoding="utf-8")
+        subprocess.run([cc, "-g", "-O0", "-o", str(install / "app"),
+                        str(src)], check=True)
+        out = ws / "engagement"
+        doc = build_ledger(ws / "install", out)
+        elf_rows = [r for r in doc["rows"] if r["class"] == "elf-linux"]
+        check(len(elf_rows) == 1, "ledger classified the built binary "
+              "as elf-linux")
+        art = elf_rows[0]["artifact_id"]
+        check(elf_rows[0]["format_tier"] == "full",
+              "elf-linux carries the full capability tier")
+
+        # ── shim libexec (stub children; the seam stays real) ───────
+        shim = ws / "shim-libexec"
+        shim.mkdir()
+        common = _stub_common(ws)
+        for name, body in _STUB_BODIES.items():
+            stub = shim / name
+            stub.write_text(common + body, encoding="utf-8")
+            stub.chmod(0o755)
+        chain_elf.ChainContext.libexec = property(  # type: ignore[assignment]
+            lambda self: shim)
+
+        def row_status() -> dict:
+            led = load_ledger(out)
+            assert led is not None
+            return next(r for r in led["rows"]
+                        if r["artifact_id"] == art)["status"]
+
+        # ── 1: mechanical-only sweep ────────────────────────────────
+        print("phase 1: mechanical-only sweep")
+        rc = chain_elf.run_all_pending(out, mechanical_only=True)
+        check(rc == chain_elf.RC_OK, "sweep advanced (rc 0)")
+        check(row_status()["state"] == "analysed",
+              "ledger write-back: analysed (audit skipped)")
+        state = chain_elf.load_chain_state(
+            chain_elf.chain_dir_for(out, art))
+        check(all(state["stages"][s]["status"] == "degraded"
+                  and state["stages"][s]["rerun_without"]
+                  == "mechanical_only"
+                  for s in ("study", "audit", "seed_rereview")),
+              "LLM stages recorded degraded with rerun_without")
+        check(state["verdict"]["attesting"] is False,
+              "mechanical-only run is non-attesting")
+        base = spawn_counts(ws)
+        check(base.get("raptor-binary investigate") == 1
+              and base.get("raptor-ghidra import") == 1,
+              "investigate + import each spawned once")
+
+        # ── 2: idempotent re-run ────────────────────────────────────
+        print("phase 2: idempotent mechanical re-run")
+        rc = chain_elf.run_all_pending(out, mechanical_only=True)
+        check(rc == chain_elf.RC_NOTHING, "nothing-to-do (rc 3)")
+        check(spawn_counts(ws) == base, "zero child spawns on re-run")
+
+        # ── 3: full run with a failing audit child ──────────────────
+        print("phase 3: full run, audit child failing")
+        (ws / "audit-fail-flag").touch()
+        rc = chain_elf.run_chain(out, art)
+        check(rc == chain_elf.RC_FAILED, "stage failure surfaces (rc 1)")
+        st = row_status()
+        check(st["state"] == "failed" and "stage=audit" in st["detail"],
+              "ledger records the failed stage for resume")
+
+        # ── 4: resume with the audit healthy ────────────────────────
+        print("phase 4: resume with audit healthy")
+        (ws / "audit-fail-flag").unlink()
+        pre = spawn_counts(ws)
+        rc = chain_elf.run_chain(out, art)
+        check(rc == chain_elf.RC_OK, "resume completes (rc 0)")
+        post = spawn_counts(ws)
+        check(post.get("raptor-binary investigate")
+              == pre.get("raptor-binary investigate")
+              and post.get("raptor-ghidra import")
+              == pre.get("raptor-ghidra import")
+              and post.get("raptor-binary-study")
+              == pre.get("raptor-binary-study"),
+              "resume re-spawned nothing before the failed stage")
+        st = row_status()
+        check(st["state"] == "verdicted", "ledger write-back: verdicted")
+        check("attesting=yes" in st["detail"],
+              "verdict detail carries the attestation")
+        state = chain_elf.load_chain_state(
+            chain_elf.chain_dir_for(out, art))
+        v = state["verdict"]
+        check(v["schema"] == chain_elf.VERDICT_SCHEMA
+              and v["policy_depth"] == "T3"
+              and v["reached_depth"] == "T3"
+              and v["degradation_reasons"] == []
+              and v["format_capability_tier"] == "full"
+              and v["attesting"] is True,
+              "verdict record: policy/reached/degradations/tier all "
+              "as designed")
+        check(v["journal_verdicts"] == {"clean": 1},
+              "journal verdict rows are the coverage evidence")
+        survivors = load_json(chain_elf.chain_dir_for(out, art)
+                              / chain_elf.SURVIVORS_FILENAME)
+        check(survivors["survivors"] == []
+              and survivors["degradation"] is None,
+              "survivors artifact written, clean")
+
+        # ── 5: complete chain is idempotent ─────────────────────────
+        print("phase 5: idempotent full re-run")
+        pre = spawn_counts(ws)
+        rc = chain_elf.run_chain(out, art)
+        check(rc == chain_elf.RC_NOTHING, "nothing-to-do (rc 3)")
+        check(spawn_counts(ws) == pre, "zero child spawns")
+        st = row_status()
+        check(st["state"] == "verdicted"
+              and "attesting=yes" in st["detail"],
+              "ledger row keeps its terminal verdicted status "
+              "across the re-run")
+        rc = chain_elf.run_chain(out, art)
+        check(rc == chain_elf.RC_NOTHING, "third run still nothing-to-do")
+        check(spawn_counts(ws) == pre, "third run spawns nothing")
+        st = row_status()
+        check(st["state"] == "verdicted"
+              and "attesting=yes" in st["detail"],
+              "terminal status stable on every idle re-run")
+
+        # ── 6: the real launcher's usage surface ────────────────────
+        print("phase 6: launcher usage surface")
+        env = dict(os.environ)
+        env["CLAUDECODE"] = "1"
+        launcher = REPO / "libexec" / "raptor-engage-chain"
+        rc_help = subprocess.run(
+            [sys.executable, str(launcher), "--help"],
+            env=env, stdout=subprocess.DEVNULL).returncode
+        check(rc_help == 0, "--help exits 0")
+        rc_bad = subprocess.run(
+            [sys.executable, str(launcher), str(ws / "nowhere"),
+             "--artifact", art],
+            env=env, stderr=subprocess.DEVNULL).returncode
+        check(rc_bad == chain_elf.RC_USAGE,
+              "missing ledger dir refused with the usage code")
+
+        print(f"chain-smoke: PASS ({_checks} checks)")
+        ok = True
+        return 0
+    finally:
+        if ok:
+            shutil.rmtree(ws, ignore_errors=True)
+        else:
+            print(f"chain-smoke: workspace kept for triage: {ws}",
+                  file=sys.stderr)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
