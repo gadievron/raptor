@@ -8,6 +8,8 @@ the arbitrary file/line tie order among chain-equal leads of one
 
 from __future__ import annotations
 
+import pytest
+
 from core.audit.consistency_prepass import (
     MAX_CONSISTENCY_LEADS,
     MAX_LEADS_PER_FILE,
@@ -15,6 +17,22 @@ from core.audit.consistency_prepass import (
     run_consistency_prepass,
 )
 from core.audit.consistency_stats import lead_strength_score
+
+
+def _ts_available() -> bool:
+    from core.audit.callsite_consistency import parse_source_cached
+    tree, _ = parse_source_cached("probe.c", "int f(void) { return 0; }")
+    return tree is not None
+
+
+# Scoped, not module-wide: the _rank_leads ordering pins run on
+# synthetic lead dicts and keep their coverage on grammar-less
+# runners; only the end-to-end prepass tests need call sites PARSED
+# out of C corpus source (site usage classification is
+# tree-sitter-tier).
+requires_ts = pytest.mark.skipif(
+    not _ts_available(), reason="tree-sitter C grammar unavailable",
+)
 
 
 def _legacy_rank(leads):
@@ -157,6 +175,7 @@ def _tie_corpus() -> dict[str, str]:
     return texts
 
 
+@requires_ts
 class TestPrepassEndToEnd:
     def test_leads_carry_score_and_formation(self, tmp_path):
         result = run_consistency_prepass(
