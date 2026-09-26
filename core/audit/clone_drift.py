@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any
 
 from .callsite_consistency import _KEYWORDS, _SECURITY_CALLEE_RE
-from .consistency_dimensions import _function_spans
+from .consistency_dimensions import function_spans
 from .peer_evidence import PeerEvidence, PeerExhibit
 
 logger = logging.getLogger(__name__)
@@ -177,7 +177,7 @@ def _function_bodies(
     max_functions: int = MAX_CLONE_FUNCTIONS,
 ) -> list[_FnBody]:
     bodies: list[_FnBody] = []
-    for file_path, name, start, lines in _function_spans(source_texts):
+    for file_path, name, start, lines in function_spans(source_texts):
         if len(bodies) >= max_functions:
             break
         text = "\n".join(lines)
@@ -434,7 +434,7 @@ def fix_anchored_drift(
         return []
     spans = {
         (f, name): (start, "\n".join(lines))
-        for f, name, start, lines in _function_spans(source_texts)
+        for f, name, start, lines in function_spans(source_texts)
     }
     if not spans:
         _signal_degraded(

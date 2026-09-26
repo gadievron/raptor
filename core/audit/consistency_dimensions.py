@@ -644,6 +644,15 @@ def _function_spans(
     return spans
 
 
+#: Public spelling of :func:`_function_spans` — cross-module
+#: consumers (uniform-absence, clone-drift, the mutation corpus)
+#: import the extraction surface by this name; the underscore
+#: spelling stays as the in-module idiom. Rename the pair together.
+#: (Distinct from ``field_census.function_spans``, which extracts
+#: one source string into FunctionSpan records.)
+function_spans = _function_spans
+
+
 def _function_spans_for_file(
     file_path: str,
     source: str,
@@ -1292,6 +1301,13 @@ def _intake_capped(members: list[Any]) -> tuple[list[Any], bool]:
     keep = set(rnd.sample(range(len(members)), MAX_FAMILY_MEMBERS))
     return [m for i, m in enumerate(members) if i in keep], True
 
+
+#: Public spelling of :func:`_intake_capped` — cross-module consumers
+#: (the negative-space intake) import the ceiling by this name; the
+#: underscore spelling stays as the in-module idiom. Rename the pair
+#: together.
+intake_capped = _intake_capped
+
 # Peer-group layers whose membership is mechanical (L2 dispatch-site
 # extraction, L4 type-cohort index, L10 route families, L7
 # interface-slot census). Literal strings by convention here; the
@@ -1339,6 +1355,13 @@ def _interface_properties(body: str) -> dict[str, bool]:
         "bounds_guard": bool(_BOUNDS_GUARD_RE.search(body)),
         "error_handling": bool(_ERROR_RETURN_RE.search(body)),
     }
+
+
+#: Public spelling of :func:`_interface_properties` — cross-module
+#: consumers (uniform-absence) import the property census by this
+#: name; the underscore spelling stays as the in-module idiom. Rename
+#: the pair together.
+interface_properties = _interface_properties
 
 
 @dataclass
