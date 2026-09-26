@@ -72,10 +72,17 @@ _MULTI_TURN_COMMANDS = frozenset({"validate", "understand", "audit"})
 # Stop. Not matched (accepted, per the fail direction below):
 # interpreter/wrapper/env-var prefixes (`bash x`, `timeout 60 x`,
 # `VAR=y x`) — EXECUTION RULES forbid those spellings for dispatch.
+# Both interior spans are bounded: unbounded, a command string that
+# repeats separators (each anchoring an attempt whose `\s*` or `\S*`
+# re-scans the rest of the string) is quadratic (measured exp 2.02;
+# bounded, exp 1.0).  Both directions: raising the bounds re-opens
+# per-separator rescan cost; lowering them drops real spellings —
+# 64 covers any sane indent after a separator, 512 any real path
+# prefix ending in `/`.
 import re  # noqa: E402
 
 _RAPTOR_INVOCATION_RE = re.compile(
-    r'(?:\A|[;&|(]|\n)\s*(?:\S*/)?libexec/raptor-[A-Za-z0-9._-]+'
+    r'(?:\A|[;&|(]|\n)\s{0,64}(?:\S{0,512}/)?libexec/raptor-[A-Za-z0-9._-]+'
 )
 
 
