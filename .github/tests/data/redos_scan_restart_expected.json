@@ -70,7 +70,7 @@
    "digests": [
     "2da2d1408533"
    ],
-   "exp": 1.2,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/analysis/taint_multi_lang.py\u001fassert_re": {
@@ -154,7 +154,7 @@
    "digests": [
     "7bac92ef17b0"
    ],
-   "exp": 1.07,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/auth_witnesses.py\u001f_GETTER_DECL_RE": {
@@ -175,7 +175,7 @@
    "digests": [
     "c8f8ffc78d2c"
    ],
-   "exp": 1.08,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/binary_layer0.py\u001f_CALLEE_RE": {
@@ -322,7 +322,7 @@
    "digests": [
     "aa7b1d8b05bf"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/compile_probe.py\u001f_DETERMINE_BUILTIN_RE": {
@@ -343,7 +343,7 @@
    "digests": [
     "0f64f014c82d"
    ],
-   "exp": 1.99,
+   "exp": 1.9,
    "verdict": "adjudicated"
   },
   "core/audit/compiler_sweep.py\u001f_DIAG_SUPPRESSION_RE": {
@@ -610,7 +610,7 @@
    "digests": [
     "a56ab90d3d8a"
    ],
-   "exp": 1.27,
+   "exp": 0.98,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001fwrapper_re": {
@@ -708,14 +708,14 @@
    "digests": [
     "c7576fa032bf"
    ],
-   "exp": 2.16,
+   "exp": 2.03,
    "verdict": "adjudicated"
   },
   "core/audit/dark_verify/_resolve.py\u001f_PY_EXT_SUFFIX_GLOBS[3]": {
    "digests": [
     "9337696cf86c"
    ],
-   "exp": 1.94,
+   "exp": 2.02,
    "verdict": "adjudicated"
   },
   "core/audit/decompiler_sanitise.py\u001f_CLASS_MEMBER_RE": {
@@ -770,6 +770,13 @@
   "core/audit/fix_history.py\u001f_CALL_RE": {
    "digests": [
     "9981b2cfc1eb"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/guard_predicate.py\u001f_SUBSCRIPT_RE": {
+   "digests": [
+    "7eabd37975e8"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -1052,14 +1059,14 @@
    "digests": [
     "0d3f53af0a22"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b\\w{0,256}len\\w*\\s*[<>=!]+": {
    "digests": [
     "d017fec15766"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b\\w{0,256}size\\w*\\s*[<>=!]+": {
@@ -1227,7 +1234,7 @@
    "digests": [
     "6791b0fd26a9"
    ],
-   "exp": 1.03,
+   "exp": 1.04,
    "verdict": "linear"
   },
   "core/audit/ptr_lifecycle.py\u001f_RCU_DEREF_RE": {
@@ -1262,7 +1269,7 @@
    "digests": [
     "87a22b640da8"
    ],
-   "exp": 1.03,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/release_order.py\u001f[\\w\\*\\s]\\b([A-Za-z_]\\w*)\\s*[,)]": {
@@ -1304,7 +1311,7 @@
    "digests": [
     "a0cc73423185"
    ],
-   "exp": 1.03,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/return_contracts.py\u001fdecl_re": {
@@ -1550,7 +1557,7 @@
    "digests": [
     "a99a1964e15b"
    ],
-   "exp": 1.02,
+   "exp": 1.04,
    "verdict": "linear"
   },
   "core/binary/glibc_versions.py\u001f_SEARCH_RE": {
@@ -1704,7 +1711,7 @@
    "digests": [
     "37de29a408f1"
    ],
-   "exp": 2.21,
+   "exp": 1.98,
    "verdict": "adjudicated"
   },
   "core/inventory/extractors.py\u001fPATTERNS[1]": {
@@ -1851,7 +1858,7 @@
    "digests": [
     "44a2e5aa9242"
    ],
-   "exp": 1.03,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/inventory/translation_view.py\u001f_CALL_IN_BODY": {
@@ -1865,7 +1872,7 @@
    "digests": [
     "5f33a892b9ad"
    ],
-   "exp": 1.99,
+   "exp": 1.96,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[2]": {
@@ -1879,21 +1886,21 @@
    "digests": [
     "0fb08c380bf3"
    ],
-   "exp": 2.01,
+   "exp": 1.98,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[4]": {
    "digests": [
     "70e776e25c31"
    ],
-   "exp": 2.04,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[5]": {
    "digests": [
     "88e933d23e53"
    ],
-   "exp": 2.0,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[6]": {
@@ -1907,7 +1914,7 @@
    "digests": [
     "8eba6201f599"
    ],
-   "exp": 1.61,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/license/detector.py\u001f(?:please\\s+)?see\\s+(?:the\\s+file\\s+)?((": {
@@ -2520,7 +2527,7 @@
    "digests": [
     "db21eb0cc688"
    ],
-   "exp": 1.99,
+   "exp": 2.04,
    "verdict": "adjudicated"
   },
   "packages/joern/runner.py\u001f_CALL_RE": {

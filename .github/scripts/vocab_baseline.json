@@ -409,6 +409,11 @@
     "kind": "literal",
     "note": "framework-internal enum/namespace vocabulary (not target API names)"
   },
+  "core/audit/guard_predicate.py::d": {
+    "count": 11,
+    "kind": "literal",
+    "note": "deviation-record serializer field keys consumed verbatim by the prepass fold and the adjudication detour — a serialization schema like consistency_dimensions.py::d, not a learned name vocabulary"
+  },
   "core/audit/consistency_verify.py::_HYPOTHESIS_STOPWORDS": {
     "count": 48,
     "kind": "literal",
