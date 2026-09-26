@@ -1231,6 +1231,11 @@ def _make_tier_counters() -> dict[str, TierCounters]:
         "joern_dominance": TierCounters(),
         "ptr_lifecycle": TierCounters(),
         "lock_region": TierCounters(),
+        # Binary-only gate; registered unconditionally like every
+        # tier — the diagnostics renderer suppresses all-zero tiers
+        # (format_tier_diagnostics), so source-only runs never print
+        # a dead disasm stanza.
+        "disasm_xcheck": TierCounters(),
     }
 
 
@@ -3858,6 +3863,7 @@ def review_one_function(
                 checklist=checklist,
                 config=config,
                 joern_server=joern_server,
+                tier_counters=result.tier_counters,
             )
             if rv is not None:
                 append_audit_log(config.out_dir, {
@@ -8858,6 +8864,7 @@ def _run_audit_body(
                 evidence_index,
                 discovered_evidence=discovered_evidence,
                 domain_model=domain_model,
+                tier_counters=result.tier_counters,
             ), batch
 
         review_idx = 0
@@ -9498,6 +9505,7 @@ def _run_audit_body(
                     checklist=checklist,
                     config=config,
                     joern_server=joern_server,
+                    tier_counters=result.tier_counters,
                 )
                 if rv is not None:
                     append_audit_log(config.out_dir, {
@@ -16989,6 +16997,7 @@ def _review_items(
     evidence_index: dict[str, EvidenceRecord] | None = None,
     discovered_evidence: dict[str, Any] | None = None,
     domain_model: dict[str, Any] | None = None,
+    tier_counters: dict[str, TierCounters] | None = None,
 ) -> list[ReviewOutcome]:
     """Review a group of trivial functions from the same file individually."""
     outcomes = []
@@ -17116,6 +17125,7 @@ def _review_items(
                     domain_model=domain_model,
                     checklist=checklist,
                     config=config,
+                    tier_counters=tier_counters,
                 )
                 if rv is not None:
                     append_audit_log(config.out_dir, {
