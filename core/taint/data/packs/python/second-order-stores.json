@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "language": "python",
+  "framework": "stdlib",
+  "pack": "second-order-stores",
+  "sources": [
+    {
+      "kind": "stored_read",
+      "match": "django.db.models.query.QuerySet.filter",
+      "store_key": "django-orm",
+      "taint_classes": ["stored-user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "QuerySet.filter reads rows back out of the ORM store; a value a request handler previously persisted re-enters the program attacker-chosen across requests. Paired with Model.save via the django-orm store key."
+    },
+    {
+      "kind": "stored_read",
+      "match": "sqlite3.Cursor.fetchone",
+      "store_key": "sql-rows",
+      "taint_classes": ["stored-user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "DB-API fetchone returns a row previously written with cursor.execute INSERT parameters; stored attacker text re-enters here. Paired with the execute write half via the sql-rows store key."
+    },
+    {
+      "kind": "stored_read",
+      "match": "sqlite3.Cursor.fetchall",
+      "store_key": "sql-rows",
+      "taint_classes": ["stored-user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "Batched form of fetchone: every row in the result set carries whatever earlier requests persisted, so the whole return value is stored attacker text under whole-value granularity."
+    },
+    {
+      "kind": "stored_read",
+      "match": "psycopg2.extensions.cursor.fetchall",
+      "store_key": "sql-rows",
+      "taint_classes": ["stored-user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "psycopg2's cursor class lives at psycopg2.extensions.cursor; fetchall returns rows whose values earlier execute(query, vars) calls persisted — the PostgreSQL half of the sql-rows pairing."
+    },
+    {
+      "kind": "stored_read",
+      "match": "redis.Redis.get",
+      "store_key": "redis-kv",
+      "taint_classes": ["stored-user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "redis.Redis.get(name) returns the bytes a previous set(name, value) stored; a cache or session value written from request data comes back attacker-chosen. Paired with Redis.set via the redis-kv store key."
+    },
+    {
+      "kind": "stored_read",
+      "match": "pickle.loads",
+      "store_key": "pickle-blob",
+      "taint_classes": ["stored-user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "pickle.loads is where a persisted blob re-enters the object graph: every value inside the unpickled result is whatever pickle.dumps serialised earlier, so the return is stored attacker data under whole-value granularity."
+    }
+  ],
+  "sinks": [
+    {
+      "kind": "stored_write",
+      "match": "django.db.models.Model.save",
+      "args": [0],
+      "store_key": "django-orm",
+      "sink_class": "stored-taint",
+      "cwe": "CWE-501",
+      "provenance": "framework_catalog",
+      "rationale": "Model.save persists the instance's fields; a tainted field taints the instance under whole-value granularity, so a save of attacker text makes every later QuerySet read of the django-orm store attacker-controlled."
+    },
+    {
+      "kind": "stored_write",
+      "match": "sqlite3.Cursor.execute",
+      "args": [2],
+      "store_key": "sql-rows",
+      "sink_class": "stored-taint",
+      "cwe": "CWE-501",
+      "provenance": "framework_catalog",
+      "rationale": "Attacker text bound as execute parameters is the SAFE way to run the statement and still persists that text: parameterisation stops sql-injection but not second-order storage. In the unbound spelling this entry matches (cursor, sql, parameters), the parameters sit at position 2 — a distinct claim from the statement position the sqli entry covers."
+    },
+    {
+      "kind": "stored_write",
+      "match": "psycopg2.extensions.cursor.execute",
+      "args": [2],
+      "store_key": "sql-rows",
+      "sink_class": "stored-taint",
+      "cwe": "CWE-501",
+      "provenance": "framework_catalog",
+      "rationale": "psycopg2 execute binds its vars argument server-side — injection-safe, storage-unsafe: bound attacker text lands in the table and re-enters through the paired fetchall read. Position 2 in the unbound spelling this entry matches (cursor, query, vars)."
+    },
+    {
+      "kind": "stored_write",
+      "match": "redis.Redis.set",
+      "args": [2],
+      "kwargs": ["value"],
+      "store_key": "redis-kv",
+      "sink_class": "stored-taint",
+      "cwe": "CWE-501",
+      "provenance": "framework_catalog",
+      "rationale": "redis.Redis.set(name, value) persists the value argument (position 2 in the unbound spelling, keyword value= otherwise); attacker text stored here comes back verbatim through the paired Redis.get."
+    },
+    {
+      "kind": "stored_write",
+      "match": "pickle.dumps",
+      "args": [0],
+      "store_key": "pickle-blob",
+      "sink_class": "stored-taint",
+      "cwe": "CWE-501",
+      "provenance": "framework_catalog",
+      "rationale": "pickle.dumps is the serialisation boundary where attacker data enters a persisted blob; whatever is pickled here is exactly what the paired pickle.loads read hands back later."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "pickle.loads",
+      "args": [0],
+      "sink_class": "deserialize",
+      "cwe": "CWE-502",
+      "provenance": "framework_catalog",
+      "rationale": "Unpickling attacker bytes executes attacker-chosen reduce callables during load — code execution, not just data. This claim is about the INPUT being tainted; the stored_read entry for the same callee is about the OUTPUT being stored data."
+    }
+  ]
+}

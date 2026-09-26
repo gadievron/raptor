@@ -101,6 +101,9 @@ def test_real_synthesis_spellings_join_the_seed_vocabulary():
         "eval": "code-injection",
         "code": "code-injection",
         "redirect": "url-redirection",
+        # No alias row: the second-order pack declares the raw store
+        # spelling as a class, so the label gates straight through.
+        "deserialize": "deserialize",
     }
     specs = [spec(function=f"app.mod.f_{label}", classes=(label,))
              for label in joining]
@@ -108,13 +111,12 @@ def test_real_synthesis_spellings_join_the_seed_vocabulary():
     admitted = {s.function.rsplit("_", 1)[1]: s.taint_classes[0]
                 for s in result.sinks}
     assert admitted == joining
-    # labels with no pack-expressible class stay counted refusals
+    # labels with no pack-declared class stay counted refusals
     unroutable = intake_learned_specs(
-        [spec(classes=("deserialize",)), spec(classes=("ldap",))],
-        vocabulary=vocab,
+        [spec(classes=("ldap",))], vocabulary=vocab,
     )
     assert unroutable.sinks == ()
-    assert unroutable.refusal_count(REFUSED_CLASS_OUTSIDE_VOCABULARY) == 2
+    assert unroutable.refusal_count(REFUSED_CLASS_OUTSIDE_VOCABULARY) == 1
 
 
 def test_sanitizer_role_spelling_variants():

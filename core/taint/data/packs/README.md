@@ -28,9 +28,12 @@ format):
 * propagator `"narrowing": true` is legal only in these
   operator-controlled files and must be visible in review.
 
-The reserved stored-taint kinds (`stored_read` / `stored_write`, paired
-by `store_key`) are parse-valid now so a second-order storage pack is a
-data-only addition.
+The stored-taint kinds (`stored_read` / `stored_write`, paired by
+`store_key`) are used by `second-order-stores`: a `stored_read`
+source's return carries the store's taint, a `stored_write` hit is a
+finding of the entry's class, and entries sharing a `store_key` label
+declare the same store's write and read halves (cross-request pairing
+consumes the label; the label itself is free-form lowercase).
 
 ## Shipped packs (python)
 
@@ -43,3 +46,7 @@ data-only addition.
   RawSQL / raw() / extra() and redirect sinks.
 * `frameworks-fastapi` — route-param binding; redirect / file /
   HTML-response sinks (fastapi and starlette import spellings).
+* `second-order-stores` — stored-taint pairs over the common stores
+  (Django ORM save/filter, DB-API execute-parameters/fetch, redis
+  set/get, pickle dumps/loads) plus the pickle.loads
+  deserialization sink.
