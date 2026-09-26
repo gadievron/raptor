@@ -40,11 +40,16 @@ _STRATEGY_SNAPSHOTS_LOCK = threading.Lock()
 
 
 def _journal_size(out_dir: Path) -> int:
-    from .journal import JOURNAL_FILENAME
-    try:
-        return (out_dir / JOURNAL_FILENAME).stat().st_size
-    except OSError:
-        return 0
+    # Sum over the shard set: the snapshot key must keep growing
+    # monotonically across a shard roll, not reset to the new file.
+    from core.coverage.journal import journal_shard_paths
+    total = 0
+    for shard in journal_shard_paths(out_dir):
+        try:
+            total += shard.stat().st_size
+        except OSError:
+            continue
+    return total
 
 
 def _build_strategy_snapshot(out_dir: Path) -> dict[tuple, list[str]]:

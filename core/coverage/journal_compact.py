@@ -402,30 +402,84 @@ def _spend_carrier_line(entry: ReviewJournalEntry,
 def compact_journal(out_dir: Path, *,
                     supersede: bool = False) -> CompactStats:
     """Atomically rewrite the run's journal without its duplicate
-    re-emission rows. Returns before/after stats; raises
-    :class:`CompactRefused` (file untouched) when the run is live,
-    the journal is absent/unreadable, or the file's identity
-    population exceeds the tool's bounds.
+    re-emission rows. Returns aggregate before/after stats; raises
+    :class:`CompactRefused` when the run is live, the journal is
+    absent/unreadable, or a file's identity population exceeds the
+    tool's bounds.
 
     ``supersede=True`` additionally drops every superseded row —
     non-newest per :func:`_supersede_identity` — replacing each
     cost-bearing one with a spend-carrier row in place, and archives
-    the original under the ``.pre-supersede`` name family instead of
+    each original under the ``.pre-supersede`` name family instead of
     ``.pre-compact``. Opt-in only: this tier is lossy on the LIVE
     file (full history stays in the archive) and is never applied by
     the resume auto-compact.
+
+    Shard-aware: every file in the journal's contiguous shard set is
+    compacted in place, one atomic swap each (a refusal mid-set
+    leaves earlier shards compacted — each swap is independently
+    backed up; lossless on the dedup tier, archive-preserved under
+    ``supersede``). Both tiers apply PER SHARD: duplicate re-emissions
+    spanning shard BOUNDARIES are not folded on disk (the loader's
+    cross-shard prune handles those in memory), and cross-shard
+    SUPERSEDED rows stay on disk too — latest-wins consumers collapse
+    them at read time. Per-shard rewriting is what restores each
+    file's headroom under the per-shard retained budgets, and
+    per-shard supersede stays spend-exact: every dropped cost-bearing
+    row's spend carrier lands in the same shard that held the row.
     """
     out_dir = Path(out_dir)
-    journal_path = out_dir / JOURNAL_FILENAME
     _refuse_live_run(out_dir)
 
+    shards = _journal.journal_shard_paths(out_dir)
+    total: CompactStats | None = None
+    backups: list[str] = []
+    for shard_path in shards:
+        stats = _compact_one_file(shard_path, out_dir,
+                                  supersede=supersede)
+        if stats is None:
+            if len(shards) == 1:
+                raise CompactRefused(
+                    f"no readable review journal at {shard_path} — "
+                    "nothing to compact"
+                )
+            continue
+        if stats.backup_path:
+            backups.append(stats.backup_path)
+        if total is None:
+            total = stats
+        else:
+            total.rows_before += stats.rows_before
+            total.rows_after += stats.rows_after
+            total.bytes_before += stats.bytes_before
+            total.bytes_after += stats.bytes_after
+            total.dropped_reemissions += stats.dropped_reemissions
+            total.kept_unparseable += stats.kept_unparseable
+            total.dropped_superseded += stats.dropped_superseded
+            total.spend_carriers += stats.spend_carriers
+            total.spend_usd_before += stats.spend_usd_before
+            total.spend_usd_after += stats.spend_usd_after
+    if total is None:
+        raise CompactRefused(
+            f"no readable review journal in {out_dir} — nothing to "
+            "compact"
+        )
+    total.journal_path = str(out_dir / JOURNAL_FILENAME) + (
+        f" (+{len(shards) - 1} shard(s))" if len(shards) > 1 else ""
+    )
+    total.backup_path = "; ".join(backups)
+    return total
+
+
+def _compact_one_file(
+    journal_path: Path, out_dir: Path, *, supersede: bool = False,
+) -> CompactStats | None:
+    """Two-pass compaction of ONE journal shard file, or ``None``
+    when the file is missing/unreadable (multi-shard callers skip)."""
     from core.source import open_regular
     fh = open_regular(journal_path, "rb")
     if fh is None:
-        raise CompactRefused(
-            f"no readable review journal at {journal_path} — nothing "
-            "to compact"
-        )
+        return None
 
     stats = CompactStats(
         journal_path=str(journal_path), backup_path="",
@@ -620,7 +674,9 @@ def compact_journal(out_dir: Path, *,
                         "compaction would change the journal spend "
                         f"floor ({stats.spend_usd_before} -> "
                         f"{stats.spend_usd_after}) — refusing; "
-                        "original journal untouched"
+                        f"{journal_path.name} untouched (in a shard "
+                        "set, shards already swapped before this one "
+                        "keep their compacted form and backups)"
                     )
 
                 # ── backup (hardlink, never deleted), then swap ──

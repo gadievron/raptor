@@ -185,7 +185,15 @@ def build_signal_index(run_dirs: Iterable[Path]) -> SignalIndex:
                     for k in keys:
                         index.add(index.tools, k, et)
 
-        for jpath in sorted(run_dir.rglob("review-journal.jsonl")):
+        # Expand each journal location to its full shard set — a
+        # rolled journal's later rows live in numbered siblings.
+        from core.coverage.journal import journal_shard_paths
+        journal_dirs = sorted(
+            {p.parent for p in run_dir.rglob("review-journal.jsonl")})
+        for jpath in (
+            shard for d in journal_dirs
+            for shard in journal_shard_paths(d) if shard.is_file()
+        ):
             for entry in _iter_jsonl(jpath):
                 key = (
                     f"{entry.get('file', '')}:{entry.get('function', '')}"

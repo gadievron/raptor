@@ -2633,16 +2633,21 @@ def cmd_resume(args: argparse.Namespace) -> int:
     # below. Best-effort — a refused auto-compact (e.g. another
     # process appeared) falls through to the completeness gate, which
     # decides whether the resume may proceed.
-    from core.coverage.journal import JOURNAL_FILENAME
+    from core.coverage.journal import journal_shard_paths
     from core.coverage.journal_compact import (
         CompactRefused,
         auto_compact_threshold_bytes,
         compact_journal,
     )
-    try:
-        _journal_size = (out_dir / JOURNAL_FILENAME).stat().st_size
-    except OSError:
-        _journal_size = 0
+    # Largest single shard drives the trigger: the budgets the
+    # auto-compact protects are PER-SHARD bounds, and a multi-shard
+    # journal's total size is expected to exceed any one of them.
+    _journal_size = 0
+    for _shard in journal_shard_paths(out_dir):
+        try:
+            _journal_size = max(_journal_size, _shard.stat().st_size)
+        except OSError:
+            continue
     _compact_threshold = auto_compact_threshold_bytes()
     if _journal_size > _compact_threshold:
         print(
