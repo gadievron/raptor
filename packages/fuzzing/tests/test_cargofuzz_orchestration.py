@@ -170,8 +170,8 @@ class TestEngineOverride(unittest.TestCase):
         (src / "main.c").write_text("int main(void){return 0;}\n")
         plan = _plan(self, src, fuzz_target="fuzz_one")
         self.assertTrue(
-            any("--fuzz-target applies to rust-crate targets" in h
-                for h in plan.hints), plan.hints)
+            any("--fuzz-target applies to rust-crate and java-project"
+                in h for h in plan.hints), plan.hints)
 
 
 class TestWitnessJoin(unittest.TestCase):
