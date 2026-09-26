@@ -578,7 +578,12 @@ def detect_guard_predicate_deviations(
 
     def _emit(dev: GuardPredicateDeviation) -> bool:
         deviations.append(dev)
-        return len(deviations) < MAX_DEVIATIONS
+        if len(deviations) >= MAX_DEVIATIONS:
+            # The cap truncates the census — say so in-band, exactly
+            # like every other bound here.
+            stats["caps_hit"] = True
+            return False
+        return True
 
     for key in sorted(groups):
         members = groups[key]
