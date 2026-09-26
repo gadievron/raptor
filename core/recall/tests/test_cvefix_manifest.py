@@ -240,6 +240,179 @@ class TestGenerate:
         assert post["corpus_kind"] == "fp-only"
 
 
+_VULN_PY = """import os
+
+
+def run(user):
+    os.system("ls " + user)
+"""
+
+_FIXED_PY = """import subprocess
+
+
+def run(user):
+    subprocess.run(["ls", "--", user], check=False)
+"""
+
+
+def _make_python_fix_repo(tmp_path: Path) -> tuple[Path, str]:
+    repo = tmp_path / "pyproj"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src/runner.py").write_text(_VULN_PY, encoding="utf-8")
+    (repo / "src/Query.java").write_text(_VULN, encoding="utf-8")
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)],
+                   check=True)
+    env = ["-c", "user.email=t@example.org", "-c", "user.name=t"]
+    subprocess.run(["git", "-C", str(repo), *env, "add", "-A"],
+                   check=True)
+    subprocess.run(["git", "-C", str(repo), *env, "commit", "-qm",
+                    "vulnerable"], check=True)
+    (repo / "src/runner.py").write_text(_FIXED_PY, encoding="utf-8")
+    # The fix also touches a Java file: the python-scoped manifest
+    # must not label it.
+    (repo / "src/Query.java").write_text(_FIXED, encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), *env, "add", "-A"],
+                   check=True)
+    subprocess.run(["git", "-C", str(repo), *env, "commit", "-qm",
+                    "fix CVE-2021-88888"], check=True)
+    fix = _git(repo, "rev-parse", "HEAD").strip()
+    return repo, fix
+
+
+class TestLanguageSuffixDefaults:
+    def _raw(self, language: str, **extra) -> dict:
+        return {
+            "cve_id": "CVE-2020-99999", "repo_url": "u",
+            "fix_commit": "a" * 40, "local_clone": "c",
+            "language": language, "cwe": "CWE-89", **extra,
+        }
+
+    def test_java_default_unchanged(self):
+        # Differential: the historical java default is byte-identical.
+        spec = CvefixSpec.from_dict(self._raw("java"))
+        assert spec.file_suffixes == (".java",)
+
+    def test_python_derives_py(self):
+        spec = CvefixSpec.from_dict(self._raw("python"))
+        assert spec.file_suffixes == (".py",)
+        assert CvefixSpec.from_dict(
+            self._raw("Python")).file_suffixes == (".py",)
+
+    def test_explicit_suffixes_win_over_language(self):
+        spec = CvefixSpec.from_dict(
+            self._raw("python", file_suffixes=[".pyi"]))
+        assert spec.file_suffixes == (".pyi",)
+
+    def test_non_string_suffixes_refused(self):
+        # A malformed explicit list must fail at spec intake, not as
+        # a TypeError deep inside the diff walk.
+        with pytest.raises(CvefixManifestError,
+                           match="non-empty strings"):
+            CvefixSpec.from_dict(
+                self._raw("python", file_suffixes=[1]))
+        with pytest.raises(CvefixManifestError,
+                           match="non-empty strings"):
+            CvefixSpec.from_dict(
+                self._raw("python", file_suffixes=[".py", ""]))
+
+    def test_bare_string_suffixes_refused(self):
+        # tuple(".py") is ('.', 'p', 'y') — a bare string must refuse
+        # at intake, never silently explode into character suffixes.
+        with pytest.raises(CvefixManifestError, match="bare string"):
+            CvefixSpec.from_dict(
+                self._raw("python", file_suffixes=".py"))
+
+    def test_non_sequence_suffixes_refused(self):
+        # A mapping would take its keys via tuple(); refuse the shape
+        # rather than guess intent.
+        with pytest.raises(CvefixManifestError,
+                           match="list of suffix strings"):
+            CvefixSpec.from_dict(
+                self._raw("python", file_suffixes={".py": 1}))
+
+    def test_whitespace_suffix_entries_refused(self):
+        # " " and " .py" pass a bare emptiness check but match no
+        # real path — same silent-filter-to-nothing pathology.
+        for bad in ([" "], [" .py"], [".py "]):
+            with pytest.raises(CvefixManifestError,
+                               match="non-empty strings"):
+                CvefixSpec.from_dict(
+                    self._raw("python", file_suffixes=bad))
+
+    def test_unmapped_language_without_explicit_refused(self):
+        # Fail-closed replaces the old silent cross-language .java
+        # default (which filtered a non-java fix's hunks to nothing).
+        with pytest.raises(CvefixManifestError,
+                           match="file_suffixes"):
+            CvefixSpec.from_dict(self._raw("go"))
+        # A whitespace-padded language is unmapped too — refused, not
+        # normalised into a guess.
+        with pytest.raises(CvefixManifestError,
+                           match="file_suffixes"):
+            CvefixSpec.from_dict(self._raw("python "))
+        # ...and stays permissive when the operator names the filter.
+        spec = CvefixSpec.from_dict(
+            self._raw("go", file_suffixes=[".go"]))
+        assert spec.file_suffixes == (".go",)
+
+    def test_direct_construction_without_suffixes_refused_at_generate(
+            self, tmp_path):
+        repo, fix = _make_fix_repo(tmp_path)
+        spec = CvefixSpec(
+            cve_id="CVE-2020-99999", repo_url="u", fix_commit=fix,
+            local_clone=repo, language="java", cwe="CWE-89")
+        with pytest.raises(CvefixManifestError,
+                           match="no file_suffixes"):
+            generate_manifests(spec)
+
+
+class TestPythonScopedGenerate:
+    def _spec_py(self, repo: Path, fix: str) -> CvefixSpec:
+        return CvefixSpec.from_dict({
+            "cve_id": "CVE-2021-88888",
+            "repo_url": "https://example.org/pyproj",
+            "fix_commit": fix,
+            "local_clone": str(repo),
+            "language": "python",
+            "cwe": "CWE-78",
+        })
+
+    def test_python_manifest_pair(self, tmp_path):
+        repo, fix = _make_python_fix_repo(tmp_path)
+        recall_m, twin = generate_manifests(self._spec_py(repo, fix))
+        assert recall_m["language"] == "python"
+        files = {e["file"] for e in recall_m["expected"]}
+        assert files == {"src/runner.py"}, (
+            "python scope must label only .py hunks")
+        assert all(e["file"].endswith(".py")
+                   for e in twin["clean_regions"])
+        # Both outputs pass the manifest schema (cve provenance gate).
+        assert parse_manifest(
+            json.loads(json.dumps(recall_m))).language == "python"
+        assert parse_manifest(
+            json.loads(json.dumps(twin))).corpus_kind == "fp-only"
+
+    def test_python_cli_end_to_end(self, tmp_path, capsys):
+        repo, fix = _make_python_fix_repo(tmp_path)
+        spec_path = tmp_path / "spec.json"
+        spec_path.write_text(json.dumps({
+            "cve_id": "CVE-2021-88888",
+            "repo_url": "https://example.org/pyproj",
+            "fix_commit": fix,
+            "local_clone": str(repo),
+            "language": "python",
+            "cwe": "CWE-78",
+        }), encoding="utf-8")
+        out = tmp_path / "corpus"
+        rc = cvefix_main(["--spec", str(spec_path),
+                          "--out-dir", str(out)])
+        assert rc == 0
+        pre = json.loads(
+            (out / "cve-2021-88888-prefix.json").read_text())
+        assert pre["language"] == "python"
+        assert {e["file"] for e in pre["expected"]} == {"src/runner.py"}
+
+
 class TestHostileCloneConfig:
     @pytest.mark.skipif(
         shutil.which("git") is None, reason="git not installed",

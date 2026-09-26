@@ -52,6 +52,21 @@ _DEFAULT_DRIFT = 3
 #: not where it lives (spec key ``include_tests`` opts back in).
 _TEST_FRAGMENTS = ("/test/", "/tests/")
 
+#: Default hunk-filter suffixes per spec language. Explicit
+#: ``file_suffixes`` always wins; a spec that names neither an explicit
+#: list nor a mapped language is REFUSED rather than defaulted — the
+#: historical implicit ``.java`` default silently filtered a
+#: python-language spec's fix hunks to nothing ("touches no files
+#: matching ('.java',)"), which reads like a labelling failure instead
+#: of the intake bug it is. The map stays deliberately small (the
+#: languages the recall corpora target); growing it is a one-line,
+#: test-pinned change, and refusing the rest keeps a typoed language
+#: from labelling the wrong file population.
+_LANG_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "java": (".java",),
+    "python": (".py",),
+}
+
 REVIEW_CANDIDATE = "unreviewed-candidate"
 
 
@@ -67,7 +82,7 @@ class CvefixSpec:
     local_clone: Path
     language: str
     cwe: str
-    file_suffixes: tuple[str, ...] = (".java",)
+    file_suffixes: tuple[str, ...] = ()
     include_tests: bool = False
 
     @classmethod
@@ -84,14 +99,46 @@ class CvefixSpec:
         cwe = str(raw.get("cwe", ""))
         if cwe and not re.match(r"^CWE-\d+$", cwe):
             errors.append(f"cwe {cwe!r} must look like CWE-NNN")
+        language = str(raw.get("language", ""))
+        raw_suffixes = raw.get("file_suffixes")
+        suffixes: tuple[str, ...] = ()
+        if isinstance(raw_suffixes, str):
+            # A bare string is an iterable of single characters:
+            # tuple(".py") silently explodes to ('.', 'p', 'y') and
+            # filters the fix hunks against nonsense suffixes — the
+            # reads-like-a-labelling-failure pathology this intake
+            # exists to refuse.
+            errors.append("file_suffixes must be a list of suffix "
+                          "strings, not a bare string")
+        elif raw_suffixes is not None and not isinstance(
+                raw_suffixes, (list, tuple)):
+            errors.append("file_suffixes must be a list of suffix "
+                          "strings")
+        else:
+            suffixes = tuple(raw_suffixes or ())
+        if suffixes and not all(
+                isinstance(s, str) and s and s == s.strip()
+                for s in suffixes):
+            # Whitespace-padded entries (" " or " .py") pass an
+            # emptiness check but match no real path.
+            errors.append("file_suffixes entries must be non-empty "
+                          "strings without surrounding whitespace")
+            suffixes = ()
+        if not suffixes and language:
+            suffixes = _LANG_SUFFIXES.get(language.lower(), ())
+            if not suffixes:
+                errors.append(
+                    f"language {language!r} has no default "
+                    f"file_suffixes (known: {sorted(_LANG_SUFFIXES)}) "
+                    "— pass file_suffixes explicitly")
         if errors:
             raise CvefixManifestError(
                 "invalid cvefix spec:\n  " + "\n  ".join(errors))
         return cls(
             cve_id=cve, repo_url=str(raw["repo_url"]), fix_commit=sha,
             local_clone=Path(raw["local_clone"]),
-            language=str(raw["language"]), cwe=cwe,
-            file_suffixes=tuple(raw.get("file_suffixes") or (".java",)),
+            language=language, cwe=cwe,
+            file_suffixes=suffixes,
             include_tests=bool(raw.get("include_tests", False)),
         )
 
@@ -215,6 +262,13 @@ def _entry(spec: CvefixSpec, ident: str, file: str,
 
 def generate_manifests(spec: CvefixSpec) -> tuple[dict, dict]:
     """Return (recall_manifest, fp_only_twin) dicts for the spec."""
+    if not spec.file_suffixes:
+        # Direct constructions bypass from_dict's derivation; an empty
+        # filter would label nothing and read as a diff problem.
+        msg = ("spec has no file_suffixes — construct via "
+               "CvefixSpec.from_dict (language-derived defaults) or "
+               "pass them explicitly")
+        raise CvefixManifestError(msg)
     clone = spec.local_clone
     if not (clone / ".git").exists():
         msg = (
