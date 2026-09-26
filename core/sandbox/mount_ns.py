@@ -60,9 +60,94 @@ from typing import TYPE_CHECKING, Optional
 
 from ._fork_safe_warn import warn_post_fork
 from ._pathpin import canonical_bind_path, is_per_process_procfs
+from .preexec import _install_jitter
 
 # See core/sandbox/context.py (_BRANDED_TMP_RE) — same shape.
 _BRANDED_TMP_RE = re.compile(r"/[^/]*raptor[^/]*(/|$)", re.IGNORECASE)
+
+# Per-mount size caps for the sandbox's fresh tmpfs instances. A tmpfs
+# mounted without ``size=`` defaults to 50% of physical RAM — PER
+# MOUNT, pages charged to RAM+swap — so the previously uncapped
+# instances (/tmp, /run, /dev, /dev/shm, the pivot root) let confined
+# code drive the HOST into memory exhaustion from inside a "contained"
+# run: no escape needed, just writes. Together with the inode budgets
+# below, the caps turn any overrun into an early, attributable ENOSPC
+# inside the sandbox.
+#
+# Each cap carries the same deterministic per-install jitter as the
+# rlimit defaults (preexec._DEFAULT_LIMITS): the exact size tuple is a
+# statfs(2)-cheap fingerprint of this framework if published as a
+# constant. Jitter is surplus-only — never below the engineered floor.
+#
+# Sizing rationale (both directions, per mount):
+#  - too LOW breaks legitimate tooling loudly mid-run (ENOSPC from
+#    compilers/extractors spilling scratch, shm_open failures in
+#    multiprocessing/sanitizer runtimes);
+#  - too HIGH re-opens the RAM/swap-fill DoS the cap exists to close
+#    (the sum of all five caps bounds a sandbox's worst-case tmpfs
+#    footprint — keep it well under small-host RAM+swap).
+_TMPFS_SIZES_MB = {
+    # /tmp: the main scratch surface — builds, archive extraction,
+    # fuzzer corpora spill here. 4 GiB clears every observed tool's
+    # need while bounding the fill well under host RAM.
+    "tmp": _install_jitter("tmpfs_tmp_mb", 4096, 512),
+    # /dev/shm: POSIX shm / named semaphores (Python multiprocessing
+    # SemLock, sanitizer runtimes). 1 GiB is generous for tooling;
+    # host-default 50% RAM is fingerprintable and DoS-able.
+    "shm": _install_jitter("tmpfs_shm_mb", 1024, 128),
+    # /run: sockets and pidfiles only — small by contract.
+    "run": _install_jitter("tmpfs_run_mb", 64, 16),
+    # /dev: device-node stubs and symlinks only (see
+    # _mount_minimal_dev); nothing legitimate writes bulk data here.
+    "dev": _install_jitter("tmpfs_dev_mb", 8, 4),
+    # pivot root: holds mount-point directories — every real path is
+    # a stacked mount, so writes landing IN the root tmpfs itself are
+    # incidental droppings, not workloads.
+    "root": _install_jitter("tmpfs_root_mb", 64, 16),
+}
+
+# Per-mount inode budgets (``nr_inodes=``) for the same five mounts.
+# The kernel's inode limit is INDEPENDENT of ``size=`` and defaults to
+# half the physical RAM pages — PER MOUNT — so a size-capped tmpfs
+# still lets confined code create tens of millions of empty files,
+# each pinning on the order of 1 KB of UNSWAPPABLE kernel slab
+# (inode + dentry): empty-file spam pins gigabytes of host kernel
+# memory while df reports the mount at 0%. The budgets close that
+# hole; overrun is the same early, attributable ENOSPC as the size
+# caps. Same surplus-only per-install jitter (statfs f_files is as
+# fingerprint-cheap as f_blocks).
+#
+# Budget rationale (both directions, per mount):
+#  - too LOW breaks file-heavy legitimate workloads (AFL queue/.state
+#    dirs hold one file per interesting input — tens to hundreds of
+#    thousands; archive/corpus extraction similar) — budget /tmp, the
+#    scratch surface, generously;
+#  - too HIGH re-opens the slab-pinning DoS the budget exists to
+#    close (~1 KB of unswappable slab per inode: the sum of all five
+#    budgets bounds worst-case pinned slab at ~1 GiB).
+_TMPFS_INODES = {
+    # /tmp: the only file-COUNT-heavy surface (fuzzer queues, corpus
+    # and archive extraction). 1 Mi inodes ≈ ~1 GiB slab worst case —
+    # in line with its 4 GiB byte cap.
+    "tmp": _install_jitter("tmpfs_tmp_inodes", 1048576, 65536),
+    # /dev/shm: shm segments and named semaphores — hundreds at most
+    # in real tooling; 64 Ki is orders of magnitude of headroom.
+    "shm": _install_jitter("tmpfs_shm_inodes", 65536, 8192),
+    # /run, /dev, pivot root: sockets/pidfiles, node stubs, and
+    # mount-point skeleton — file counts in the dozens; 16 Ki keeps
+    # the failure mode unreachable for legitimate use while bounding
+    # slab at ~16 MiB each.
+    "run": _install_jitter("tmpfs_run_inodes", 16384, 2048),
+    "dev": _install_jitter("tmpfs_dev_inodes", 16384, 2048),
+    "root": _install_jitter("tmpfs_root_inodes", 16384, 2048),
+}
+
+
+def _tmpfs_data(name: str, mode: str | None = None) -> str:
+    """mount(2) data string for a capped sandbox tmpfs."""
+    caps = (f"size={_TMPFS_SIZES_MB[name]}m,"
+            f"nr_inodes={_TMPFS_INODES[name]}")
+    return f"{mode},{caps}" if mode else caps
 
 
 class ExtraRoBindError(OSError):
@@ -937,7 +1022,7 @@ def _mount_minimal_dev(root: str) -> None:
     device refuses setup outright (tampered/exotic host).
     """
     dev = f"{root}/dev"
-    _mount("tmpfs", dev, "tmpfs", 0, "mode=755")
+    _mount("tmpfs", dev, "tmpfs", 0, _tmpfs_data("dev", "mode=755"))
     _essential = ("null", "zero", "urandom")
     for name in _MINIMAL_DEV_NODES:
         host_node = f"/dev/{name}"
@@ -989,7 +1074,7 @@ def _mount_minimal_dev(root: str) -> None:
     # WITHOUT exposing the host's shm segments. Mode 1777 matches the
     # host convention (sticky world-writable scratch).
     os.makedirs(f"{dev}/shm", exist_ok=True)
-    _mount("tmpfs", f"{dev}/shm", "tmpfs", 0, "mode=1777")
+    _mount("tmpfs", f"{dev}/shm", "tmpfs", 0, _tmpfs_data("shm", "mode=1777"))
     # Fresh devpts instance: serves openpty()/script/expect INSIDE the
     # sandbox with pty pairs that exist only in this namespace — the
     # host's pts nodes are simply not present. ptmxmode=0666 lets the
@@ -1201,7 +1286,7 @@ def setup_mount_ns(target: str | None, output: str | None,
                     f"setup",
                 )
     else:
-        _mount("tmpfs", root, "tmpfs", 0, "mode=755")
+        _mount("tmpfs", root, "tmpfs", 0, _tmpfs_data("root", "mode=755"))
 
         # 3. Create standard-dir mount points in the new tmpfs root. We
         # own the tmpfs inodes here so mkdir is not blocked by host-/
@@ -1279,8 +1364,10 @@ def setup_mount_ns(target: str | None, output: str | None,
     # 7. /tmp and /run: fresh tmpfs per sandbox. This is the main
     # isolation win over Landlock-only — per-sandbox /tmp closes the
     # cross-sandbox symlink-race class.
-    _mount("tmpfs", f"{root}/tmp", "tmpfs")
-    _mount("tmpfs", f"{root}/run", "tmpfs")
+    # Default tmpfs root mode (1777) is what /tmp callers expect —
+    # only the size cap is added here.
+    _mount("tmpfs", f"{root}/tmp", "tmpfs", 0, _tmpfs_data("tmp"))
+    _mount("tmpfs", f"{root}/run", "tmpfs", 0, _tmpfs_data("run"))
 
     # 7b. Re-create inherited temp-dir env paths inside the fresh
     # tmpfs. The child inherits TMPDIR/TEMP/TMP from the host; a value
