@@ -39,6 +39,8 @@ from core.logging import get_logger
 from core.sandbox import SandboxSetupError
 from core.sandbox import run as _sandbox_run
 from core.sandbox import run_trusted as _run_trusted
+from core.security.log_sanitisation import sanitise_for_terminal
+from core.source import open_regular
 from packages.fuzzing.seed_corpus import prepare_builtin_seed_corpus
 
 logger = get_logger()
@@ -1308,14 +1310,36 @@ class AFLRunner:
         return total_crashes, crashes_dir
 
     def _collect_all_crash_files(self) -> list[Path]:
-        """Collect crash files from main and all secondary instance directories."""
+        """Collect crash files from main and all secondary instance directories.
+
+        lstat-honest at every component below ``output_dir``: the
+        instance dirs and their ``crashes/`` contents sit inside the
+        sandboxed (attacker-built) target's write grant, while the
+        merge that consumes this list runs UNSANDBOXED after the
+        campaign with the full host filesystem view. A planted
+        symlink — at an instance dir, at a ``crashes`` dir, or at an
+        ``id:`` entry — would make the merge read (and so launder into
+        a REGULAR merged file) host files the campaign's mount
+        namespace never exposed to the target; every downstream
+        defense keyed on symlink-ness then passes on the copy.
+        """
         crash_files: list[Path] = []
         for sub in sorted(self.output_dir.iterdir()):
+            if sub.is_symlink() or not sub.is_dir():
+                continue
             crashes_dir = sub / "crashes"
-            if sub.is_dir() and crashes_dir.is_dir():
-                crash_files.extend(
-                    f for f in crashes_dir.iterdir() if f.name.startswith("id:")
-                )
+            if crashes_dir.is_symlink() or not crashes_dir.is_dir():
+                continue
+            for f in sorted(crashes_dir.iterdir()):
+                if not f.name.startswith("id:"):
+                    continue
+                if f.is_symlink() or not f.is_file():
+                    logger.warning(
+                        "crash merge: refusing non-regular crash entry %s",
+                        sanitise_for_terminal(str(f)),
+                    )
+                    continue
+                crash_files.append(f)
         return sorted(crash_files)
 
     def _merge_crash_files(self, crash_files: list[Path]) -> Path | None:
@@ -1357,27 +1381,46 @@ class AFLRunner:
                 pass
             else:
                 continue
-            try:
-                dest.hardlink_to(f)
-            except OSError:
-                # Exclusive-create copy: hardlink_to refuses an
-                # occupied name by itself; the fallback must match
-                # (copy2 opens the destination with O_TRUNC and
-                # follows symlinks planted in the lstat→copy window).
-                # A plant landing INSIDE that window makes this open
-                # raise (FileExistsError) — failing the merge loudly
-                # is the chosen behaviour: an active mid-merge
-                # attacker is a bigger finding than a lost merge.
-                with os.fdopen(
-                    open_exclusive_artifact(dest), "wb",
-                ) as out_fh, f.open("rb") as src_fh:
-                    shutil.copyfileobj(src_fh, out_fh)
-                # The hardlink path shares the inode, so the crash's
-                # timestamps ride along for free; the copy must carry
-                # them too — triage orders crashes by mtime.
-                # Best-effort: metadata loss never fails the merge.
+            # Source leg is fd-honest: ``hardlink_to``/``os.link``
+            # FOLLOW a source symlink, and a by-name ``open("rb")``
+            # does too — either launders a target-planted
+            # ``id:… -> <host file>`` into a REGULAR merged file. No
+            # hardlink fast path can be made swap-honest, so every
+            # merge goes through ``open_regular`` (O_NOFOLLOW +
+            # fstat(S_ISREG) on the OPENED fd, non-blocking so a
+            # planted FIFO cannot wedge the merge) into an
+            # exclusive-create destination. A plant swapped in
+            # between the enumeration's check and this open is
+            # refused here, not at the earlier by-name check.
+            src_fh = open_regular(f, "rb")
+            if src_fh is None:
+                logger.warning(
+                    "crash merge: refusing non-regular crash source %s",
+                    sanitise_for_terminal(str(f)),
+                )
+                continue
+            # Destination-side plant landing inside the lstat→create
+            # window makes open_exclusive_artifact raise
+            # (FileExistsError) — failing the merge loudly is the
+            # chosen behaviour: an active mid-merge attacker is a
+            # bigger finding than a lost merge.
+            with os.fdopen(
+                open_exclusive_artifact(dest), "wb",
+            ) as out_fh, src_fh:
+                shutil.copyfileobj(src_fh, out_fh)
+                out_fh.flush()
+                # The copy must carry the crash's timestamps — triage
+                # orders crashes by mtime. Metadata rides from the
+                # already-OPEN source fd onto the destination fd (a
+                # by-name copystat would follow a symlink swapped in
+                # after the fd-honest open). Best-effort: metadata
+                # loss never fails the merge.
                 with contextlib.suppress(OSError):
-                    shutil.copystat(f, dest)
+                    st = os.fstat(src_fh.fileno())
+                    os.utime(
+                        out_fh.fileno(),
+                        ns=(st.st_atime_ns, st.st_mtime_ns),
+                    )
         return merged
 
     @staticmethod

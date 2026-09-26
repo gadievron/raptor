@@ -290,6 +290,93 @@ class TestMergeCrashFiles:
         assert dest.read_bytes() == b"b"
         assert int(dest.stat().st_mtime) == stamp
 
+    def test_symlinked_crash_entry_refused_at_enumeration(
+        self, tmp_path, caplog,
+    ):
+        """A target-planted ``id:… -> <host file>`` in a crashes dir
+        must never enter the merge list: the merge runs unsandboxed
+        and would launder the symlink's target into a REGULAR merged
+        file that every downstream symlink defense accepts."""
+        secret = tmp_path / "host-secret"
+        secret.write_bytes(b"PRIVATE KEY MATERIAL")
+        self._plant_crash(tmp_path, "main",
+                          "id:000000,sig:11,src:000000,op:havoc,rep:1", b"a")
+        crashes = tmp_path / "secondary1" / "crashes"
+        crashes.mkdir(parents=True)
+        (crashes / "id:000042,sig:11,src:000000,op:havoc,rep:1").symlink_to(
+            secret)
+
+        runner = self._make_runner(tmp_path)
+        with caplog.at_level("WARNING"):
+            crash_files = runner._collect_all_crash_files()
+
+        assert [f.name.split(",")[0] for f in crash_files] == ["id:000000"]
+        assert any("non-regular crash entry" in r.getMessage()
+                   for r in caplog.records)
+
+    def test_symlinked_instance_and_crashes_dirs_refused(self, tmp_path):
+        """Instance dirs and their ``crashes`` dirs are themselves
+        target-writable names: a symlinked directory component routes
+        the whole enumeration at a foreign tree of REAL files, which
+        the per-entry symlink check cannot see."""
+        foreign = tmp_path / "foreign"
+        (foreign / "crashes").mkdir(parents=True)
+        (foreign / "crashes" / "id:000001").write_bytes(b"host data")
+
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "evilinst").symlink_to(foreign)
+        real_inst = out / "real"
+        real_inst.mkdir()
+        (real_inst / "crashes").symlink_to(foreign / "crashes")
+
+        runner = self._make_runner(out)
+        assert runner._collect_all_crash_files() == []
+
+    def test_symlinked_source_refused_at_merge_leg(self, tmp_path, caplog):
+        """TOCTOU leg: an entry swapped to a symlink AFTER enumeration
+        must be refused by the merge's fd-honest open, never read
+        through by name."""
+        secret = tmp_path / "host-secret"
+        secret.write_bytes(b"PRIVATE KEY MATERIAL")
+        real = self._plant_crash(
+            tmp_path, "secondary1",
+            "id:000001,sig:06,src:000002,op:havoc,rep:2", b"b")
+        planted = tmp_path / "secondary2" / "crashes"
+        planted.mkdir(parents=True)
+        link = planted / "id:000042,sig:11,src:000000,op:havoc,rep:1"
+        link.symlink_to(secret)
+
+        runner = self._make_runner(tmp_path)
+        with caplog.at_level("WARNING"):
+            # Simulates the post-enumeration swap by handing the merge
+            # the symlink directly.
+            merged = runner._merge_crash_files([real, link])
+
+        assert merged == tmp_path / "merged_crashes"
+        contents = [f.read_bytes() for f in merged.iterdir()]
+        assert contents == [b"b"]
+        assert b"PRIVATE KEY MATERIAL" not in b"".join(contents)
+        assert any("non-regular crash source" in r.getMessage()
+                   for r in caplog.records)
+
+    def test_fifo_source_skipped_without_blocking(self, tmp_path):
+        """A planted FIFO at an ``id:`` name must not wedge the
+        unsandboxed merge (a by-name open blocks until a writer
+        appears); the non-blocking fd-honest open refuses it."""
+        real = self._plant_crash(
+            tmp_path, "secondary1",
+            "id:000001,sig:06,src:000002,op:havoc,rep:2", b"b")
+        fifo_dir = tmp_path / "secondary2" / "crashes"
+        fifo_dir.mkdir(parents=True)
+        fifo = fifo_dir / "id:000042,sig:11,src:000000,op:havoc,rep:1"
+        os.mkfifo(fifo)
+
+        runner = self._make_runner(tmp_path)
+        merged = runner._merge_crash_files([real, fifo])
+
+        assert [f.read_bytes() for f in merged.iterdir()] == [b"b"]
+
     def test_merge_is_idempotent(self, tmp_path):
         runner = self._make_runner(tmp_path)
         self._plant_crash(tmp_path, "main",
