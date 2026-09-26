@@ -12,6 +12,8 @@ are unaffected; pathological density trips the budget.
 import logging
 import sys
 
+import pytest
+
 import core.inventory.call_graph as cg
 
 
@@ -217,6 +219,12 @@ class TestEstimator:
     def test_estimator_counts_php_include_edges(self):
         # The include-edge / define layer (PHP walker) must be
         # charged too — a PHP-heavy tree budgets like any other.
+        # extract_call_graph_php returns an EMPTY graph without the
+        # grammar wheel (documented degradation), so the charging pin
+        # needs tree-sitter-php present — the same guard the
+        # include-edge suite carries. Every other test in this file
+        # runs the stdlib-ast Python extractor and stays unguarded.
+        pytest.importorskip("tree_sitter_php")
         php = "<?php\n" + "\n".join(
             f"include('inc/mod{k}.php'); define('C{k}', 'v{k}');"
             for k in range(200))
