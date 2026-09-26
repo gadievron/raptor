@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Per-artifact ELF analysis chain over an engagement ledger.
+
+Thin launcher for ``core.engagement.chain_elf`` — the sequencing glue
+that composes the EXISTING binary tools (investigate → import → study
+→ checklist → audit → siblings → seed re-review → validate survivors)
+per ledger artifact and writes stage status + the final verdict record
+back to the ledger. No new analysis lives here or in the module.
+
+Idempotent + resumable: chain state is durable per artifact under
+``<ledger-dir>/chains/<artifact-id>/``; re-running continues from the
+first unsettled stage and a complete chain reports nothing-to-do.
+Distinct exit codes (operator-schedulable): 0 advanced/completed,
+1 stage failure (re-run resumes), 2 usage, 3 nothing to do.
+
+Usage:
+    raptor-engage-chain <ledger-dir> --artifact <id>
+    raptor-engage-chain <ledger-dir> --all-pending
+        [--target-root DIR] [--model M] [--max-cost USD]
+        [--mechanical-only] [-v]
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
+
+import argparse  # noqa: E402
+
+from core.engagement.chain_elf import (  # noqa: E402
+    RC_USAGE,
+    run_all_pending,
+    run_chain,
+)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="raptor-engage-chain",
+        description="Run (or resume) the per-artifact ELF analysis "
+                    "chain over an engagement ledger.",
+    )
+    ap.add_argument("ledger_dir", type=Path,
+                    help="Engagement output directory (holds "
+                         "ledger.json).")
+    which = ap.add_mutually_exclusive_group(required=True)
+    which.add_argument("--artifact", metavar="ID",
+                       help="Run one artifact's chain by ledger id.")
+    which.add_argument("--all-pending", action="store_true",
+                       help="Run every ledger row's dispatch arm in "
+                            "row order (complete rows no-op).")
+    ap.add_argument("--target-root", type=Path, default=None,
+                    help="Override the ledger's recorded target root "
+                         "(artifact paths resolve under it).")
+    ap.add_argument("--model", default=None,
+                    help="LLM model override passed to the study and "
+                         "audit stages.")
+    ap.add_argument("--max-cost", type=float, default=None,
+                    metavar="USD",
+                    help="Per-stage LLM budget passed to the study "
+                         "and audit stages.")
+    ap.add_argument("--mechanical-only", action="store_true",
+                    help="Skip the LLM stages (study/audit/re-review) "
+                         "— each skip is a recorded degradation that "
+                         "re-runs without this flag.")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    parsed = ap.parse_args()
+
+    if not parsed.ledger_dir.is_dir():
+        # Operator-typed, but tab-completed hostile names are still
+        # hostile bytes on a terminal — escape the echoed path.
+        print(f"error: not a directory: "
+              f"{_sft(str(parsed.ledger_dir), max_len=300)}",
+              file=sys.stderr)
+        return RC_USAGE
+
+    if parsed.all_pending:
+        return run_all_pending(
+            parsed.ledger_dir,
+            target_root=parsed.target_root,
+            model=parsed.model,
+            max_cost=parsed.max_cost,
+            mechanical_only=parsed.mechanical_only,
+        )
+    return run_chain(
+        parsed.ledger_dir, parsed.artifact,
+        target_root=parsed.target_root,
+        model=parsed.model,
+        max_cost=parsed.max_cost,
+        mechanical_only=parsed.mechanical_only,
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())
