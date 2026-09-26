@@ -2597,6 +2597,11 @@
     "count": 14,
     "kind": "literal"
   },
+  "packages/llm_analysis/context_toolloop.py::build_toolloop_record": {
+    "count": 12,
+    "kind": "literal",
+    "note": "context_toolloop record shape persisted on the finding's analysis entry (end_reason, first/final verdict summaries, turn list, byte total) \u2014 a serialization schema, not a name vocabulary; same class as the baselined manifest/to_dict shapes"
+  },
   "packages/llm_analysis/crash_agent.py::analysis_schema": {
     "count": 11,
     "kind": "literal"
