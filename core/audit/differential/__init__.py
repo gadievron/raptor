@@ -20,6 +20,11 @@ from ._gate import (
     differential_applicable,
     usable_family,
 )
+from ._prompts import (
+    build_member_spec,
+    build_vector_prompt,
+    parse_vector_response,
+)
 from ._rails import (
     MAX_CONFORMING_EXECUTED,
     MAX_DIFFERENTIAL_EXECUTIONS,
@@ -70,9 +75,12 @@ __all__ = [
     "VERDICT_INCONCLUSIVE",
     "VERDICT_NONDIRECTIONAL",
     "VectorVerdict",
+    "build_member_spec",
+    "build_vector_prompt",
     "classify_lead",
     "classify_vector",
     "differential_applicable",
     "observation_from_result",
+    "parse_vector_response",
     "usable_family",
 ]
