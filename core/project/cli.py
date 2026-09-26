@@ -932,7 +932,17 @@ def main() -> None:
                     # Persisted paths arrive via project-import zips
                     # too — same defang as the list view's fields.
                     for b in p.binaries:
-                        print(f"  {sanitise_for_terminal(str(b), max_len=256)}")
+                        witness = (getattr(p, "binary_witnesses", None)
+                                   or {}).get(str(b))
+                        # Witness strings ride project-import zips too
+                        # — defang the excerpt like the path.
+                        tag = (f"sha256 "
+                               f"{sanitise_for_terminal(witness[:12])}…"
+                               if witness
+                               else "no content witness — re-add to "
+                                    "pin (enrichment-only until then)")
+                        print(f"  {sanitise_for_terminal(str(b), max_len=256)}"
+                              f"  [{tag}]")
             elif args.action == "add":
                 if not args.path:
                     print(_red("add requires a <path> argument"))
@@ -951,6 +961,24 @@ def main() -> None:
                     ))
                     return
                 resolved = str(resolved_path)
+                # Content witness: the add is a trust assertion about
+                # the BYTES at this path right now — persisted-store
+                # binaries drive `absent`-verdict hard-suppression on
+                # every later run, and the path may sit inside a run
+                # dir's write grant (the env-build persist hint points
+                # there). Pin sha256 here; the oracle load seam
+                # re-verifies and refuses a changed file. Hash OUTSIDE
+                # the project-file lock — the lock guards the registry
+                # write, not the binary, and a multi-GB debug binary
+                # must not hold it.
+                from core.hash import sha256_file
+                try:
+                    digest = sha256_file(resolved_path)
+                except OSError as exc:
+                    print(_red(
+                        f"add: cannot read {resolved} for content "
+                        f"pinning ({exc}) — not added"))
+                    return
                 # RMW under the project-file lock (re-load inside it)
                 # so a concurrent mutator's write isn't dropped.
                 from .project import project_file_lock
@@ -960,11 +988,23 @@ def main() -> None:
                         print(_red(f"Project '{name}' not found."))
                         return
                     if resolved in p.binaries:
-                        print(f"Already present: {resolved}")
+                        if p.binary_witnesses.get(resolved) == digest:
+                            print(f"Already present: {resolved}")
+                        else:
+                            # Re-add = re-assertion: the operator
+                            # rebuilt (or is upgrading a pre-witness
+                            # entry) and re-pins the current bytes.
+                            p.binary_witnesses[resolved] = digest
+                            save_json(project_file, p.to_dict())
+                            print(_green(
+                                f"Witness refreshed: {resolved} "
+                                f"(sha256 {digest[:12]}…)"))
                     else:
                         p.binaries.append(resolved)
+                        p.binary_witnesses[resolved] = digest
                         save_json(project_file, p.to_dict())
-                        print(_green(f"Added: {resolved}"))
+                        print(_green(f"Added: {resolved} "
+                                     f"(pinned sha256 {digest[:12]}…)"))
             elif args.action == "remove":
                 if not args.path:
                     print(_red("remove requires a <path> argument"))
@@ -980,6 +1020,7 @@ def main() -> None:
                         print(f"Not present: {resolved}")
                     else:
                         p.binaries.remove(resolved)
+                        p.binary_witnesses.pop(resolved, None)
                         save_json(project_file, p.to_dict())
                         print(_green(f"Removed: {resolved}"))
             elif args.action == "clear":
@@ -990,6 +1031,7 @@ def main() -> None:
                         print(_red(f"Project '{name}' not found."))
                         return
                     p.binaries = []
+                    p.binary_witnesses = {}
                     save_json(project_file, p.to_dict())
                 print(_green(f"Cleared binaries for '{name}'"))
 

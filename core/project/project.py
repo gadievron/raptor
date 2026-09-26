@@ -48,7 +48,7 @@ except Exception:  # noqa: BLE001 — invalid RAPTOR_OUT_DIR
     DEFAULT_OUTPUT_BASE = RaptorConfig.BASE_OUT_DIR / "projects"
 
 
-_PROJECT_SCHEMA_VERSION = 5
+_PROJECT_SCHEMA_VERSION = 6
 
 #: Generated (non-run) directories that live directly inside a
 #: project output dir. Every run-dir enumeration must skip them —
@@ -313,7 +313,12 @@ class Project:
     # v5 adds ``ghidra_projects`` — operator-attached Ghidra .gpr
     # paths for bidirectional RE sync. Older files still load with
     # the list defaulted; the next write upgrades them.
-    version: int = 5
+    #
+    # v6 adds ``binary_witnesses`` — sha256 content pins recorded at
+    # ``/project binary add`` and re-verified at load. Older files
+    # still load with the map defaulted (their binaries downgrade to
+    # enrichment-only until re-added); the next write upgrades them.
+    version: int = 6
     # Operator-supplied debug binaries for binary_oracle reachability
     # enrichment. Persisted across runs so the operator doesn't re-pass
     # ``--binary`` every invocation. List for ``--target-kind=hybrid``
@@ -321,6 +326,20 @@ class Project:
     # into ``RaptorConfig.BINARY_ORACLE_PATHS`` at /agentic / /codeql
     # start; explicit ``--binary`` on the CLI is additive.
     binaries: list[str] = field(default_factory=list)
+    # v6: content witnesses for the binary store — resolved path (the
+    # exact string held in ``binaries``) → sha256 hexdigest recorded
+    # at ``/project binary add``. The store is the one surface where
+    # run-writable content is promoted to durable suppression
+    # authority (an env-built artifact lives inside the run dir's
+    # write grant), so the operator's trust assertion is pinned to
+    # the BYTES they pointed at, not the path: the oracle load seam
+    # re-hashes and refuses an entry whose content changed
+    # (``binary_oracle_cli._project_binaries``). Entries with no
+    # witness (pre-v6 stores) stay enrichment-only — never
+    # ``absent``-suppression — until re-added. Same posture as the
+    # trust-marker archive lane (``trust._archive_target_equivalent``,
+    # sha256 fail-closed).
+    binary_witnesses: dict[str, str] = field(default_factory=dict)
     # v5: operator-attached Ghidra projects (.gpr paths) for
     # bidirectional sync — review context injection reads their
     # cached REDatabases; /ghidra sync exports findings back into
@@ -358,6 +377,7 @@ class Project:
             "description": self.description,
             "notes": self.notes,
             "binaries": list(self.binaries),
+            "binary_witnesses": dict(self.binary_witnesses),
             "ghidra_projects": list(self.ghidra_projects),
             "threat_model_path": self.threat_model_path,
             "threat_model_updated": self.threat_model_updated,
@@ -374,6 +394,9 @@ class Project:
         binaries = data.get("binaries") or []
         if not isinstance(binaries, list):
             binaries = []
+        witnesses = data.get("binary_witnesses") or {}
+        if not isinstance(witnesses, dict):
+            witnesses = {}
         ghidra_projects = data.get("ghidra_projects") or []
         if not isinstance(ghidra_projects, list):
             ghidra_projects = []
@@ -400,6 +423,14 @@ class Project:
             notes=data.get("notes", ""),
             version=version,
             binaries=[str(b) for b in binaries if isinstance(b, str)],
+            # Type-screened like ``binaries``: a witness value that is
+            # not a string carries no pin (dropped → the entry reads
+            # as unwitnessed, the enrichment-only tier — fail closed,
+            # never a crash on a hand-edited file).
+            binary_witnesses={
+                str(k): str(v) for k, v in witnesses.items()
+                if isinstance(k, str) and isinstance(v, str) and v
+            },
             ghidra_projects=[str(g) for g in ghidra_projects
                              if isinstance(g, str)],
             threat_model_path=str(data.get("threat_model_path") or ""),

@@ -436,3 +436,72 @@ class TestDeclaredOut:
              RaptorConfig.BINARY_ORACLE_NO_SUPPRESS,
              RaptorConfig.BINARY_ORACLE_DECLARED,
              RaptorConfig.BINARY_ORACLE_EDGES) = prev
+
+
+class TestProjectBinaryWitnessGate:
+    """Content-witness re-verification at the store's load seam.
+
+    ``/project binary add`` pins sha256 of the bytes the operator
+    pointed at (the assertion travels with the CONTENT); a persisted
+    path can sit inside a run dir's write grant, so anything with that
+    grant could otherwise swap the file after add and have its DWARF
+    drive ``absent``-verdict hard-suppression on every later run."""
+
+    def _load(self, binaries, witnesses, no_suppress=None):
+        from core.analysis.binary_oracle_cli import _project_binaries
+
+        proj = SimpleNamespace(binaries=binaries,
+                               binary_witnesses=witnesses)
+
+        class _Mgr:
+            def load(self, name):
+                return proj
+
+        with patch("core.project.project.ProjectManager", _Mgr), \
+             patch("core.project.trust._context_project_name",
+                   return_value="myproj"):
+            paths, name = _project_binaries(no_suppress_out=no_suppress)
+        assert name == "myproj"
+        return paths
+
+    def test_matching_witness_loads(self, tmp_path):
+        from core.hash import sha256_file
+        b = tmp_path / "app.debug"
+        b.write_bytes(b"\x7fELF" + b"\x00" * 28)
+        key = str(b.resolve())
+        no_suppress: list = []
+        paths = self._load([key], {key: sha256_file(b)},
+                           no_suppress=no_suppress)
+        assert paths == [b.resolve()]
+        assert no_suppress == []
+
+    def test_swapped_content_refused(self, tmp_path):
+        # THE attack: file replaced after the operator's add — the
+        # pinned witness no longer matches, the entry must not load
+        # in ANY tier (a swapped binary steers enrichment too).
+        from core.hash import sha256_file
+        b = tmp_path / "app.debug"
+        b.write_bytes(b"\x7fELF" + b"\x00" * 28)
+        pinned = sha256_file(b)
+        b.write_bytes(b"\x7fELF" + b"\xff" * 28)
+        key = str(b.resolve())
+        no_suppress: list = []
+        paths = self._load([key], {key: pinned}, no_suppress=no_suppress)
+        assert paths == []
+        assert no_suppress == []
+
+    def test_witnessed_but_unreadable_refused(self, tmp_path):
+        key = str((tmp_path / "gone.debug").resolve())
+        assert self._load([key], {key: "0" * 64}) == []
+
+    def test_legacy_unwitnessed_is_enrichment_only(self, tmp_path):
+        # Pre-witness store entries still load (no forced re-buy of
+        # every store) but join the no-suppress channel: enrichment
+        # verdicts count, ``absent`` never hard-suppresses off them.
+        b = tmp_path / "app.debug"
+        b.write_bytes(b"\x7fELF" + b"\x00" * 28)
+        key = str(b.resolve())
+        no_suppress: list = []
+        paths = self._load([key], {}, no_suppress=no_suppress)
+        assert paths == [b.resolve()]
+        assert no_suppress == [key]

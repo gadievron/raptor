@@ -307,12 +307,25 @@ def _autodetect_binaries(
 def _project_binaries(
     repo: Path | None = None,
     run_dir: Path | None = None,
+    no_suppress_out: list | None = None,
 ) -> tuple[list[Path], str | None]:
     """Layer in any binaries persisted on the governing project (the
     run pin's project in-run, the ambient layers otherwise). Returns
     ``(paths, project_name)``. Best-effort — a missing project /
     schema mismatch returns ``([], None)`` rather than crashing the
     run.
+
+    CONTENT-WITNESS GATE: ``/project binary add`` pins sha256 of the
+    bytes the operator pointed at; the store is the one surface where
+    run-writable content is promoted to durable suppression authority
+    (the env-build persist hint names a path inside the run dir's
+    write grant). Each witnessed entry is re-hashed here: a mismatch
+    means the file changed since the operator's assertion — the entry
+    is REFUSED for this run (loud warning + re-add hint), because the
+    trust travelled with the bytes, not the path. Entries with no
+    witness (pre-v6 stores) still load but join ``no_suppress_out``
+    (the env-build guessed-command channel): enrichment verdicts
+    count, ``absent`` never hard-suppresses off them.
 
     ONE-TARGET GATE: persisted binaries are an operator
     assertion about ONE target, exactly like trust markers — which got
@@ -345,7 +358,41 @@ def _project_binaries(
                 active, repo,
             )
             return [], active
-        return [Path(b).expanduser().resolve() for b in proj.binaries], active
+        witnesses = getattr(proj, "binary_witnesses", None) or {}
+        out: list[Path] = []
+        for b in proj.binaries:
+            p = Path(b).expanduser().resolve()
+            recorded = witnesses.get(b)
+            if recorded:
+                from core.hash import sha256_file
+                try:
+                    actual = sha256_file(p)
+                except OSError:
+                    logger.warning(
+                        "binary-oracle: project binary %s is "
+                        "unreadable — refusing for this run "
+                        "(re-add with /project binary add once "
+                        "rebuilt)", p)
+                    continue
+                if actual != recorded:
+                    logger.warning(
+                        "binary-oracle: REFUSED project binary %s — "
+                        "content changed since /project binary add "
+                        "pinned it (sha256 mismatch). If you rebuilt "
+                        "it, re-add to re-assert trust; if you did "
+                        "not, treat the file as tampered.", p)
+                    continue
+            else:
+                logger.warning(
+                    "binary-oracle: project binary %s has no content "
+                    "witness (pre-witness store entry) — loading as "
+                    "enrichment-only; absent verdicts will not "
+                    "suppress. Re-add with /project binary add to "
+                    "pin it.", p)
+                if no_suppress_out is not None:
+                    no_suppress_out.append(str(p))
+            out.append(p)
+        return out, active
     except Exception:  # noqa: BLE001
         return [], None
 
@@ -424,7 +471,10 @@ def _env_build_debug_binaries(
         for pth in paths:
             # Artifact names come out of the target's build — sanitise.
             print(f"  {sanitise_for_terminal(str(pth))}")
-        print("  persist for future runs: /project binary add <path>")
+        print("  persist for future runs: /project binary add <path> "
+              "(pins current content by sha256; copy the artifact "
+              "out of the run dir first — run dirs get cleaned and "
+              "are run-writable)")
         return paths, guessed
     except Exception as exc:  # noqa: BLE001 — degrade, never fail the run
         logger.debug("binary-oracle env build errored", exc_info=True)
@@ -520,7 +570,8 @@ def resolve_binary_paths(args, repo: Path, target_kind: str,
 
     _out = getattr(args, "out", None)
     proj_paths, proj_name = _project_binaries(
-        repo=repo, run_dir=Path(_out) if _out else None)
+        repo=repo, run_dir=Path(_out) if _out else None,
+        no_suppress_out=no_suppress_out)
     added = 0
     for p in proj_paths:
         if not Path(p).is_file():
