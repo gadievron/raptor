@@ -361,20 +361,24 @@ Examples:
                     help="With --orchestrator, print the plan and exit without running")
     ap.add_argument(
         "--engine",
-        choices=["afl", "libfuzzer", "atheris", "cargo-fuzz"],
+        choices=["afl", "libfuzzer", "atheris", "cargo-fuzz", "jazzer"],
         default=None,
         help="Force a specific engine on the orchestrator path. "
              "Honoured only when the detected target kind supports it "
              "(atheris drives python-pkg targets; cargo-fuzz drives "
-             "rust-crate targets); otherwise the plan blocks with the "
-             "reason. Implies --orchestrator.")
+             "rust-crate targets; jazzer drives java-project targets); "
+             "otherwise the plan blocks with the reason. Implies "
+             "--orchestrator.")
     ap.add_argument(
         "--fuzz-target", metavar="NAME",
-        help="cargo-fuzz target to build and run for rust-crate "
-             "targets (a fuzz/fuzz_targets/<NAME>.rs harness). "
-             "Auto-selected when the crate has exactly one; several "
-             "targets block the plan with the list. Implies "
-             "--orchestrator.")
+        help="In-repo harness to build and run: the cargo-fuzz target "
+             "name for rust-crate targets (a "
+             "fuzz/fuzz_targets/<NAME>.rs harness), or the Jazzer "
+             "target class for java-project targets (a "
+             "fuzzerTestOneInput / @FuzzTest class; fully-qualified, "
+             "or the simple name when unambiguous). Auto-selected "
+             "when the project has exactly one; several targets block "
+             "the plan with the list. Implies --orchestrator.")
     py_harness_group = ap.add_mutually_exclusive_group()
     py_harness_group.add_argument(
         "--py-harness", metavar="FILE",
