@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "language": "python",
+  "framework": "stdlib",
+  "pack": "stored-taint-demo",
+  "sources": [
+    {
+      "kind": "stored_read",
+      "match": "shelve.open",
+      "store_key": "user-profile-store",
+      "taint_classes": ["stored-user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "Reads back values a request handler previously persisted; the read value re-enters the program attacker-chosen across requests."
+    }
+  ],
+  "sinks": [
+    {
+      "kind": "stored_write",
+      "match": "shelve.Shelf.setdefault",
+      "args": [1],
+      "store_key": "user-profile-store",
+      "sink_class": "stored-taint",
+      "cwe": "CWE-501",
+      "provenance": "framework_catalog",
+      "rationale": "Persisting attacker text into the paired store makes every later stored_read of the same store key attacker-controlled."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "requests.post",
+      "args": [0],
+      "kwargs": ["url"],
+      "sink_class": "secret-exposure",
+      "cwe": "CWE-200",
+      "provenance": "framework_catalog",
+      "rationale": "A secret flowing into an outbound request URL or body leaves the trust boundary; the sink class is new to this pack and needs no code change."
+    }
+  ]
+}
