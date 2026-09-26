@@ -29,6 +29,7 @@ from typing import Any
 from core.llm.coerce import structured_result, to_lower_token_safe
 from core.paths import strip_file_uri
 from core.run.finding_status import read_verdict
+from core.security.log_sanitisation import escape_nonprintable
 from core.security.prompt_envelope import neutralize_tag_forgery
 from packages.hypothesis_validation import Hypothesis
 from packages.hypothesis_validation.adapters import CodeQLAdapter
@@ -1038,6 +1039,84 @@ def _hypothesis_cache_key(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+#: Producer identity of the cross-file taint engine (the ``tool``
+#: field of its findings in every intake shape). Local constant so
+#: the gate does not import ``core.taint``; pinned against
+#: ``core.taint.emission.PRODUCER`` by test.
+_TAINT_PRODUCER = "taint-crossfile"
+
+#: The one tier value that IS source-static derivation; any other
+#: non-empty tier string on a taint path marks a hop CodeQL's
+#: source-language dataflow cannot be expected to represent.
+_TIER_RESOLVED_STATIC = "resolved_static"
+
+#: Step tags marking producer approximations (taint-all-params
+#: fallback, binding-by-convention guesses) — sub-static even when
+#: the tier field reads static.
+_SUB_STATIC_TAGS = frozenset({"assumed_propagation", "binding_approx"})
+
+
+def _taint_path_tiers(finding: dict) -> list[str]:
+    """Every tier string recorded on the finding: the path-level
+    ``path_tier`` (scan-shape ``metadata`` / validation-shape
+    ``taint_crossfile`` blocks) plus per-step ``properties.tier``."""
+    tiers: list[str] = []
+    for block_key in ("metadata", "taint_crossfile"):
+        block = finding.get(block_key)
+        if isinstance(block, dict):
+            tier = block.get("path_tier")
+            if isinstance(tier, str) and tier:
+                tiers.append(tier)
+    path = finding.get("dataflow_path")
+    if isinstance(path, dict):
+        steps = [path.get("source"), *(
+            path.get("steps") if isinstance(path.get("steps"), list)
+            else []
+        ), path.get("sink")]
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            props = step.get("properties")
+            if not isinstance(props, dict):
+                continue
+            tier = props.get("tier")
+            if isinstance(tier, str) and tier:
+                tiers.append(tier)
+            tags = props.get("tags")
+            if isinstance(tags, (list, tuple)) and any(
+                isinstance(t, str) and t in _SUB_STATIC_TAGS
+                for t in tags
+            ):
+                # Represent a tag hit as a sub-static tier entry.
+                tiers.append("tag:" + next(
+                    t for t in tags
+                    if isinstance(t, str) and t in _SUB_STATIC_TAGS
+                ))
+    return tiers
+
+
+def _taint_sub_static_exemption(finding: dict) -> bool:
+    """True when the finding is a cross-file taint engine candidate
+    whose path carries POSITIVE sub-static evidence — a recorded tier
+    below ``resolved_static`` or an approximation tag on any hop.
+
+    Such flows rode edges (dispatch tables, getattr dispatch,
+    taint-all-params fallbacks) that CodeQL's source-language dataflow
+    cannot represent; a Tier 1 query finding no path there is silence,
+    not refutation evidence. Producer-scoped by the ``tool`` /
+    ``source_type`` fields; a taint finding whose recorded tiers are
+    ALL resolved_static (or that records no tier evidence at all)
+    stays fully checkable — the exemption needs positive evidence,
+    never shape drift."""
+    if (
+        finding.get("tool") != _TAINT_PRODUCER
+        and finding.get("source_type") != "taint"
+    ):
+        return False
+    tiers = _taint_path_tiers(finding)
+    return any(t != _TIER_RESOLVED_STATIC for t in tiers)
+
+
 def tier1_check_finding(
     finding: dict,
     codeql_dbs: dict[str, Path],
@@ -1131,6 +1210,21 @@ def _tier1_check_finding_inner(
             return "no_check"
     except ImportError:
         pass
+
+    # Tier-aware exemption: a cross-file taint candidate whose path
+    # carries sub-static hops gets no_check — never a hard refutation
+    # — from this gate (CodeQL cannot represent the approximated
+    # edges, so its silence is not evidence). Runs before any
+    # discovery/DB work: the exemption also saves the invocation.
+    # Counted here per finding; the wrapper's verdict line shows the
+    # resulting no_check.
+    if _taint_sub_static_exemption(finding):
+        logger.info(
+            "tier1_check_finding: taint-crossfile sub-static path — "
+            "no_check exemption (rule=%s)",
+            escape_nonprintable(str(finding.get("rule_id") or "?")),
+        )
+        return "no_check"
 
     language = _finding_language(finding)
     if not language:
