@@ -1710,15 +1710,20 @@ def run_audit_postpass(args: argparse.Namespace, target: Path, out_dir: Path) ->
 
         # Reuse the agentic checklist — same target, same parser;
         # skips a full re-parse of the repo. raptor-audit builds a
-        # fresh one when the copy is missing.
-        agentic_checklist = out_dir / "checklist.json"
-        if agentic_checklist.is_file():
-            import shutil
+        # fresh one when the copy is missing. Accessor round-trip
+        # (not a byte copy): reads either on-disk form (single-file
+        # or sharded) and re-emits the right form in the audit dir.
+        from core.inventory import (
+            checklist_exists,
+            read_checklist,
+            save_checklist,
+        )
+        if checklist_exists(out_dir):
             try:
-                shutil.copyfile(
-                    agentic_checklist, audit_dir / "checklist.json",
-                )
-            except OSError as e:
+                _data = read_checklist(out_dir)
+                if _data:
+                    save_checklist(audit_dir, _data)
+            except (OSError, RuntimeError) as e:
                 logger.warning(
                     "audit post-pass: checklist copy failed (%s); "
                     "raptor-audit will rebuild it", e,
@@ -3071,8 +3076,8 @@ def main() -> int:
 
     # Build inventory checklist (independent of scanning, available to all phases)
     try:
-        from core.inventory import build_inventory
-        if not (out_dir / "checklist.json").exists():
+        from core.inventory import build_inventory, checklist_exists
+        if not checklist_exists(out_dir):
             build_inventory(str(original_repo_path), str(out_dir))
             logger.debug("Inventory checklist built: %s", out_dir / "checklist.json")
     except Exception as e:  # noqa: BLE001
@@ -3204,11 +3209,12 @@ def main() -> int:
     # ========================================================================
     reachability_prepass_result = None
     scan_inventory = None
-    _checklist_path = out_dir / "checklist.json"
-    if _checklist_path.exists():
-        # load_json is non-strict: returns None on unreadable/corrupt
-        # input and logs a warning naming the file — nothing to suppress.
-        scan_inventory = load_json(_checklist_path)
+    from core.inventory import checklist_exists as _checklist_exists
+    from core.inventory import read_checklist as _read_checklist
+    if _checklist_exists(out_dir):
+        # Accessor read (either on-disk form): unreadable/corrupt
+        # input reads as {} → normalised to None below.
+        scan_inventory = _read_checklist(out_dir) or None
     def _try_cached_joern(target: Path, run_out_dir: Path):
         """Start a Joern server only if a cached CPG exists for this project."""
         try:
@@ -4253,8 +4259,10 @@ def main() -> int:
         for excl in (args.exclude_dir or []):
             analysis_cmd += ["--exclude-dir", excl]
 
-        # Attach checklist for metadata lookup
-        if (out_dir / "checklist.json").exists():
+        # Attach checklist for metadata lookup. The flag names the
+        # SLOT path; the analysis agent resolves single-file vs
+        # sharded through the accessor.
+        if _checklist_exists(out_dir):
             analysis_cmd.extend(["--checklist", str(out_dir / "checklist.json")])
 
         # Forward --no-journal opt-out so operators who don't
@@ -5483,8 +5491,9 @@ def _estimate_review_residual(out_dir: Path) -> tuple | None:
     subdirs). An estimate, not the audit's gap computation — good
     enough to say "most of the inventory was never reviewed".
     """
-    checklist = load_json(out_dir / "checklist.json")
-    if not isinstance(checklist, dict):
+    from core.inventory import read_checklist
+    checklist = read_checklist(out_dir)
+    if not checklist:
         return None
     total = 0
     for file_info in checklist.get("files", []) or []:

@@ -324,18 +324,16 @@ def _rank_candidates(
     # was pure waste. See `_find_stale_files` docstring.
     disk_hash_cache: dict[str, str | None] = {}
     scored: list[tuple[int, int, Path, set[str]]] = []
+    from core.inventory import read_checklist
     for d in candidates:
-        u_checklist = load_json(d / "checklist.json", max_bytes=64 * 1024 * 1024)
-        if not isinstance(u_checklist, dict) or not u_checklist:
-            # No checklist — or a non-object one (an array-shaped
-            # checklist.json pre-fix crashed _extract_hashes and took
-            # down three-tier discovery for every later run). Treat as
-            # fully stale (can't verify any file).
-            if u_checklist is not None and not isinstance(u_checklist, dict):
-                logger.warning(
-                    "understand_bridge: %s/checklist.json is not a JSON "
-                    "object — treating candidate as fully stale", d.name,
-                )
+        # Accessor read: flock + symlink resolution + the sharded
+        # checklist/ layout, one budget class. Missing, malformed,
+        # non-object (an array-shaped checklist.json pre-fix crashed
+        # _extract_hashes and took down three-tier discovery for
+        # every later run), and integrity-refused sharded layouts all
+        # read as {} — treat as fully stale (can't verify any file).
+        u_checklist = read_checklist(d)
+        if not u_checklist:
             scored.append((1, _safe_mtime_ns(d), d, set()))
             continue
         u_hashes = _extract_hashes(u_checklist)
@@ -513,16 +511,12 @@ def _search_understand_dirs(
             continue  # broken symlinks, transient races
 
         if target_resolved:
-            from core.json import load_json
-            checklist = load_json(d / "checklist.json", max_bytes=64 * 1024 * 1024)
-            # Non-dict shapes (array-shaped checklist.json) skip the
-            # candidate with a warning instead of crashing discovery.
-            if not isinstance(checklist, dict) or not checklist:
-                if checklist is not None and not isinstance(checklist, dict):
-                    logger.warning(
-                        "understand_bridge: %s/checklist.json is not a "
-                        "JSON object — candidate skipped", d.name,
-                    )
+            from core.inventory import read_checklist
+            # Accessor read (sharded layout included). Non-dict
+            # shapes (array-shaped checklist.json) read as {} and
+            # skip the candidate instead of crashing discovery.
+            checklist = read_checklist(d)
+            if not checklist:
                 continue
             d_target = str(checklist.get("target_path", "") or "")
             if not d_target:
@@ -590,8 +584,8 @@ def load_understand_context(
     #     would survive a stale-files set containing the canonical
     #     `foo.py` and leak through. The validate dir's checklist is the
     #     ground truth for normalisation. ---
-    _raw_cl = load_json(validate_dir / "checklist.json", max_bytes=64 * 1024 * 1024)
-    validate_checklist = _raw_cl if isinstance(_raw_cl, dict) else {}
+    from core.inventory import read_checklist
+    validate_checklist = read_checklist(validate_dir)
     normalize_context_map(context_map, validate_checklist,
                           target_path=validate_checklist.get("target_path"))
 
@@ -692,7 +686,8 @@ def load_understand_graph_context(
     if not context_map:
         return summary
 
-    checklist = load_json(validate_dir / "checklist.json") or {}
+    from core.inventory import read_checklist
+    checklist = read_checklist(validate_dir)
     normalize_context_map(context_map, checklist,
                           target_path=checklist.get("target_path") or target_path)
     filtered = _filter_context_map(context_map, stale_files)

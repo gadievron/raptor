@@ -231,8 +231,8 @@ def journal_orchestrated_results(
     Returns the number of entries written. Best-effort.
     """
     if checklist is None:
-        from core.json import load_json
-        checklist = load_json(Path(out_dir) / "checklist.json")
+        from core.inventory import read_checklist
+        checklist = read_checklist(Path(out_dir)) or None
     if not isinstance(checklist, dict):
         logger.debug(
             "orchestrated journal: no usable checklist — skipping",

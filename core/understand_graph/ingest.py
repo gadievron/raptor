@@ -61,11 +61,11 @@ def ingest_run(run_dir: Path, target_path: Optional[str] = None,
     :func:`graph_path_for_run`.
     """
     run_dir = Path(run_dir)
-    checklist = load_json(run_dir / "checklist.json")
-    if not isinstance(checklist, dict):
-        # A junk-shaped checklist is not a reason to drop the other
-        # artifacts — but it must never reach .get() calls.
-        checklist = {}
+    # Accessor read (sharded layout + flock): junk shapes read as {}
+    # — not a reason to drop the other artifacts, but they must never
+    # reach .get() calls.
+    from core.inventory import read_checklist
+    checklist = read_checklist(run_dir)
     context_map = load_json(run_dir / "context-map.json")
     variants = load_json(run_dir / "variants.json")
     trace_paths = sorted(run_dir.glob("flow-trace-*.json"))
@@ -956,8 +956,12 @@ def _infer_run_target(run_dir: Path) -> str:
     meta = load_json(run_dir / RUN_METADATA_FILE)
     if isinstance(meta, dict) and meta.get("target_path"):
         return str(meta["target_path"])
-    checklist = load_json(run_dir / "checklist.json")
-    if isinstance(checklist, dict) and checklist.get("target_path"):
+    # Meta accessor: for a sharded checklist this reads the index
+    # manifest only — target resolution must not load a multi-GB
+    # file inventory.
+    from core.inventory import read_checklist_meta
+    checklist = read_checklist_meta(run_dir)
+    if checklist.get("target_path"):
         return str(checklist["target_path"])
     context_map = load_json(run_dir / "context-map.json")
     if isinstance(context_map, dict):
@@ -1237,7 +1241,8 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
             target = target or str(run_meta.get("target_path") or "")
 
         lanes = []
-        if (d / "checklist.json").exists() or (d / "context-map.json").exists():
+        from core.inventory import checklist_exists
+        if checklist_exists(d) or (d / "context-map.json").exists():
             lanes.append(ingest_run)
         if (d / "findings.json").exists():
             lanes.append(ingest_scan_findings)

@@ -410,17 +410,15 @@ def _read_suppressions(digest: RunDigest) -> None:
 
 def _read_coverage(digest: RunDigest) -> None:
     try:
-        from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
         from core.coverage.store_summary import (
             coverage_view,
             store_llm_coverage_percent,
         )
-        from core.json import load_json
+        from core.inventory import read_checklist
         run = digest.run_dir
         view = coverage_view(
             [run],
-            load_json(run / "checklist.json",
-                      max_bytes=RUN_ARTIFACT_MAX_BYTES),
+            read_checklist(run) or None,
             run / "coverage.json",
             annotations_base=run / "annotations",
         )

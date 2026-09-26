@@ -1514,7 +1514,7 @@ class RuleOfTwoTests(unittest.TestCase):
     def test_understand_passes_gate_when_human(self):
         h, s = self._legs(human=True, sandbox=False)
         with h, s, patch(
-            "core.orchestration.agentic_passes.shutil.which", return_value=None
+            "shutil.which", return_value=None
         ):
             result = run_understand_prepass(
                 target=Path("scratch/nonexistent-target"),
@@ -1529,7 +1529,7 @@ class RuleOfTwoTests(unittest.TestCase):
         # The new capability: CI/cron with containment runs the pass.
         h, s = self._legs(human=False, sandbox=True)
         with h, s, patch(
-            "core.orchestration.agentic_passes.shutil.which", return_value=None
+            "shutil.which", return_value=None
         ):
             result = run_understand_prepass(
                 target=Path("scratch/nonexistent-target"),
@@ -1546,7 +1546,7 @@ class RuleOfTwoTests(unittest.TestCase):
             report.write_text('{"results": []}')
             h, s = self._legs(human=False, sandbox=True)
             with h, s, patch(
-                "core.orchestration.agentic_passes.shutil.which",
+                "shutil.which",
                 return_value=None,
             ):
                 result = run_validate_postpass(

@@ -2633,14 +2633,12 @@ def _print_run_provenance(project, run_query) -> None:
 def _print_coverage(project, detailed: bool=False, fail_under=None):
     """Print project coverage — the unified store-backed report (coverage
     state + per-run execution detail), plus the ``--fail-under`` check."""
-    from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
     from core.coverage.store_summary import (
         coverage_view,
         format_store_threshold_result,
         render_coverage,
         store_coverage_threshold_met,
     )
-    from core.json import load_json
 
     base = Path(project.output_dir)
     try:
@@ -2649,16 +2647,14 @@ def _print_coverage(project, detailed: bool=False, fail_under=None):
         import logging as _logging
         _logging.getLogger(__name__).warning("failed to list run dirs: %s", exc)
         run_dirs = []
-    # Checklists live in sandbox-writable run dirs — run-artifact
-    # budget, same class the coverage readers already apply.
-    checklist = load_json(base / "checklist.json",
-                          max_bytes=RUN_ARTIFACT_MAX_BYTES)
-    if not isinstance(checklist, dict):
-        checklist = None
+    # Accessor reads (checklist budget class): flock, project-symlink
+    # resolution, and the sharded checklist/ layout in one place.
+    from core.inventory import read_checklist
+    checklist = read_checklist(base) or None
+    if checklist is None:
         for d in run_dirs:
-            cl = load_json(d / "checklist.json",
-                           max_bytes=RUN_ARTIFACT_MAX_BYTES)
-            if isinstance(cl, dict):
+            cl = read_checklist(d)
+            if cl:
                 checklist = cl
                 break
     store_path = base / "coverage.json"
@@ -3358,9 +3354,9 @@ def _classify_clean_coverage(project, plan):
     hiccup must never block a clean. Returns [] when there's no inventory."""
     try:
         from core.coverage.clean import classify_removal
-        from core.json import load_json
+        from core.inventory import read_checklist
 
-        checklist = load_json(Path(project.output_dir) / "checklist.json")
+        checklist = read_checklist(Path(project.output_dir))
         victims = plan.get("delete_dirs", [])
         if not checklist or not victims:
             return []
@@ -3385,10 +3381,10 @@ def _apply_clean_coverage(project, plan, consequences) -> None:
     try:
         from core.coverage.clean import apply_removal
         from core.coverage.store import CoverageStore, coverage_store_lock
-        from core.json import load_json
+        from core.inventory import read_checklist
 
-        checklist = load_json(Path(project.output_dir) / "checklist.json")
-        if not isinstance(checklist, dict):
+        checklist = read_checklist(Path(project.output_dir))
+        if not checklist:
             return
         cov_path = Path(project.output_dir) / "coverage.json"
         # Lock the whole read-modify-write: a run completing mid-clean snapshots

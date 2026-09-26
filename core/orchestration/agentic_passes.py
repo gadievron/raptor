@@ -36,7 +36,6 @@ them into ran=False.
 from __future__ import annotations
 
 import logging
-import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -351,8 +350,12 @@ def _run_validate_postpass_unsafe(
         # as the /understand bridge's path validation. The mtime-based
         # TTL on the validate side rejects checklists older than 1h
         # (stale source drift).
+        from core.inventory import checklist_exists
         agentic_checklist = agentic_out_dir / "checklist.json"
-        if agentic_checklist.is_file():
+        # Either on-disk form qualifies: the pointer names the SLOT
+        # path, and the /validate reader resolves single-file vs
+        # sharded itself.
+        if checklist_exists(agentic_out_dir):
             save_json(
                 validate_dir / "parent-checklist-pointer.json",
                 {
@@ -436,13 +439,18 @@ def _provision_understand_checklist(target: Path, agentic_out_dir: Path,
     Falls back to running raptor-build-checklist when no agentic checklist
     is available (e.g. build_inventory failed earlier).
     """
-    agentic_checklist = agentic_out_dir / "checklist.json"
-    if agentic_checklist.exists():
+    from core.inventory import checklist_exists, read_checklist, save_checklist
+    if checklist_exists(agentic_out_dir):
         try:
-            shutil.copyfile(agentic_checklist, understand_dir / "checklist.json")
-            logger.info("reused agentic checklist for understand pre-pass (skipped reparse)")
-            return True
-        except OSError as e:
+            # Accessor round-trip instead of a byte copy: reads either
+            # on-disk form (single-file or sharded) and re-emits the
+            # right form in the understand dir.
+            data = read_checklist(agentic_out_dir)
+            if data:
+                save_checklist(understand_dir, data)
+                logger.info("reused agentic checklist for understand pre-pass (skipped reparse)")
+                return True
+        except (OSError, RuntimeError) as e:
             logger.warning("checklist copy failed (%s); falling back to fresh build", e)
     return _build_checklist_via_libexec(target, understand_dir)
 
@@ -685,15 +693,15 @@ def _enrich_agentic_checklist(agentic_out_dir: Path, context_map_path: Path) -> 
     mismatch (LLM produced absolute paths instead of relative-from-target,
     or some other drift) and would otherwise be a silent no-op.
     """
-    checklist_path = agentic_out_dir / "checklist.json"
-    if not checklist_path.exists():
-        logger.info("agentic checklist not found at %s; skipping enrichment", checklist_path)
+    from core.inventory import checklist_exists, read_checklist
+    if not checklist_exists(agentic_out_dir):
+        logger.info("agentic checklist not found in %s; skipping enrichment", agentic_out_dir)
         return False
     try:
         from core.orchestration.understand_bridge import enrich_checklist
-        checklist = load_json(checklist_path)
+        checklist = read_checklist(agentic_out_dir)
         context_map = load_json(context_map_path)
-        if not isinstance(checklist, dict) or not isinstance(context_map, dict):
+        if not checklist or not isinstance(context_map, dict):
             logger.warning("checklist or context_map not a JSON object; skipping enrichment")
             return False
 
@@ -771,8 +779,8 @@ def _mark_unreachable_low_priority(
     Returns the count of functions marked low-priority. Best-
     effort; failures logged at debug.
     """
-    checklist_path = agentic_out_dir / "checklist.json"
-    if not checklist_path.exists():
+    from core.inventory import checklist_exists
+    if not checklist_exists(agentic_out_dir):
         return 0
     counted = {"marked": 0}
     try:
@@ -841,8 +849,8 @@ def run_reachability_prepass(
     non-None ``skipped_reason``.
     """
     t0 = time.monotonic()
-    checklist_path = agentic_out_dir / "checklist.json"
-    if not checklist_path.exists():
+    from core.inventory import checklist_exists
+    if not checklist_exists(agentic_out_dir):
         return ReachabilityPrepassResult(
             ran=False,
             skipped_reason="agentic checklist not yet built",

@@ -47,11 +47,10 @@ from .tree_class import NON_PRODUCTION_TREE_CLASSES
 
 logger = logging.getLogger(__name__)
 
-# Byte budgets: coverage/diff sidecars are findings-class documents;
-# the checklist is the largest artifact class (measured up to ~36 MB
-# on big targets — 256 MiB mirrors the coverage-store budget).
+# Byte budgets: coverage/diff sidecars are findings-class documents.
+# (Checklist reads go through core.inventory.read_checklist, which
+# owns the checklist budget class.)
 _MAX_COVERAGE_BYTES = 64 * 1024 * 1024
-_MAX_CHECKLIST_BYTES = 256 * 1024 * 1024
 # Flow-trace artifacts are RAPTOR-written run output, parsed in a
 # glob loop — the audit-artifact budget class.
 _MAX_FLOW_TRACE_BYTES = 64 * 1024 * 1024
@@ -489,19 +488,26 @@ def _latest_sibling_checklist(
     except Exception:
         logger.debug("sibling run discovery failed", exc_info=True)
         return None
+    from core.inventory import read_checklist
     best: Path | None = None
     best_mtime = -1.0
     for d in dirs:
-        p = d / "checklist.json"
-        try:
-            mtime = p.stat().st_mtime
-        except OSError:
+        # Slot timestamp covers BOTH on-disk forms: the single file,
+        # or the sharded layout's index manifest.
+        mtime: float | None = None
+        for probe in (d / "checklist.json", d / "checklist" / "index.json"):
+            try:
+                mtime = probe.stat().st_mtime
+                break
+            except OSError:
+                continue
+        if mtime is None:
             continue
         if mtime > best_mtime:
-            best, best_mtime = p, mtime
+            best, best_mtime = d, mtime
     if best is None:
         return None
-    return load_json(best, max_bytes=_MAX_CHECKLIST_BYTES)
+    return read_checklist(best) or None
 
 
 def ensure_inventory_diff(

@@ -215,7 +215,11 @@ class TestRunAuditPostpass:
         })
         out_dir = tmp_path / "agentic_out"
         out_dir.mkdir()
-        (out_dir / "checklist.json").write_text("{}", encoding="utf-8")
+        # A minimal REAL inventory: the hand-off is an accessor
+        # round-trip now, and an empty/unreadable source (reads as
+        # {}) is deliberately not copied.
+        (out_dir / "checklist.json").write_text(
+            '{"files": []}', encoding="utf-8")
 
         phase = run_audit_postpass(_args(), tmp_path / "target", out_dir)
 

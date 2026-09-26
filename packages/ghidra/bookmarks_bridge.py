@@ -217,9 +217,9 @@ def write_checklist_from_bookmarks(
         return 0
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    checklist_path = output_dir / "checklist.json"
 
-    if checklist_path.is_file():
+    from core.inventory import checklist_exists, save_checklist
+    if checklist_exists(output_dir):
         try:
             from core.json import load_json
 
@@ -255,7 +255,9 @@ def write_checklist_from_bookmarks(
                 )
                 existing["total_functions"] = existing["total_items"]
                 existing["_bookmark_import"] = True
-                save_json(checklist_path, existing)
+                # Accessor write: retires a superseded sharded layout
+                # so the discriminator serves THIS write.
+                save_checklist(output_dir, existing)
                 return len(items)
         except (json.JSONDecodeError, OSError):
             pass
@@ -279,7 +281,7 @@ def write_checklist_from_bookmarks(
         "_bookmark_import": True,
     }
 
-    save_json(checklist_path, checklist)
+    save_checklist(output_dir, checklist)
 
     logger.info(
         "bookmarks bridge: %d function(s) → checklist.json",

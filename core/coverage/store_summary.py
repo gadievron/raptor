@@ -438,17 +438,14 @@ def format_file_breakdown(rows: list[dict[str, Any]], max_files: int = 40) -> st
 def render_run_coverage(run_dir) -> str | None:
     """Single-run convenience wrapper over :func:`render_coverage` (used by
     /agentic and standalone /scan end-of-run printing). Read-only."""
-    from core.json import load_json
-
-    from .record import RUN_ARTIFACT_MAX_BYTES
+    from core.inventory import read_checklist
 
     run = Path(run_dir)
     return render_coverage(
         [run],
-        # Run-dir artifact — shared intake budget like every other
-        # run-dir read (closure test derives the reader set).
-        load_json(run / "checklist.json",
-                  max_bytes=RUN_ARTIFACT_MAX_BYTES),
+        # Accessor read: flock + project-symlink resolution + the
+        # sharded checklist/ layout, under the checklist budget class.
+        read_checklist(run),
         run / "coverage.json",
         annotations_base=run / "annotations",
     )
