@@ -1252,12 +1252,19 @@ def _iter_verdict_rows(
     strict: bool = False,
 ):
     """Yield ``(memory_id, verdict, source_hash, ts, mac_verified,
-    note)`` for every finding-verdict row stored for one finding
-    (``note`` = the free-form audit text after the marker fields —
-    the operator provenance stamp).
+    note, status)`` for every finding-verdict row stored for one
+    finding (``note`` = the free-form audit text after the marker
+    fields — the operator provenance stamp; ``status`` = the server's
+    lifecycle status string, ``""`` when the server reports none).
+    Rows the server has DEPRECATED (its reversible soft-delete — what
+    :func:`forget_finding_verdicts` performs) are skipped: a cleared
+    row must neither re-list as live nor be re-cleared.
 
     Deterministic enumeration (bounded id-bearing listing filtered on
-    the repo's fp domain + the finding fingerprint), NOT semantic
+    the repo's fp domain + the finding fingerprint — the domain is
+    also requested server-side, so the walk pages the repo's rows
+    rather than the whole store; the client-side domain check stays
+    as belt-and-braces for servers that ignore it), NOT semantic
     recall — an operator clearing a verdict must see every row, not
     the top-k nearest. Bounded like raptor-sage's memory walk (page
     cap plus per-id dedupe), but incompleteness raises
@@ -1277,7 +1284,8 @@ def _iter_verdict_rows(
     seen: set[str] = set()
     offset = 0
     for _ in range(_OPERATOR_LIST_MAX_PAGES):
-        resp = client.list_memories(limit=_OPERATOR_LIST_PAGE, offset=offset)
+        resp = client.list_memories(
+            limit=_OPERATOR_LIST_PAGE, offset=offset, domain=domain)
         if resp is None:
             raise VerdictWalkTruncated(
                 "SAGE memory listing failed mid-walk")
@@ -1295,6 +1303,12 @@ def _iter_verdict_rows(
                 continue
             seen.add(mid)
             new_rows += 1
+            status = getattr(m, "status", None)
+            status_str = str(getattr(status, "value", status) or "")
+            if status_str.lower() == "deprecated":
+                # The server's soft-delete: a cleared row must
+                # neither re-list as live nor be re-cleared.
+                continue
             if getattr(m, "domain_tag", None) != domain:
                 continue
             text, token = rowmac.strip(str(getattr(m, "content", "") or ""))
@@ -1315,7 +1329,7 @@ def _iter_verdict_rows(
             }
             mac_ok = _row_mac_ok("finding_verdict", fields, token)
             note = text[match.end():].strip()
-            yield (mid, verdict, src, ts, mac_ok, note)
+            yield (mid, verdict, src, ts, mac_ok, note, status_str)
         offset += len(memories)
         if new_rows == 0:
             if has_more:
@@ -1352,10 +1366,12 @@ def list_finding_verdict_rows(
     """Every stored verdict row for one finding, with memory ids.
 
     Returns ``None`` when SAGE is unavailable (distinct from ``[]`` =
-    reachable but no rows). Each row:
-    ``{memory_id, verdict, source_hash, ts, mac_verified, note}`` —
-    ``note`` carries the row's free-form audit text (the operator
-    provenance stamp), so where a verdict came from is inspectable.
+    reachable but no rows). Each row: ``{memory_id, verdict,
+    source_hash, ts, mac_verified, note, status}`` — ``note`` carries
+    the row's free-form audit text (the operator provenance stamp),
+    so where a verdict came from is inspectable; ``status`` is the
+    server's lifecycle status (``""`` when unreported). Deprecated
+    rows are excluded (see :func:`_iter_verdict_rows`).
     Raises :class:`VerdictWalkTruncated` when the enumeration could
     not cover the store — callers must report, never treat the
     partial view as the store's contents. (Read path: a legacy
@@ -1376,8 +1392,9 @@ def list_finding_verdict_rows(
                 "ts": ts,
                 "mac_verified": mac_ok,
                 "note": note,
+                "status": status,
             }
-            for mid, verdict, src, ts, mac_ok, note
+            for mid, verdict, src, ts, mac_ok, note, status
             in _iter_verdict_rows(
                 client, repo_path, rule_id, file_path, function)
         ]
@@ -1433,7 +1450,7 @@ def forget_finding_verdicts(
         return None
     cleared = 0
     failed = 0
-    for mid, verdict, _src, _ts, _mac_ok, _note in rows:
+    for mid, verdict, _src, _ts, _mac_ok, _note, _status in rows:
         if verdicts is not None and verdict not in verdicts:
             continue
         if client.forget(mid, reason=reason):

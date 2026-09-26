@@ -191,6 +191,58 @@ class TestSageClientWithMock(unittest.TestCase):
             _restore_sdk(client_mod, snapshot)
 
     @patch("core.sage.client._use_direct_embed", return_value=False)
+    def test_list_memories_forwards_domain(self, _mock_direct):
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            _, mock_instance = _install_mock_sdk(client_mod)
+            from core.sage.client import SageClient
+            from core.sage.config import SageConfig
+
+            sc = SageClient(SageConfig(enabled=True))
+            mock_instance.list_memories.return_value = "page"
+            self.assertEqual(
+                sc.list_memories(limit=5, offset=10, domain="d"), "page")
+            mock_instance.list_memories.assert_called_once_with(
+                limit=5, offset=10, domain="d")
+            # No domain -> the kwarg is omitted entirely.
+            mock_instance.list_memories.reset_mock()
+            sc.list_memories(limit=5, offset=10)
+            mock_instance.list_memories.assert_called_once_with(
+                limit=5, offset=10)
+        finally:
+            _restore_sdk(client_mod, snapshot)
+
+    @patch("core.sage.client._use_direct_embed", return_value=False)
+    def test_list_memories_domain_falls_back_on_legacy_sdk(
+            self, _mock_direct):
+        # An SDK that predates server-side domain filtering raises
+        # TypeError on the kwarg; the wrapper retries unfiltered so
+        # the caller's client-side filter still sees every row.
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            _, mock_instance = _install_mock_sdk(client_mod)
+            from core.sage.client import SageClient
+            from core.sage.config import SageConfig
+
+            sc = SageClient(SageConfig(enabled=True))
+            calls = []
+
+            def legacy(limit=200, offset=0):
+                calls.append((limit, offset))
+                return "page"
+
+            mock_instance.list_memories = legacy
+            self.assertEqual(
+                sc.list_memories(limit=5, offset=0, domain="d"), "page")
+            self.assertEqual(calls, [(5, 0)])
+        finally:
+            _restore_sdk(client_mod, snapshot)
+
+    @patch("core.sage.client._use_direct_embed", return_value=False)
     def test_propose_auto_embeds(self, _mock_direct):
         import core.sage.client as client_mod
 

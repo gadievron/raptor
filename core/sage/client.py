@@ -464,7 +464,12 @@ class SageClient:
             self._query_cache[key] = result
         return result
 
-    def list_memories(self, limit: int = 200, offset: int = 0) -> Any | None:
+    def list_memories(
+        self,
+        limit: int = 200,
+        offset: int = 0,
+        domain: str | None = None,
+    ) -> Any | None:
         """One page of the server's memory listing (SDK passthrough).
 
         Returns the raw SDK response (``.memories`` = memory objects
@@ -473,11 +478,25 @@ class SageClient:
         ``None`` when SAGE is unavailable or the call fails. Needed by
         id-bearing operator operations (forget a specific row) — the
         semantic :meth:`query` deliberately drops ids.
+
+        ``domain`` (when given) asks the server to page only that
+        domain's rows. A legacy SDK without the parameter gets one
+        retry without it — callers filter client-side on
+        ``domain_tag`` anyway, so they still see every row they asked
+        about, just across more pages.
         """
         client = self._get_client()
         if client is None:
             return None
         try:
+            if domain is not None:
+                try:
+                    return client.list_memories(
+                        limit=limit, offset=offset, domain=domain)
+                except TypeError:
+                    # Legacy SDK signature — page unfiltered; the
+                    # caller's client-side domain check still applies.
+                    pass
             return client.list_memories(limit=limit, offset=offset)
         except Exception as e:  # noqa: BLE001 — degrade, never raise into hooks
             logger.warning("SAGE list_memories failed: %s", e)
