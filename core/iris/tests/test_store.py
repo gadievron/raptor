@@ -822,3 +822,67 @@ class TestAssumptionEvictionAtPersist:
         assert files == ["", "live.c"], (
             f"expected gone.c evicted, empty-file kept: {files}"
         )
+
+
+class TestStorePinRouting:
+    """``_project_dir`` follows the RUN PIN state table
+    (core/run/pin.py): pinned ``project=P`` → P's store wherever the
+    run dir physically sits; authoritative pin-null (explicitly
+    projectless) → run-local, even inside a project-shaped parent;
+    pin-less legacy run dirs keep the documented parent convention."""
+
+    def _register(self, monkeypatch, root, name):
+        from pathlib import Path
+
+        from core.project.project import ProjectManager
+        projects_dir = root / "registry"
+        monkeypatch.setattr(
+            "core.project.project.PROJECTS_DIR", projects_dir)
+        target = root / "code"
+        target.mkdir(exist_ok=True)
+        proj_out = root / "out" / name
+        ProjectManager().create(name, str(target),
+                                output_dir=str(proj_out))
+        return Path(proj_out), target
+
+    def test_pinned_run_writes_project_store(self, tmp_path, monkeypatch):
+        from core.json import save_json
+        proj_out, target = self._register(monkeypatch, tmp_path, "pinproj")
+        run_dir = tmp_path / "elsewhere" / "run"   # e.g. an --out run
+        run_dir.mkdir(parents=True)
+        save_json(run_dir / ".raptor-run.json",
+                  {"project": "pinproj", "project_source": "argv",
+                   "target_path": str(target)})
+
+        save_specs(run_dir, [_make_spec()])
+
+        assert (proj_out / "iris-specs" / "specs.json").is_file()
+        assert not (run_dir / "iris-specs").exists()
+        assert len(load_specs(run_dir)) == 1
+
+    def test_null_pin_keeps_specs_run_local(self, tmp_path, monkeypatch):
+        """An explicitly projectless run must not leak specs into the
+        project whose output dir happens to contain it — containment
+        inference is forbidden for authoritative null pins."""
+        from core.json import save_json
+        proj_out, target = self._register(monkeypatch, tmp_path, "hostproj")
+        run_dir = proj_out / "audit_20990101_000000"
+        run_dir.mkdir(parents=True)
+        save_json(run_dir / ".raptor-run.json",
+                  {"project": None, "project_source": "argv",
+                   "target_path": str(target)})
+
+        save_specs(run_dir, [_make_spec()])
+
+        assert (run_dir / "iris-specs" / "specs.json").is_file()
+        assert not (proj_out / "iris-specs").exists()
+        assert len(load_specs(run_dir)) == 1
+
+    def test_legacy_pinless_dir_keeps_parent_convention(self, tmp_path):
+        run_dir = tmp_path / "proj" / "run_001"    # no .raptor-run.json
+        run_dir.mkdir(parents=True)
+
+        save_specs(run_dir, [_make_spec()])
+
+        assert (tmp_path / "proj" / "iris-specs" / "specs.json").is_file()
+        assert len(load_specs(run_dir)) == 1
