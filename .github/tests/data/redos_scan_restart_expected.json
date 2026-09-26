@@ -2670,13 +2670,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/source_intel/adapter.py\u001f_RETURN_VALUE_RE": {
-   "digests": [
-    "623aa51b63a9"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "packages/source_intel/adapter.py\u001fassign_pat": {
    "digests": [
     "ee423960caa2"

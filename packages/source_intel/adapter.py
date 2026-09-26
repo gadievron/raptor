@@ -2158,8 +2158,15 @@ def _count_statements(body_lines: list) -> int:
 # value ('return  ;'), which previously appended an empty normalized
 # value and now skips like the bare 'return;' the docstring already
 # excludes.
+# The interior span is bounded ({0,400}): unbounded, a line that
+# repeats 'return '-shaped heads with the ';' withheld makes every
+# planted head re-scan the rest of the line — quadratic on a
+# hostile line (measured exp 1.98; bounded, exp 1.0).  Both
+# directions: raising the bound re-opens per-head rescan cost;
+# lowering it drops long-but-real one-line return expressions from
+# the value census (402 chars covers any sane spelling).
 _RETURN_VALUE_RE = re.compile(
-    r"\breturn\s+([^;\s](?:[^;]*[^;\s])?)\s*;",
+    r"\breturn\s+([^;\s](?:[^;]{0,400}[^;\s])?)\s*;",
 )
 
 
