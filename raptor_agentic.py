@@ -102,6 +102,56 @@ def _kill_process_tree(process: "subprocess.Popen") -> None:
         process.kill()
 
 
+#: Filename of the cross-file taint engine's SARIF artifact
+#: (== core.taint.run.SARIF_FILENAME, pinned by test; the constant is
+#: local so argument parsing never imports the engine). Excluded from
+#: the --reanalyze fallback glob by EXACT name: widening this to a
+#: pattern would silently drop operator-imported artifacts, while a
+#: rename on the emission side without this constant re-opens the
+#: import-lane pull.
+_TAINT_SARIF_FILENAME = "crossfile-taint.sarif"
+
+
+def _reanalyze_sarif_selection(
+    reanalyze_dir: Path, prev_meta: dict,
+) -> list[str]:
+    """SARIF files a --reanalyze run re-imports from a previous run
+    directory: the run-recorded ``extra.sarif_files`` when present,
+    else a ``*.sarif`` directory glob.
+
+    The fallback glob excludes the taint engine's own artifact —
+    ``crossfile-taint.sarif`` is a producer channel consumed by the
+    post-scan merge (a rerun with --taint-crossfile regenerates it),
+    not an external scanner result; pulling it into the import lane
+    would re-ingest engine findings as imported scanner findings.
+    Exclusions are logged, never silent. A metadata-recorded list is
+    the original run's explicit statement of its scanner outputs and
+    is honoured verbatim.
+    """
+    prev_sarif: list[str] = []
+    for s in prev_meta.get("extra", {}).get("sarif_files", []):
+        candidate = reanalyze_dir / Path(s).name
+        if candidate.exists():
+            prev_sarif.append(str(candidate))
+        else:
+            logger.warning("--reanalyze: SARIF file missing: %s", candidate)
+    if not prev_sarif:
+        excluded = 0
+        for f in sorted(reanalyze_dir.glob("*.sarif")):
+            if f.name == _TAINT_SARIF_FILENAME:
+                excluded += 1
+                continue
+            prev_sarif.append(str(f))
+        if excluded:
+            logger.info(
+                "--reanalyze: excluded %s (cross-file taint artifact — "
+                "rerun with --taint-crossfile to regenerate it; the "
+                "import lane is for scanner SARIF)",
+                _TAINT_SARIF_FILENAME,
+            )
+    return prev_sarif
+
+
 def _count_dropped_suppressions(path: Path) -> int:
     """Count the records in ``suppressions.jsonl`` that describe an
     actual drop.
@@ -2646,15 +2696,7 @@ def main() -> int:
             )
         if not args.repo:
             args.repo = prev_target
-        prev_sarif = []
-        for s in prev_meta.get("extra", {}).get("sarif_files", []):
-            candidate = reanalyze_dir / Path(s).name
-            if candidate.exists():
-                prev_sarif.append(str(candidate))
-            else:
-                logger.warning("--reanalyze: SARIF file missing: %s", candidate)
-        if not prev_sarif:
-            prev_sarif.extend(str(f) for f in sorted(reanalyze_dir.glob("*.sarif")))
+        prev_sarif = _reanalyze_sarif_selection(reanalyze_dir, prev_meta)
         if not prev_sarif:
             parser.error(f"--reanalyze: no SARIF files found in {reanalyze_dir}")
         args.sarif = (args.sarif or []) + prev_sarif
