@@ -45,6 +45,23 @@ def build_provenance_map(
     edges = context_map.get("call_edges") or []
     if not entries or not edges:
         return {}
+    # A truncated edge list cannot support a NEGATIVE conclusion:
+    # "reachable ONLY from trusted entry points" needs the complete
+    # graph — a dropped untrusted-entry path reads as trusted-only
+    # and SUPPRESSES the finding (verdict-affecting, observed exposure
+    # on kernel-scale runs where the 200k cap kept 26% of the graph).
+    # The sentinel below joins every reaching set so both consumers
+    # (provenance_all_trusted; the prompt's "Do not flag" block)
+    # degrade to the untrusted-tags-only rendering, which is
+    # fail-safe. Positive (untrusted) tags stay: more edges can only
+    # ADD reachers, never remove them. Cost direction, stated
+    # both ways: under truncation, genuinely trusted-only functions
+    # lose the auto-clean veto (design-pattern-CWE promotion still
+    # needs its trust-boundary receipt; the clean-direction override
+    # only ever applied to detection-only evidence) — a bounded FP
+    # increase bought deliberately, because the suppression it
+    # prevents is a silent wrong-direction verdict.
+    truncated = bool(context_map.get("call_edges_truncated"))
 
     ep_trust = _classify_entry_points(entries, threat_model)
 
@@ -56,6 +73,12 @@ def build_provenance_map(
         if callee_name:
             adj.setdefault(caller_key, []).append(f"{callee_file}:{callee_name}")
 
+    _TRUNC_SENTINEL = {
+        "ep_id": "call-graph-truncated",
+        "ep_name": "call graph truncated — provenance incomplete",
+        "trust": "unknown",
+        "ep_type": "incomplete-graph",
+    }
     result: dict[str, list[dict[str, str]]] = {}
     for ep in entries:
         if not isinstance(ep, dict):
@@ -84,6 +107,9 @@ def build_provenance_map(
                 if neighbor not in visited:
                     queue.append(neighbor)
 
+    if truncated:
+        for reaching in result.values():
+            reaching.append(dict(_TRUNC_SENTINEL))
     return result
 
 

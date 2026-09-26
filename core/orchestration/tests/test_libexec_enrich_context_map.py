@@ -202,3 +202,18 @@ class TestSinkStageUsesStageFailedChokepoint:
         # installed.
         assert "\x1b" not in err
         assert "\x07" not in err
+
+
+def test_combined_shim_routes_call_edges_to_store():
+    """Sibling-drift pin: the combined shim must pass the same store
+    args its per-stage sibling passes — an unrouted combined shim was
+    the producer whose maps never ingested."""
+    from pathlib import Path
+    shim = Path(__file__).resolve().parents[3] / (
+        "libexec/raptor-enrich-context-map")
+    src = shim.read_text()
+    call = src[src.find("n_edges = enrich_with_call_edges"):]
+    call = call[:call.find(")")]
+    assert "graph_store=graph_store" in call
+    assert "run_dir=understand_dir" in call
+    assert "target_path=" in call

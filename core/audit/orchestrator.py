@@ -4817,18 +4817,35 @@ def _load_call_edges_from_store(
                     "call-edge bootstrap under incomplete store lane "
                     "failed", exc_info=True,
                 )
-            # The bootstrap rebuilds the edge array and clears the
-            # routing markers like any rebuild; restore the store
-            # marker — it still names the snapshot this union's
-            # verified rows came from (in-memory only, as above).
-            context_map["call_edges_store"] = marker
+            # A ROUTED bootstrap ingests a NEW snapshot and writes
+            # its own fresh marker — restoring the old one over it
+            # would point every later consult at a superseded
+            # generation (the store answers None for non-latest
+            # snapshots), killing the replay on exactly the
+            # incomplete-lane path it serves. Only restore when the
+            # bootstrap wrote none (storeless bootstrap / no lane).
+            context_map.setdefault("call_edges_store", marker)
         # Union, never replace: an incomplete verified subset may be
         # smaller than the map's own hint-tier list, and negative
         # reachability stays inconclusive under the truncation marker
         # regardless — dropping hint edges would only cost the
-        # non-verdict consumers.
+        # non-verdict consumers. Deduplicated: a repeated consult
+        # must not double the lane (at kernel scale a duplicate
+        # union retains ~2x the lean rows for the whole run).
         existing = context_map.get("call_edges") or []
-        context_map["call_edges"] = list(existing) + list(lane["edges"])
+        seen = {
+            (e.get("caller_file"), e.get("caller"),
+             e.get("callee"), e.get("callee_file"))
+            for e in existing if isinstance(e, dict)
+        }
+        merged = list(existing)
+        for e in lane["edges"]:
+            key = (e.get("caller_file"), e.get("caller"),
+                   e.get("callee"), e.get("callee_file"))
+            if key not in seen:
+                seen.add(key)
+                merged.append(e)
+        context_map["call_edges"] = merged
         context_map["call_edges_truncated"] = True
         logger.warning(
             "call edges: only %d of %d minted mechanical edge row(s) "
@@ -4839,6 +4856,65 @@ def _load_call_edges_from_store(
             lane.get("unverified", 0),
         )
     return True
+
+
+def _prep_call_edges(context_map: dict[str, Any], config,
+                     checklist: dict[str, Any] | None) -> None:
+    """The prep seam's call-edge flow, in one testable unit.
+
+    Order matters and is behavior: (1) store lane first — an existing
+    marker's complete verified set replaces any capped list before a
+    bootstrap is even considered; (2) the checklist bootstrap (either
+    the store-lane callback or the storeless fallback) ROUTES to the
+    graph store — the audit's in-memory bootstrap was the one
+    producer that never ingested, so an audit-built map carried the
+    capped 26% of a kernel graph forever; (3) consult LAST, after
+    whichever bootstrap ran — a bootstrap that just ingested leaves
+    the fresh marker beside a still-capped in-memory list, and a
+    consult placed only inside the first block never fired on exactly
+    the fresh-map kernel scenario this seam exists for. The complete
+    verified lane replaces the capped list and lifts the truncation
+    markers for every in-audit consumer; an incomplete lane unions
+    (deduplicated) and keeps truncation semantics.
+    """
+    if _call_edges_need_bootstrap(context_map) or context_map.get(
+        "call_edges_truncated"
+    ):
+        from core.orchestration.context_map_callgraph import (
+            enrich_with_call_edges as _enrich_call_edges,
+        )
+
+        _cg_store = _graph_store_for_config(config)
+
+        def _routed_bootstrap() -> int:
+            return _enrich_call_edges(
+                context_map, checklist=checklist,
+                graph_store=_cg_store, run_dir=config.out_dir,
+                target_path=str(config.target_path or ""),
+            )
+
+        _load_call_edges_from_store(
+            context_map, config, bootstrap=_routed_bootstrap,
+        )
+    if _call_edges_need_bootstrap(context_map):
+        from core.orchestration.context_map_callgraph import (
+            enrich_with_call_edges,
+        )
+
+        edge_count = enrich_with_call_edges(
+            context_map,
+            checklist=checklist,
+            graph_store=_graph_store_for_config(config),
+            run_dir=config.out_dir,
+            target_path=str(config.target_path or ""),
+        )
+        if edge_count:
+            logger.debug(
+                "bootstrapped %d call edges from checklist", edge_count)
+    if context_map.get("call_edges_store") and context_map.get(
+        "call_edges_truncated"
+    ):
+        _load_call_edges_from_store(context_map, config)
 
 
 def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
@@ -4962,36 +5038,8 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         context_map = _try_understand_bridge(config)
     if context_map is None:
         context_map = {}
-    if not binary_mode and (
-        _call_edges_need_bootstrap(context_map)
-        or context_map.get("call_edges_truncated")
-    ):
-        # Store lane first: the project graph store holds the FULL
-        # verified mechanical edge set beyond the in-artifact cap.
-        # No lane -> the map is untouched and the pre-existing paths
-        # below run unchanged (store absent asserts nothing). An
-        # incomplete lane runs the same checklist bootstrap as below
-        # (via the callback) before unioning, so degraded-lane runs
-        # keep today's hint coverage.
-        from core.orchestration.context_map_callgraph import (
-            enrich_with_call_edges as _enrich_call_edges,
-        )
-
-        _load_call_edges_from_store(
-            context_map, config,
-            bootstrap=lambda: _enrich_call_edges(
-                context_map, checklist=checklist,
-            ),
-        )
-    if _call_edges_need_bootstrap(context_map) and not binary_mode:
-        from core.orchestration.context_map_callgraph import enrich_with_call_edges
-
-        edge_count = enrich_with_call_edges(
-            context_map,
-            checklist=checklist,
-        )
-        if edge_count:
-            logger.debug("bootstrapped %d call edges from checklist", edge_count)
+    if not binary_mode:
+        _prep_call_edges(context_map, config, checklist)
     if not context_map.get("crypto_inventory"):
         # Bare-audit fallback (A9): without a prior /understand map the
         # crypto API packs never fed the audit — per-function contexts
