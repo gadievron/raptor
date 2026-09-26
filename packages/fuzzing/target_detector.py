@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import re
 import shutil
 import struct
 import zipfile
@@ -546,6 +547,100 @@ def _pe_arch(path: Path) -> str:
     return _COFF_MACHINE_ARCH.get(machine, f"machine_{machine:#x}")
 
 
+# cargo-fuzz layout detection ------------------------------------------
+
+# Fuzz-target names double as cargo bin names and path components on
+# the run side; the enumeration vets them to this charset so a scanned
+# repo's file names stay inert in hints, globs, and command lines.
+_CARGO_FUZZ_TARGET_NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# Enumeration bound — fuzz_targets/ is scanned-repo content, so a
+# planted directory with millions of entries must not balloon hints or
+# plan output. Real projects carry a handful of targets.
+_MAX_CARGO_FUZZ_TARGETS = 256
+
+
+def find_cargo_fuzz_dir(crate_dir: Path) -> Path | None:
+    """Locate the cargo-fuzz workspace for *crate_dir*.
+
+    The conventional layout is a ``fuzz/`` child holding its own
+    ``Cargo.toml`` plus a ``fuzz_targets/`` directory (what
+    ``cargo fuzz init`` scaffolds). The crate directory itself also
+    qualifies, so an operator can point /fuzz straight at the fuzz
+    workspace. Returns the RESOLVED path, or None when neither
+    matches.
+
+    Containment: a candidate — or its ``fuzz_targets`` directory —
+    that resolves OUTSIDE the resolved crate directory is refused with
+    a logged reason. The fuzz workspace receives a build-phase write
+    grant downstream and the target enumeration walks ``fuzz_targets``,
+    so a repo-planted symlink at either level would otherwise steer
+    the grant or the enumeration at an arbitrary tree elsewhere on the
+    host.
+    """
+    base = Path(crate_dir)
+    try:
+        base_resolved = base.resolve()
+    except OSError:
+        return None
+
+    def _escapes(path: Path) -> Path | None:
+        """The resolved path when it escapes the crate, else None."""
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return path
+        if resolved != base_resolved and \
+                base_resolved not in resolved.parents:
+            return resolved
+        return None
+
+    for candidate in (base / "fuzz", base):
+        if not ((candidate / "Cargo.toml").is_file()
+                and (candidate / "fuzz_targets").is_dir()):
+            continue
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        for level, escaped_to in (
+            (candidate, _escapes(candidate)),
+            (candidate / "fuzz_targets",
+             _escapes(candidate / "fuzz_targets")),
+        ):
+            if escaped_to is not None:
+                logger.warning(
+                    "cargo-fuzz layout at %s refused: %s resolves to "
+                    "%s, outside the crate %s — a symlinked workspace "
+                    "or fuzz_targets dir would steer the build's "
+                    "write grant or the target enumeration off the "
+                    "crate",
+                    candidate, level, escaped_to, base_resolved,
+                )
+                break
+        else:
+            return resolved
+    return None
+
+
+def list_cargo_fuzz_targets(fuzz_dir: Path) -> list[str]:
+    """Fuzz-target names under ``<fuzz_dir>/fuzz_targets`` (``.rs``
+    stems), sorted, charset-vetted, symlink-refusing, and bounded —
+    the tree is the scanned repo's own content."""
+    targets: list[str] = []
+    try:
+        entries = sorted((Path(fuzz_dir) / "fuzz_targets").iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        if len(targets) >= _MAX_CARGO_FUZZ_TARGETS:
+            break
+        if entry.suffix != ".rs" or entry.is_symlink() or not entry.is_file():
+            continue
+        if _CARGO_FUZZ_TARGET_NAME_RE.fullmatch(entry.stem):
+            targets.append(entry.stem)
+    return targets
+
+
 def _detect_rust_crate(crate_dir: Path) -> TargetInfo:
     has_cargo = shutil.which("cargo") is not None
     has_cargo_fuzz = shutil.which("cargo-fuzz") is not None
@@ -563,10 +658,21 @@ def _detect_rust_crate(crate_dir: Path) -> TargetInfo:
         info.blockers.append(
             "cargo-fuzz not installed. Install with: cargo install cargo-fuzz"
         )
-    info.hints.append(
-        "cargo-fuzz scaffolds harnesses in fuzz/fuzz_targets/. "
-        "Use 'cargo fuzz init' if not already set up."
-    )
+    fuzz_dir = find_cargo_fuzz_dir(crate_dir)
+    targets = list_cargo_fuzz_targets(fuzz_dir) if fuzz_dir else []
+    if targets:
+        shown = ", ".join(targets[:8]) + (", ..." if len(targets) > 8 else "")
+        info.hints.append(
+            f"cargo-fuzz layout detected ({len(targets)} fuzz "
+            f"target(s)): {shown}. Select one with --fuzz-target "
+            "<name>; a single target is auto-selected."
+        )
+    else:
+        info.hints.append(
+            "No fuzz targets found. cargo-fuzz scaffolds harnesses in "
+            "fuzz/fuzz_targets/ — use 'cargo fuzz init' (and "
+            "'cargo fuzz add <name>') if not already set up."
+        )
     return info
 
 
