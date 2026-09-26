@@ -146,6 +146,49 @@ Binary checklist items additionally journal which refutation gates
 could not run on them, so "no refutation" is distinguishable from
 "gate never ran".
 
+Binary items get one refutation gate of their own: the disassembly
+cross-check (`disasm_xcheck`).  Decompilation can silently drop a
+call argument or misrender register liveness, and a review grounded
+in that pseudo-C then asserts a mechanism the machine code
+contradicts.  When a binary item's suspicious/finding-tier claim
+cites an argument-count, register-liveness, sibling-differential
+("no count argument, unlike sibling calls that pass one"), or
+operand-width fact (a bounded keyword+structure match, never free
+LLM classification — the claim is read from the hypothesis, the
+hypothesis list, or the verdict body), the gate disassembles a
+bounded window around the relevant call site(s) — sandboxed, like
+every other parser of target-derived bytes — and runs mechanical
+predicates against the decoded instructions.  Checklist and
+re-database addresses are corrected for the RE tool's load bias
+(Ghidra rebases position-independent ELFs), so the decoded window is
+the claimed function, never a lookalike at the wrong address.
+
+Demotion requires refute-grade evidence at every examined call site:
+an unconditional 32/64-bit register write that provably reaches the
+call within the window (branch-free, or dominating from the
+function's straight-line entry region — and only when the call is
+itself reachable from the entry; an entry region that returns or
+jumps past the call dominates nothing).  Conditional moves, 8/16-bit
+alias writes, and writes a jump can bypass never demote — they only
+withhold corroboration.  Sibling-differential demotion additionally
+requires the callee's FULL attributable caller population sampled
+cleanly (a partial sample is decoy-steerable) and a shared register
+set with signal beyond the near-universal first two argument
+registers.  A load bias guessed from the tool's naming convention
+(rather than measured from the re-database's segment table) can
+corroborate but never demote.  Operand-width claims never demote at all: a
+wide compare beside a narrow one is the classic
+truncated-length-check TRUE-finding shape, so width evidence only
+corroborates or stays inconclusive.  Consistent evidence attaches a
+corroboration receipt without changing anything; an unresolvable
+window, an unmatched claimed callee, or a below-grade write records
+an honest inconclusive with its reason.  The gate never promotes,
+and its per-outcome tallies appear in the run's mechanical tier
+effectiveness table under `disasm_xcheck`.  Receipts land in the
+audit log (`action: disasm_xcheck`) with the excerpt escaped and
+bounded.  Only x86-64 ELF binaries are decoded today; other
+architectures record `arch-unsupported`.
+
 Binary targets get two decompiler Semgrep passes.  Per hypothesis,
 the tool chain runs curated decompiler-tolerant rules
 (`core/audit/rules/decompiler/`) over the reviewed function's
