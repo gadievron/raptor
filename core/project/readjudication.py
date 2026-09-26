@@ -16,8 +16,11 @@ source's disproof against an earlier CONFIRMED-TIER verdict (the
 overturn class — see :data:`CONFIRMED_TIER_STATUSES`). A later disproof
 over a mere hypothesis is ordinary validation progression and never
 queues; a validated verdict being disproven by a different run is not
-progression, it is one of the two adjudications being wrong. Each queue
-record carries a ``shape`` field naming its class.
+progression, it is one of the two adjudications being wrong. A third
+class covers ONE completed run whose end-state holds both a
+confirmed-tier verdict and a disproof at the same site (an intra-run
+split — two final verdicts disagreeing inside one container). Each
+queue record carries a ``shape`` field naming its class.
 
 This module preserves the signal WITHOUT changing any verdict:
 
@@ -60,7 +63,7 @@ from core.project.findings_utils import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Collection, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +130,17 @@ CONFIRMED_TIER_STATUSES = frozenset({
 #: * ``disproof_after_confirmed`` — a later source's disproof
 #:   contradicts an earlier source's CONFIRMED-TIER verdict (the
 #:   overturn class; tier boundary above).
+#: * ``intra_run_split`` — ONE source's end-state carries both a
+#:   confirmed-tier verdict and a disproof at the same site. Only
+#:   detected for sources the caller marks FINAL (a completed run's
+#:   container): two final verdicts disagreeing is a genuine
+#:   inconsistency, while a claim+disproof pair passing through a
+#:   LIVE container is transient in-pipeline refinement and stays
+#:   excluded. Both sides must be final-status rows — a hypothesis
+#:   beside a disproof in the same run is ordinary progression.
 SHAPE_CLAIM_AFTER_DISPROOF = "claim_after_disproof"
 SHAPE_OVERTURN = "disproof_after_confirmed"
+SHAPE_INTRA_RUN_SPLIT = "intra_run_split"
 
 #: Cap on free-text fields stored in a queue record. Findings rows are
 #: LLM-authored or import-restored — unbounded prose must not turn the
@@ -375,6 +387,8 @@ def build_queue_record(
 
 def detect_contradictions(
     sources: Sequence[tuple[str, list[dict[str, Any]]]],
+    *,
+    final_sources: Collection[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Detect cross-adjudication contradictions, in both directions.
 
@@ -392,8 +406,14 @@ def detect_contradictions(
       later disproof over a mere hypothesis is ordinary validation
       progression and stays unqueued; only a validated verdict being
       disproven is overturn-shaped.
-    * A claim+disproof pair inside ONE source never queues in either
-      direction — that is in-pipeline refinement.
+    * :data:`SHAPE_INTRA_RUN_SPLIT` — a confirmed-tier verdict AND a
+      disproof at the same site inside ONE source listed in
+      *final_sources* (labels of sources that are a COMPLETED run's
+      end-state container). Outside that opt-in, a claim+disproof
+      pair inside one source never queues in either direction — that
+      is in-pipeline refinement — and even inside it, a
+      hypothesis-tier row beside a disproof is ordinary progression:
+      BOTH sides must be final statuses.
 
     One record per (shape, site, claim source, disproof source, newer
     side's mechanism); when several disproofs (or confirmed claims)
@@ -472,6 +492,31 @@ def detect_contradictions(
                 prior_claim_count=len(prior),
                 shape=SHAPE_OVERTURN,
             ))
+        if label in final_sources:
+            local_conf: dict[tuple, list[dict[str, Any]]] = {}
+            local_dis: dict[tuple, list[dict[str, Any]]] = {}
+            for finding in rows:
+                key = site_key(finding)
+                if key is None:
+                    continue
+                if is_disproof(finding):
+                    local_dis.setdefault(key, []).append(finding)
+                elif is_confirmed_tier(finding):
+                    local_conf.setdefault(key, []).append(finding)
+            for key, conf_rows in local_conf.items():
+                dis_rows = local_dis.get(key)
+                if not dis_rows:
+                    continue
+                for conf in conf_rows:
+                    pair = (SHAPE_INTRA_RUN_SPLIT, key, label, label,
+                            _mechanisms(conf))
+                    if not _admit(pair, key):
+                        continue
+                    records.append(build_queue_record(
+                        conf, label, dis_rows[-1], label,
+                        prior_disproof_count=len(dis_rows),
+                        shape=SHAPE_INTRA_RUN_SPLIT,
+                    ))
         for finding in rows:
             key = site_key(finding)
             if key is None:
@@ -494,6 +539,21 @@ def detect_contradictions(
     return records
 
 
+def _run_completed(run_dir: Path) -> bool:
+    """Completed-run predicate gating intra-run split detection.
+    Tolerant and fail-closed toward NOT queueing: missing or
+    unreadable run metadata reads as not-completed, so a live or
+    half-written container never has its transient claim+disproof
+    pairs promoted to split records."""
+    try:
+        from core.run.metadata import STATUS_COMPLETED, load_run_metadata
+        meta = load_run_metadata(run_dir)
+        return (isinstance(meta, dict)
+                and meta.get("status") == STATUS_COMPLETED)
+    except Exception:  # noqa: BLE001 — predicate is an aid, never a crash
+        return False
+
+
 def detect_project_contradictions(
     run_dirs: Sequence[Path],
 ) -> list[dict[str, Any]]:
@@ -504,8 +564,18 @@ def detect_project_contradictions(
     ``(imported)`` on the record — their claims carry
     attacker-selectable statuses (unsigned archives), so a reader
     weighs those contradictions accordingly.
+
+    COMPLETED runs (per their run metadata) are passed as final
+    sources, enabling intra-run split detection over their end-state
+    containers: a confirmed-tier verdict and a disproof both
+    surviving to a run's completion is a genuine inconsistency. Live
+    and swept-failed runs never split-detect — their containers are
+    transient. (An imported run's status is archive-supplied like the
+    rest of its rows; its split records carry the ``(imported)``
+    label for the reader to weigh.)
     """
     sources: list[tuple[str, list[dict[str, Any]]]] = []
+    final_labels: set[str] = set()
     for run_dir in run_dirs:
         run_dir = Path(run_dir)
         findings = load_findings_from_dir(run_dir)
@@ -514,8 +584,11 @@ def detect_project_contradictions(
         label = run_dir.name
         if run_is_imported(run_dir):
             label += " (imported)"
+        if _run_completed(run_dir):
+            final_labels.add(label)
         sources.append((label, findings))
-    return detect_contradictions(sources)
+    return detect_contradictions(
+        sources, final_sources=frozenset(final_labels))
 
 
 def queued_count(records: Sequence[dict[str, Any]]) -> int:
@@ -655,6 +728,7 @@ __all__ = [
     "QUEUE_FILENAME",
     "RECORD_CAP",
     "SHAPE_CLAIM_AFTER_DISPROOF",
+    "SHAPE_INTRA_RUN_SPLIT",
     "SHAPE_OVERTURN",
     "SITE_RECORD_CAP",
     "build_queue_record",
