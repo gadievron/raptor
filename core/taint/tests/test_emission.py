@@ -375,8 +375,9 @@ class TestRoundTrip:
                                             packs) -> None:
         """The scan-shaped twin's ``dataflow_path`` matches what
         ``extract_dataflow_path`` rebuilds from the SARIF bytes — the
-        merge channel and a disk re-parse see the same path (the twin
-        additionally carries per-step ``properties``)."""
+        merge channel and a disk re-parse see the same path, including
+        the per-step ``properties`` the parser carries through its
+        sanitiser (benign values round-trip unchanged)."""
         res = _run(tmp_path, _CHAIN, packs)
         rep = emit(res, packs)
         out = tmp_path / "crossfile-taint.sarif"
@@ -384,12 +385,9 @@ class TestRoundTrip:
         parsed = parse_sarif_findings(out)[0]["dataflow_path"]
         twin = rep.findings[0]["dataflow_path"]
 
-        def strip(step: dict) -> dict:
-            return {k: v for k, v in step.items() if k != "properties"}
-
-        assert strip(twin["source"]) == parsed["source"]
-        assert strip(twin["sink"]) == parsed["sink"]
-        assert [strip(s) for s in twin["steps"]] == parsed["steps"]
+        assert twin["source"] == parsed["source"]
+        assert twin["sink"] == parsed["sink"]
+        assert twin["steps"] == parsed["steps"]
         assert twin["total_steps"] == parsed["total_steps"]
         assert rep.findings[0]["finding_id"].startswith(PRODUCER)
 
