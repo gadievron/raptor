@@ -2926,5 +2926,30 @@
     "kind": "literal",
     "note": "Autonomous-run summary dict: counter + provenance KEYS written to the analysis-summary JSON (persistence schema keys, not a name vocabulary); root-module universe addition.",
     "reviewed": "2026-09-21"
+  },
+  "packages/exploitability_validation/binary_substrate.py::_checklist_from_sidecar": {
+    "count": 13,
+    "kind": "literal",
+    "note": "checklist.json artifact field manifest (the build_binary_checklist / build_inventory output shape mirrored for the degraded sidecar-only inventory) \u2014 persistence schema keys, not a learned name vocabulary"
+  },
+  "packages/exploitability_validation/binary_substrate.py::build_binary_target_checklist": {
+    "count": 13,
+    "kind": "literal",
+    "note": "the checklist 'substrate' block field manifest (provenance record keys the report and downstream stages read) \u2014 persistence schema keys, not a learned name vocabulary"
+  },
+  "packages/exploitability_validation/binary_substrate.py::entry": {
+    "count": 11,
+    "kind": "literal",
+    "note": "attack-paths.json entry field manifest (ATTACK_PATH_SCHEMA keys, mirrors understand_bridge._trace_to_attack_path) \u2014 persistence schema keys, not a learned name vocabulary"
+  },
+  "packages/exploitability_validation/schemas.py::CHECKLIST_SCHEMA": {
+    "count": 12,
+    "kind": "literal",
+    "note": "JSON-schema property-name manifest for checklist.json items (source line anchors + binary address anchors) \u2014 schema keys, not a learned name vocabulary"
+  },
+  "packages/exploitability_validation/binary_substrate.py::record": {
+    "count": 10,
+    "kind": "literal",
+    "note": "binary-substrate.json discovery-receipt field manifest (selection + identity-verification facts, incl. sha_verified) \u2014 persistence schema keys, not a learned name vocabulary"
   }
 }
