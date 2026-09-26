@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "language": "python",
+  "framework": "stdlib",
+  "pack": "template-engines",
+  "sinks": [
+    {
+      "kind": "dotted_callee",
+      "match": "jinja2.Environment.from_string",
+      "args": [1],
+      "kwargs": ["source"],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "Environment.from_string compiles its source argument as a template of the configured environment — attacker text in it is expression execution on render. Position 1 is the unbound spelling (self at 0); the keyword spelling is source=."
+    },
+    {
+      "kind": "method_name",
+      "match": "from_string",
+      "receiver_hint": "env",
+      "args": [0],
+      "kwargs": ["source"],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "confidence": "heuristic",
+      "provenance": "framework_catalog",
+      "rationale": "The dominant real-world spelling is env.from_string(...) on a constructed Environment, which has no import binding to resolve; bare-name equality gated on a receiver named env, hence heuristic."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "jinja2.nativetypes.NativeEnvironment.from_string",
+      "args": [1],
+      "kwargs": ["source"],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "NativeEnvironment renders to native Python objects instead of text — the same from_string surface with a wider post-render blast radius, worth its own import spelling."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "django.template.Engine.from_string",
+      "args": [1],
+      "kwargs": ["template_code"],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "Engine.from_string(template_code) is Django's constructor-level compile of raw template text, reachable without the django.template.Template spelling the core pack already claims."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "tornado.template.Template",
+      "args": [0],
+      "kwargs": ["template_string"],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "Tornado templates embed Python expressions; constructing one from attacker text (positional or template_string=) executes those expressions on generate()."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "bottle.SimpleTemplate",
+      "args": [0],
+      "kwargs": ["source"],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "Bottle's SimpleTemplate lines and inline blocks are Python; a template built from attacker source (positional or source=) is code execution on render."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "bottle.template",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "bottle.template renders its first argument directly when it is not the name of a template file — the one-call string-render spelling of the SimpleTemplate surface."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "Cheetah.Template.Template",
+      "args": [0],
+      "kwargs": ["source"],
+      "sink_class": "template-injection",
+      "cwe": "CWE-94",
+      "provenance": "framework_catalog",
+      "rationale": "Cheetah compiles the template source into a Python class at construction — attacker template text IS generated code, so the entry carries the code-generation CWE while pairing under the template class."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "chameleon.PageTemplate",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "Chameleon page templates evaluate python: expressions in TAL attributes; a PageTemplate built from attacker text executes them on render."
+    }
+  ]
+}
