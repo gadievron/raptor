@@ -1245,6 +1245,11 @@
     "count": 18,
     "kind": "literal"
   },
+  "core/engagement/chain_elf.py::build_verdict": {
+      "count": 12,
+      "kind": "literal",
+      "note": "fixed verdict-record schema keys for the engagement chain (engage-chain-verdict/1: policy depth, reached depth, degradation reasons, capability tier, journal counts, journal floor) — a persistence schema shape pinned by core/engagement/tests/test_chain_elf.py, not a learned name vocabulary"
+  },
   "core/engagement/ledger.py::_base_row": {
     "count": 14,
     "kind": "literal",
