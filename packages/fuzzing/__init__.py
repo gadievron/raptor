@@ -15,6 +15,11 @@ from .seed_corpus import (
     prepare_seed_corpus,
 )
 from .capability import CapabilityReport, probe as probe_capabilities, select_fuzzer
+from .harness_census import (
+    EngineCensus,
+    FuzzHarnessCensus,
+    census_fuzz_harnesses,
+)
 from .target_detector import TargetInfo, detect as detect_target
 from .orchestrator import FuzzingOrchestrator, CampaignPlan
 from .libfuzzer_runner import LibFuzzerRunner, LibFuzzerResult, LibFuzzerStats
@@ -48,7 +53,9 @@ __all__ = [
     "CorpusManager",
     "Crash",
     "CrashCollector",
+    "EngineCensus",
     "FuzzEvent",
+    "FuzzHarnessCensus",
     "FuzzingOrchestrator",
     "FuzzingTelemetry",
     "GeneratedHarness",
@@ -62,6 +69,7 @@ __all__ = [
     "SeedCorpusOptions",
     "TargetInfo",
     "analyse_binary_context",
+    "census_fuzz_harnesses",
     "detect_target",
     "prepare_builtin_seed_corpus",
     "prepare_seed_corpus",
