@@ -4,17 +4,31 @@ from __future__ import annotations
 
 _IMPORT_PREFIXES = ("sym.imp.", "imp.", "__imp_", "_")
 
-# libc/POSIX names where the leading underscore IS the identity, not a
-# Mach-O global-symbol decoration: stripping it conflates two distinct
+# Names where the leading underscore IS the identity, not a Mach-O
+# global-symbol decoration: stripping it conflates two distinct
 # functions in the tier-1 fingerprints and classify_security_api
 # (_exit is not exit — no atexit handlers; _setjmp/_longjmp are the
-# no-signal-mask variants of setjmp/longjmp). Deliberately a small
-# libc-only seed, per the learn-vocab discipline.
+# no-signal-mask variants of setjmp/longjmp). The Windows CRT/SEH
+# names below are exported WITH their underscores (_mbscpy is the
+# real msvcrt export, not a decorated mbscpy; the SEH personality
+# routines only exist in underscored form) — stripping would leave
+# names that match nothing in any catalog. __C_specific_handler keeps
+# both spellings: the raw export and the once-stripped form that a
+# generic single-underscore normaliser upstream may hand us.
+# Deliberately a small seed, per the learn-vocab discipline.
 _UNDERSCORE_SIGNIFICANT = frozenset({
     "_exit",
     "_Exit",
     "_setjmp",
     "_longjmp",
+    # Windows multibyte CRT copy/concat (real underscored exports).
+    "_mbscpy",
+    "_mbscat",
+    # Windows SEH personality routines.
+    "_except_handler3",
+    "_except_handler4",
+    "__C_specific_handler",
+    "_C_specific_handler",
 })
 
 

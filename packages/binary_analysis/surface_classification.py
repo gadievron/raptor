@@ -15,18 +15,34 @@ from typing import Any
 from core.function_taxonomy import (
     EXEC_FUNCS,
     FORMAT_STRING_FUNCS,
+    MACOS_BYTE_BUFFER_SUBSTRINGS,
     MACOS_FILESYSTEM_URL_SUBSTRINGS,
+    MACOS_IOKIT_SUBSTRINGS,
     MACOS_PARSER_SUBSTRINGS,
     MACOS_PROCESS_EXEC_SUBSTRINGS,
     MACOS_SECURITY_BOUNDARY_PREFIXES,
+    MACOS_XPC_INGRESS_SUBSTRINGS,
     MEMORY_COPY_FUNCS,
     PARSER_FUNCS,
     SCAN_FAMILY_FUNCS,
     STRING_OVERFLOW_FUNCS,
     TOCTOU_FUNCS,
+    WIN32_DYNAMIC_LOAD_FUNCS,
+    WIN32_REGISTRY_INGEST_FUNCS,
+    WIN32_SEH_FUNCS,
 )
 
 from ._symbols import strip_import_prefix
+
+# Consumer composition (per the taxonomy's use-site rule): only the
+# WINDOWS user-side device-control callers classify as sinks here.
+# POSIX ``ioctl`` shares the taxonomy group but is near-ubiquitous
+# (every TTY-touching binary imports it), so ranking it would drown
+# the queue in zero-signal hits — and the kernel-side dispatch names
+# never appear in user-space import tables at all.
+_WIN32_DEVICE_CONTROL = frozenset({
+    "DeviceIoControl", "NtDeviceIoControlFile",
+})
 
 
 @dataclass(frozen=True)
@@ -74,6 +90,21 @@ def classify_security_api(name: str) -> SurfaceClassification | None:
         return SurfaceClassification(raw, "surface", "parser", False,
                                      "Parser/input API worth tracing, but not a consequence by itself.")
 
+    # Win32 arms — exact base-name matches like the C-family arms
+    # above (Windows import names are unmangled).
+    if base in _WIN32_DEVICE_CONTROL:
+        return SurfaceClassification(raw, "sink", "device_control", True,
+                                     "User-to-driver control call; only dangerous if attacker data shapes the control code or request buffer crossing into the driver.")
+    if base in WIN32_REGISTRY_INGEST_FUNCS:
+        return SurfaceClassification(raw, "surface", "registry_input", False,
+                                     "Registry read surface; values under less-privileged-writable keys are external input worth tracing.")
+    if base in WIN32_DYNAMIC_LOAD_FUNCS:
+        return SurfaceClassification(raw, "surface", "dynamic_load", False,
+                                     "Dynamic code loading surface; a planting/search-path claim needs an attacker-influenceable path at the callsite.")
+    if base in WIN32_SEH_FUNCS:
+        return SurfaceClassification(raw, "surface", "exception_handling", False,
+                                     "SEH/unwind machinery marker; review surface for handler-state abuse, not a consequence by itself.")
+
     # macOS categories come from the taxonomy's grouped substring sets
     # (this consumer used to re-list a drifting subset of them). Match
     # semantics per the taxonomy contract: substring-in-demangled-name
@@ -98,6 +129,24 @@ def classify_security_api(name: str) -> SurfaceClassification | None:
     ):
         return SurfaceClassification(raw, "surface", "security_boundary", False,
                                      "Security-framework boundary API.")
+    if _matches_macos_group(stripped, _raw_parts, MACOS_IOKIT_SUBSTRINGS):
+        # Split at the use site: IOConnectCall* pushes attacker-shaped
+        # selectors/buffers into a kext — the macOS sibling of the
+        # DeviceIoControl sink above; service discovery only acquires
+        # the boundary handle.
+        if base.startswith("IOConnectCall"):
+            return SurfaceClassification(raw, "sink", "device_control", True,
+                                         "IOKit user-client call; only dangerous if attacker data shapes the selector or struct buffer crossing into the kext.")
+        return SurfaceClassification(raw, "surface", "iokit_boundary", False,
+                                     "IOKit service discovery/registry surface on the kernel boundary.")
+    if _matches_macos_group(stripped, _raw_parts,
+                            MACOS_XPC_INGRESS_SUBSTRINGS):
+        return SurfaceClassification(raw, "surface", "ipc_ingress", False,
+                                     "XPC listener/payload-read surface; peer-controlled input arrives here, consequences live downstream.")
+    if _matches_macos_group(stripped, _raw_parts,
+                            MACOS_BYTE_BUFFER_SUBSTRINGS):
+        return SurfaceClassification(raw, "surface", "byte_buffer_bridge", False,
+                                     "CF/NS byte-buffer bridge surface; tainted bytes and decode options often cross here.")
     return None
 
 

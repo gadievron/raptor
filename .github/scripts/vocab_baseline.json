@@ -2065,6 +2065,11 @@
     "count": 12,
     "kind": "literal"
   },
+  "packages/binary_analysis/_symbols.py::_UNDERSCORE_SIGNIFICANT": {
+    "count": 10,
+    "kind": "literal",
+    "note": "identity-underscore exemption list for the symbol normaliser — names whose leading underscore is the export's real spelling (libc _exit/_setjmp family plus the Windows CRT/SEH underscored exports), so stripping would conflate or orphan them; a curated normalisation contract that grows only with catalog pins, not a learned name vocabulary"
+  },
   "packages/binary_analysis/cli.py::_COMMANDS": {
     "count": 11,
     "kind": "literal"
