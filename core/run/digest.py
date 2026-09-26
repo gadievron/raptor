@@ -99,6 +99,14 @@ class RunDigest:
     suppression_verdicts: dict[str, int] = field(default_factory=dict)
     # coverage
     coverage_percent: float | None = None
+    # target (sealed into .raptor-run.json at start_run)
+    target_path: str | None = None
+    # shipped fuzz harnesses on the target tree, engine → count
+    # (packages.fuzzing.harness_census; read once at digest build,
+    # terminal runs only). Empty when none found / census failed.
+    fuzz_harness_counts: dict[str, int] = field(default_factory=dict)
+    # True when the census hit a walk/sniff cap — counts partial.
+    fuzz_harness_counts_partial: bool = False
     # operator hints (already operator-authored text or built here
     # from constants + paths)
     next_steps: list[str] = field(default_factory=list)
@@ -145,6 +153,9 @@ def _read_lifecycle(digest: RunDigest) -> None:
     dur = meta.get("duration_seconds")
     if isinstance(dur, (int, float)) and not isinstance(dur, bool):
         digest.duration_seconds = float(dur)
+    target = meta.get("target_path")
+    if isinstance(target, str) and target:
+        digest.target_path = target
     extra = meta.get("extra")
     if isinstance(extra, dict):
         err = extra.get("error")
@@ -428,6 +439,36 @@ def _read_coverage(digest: RunDigest) -> None:
         logger.debug("digest: coverage layer unreadable", exc_info=True)
 
 
+def _read_fuzz_census(digest: RunDigest) -> None:
+    """Shipped fuzz harnesses on the run's target — one bounded,
+    read-only census at digest build.
+
+    Terminal runs only: ``raptor-run-status`` polls this reader on
+    LIVE runs, and the census (cheap as it is) must never become a
+    per-poll tree scan or a mid-pipeline stage. The target path is
+    the one sealed into ``.raptor-run.json`` at start_run; the
+    census only ever READS the tree, and the digest line renders
+    counts + engine-name constants — never target-derived names.
+    """
+    if digest.status == "running":
+        return
+    if not digest.target_path:
+        return
+    target = Path(digest.target_path)
+    if not target.is_dir():
+        return
+    try:
+        from packages.fuzzing.harness_census import census_fuzz_harnesses
+        census = census_fuzz_harnesses(target)
+    except Exception:  # noqa: BLE001 — census failure never degrades the digest
+        logger.debug("digest: fuzz census unreadable", exc_info=True)
+        return
+    digest.fuzz_harness_counts = {
+        e.engine: e.count for e in census.engines
+    }
+    digest.fuzz_harness_counts_partial = bool(census.truncated)
+
+
 def _read_next_steps(digest: RunDigest) -> None:
     try:
         from core.audit.resume import pipeline_tail_hint
@@ -459,7 +500,7 @@ def read_run_digest(run_dir: Path) -> RunDigest:
     digest = RunDigest(run_dir=Path(run_dir))
     for layer in (_read_lifecycle, _read_spend, _read_telemetry,
                   _read_findings, _read_suppressions, _read_coverage,
-                  _read_next_steps):
+                  _read_fuzz_census, _read_next_steps):
         try:
             layer(digest)
         except Exception:  # noqa: BLE001 — one broken layer must not hide the rest
@@ -613,6 +654,24 @@ def render_run_digest(digest: RunDigest) -> str:
         lines.append("")
         lines.append(f"  Coverage: {digest.coverage_percent:.1f}% of "
                      "reviewable units")
+
+    if digest.fuzz_harness_counts:
+        # ONE opportunistic line — engine names are census constants
+        # and counts are ints, but the pair rides through a digest
+        # dataclass consumers may rebuild from JSON, so the joined
+        # text goes through the same escape-at-render seam as every
+        # other digest string.
+        total = sum(digest.fuzz_harness_counts.values())
+        parts = ", ".join(
+            f"{count} {engine}"
+            for engine, count in digest.fuzz_harness_counts.items())
+        partial = (" (counts partial)"
+                   if digest.fuzz_harness_counts_partial else "")
+        lines.append("")
+        lines.append(
+            f"  Target ships {total} fuzz harness"
+            f"{'es' if total != 1 else ''}{partial}: "
+            f"{_line(parts, max_len=200)} — /fuzz can drive them")
 
     if digest.next_steps:
         lines.append("")
