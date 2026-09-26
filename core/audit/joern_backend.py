@@ -530,13 +530,13 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
     # resolve_cpg_timeout_s refines a derived ("auto") timeout from
     # the scope's source-size estimate; non-auto tunables pass
     # through unchanged.
-    from packages.joern.tunables import resolve_cpg_timeout_s
+    from packages.joern.tunables import (
+        resolve_cpg_timeout_s,
+        resolve_import_timeout_s,
+    )
     combined_excludes = tuple(exclude_dirs) + tuple(scope_exclude_dirs)
     cpg_timeout = resolve_cpg_timeout_s(
         tunables, target_path, exclude_dirs=combined_excludes,
-    )
-    import_timeout = (
-        getattr(tunables, "import_timeout_s", None) if tunables else None
     )
     # The parse frontend heap follows the tunables like the query
     # server's: a retry at derived-max heap is meaningless if the
@@ -558,6 +558,13 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
     # fields.
     import_retried = False
     import_retry_timeout_s: int | None = None
+    # Failure honesty (ADDITIVE record fields — readers tolerate their
+    # absence and must tolerate their presence): a failed record
+    # without a machine-readable WHY left the run report unable to
+    # name which ceiling bound or what operation died.
+    reason: str | None = None
+    cpg_bytes: int | None = None
+    import_timeout: int | None = None
 
     def _status(*, failed: bool, phase: str) -> dict:
         return {
@@ -573,6 +580,9 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
             "import_retry_timeout_s": import_retry_timeout_s,
             "estimated_sloc": est_sloc,
             "scope_excluded_dirs": len(scope_exclude_dirs),
+            "reason": reason,
+            "cpg_bytes": cpg_bytes,
+            "import_timeout_s": import_timeout,
         }
 
     try:
@@ -610,13 +620,27 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
         logger.debug("CPG build failed for %s", target_path, exc_info=True)
         # An exception is a channel loss like any failed build — it
         # must reach the run report, not just this debug line.
+        reason = "build_error"
         _write_cpg_build_status(out_dir, _status(
             failed=True, phase="build"))
         return False
     if not ok:
+        reason = "build_failed"
         _write_cpg_build_status(out_dir, _status(
             failed=True, phase="build"))
         return False
+    # The serialized CPG size is the honest scale signal for the
+    # import budget: the import wall is CLIENT-SIDE deserialise work
+    # (a kernel-scale import expired its fixed window while the server
+    # sat idle far below its heap), so the budget scales with the
+    # bytes the client must walk — never with server resources. A
+    # stat failure degrades to the unresolved base, never to an error.
+    try:
+        cpg_bytes = cpg.path.stat().st_size
+    except OSError:
+        cpg_bytes = None
+    import_timeout = resolve_import_timeout_s(tunables, cpg_bytes)
+
     def _try_import(timeout) -> bool:
         # import_cpg reports failure BOTH ways: False for handled
         # failures (server died mid-import — "remote end closed" —
@@ -633,27 +657,78 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
                 "CPG import failed for %s", target_path, exc_info=True)
             return False
 
+    def _import_failure_class() -> str:
+        """Classify the last import failure from the server's own
+        per-thread post classification (empty for handled non-transport
+        failures such as a malformed response or a failed binding
+        check, and for injected test doubles without the attribute)."""
+        detail = str(getattr(srv, "_last_post_error", "") or "").lower()
+        if "timed out" in detail:
+            return "import_timeout"
+        if "connect" in detail or "refused" in detail:
+            return "import_connection_lost"
+        return "import_failed"
+
     imported = _try_import(import_timeout)
     if not imported:
+        failure_class = _import_failure_class()
+        try:
+            from core.tuning import (
+                derive_joern_import_timeout_s,
+                derived_max_joern_import_timeout_s,
+            )
+            import_cap: int | None = derived_max_joern_import_timeout_s()
+            derived_budget = derive_joern_import_timeout_s(cpg_bytes)
+        except Exception:  # noqa: BLE001 — retry sizing must not cost the run
+            logger.debug("import retry sizing failed", exc_info=True)
+            import_cap = None
+            derived_budget = 0
+        if (failure_class == "import_timeout"
+                and import_cap is not None
+                and (import_timeout or 0) >= import_cap):
+            # Scale-aware fail-fast: the first attempt already ran at
+            # the derivation ceiling, so there is no larger budget to
+            # retry with — re-running the SAME wall against a slow
+            # client-side deserialise is guaranteed waste (the first
+            # timeout proved the wall insufficient; nothing about a
+            # restart makes the same wall enough). Record the honest
+            # reason instead of burning a second ceiling-length wall.
+            reason = "import_timeout"
+            logger.warning(
+                "CPG import for %s timed out after %ds (CPG %s bytes) "
+                "with the budget already at/above the derivation "
+                "ceiling (%ds) — no larger retry budget exists, not "
+                "retrying; set joern_import_timeout_s explicitly to "
+                "exceed the ceiling",
+                target_path, import_timeout, cpg_bytes, import_cap,
+            )
+            _write_cpg_build_status(out_dir, _status(
+                failed=True, phase="import"))
+            return False
         # Channel-keep: a kernel-scale import can kill the server
         # outright; one explicit retry against a restarted server —
         # restart() alone cannot help here (no successful _cpg_path
-        # to re-import) so the import is re-issued by hand. Timeout
-        # doubles (floor 30 min): too small re-buys the same death on
-        # a slow import; unbounded would let one graph eat the run's
-        # wall — the build-side derived-max retry uses the same
+        # to re-import) so the import is re-issued by hand. The retry
+        # NEVER re-runs the first budget: a timeout-class failure just
+        # proved that wall too small (doubling, with the CPG-size
+        # derivation and the historical 30-min floor as raises, capped
+        # at the derivation ceiling); too small re-buys the same death
+        # on a slow import; unbounded would let one graph eat the
+        # run's wall — the build-side derived-max retry uses the same
         # one-retry posture.
         # Distinct name: `retry_timeout` is the BUILD retry's closure
         # variable — _status() reads it for the record's
         # retry_timeout_s field, and rebinding it here fabricated the
         # reported derived-max build timeout.
         import_retry_timeout_s = max(
-            (import_timeout or 0) * 2, 1800,
+            (import_timeout or 0) * 2, derived_budget, 1800,
         )
+        if import_cap is not None:
+            import_retry_timeout_s = min(import_retry_timeout_s, import_cap)
         logger.warning(
-            "CPG import failed for %s — restarting the server and "
-            "retrying the import once (timeout %ds)",
-            target_path, import_retry_timeout_s,
+            "CPG import failed for %s (%s) — restarting the server "
+            "and retrying the import once (timeout %ds)",
+            target_path, failure_class, import_retry_timeout_s,
         )
         restarted = False
         try:
@@ -667,7 +742,10 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
             imported = _try_import(import_retry_timeout_s)
     if not imported:
         # A built-but-unimported graph is still a lost channel: the
-        # record must never claim a rescue the server can't serve.
+        # record must never claim a rescue the server can't serve —
+        # and it must say WHY (which operation died, classified from
+        # the LAST attempt).
+        reason = _import_failure_class()
         _write_cpg_build_status(out_dir, _status(
             failed=True, phase="import"))
         return False
