@@ -1114,9 +1114,12 @@ def _apply_journal_verdict_overrides(
 # Artifacts every finished orchestrator run writes. Absence of any of
 # them means the run stopped before its export tail (or the write
 # failed) — the report states this instead of silently rendering the
-# sections empty.
+# sections empty. The inventory is NOT probed here: its slot has two
+# on-disk forms (single-file checklist.json, or the sharded
+# checklist/ dir whose writer unlinks the single file), so
+# _assess_completeness routes it through
+# core.inventory.checklist_exists instead of a literal file probe.
 _EXPECTED_ARTIFACTS = (
-    ("checklist.json", "inventory (checklist.json)"),
     ("gaps.json", "gap schedule (gaps.json)"),
     ("findings-graded.json", "graded findings export (findings-graded.json)"),
     ("cost-breakdown.json", "cost ledger (cost-breakdown.json)"),
@@ -1179,10 +1182,18 @@ def _assess_completeness(out_dir: Path) -> dict[str, Any]:
         if isinstance(meta, dict):
             status = meta.get("status")
 
-    missing = [
+    # Inventory probe goes through the sharded-aware accessor (the
+    # idiom _find_unrecorded_reads uses): the sharded checklist writer
+    # removes checklist.json and leaves checklist/index.json, so a
+    # bare .is_file() would mark every sharded run partial.
+    from core.inventory import checklist_exists
+    missing = [] if checklist_exists(out_dir) else [
+        "inventory (checklist.json)",
+    ]
+    missing.extend(
         label for name, label in _EXPECTED_ARTIFACTS
         if not (out_dir / name).is_file()
-    ]
+    )
     # Study starvation is a completeness gap, not a silent detail: a
     # run whose study consumer produced zero re-reviews while
     # questions are still pending reviewed everything hypothesis-blind

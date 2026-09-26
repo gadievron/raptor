@@ -162,6 +162,83 @@ class TestCompleteRunReport:
         assert "Run segments: 2" in md
 
 
+class TestShardedChecklistCompleteness:
+    """The inventory slot has TWO on-disk forms — single-file
+    ``checklist.json`` or the sharded ``checklist/`` dir, whose writer
+    unlinks the single file. Completeness must probe the slot, not the
+    literal file name, in both directions: a sharded completed run is
+    NOT partial, and a run with no inventory in either form still is.
+    """
+
+    def _run_without_inventory(self, tmp_path: Path) -> Path:
+        """A completed run carrying every expected artifact EXCEPT
+        the inventory slot."""
+        out = tmp_path / "audit-run"
+        out.mkdir()
+        _meta(out, "completed")
+        (out / "gaps.json").write_text(json.dumps({"count": 0, "gaps": []}))
+        (out / "findings-graded.json").write_text(
+            json.dumps({"findings": [], "stats": {}}),
+        )
+        (out / "cost-breakdown.json").write_text(
+            json.dumps({"phases": {}, "totals": {}}),
+        )
+        _journal(out, "f1", "clean")
+        return out
+
+    def _shard_inventory(self, out: Path, monkeypatch) -> None:
+        """Store the inventory through the REAL writer, forced into
+        the sharded form via tiny budgets — the run dir ends up with
+        ``checklist/index.json`` and NO ``checklist.json``."""
+        import core.inventory as inv
+        monkeypatch.setattr(inv, "_MAX_CHECKLIST_BYTES", 512)
+        monkeypatch.setattr(inv, "_CHECKLIST_SHARD_TARGET_BYTES", 1024)
+        files = [
+            {"path": f"src/file{i}.c", "sha256": "0" * 64, "sloc": 10,
+             "items": [{"name": f"fn{i}", "kind": "function",
+                        "line_start": 1, "line_end": 5}]}
+            for i in range(24)
+        ]
+        inv.save_checklist(out, {
+            "target_path": "/t", "total_files": len(files),
+            "files": files,
+        })
+        assert (out / "checklist" / "index.json").is_file()
+        assert not (out / "checklist.json").exists()
+
+    def test_sharded_completed_run_is_not_partial(
+        self, tmp_path, monkeypatch,
+    ):
+        out = self._run_without_inventory(tmp_path)
+        self._shard_inventory(out, monkeypatch)
+        report = generate_report(out)
+        comp = report["completeness"]
+        assert comp["missing"] == []
+        assert comp["partial"] is False
+        assert "Partial run" not in report["summary"]
+        md = write_markdown_report(report, out).read_text()
+        assert "## Run completeness" not in md
+
+    def test_genuinely_missing_inventory_still_reported(self, tmp_path):
+        # The alarm must not go vacuous: no checklist in EITHER form
+        # is still a named completeness gap.
+        out = self._run_without_inventory(tmp_path)
+        report = generate_report(out)
+        comp = report["completeness"]
+        assert "inventory (checklist.json)" in comp["missing"]
+        assert comp["partial"] is True
+
+    def test_single_file_inventory_still_satisfies(self, tmp_path):
+        # Legacy unsharded runs: the single-file form keeps counting.
+        out = self._run_without_inventory(tmp_path)
+        (out / "checklist.json").write_text(json.dumps({
+            "target_path": str(tmp_path), "files": [],
+        }))
+        comp = generate_report(out)["completeness"]
+        assert comp["missing"] == []
+        assert comp["partial"] is False
+
+
 class TestStudyStarvationLabel:
     """Zero study output with questions still pending is a NAMED
     completeness gap, not a silent detail."""
