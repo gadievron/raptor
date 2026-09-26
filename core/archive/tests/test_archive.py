@@ -367,6 +367,38 @@ class TestFailClosedCorruptArchives(unittest.TestCase):
             stats = extract_to_dir(src, Path(td) / "out")
             self.assertEqual(stats["files"], 1)
             self.assertEqual(stats["dropped"], 0)
+            self.assertEqual(stats["dropped_reasons"], {})
+
+    def test_summary_breaks_down_drop_reasons(self) -> None:
+        # A traversal-named member is dropped by the primitive's safety
+        # filter; the summary must say WHY, not just how many — a
+        # consumer telling hostile names from benign skips needs the
+        # per-reason breakdown.
+        with TemporaryDirectory() as td:
+            src = Path(td) / "mixed.zip"
+            _zip(src, {"../evil.txt": b"evil", "ok.txt": b"fine"})
+            out = Path(td) / "out"
+            stats = extract_to_dir(src, out)
+            self.assertEqual(stats["files"], 1)
+            self.assertEqual(stats["dropped"], 1)
+            self.assertEqual(stats["dropped_reasons"],
+                             {"path_traversal": 1})
+            self.assertEqual(_files(out), ["ok.txt"])
+
+    def test_limit_error_names_the_cap_kind(self) -> None:
+        # Structured cap attribution: entry-count vs total-bytes caps
+        # raise with distinct ``cap`` values so callers can name the
+        # operator lever that was hit instead of parsing messages.
+        with TemporaryDirectory() as td:
+            src = Path(td) / "many.zip"
+            _zip(src, {f"f{i}.txt": b"x" * 8 for i in range(20)})
+            with self.assertRaises(DecompressionLimitExceeded) as ctx:
+                extract_to_dir(src, Path(td) / "out1", max_files=5)
+            self.assertEqual(ctx.exception.cap, "entry_count")
+            with self.assertRaises(DecompressionLimitExceeded) as ctx:
+                extract_to_dir(src, Path(td) / "out2",
+                               max_total_bytes=32)
+            self.assertEqual(ctx.exception.cap, "total_bytes")
 
 class TestStreamingExtraction(unittest.TestCase):
     """Members must stream to disk — never accumulate in a dict up to
