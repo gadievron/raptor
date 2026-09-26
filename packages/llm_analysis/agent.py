@@ -482,8 +482,17 @@ class VulnerabilityContext:
             return None
         return resolved
 
-    def read_vulnerable_code(self) -> bool:
-        """Read the actual vulnerable code from the file."""
+    def read_vulnerable_code(
+        self, context_lines: int = FINDING_CONTEXT_LINES,
+    ) -> bool:
+        """Read the actual vulnerable code from the file.
+
+        ``context_lines`` widens/narrows the surrounding-context
+        window around the finding's own lines; the default is the
+        shared classifier window. The verdict-triggered context
+        expansion re-reads with the expanded window; ``full_code``
+        (the finding's own line range) is independent of it.
+        """
         file_path = self.get_full_file_path()
         if not file_path or not file_path.exists():
             logger.warning("Cannot read file: %s", file_path)
@@ -526,10 +535,11 @@ class VulnerabilityContext:
                 self.full_code = "\n".join(lines[start_idx:end_idx])
 
                 # Surrounding context: the shared classifier window
-                # (FINDING_CONTEXT_LINES before and after) — see
-                # core.llm.context_window for the sizing rationale.
-                context_start = max(0, start_idx - FINDING_CONTEXT_LINES)
-                context_end = min(len(lines), end_idx + FINDING_CONTEXT_LINES)
+                # (context_lines before and after; default
+                # FINDING_CONTEXT_LINES) — see core.llm.context_window
+                # for the sizing rationale.
+                context_start = max(0, start_idx - context_lines)
+                context_end = min(len(lines), end_idx + context_lines)
                 self.surrounding_context = "\n".join(lines[context_start:context_end])
             else:
                 # No line numbers: untargeted head-of-file fallback.
@@ -871,7 +881,8 @@ class AutonomousSecurityAgentV2:
                  execute_timeout: int = 5,
                  execute_sanitizers: list | None = None,
                  deep_validate: bool = False,
-                 deep_validate_disabled: bool = False) -> None:
+                 deep_validate_disabled: bool = False,
+                 context_expansion: bool = False) -> None:
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -951,6 +962,22 @@ class AutonomousSecurityAgentV2:
         # The free Tier 1 pre-flight is unaffected in both directions.
         self.deep_validate = bool(deep_validate)
         self.deep_validate_disabled = bool(deep_validate_disabled)
+        # --context-expansion: opt-in second look for explicitly
+        # uncertain verdicts (confidence=low / full abstention) —
+        # one re-run with the expanded window + 1-hop caller/callee
+        # context, joined replace-only-when-more-confident. Default
+        # OFF; when off the analysis path is exactly the pre-flag
+        # pipeline (differential-tested). Trigger/join/rails live in
+        # packages.llm_analysis.context_expansion; the stats dict is
+        # counted-never-silent and feeds the run report.
+        self.context_expansion = bool(context_expansion)
+        self._expansion_stats = {
+            "expansions_triggered": 0,
+            "expansions_performed": 0,
+            "expansions_changed_verdict": 0,
+            "skipped_cap": 0,
+            "errors": 0,
+        }
         # P23 guard-dominance chokepoint: lazy warm-CPG Joern server.
         # ``_probed`` distinguishes "never tried" from "tried, cold
         # cache" so a run without a CPG pays the probe exactly once.
@@ -1268,6 +1295,7 @@ class AutonomousSecurityAgentV2:
         self,
         vuln: VulnerabilityContext,
         extra_context_blocks: tuple = (),
+        checklist: dict[str, Any] | None = None,
     ) -> bool:
         """Run LLM analysis on one finding.
 
@@ -1275,6 +1303,10 @@ class AutonomousSecurityAgentV2:
         ``UntrustedBlock`` objects appended to the prompt envelope —
         used by the variant-review pass to carry the originating
         hypothesis of the synthesised checker's seed finding.
+
+        ``checklist`` is the inventory checklist (optional); consumed
+        only by the verdict-triggered context expansion's 1-hop
+        caller/callee lookup — the base analysis path never reads it.
         """
         is_prep = isinstance(self.llm, ClaudeCodeProvider)
 
@@ -1537,6 +1569,41 @@ class AutonomousSecurityAgentV2:
                     "  Attack Scenario: %s...", scenario,
                 )
 
+            # Verdict-triggered context expansion (--context-expansion,
+            # default off): when THIS verdict is explicitly uncertain
+            # (confidence=low or a full abstention), re-run the finding
+            # once with the expanded window + 1-hop caller/callee
+            # context. The join rule only ever upgrades certainty —
+            # see packages.llm_analysis.context_expansion. Runs BEFORE
+            # deep dataflow validation so that gate (and everything
+            # downstream) sees the settled verdict. getattr keeps the
+            # flag-off default and partially-constructed test agents
+            # on the exact pre-flag path.
+            if getattr(self, "context_expansion", False):
+                from packages.llm_analysis.context_expansion import (
+                    expansion_trigger,
+                )
+                _reason = expansion_trigger(analysis)
+                if _reason is not None:
+                    expanded = self._expand_context_and_rerun(
+                        vuln, analysis, _reason,
+                        meta=meta,
+                        extra_blocks=tuple(extra_blocks),
+                        analysis_schema=analysis_schema,
+                        checklist=checklist,
+                    )
+                    if expanded is not None:
+                        analysis = expanded
+                        vuln.analysis = analysis
+                        # Same tri-state discipline as the first
+                        # verdict parse above.
+                        vuln.exploitable = read_verdict(
+                            analysis, "is_exploitable",
+                        ) is True
+                        vuln.exploitability_score = (
+                            analysis.get("exploitability_score") or 0.0
+                        )
+
             # Deep dataflow validation for high-confidence findings.
             # --deep-validate widens the gate to every dataflow
             # finding regardless of the initial verdict; the block
@@ -1688,6 +1755,207 @@ class AutonomousSecurityAgentV2:
             vuln.exploitability_score = 0.0
             vuln.error = f"LLM analysis failed: {e}"
             return False
+
+    def _expand_context_and_rerun(
+        self,
+        vuln: VulnerabilityContext,
+        first_analysis: dict[str, Any],
+        reason: str,
+        *,
+        meta: dict[str, Any],
+        extra_blocks: tuple,
+        analysis_schema: dict[str, Any],
+        checklist: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """One expanded re-run for an explicitly uncertain verdict.
+
+        Widens the surrounding-context window to the derived
+        ``EXPANDED_FINDING_CONTEXT_LINES``, attaches 1-hop
+        caller/callee blocks through the existing assembly seams,
+        sends ONE more analysis call under a distinct transcript
+        subject (``<finding_id>::context-expansion`` — record/replay
+        stays deterministic beside the base call's tag), and joins
+        the two verdicts under the replace-only-when-more-confident
+        rule. Both verdicts land in the chosen analysis dict's
+        ``context_expansion`` record.
+
+        Returns the chosen analysis dict, or ``None`` when the first
+        verdict stands untouched because the expansion could not run
+        (per-run cap reached / re-read failed / LLM call failed) —
+        every such path is counted in the run stats and annotated on
+        the record, never silent. Never raises.
+        """
+        from packages.llm_analysis.context_expansion import (
+            EXPANDED_FINDING_CONTEXT_LINES,
+            MAX_EXPANSIONS_PER_RUN,
+            build_expansion_record,
+            expansion_context_blocks,
+            join_verdicts,
+        )
+
+        stats = self._expansion_stats
+        stats["expansions_triggered"] += 1
+        if stats["expansions_performed"] >= MAX_EXPANSIONS_PER_RUN:
+            stats["skipped_cap"] += 1
+            logger.info(
+                "⊘ Context expansion skipped for %s (%s): per-run cap "
+                "of %d reached",
+                vuln.finding_id, reason, MAX_EXPANSIONS_PER_RUN,
+            )
+            first_analysis["context_expansion"] = {
+                "triggered": True,
+                "reason": reason,
+                "performed": False,
+                "skipped": "expansion_cap",
+            }
+            return None
+
+        original_context = vuln.surrounding_context
+        try:
+            stats["expansions_performed"] += 1
+            logger.info(
+                "🔎 Context expansion for %s (%s): re-running with "
+                "±%d-line window + 1-hop callers/callees",
+                vuln.finding_id, reason, EXPANDED_FINDING_CONTEXT_LINES,
+            )
+            if not vuln.read_vulnerable_code(
+                context_lines=EXPANDED_FINDING_CONTEXT_LINES,
+            ):
+                raise RuntimeError("expanded-context re-read failed")
+
+            function_name = meta.get("name") or ""
+            hop_blocks = expansion_context_blocks(
+                checklist, vuln.file_path or "", function_name,
+                Path(vuln.repo_path),
+            )
+
+            from packages.llm_analysis.prompts import (
+                build_analysis_prompt_bundle,
+            )
+            # Mirror of the base analysis bundle: identical inputs
+            # except the widened surrounding_context and the appended
+            # hop blocks. Exemplar attribution stays on the base
+            # analysis (the re-run's exemplar usage is not
+            # re-persisted).
+            bundle = build_analysis_prompt_bundle(
+                rule_id=vuln.rule_id,
+                level=vuln.level,
+                file_path=vuln.file_path,
+                start_line=vuln.start_line,
+                end_line=vuln.end_line,
+                message=vuln.message,
+                code=vuln.full_code,
+                surrounding_context=vuln.surrounding_context,
+                has_dataflow=vuln.has_dataflow,
+                dataflow_source=vuln.dataflow_source,
+                dataflow_sink=vuln.dataflow_sink,
+                dataflow_steps=vuln.dataflow_steps,
+                metadata=meta,
+                repo_path=str(vuln.repo_path),
+                cwe_id=vuln.cwe_id,
+                function_name=function_name,
+                file_includes=meta.get("includes") or (),
+                function_calls_made=(
+                    meta.get("calls") or meta.get("callees") or ()
+                ),
+                extra_blocks=tuple(extra_blocks) + hop_blocks,
+                verified_outcomes=(
+                    self._get_verified_outcomes()
+                    if self.use_verified_exemplars else ()
+                ),
+                budget_tokens=self._prompt_budget(),
+                exemplar_usage={},
+            )
+            prompt = next(
+                m.content for m in bundle.messages if m.role == "user"
+            )
+            system_prompt = next(
+                m.content for m in bundle.messages if m.role == "system"
+            )
+
+            from core.llm.response_validation import (
+                attempt_quality_retry,
+                validate_structured_response,
+            )
+            # Distinct subject tag: the expansion call (and its
+            # quality retry) is a different work item than the base
+            # analysis — sharing the base tag would make replay serve
+            # the base entry to whichever call comes first.
+            with transcript_subject(
+                f"{vuln.finding_id}::context-expansion",
+            ):
+                raw_second, _full_response = self.llm.generate_structured(
+                    prompt=prompt,
+                    schema=analysis_schema,
+                    system_prompt=system_prompt,
+                    task_type=TaskType.ANALYSE,
+                )
+                if raw_second is None:
+                    raise RuntimeError("expansion returned no analysis")
+                validated = validate_structured_response(
+                    raw_second, analysis_schema,
+                )
+                validated = attempt_quality_retry(
+                    self.llm, validated, prompt, analysis_schema,
+                    system_prompt=system_prompt,
+                    task_type=TaskType.ANALYSE,
+                    threshold=0.5,
+                )
+            second = validated.data
+
+            # Same CVSS derivation the base verdict got — the join
+            # may promote this dict to the finding's analysis.
+            from packages.cvss import score_finding
+            score_finding(second)
+
+            chosen, replaced = join_verdicts(first_analysis, second)
+            if replaced:
+                stats["expansions_changed_verdict"] += 1
+                logger.info(
+                    "✓ Context expansion replaced the verdict for %s "
+                    "(second verdict more confident)",
+                    vuln.finding_id,
+                )
+            else:
+                logger.info(
+                    "✓ Context expansion kept the first verdict for %s "
+                    "(second verdict not more confident)",
+                    vuln.finding_id,
+                )
+                # The standing verdict was rendered on the ORIGINAL
+                # window — restore it so the persisted context matches
+                # the verdict that stands.
+                vuln.surrounding_context = original_context
+            kinds = {b.kind for b in hop_blocks}
+            chosen["context_expansion"] = build_expansion_record(
+                reason=reason,
+                first=first_analysis,
+                second=second,
+                replaced=replaced,
+                window_lines=EXPANDED_FINDING_CONTEXT_LINES,
+                caller_context_attached="caller-call-sites" in kinds,
+                callee_context_attached="callee-sources" in kinds,
+            )
+            return chosen
+        except Exception as e:  # noqa: BLE001
+            stats["errors"] += 1
+            vuln.surrounding_context = original_context
+            from core.security.log_sanitisation import (
+                sanitise_for_terminal as _sft,
+            )
+            detail = _sft(str(e), max_len=200)
+            logger.warning(
+                "Context expansion failed for %s — first verdict "
+                "stands: %s",
+                vuln.finding_id, detail,
+            )
+            first_analysis["context_expansion"] = {
+                "triggered": True,
+                "reason": reason,
+                "performed": True,
+                "error": detail,
+            }
+            return None
 
     def _tier1_pre_flight(self, vuln: VulnerabilityContext) -> str:
         """Run IRIS Tier 1 against `vuln` if a CodeQL DB is available.
@@ -2734,6 +3002,7 @@ class AutonomousSecurityAgentV2:
                     )
                 if not self.analyze_vulnerability(
                     vuln, extra_context_blocks=blocks,
+                    checklist=checklist,
                 ):
                     continue
                 stats["analyzed"] += 1
@@ -3453,7 +3722,7 @@ class AutonomousSecurityAgentV2:
                     continue  # skip LLM analyze + exploit + patch
 
                 # 1. Autonomous analysis (LLM-powered, or prep-only)
-                if self.analyze_vulnerability(vuln):
+                if self.analyze_vulnerability(vuln, checklist=checklist):
                     analyzed += 1
                     if emit_journal and self._emit_journal_entry(vuln, checklist):
                         journal_entries_emitted += 1
@@ -3714,6 +3983,13 @@ class AutonomousSecurityAgentV2:
             "results": results,
         }
 
+        # Context-expansion stats — emitted only when the opt-in flag
+        # is on, so flag-off reports stay byte-identical to the
+        # pre-flag pipeline. Always the full counter set when on
+        # (zeros included): counted-never-silent.
+        if getattr(self, "context_expansion", False):
+            report["context_expansion"] = dict(self._expansion_stats)
+
         # Save report
         report_file = self.out_dir / "autonomous_analysis_report.json"
         save_json(report_file, report)
@@ -3809,6 +4085,25 @@ class AutonomousSecurityAgentV2:
                     "corroborated with receipts",
                     fail_open_skipped_llm_calls,
                     fail_open_corroborated,
+                )
+            if getattr(self, "context_expansion", False):
+                # Always emitted while the flag is on — the eval
+                # protocol reads these counters, and an all-zero run
+                # is itself a measurement.
+                from packages.llm_analysis.context_expansion import (
+                    MAX_EXPANSIONS_PER_RUN,
+                )
+                _es = self._expansion_stats
+                logger.info(
+                    "✓ Context expansion: %d triggered, %d performed, "
+                    "%d changed verdict (cap %d; %d skipped at cap, "
+                    "%d errors)",
+                    _es["expansions_triggered"],
+                    _es["expansions_performed"],
+                    _es["expansions_changed_verdict"],
+                    MAX_EXPANSIONS_PER_RUN,
+                    _es["skipped_cap"],
+                    _es["errors"],
                 )
             logger.info("")
             if dataflow_validated > 0:
@@ -4111,6 +4406,20 @@ def main() -> None:
              "the default usage-driven auto-enable. Takes precedence over "
              "--deep-validate.",
     )
+    ap.add_argument(
+        "--context-expansion",
+        action="store_true",
+        help="Opt-in second look for explicitly uncertain verdicts "
+             "(confidence=low, or a full verdict abstention): re-run "
+             "the finding once with a doubled context window plus "
+             "1-hop caller/callee context. The re-run replaces the "
+             "verdict only when strictly more confident; both "
+             "verdicts land in the finding's analysis record. "
+             "Bounded per run — each expansion is one extra "
+             "analysis call (see "
+             "packages/llm_analysis/context_expansion.py for the "
+             "trigger, join rule, and caps). Default off.",
+    )
 
     args = ap.parse_args()
 
@@ -4188,6 +4497,7 @@ def main() -> None:
         # flags were silent no-ops on plain /analyze runs.
         deep_validate=args.deep_validate,
         deep_validate_disabled=args.no_deep_validate,
+        context_expansion=args.context_expansion,
     )
 
     # Load checklist for metadata lookup
@@ -4282,6 +4592,15 @@ def main() -> None:
         dv = (report or {}).get("dataflow_validation") or {}
         for line in render_dataflow_validation_lines(dv, indent=""):
             print(line)
+        # Context-expansion stats — present only on --context-expansion
+        # runs (the eval protocol reads these counters).
+        ce = report.get("context_expansion")
+        if ce:
+            print(
+                f"Context expansions: {ce['expansions_triggered']} "
+                f"triggered, {ce['expansions_performed']} performed, "
+                f"{ce['expansions_changed_verdict']} changed verdict"
+            )
         print(f"LLM cost: ${report['llm_stats']['total_cost']:.4f}")
         print(f"Output: {out_dir}")
         print("=" * 70)

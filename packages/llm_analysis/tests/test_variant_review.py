@@ -299,7 +299,7 @@ class TestReviewVariantMatches:
 
         captured = {}
 
-        def fake_analyze(vuln, extra_context_blocks=()):
+        def fake_analyze(vuln, extra_context_blocks=(), checklist=None):
             captured["vuln"] = vuln
             captured["blocks"] = extra_context_blocks
             vuln.exploitable = True
@@ -334,7 +334,7 @@ class TestReviewVariantMatches:
         agent = self._agent(tmp_path)
         _write_matches(agent.out_dir, [_record()])
 
-        def fake_analyze(vuln, extra_context_blocks=()):
+        def fake_analyze(vuln, extra_context_blocks=(), checklist=None):
             vuln.analysis = {"is_exploitable": False}
             return True
 
@@ -359,7 +359,7 @@ class TestReviewVariantMatches:
 
         calls = []
 
-        def flaky_analyze(vuln, extra_context_blocks=()):
+        def flaky_analyze(vuln, extra_context_blocks=(), checklist=None):
             calls.append(vuln.file_path)
             if len(calls) == 1:
                 raise RuntimeError("boom")
