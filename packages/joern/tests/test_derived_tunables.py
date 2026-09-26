@@ -11,6 +11,7 @@ from packages.joern.tunables import JoernTunables
 
 def _fake_tuning(
     cpg_timeout_s: int, *, heap_derived: bool = False,
+    import_timeout_s: int = 900,
 ) -> Tuning:
     return Tuning(
         codeql_enabled=True,
@@ -20,6 +21,7 @@ def _fake_tuning(
         joern_heap_mb=2048,
         joern_heap_ceiling_mb=65536,
         joern_cpg_timeout_s=cpg_timeout_s,
+        joern_import_timeout_s=import_timeout_s,
         joern_query_timeout_s=300,
         max_semgrep_workers=4, max_codeql_workers=2,
         max_fuzz_parallel=4,
@@ -211,3 +213,145 @@ class TestSessionUsesResolvedTimeout:
             ) as srv:
                 assert srv is server
         assert captured.get("timeout") == 300
+
+
+# ── Import-timeout sentinel and import-site resolution ──────────────
+
+_MIB = 1024 * 1024
+
+
+class TestImportTimeoutSentinel:
+    def test_sentinel_becomes_fallback_number_and_auto_flag(
+        self, monkeypatch,
+    ):
+        from core.tuning import JOERN_IMPORT_TIMEOUT_DERIVED
+        monkeypatch.setattr(
+            core.tuning, "get_tuning",
+            lambda: _fake_tuning(
+                300, import_timeout_s=JOERN_IMPORT_TIMEOUT_DERIVED,
+            ),
+        )
+        t = JoernTunables.from_tuning()
+        assert t.import_timeout_auto is True
+        assert t.import_timeout_s == (
+            core.tuning.derive_joern_import_timeout_s(None)
+        )
+        assert t.import_timeout_s > 0
+
+    def test_static_timeout_keeps_value_no_auto_flag(self, monkeypatch):
+        monkeypatch.setattr(
+            core.tuning, "get_tuning",
+            lambda: _fake_tuning(300, import_timeout_s=3600),
+        )
+        t = JoernTunables.from_tuning()
+        assert t.import_timeout_auto is False
+        assert t.import_timeout_s == 3600
+
+    def test_operator_override_beats_auto(self, monkeypatch):
+        from core.tuning import JOERN_IMPORT_TIMEOUT_DERIVED
+        monkeypatch.setattr(
+            core.tuning, "get_tuning",
+            lambda: _fake_tuning(
+                300, import_timeout_s=JOERN_IMPORT_TIMEOUT_DERIVED,
+            ),
+        )
+        t = JoernTunables.from_tuning(overrides={"import_timeout_s": 42})
+        assert t.import_timeout_auto is False
+        assert t.import_timeout_s == 42
+
+
+class TestResolveImportTimeout:
+    def test_non_auto_passthrough(self):
+        from packages.joern.tunables import resolve_import_timeout_s
+        t = JoernTunables(import_timeout_s=3600)
+        assert resolve_import_timeout_s(t, 190 * _MIB) == 3600
+
+    def test_none_tunables_default(self):
+        from packages.joern.tunables import resolve_import_timeout_s
+        assert resolve_import_timeout_s(None, 190 * _MIB) == (
+            JoernTunables.import_timeout_s
+        )
+
+    def test_auto_derives_from_cpg_size(self):
+        from packages.joern.tunables import resolve_import_timeout_s
+        t = JoernTunables(import_timeout_s=900, import_timeout_auto=True)
+        derived = resolve_import_timeout_s(t, 190 * _MIB)
+        # The kernel-scale calibration graph clears the budget that
+        # killed it (1800 s) with headroom, inside the cap.
+        assert derived >= 2 * 1800
+        assert derived <= 10800
+
+    def test_auto_small_cpg_floors(self):
+        from packages.joern.tunables import resolve_import_timeout_s
+        t = JoernTunables(import_timeout_s=900, import_timeout_auto=True)
+        assert resolve_import_timeout_s(t, 5 * _MIB) == 900
+
+    def test_auto_unknown_size_keeps_base(self):
+        from packages.joern.tunables import resolve_import_timeout_s
+        t = JoernTunables(import_timeout_s=900, import_timeout_auto=True)
+        assert resolve_import_timeout_s(t, None) == 900
+
+
+# ── Sandbox CPU budget derived from the wall timeout ────────────────
+
+class TestSandboxCpuLimits:
+    def _patch(self, monkeypatch, *, standing: int, cpus: int) -> None:
+        import core.sandbox.preexec as preexec
+        monkeypatch.setattr(
+            preexec, "standing_cpu_seconds", lambda: standing,
+        )
+        import os as _os
+        monkeypatch.setattr(
+            _os, "sched_getaffinity", lambda pid: set(range(cpus)),
+            raising=False,
+        )
+
+    def test_short_wall_keeps_standing_floor(self, monkeypatch):
+        # Direction 1: a short wall must not TIGHTEN the standing
+        # sandbox posture — the override only ever raises.
+        from packages.joern.tunables import sandbox_cpu_limits
+        self._patch(monkeypatch, standing=3700, cpus=8)
+        assert sandbox_cpu_limits(60) == {"cpu_seconds": 3700}
+
+    def test_long_wall_raises_above_wall_times_cpus(self, monkeypatch):
+        # Direction 2 (the defect): a derived 4 h wall with a
+        # multi-threaded JVM must get a CPU budget that cannot fire
+        # before the wall — wall x CPUs plus headroom.
+        from packages.joern.tunables import sandbox_cpu_limits
+        self._patch(monkeypatch, standing=3700, cpus=8)
+        got = sandbox_cpu_limits(14400)
+        assert got["cpu_seconds"] >= 14400 * 8
+        assert got["cpu_seconds"] == 14400 * 8 + 300
+
+    def test_hostile_wall_input_is_clamped(self, monkeypatch):
+        # A corrupted wall value must not mint an effectively
+        # unlimited RLIMIT_CPU: the input clamps at 24 h.
+        from packages.joern.tunables import sandbox_cpu_limits
+        self._patch(monkeypatch, standing=3700, cpus=8)
+        assert sandbox_cpu_limits(10**9) == {
+            "cpu_seconds": 86400 * 8 + 300,
+        }
+
+    def test_operator_disabled_cpu_rlimit_is_not_resurrected(
+        self, monkeypatch,
+    ):
+        from packages.joern.tunables import sandbox_cpu_limits
+        self._patch(monkeypatch, standing=0, cpus=8)
+        assert sandbox_cpu_limits(14400) == {}
+
+    def test_sandbox_layer_absent_uses_documented_default(
+        self, monkeypatch,
+    ):
+        import core.sandbox.preexec as preexec
+        from packages.joern.tunables import sandbox_cpu_limits
+
+        def boom() -> int:
+            raise OSError("no sandbox")
+
+        monkeypatch.setattr(preexec, "standing_cpu_seconds", boom)
+        import os as _os
+        monkeypatch.setattr(
+            _os, "sched_getaffinity", lambda pid: set(range(4)),
+            raising=False,
+        )
+        assert sandbox_cpu_limits(60) == {"cpu_seconds": 3600}

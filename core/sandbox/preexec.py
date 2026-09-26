@@ -210,6 +210,25 @@ def _load_user_limits() -> dict:
         return state._user_limits_cache
 
 
+def standing_cpu_seconds() -> int:
+    """The effective standing RLIMIT_CPU budget (default + user config).
+
+    The merged value a sandboxed spawn gets when its caller passes no
+    ``limits`` override — the same DEFAULT + ~/.config/raptor/
+    sandbox.json composition ``context.sandbox()`` applies. Callers
+    that derive a larger per-spawn CPU budget from a wall timeout
+    (e.g. the Joern CPG build) use this as their floor so a derived
+    override can only RAISE the standing posture, never tighten a
+    default or a user-raised value behind the operator's back. A
+    user-configured 0 (explicit "no CPU rlimit" — see _set_limits'
+    ``if cpu > 0`` guard) is returned as-is so the caller can decline
+    to resurrect a limit the operator disabled.
+    """
+    merged = dict(_DEFAULT_LIMITS)
+    merged.update(_load_user_limits())
+    return int(merged["cpu_seconds"])
+
+
 def _make_preexec_fn(limits: dict, writable_paths: list | None = None,
                      allowed_tcp_ports: list | None = None,
                      seccomp_profile: str | None = None,
