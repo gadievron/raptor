@@ -247,8 +247,12 @@ def _rank_leads(leads: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     The chain is unchanged; the score takes effect exclusively where
     the ranking was previously an arbitrary file/line tie among
-    chain-equal leads, so at equal ratio a 27/30 family now precedes
-    a 3/3 one. Strata are never interleaved by score (the stratum id
+    chain-equal leads, so at equal ratio an 18/20 family now precedes
+    a 9/10 one. Raw ratio still sorts ahead of the score, so a 3/3
+    lead outranks a 27/30 one unconditionally — the score never
+    demotes a small-N-perfect family below a large-N near-perfect
+    one; it only breaks exact-ratio ties. Strata are never
+    interleaved by score (the stratum id
     sorts ahead of it): per-stratum precision is unmeasured, so a
     flag-mode score and a return-check score have no comparable
     scale. See consistency_stats.stratified_lead_sort_key.
