@@ -146,6 +146,12 @@ class RunLockHandle:
 #: whatever the caller does with the return value. Also the authority
 #: for self-held detection (`_held_by_this_process`): process-local
 #: state a run-dir writer cannot forge, unlike the holder stamp.
+#: Fork-shared: a fork() child inherits this registry AND the flock'd
+#: open file description, so the child counts as holder and
+#: re-acquires as self-held — semantically honest (it genuinely
+#: shares the flock), but a deliberate widening to keep in mind if
+#: worker-side acquisition ever appears (today's only callers are
+#: orchestrator top-level and never fork before re-acquiring).
 _HELD: list[RunLockHandle] = []
 
 
