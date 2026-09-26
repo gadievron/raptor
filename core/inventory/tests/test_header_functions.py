@@ -127,6 +127,27 @@ class TestBuildIndex:
         idx = build_header_function_index(tmp_path)
         assert "if" not in idx
 
+    def test_skips_reserved_words_but_keeps_prefix_names(self, tmp_path):
+        # _SKIP_NAMES shares the extractor's reserved-word blocklist:
+        # a captured name that is a C/C++ reserved word (`class` is a
+        # legal C identifier but reserved in C++) is refused, while
+        # identifiers that merely prefix a reserved word must index.
+        (tmp_path / "mix.h").write_text(
+            "static int class(int x) {\n"
+            "    return x;\n"
+            "}\n"
+            "static int classify(int x) {\n"
+            "    return x + 1;\n"
+            "}\n"
+            "static int interior(void) {\n"
+            "    return 2;\n"
+            "}\n"
+        )
+        idx = build_header_function_index(tmp_path)
+        assert "class" not in idx
+        assert "classify" in idx
+        assert "interior" in idx
+
     def test_braces_inside_string_literal(self, tmp_path):
         (tmp_path / "fmt.h").write_text(
             'static inline void fmt(int x) {\n'

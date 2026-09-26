@@ -1,11 +1,13 @@
 """Tests for function extraction with metadata."""
 
 import json
+from pathlib import Path
+
 import pytest
 from core.inventory.extractors import (
     FunctionInfo, FunctionMetadata,
     PythonExtractor, JavaExtractor, CExtractor, GoExtractor,
-    JavaScriptExtractor, LuaExtractor, TreeSitterExtractor,
+    GenericExtractor, JavaScriptExtractor, LuaExtractor, TreeSitterExtractor,
     extract_functions, extract_items, _TS_AVAILABLE, _get_ts_languages,
 )
 from core.testing.treesitter import requires_ts
@@ -241,6 +243,374 @@ class TestCRegexExtractor:
         fn = next(f for f in funcs if f.name == "inflate")
         assert fn.line_end is not None
         assert fn.line_end > fn.line_start
+
+
+class TestCReservedWordIdentities:
+    """The regex lane's name capture is "last word before `(`" — on
+    declarator shapes where that paren is not the parameter list, the
+    captured word is a TYPE and real-world corpora minted inventory
+    identities named `int` / `void` with multi-KB brace-filled spans.
+    A recognised function name must never be a C/C++ reserved word."""
+
+    def test_funcptr_param_continuation_does_not_mint_type_name(self):
+        # A function-pointer PARAMETER on a signature continuation
+        # line (ubiquitous in event-driven C) matches
+        # ANSI_SPLIT_PATTERN with `int` in the name group, and the `{`
+        # on the next line confirmed the phantom.
+        code = (
+            "static void drain_timeout_queue(struct timeout_queue *q,\n"
+            "                                int (*func)(struct conn_state *))\n"
+            "{\n"
+            "    unsigned total = 0;\n"
+            "}\n"
+        )
+        names = [f.name for f in CExtractor().extract("t.c", code)]
+        assert "int" not in names
+        assert "drain_timeout_queue" in names
+
+    def test_funcptr_return_defn_does_not_mint_type_name(self):
+        # Function-pointer RETURN type: the word before the declarator
+        # paren is the type. The regex lane cannot recover the real
+        # name (`lookup_handler`) from this shape — tree-sitter does —
+        # but it must not mint `int` in its place.
+        code = (
+            "static int (*lookup_handler(const char *name))(int)\n"
+            "{\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        names = [f.name for f in CExtractor().extract("t.c", code)]
+        assert "int" not in names
+
+    def test_keyword_block_still_refused(self):
+        # Statement keywords stay refused (pre-existing behavior).
+        code = (
+            "void f(void)\n"
+            "{\n"
+            "    if (cond) {\n"
+            "        work();\n"
+            "    }\n"
+            "    while (more()) {\n"
+            "        step();\n"
+            "    }\n"
+            "}\n"
+        )
+        names = [f.name for f in CExtractor().extract("t.c", code)]
+        assert "if" not in names
+        assert "while" not in names
+
+    def test_keyword_prefix_names_still_extract(self):
+        # Two-direction guard on the churn-prone list: identifiers
+        # that merely PREFIX a reserved word are ordinary names and
+        # must keep extracting.
+        code = (
+            "static int iffy(void) {\n"
+            "    return 0;\n"
+            "}\n"
+            "int interior(int x) {\n"
+            "    return x;\n"
+            "}\n"
+            "unsigned intp(void) {\n"
+            "    return 1;\n"
+            "}\n"
+        )
+        names = {f.name for f in CExtractor().extract("t.c", code)}
+        assert {"iffy", "interior", "intp"} <= names
+
+    def test_ansi_one_line_funcptr_return_does_not_mint(self):
+        # Seam pin: the one-line ANSI arm. A funcptr-return definition
+        # whose whole signature fits one line puts `int` in the ANSI
+        # pattern's name group; reverting this seam's RESERVED_WORDS
+        # check back to KEYWORDS re-mints it.
+        code = (
+            "static int (*get_handler(const char *name))(int) {\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        names = [f.name for f in CExtractor().extract("t.c", code)]
+        assert not set(names) & CExtractor.RESERVED_WORDS
+
+    def test_split_funcptr_return_does_not_mint(self):
+        # Seam pin: the FUNCNAME_OPEN_PAREN arm (storage class alone
+        # on line 1, `int (*get_hook(...,` opening line 2).
+        code = (
+            "static\n"
+            "int (*get_hook(const char *name,\n"
+            "               int flags))(int)\n"
+            "{\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        names = [f.name for f in CExtractor().extract("t.c", code)]
+        assert not set(names) & CExtractor.RESERVED_WORDS
+
+    def test_multiline_opener_funcptr_return_does_not_mint(self):
+        # Seam pin: the multi-line opener arm (signature spans two
+        # lines, brace on its own line).
+        code = (
+            "static int (*get_filter(const char *name,\n"
+            "                        int flags))(void)\n"
+            "{\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        names = [f.name for f in CExtractor().extract("t.c", code)]
+        assert not set(names) & CExtractor.RESERVED_WORDS
+
+    def test_reserved_words_contains_no_ordinary_identifiers(self):
+        # The list's membership criterion, executable: ISO C / C++
+        # reserved words only — never typedef/library names, never
+        # keyword-prefix identifiers.
+        reserved = CExtractor.RESERVED_WORDS
+        assert CExtractor.KEYWORDS <= reserved
+        assert CExtractor.C_TYPE_HINTS <= reserved
+        for legit in ("iffy", "interior", "intp", "main",
+                      "size_t", "uint32_t", "apr_status_t"):
+            assert legit not in reserved
+
+    def test_reserved_words_is_exactly_iso_c_union_iso_cpp(self):
+        # Exact-set pin (both directions): the effective vocabulary is
+        # precisely ISO C23 ∪ ISO C++23 — a shrink (dropping e.g.
+        # `restrict` or `co_await`) fails here just as loudly as an
+        # ordinary-identifier addition. Closed language enumeration,
+        # so pinning the exact set is safe: it changes only when a new
+        # ISO revision reserves new words.
+        c23 = frozenset("""alignas alignof auto bool break case char const
+            constexpr continue default do double else enum extern false float
+            for goto if inline int long nullptr register restrict return short
+            signed sizeof static static_assert struct switch thread_local true
+            typedef typeof typeof_unqual union unsigned void volatile while
+            _Alignas _Alignof _Atomic _BitInt _Bool _Complex _Decimal128
+            _Decimal32 _Decimal64 _Generic _Imaginary _Noreturn _Static_assert
+            _Thread_local""".split())
+        cxx23 = frozenset("""alignas alignof and and_eq asm auto bitand bitor
+            bool break case catch char char8_t char16_t char32_t class compl
+            concept const consteval constexpr constinit const_cast continue
+            co_await co_return co_yield decltype default delete do double
+            dynamic_cast else enum explicit export extern false float for
+            friend goto if inline int long mutable namespace new noexcept not
+            not_eq nullptr operator or or_eq private protected public register
+            reinterpret_cast requires return short signed sizeof static
+            static_assert static_cast struct switch template this thread_local
+            throw true try typedef typeid typename union unsigned using
+            virtual void volatile wchar_t while xor xor_eq""".split())
+        assert CExtractor.RESERVED_WORDS == c23 | cxx23
+
+    @requires_ts("c")
+    def test_repair_pass_gate_refuses_reserved_names(self, monkeypatch):
+        # Independent defense-in-depth check of the merge seam in
+        # extract_items: even if the regex lane regresses and mints a
+        # reserved-word identity again, the repair pass must not
+        # append it beside the correctly-named tree-sitter item.
+        from core.inventory import extractors as ex
+
+        class _MintingStub:
+            def extract(self, _filepath, _content):
+                return [
+                    FunctionInfo(name="int", line_start=1, line_end=3),
+                    FunctionInfo(name="rescued_fn", line_start=1, line_end=3),
+                ]
+
+        monkeypatch.setitem(ex._REGEX_EXTRACTORS, "c", _MintingStub())
+        src = (
+            "static int real_fn(int x)\n"
+            "{\n"
+            "    return x;\n"
+            "}\n"
+        )
+        items = extract_items("t.c", "c", src)
+        names = {i.name for i in items if i.kind == "function"}
+        assert "real_fn" in names
+        assert "rescued_fn" in names   # legitimate gap-fill still lands
+        assert "int" not in names      # reserved identity gated out
+
+
+class TestTsMainLaneReservedGate:
+    """The tree-sitter MAIN lane (_extract_function) must refuse
+    reserved-word names on c/cpp: preprocessor-fragmented parses can
+    leave a statement keyword as the declarator identifier of a CLEAN
+    function_definition node, minting `if` identities with multi-KB
+    spans from real corpora."""
+
+    @requires_ts("c")
+    def test_ifdef_wrapped_else_if_does_not_mint(self):
+        # An `#ifdef`-wrapped `else if` arm fragments the parse:
+        # tree-sitter accepts `if` as a declarator identifier inside a
+        # clean function_definition — bypassing the regex-lane seams,
+        # both recovery arms, and the merge gate. This exact shape
+        # minted per-arm `if` identities from a real-world C corpus.
+        code = (
+            "static void seed_pool(int n)\n"
+            "{\n"
+            "    int i;\n"
+            "    for (i = 0; i < n; i++) {\n"
+            "        if (src == FROM_FILE) {\n"
+            "            feed_file();\n"
+            "        }\n"
+            "#ifdef HAVE_EXTERNAL_DAEMON\n"
+            "        else if (src == FROM_DAEMON) {\n"
+            "            feed_daemon();\n"
+            "        }\n"
+            "#endif\n"
+            "        else if (src == FROM_BUILTIN) {\n"
+            "            feed_builtin();\n"
+            "        }\n"
+            "    }\n"
+            "}\n"
+            "static int next_chunk(int lo, int hi)\n"
+            "{\n"
+            "    return lo + hi;\n"
+            "}\n"
+        )
+        items = extract_items("t.c", "c", code)
+        names = [i.name for i in items if i.kind == "function"]
+        assert not set(names) & CExtractor.RESERVED_WORDS
+        assert "seed_pool" in names
+        assert "next_chunk" in names
+
+    @requires_ts("c")
+    @requires_ts("cpp")
+    @pytest.mark.parametrize("lang", ["c", "cpp"])
+    def test_dangling_type_line_if_header_does_not_mint(self, lang):
+        # A dangling type line above an `if` header parses as a
+        # function_definition whose declarator identifier is `if`.
+        code = (
+            "unsigned long\n"
+            "if (cond)\n"
+            "{\n"
+            "    body();\n"
+            "}\n"
+        )
+        items = extract_items(f"t.{'c' if lang == 'c' else 'cpp'}", lang, code)
+        names = [i.name for i in items if i.kind == "function"]
+        assert not set(names) & CExtractor.RESERVED_WORDS
+
+    @requires_ts("c")
+    def test_macro_wrapped_keyword_declarator_does_not_mint(self):
+        # `WRAP(if)(void) { }` puts `if` in a parenthesized_declarator
+        # identifier slot.
+        code = (
+            "WRAP(if)(void)\n"
+            "{\n"
+            "}\n"
+            "int real_one(void)\n"
+            "{\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        items = extract_items("t.c", "c", code)
+        names = [i.name for i in items if i.kind == "function"]
+        assert not set(names) & CExtractor.RESERVED_WORDS
+        assert "real_one" in names
+
+    @requires_ts("c")
+    def test_conversion_operator_routed_to_c_does_not_mint(self):
+        # C++ `operator int()` in a header routed to the c lane parses
+        # with `int` in the name slot.
+        code = "operator int() { }\n"
+        items = extract_items("t.h", "c", code)
+        names = [i.name for i in items if i.kind == "function"]
+        assert "int" not in names
+
+    @requires_ts("cpp")
+    def test_cpp_special_functions_survive_gate(self):
+        # Accept direction: legitimate C++ special functions carry
+        # multi-token / punctuated names — never a bare reserved word —
+        # and must keep extracting on the cpp lane.
+        code = (
+            "struct V {\n"
+            "    int x;\n"
+            "    V() : x(0) {}\n"
+            "    ~V() {}\n"
+            "    operator int() const { return x; }\n"
+            "    int operator()(int y) { return y; }\n"
+            "    V& operator+=(const V& o) { return *this; }\n"
+            "};\n"
+        )
+        names = {f.name for f in TreeSitterExtractor("cpp").extract("v.cpp", code)}
+        assert {"V", "~V", "operator int", "operator()", "operator+="} <= names
+
+
+class TestGenericExtractorControlFlowGate:
+    """The generic fallback's brace-and-paren pattern captures the word
+    before `(` — statement headers like `} else if (x) {` put a
+    control-flow keyword there. Language-agnostic lane, so the gate is
+    the small control-flow subset, NOT the C/C++ reserved vocabulary."""
+
+    def test_else_if_header_does_not_mint(self):
+        code = (
+            "foo bar (baz) {\n"
+            "} else if (x) {\n"
+            "}\n"
+        )
+        names = [f.name for f in GenericExtractor().extract("t.inc", code)]
+        assert "if" not in names
+        assert "bar" in names
+
+    def test_kotlin_when_header_does_not_mint(self):
+        code = (
+            "fun pick(x: Int): Int {\n"
+            "    return when (x) {\n"
+            "        else -> 0\n"
+            "    }\n"
+            "}\n"
+        )
+        names = [f.name for f in GenericExtractor().extract("k.kt", code)]
+        assert "when" not in names
+        assert "pick" in names
+
+    def test_inc_lane_end_to_end_does_not_mint(self):
+        # The `.inc` residual lane routes to the generic fallback via
+        # extract_items — the end-to-end path that minted `if`.
+        code = (
+            "handler:\n"
+            "    mov r0, r1\n"
+            "foo bar (baz) {\n"
+            "} else if (x) {\n"
+            "}\n"
+        )
+        items = extract_items("tables.inc", "inc", code)
+        names = [i.name for i in items if i.kind == "function"]
+        assert "if" not in names
+
+    def test_c_only_reserved_words_still_extract(self):
+        # Accept direction (membership criterion, executable): words
+        # reserved only in C/C++ are ordinary method names in the
+        # generic lane's languages and must keep extracting.
+        code = (
+            "public int template(int x) { return x; }\n"
+            "static long restrict(long v) { return v; }\n"
+            "private bool typename(int k) { return k > 0; }\n"
+        )
+        names = {f.name for f in GenericExtractor().extract("r.cs", code)}
+        assert {"template", "restrict", "typename"} <= names
+        for word in ("template", "restrict", "typename"):
+            assert word not in GenericExtractor._CONTROL_FLOW_NAMES
+        assert "if" in GenericExtractor._CONTROL_FLOW_NAMES
+
+
+class TestNoReservedIdentitiesInTreeCorpus:
+
+    def test_absolute_zero_reserved_names_over_repo_c_corpus(self):
+        # ABSOLUTE assertion, not a BASE-relative diff (a diff is blind
+        # to phantoms present on both sides): the full extract_items
+        # path over every C/C++ file in this repository emits zero
+        # reserved-word function identities.
+        repo = Path(__file__).resolve().parents[3]
+        files = sorted(
+            p for ext in ("*.c", "*.h", "*.cc", "*.cpp")
+            for p in repo.rglob(ext)
+            if ".git" not in p.parts
+        )
+        assert len(files) > 50  # the corpus actually loaded
+        offenders = []
+        for p in files:
+            content = p.read_text(errors="replace")
+            lang = "cpp" if p.suffix in (".cpp", ".cc") else "c"
+            for i in extract_items(str(p), lang, content):
+                if i.kind == "function" and i.name in CExtractor.RESERVED_WORDS:
+                    offenders.append((str(p.relative_to(repo)), i.name))
+        assert offenders == []
 
 
 class TestGoRegexExtractor:
