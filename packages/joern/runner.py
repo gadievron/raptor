@@ -1301,7 +1301,13 @@ def estimate_in_scope_sloc(target: Path, *, exclude_dirs=()) -> int:
             if p.suffix.lower() not in _CONTENT_KEY_SOURCE_EXTS:
                 continue
             try:
-                st = os.stat(p)  # follows symlinks
+                # lstat, deliberately: a planted symlink named like
+                # source (huge.c -> an out-of-tree multi-GB file)
+                # must not inflate the estimate — an inflated
+                # estimate grows the derived CPG wall, so a hung
+                # frontend burns longer before the kill. The symlink
+                # entry itself fails S_ISREG and carries no bytes.
+                st = os.lstat(p)
             except OSError:
                 continue
             if not stat.S_ISREG(st.st_mode):
