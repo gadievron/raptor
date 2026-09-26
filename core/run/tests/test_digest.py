@@ -338,3 +338,120 @@ class TestRendering:
         d = read_run_digest(tmp_path)
         payload = json.dumps(d.to_dict(), ensure_ascii=True)
         assert json.loads(payload)["command"] == "agentic"
+
+
+class TestFuzzHarnessLine:
+    """Shipped fuzz-harness surfacing — one line, terminal runs
+    only, never able to degrade the digest."""
+
+    @staticmethod
+    def _target_with_harnesses(base: Path) -> Path:
+        target = base / "target-repo"
+        fuzz = target / "fuzz" / "fuzz_targets"
+        fuzz.mkdir(parents=True)
+        (target / "fuzz" / "Cargo.toml").write_text("[package]\n")
+        (fuzz / "roundtrip.rs").write_text(
+            "fuzz_target!(|data: &[u8]| {});\n")
+        c_dir = target / "tests" / "fuzz"
+        c_dir.mkdir(parents=True)
+        (c_dir / "fuzz_decode.c").write_text(
+            "int LLVMFuzzerTestOneInput(const uint8_t *d, size_t n)"
+            " { return 0; }\n")
+        return target
+
+    def test_digest_line_renders_counts(self, tmp_path):
+        target = self._target_with_harnesses(tmp_path)
+        run = tmp_path / "run"
+        run.mkdir()
+        _meta(run, target_path=str(target))
+        d = read_run_digest(run)
+        assert d.fuzz_harness_counts == {"cargo-fuzz": 1, "libfuzzer": 1}
+        out = render_run_digest(d)
+        assert "Target ships 2 fuzz harnesses: " in out
+        assert "1 cargo-fuzz, 1 libfuzzer" in out
+        assert "/fuzz can drive them" in out
+
+    def test_singular_harness_line(self, tmp_path):
+        target = tmp_path / "t"
+        fuzz = target / "fuzz" / "fuzz_targets"
+        fuzz.mkdir(parents=True)
+        (target / "fuzz" / "Cargo.toml").write_text("[package]\n")
+        (fuzz / "one.rs").write_text("fn main() {}\n")
+        run = tmp_path / "run"
+        run.mkdir()
+        _meta(run, target_path=str(target))
+        out = render_run_digest(read_run_digest(run))
+        assert "Target ships 1 fuzz harness: 1 cargo-fuzz" in out
+
+    def test_truncated_census_marks_counts_partial(
+            self, tmp_path, monkeypatch):
+        import packages.fuzzing.harness_census as hc
+        target = self._target_with_harnesses(tmp_path)
+        run = tmp_path / "run"
+        run.mkdir()
+        _meta(run, target_path=str(target))
+        monkeypatch.setattr(hc, "_MAX_SNIFF_FILES", 0)
+        d = read_run_digest(run)
+        assert d.fuzz_harness_counts_partial is True
+        out = render_run_digest(d)
+        assert "fuzz harness (counts partial): 1 cargo-fuzz" in out
+
+    def test_no_harnesses_no_line(self, tmp_path):
+        target = tmp_path / "t"
+        target.mkdir()
+        run = tmp_path / "run"
+        run.mkdir()
+        _meta(run, target_path=str(target))
+        d = read_run_digest(run)
+        assert d.fuzz_harness_counts == {}
+        assert "fuzz harness" not in render_run_digest(d)
+
+    def test_running_run_skips_census(self, tmp_path, monkeypatch):
+        target = self._target_with_harnesses(tmp_path)
+        run = tmp_path / "run"
+        run.mkdir()
+        _meta(run, status="running", target_path=str(target))
+        import packages.fuzzing.harness_census as hc
+
+        def _explode(_path):  # pragma: no cover - trap
+            raise AssertionError("census must not run on a live run")
+
+        monkeypatch.setattr(hc, "census_fuzz_harnesses", _explode)
+        d = read_run_digest(run)
+        assert d.fuzz_harness_counts == {}
+
+    def test_census_failure_digest_intact(self, tmp_path, monkeypatch):
+        target = self._target_with_harnesses(tmp_path)
+        run = tmp_path / "run"
+        run.mkdir()
+        _meta(run, target_path=str(target),
+              extra={"findings_count": 3})
+        import packages.fuzzing.harness_census as hc
+
+        def _boom(_path):
+            raise RuntimeError("census exploded")
+
+        monkeypatch.setattr(hc, "census_fuzz_harnesses", _boom)
+        d = read_run_digest(run)
+        assert d.fuzz_harness_counts == {}
+        assert d.findings_total == 3  # other layers untouched
+        out = render_run_digest(d)
+        assert "What matters" in out
+        assert "fuzz harness" not in out
+
+    def test_absent_or_bogus_target_path_skips(self, tmp_path):
+        run = tmp_path / "run"
+        run.mkdir()
+        _meta(run)  # no target_path at all
+        assert read_run_digest(run).fuzz_harness_counts == {}
+        _meta(run, target_path=str(tmp_path / "nope"))
+        assert read_run_digest(run).fuzz_harness_counts == {}
+
+    def test_to_dict_carries_counts(self, tmp_path):
+        target = self._target_with_harnesses(tmp_path)
+        run = tmp_path / "run"
+        run.mkdir()
+        _meta(run, target_path=str(target))
+        doc = json.loads(json.dumps(read_run_digest(run).to_dict()))
+        assert doc["fuzz_harness_counts"]["cargo-fuzz"] == 1
+        assert doc["target_path"] == str(target)
