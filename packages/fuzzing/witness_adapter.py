@@ -24,6 +24,7 @@ from core.witness.types import compute_bytes_hash
 
 if TYPE_CHECKING:
     from packages.fuzzing.atheris_runner import PythonExceptionInfo
+    from packages.fuzzing.cargofuzz_runner import RustPanicInfo
     from packages.fuzzing.crash_collector import Crash
     from packages.fuzzing.crash_attribution import CrashAttribution
 
@@ -199,5 +200,79 @@ def witness_from_atheris_artifact(
         outcome_detail=outcome_detail,
         target_source_hash=target_source_hash,
         produced_by="atheris",
+    )
+    return witness, data
+
+
+def witness_from_cargofuzz_artifact(
+    artifact: Path,
+    *,
+    panic: RustPanicInfo | None = None,
+    binary_path: Path | None = None,
+    target_source_hash: str | None = None,
+) -> tuple[Witness, bytes]:
+    """Wrap a cargo-fuzz crash artifact as a ``Witness`` + raw bytes.
+
+    Same shape and store path as the AFL and atheris adapters above,
+    so cargo-fuzz crashes join /validate, reporting, and
+    ``raptor-verified-outcomes`` on the identical data path.
+    Differences worth naming:
+
+    * cargo-fuzz crashes are usually Rust panics: the harness aborts
+      on the panic and libFuzzer's crash handler writes the artifact.
+      The fuzzer observed the target die on these bytes — the outcome
+      is ``EXIT_SIGNAL`` (same evidentiary weight as an AFL signal
+      exit), with the Rust-side truth carried precisely in
+      ``outcome_detail`` (``crash_kind=rust_panic``, panic message /
+      location, ``stack_hash`` from the backtrace frames). Native
+      crashes (ASan reports, segfaults in unsafe code) surface
+      identically minus the panic detail (``crash_kind=native``).
+    * ``binary_path`` is the BUILT fuzz-target binary, hashed into
+      ``target_binary_hash`` so a later run can verify it is still the
+      same build; ``target_source_hash`` binds the crate tree when the
+      caller has one.
+
+    The artifact lives in the target-writable crashes dir: same
+    bounded-read cap and oversize refusal as the AFL adapter.
+    """
+    got = read_bytes_capped(artifact, _MAX_CRASH_INPUT_BYTES)
+    if got is None:
+        msg = f"crash artifact {artifact} could not be read"
+        raise OSError(msg)
+    data, truncated = got
+    if truncated:
+        msg = (
+            f"crash artifact {artifact} exceeds the "
+            f"{_MAX_CRASH_INPUT_BYTES}-byte witness cap — refusing to "
+            f"load a target-planted oversized file into the witness "
+            f"store"
+        )
+        raise ValueError(msg)
+
+    outcome_detail: dict = {"crash_id": artifact.name}
+    if panic is not None:
+        outcome_detail["crash_kind"] = "rust_panic"
+        if panic.message:
+            outcome_detail["panic_message"] = panic.message
+        if panic.location:
+            outcome_detail["panic_location"] = panic.location
+        if panic.stack_key:
+            outcome_detail["stack_hash"] = panic.stack_key
+    else:
+        outcome_detail["crash_kind"] = "native"
+
+    target_binary_hash: str | None = None
+    if binary_path is not None and Path(binary_path).is_file():
+        target_binary_hash = sha256_file(Path(binary_path))
+
+    witness = Witness(
+        bytes_hash=compute_bytes_hash(data),
+        bytes_len=len(data),
+        source=WitnessSource.FUZZ,
+        observed_outcome=WitnessOutcome.EXIT_SIGNAL,
+        outcome_detail=outcome_detail,
+        target_binary_hash=target_binary_hash,
+        target_source_hash=target_source_hash,
+        produced_by="cargo-fuzz",
     )
     return witness, data
