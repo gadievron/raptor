@@ -1924,6 +1924,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "core/tuning/__init__.py::_AUTO_RESOLVERS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "closed tuning-key registry: maps the /tune config keys that accept \"auto\" to their host-detection resolvers — RAPTOR's own operator-facing configuration surface, the same closed taxonomy as the sibling _DEFAULTS/_KEY_COMMENTS/_VALID_KEYS entries, not a learned name vocabulary"
+  },
   "core/tuning/__init__.py::_DEFAULTS": {
     "count": 13,
     "kind": "literal"
