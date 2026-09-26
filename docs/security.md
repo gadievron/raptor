@@ -85,6 +85,34 @@ strips `PYTHONPATH`/`PYTHONHOME`, no user site, no cwd prepended to
 `PYTHONHOME`, `PYTHONSTARTUP`, and `PYTHONINSPECT` from all subprocess
 environments.
 
+**Interpreter-startup-hook forgery (authority/consent surfaces):** a
+sharper variant of the same class — a `sitecustomize.py` reached via
+`PYTHONPATH`, or a `.pth`/`usercustomize.py` planted in the default
+user site (the latter needs ZERO environment variables, so no env
+check can see it), executes before the first line of any launcher and
+can monkeypatch the checks that operator authority rests on
+(invocation-context provenance, consent ceremonies, the
+boot-payload-stamp enforcement). The launchers that mint or enforce
+operator authority — `raptor-review`, `raptor-annotate`,
+`raptor-coverage-summary`, `raptor-wsl-consent`, `raptor-may-ask`,
+`raptor-sage-mcp-guard`, and the `python3` children of the SAGE
+consent lane — therefore run under interpreter isolated mode: a
+`-S python3 -I` shebang closes the dispatch route at the first
+instruction, and a byte-pinned re-exec guard (first statement in each
+script) extends the closure to `python3 <script>` invocations,
+preserving argv, stdin, and the TTY-ness of all std fds so the
+ceremony gates see the unchanged context. Honest bound: on the
+`python3 <script>` route the hook has already run when the guard
+fires — the stock neuter of the guard fails closed (exit 97), but a
+hook crafted against the guard can win there, and same-user writes to
+RAPTOR's own files or the interpreter's startup surface — the system
+site-packages, or interpreter resolution itself (a `python3` shim in
+a user-writable `PATH` directory, or a `PATH=…` prefix, that strips
+`-I` before the real interpreter runs) — remain outside the trust
+edge, as ever. Identity, coverage, and behaviour
+are gate-pinned (`test_libexec_marker_coverage.py`,
+`test_interpreter_isolation.py`).
+
 ### 5. Exfiltration via LLM Output Rendering
 
 Attacker-controlled content can exfiltrate data if the researcher views
