@@ -91,13 +91,36 @@ class TestPassFdsGate(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_socket_refused_even_when_declared(self):
+        """A socket with an ADDRESSABLE endpoint stays refused, and
+        pass_fds_declared cannot override the refusal. (An own
+        anonymous socketpair half is pipe-equivalent and admitted —
+        covered in test_pass_fds_socketpair.py — so the refusal
+        fixture here is the reachable shape the gate exists for: a
+        client connected to a pathname AF_UNIX listener.)"""
+        peer_path = os.path.join(self.out, "peer.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(listener.close)
+        listener.bind(peer_path)
+        listener.listen(1)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(client.close)
+        client.connect(peer_path)
+        with self._sandbox() as run:
+            with self.assertRaisesRegex(TypeError, "socket"):
+                run(["/bin/true"], pass_fds=[client.fileno()],
+                    pass_fds_declared=True)
+
+    def test_own_socketpair_half_admitted_at_gate(self):
+        """The one admissible socket shape — an own anonymous AF_UNIX
+        SOCK_STREAM socketpair half — passes the gate end-to-end (no
+        declaration needed): pipe-equivalent capability."""
         a, b = socket.socketpair()
         self.addCleanup(a.close)
         self.addCleanup(b.close)
         with self._sandbox() as run:
-            with self.assertRaisesRegex(TypeError, "socket"):
-                run(["/bin/true"], pass_fds=[a.fileno()],
-                    pass_fds_declared=True)
+            r = run(["/bin/true"], pass_fds=[a.fileno()],
+                    capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_read_fd_allowed_when_reads_unrestricted(self):
         fd = self._open_victim()

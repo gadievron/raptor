@@ -1069,6 +1069,51 @@ class TestFdIsolation(unittest.TestCase):
         finally:
             s.close()
 
+    def test_pass_fds_own_socketpair_half_accepted(self):
+        """The ONE admissible socket shape: a connected anonymous
+        AF_UNIX stream socketpair half created by this process —
+        pipe-equivalent (a private byte stream to the trusted
+        parent), so it clears the gate like the stdio pipes do."""
+        import socket as _socket
+        if not hasattr(_socket, "SO_PEERCRED"):
+            self.skipTest("SO_PEERCRED unavailable on this platform")
+        parent_half, child_half = _socket.socketpair()
+        try:
+            with sandbox() as run:
+                result = run(
+                    ["true"], pass_fds=[child_half.fileno()],
+                    capture_output=True, text=True, timeout=10,
+                )
+            self.assertEqual(result.returncode, 0)
+        finally:
+            parent_half.close()
+            child_half.close()
+
+    def test_pass_fds_pathname_socket_rejected_even_declared(self):
+        """The docker.sock client shape (connected to a PATHNAME
+        server) stays refused, and pass_fds_declared cannot override
+        the socket refusal — the declared escape hatch covers policy
+        mismatches on files/dirs, never sockets outside the
+        own-socketpair carve-out."""
+        import socket as _socket
+        with TemporaryDirectory() as td:
+            path = os.path.join(td, "srv.sock")
+            srv = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            cli = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            try:
+                srv.bind(path)
+                srv.listen(1)
+                cli.connect(path)
+                with sandbox() as run:
+                    with self.assertRaises(TypeError) as cm:
+                        run(["true"], pass_fds=[cli.fileno()],
+                            pass_fds_declared=True)
+                self.assertIn("socket", str(cm.exception))
+                self.assertIn("does not override", str(cm.exception))
+            finally:
+                cli.close()
+                srv.close()
+
     def test_pass_fds_pipe_accepted(self):
         """Pipes (S_ISFIFO) are a legitimate pass_fds use — not blocked."""
         r, w = os.pipe()

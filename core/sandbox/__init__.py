@@ -353,9 +353,17 @@ Threat model — what the sandbox DOES protect against:
   the blocklist names. `env=None` is treated as "no env kwarg" (not
   "inherit os.environ wholesale" which is subprocess's default).
 - Socket FDs via `pass_fds=[...]` — `sandbox().run()` stats each
-  pass_fds entry and rejects S_ISSOCK. Pipes (S_ISFIFO) still pass.
-  Closes the "inherited Unix-socket FD reaches /var/run/docker.sock"
-  vector without breaking legitimate pipe-based stdin passing.
+  pass_fds entry and rejects S_ISSOCK, with ONE narrow carve-out: a
+  connected anonymous AF_UNIX SOCK_STREAM socketpair half whose
+  other half is held by the calling process (SO_PEERCRED peer pid ==
+  own pid; `_anon_socketpair_problem`) is admitted — that shape is
+  capability-equivalent to the stdio pipes already allowed. Every
+  other socket (pathname/abstract endpoints, INET families,
+  listeners, foreign-created pairs) stays refused, and
+  `pass_fds_declared` cannot override the refusal. Pipes (S_ISFIFO)
+  still pass. Closes the "inherited Unix-socket FD reaches
+  /var/run/docker.sock" vector without breaking legitimate
+  pipe-based stdin passing or parent-created worker transports.
 - `shell=True` misuse — rejected with TypeError. subprocess with
   shell=True reinterprets argv into `sh -c argv[0] argv[1:]`, which
   breaks deterministic argv construction AND is a shell-injection
@@ -482,8 +490,10 @@ What the sandbox does NOT protect against:
   (libseccomp returns negative for unknown names). One-shot warning
   lists any unresolved syscalls so operators can decide.
 - `pass_fds` non-socket FD abuse — pipes and regular-file FDs are
-  allowed through. Sockets are rejected (see above). Callers passing
-  `close_fds=False` are rejected with TypeError.
+  allowed through. Sockets are rejected except an own anonymous
+  connected AF_UNIX SOCK_STREAM socketpair half (pipe-equivalent;
+  see above). Callers passing `close_fds=False` are rejected with
+  TypeError.
 - Caller `env=` override bypasses `get_safe_env()` — the allowlist
   is never applied to it, and the DANGEROUS_ENV_VARS blocklist only
   under `strict_env=True` (default ON for `run_untrusted()`; see

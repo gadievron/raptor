@@ -371,21 +371,30 @@ class TestAPIContract(unittest.TestCase):
         self.assertIn("shell", str(cm.exception).lower())
 
     def test_pass_fds_socket_rejected(self):
-        """An inherited AF_UNIX socket FD can reach the docker daemon
-        socket. Defense: stat each pass_fds entry and refuse S_ISSOCK.
-        Pipe FDs (S_ISFIFO) remain allowed for legitimate stdin piping."""
+        """An inherited AF_UNIX socket FD connected to a pathname
+        listener can reach the docker daemon socket. Defense: refuse
+        any pass_fds socket that has an addressable endpoint. (The
+        one admitted socket shape — an own anonymous socketpair half,
+        pipe-equivalent — is covered in test_pass_fds_socketpair.py;
+        pipe FDs remain allowed for legitimate stdin piping.)"""
         if not check_net_available() or not check_mount_available():
             self.skipTest("User/mount namespaces not available")
-        # Create a socket FD — should be rejected
-        s1, s2 = socket.socketpair()
+        # A client connected to a pathname AF_UNIX listener — the
+        # /var/run/docker.sock shape — must be rejected.
+        sock_path = os.path.join(self.tmp.name, "daemon.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
+            listener.bind(sock_path)
+            listener.listen(1)
+            client.connect(sock_path)
             with self.assertRaises((TypeError, ValueError)), sandbox(
                 target=self.tmp.name, output=self.tmp.name,
             ) as run:
-                run(["true"], pass_fds=[s1.fileno()], timeout=5)
+                run(["true"], pass_fds=[client.fileno()], timeout=5)
         finally:
-            s1.close()
-            s2.close()
+            client.close()
+            listener.close()
 
     @requires_landlock
     def test_pass_fds_pipe_allowed(self):

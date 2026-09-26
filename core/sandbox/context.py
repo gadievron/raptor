@@ -922,6 +922,83 @@ def _under(spelling: str, root: str) -> bool:
     return spelling == root or spelling.startswith(root + "/")
 
 
+def _anon_socketpair_problem(fd: int) -> str | None:
+    """Why this socket fd is NOT an own-socketpair half, or ``None``.
+
+    SECURITY-SENSITIVE: this predicate is the ONLY socket shape the
+    pass_fds gate admits, and it is deliberately capability-equivalent
+    to the stdio pipes the gate already allows — a private byte stream
+    to the trusted calling process, nothing else. Every check below is
+    load-bearing:
+
+    * ``AF_UNIX`` + ``SOCK_STREAM`` — no INET/DGRAM shapes; an
+      inherited INET socket is a network capability the seccomp
+      socket-family filter never sees.
+    * both endpoint addresses UNNAMED (empty) — a pathname or
+      abstract address on EITHER end means the fd reaches (or can be
+      reached by) something addressable in a shared namespace, e.g. a
+      connected ``/var/run/docker.sock`` client, which this gate
+      exists to refuse. ``getpeername`` must also succeed: an
+      unconnected socket is a listener-shaped capability, not a pipe.
+    * ``SO_PEERCRED`` peer pid == ``os.getpid()`` — the OTHER half is
+      held by the calling process itself, i.e. THIS process created
+      the pair via ``socketpair(2)``. A pair minted by a foreign
+      process and smuggled in over SCM_RIGHTS reports the foreign
+      pid and refuses. Platforms without ``SO_PEERCRED`` (non-Linux)
+      refuse — fail closed; the pathname transport is primary there.
+
+    The fd is inspected through a dup-wrapped ``socket.socket`` so
+    the caller's descriptor keeps its state (no ownership transfer).
+    Returns ``None`` when the fd qualifies, else the refusal reason.
+    """
+    import socket as _socket_mod
+    import struct as _struct
+
+    try:
+        dup_fd = os.dup(fd)
+    except OSError as e:
+        return f"fd not duplicable for inspection ({e})"
+    try:
+        sock = _socket_mod.socket(fileno=dup_fd)
+    except OSError as e:
+        os.close(dup_fd)
+        return f"not inspectable as a socket ({e})"
+    try:
+        if sock.family != _socket_mod.AF_UNIX:
+            return f"family {sock.family!r} is not AF_UNIX"
+        if sock.type != _socket_mod.SOCK_STREAM:
+            return f"type {sock.type!r} is not SOCK_STREAM"
+        try:
+            local = sock.getsockname()
+        except OSError as e:
+            return f"getsockname failed ({e})"
+        if local != "":
+            return "local endpoint is named (pathname/abstract), not an anonymous socketpair"
+        try:
+            peer = sock.getpeername()
+        except OSError as e:
+            return f"not a connected stream (getpeername: {e})"
+        if peer != "":
+            return "peer endpoint is named (pathname/abstract), not an anonymous socketpair"
+        so_peercred = getattr(_socket_mod, "SO_PEERCRED", None)
+        if so_peercred is None:
+            return "SO_PEERCRED unavailable on this platform"
+        try:
+            cred = sock.getsockopt(
+                _socket_mod.SOL_SOCKET, so_peercred,
+                _struct.calcsize("3i"),
+            )
+            peer_pid = _struct.unpack("3i", cred)[0]
+        except (OSError, _struct.error) as e:
+            return f"SO_PEERCRED unreadable ({e})"
+        if peer_pid != os.getpid():
+            return (f"peer pid {peer_pid} is not this process "
+                    f"({os.getpid()}) — pair not created here")
+        return None
+    finally:
+        sock.close()
+
+
 def _split_wsl_ambient_mnt_reads(
     paths: list, exempt_roots: list,
 ) -> "tuple[list, list]":
@@ -4679,17 +4756,43 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     )
                     raise TypeError(msg_0) from e
                 if _stat.S_ISSOCK(mode):
-                    # Sockets stay refused even under pass_fds_declared:
-                    # they bypass the seccomp socket-family filter
-                    # outright and there is no in-policy socket shape.
+                    # SECURITY-SENSITIVE: sockets stay refused even
+                    # under pass_fds_declared — they bypass the seccomp
+                    # socket-family filter outright. ONE narrow shape
+                    # is admitted: a connected anonymous AF_UNIX
+                    # SOCK_STREAM socketpair half whose other half is
+                    # held by THIS process (_anon_socketpair_problem).
+                    # That shape is capability-equivalent to the stdio
+                    # pipes already allowed — a private byte stream to
+                    # the trusted parent — and lets sandboxed workers
+                    # (e.g. the Ghidra decompile server on hosts whose
+                    # seccomp lane denies socket(AF_UNIX)) serve over a
+                    # parent-created pair. Anything else — pathname or
+                    # abstract endpoints (docker.sock clients), INET
+                    # families, listeners, foreign-created pairs —
+                    # keeps the unconditional refusal below, which
+                    # pass_fds_declared cannot override.
+                    _sock_problem = _anon_socketpair_problem(fd)
+                    if _sock_problem is None:
+                        logger.info(
+                            "Sandbox: pass_fds entry fd=%d admitted as "
+                            "an own anonymous AF_UNIX stream socketpair "
+                            "half (pipe-equivalent capability).", fd,
+                        )
+                        continue
                     msg_0 = (
                         f"sandbox().run(): pass_fds entry fd={fd} is a "
                         f"socket. Inherited sockets bypass the seccomp "
                         f"socket() family filter — a compromised child "
                         f"could connect to the socket's peer (e.g. "
-                        f"/var/run/docker.sock). Refusing. If you need "
-                        f"to pass a pipe for stdin content, use a pipe "
-                        f"fd (S_ISFIFO) or pass stdin= directly."
+                        f"/var/run/docker.sock). Refusing "
+                        f"({_sock_problem}); pass_fds_declared does not "
+                        f"override this. The only admissible socket "
+                        f"shape is a connected anonymous AF_UNIX "
+                        f"SOCK_STREAM socketpair half created by this "
+                        f"process. If you need to pass a pipe for "
+                        f"stdin content, use a pipe fd (S_ISFIFO) or "
+                        f"pass stdin= directly."
                     )
                     raise TypeError(msg_0)
                 _problem = _fd_policy_problem(fd)
