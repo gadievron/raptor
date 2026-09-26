@@ -25,6 +25,10 @@ sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.dataflow.evidence_renderer import render_evidence_for_prompt
 from core.dataflow.sanitizer_evidence import SanitizerEvidence
+from core.llm.context_window import (
+    DATAFLOW_STEP_CONTEXT_LINES,
+    DATAFLOW_VALIDATION_CONTEXT_LINES,
+)
 from core.llm.methodology import load_methodology
 from core.smt_solver import BVProfile
 from core.smt_solver.path_feasibility import (
@@ -616,7 +620,8 @@ class DataflowValidator:
             self.logger.warning("Failed to extract dataflow path: %s", e)
             return None
 
-    def read_source_context(self, file_path: str, line: int, context_lines: int = 10,
+    def read_source_context(self, file_path: str, line: int,
+                            context_lines: int = DATAFLOW_VALIDATION_CONTEXT_LINES,
                             repo_root: Path | None = None) -> str:
         """
         Read source code context around a location.
@@ -624,7 +629,9 @@ class DataflowValidator:
         Args:
             file_path: Path to source file
             line: Line number
-            context_lines: Lines before/after to include
+            context_lines: Lines before/after to include (default:
+                the shared dataflow-validation window — see
+                core.llm.context_window for the sizing rationale)
             repo_root: When provided, refuse to read files outside this root.
                 Callers passing SARIF-derived paths should always set this.
 
@@ -727,7 +734,12 @@ class DataflowValidator:
         blocks = []
         all_steps = [dataflow.source] + dataflow.intermediate_steps + [dataflow.sink]
         for i, step in enumerate(all_steps):
-            ctx = self.read_source_context(str(repo_path / step.file_path), step.line, context_lines=5,
+            # Tight per-step window (shared with the analysis prompt's
+            # dataflow snippets): condition extraction wants the guards
+            # AT the step, not the whole neighbourhood — see
+            # core.llm.context_window.
+            ctx = self.read_source_context(str(repo_path / step.file_path), step.line,
+                                            context_lines=DATAFLOW_STEP_CONTEXT_LINES,
                                             repo_root=repo_path)
             blocks.append(UntrustedBlock(
                 content=f"({step.label})\n{ctx}",
