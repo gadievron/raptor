@@ -86,5 +86,22 @@ def test_merge_and_report_paths_are_gated(tmp_path: Path, monkeypatch):
     assert merge_findings([run]) == []
 
 
+def test_skip_warning_names_file_consequence_and_remedy(
+        tmp_path: Path, monkeypatch, caplog):
+    """The over-gate skip must be actionable: name the skipped FILE,
+    the merged-view consequence, and a remedy — a kernel-scale run's
+    findings vanishing from /project views must never be a mystery."""
+    _write_findings(tmp_path / "findings.json", pad=4096)
+    monkeypatch.setattr(findings_utils, "MAX_FINDINGS_JSON_BYTES", 1024,
+                        raising=False)
+    with caplog.at_level("WARNING"):
+        load_findings_from_dir(tmp_path)
+    msg = "\n".join(r.getMessage() for r in caplog.records)
+    assert str(tmp_path / "findings.json") in msg
+    assert "EXCLUDED" in msg
+    assert "/project findings" in msg
+    assert "jq" in msg
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

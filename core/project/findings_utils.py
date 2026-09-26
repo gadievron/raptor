@@ -202,7 +202,13 @@ def _load_size_gated_json(path: Path) -> Any | None:
     if size > MAX_FINDINGS_JSON_BYTES:
         logger.warning(
             "skipping %s: %d bytes exceeds the %d-byte findings-file "
-            "gate — not parsing (oversized/hostile artifact?)",
+            "gate — this run's findings are EXCLUDED from every "
+            "merged project view (/project findings, report, "
+            "correlate, diff) until the file shrinks. If the file is "
+            "RAPTOR's own oversized artifact (kernel-scale runs), "
+            "inspect it directly (jq streams it) or split/trim it; "
+            "if its origin is unknown, treat it as hostile and do "
+            "not parse it wholesale.",
             path, size, MAX_FINDINGS_JSON_BYTES,
         )
         return None
