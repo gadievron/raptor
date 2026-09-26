@@ -20,6 +20,7 @@ from core.project.findings_utils import (
     MAX_FINDINGS_JSON_BYTES,
     load_findings_from_dir,
     load_sca_findings_from_dir,
+    oversized_findings_files,
 )
 
 _FINDING = {"id": "f1", "file": "a.c", "function": "p", "line": 1,
@@ -101,6 +102,62 @@ def test_skip_warning_names_file_consequence_and_remedy(
     assert "EXCLUDED" in msg
     assert "/project findings" in msg
     assert "jq" in msg
+
+
+def _sparse_over_gate(path: Path) -> None:
+    """st_size one byte over the gate; sparse — never read or parsed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as fh:
+        fh.seek(MAX_FINDINGS_JSON_BYTES)
+        fh.write(b"x")
+
+
+class TestOversizedFindingsFiles:
+    """Stat-only preview of the gate along the loader's exact fallback
+    chain — recompute-and-replace callers (the completion-time
+    re-adjudication sweep) refuse to replace derived artifacts when
+    the recompute would run over a gate-excluded view."""
+
+    def test_oversized_primary_reported(self, tmp_path: Path):
+        _sparse_over_gate(tmp_path / "findings.json")
+        assert oversized_findings_files(tmp_path) == [
+            tmp_path / "findings.json"]
+
+    def test_fallback_checked_when_primary_missing(self, tmp_path: Path):
+        _sparse_over_gate(tmp_path / "openant_findings.json")
+        assert oversized_findings_files(tmp_path) == [
+            tmp_path / "openant_findings.json"]
+
+    def test_fallback_checked_when_primary_oversized(self, tmp_path: Path):
+        # An over-gate primary makes the loader consult the fallback,
+        # so an over-gate fallback fires a second gate — both report.
+        _sparse_over_gate(tmp_path / "findings.json")
+        _sparse_over_gate(tmp_path / "openant_findings.json")
+        assert oversized_findings_files(tmp_path) == [
+            tmp_path / "findings.json",
+            tmp_path / "openant_findings.json"]
+
+    def test_readable_primary_shadows_oversized_fallback(
+            self, tmp_path: Path):
+        # The loader never consults the fallback past a readable
+        # primary — previewing it anyway would report a gate the
+        # loader cannot fire (a phantom deferral trigger).
+        _write_findings(tmp_path / "findings.json")
+        _sparse_over_gate(tmp_path / "openant_findings.json")
+        assert oversized_findings_files(tmp_path) == []
+
+    def test_no_files_no_gates(self, tmp_path: Path):
+        assert oversized_findings_files(tmp_path) == []
+
+    def test_at_bound_is_not_over(self, tmp_path: Path):
+        # The gate is strictly greater-than: st_size == the bound
+        # loads, and the preview must agree with the loader's own
+        # comparison in both directions.
+        p = tmp_path / "findings.json"
+        with p.open("wb") as fh:
+            fh.seek(MAX_FINDINGS_JSON_BYTES - 1)
+            fh.write(b"x")
+        assert oversized_findings_files(tmp_path) == []
 
 
 if __name__ == "__main__":

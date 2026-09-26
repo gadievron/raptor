@@ -779,3 +779,160 @@ class TestProjectSplitGating:
                   if record_shape(r) == SHAPE_INTRA_RUN_SPLIT]
         assert splits[0]["site"]["function"] == "read_form"
         assert splits[0]["new_claim"]["id"] == "V2-A"
+
+
+class TestRefreshProjectQueue:
+    """Completion-time bridge: the project-level queue is recomputed
+    from the project's run dirs and written where /project report
+    materialises it (<project>/_report)."""
+
+    @staticmethod
+    def _run(project_dir, name, findings, ts, status="completed"):
+        d = project_dir / name
+        d.mkdir(parents=True)
+        (d / "findings.json").write_text(json.dumps({"findings": findings}))
+        (d / ".raptor-run.json").write_text(json.dumps({
+            "status": status, "command": "validate", "timestamp": ts,
+        }))
+        return d
+
+    def test_cross_run_contradiction_written_to_report_dir(self, tmp_path):
+        from core.project.readjudication import refresh_project_queue
+        proj = tmp_path / "proj"
+        # The sibling-run shape the import-time detector cannot see:
+        # the disproof lives in ANOTHER run's container.
+        self._run(proj, "run_a", [_disproof()], "2026-01-01T00:00:00")
+        self._run(proj, "run_b", [_claim()], "2026-01-02T00:00:00")
+        path = refresh_project_queue(proj)
+        assert path == proj / "_report" / QUEUE_FILENAME
+        records = load_jsonl(path)
+        assert queued_count(records) == 1
+        rec = records[0]
+        assert record_shape(rec) == SHAPE_CLAIM_AFTER_DISPROOF
+        assert rec["new_claim"]["source"] == "run_b"
+        assert rec["disproof"]["source"] == "run_a"
+
+    def test_ordering_by_recorded_start_not_name(self, tmp_path):
+        # run named "later" but STARTED earlier holds the disproof —
+        # the shared locate ordering (recorded timestamp) must place
+        # it first or the claim reads as progression.
+        from core.project.readjudication import refresh_project_queue
+        proj = tmp_path / "proj"
+        self._run(proj, "z_old", [_disproof()], "2026-01-01T00:00:00")
+        self._run(proj, "a_new", [_claim()], "2026-01-02T00:00:00")
+        path = refresh_project_queue(proj)
+        assert path is not None
+        assert queued_count(load_jsonl(path)) == 1
+
+    def test_empty_detection_clears_stale_queue(self, tmp_path):
+        from core.project.readjudication import refresh_project_queue
+        proj = tmp_path / "proj"
+        report = proj / "_report"
+        report.mkdir(parents=True)
+        stale = report / QUEUE_FILENAME
+        stale.write_text('{"action": "queued"}\n')
+        self._run(proj, "run_a", [_claim()], "2026-01-01T00:00:00")
+        assert refresh_project_queue(proj) is None
+        assert not stale.exists()
+
+    def test_no_contradiction_no_report_dir_minted(self, tmp_path):
+        from core.project.readjudication import refresh_project_queue
+        proj = tmp_path / "proj"
+        self._run(proj, "run_a", [_claim()], "2026-01-01T00:00:00")
+        assert refresh_project_queue(proj) is None
+        assert not (proj / "_report").exists()
+
+    def test_no_runs_is_a_noop(self, tmp_path):
+        from core.project.readjudication import refresh_project_queue
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        assert refresh_project_queue(proj) is None
+
+    def test_budget_deferral_leaves_existing_queue(self, tmp_path,
+                                                   monkeypatch):
+        # Over budget: the sweep is skipped and a previously computed
+        # queue file survives — deferral must never delete signal.
+        import core.project.readjudication as readj
+        proj = tmp_path / "proj"
+        self._run(proj, "run_a", [_disproof()], "2026-01-01T00:00:00")
+        self._run(proj, "run_b", [_claim()], "2026-01-02T00:00:00")
+        path = readj.refresh_project_queue(proj)
+        assert path is not None and path.exists()
+        before = path.read_text()
+        monkeypatch.setattr(readj, "PROJECT_SWEEP_BYTE_BUDGET", 1)
+        assert readj.refresh_project_queue(proj) is None
+        assert path.read_text() == before
+
+    def test_per_file_gate_defers_and_preserves_queue(self, tmp_path,
+                                                      caplog):
+        # A sibling findings.json over the per-file gate (while under
+        # the sweep budget) makes detection's loader EXCLUDE that run,
+        # so a recompute would be partial by construction — here it
+        # would find no contradiction and DELETE the queue whose
+        # record depends on the inflated run. The refresh must defer
+        # exactly like the budget path: return None, existing queue
+        # byte-identical, loud notice naming the skipped-file count.
+        from core.project.findings_utils import MAX_FINDINGS_JSON_BYTES
+        from core.project.readjudication import refresh_project_queue
+        proj = tmp_path / "proj"
+        a = self._run(proj, "run_a", [_disproof()], "2026-01-01T00:00:00")
+        self._run(proj, "run_b", [_claim()], "2026-01-02T00:00:00")
+        path = refresh_project_queue(proj)
+        assert path is not None
+        before = path.read_bytes()
+        # Inflate the disproof run's artifact past the gate (sparse —
+        # st_size is what gates; nothing ever reads the padding).
+        with (a / "findings.json").open("r+b") as fh:
+            fh.seek(MAX_FINDINGS_JSON_BYTES)
+            fh.write(b"x")
+        with caplog.at_level("INFO"):
+            assert refresh_project_queue(proj) is None
+        assert path.read_bytes() == before
+        msg = "\n".join(r.getMessage() for r in caplog.records)
+        assert "deferred" in msg
+        assert "1 findings artifact(s)" in msg
+
+    def test_readable_files_still_sweep_and_clear(self, tmp_path):
+        # Two-direction control for the gate deferral: with every
+        # artifact readable, the refresh recomputes normally —
+        # including the empty-delete of a queue whose contradiction
+        # has resolved (the deferral is scoped to the gate, never a
+        # blanket write inhibition).
+        from core.project.readjudication import refresh_project_queue
+        proj = tmp_path / "proj"
+        self._run(proj, "run_a", [_disproof()], "2026-01-01T00:00:00")
+        self._run(proj, "run_b", [_claim()], "2026-01-02T00:00:00")
+        path = refresh_project_queue(proj)
+        assert path is not None and path.exists()
+        (proj / "run_b" / "findings.json").write_text(
+            json.dumps({"findings": []}))
+        assert refresh_project_queue(proj) is None
+        assert not path.exists()
+
+    def test_shadowed_oversized_fallback_does_not_defer(self, tmp_path):
+        # findings.json is readable, so the loader never consults the
+        # oversized openant_findings.json — the stat preview follows
+        # the same fallback chain, or a shadowed file would force a
+        # phantom deferral on every completion.
+        from core.project.findings_utils import MAX_FINDINGS_JSON_BYTES
+        from core.project.readjudication import refresh_project_queue
+        proj = tmp_path / "proj"
+        a = self._run(proj, "run_a", [_disproof()], "2026-01-01T00:00:00")
+        self._run(proj, "run_b", [_claim()], "2026-01-02T00:00:00")
+        with (a / "openant_findings.json").open("wb") as fh:
+            fh.seek(MAX_FINDINGS_JSON_BYTES)
+            fh.write(b"x")
+        path = refresh_project_queue(proj)
+        assert path is not None
+        assert queued_count(load_jsonl(path)) == 1
+
+    def test_under_budget_sweeps(self, tmp_path, monkeypatch):
+        # Two-direction control for the budget: a generous budget
+        # sweeps (the deferral above is the only skip path).
+        import core.project.readjudication as readj
+        proj = tmp_path / "proj"
+        self._run(proj, "run_a", [_disproof()], "2026-01-01T00:00:00")
+        self._run(proj, "run_b", [_claim()], "2026-01-02T00:00:00")
+        monkeypatch.setattr(readj, "PROJECT_SWEEP_BYTE_BUDGET",
+                            10 * 1024 * 1024)
+        assert readj.refresh_project_queue(proj) is not None
