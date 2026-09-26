@@ -525,3 +525,148 @@ class TestTerseExecutableDetection(unittest.TestCase):
                                     b"VZ" + b"\x00" * 62))
         self.assertEqual(pe_info.kind, "pe-exe")
         self.assertEqual(te_info.kind, "te")
+
+
+class TestCargoFuzzLayout(unittest.TestCase):
+    """cargo-fuzz layout detection: fuzz-dir location, target
+    enumeration (charset-vetted, symlink-refusing, bounded), and the
+    rust-crate hints that carry the result."""
+
+    def _crate(self, tmp: str, targets: list[str]) -> Path:
+        crate = Path(tmp) / "crate"
+        (crate / "fuzz" / "fuzz_targets").mkdir(parents=True)
+        (crate / "Cargo.toml").write_text("[package]\nname='c'\n")
+        (crate / "fuzz" / "Cargo.toml").write_text(
+            "[package]\nname='c-fuzz'\n"
+            "[package.metadata]\ncargo-fuzz = true\n")
+        for name in targets:
+            (crate / "fuzz" / "fuzz_targets" / f"{name}.rs").write_text(
+                "// ft\n")
+        return crate
+
+    def test_conventional_fuzz_child_found(self):
+        from packages.fuzzing.target_detector import (
+            find_cargo_fuzz_dir,
+            list_cargo_fuzz_targets,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            crate = self._crate(tmp, ["fuzz_a", "fuzz_b"])
+            fuzz_dir = find_cargo_fuzz_dir(crate)
+            self.assertEqual(fuzz_dir, (crate / "fuzz").resolve())
+            self.assertEqual(list_cargo_fuzz_targets(fuzz_dir),
+                             ["fuzz_a", "fuzz_b"])
+
+    def test_fuzz_workspace_itself_qualifies(self):
+        # Operators can point /fuzz straight at the fuzz workspace.
+        from packages.fuzzing.target_detector import find_cargo_fuzz_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            crate = self._crate(tmp, ["fuzz_a"])
+            self.assertEqual(find_cargo_fuzz_dir(crate / "fuzz"),
+                             (crate / "fuzz").resolve())
+
+    def test_symlinked_fuzz_dir_outside_the_crate_is_refused(self):
+        # The fuzz workspace receives a build-phase write grant: a
+        # repo-planted `fuzz` symlink pointing at a cargo-fuzz-shaped
+        # tree elsewhere on the host must not steer that grant there.
+        from packages.fuzzing.target_detector import find_cargo_fuzz_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            elsewhere = self._crate(tmp, ["fuzz_a"])  # tmp/crate
+            victim_fuzz = elsewhere / "fuzz"
+            crate2 = Path(tmp) / "crate2"
+            crate2.mkdir()
+            (crate2 / "Cargo.toml").write_text("[package]\n")
+            (crate2 / "fuzz").symlink_to(victim_fuzz)
+            self.assertIsNone(find_cargo_fuzz_dir(crate2))
+
+    def test_symlinked_fuzz_targets_dir_outside_the_crate_is_refused(self):
+        # Symmetric containment one level down: fuzz/ itself real, but
+        # fuzz_targets a symlink escaping the crate — the enumeration
+        # must not follow it off the crate.
+        from packages.fuzzing.target_detector import find_cargo_fuzz_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            elsewhere = self._crate(tmp, ["fuzz_a"])   # tmp/crate
+            victim_targets = elsewhere / "fuzz" / "fuzz_targets"
+            crate2 = Path(tmp) / "crate2"
+            (crate2 / "fuzz").mkdir(parents=True)
+            (crate2 / "Cargo.toml").write_text("[package]\n")
+            (crate2 / "fuzz" / "Cargo.toml").write_text("[package]\n")
+            (crate2 / "fuzz" / "fuzz_targets").symlink_to(victim_targets)
+            self.assertIsNone(find_cargo_fuzz_dir(crate2))
+
+    def test_symlinked_fuzz_dir_inside_the_crate_is_allowed(self):
+        # Containment is about escaping the crate, not about symlinks
+        # per se: a fuzz -> ./real-fuzz indirection inside the crate
+        # resolves and is granted on the REAL path.
+        from packages.fuzzing.target_detector import find_cargo_fuzz_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            crate = Path(tmp) / "crate"
+            real = crate / "real-fuzz"
+            (real / "fuzz_targets").mkdir(parents=True)
+            (crate / "Cargo.toml").write_text("[package]\n")
+            (real / "Cargo.toml").write_text("[package]\n")
+            (real / "fuzz_targets" / "fuzz_a.rs").write_text("// ft\n")
+            (crate / "fuzz").symlink_to(real)
+            self.assertEqual(find_cargo_fuzz_dir(crate), real.resolve())
+
+    def test_no_layout_returns_none(self):
+        from packages.fuzzing.target_detector import find_cargo_fuzz_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            crate = Path(tmp) / "crate"
+            crate.mkdir()
+            (crate / "Cargo.toml").write_text("[package]\n")
+            self.assertIsNone(find_cargo_fuzz_dir(crate))
+
+    def test_enumeration_vets_names_and_refuses_symlinks(self):
+        # fuzz_targets/ is scanned-repo content: hostile names (shell
+        # metacharacters, path separators via encoding tricks) and
+        # symlinked entries never enter the target list.
+        from packages.fuzzing.target_detector import (
+            find_cargo_fuzz_dir,
+            list_cargo_fuzz_targets,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            crate = self._crate(tmp, ["good_one"])
+            targets_dir = crate / "fuzz" / "fuzz_targets"
+            (targets_dir / "bad name$(x).rs").write_text("// ft\n")
+            (targets_dir / ("x" * 80 + ".rs")).write_text("// ft\n")
+            (targets_dir / "not_rust.txt").write_text("hi\n")
+            (targets_dir / "linked.rs").symlink_to(
+                targets_dir / "good_one.rs")
+            fuzz_dir = find_cargo_fuzz_dir(crate)
+            self.assertEqual(list_cargo_fuzz_targets(fuzz_dir),
+                             ["good_one"])
+
+    def test_enumeration_is_bounded(self):
+        from packages.fuzzing import target_detector as td
+        # Fixture scale guard: this test creates bound+5 real files, so
+        # a bound raised past 1024 needs a rewritten fixture, not a
+        # bigger tree.
+        self.assertLessEqual(td._MAX_CARGO_FUZZ_TARGETS, 1024)
+        with tempfile.TemporaryDirectory() as tmp:
+            crate = self._crate(
+                tmp,
+                [f"t{i:04d}" for i in range(td._MAX_CARGO_FUZZ_TARGETS + 5)],
+            )
+            fuzz_dir = td.find_cargo_fuzz_dir(crate)
+            self.assertEqual(len(td.list_cargo_fuzz_targets(fuzz_dir)),
+                             td._MAX_CARGO_FUZZ_TARGETS)
+
+    def test_rust_crate_hint_names_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            crate = self._crate(tmp, ["fuzz_a"])
+            with patch("packages.fuzzing.target_detector.shutil.which",
+                       return_value="/x/tool"):
+                info = detect(crate)
+        self.assertEqual(info.kind, "rust-crate")
+        self.assertTrue(any("fuzz_a" in h for h in info.hints), info.hints)
+
+    def test_rust_crate_hint_without_layout_names_scaffold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            crate = Path(tmp) / "crate"
+            crate.mkdir()
+            (crate / "Cargo.toml").write_text("[package]\n")
+            with patch("packages.fuzzing.target_detector.shutil.which",
+                       return_value="/x/tool"):
+                info = detect(crate)
+        self.assertTrue(
+            any("cargo fuzz init" in h for h in info.hints), info.hints)
