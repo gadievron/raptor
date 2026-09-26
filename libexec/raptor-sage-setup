@@ -839,7 +839,17 @@ run_boot_probe() {
     local nonce_file nonce rc=0
     nonce_file="$RAPTOR_DIR/.sage/boot-capture.nonce"
     mkdir -p "$RAPTOR_DIR/.sage"
-    nonce=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+    # python3 -I on every interpreter this consent lane spawns (here
+    # through the stamp write): an interpreter-startup hook (PYTHONPATH
+    # sitecustomize, user-site .pth/usercustomize — the latter with
+    # zero environment variables) could otherwise skew what the
+    # operator is shown versus what is stamped authorized. Isolated
+    # mode means the hook never loads (docs/security.md, the
+    # interpreter-startup-hook class); the ambient-env sites that
+    # legitimately need user-site packages (the sage_sdk probe,
+    # seeding, agent registration) are pinned as such in
+    # core/sage/tests/test_boot_payload_isolation.py.
+    nonce=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
     _RAPTOR_TMP_FILES+=("$nonce_file")
     (umask 077; printf '%s' "$nonce" > "$nonce_file")
     printf '%s\n%s\n%s\n%s\n' \
@@ -942,7 +952,7 @@ capture_boot_payload() {
     # Defined nested so test drivers that extract capture_boot_payload
     # alone stay self-contained.
     _flatten_splitlines_separators() {
-        python3 -c '
+        python3 -I -c '
 import sys
 text = sys.stdin.buffer.read().decode("utf-8", errors="replace")
 for sep in "\r\v\f\x1c\x1d\x1e\x85\u2028\u2029":
@@ -1047,7 +1057,7 @@ authorize_boot_payload() {
     # rendered payload line carries a "| " prefix so payload text can
     # never impersonate the script's own frame/status lines.
     _render_payload_display() {
-        RAPTOR_DIR="$RAPTOR_DIR" python3 -c '
+        RAPTOR_DIR="$RAPTOR_DIR" python3 -I -c '
 import os
 import sys
 
@@ -1252,7 +1262,7 @@ sys.stdout.write("\n".join(rendered))
         # "no tools" exactly on the payloads that most need the split.
         if grep -qxF '### tools.list' "$tmp_capture"; then
             has_tools=1
-            if ! display_payload=$(python3 "$reviewer" strip-tools --live "$tmp_capture"); then
+            if ! display_payload=$(python3 -I "$reviewer" strip-tools --live "$tmp_capture"); then
                 echo "raptor-sage-setup: could not split the tools surface out of the payload display." >&2
                 echo "Refusing to record a boot-payload stamp that could not be reviewed." >&2
                 return 1
@@ -1268,7 +1278,7 @@ sys.stdout.write("\n".join(rendered))
         fi
         echo "-----------------------------------------------------------"
         if [ "$has_tools" = "1" ]; then
-            if ! python3 "$reviewer" tools-digest --live "$tmp_capture"; then
+            if ! python3 -I "$reviewer" tools-digest --live "$tmp_capture"; then
                 # Fail toward LESS authority, loudly: no digest means
                 # the tools surface was never reviewable, so it must
                 # not ride the stamp — defer it to the review lane.
@@ -1285,7 +1295,7 @@ sys.stdout.write("\n".join(rendered))
                 case "$answer" in
                     y|Y|yes|YES) break ;;
                     [dD]\ ?*)
-                        python3 "$reviewer" show-tool --live "$tmp_capture" \
+                        python3 -I "$reviewer" show-tool --live "$tmp_capture" \
                             --name "${answer#[dD] }" || true
                         ;;
                     *)
@@ -1304,7 +1314,7 @@ sys.stdout.write("\n".join(rendered))
             echo "baseline it at your own terminal: libexec/raptor-sage-setup review"
         fi
         if [ "$tools_deferred" = "1" ] && [ "$has_tools" = "1" ]; then
-            if ! payload=$(python3 "$reviewer" strip-tools --live "$tmp_capture"); then
+            if ! payload=$(python3 -I "$reviewer" strip-tools --live "$tmp_capture"); then
                 echo "raptor-sage-setup: could not strip the deferred tools surface from the stamp." >&2
                 echo "Refusing to record definitions that were never reviewed." >&2
                 return 1
@@ -1397,7 +1407,7 @@ review_boot_payload() {
     echo "Boot-payload review — live server vs $AUTHORIZED_PAYLOAD"
     echo
     local rc=0
-    python3 "$reviewer" compare \
+    python3 -I "$reviewer" compare \
         --authorized "$AUTHORIZED_PAYLOAD" --live "$tmp_live" || rc=$?
     echo
     if [ "$rc" = "0" ]; then
@@ -1441,7 +1451,7 @@ review_boot_payload() {
                 a|A) decision=merge; break ;;
                 r|R) decision=deny; break ;;
                 [dD]\ ?*)
-                    python3 "$reviewer" show-tool --live "$tmp_live" \
+                    python3 -I "$reviewer" show-tool --live "$tmp_live" \
                         --name "${answer#[dD] }" || true
                     ;;
                 *)
@@ -1458,7 +1468,7 @@ review_boot_payload() {
         return 4
     fi
     local merged
-    if ! merged=$(python3 "$reviewer" "$decision" \
+    if ! merged=$(python3 -I "$reviewer" "$decision" \
             --authorized "$AUTHORIZED_PAYLOAD" --live "$tmp_live"); then
         echo "Error: recording the decision failed; the stamp is unchanged." >&2
         return 3
@@ -1984,7 +1994,7 @@ status_sage() {
             printf '%s\n' "$live" > "$tmp_live"
             local drift_out
             drift_rc=0
-            drift_out=$(python3 "$RAPTOR_DIR/core/sage/boot_payload_review.py" \
+            drift_out=$(python3 -I "$RAPTOR_DIR/core/sage/boot_payload_review.py" \
                 summary --authorized "$AUTHORIZED_PAYLOAD" \
                 --live "$tmp_live" 2>/dev/null) || drift_rc=$?
             if [ "$drift_rc" = "0" ]; then

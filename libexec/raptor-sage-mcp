@@ -101,7 +101,13 @@ if [ -n "${RAPTOR_SAGE_BOOT_CAPTURE:-}" ]; then
     echo "raptor-sage-mcp: RAPTOR_SAGE_BOOT_CAPTURE is set but does not match a fresh capture nonce — ignoring the bypass; boot-payload enforcement stays on." >&2
 fi
 
-exec python3 "$RAPTOR_DIR/libexec/raptor-sage-mcp-guard" \
+# -I: the guard enforces the operator-authorized boot-payload stamp,
+# and a session environment's interpreter-startup hook (PYTHONPATH
+# sitecustomize, user-site .pth/usercustomize) could otherwise
+# monkeypatch its comparison before enforcement begins. Isolated mode
+# at the call site means the hook never loads at all; the guard's own
+# in-file re-exec covers routes that bypass this wrapper.
+exec python3 -I "$RAPTOR_DIR/libexec/raptor-sage-mcp-guard" \
     --authorized "$RAPTOR_DIR/.sage/boot-payload.authorized" \
     -- \
     "${CHILD[@]}"
