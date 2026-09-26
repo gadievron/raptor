@@ -21,6 +21,7 @@ silent-empty-output lesson):
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import re
@@ -33,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from core.project.sessions import proc_starttime
 from core.run.workdir import exec_workdir
 from core.security.env_sanitisation import safe_subprocess_env
 from core.source import read_text_capped
@@ -90,6 +92,21 @@ _OWNER_START_LABEL = "raptor.sanwit.owner.start"
 #: Larger risks a long startup stall against a hostile/wedged
 #: daemon; smaller just spreads the reap over more runs.
 _SWEEP_CAP = 64
+
+#: Bound on a candidate's ``docker inspect`` label-map output. Our
+#: own three labels are tens of bytes; a hostile image can ship
+#: megabytes of inherited labels — past this, the row is not ours
+#: and is skipped (fail toward not-reaping).
+_SWEEP_INSPECT_CAP = 64 * 1024
+
+#: Whole-sweep wall budget. Without it the worst case against a
+#: wedged daemon is every per-call timeout in sequence (~90s per
+#: reaped row) — the sweep is a best-effort belt and must never
+#: stall the witness for more than about this long plus one
+#: in-flight call (<=30s). Rows left unprocessed surface again on
+#: the next witness process. Larger stalls a run behind a wedged
+#: daemon; smaller spreads a mass-reap over more runs.
+_SWEEP_BUDGET_S = 120
 
 #: Container-side RLIMIT_FSIZE (bytes) for the docker tier. Scope
 #: stated precisely: it bounds REGULAR-FILE writes by the
@@ -177,30 +194,16 @@ def _probe_native(php: str) -> tuple[str, str]:
     )
 
 
-def _proc_starttime(pid: int) -> str | None:
-    """starttime of *pid* in clock ticks (field 22 of
-    ``/proc/<pid>/stat``), or ``None`` when unreadable (no procfs,
-    vanished pid). The comm field may contain spaces and parens, so
-    the line is split after the LAST ``)``."""
-    got = read_text_capped(f"/proc/{pid}/stat", 8192)
-    if got is None:
-        return None
-    try:
-        fields = got[0].rsplit(")", 1)[1].split()
-        start = fields[19]  # field 22 overall; 20th after comm
-    except IndexError:
-        return None
-    return start if start.isdigit() else None
-
-
 def _owner_identity() -> tuple[int, str]:
     """(pid, starttime) of THIS process — the verified-pid identity
     stamped on every witness container. A pid alone can be recycled;
     pid + starttime cannot, so a sweeper can distinguish "my owner
     is gone" from "some process reuses my owner's pid". starttime
-    ``0`` = unverifiable on this host; the sweep never reaps on it."""
+    ``0`` = unverifiable on this host; the sweep never reaps on it.
+    The starttime read is the shared PID-reuse discriminator
+    (``core.project.sessions.proc_starttime``)."""
     pid = os.getpid()
-    return pid, _proc_starttime(pid) or "0"
+    return pid, proc_starttime(pid) or "0"
 
 
 def _docker_base_args(
@@ -340,24 +343,32 @@ def _sweep_dead_owner_containers(docker: str) -> None:
     Unverifiable rows — starttime label ``0``, unreadable /proc for
     a live pid, malformed labels/cid — are always left alone: never
     reap another session's container on a guess. Best-effort and
-    bounded (per-call timeouts, ``_SWEEP_CAP`` rows): a wedged or
-    hostile daemon can stall or lie, it cannot block the witness or
-    steer a reap at a live owner's container.
+    bounded (per-call timeouts, ``_SWEEP_CAP`` rows, inspect-output
+    cap): a wedged or hostile daemon can stall or lie, it cannot
+    block the witness or steer a reap at a live owner's container.
+
+    Injection-hardened listing: label VALUES are attacker-influenced
+    (a hostile image ships arbitrary inherited labels), and a Go
+    template ``ps --format`` prints them RAW — an embedded newline
+    forged a fully-vetted row naming a foreign victim cid. The
+    listing therefore asks for ``{{.ID}}`` ONLY (daemon-generated
+    hex, nothing attacker-authored on the line), and the owner
+    labels are then read per candidate with ``docker inspect
+    {{json .Config.Labels}}`` — authoritative for THAT container and
+    JSON-escaped, so a label value cannot speak for any other
+    container. The identity decision is made exclusively from the
+    inspected labels.
     """
     global _SWEEP_DONE
     with _SWEEP_LOCK:
         if _SWEEP_DONE:
             return
         _SWEEP_DONE = True
-    fmt = (
-        "{{.ID}}\t"
-        f'{{{{.Label "{_OWNER_PID_LABEL}"}}}}\t'
-        f'{{{{.Label "{_OWNER_START_LABEL}"}}}}'
-    )
     try:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no target data
             [docker, "ps", "-a", "--no-trunc",
-             "--filter", f"label={_CHANNEL_LABEL}=1", "--format", fmt],
+             "--filter", f"label={_CHANNEL_LABEL}=1",
+             "--format", "{{.ID}}"],
             capture_output=True, text=True, env=_safe_env(),
             timeout=30, check=False,
         )
@@ -366,26 +377,58 @@ def _sweep_dead_owner_containers(docker: str) -> None:
     if proc.returncode != 0:
         return
     own_pid = os.getpid()
+    budget_end = time.monotonic() + _SWEEP_BUDGET_S
     for line in (proc.stdout or "").splitlines()[:_SWEEP_CAP]:
-        parts = line.split("\t")
-        if len(parts) != 3:
-            continue
-        cid, pid_s, start_s = (p.strip() for p in parts)
+        if time.monotonic() >= budget_end:
+            return  # best-effort: the next witness process resumes
+        cid = line.strip()
         if not re.fullmatch(r"[0-9a-f]{12,64}", cid):
             continue
-        if not (pid_s.isdigit() and start_s.isdigit()):
+        labels = _inspect_labels(docker, cid)
+        if labels.get(_CHANNEL_LABEL) != "1":
+            continue  # not (or no longer) a witness container
+        pid_s = labels.get(_OWNER_PID_LABEL, "")
+        start_s = labels.get(_OWNER_START_LABEL, "")
+        if not (
+            isinstance(pid_s, str) and pid_s.isdigit()
+            and isinstance(start_s, str) and start_s.isdigit()
+        ):
             continue
         if start_s == "0":
             continue  # owner identity was never verifiable
         pid = int(pid_s)
         if pid == own_pid:
             continue
-        live_start = _proc_starttime(pid)
+        live_start = proc_starttime(pid)
         if live_start == start_s:
             continue  # owner alive, identity verified
         if live_start is None and _pid_exists(pid):
             continue  # alive but unverifiable — leave it alone
         _daemon_remove(docker, cid)
+
+
+def _inspect_labels(docker: str, cid: str) -> dict:
+    """The container's OWN label map, from ``docker inspect`` —
+    authoritative and JSON-escaped (a hostile label value cannot
+    inject rows or name another container). Empty dict on any
+    failure or oversized/odd output: fail toward not-reaping."""
+    try:
+        proc = subprocess.run(  # noqa: S603 — fixed argv; cid charset-checked
+            [docker, "inspect", "--format",
+             "{{json .Config.Labels}}", cid],
+            capture_output=True, text=True, env=_safe_env(),
+            timeout=30, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    out = proc.stdout or ""
+    if proc.returncode != 0 or len(out) > _SWEEP_INSPECT_CAP:
+        return {}
+    try:
+        labels = json.loads(out)
+    except ValueError:
+        return {}
+    return labels if isinstance(labels, dict) else {}
 
 
 def _probe_docker(docker: str) -> tuple[str, str]:

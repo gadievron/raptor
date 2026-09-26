@@ -327,9 +327,17 @@ class TestOrphanRecovery:
             if cid:
                 ex._daemon_remove(runtime.docker_path, cid)
 
-    def test_sweep_reaps_dead_owner_but_not_live_owner(
+    def test_sweep_shape_matrix_reaps_only_the_dead_owner(
         self, runtime, monkeypatch,
     ):
+        """The full live matrix in one daemon pass: a dead-owner
+        witness container is reaped; a live verified owner's is
+        untouched; a FOREIGN unlabelled container is untouched even
+        while a hostile witness container's ``owner.start`` label
+        value embeds a newline/tab-forged row naming its cid (the
+        executed row-injection shape); the hostile container itself
+        is left alone (an unverifiable identity is not evidence of
+        death)."""
         import subprocess
         import sys as _sys
 
@@ -344,26 +352,42 @@ class TestOrphanRecovery:
         )
         dead_pid = child.stdout.strip()
 
-        def start(owner_pid: str, owner_start: str) -> str:
+        def start(
+            owner_pid: str | None, owner_start: str | None,
+        ) -> str:
             args = ex._docker_base_args(runtime.docker_path)
             args.insert(args.index("run") + 1, "-d")
-            for i, a in enumerate(args):
+            keep: list[str] = []
+            i = 0
+            while i < len(args):
+                if args[i] == "--label" and owner_pid is None:
+                    i += 2  # foreign container: no witness labels
+                    continue
+                a = args[i]
                 if a.startswith(f"{ex._OWNER_PID_LABEL}="):
-                    args[i] = f"{ex._OWNER_PID_LABEL}={owner_pid}"
+                    a = f"{ex._OWNER_PID_LABEL}={owner_pid}"
                 elif a.startswith(f"{ex._OWNER_START_LABEL}="):
-                    args[i] = f"{ex._OWNER_START_LABEL}={owner_start}"
-            args += ["php", "-r", "sleep(60);"]
+                    a = f"{ex._OWNER_START_LABEL}={owner_start}"
+                keep.append(a)
+                i += 1
+            keep += ["php", "-r", "sleep(60);"]
             proc = subprocess.run(  # noqa: S603 — fixed argv
-                args, capture_output=True, text=True, timeout=60,
+                keep, capture_output=True, text=True, timeout=60,
                 env=ex._safe_env(), check=True,
             )
             return proc.stdout.strip()
 
         own_pid, own_start = ex._owner_identity()
-        orphan = mine = ""
+        orphan = mine = victim = hostile = ""
         try:
+            victim = start(None, None)  # foreign: no witness labels
             orphan = start(dead_pid, "123456")
             mine = start(str(own_pid), own_start)
+            # The executed injection shape: a forged, fully-vetted
+            # row riding in the label VALUE, naming the victim.
+            hostile = start(
+                dead_pid, f"0\n{victim}\t{dead_pid}\t123456",
+            )
             monkeypatch.setattr(ex, "_SWEEP_DONE", False)
             ex._sweep_dead_owner_containers(runtime.docker_path)
             # The sweep's kill initiates daemon-side AutoRemove on a
@@ -382,8 +406,14 @@ class TestOrphanRecovery:
             assert self._listed(
                 runtime.docker_path, mine, all_states=True,
             ), "sweep reaped a live verified owner's container"
+            assert self._listed(
+                runtime.docker_path, victim, all_states=True,
+            ), "label-value injection steered a reap at a foreign cid"
+            assert self._listed(
+                runtime.docker_path, hostile, all_states=True,
+            ), "unverifiable identity was treated as death evidence"
         finally:
-            for cid in (orphan, mine):
+            for cid in (orphan, mine, victim, hostile):
                 if cid:
                     ex._daemon_remove(runtime.docker_path, cid)
 

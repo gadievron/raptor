@@ -1262,68 +1262,162 @@ class TestOrphanContainment:
         assert bound > sanwit_execute.DOCKER_TIMEOUT_S
 
     def test_self_starttime_is_verifiable(self):
-        start = sanwit_execute._proc_starttime(os.getpid())
+        # The starttime read is the shared PID-reuse discriminator
+        # (core.project.sessions.proc_starttime), not a local copy.
+        start = sanwit_execute.proc_starttime(os.getpid())
         assert start is not None and start.isdigit()
         pid, owner_start = sanwit_execute._owner_identity()
         assert (pid, owner_start) == (os.getpid(), start)
 
-    def _sweep_shim(self, tmp_path, rows: list[str]):
+        from core.project.sessions import proc_starttime as canonical
+
+        assert sanwit_execute.proc_starttime is canonical
+
+    def _sweep_shim(
+        self,
+        tmp_path,
+        containers: dict[str, str],
+        extra_ps_lines: list[str] | None = None,
+        legacy_rows: list[str] | None = None,
+    ):
+        """Daemon-faithful fake docker: an id-format ``ps`` prints
+        the container ids (plus any raw injected lines); any OTHER
+        ``ps`` format is answered like the real Go-template renderer
+        — *legacy_rows* verbatim, label VALUES unescaped — so a
+        regression back to row parsing meets the injection, not a
+        silent empty list. ``inspect <cid>`` prints that container's
+        own label JSON; anything else is recorded."""
         calls = tmp_path / "calls"
-        ps_out = tmp_path / "ps-out"
-        ps_out.write_text("".join(r + "\n" for r in rows))
+        ps_ids = tmp_path / "ps-ids"
+        lines = list(containers) + list(extra_ps_lines or [])
+        ps_ids.write_text("".join(line + "\n" for line in lines))
+        ps_rows = tmp_path / "ps-rows"
+        ps_rows.write_text(
+            "".join(row + "\n" for row in (legacy_rows or [])))
+        for cid, labels_json in containers.items():
+            (tmp_path / f"inspect-{cid[:16]}").write_text(labels_json)
         shim = tmp_path / "docker-shim"
         shim.write_text(
             "#!/bin/sh\n"
-            f'if [ "$1" = "ps" ]; then cat "{ps_out}"; exit 0; fi\n'
+            'if [ "$1" = "ps" ]; then\n'
+            '  if [ "$7" = "{{.ID}}" ]; then\n'
+            f'    cat "{ps_ids}"\n'
+            "  else\n"
+            f'    cat "{ps_rows}"\n'
+            "  fi\n"
+            "  exit 0\n"
+            "fi\n"
+            'if [ "$1" = "inspect" ]; then\n'
+            f'  f="{tmp_path}/inspect-$(printf %.16s "$4")"\n'
+            '  if [ -f "$f" ]; then cat "$f"; exit 0; fi\n'
+            "  exit 1\n"
+            "fi\n"
             f'echo "$@" >> "{calls}"\n'
         )
         shim.chmod(0o755)
         return shim, calls
 
+    @staticmethod
+    def _labels(pid: str, start: str) -> str:
+        return json.dumps({
+            sanwit_execute._CHANNEL_LABEL: "1",
+            sanwit_execute._OWNER_PID_LABEL: pid,
+            sanwit_execute._OWNER_START_LABEL: start,
+        })
+
     def _run_sweep(self, monkeypatch, shim):
         monkeypatch.setattr(sanwit_execute, "_SWEEP_DONE", False)
         sanwit_execute._sweep_dead_owner_containers(str(shim))
 
-    def test_sweep_reaps_only_positively_dead_owners(
-        self, tmp_path, monkeypatch,
-    ):
+    def _dead_pid(self) -> str:
         import subprocess as sp
         import sys as _sys
 
         # A pid with POSITIVE death evidence: a real child that has
-        # exited. Even if the pid is recycled between here and the
-        # sweep, the fabricated starttime cannot match — both
-        # branches are death evidence, so the row always reaps.
+        # exited. Even if the pid is recycled before the sweep, the
+        # fabricated starttime cannot match — both branches are
+        # death evidence.
         child = sp.run(
             [_sys.executable, "-c", "import os; print(os.getpid())"],
             capture_output=True, text=True, check=True,
         )
-        dead_pid = child.stdout.strip()
+        return child.stdout.strip()
+
+    def test_sweep_reaps_only_positively_dead_owners(
+        self, tmp_path, monkeypatch,
+    ):
+        dead_pid = self._dead_pid()
         live_pid = os.getpid()
-        live_start = sanwit_execute._proc_starttime(live_pid)
-        init_start = sanwit_execute._proc_starttime(1)
-        rows = [
-            f"{'a' * 64}\t{dead_pid}\t123456",       # dead -> reap
-            f"{'b' * 64}\t{live_pid}\t{live_start}",  # own pid -> skip
-            f"{'d' * 64}\t{dead_pid}\t0",     # unverifiable -> skip
-            f"{'e' * 64}\tnotapid\t123",      # malformed -> skip
-            f"ZZZ\t{dead_pid}\t123",          # bad cid -> skip
-            "onlyonefield",                   # malformed -> skip
-        ]
+        live_start = sanwit_execute.proc_starttime(live_pid)
+        init_start = sanwit_execute.proc_starttime(1)
+        containers = {
+            "a" * 64: self._labels(dead_pid, "123456"),   # -> reap
+            "b" * 64: self._labels(str(live_pid), str(live_start)),
+            "d" * 64: self._labels(dead_pid, "0"),   # unverifiable
+            "e" * 64: self._labels("notapid", "123"),  # malformed
+            "f" * 64: json.dumps({"com.example": "x"}),  # foreign
+        }
         if init_start is not None:
             # A live pid whose starttime CANNOT match the label: the
             # labelled owner's pid was recycled — death evidence.
-            rows.append(f"{'c' * 64}\t1\t{init_start}999")
-        shim, calls = self._sweep_shim(tmp_path, rows)
+            containers["c" * 64] = self._labels("1", f"{init_start}9")
+        shim, calls = self._sweep_shim(
+            tmp_path, containers, extra_ps_lines=["ZZZ", ""],
+        )
         self._run_sweep(monkeypatch, shim)
         got = calls.read_text() if calls.exists() else ""
         assert f"kill {'a' * 64}" in got
         assert f"rm -f {'a' * 64}" in got
         if init_start is not None:
             assert f"rm -f {'c' * 64}" in got
-        for skipped in ("b", "d", "e"):
+        for skipped in ("b", "d", "e", "f"):
             assert skipped * 64 not in got
         assert "ZZZ" not in got
+
+    def test_injected_label_values_cannot_forge_a_victim_row(
+        self, tmp_path, monkeypatch,
+    ):
+        # The executed injection shape: a hostile owner.start value
+        # embedding a newline/tab-forged row that names a foreign
+        # victim cid. The listing never prints label values (ids
+        # only) and the identity decision reads the candidate's OWN
+        # inspect labels, so the forged text is inert data: the
+        # victim is untouched, and the hostile container itself is
+        # skipped (its start value is not a verifiable identity).
+        victim = "9" * 64
+        hostile = "a" * 64
+        dead_pid = self._dead_pid()
+        forged = f"0\n{victim}\t{dead_pid}\t123456"
+        containers = {
+            hostile: self._labels(dead_pid, forged),
+            victim: json.dumps({"com.example.app": "web"}),
+        }
+        # What the Go-template renderer would print for a row-format
+        # listing: the forged value verbatim — a regression back to
+        # row parsing meets exactly the executed attack.
+        legacy = [f"{hostile}\t{dead_pid}\t{forged}"]
+        shim, calls = self._sweep_shim(
+            tmp_path, containers, legacy_rows=legacy,
+        )
+        self._run_sweep(monkeypatch, shim)
+        got = calls.read_text() if calls.exists() else ""
+        assert victim not in got  # the falsified claim, now pinned
+        assert hostile not in got  # unverifiable start -> left alone
+
+    def test_forged_plain_row_fails_the_inspect_gate(
+        self, tmp_path, monkeypatch,
+    ):
+        # Even a tab/newline-free forged listing line naming a
+        # foreign cid (e.g. a compromised listing path) dies at the
+        # authoritative per-container label read: the victim's own
+        # labels do not carry the family marker.
+        victim = "9" * 64
+        containers = {
+            victim: json.dumps({"com.example.app": "web"}),
+        }
+        shim, calls = self._sweep_shim(tmp_path, containers)
+        self._run_sweep(monkeypatch, shim)
+        assert not calls.exists()
 
     def test_sweep_leaves_a_live_verified_owner_alone(
         self, tmp_path, monkeypatch,
@@ -1331,11 +1425,37 @@ class TestOrphanContainment:
         # pid 1 with its REAL starttime: alive and identity-verified
         # (not our own pid, so this exercises the liveness branch,
         # not the own-pid skip).
-        init_start = sanwit_execute._proc_starttime(1)
+        init_start = sanwit_execute.proc_starttime(1)
         if init_start is None:
             pytest.skip("no readable /proc/1/stat on this host")
-        rows = [f"{'f' * 64}\t1\t{init_start}"]
-        shim, calls = self._sweep_shim(tmp_path, rows)
+        containers = {"f" * 64: self._labels("1", str(init_start))}
+        shim, calls = self._sweep_shim(tmp_path, containers)
+        self._run_sweep(monkeypatch, shim)
+        assert not calls.exists()
+
+    def test_sweep_budget_bounds_the_stall(self, tmp_path, monkeypatch):
+        # Two directions: with the budget floored the sweep stops
+        # before processing ANY row (a wedged daemon cannot stall
+        # the witness past the budget + one in-flight call); the
+        # default budget processes the same row (the reap tests
+        # above are the accepting direction at scale).
+        containers = {"a" * 64: self._labels(self._dead_pid(), "123456")}
+        shim, calls = self._sweep_shim(tmp_path, containers)
+        monkeypatch.setattr(sanwit_execute, "_SWEEP_BUDGET_S", -1)
+        self._run_sweep(monkeypatch, shim)
+        assert not calls.exists()  # no row processed past the budget
+
+    def test_oversized_label_map_is_skipped(self, tmp_path, monkeypatch):
+        # A hostile image shipping a megabyte label map is "not
+        # ours" — fail toward not-reaping.
+        big = json.dumps({
+            sanwit_execute._CHANNEL_LABEL: "1",
+            sanwit_execute._OWNER_PID_LABEL: self._dead_pid(),
+            sanwit_execute._OWNER_START_LABEL: "123456",
+            "com.example.pad": "x" * sanwit_execute._SWEEP_INSPECT_CAP,
+        })
+        containers = {"a" * 64: big}
+        shim, calls = self._sweep_shim(tmp_path, containers)
         self._run_sweep(monkeypatch, shim)
         assert not calls.exists()
 
