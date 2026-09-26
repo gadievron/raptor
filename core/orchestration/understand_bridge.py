@@ -1710,6 +1710,20 @@ def _merge_attack_surface(
         if isinstance(src, dict) and src.get("has_taint_flow"):
             taint_confirmed += 1
 
+    # Advisory token-enforcement attach: when the understand run also
+    # carries a token-map.json (study token_checks projection), stamp
+    # each mapped entry point with its enforcement fact. Hint only —
+    # this never writes status/priority, and "enforced" is a call-
+    # presence witness, never a suppression licence (skip paths still
+    # map as enforced).
+    try:
+        from core.concepts.token_map import annotate_entry_points
+        annotate_entry_points(
+            _list_at(context_map, "entry_points"), imported_from.parent,
+        )
+    except Exception:
+        logger.debug("token-enforcement attach skipped", exc_info=True)
+
     if changed:
         attack_surface = {
             "sources": merged_sources,
