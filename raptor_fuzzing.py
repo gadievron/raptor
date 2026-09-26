@@ -573,6 +573,7 @@ Examples:
     if args.from_smt_witness:
         from packages.fuzzing.smt_seed import (
             SEED_DIR_NAME,
+            ensure_real_seed_dir,
             synthesize_from_run_dir,
         )
         source_dir = Path(args.from_smt_witness)
@@ -580,8 +581,26 @@ Examples:
             logger.error("--from-smt-witness dir not found: %s", source_dir)
             sys.exit(1)
         seed_dir = out_dir / SEED_DIR_NAME
+        # Entry containment for EVERY smt-seeds touch on this flow
+        # (see ensure_real_seed_dir): the run dir is reused and was
+        # writable by the previous campaign's sandboxed target, so a
+        # plant at the predictable smt-seeds name must refuse before
+        # the FIRST write — the built-in corpus materialisation below
+        # writes into seed_dir too, and a planted symlink would
+        # redirect it (with the witness seeds, dictionary, and
+        # manifest) into an attacker-chosen directory that the
+        # campaign would then read its corpus back from.
+        seed_dir_refused = ensure_real_seed_dir(seed_dir)
+        if seed_dir_refused is not None:
+            from core.security.log_sanitisation import sanitise_for_terminal
+            logger.warning(
+                "planted object at %s (%s) — witness seeds, built-in "
+                "corpus, and dictionary merge are all skipped for this "
+                "run; remove the object to re-enable them",
+                sanitise_for_terminal(str(seed_dir)),
+                sanitise_for_terminal(seed_dir_refused, max_len=200))
         builtin_ok = False
-        if corpus_dir is None:
+        if corpus_dir is None and seed_dir_refused is None:
             # Baseline variety first, witness seeds on top, and the
             # combined directory becomes the run corpus. With an
             # operator --corpus we never mutate their directory —
@@ -600,11 +619,28 @@ Examples:
             f"dict entries, {len(manifest['skipped'])} skipped"
         )
         if manifest["seed_count"] == 0 and manifest["dict_entries"] == 0:
-            logger.warning(
-                "--from-smt-witness produced nothing usable from %s "
-                "(see %s/%s)", source_dir, seed_dir, "smt-seeds-manifest.json",
-            )
-        if corpus_dir is None and (builtin_ok or manifest["seed_count"]):
+            if manifest.get("seed_dir_refused"):
+                # No manifest file exists to point at — nothing was
+                # written under the planted name (see the warnings
+                # above for the refusal).
+                logger.warning(
+                    "--from-smt-witness produced nothing usable from "
+                    "%s (seed dir refused — see the planted-object "
+                    "warning above)", source_dir,
+                )
+            else:
+                logger.warning(
+                    "--from-smt-witness produced nothing usable from %s "
+                    "(see %s/%s)", source_dir, seed_dir, "smt-seeds-manifest.json",
+                )
+        if (
+            corpus_dir is None
+            and not manifest.get("seed_dir_refused")
+            and (builtin_ok or manifest["seed_count"])
+        ):
+            # Corpus read-back is gated on the same containment as the
+            # writes: when the seed-dir name is planted, the campaign
+            # must not read its corpus through it.
             corpus_dir = seed_dir
         if args.dict and manifest["dict_entries"]:
             logger.warning(

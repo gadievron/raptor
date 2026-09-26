@@ -9,9 +9,11 @@ from pathlib import Path
 from packages.fuzzing.smt_seed import (
     MANIFEST_NAME,
     MAX_WITNESSES,
+    SEED_DIR_NAME,
     SEED_LEN_CAP,
     WitnessRecord,
     collect_witnesses,
+    ensure_real_seed_dir,
     merge_witness_dict,
     synthesize_from_run_dir,
     synthesize_seeds,
@@ -451,6 +453,219 @@ class TestLengthPathOverwriteGuard:
             sk.get("reason") == "seed filename collision"
             for sk in manifest["skipped"]
         ), "the drop must be recorded, never silent"
+
+
+def _witness_source(tmp_path):
+    source = tmp_path / "validate_run"
+    source.mkdir()
+    (source / "attack-paths.json").write_text(json.dumps([
+        {"id": "AP-001", "smt_model": {"buf_len": 24, "magic": 0x41}},
+    ]))
+    return source
+
+
+class TestPlantedSeedDirDefense:
+    """Class closure at the flow entry: the smt-seeds NAME itself is
+    exactly as predictable as the seed / dict / manifest names inside
+    it, and a plant there kills or redirects EVERY artifact at once.
+    The old ``mkdir(exist_ok=True)`` crashed on a file or dangling
+    symlink (``FileExistsError``) and silently FOLLOWED a symlink to a
+    directory (CPython's exist_ok re-check is ``is_dir()``), letting
+    the unsandboxed parent write all seeds, the dictionary, and the
+    manifest into an attacker-chosen directory — and read the campaign
+    corpus back through it."""
+
+    def test_file_at_seed_dir_name_refused_not_crashed(
+        self, tmp_path, caplog,
+    ):
+        source = _witness_source(tmp_path)
+        run_out = tmp_path / "fuzz_run"
+        run_out.mkdir()
+        plant = run_out / SEED_DIR_NAME
+        plant.write_text("occupied")
+
+        with caplog.at_level("WARNING", logger="packages.fuzzing.smt_seed"):
+            manifest = synthesize_from_run_dir(source, run_out)
+
+        assert manifest["seed_dir_refused"]
+        assert manifest["seed_count"] == 0
+        assert manifest["merged_dict"] is None
+        assert plant.read_text() == "occupied"  # left in place
+        assert not (run_out / "fuzz.dict").exists()  # merge skipped
+        assert any("refusing SMT witness synthesis" in r.getMessage()
+                   for r in caplog.records)
+        # No-silent-drop contract: the refusal is in the audit trail.
+        assert any(s["reason"].startswith("seed dir refused")
+                   for s in manifest["skipped"])
+
+    def test_dangling_symlink_at_seed_dir_name_refused(
+        self, tmp_path, caplog,
+    ):
+        """A dangling symlink passes ``exists() == False`` but makes
+        ``mkdir(exist_ok=True)`` raise ``FileExistsError`` — the whole
+        /fuzz run died on a traceback before any campaign."""
+        source = _witness_source(tmp_path)
+        run_out = tmp_path / "fuzz_run"
+        run_out.mkdir()
+        target = run_out / "never-created"
+        (run_out / SEED_DIR_NAME).symlink_to(target)
+
+        with caplog.at_level("WARNING", logger="packages.fuzzing.smt_seed"):
+            manifest = synthesize_from_run_dir(source, run_out)
+
+        assert manifest["seed_dir_refused"]
+        assert manifest["seed_count"] == 0
+        assert manifest["merged_dict"] is None
+        assert (run_out / SEED_DIR_NAME).is_symlink()  # left in place
+        assert not target.exists()  # never created through the link
+        assert any("refusing SMT witness synthesis" in r.getMessage()
+                   for r in caplog.records)
+
+    def test_symlink_to_attacker_dir_refused_nothing_redirected(
+        self, tmp_path, caplog,
+    ):
+        """The strongest member: a symlink to an attacker-chosen
+        directory passed the old gate silently, and the unsandboxed
+        parent wrote every artifact through it — with ``os.replace``
+        CLOBBERING anything named like the manifest in the victim
+        directory — then read the campaign corpus back through it.
+        The attacker directory must stay untouched."""
+        source = _witness_source(tmp_path)
+        run_out = tmp_path / "fuzz_run"
+        run_out.mkdir()
+        attacker = tmp_path / "attacker"
+        attacker.mkdir()
+        victim = attacker / MANIFEST_NAME
+        victim.write_text("victim manifest\n")
+        (run_out / SEED_DIR_NAME).symlink_to(attacker)
+
+        with caplog.at_level("WARNING", logger="packages.fuzzing.smt_seed"):
+            manifest = synthesize_from_run_dir(source, run_out)
+
+        # Attacker dir holds ONLY what the attacker put there — the
+        # write-redirect assertion comes first: pre-fix it held the
+        # manifest, the dictionary, and every seed.
+        assert sorted(p.name for p in attacker.iterdir()) == [MANIFEST_NAME]
+        assert victim.read_text() == "victim manifest\n"  # not clobbered
+        assert manifest["seed_dir_refused"]
+        assert manifest["seed_count"] == 0
+        assert manifest["merged_dict"] is None
+        assert (run_out / SEED_DIR_NAME).is_symlink()  # left in place
+        assert not (run_out / "fuzz.dict").exists()  # no poisoned merge
+        assert any("refusing SMT witness synthesis" in r.getMessage()
+                   for r in caplog.records)
+
+    def test_guard_direct_route_refuses_all_three_shapes(self, tmp_path):
+        """The CLI calls ``ensure_real_seed_dir`` directly BEFORE the
+        built-in corpus materialisation — replay the shapes through
+        that route too."""
+        file_plant = tmp_path / "a" / SEED_DIR_NAME
+        file_plant.parent.mkdir()
+        file_plant.write_text("x")
+        assert ensure_real_seed_dir(file_plant) is not None
+
+        dangling = tmp_path / "b" / SEED_DIR_NAME
+        dangling.parent.mkdir()
+        dangling.symlink_to(tmp_path / "b" / "gone")
+        assert ensure_real_seed_dir(dangling) is not None
+
+        attacker = tmp_path / "attacker"
+        attacker.mkdir()
+        link = tmp_path / "c" / SEED_DIR_NAME
+        link.parent.mkdir()
+        link.symlink_to(attacker)
+        assert ensure_real_seed_dir(link) is not None
+        assert list(attacker.iterdir()) == []
+
+        # Both directions: a fresh name and a pre-existing real
+        # directory are accepted.
+        clean = tmp_path / "d" / SEED_DIR_NAME
+        clean.parent.mkdir()
+        assert ensure_real_seed_dir(clean) is None
+        assert clean.is_dir() and not clean.is_symlink()
+        assert ensure_real_seed_dir(clean) is None  # idempotent
+
+    def test_cli_flow_guards_before_first_write_and_gates_corpus(self):
+        """The CLI's --from-smt-witness block writes into seed_dir
+        BEFORE synthesize_from_run_dir (built-in corpus), and reads
+        the campaign corpus back from it afterwards — both must sit
+        behind the same containment verdict."""
+        repo_root = Path(__file__).resolve().parents[3]
+        source = (repo_root / "raptor_fuzzing.py").read_text(encoding="utf-8")
+        guard_at = source.index("ensure_real_seed_dir(seed_dir)")
+        builtin_at = source.index("prepare_builtin_seed_corpus(seed_dir")
+        assert guard_at < builtin_at, (
+            "the seed-dir guard must run before the built-in corpus "
+            "materialisation — the first seed-dir write on the flow"
+        )
+        assert 'manifest.get("seed_dir_refused")' in source, (
+            "corpus read-back must gate on the containment verdict"
+        )
+
+    def test_clean_and_reused_seed_dir_still_work(self, tmp_path):
+        """Direction two of the refusal: a clean run and a re-run over
+        the same (real) seed dir must keep producing artifacts."""
+        source = _witness_source(tmp_path)
+        run_out = tmp_path / "fuzz_run"
+        run_out.mkdir()
+
+        manifest = synthesize_from_run_dir(source, run_out)
+        assert manifest["seed_dir_refused"] is None
+        assert manifest["seed_count"] >= 2
+        assert manifest["merged_dict"] == str(run_out / "fuzz.dict")
+        assert (run_out / SEED_DIR_NAME / MANIFEST_NAME).is_file()
+
+        # Re-run over the now-existing real dir: accepted, no refusal.
+        manifest2 = synthesize_from_run_dir(source, run_out)
+        assert manifest2["seed_dir_refused"] is None
+
+
+class TestPlantedManifestDefense:
+    def test_dir_at_manifest_name_contained_run_continues(
+        self, tmp_path, caplog,
+    ):
+        """A directory planted at the predictable manifest name is the
+        one shape ``save_json``'s ``os.replace`` cannot swap — the
+        ``IsADirectoryError`` used to propagate up through the bare
+        /fuzz CLI handler and kill the run (the prior containment
+        commit's claim that seeds AND the manifest always survive a
+        plant was wrong for exactly this shape). Contained: one
+        warning, seeds and dictionary still produced, plant left in
+        place, the in-memory manifest still returned."""
+        plant = tmp_path / MANIFEST_NAME
+        plant.mkdir()
+        (plant / "occupant").write_text("inside\n")
+
+        with caplog.at_level("WARNING", logger="packages.fuzzing.smt_seed"):
+            manifest = synthesize_seeds([_record({"magic": 0x41})], tmp_path)
+
+        assert manifest["seed_count"] >= 1
+        assert (tmp_path / "smt-witness.dict").is_file()  # unaffected
+        assert plant.is_dir()  # never removed
+        assert (plant / "occupant").read_text() == "inside\n"
+        refusals = [r for r in caplog.records
+                    if "witness manifest not written" in r.getMessage()]
+        assert len(refusals) == 1
+        assert not list(tmp_path.glob(".~savejson-*"))  # no stray tmp
+
+    def test_dir_at_manifest_name_e2e_merge_still_happens(self, tmp_path):
+        """End-to-end over the CLI's bare-call route: the run must
+        complete AND the dictionary merge must still happen — the
+        manifest plant costs only the manifest file."""
+        source = _witness_source(tmp_path)
+        run_out = tmp_path / "fuzz_run"
+        run_out.mkdir()
+        seed_dir = run_out / SEED_DIR_NAME
+        seed_dir.mkdir()
+        (seed_dir / MANIFEST_NAME).mkdir()
+
+        manifest = synthesize_from_run_dir(source, run_out)
+
+        assert manifest["seed_count"] >= 2
+        assert manifest["seed_dir_refused"] is None
+        assert manifest["merged_dict"] == str(run_out / "fuzz.dict")
+        assert (run_out / "fuzz.dict").is_file()
+        assert (seed_dir / MANIFEST_NAME).is_dir()  # plant left in place
 
 
 class TestCollectWitnessesShapes:
