@@ -1522,6 +1522,11 @@ def run_consistency_prepass(
 
     return {
         "census": census,
+        # Provenance: True = reloaded from the prep cache (may lack a
+        # joern supplement the live server would have added); False =
+        # built fresh this prepass. Reuse seams that need
+        # joern-supplemented data gate on this.
+        "census_cached": census_cached,
         "findings": findings,
         "leads": capped_leads,
         "mechanical": mechanical,
