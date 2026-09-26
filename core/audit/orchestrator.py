@@ -29718,12 +29718,37 @@ def _journal_finding_outcomes(
     Functions with ANY outcome in this segment are skipped — the live
     outcome (including a post-pass demotion not yet re-journalled)
     supersedes its own earlier journal rows. Never raises.
+
+    Transport tiering (row MAC + run scope, the journal export's
+    contract — see ``findings_export``): the journal lives in the
+    target-writable run dir, and this seam re-materialises rows
+    straight into ``findings.json``, so a planted "finding" line
+    shipped a phantom finding on every resumed finalize segment.
+    Unstamped/tampered rows are refused outright — and the gap fold
+    denies hash-tier review credit to finding-class rows, so a
+    refused honest row's function genuinely re-reviews next segment
+    (the two gates agree; neither silent loss nor a phantom).
+    Verified rows are NEVER refused for scope — a verified row
+    cannot be attacker-minted — but raw tool receipts require a
+    MAC-covered ``run_path`` matching THIS resolved run dir
+    (basenames collide across projects; a byte-copied same-named
+    sibling journal must not resurrect receipts minted against a
+    different codebase). Everything else verified — unattributed
+    legacy rows, renamed/relocated own runs, sibling rows — keeps
+    the finding but re-imports receipt-less: each
+    ``evidence_tools`` element rides per-"+"-part through the
+    LLM-tier sanitizer so it can never pass ``_is_tool_confirmed``
+    and mint ``confirmed_by`` receipts downstream.
     """
     out_dir = getattr(config, "out_dir", None)
     if not out_dir:
         return []
     try:
-        from core.coverage.journal import latest_function_grade_collapse
+        from core.coverage import journal_mac
+        from core.coverage.journal import (
+            RUN_ID_UNATTRIBUTED,
+            latest_function_grade_collapse,
+        )
 
         from .journal import is_mechanical_echo, load_entries
 
@@ -29733,9 +29758,22 @@ def _journal_finding_outcomes(
         ]
         if not entries:
             return []
+        # The re-importing run's identity: the FULL resolved run-dir
+        # path, matching what ``append_entry`` stamps into the MAC-
+        # covered ``run_path`` field at write time. Basenames collide
+        # across projects (operator-chosen ``--out`` names), so raw
+        # receipts key on the full path — and resolving on BOTH sides
+        # keeps a symlinked ``--out`` spelling (writer) and its
+        # resolved form (reader) in agreement.
+        try:
+            run_path_identity = str(Path(out_dir).resolve())
+        except OSError:
+            run_path_identity = str(out_dir)
         local_keys = {(o.file, o.function) for o in local_outcomes}
         collapsed = latest_function_grade_collapse(entries)
         outcomes: list[ReviewOutcome] = []
+        refused_unverified = 0
+        demoted_foreign = 0
         for site_key in sorted(collapsed):
             entry = collapsed[site_key]
             if entry.verdict != "finding":
@@ -29756,10 +29794,62 @@ def _journal_finding_outcomes(
             # toward the recoverable direction.
             if (entry.file, entry.function) in local_keys:
                 continue
+            if (journal_mac.entry_provenance(entry)
+                    != journal_mac.ROW_VERIFIED):
+                refused_unverified += 1
+                logger.debug(
+                    "journal finding re-import: refusing %s:%s "
+                    "(unstamped/tampered row)",
+                    entry.file, entry.function,
+                )
+                continue
+            run_scoped = bool(
+                run_path_identity
+                and entry.run_path == run_path_identity
+            )
             hypotheses = [
                 h for h in (entry.hypotheses or [])
                 if isinstance(h, dict) and h.get("mechanism")
             ]
+            if run_scoped:
+                # This run's own MAC-covered record — the in-session
+                # record gate enforced tool grounding at record time,
+                # so the journaled receipt stamp rides through whole.
+                evidence_tool = "+".join(entry.evidence_tools or [])
+            else:
+                # Verified but not THIS run dir: unattributed
+                # grandfather, a renamed/relocated own run, or a
+                # same-key sibling row. The finding survives — a
+                # verified row cannot be attacker-minted — but the
+                # receipts do not: tool receipts assert "these tools
+                # ran HERE against THIS target", which only a full-
+                # path match proves. Attributed-elsewhere rows are
+                # counted for the summary warning; sanitisation is
+                # per "+"-PART within each element (a composite
+                # legacy element like "note+dynamic:sanitizer" must
+                # not leak a raw verification-grade part to
+                # split-on-"+" consumers such as
+                # _is_verification_evidence_for_gate).
+                if entry.run_path or (
+                    entry.run_id
+                    and entry.run_id != RUN_ID_UNATTRIBUTED
+                ):
+                    demoted_foreign += 1
+                    logger.debug(
+                        "journal finding re-import: %s:%s verified "
+                        "but attributed elsewhere (run_path=%r) — "
+                        "re-imported receipt-less",
+                        entry.file, entry.function, entry.run_path,
+                    )
+                evidence_tool = "+".join(
+                    p
+                    for t in (entry.evidence_tools or [])
+                    for p in (
+                        _sanitize_llm_et(part.strip())
+                        for part in str(t).split("+")
+                    )
+                    if p
+                )
             outcome = ReviewOutcome(
                 file=entry.file,
                 function=entry.function,
@@ -29767,12 +29857,24 @@ def _journal_finding_outcomes(
                 body=entry.body or "",
                 hypothesis=hypotheses[0]["mechanism"] if hypotheses else "",
                 hypotheses=hypotheses or None,
-                evidence_tool="+".join(entry.evidence_tools or []),
+                evidence_tool=evidence_tool,
                 model=entry.model or "",
             )
             outcome.line = entry.line_start or 0
             outcome.provisional = bool(entry.provisional)
             outcomes.append(outcome)
+        if refused_unverified or demoted_foreign:
+            logger.warning(
+                "journal finding re-import: refused %d unstamped/"
+                "tampered finding row(s) (not re-materialised into "
+                "findings.json; the gap fold denies hash-tier credit "
+                "to finding-class rows, so an honest refused row's "
+                "function re-reviews next segment) and re-imported "
+                "%d verified row(s) attributed to another run dir "
+                "receipt-less (finding kept, tool receipts demoted "
+                "to the llm-claimed tier)",
+                refused_unverified, demoted_foreign,
+            )
         return outcomes
     except Exception:
         logger.debug(

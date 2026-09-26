@@ -268,12 +268,25 @@ class TestPersistFindingsJournalReimport:
         evidence_tools: list[str] | None = None,
         hypotheses: list[dict[str, str]] | None = None,
         strategies: list[str] | None = None,
+        run_id: str | None = None,
+        raw: bool = False,
+        legacy_stamp: bool = False,
     ) -> None:
-        from core.coverage.journal import ReviewJournalEntry
+        """One prior-segment journal row.
+
+        Default = what the run's own writer produces: MAC-stamped via
+        ``append_entry``, which stamps the resolved run-dir
+        ``run_path`` into the MAC-covered row. ``run_id`` overrides
+        the name attribution; ``raw=True`` appends the line without a
+        stamp (planted-row pins); ``legacy_stamp=True`` mints a
+        verified row WITHOUT ``run_path`` — the shape every row had
+        before the field existed (legacy-journal pins).
+        """
+        from core.coverage.journal import ReviewJournalEntry, append_entry
 
         entry = ReviewJournalEntry(
             ts=ts,
-            run_id="audit-run",
+            run_id=tmp_path.name if run_id is None else run_id,
             file=file,
             function=function,
             verdict=verdict,
@@ -285,8 +298,21 @@ class TestPersistFindingsJournalReimport:
             strategies=strategies or [],
             producer="audit",
         )
-        with open(tmp_path / "review-journal.jsonl", "a") as fh:
-            fh.write(json.dumps(entry.to_dict()) + "\n")
+        if raw:
+            with open(tmp_path / "review-journal.jsonl", "a") as fh:
+                fh.write(json.dumps(entry.to_dict()) + "\n")
+        elif legacy_stamp:
+            from core.coverage import journal_mac
+
+            row = entry.to_dict()
+            row.pop(journal_mac.TOKEN_KEY, None)
+            token = journal_mac.mint_row(row)
+            if token:
+                row[journal_mac.TOKEN_KEY] = token
+            with open(tmp_path / "review-journal.jsonl", "a") as fh:
+                fh.write(json.dumps(row) + "\n")
+        else:
+            append_entry(tmp_path, entry)
 
     def test_prior_segment_finding_survives_finalize_rewrite(self, tmp_path):
         from core.audit.orchestrator import (
@@ -423,6 +449,154 @@ class TestPersistFindingsJournalReimport:
         _persist_findings(result, self._config(tmp_path))
         data = json.loads((tmp_path / "findings.json").read_text())
         assert len(data) == 1
+
+    def test_planted_unstamped_finding_row_is_refused(self, tmp_path):
+        """The transport PoC: a raw journal line (no MAC) with
+        verdict=finding must NOT re-materialise a phantom finding
+        into findings.json on a finalize segment."""
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _persist_findings,
+        )
+
+        self._journal_row(
+            tmp_path, function="phantom_fn", verdict="finding",
+            ts="2026-01-01T00:00:01.000000Z", raw=True,
+        )
+        _persist_findings(OrchestratorResult(), self._config(tmp_path))
+        assert not (tmp_path / "findings.json").exists()
+
+    def test_foreign_run_verified_row_imports_receipt_less(self, tmp_path):
+        """A verified row byte-copied from a SIBLING run dir carries
+        that run's MAC-covered ``run_path``. The MAC proves it is
+        genuine install history (not attacker-minted), so the finding
+        survives the re-import — refusing it silently lost real
+        findings — but its receipts demote to the LLM-claimed tier:
+        raw tool receipts belong only to the run dir that earned
+        them."""
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _persist_findings,
+        )
+
+        own = tmp_path / "own-run"
+        own.mkdir()
+        sibling = tmp_path / "sibling-run"
+        sibling.mkdir()
+        self._journal_row(
+            sibling, function="sibling_fn", verdict="finding",
+            ts="2026-01-01T00:00:01.000000Z",
+            # One COMPOSITE element: the demotion must sanitize every
+            # "+"-part, not just prefix the element — split-on-"+"
+            # consumers would otherwise see a raw receipt part.
+            evidence_tools=["smt:check-overflow+joern:live"],
+        )
+        with open(own / "review-journal.jsonl", "a") as fh:
+            fh.write((sibling / "review-journal.jsonl").read_text())
+        _persist_findings(OrchestratorResult(), self._config(own))
+        data = json.loads((own / "findings.json").read_text())
+        assert data[0]["function"] == "sibling_fn"
+        assert data[0]["evidence_tool"] == (
+            "llm-claimed:smt:check-overflow+llm-claimed:joern:live")
+
+    def test_same_basename_sibling_row_demotes_receipts(self, tmp_path):
+        """Receipt replay via basename collision: a verified row from
+        a run dir with the SAME basename under a different parent used
+        to pass the run_id (basename) scope check and ride its raw
+        receipts through. Scope is full resolved ``run_path`` now —
+        the row still imports (verified = genuine history) but its
+        receipts demote."""
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _persist_findings,
+        )
+
+        own = tmp_path / "run-x"
+        own.mkdir()
+        twin = tmp_path / "elsewhere" / "run-x"
+        twin.mkdir(parents=True)
+        self._journal_row(
+            twin, function="twin_fn", verdict="finding",
+            ts="2026-01-01T00:00:01.000000Z",
+            evidence_tools=["smt:check-overflow", "joern:live"],
+        )
+        with open(own / "review-journal.jsonl", "a") as fh:
+            fh.write((twin / "review-journal.jsonl").read_text())
+        _persist_findings(OrchestratorResult(), self._config(own))
+        data = json.loads((own / "findings.json").read_text())
+        assert data[0]["function"] == "twin_fn"
+        assert data[0]["evidence_tool"] == (
+            "llm-claimed:smt:check-overflow+llm-claimed:joern:live")
+
+    def test_symlink_alias_write_stays_run_scoped(self, tmp_path):
+        """A writer that reached the run dir through a symlink alias
+        stamps the RESOLVED path, so the reader (resolving its own
+        identity the same way) still scopes the row to this run —
+        the old basename compare broke on symlinked --out dirs."""
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _persist_findings,
+        )
+
+        real = tmp_path / "real-run"
+        real.mkdir()
+        alias = tmp_path / "alias-run"
+        alias.symlink_to(real)
+        self._journal_row(
+            alias, function="aliased_fn", verdict="finding",
+            ts="2026-01-01T00:00:01.000000Z",
+            evidence_tools=["smt:check-overflow"],
+        )
+        _persist_findings(OrchestratorResult(), self._config(real))
+        data = json.loads((real / "findings.json").read_text())
+        assert data[0]["function"] == "aliased_fn"
+        assert data[0]["evidence_tool"] == "smt:check-overflow"
+
+    def test_unattributed_row_reimports_receipt_less(self, tmp_path):
+        """Verified rows with no run attribution (legacy run_id="" /
+        the RUN_ID_UNATTRIBUTED sentinel) keep the finding — erasing
+        them would regress honest relative---out runs — but their
+        receipt stamp demotes to the LLM-claimed tier so it can never
+        mint confirmed_by receipts downstream."""
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _persist_findings,
+        )
+        from core.coverage.journal import RUN_ID_UNATTRIBUTED
+
+        for run_id, fn in ((RUN_ID_UNATTRIBUTED, "sentinel_fn"),
+                           ("", "legacy_fn")):
+            self._journal_row(
+                tmp_path, function=fn, verdict="finding",
+                ts="2026-01-01T00:00:01.000000Z", run_id=run_id,
+                evidence_tools=["smt:check-overflow"],
+                legacy_stamp=True,
+            )
+        _persist_findings(OrchestratorResult(), self._config(tmp_path))
+        data = json.loads((tmp_path / "findings.json").read_text())
+        assert {d["function"] for d in data} == {"sentinel_fn",
+                                                 "legacy_fn"}
+        for d in data:
+            assert d["evidence_tool"] == "llm-claimed:smt:check-overflow"
+
+    def test_own_run_row_keeps_receipt_stamp(self, tmp_path):
+        """The default harness row IS run-scoped (``append_entry``
+        stamps this run dir's resolved ``run_path`` into the MAC) —
+        its journaled evidence stamp rides through whole; the record
+        gate enforced grounding at record time."""
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _persist_findings,
+        )
+
+        self._journal_row(
+            tmp_path, function="own_fn", verdict="finding",
+            ts="2026-01-01T00:00:01.000000Z",
+            evidence_tools=["smt:check-overflow", "joern:live"],
+        )
+        _persist_findings(OrchestratorResult(), self._config(tmp_path))
+        data = json.loads((tmp_path / "findings.json").read_text())
+        assert data[0]["evidence_tool"] == "smt:check-overflow+joern:live"
 
 
 class TestFindingsRobustness:
