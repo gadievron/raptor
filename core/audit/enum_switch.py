@@ -310,8 +310,11 @@ def detect_enum_switch_deviations(
         label_sets = [frozenset(sw.labels) for sw in peers]
         n = len(peers)
         # Member-major presence walk with the run-level ops budget:
-        # over budget → the remaining enums are EXCLUDED (loud), not
-        # half-censused (an absence claim from a truncated walk lies).
+        # an enum whose walk does not fit the REMAINING budget is
+        # EXCLUDED whole (loud, one census_degraded tick each), not
+        # half-censused (an absence claim from a truncated walk
+        # lies). Per-enum, not a hard stop: later, smaller enums may
+        # still census inside the leftover budget.
         if ops + len(d.members) * n > MAX_PRESENCE_OPS:
             stats["caps_hit"] = True
             reasons["census_degraded"] = (
