@@ -1919,6 +1919,78 @@ def _load_reading_list(path: Path) -> tuple[list[str], list[str]]:
     return identifiers, concepts
 
 
+def _vet_reading_list_identifiers(
+    rl_idents: list[str],
+    scope_files: list[Path],
+) -> tuple[list[str], list[str]]:
+    """Partition reading-list identifiers by presence in the scanned tree.
+
+    Reading-list identifiers are carryover from PRIOR runs via the
+    project concepts store — when that store was populated against a
+    DIFFERENT tree (another binary's decomp tree is the live-hit
+    shape), its identifiers match nothing here, the identifier focus
+    then matches zero files, and the study "succeeds" with zero items,
+    silently inheriting the old domain model.
+
+    The vet is resolve-keyed deliberately, not identity-keyed: an
+    identity stamp on the entries (binary fid / content hash) could
+    never be the decision function — a same-binary re-decompile or
+    ordinary source drift changes any content identity while the
+    entries stay perfectly valid, so a mismatch would still have to
+    fall back to exactly this presence check. Presence-in-scope is
+    the property the focus filter actually consumes, so keying on it
+    cannot false-drop an identifier that would have focused anything.
+
+    Case-insensitive substring match on the SAME lowercased key
+    family the pass-2 ``concept_filter`` gate is built from —
+    {ident, bare (struct/union/enum prefix stripped), bare_no_t
+    (``_t`` suffix stripped)}. Matcher parity is the correctness
+    property: the filter's direct search terms are ident/bare, and
+    its type-ref expansion only ever adds function names that
+    contain bare_no_t (names that themselves appear in some scanned
+    file), so an identifier with NO family witness in the scope is
+    one the downstream filter could not have matched anywhere.
+    Vetting on the literal spelling alone false-dropped ``sg_table_t``
+    against a tree that spells only ``sg_table`` — narrowing the
+    study below what the unvetted focus would have covered.
+
+    Early-exits once every identifier has a witness, so the healthy
+    case reads few files; the contaminated case costs one capped
+    read per in-scope file (pass 2 would have read them all anyway).
+    Returns ``(kept, dropped)``, both preserving input order.
+    """
+    def _key_family(ident: str) -> frozenset[str]:
+        low = ident.lower()
+        bare = re.sub(r"^(?:struct|union|enum)\s+", "", low)
+        bare_no_t = bare.removesuffix("_t")
+        # Drop empty keys: "" is a substring of everything and would
+        # vacuously witness a degenerate identifier.
+        return frozenset(k for k in (low, bare, bare_no_t) if k)
+
+    families: dict[str, frozenset[str]] = {
+        ident: _key_family(ident) for ident in rl_idents
+    }
+    witnessed: set[str] = set()
+    unresolved = {i for i, fam in families.items() if fam}
+    for sf in scope_files:
+        if not unresolved:
+            break
+        got = read_text_capped(sf, errors="replace")
+        if got is None:
+            continue
+        content_low = got[0].lower()
+        search = {k for i in unresolved for k in families[i]} - witnessed
+        hits = {key for key in search if key in content_low}
+        if hits:
+            witnessed |= hits
+            unresolved = {
+                i for i in unresolved if not families[i] & witnessed
+            }
+    kept = [i for i in rl_idents if families[i] & witnessed]
+    dropped = [i for i in rl_idents if not families[i] & witnessed]
+    return kept, dropped
+
+
 def _load_bridge_seeds(path: Path) -> tuple[list[str], list[str]]:
     """Seed names + concept hints from a bridge-seeds.json.
 
@@ -3081,8 +3153,30 @@ def main() -> None:
     # under-reported the operator's asks.
     cli_ident_names = {i.lower() for i in identifiers}
 
+    rl_dropped: list[str] = []
+    rl_all_dropped = False
     if parsed.reading_list:
         rl_idents, rl_concepts = _load_reading_list(Path(parsed.reading_list))
+        if rl_idents:
+            # Cross-binary contamination gate: the reading list rides
+            # in from the PROJECT concepts store, and a store populated
+            # against a different tree (another binary's decomp tree)
+            # carries identifiers that match nothing here — an
+            # unvetted focus then matches zero files and the study
+            # "succeeds" with zero items. Identifiers with no witness
+            # in the current scope leave the focus, loudly.
+            rl_idents, rl_dropped = _vet_reading_list_identifiers(
+                rl_idents, source_files)
+            if rl_dropped:
+                # rl names are LLM-authored free text — escape before
+                # the operator terminal.
+                print(f"study-prep: {len(rl_dropped)} reading-list "
+                      f"identifiers resolve to no file in this tree — "
+                      f"dropped from focus (different binary?): "
+                      f"{_sft(', '.join(rl_dropped[:5]), max_len=300)}"
+                      f"{' ...' if len(rl_dropped) > 5 else ''}",
+                      file=sys.stderr)
+            rl_all_dropped = bool(rl_dropped) and not rl_idents
         if rl_idents:
             identifiers.extend(rl_idents)
             # reading-list identifiers are LLM-authored free text
@@ -3153,6 +3247,17 @@ def main() -> None:
             # above) — stamp-eligible.
             cli_ident_names.update(
                 ci.lower() for ci in correlate_identifiers)
+
+    # Announced AFTER the --correlate merge above: correlate names
+    # are a focus source like --identifier, so an all-foreign
+    # reading list beside a live --correlate run must not claim the
+    # run is unfocused (and a degenerate single-name --correlate,
+    # ignored above, correctly still counts as no focus).
+    if rl_all_dropped and not identifiers and not semantic_concepts:
+        print("study-prep: ALL reading-list identifiers dropped and "
+              "no other focus source — proceeding with the "
+              "unfocused default scope (never an empty focus)",
+              file=sys.stderr)
 
     cf: frozenset[str] | None = None
     if identifiers and c_files:
@@ -3553,12 +3658,16 @@ def main() -> None:
         sidecar_path = (Path(parsed.redb_map) if parsed.redb_map
                         else Path(target) / "decomp-map.json")
         existing_keys = {(it.kind, it.name) for it in items}
-        if parsed.reading_list and not identifiers:
+        if parsed.reading_list and not identifiers and not rl_all_dropped:
             # A reading list exists but yielded no identifiers (e.g.
             # concept-only items with failed seeding) — an unscoped
             # merge would re-inflate a narrowed pass to the whole
             # binary. Skip the merge; the regex items are already
-            # reading-list-scoped.
+            # reading-list-scoped. Exception: when EVERY reading-list
+            # identifier was dropped as foreign to this tree, the run
+            # is deliberately falling back to the unfocused default —
+            # skipping the merge then would hand back the silent
+            # zero-item study the drop just prevented.
             redb_items = []
             print("study-prep: --redb merge skipped (reading list "
                   "present but no identifiers to scope by)",
@@ -3635,10 +3744,32 @@ def main() -> None:
         "bridge_seed_file": parsed.bridge_seed_file or None,
         "related_docs": related_docs,
         "unresolved_identifiers": ml_unresolved,
+        # Foreign-identifier drop record: downstream (study-loop's
+        # zero-item check) names the cause from these instead of
+        # reporting a silent empty study. Count is authoritative;
+        # names are a bounded sample for the operator. The names are
+        # target-derived (LLM-authored free text) — any future
+        # terminal renderer must sanitise_for_terminal them first.
+        "reading_list_dropped": len(rl_dropped),
+        "reading_list_dropped_names": rl_dropped[:20],
         "items": [asdict(item) for item in items],
     }
     save_json(out_path, out_data)
     print(f"study-prep: wrote {out_path} ({len(items)} items)", file=sys.stderr)
+    if not items:
+        # Drop-first attribution names the likeliest cause, not the
+        # only one: survivors/other focus may also have matched no
+        # extractable items, so the drop-shaped cause says so too.
+        cause = (
+            f"{len(rl_dropped)} reading-list identifier(s) resolved "
+            "to no file in this tree (different binary?) and the "
+            "remaining focus matched no extractable items"
+            if rl_dropped else
+            "no extractable items matched the requested focus"
+        )
+        print(f"study-prep: WARNING: study list is EMPTY (0 items) — "
+              f"{cause}; a study pass over it learns nothing",
+              file=sys.stderr)
 
     if discovered_patterns:
         patterns_path = output_dir / "patterns.json"
