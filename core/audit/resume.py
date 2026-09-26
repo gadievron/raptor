@@ -44,12 +44,12 @@ from core.run.resume import (  # noqa: F401 — re-exported audit surface
     EXHAUSTED_BUDGET_EPSILON_USD,
     SPEND_FLOOR_FILENAME,
     SpanDriftRecord,
-    _spend_value,
     max_of_evidence,
     persist_spend_floor,
     remaining_budget_usd,
     spans_drift,
     spend_floor_usd,
+    spend_value,
 )
 from core.run.resume import load_run_config as _load_run_config
 from core.run.resume import (
@@ -223,12 +223,12 @@ def booked_spend_usd(breakdown: dict[str, Any] | None) -> float:
     if not breakdown:
         return 0.0
     totals = breakdown.get("totals") or {}
-    spend = _spend_value(totals.get("total_spend_usd"))
+    spend = spend_value(totals.get("total_spend_usd"))
     if spend is not None:
         return spend
     tracked = 0.0
     for key in ("cost_usd", "failed_attempts_cost_usd"):
-        v = _spend_value(totals.get(key))
+        v = spend_value(totals.get(key))
         if v is not None:
             tracked += v
     return tracked
@@ -248,7 +248,7 @@ def journal_spend_usd(out_dir: Path) -> float:
         # floor — spend accounting never reads the process-local
         # journal cache.
         for entry in load_entries(Path(out_dir), fresh=True):
-            cost = _spend_value(entry.cost_usd)
+            cost = spend_value(entry.cost_usd)
             if cost is not None:
                 total += cost
     except Exception:

@@ -305,7 +305,7 @@ def _iter_lines(fh: IO[bytes]):
 
 def _row_cost(raw: dict[str, Any]) -> float:
     """Bounded per-row cost, matching the spend loader's clamp
-    (``core.audit.resume._spend_value``): non-finite values clamp,
+    (``core.audit.resume.spend_value``): non-finite values clamp,
     never sum raw. On stdlib-json installs a planted ``1e400`` parses
     to ``inf`` (the row quarantines at load, but the compactor
     accounts unparseable-dict rows too), and an ``inf`` on BOTH sides

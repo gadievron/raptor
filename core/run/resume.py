@@ -299,7 +299,7 @@ def spans_drift(
     drifted: list[SpanDrift] = []
     checked = 0
     for file_path, group in by_file.items():
-        resolved = _safe_target_join(target_path, file_path)
+        resolved = safe_target_join(target_path, file_path)
         readable = resolved is not None and resolved.is_file()
         span_group = [r for r in group if r.line_start is not None]
         if span_group and readable:
@@ -332,12 +332,16 @@ def spans_drift(
     return drifted, checked
 
 
-def _safe_target_join(target_path: Path, rel: str) -> Path | None:
+def safe_target_join(target_path: Path, rel: str) -> Path | None:
     """Join a recorded relative path under the target root, refusing
     traversal — recorded paths are run artifacts, not trusted path
     input. Same policy as /audit's join: a lexical ``..``-segment
     pre-reject (even non-escaping ``a/../b``) on top of
-    ``core.paths.confine``'s filesystem-aware containment."""
+    ``core.paths.confine``'s filesystem-aware containment.
+
+    Public substrate API: cross-package resume consumers (the
+    understand checkpoint store, the audit resume surface) import
+    this by name — renames need a deprecation path."""
     from core.paths import confine
 
     if ".." in rel.split("/"):
@@ -354,7 +358,7 @@ def _safe_target_join(target_path: Path, rel: str) -> Path | None:
 _MAX_SPEND_EVIDENCE_USD = 1e7
 
 
-def _spend_value(value: Any) -> float | None:
+def spend_value(value: Any) -> float | None:
     """A finite, bounded, non-negative spend figure from run-dir JSON
     evidence — ``None`` for non-numeric shapes.
 
@@ -366,6 +370,10 @@ def _spend_value(value: Any) -> float | None:
     the writer anything a plain forged number would not: an overclaim
     (``inf``/oversize) clamps to the ceiling, an underclaim
     (``-inf``/``NaN``/negative) clamps to $0.
+
+    Public substrate API: cross-package resume consumers (the
+    understand checkpoint store, the audit resume surface) import
+    this by name — renames need a deprecation path.
     """
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
@@ -408,7 +416,7 @@ def persist_spend_floor(
     out_dir = Path(out_dir)
     if not out_dir.is_dir():
         return
-    clamped = _spend_value(spend_usd)
+    clamped = spend_value(spend_usd)
     if clamped is None:
         return
     spend_usd = clamped
@@ -429,7 +437,7 @@ def spend_floor_usd(out_dir: Path) -> float:
     data = load_json(path, max_bytes=_RESUME_JSON_MAX_BYTES)
     if not isinstance(data, dict):
         return 0.0
-    spend = _spend_value(data.get("spend_usd"))
+    spend = spend_value(data.get("spend_usd"))
     return 0.0 if spend is None else spend
 
 
@@ -446,13 +454,13 @@ def max_of_evidence(
     (observed live: segment 4 booked $47.29 of a ~$4,534 run — a ~99%
     under-report in the final ledger).
 
-    Values are clamped through :func:`_spend_value`; non-numeric
+    Values are clamped through :func:`spend_value`; non-numeric
     entries read as $0. An empty sequence books $0 with an empty note.
     """
     booked = 0.0
     note = ""
     for value, source_note in evidence:
-        clamped = _spend_value(value)
+        clamped = spend_value(value)
         v = 0.0 if clamped is None else clamped
         if v > booked or not note:
             booked = v
