@@ -1202,9 +1202,14 @@ def _checkpoint_wrap(dispatch_fn, args, out_dir: Path, *, mode: str,
         )
         if isinstance(results, list) and not failed:
             store.save(name, results, cost_by_model.get(name, 0.0))
-            # dict() snapshot: sibling workers mutate cost_by_model
-            # concurrently, and iterating a mutating dict raises.
-            store.bump_spend_floor(sum(dict(cost_by_model).values()))
+        # The floor bump is unconditional: a failure-shaped result
+        # spent real money too (the cost collector booked it before
+        # the errors surfaced), and the floor is monotonic — bumping
+        # only on success let a failed model's whole cost fall off
+        # the resume accounting. dict() snapshot: sibling workers
+        # mutate cost_by_model concurrently, and iterating a mutating
+        # dict raises.
+        store.bump_spend_floor(sum(dict(cost_by_model).values()))
         return results
 
     return _wrapped

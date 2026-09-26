@@ -295,3 +295,47 @@ class TestTraceResume:
         assert {i.get("trace_id") for i in result["items"]} == {"t1", "t2"}
         assert result["resumed_segment"] == 2
         assert result["carried_models"] == ["model-a"]
+
+
+class TestSpendFloorBooksFailedDispatch:
+    def test_failed_model_spend_still_raises_the_floor(
+            self, tmp_path, repo, run_dir):
+        # The floor is the resume machinery's "money already left the
+        # building" record. A dispatch whose result is failure-shaped
+        # (all-error list) spent real money via the cost collector,
+        # and the floor is monotonic — so the bump must not be gated
+        # on success (a failed final model once left its whole cost
+        # off the floor, and a resumed run under-booked the spend).
+        from core.run.resume import spend_floor_usd
+
+        mod = _load_shim()
+        cost_by_model: dict[str, float] = {}
+
+        class _Args:
+            pass
+
+        class _Model:
+            model_name = "model-a"
+
+        def dispatch(model, task_arg, repo_path):
+            cost_by_model["model-a"] = 1.5  # collector booked pre-failure
+            return [{"error": "provider 500"}]
+
+        wrapped = mod._checkpoint_wrap(
+            dispatch, _Args(), run_dir, mode="hunt", task_key="k",
+            target=repo, cost_by_model=cost_by_model)
+        results = wrapped(_Model(), "pattern", str(repo))
+
+        assert results == [{"error": "provider 500"}]
+        assert spend_floor_usd(run_dir) >= 1.5
+        # The failed result itself is still NOT checkpointed — it must
+        # re-run on resume, not replay.
+        from packages.code_understanding.checkpoint import (
+            CheckpointStore,
+            task_fingerprint,
+        )
+        store = CheckpointStore(
+            run_dir, mode="hunt",
+            fingerprint=task_fingerprint("hunt", "k", repo),
+            target=repo)
+        assert store.load("model-a") is None
