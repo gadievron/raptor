@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""Live E2E: pack rows → emitted extension pack → stock CodeQL query.
+
+Builds a JavaScript fixture with one flow per row channel, both fed
+by a synthetic-package source (``fixturepkg.taintedValue``) declared
+in a fixture pack written to a scratch config dir:
+
+* ``cp.exec(...)`` — the SOURCE-channel probe. ``child_process.exec``
+  is already stock-modeled in javascript-all (ChildProcessMethodCall),
+  so this finding appearing augmented-only is explained by the source
+  row alone.
+* ``sink.runIt(...)`` — the SINK-channel probe. ``sinkpkg.runIt`` is
+  unknown to the stock models; this finding requires BOTH the fixture
+  source row and the fixture sink row to be consumed.
+
+The fixture pack is loaded TOGETHER with the shipped
+``javascript/web-injection-core`` pack, so the shipped seed rows
+round-trip the live emitter in the same run (ride-along; the
+discriminating sink assertion is the synthetic row). The merged set
+goes through :func:`core.taint.mad_rows.rows_from_pack_set`, the real
+emitter, a real CodeQL javascript database, and the stock
+``Security/CWE-078/CommandInjection.ql`` query baseline vs augmented.
+
+PASS iff the baseline run finds nothing and the augmented run flags
+BOTH call sites: the delta proves source rows and sink rows each ride
+``--additional-packs``/``--model-packs`` into the stock suite and are
+consumed there. Exit codes: 0 pass, 1 fail, 3 environment skip (no
+codeql CLI / javascript-queries pack cached).
+
+Dev-tooling only — not invoked by the LLM-driven RAPTOR workflows.
+Co-located with ``core/taint/`` (the module it verifies) rather than
+``libexec/`` (reserved for framework-internal dispatch shims).
+
+Usage::
+
+    core/taint/scripts/taint-mad-e2e [--keep]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+RAPTOR = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(RAPTOR))
+
+from core.config import RaptorConfig  # noqa: E402
+from core.dataflow.codeql_augmented_run import (  # noqa: E402
+    run_baseline_and_augmented,
+)
+from core.dataflow.extension_pack import write_extension_pack  # noqa: E402
+from core.taint.mad_rows import rows_from_pack_set  # noqa: E402
+from core.taint.packs import load_packs  # noqa: E402
+
+QUERY = "codeql/javascript-queries:Security/CWE-078/CommandInjection.ql"
+RULE_ID = "js/command-line-injection"
+
+FIXTURE_JS = """\
+const fixture = require('fixturepkg');
+const sink = require('sinkpkg');
+const cp = require('child_process');
+cp.exec(fixture.taintedValue());
+sink.runIt(fixture.taintedValue());
+"""
+#: fixture line of the source-channel probe (stock-modeled exec sink)
+SOURCE_PROBE_LINE = 4
+#: fixture line of the sink-channel probe (non-stock sinkpkg.runIt)
+SINK_PROBE_LINE = 5
+
+# The rows the stock model set cannot know: a synthetic package's
+# call return (source channel) and a synthetic package's sink
+# (sink channel — child_process.exec would NOT discriminate here,
+# it is already stock-modeled, so a finding on it only proves the
+# source row).
+FIXTURE_PACK = {
+    "schema_version": 1,
+    "language": "javascript",
+    "framework": "node",
+    "pack": "e2e-fixture",
+    "sources": [
+        {
+            "kind": "call_return",
+            "match": "fixturepkg.taintedValue",
+            "taint_classes": ["user-input"],
+            "provenance": "framework_catalog",
+            "rationale": "E2E fixture: a synthetic package whose call return stands in for remote input the stock model set cannot already know about.",
+        },
+    ],
+    "sinks": [
+        {
+            "kind": "dotted_callee",
+            "match": "sinkpkg.runIt",
+            "args": [0],
+            "sink_class": "command-injection",
+            "cwe": "CWE-78",
+            "provenance": "framework_catalog",
+            "rationale": "E2E fixture: a synthetic command sink unknown to the stock models, so a finding on it proves the emitted sink row was consumed.",
+        },
+    ],
+}
+
+
+def _rule_hit_lines(sarif_path: Path) -> list[int]:
+    """Start lines of every result for RULE_ID, sorted."""
+    doc = json.loads(sarif_path.read_text(encoding="utf-8"))
+    lines = []
+    for run in doc.get("runs", []):
+        for res in run.get("results", []):
+            if res.get("ruleId") != RULE_ID:
+                continue
+            for loc in res.get("locations", []):
+                region = (loc.get("physicalLocation", {})
+                          .get("region", {}))
+                if "startLine" in region:
+                    lines.append(region["startLine"])
+    return sorted(lines)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--keep", action="store_true",
+                        help="keep the scratch dir for inspection")
+    args = parser.parse_args()
+
+    codeql = shutil.which("codeql")
+    if codeql is None:
+        print("SKIP: no codeql CLI on PATH")
+        return 3
+
+    scratch = Path(tempfile.mkdtemp(prefix="raptor-taint-mad-e2e-",
+                                    dir="/var/tmp"))
+    print(f"scratch: {scratch}")
+    try:
+        return _run(codeql, scratch)
+    finally:
+        if args.keep:
+            print(f"kept: {scratch}")
+        else:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _run(codeql: str, scratch: Path) -> int:
+    fixture = scratch / "fixture"
+    fixture.mkdir()
+    (fixture / "app.js").write_text(FIXTURE_JS, encoding="utf-8")
+
+    pack_cfg = scratch / "packs" / "javascript"
+    pack_cfg.mkdir(parents=True)
+    (pack_cfg / "e2e-fixture.json").write_text(
+        json.dumps(FIXTURE_PACK, indent=2), encoding="utf-8")
+
+    pack_set = load_packs(
+        ["javascript/web-injection-core", "javascript/e2e-fixture"],
+        extra_dirs=[scratch / "packs"],
+        target_root=fixture,
+    )
+    conv = rows_from_pack_set(pack_set, language="javascript")
+    if not conv.rows:
+        print("FAIL: conversion produced no rows")
+        return 1
+    result = write_extension_pack(
+        conv.rows,
+        language="javascript",
+        out_dir=scratch / "mad-pack",
+        pack_name="raptor/taint-mad-e2e",
+    )
+    if result.rejected:
+        for r in result.rejected:
+            print(f"FAIL: emitter rejected row: {r.reason}")
+        return 1
+    print(f"emitted: {result.rows_written} rows {dict(result.counts)}")
+
+    db = scratch / "db"
+    create = subprocess.run(
+        [codeql, "database", "create", str(db),
+         "--language=javascript", "--source-root", str(fixture)],
+        capture_output=True, text=True, timeout=600, check=False,
+        env=RaptorConfig.get_safe_env(),
+    )
+    if create.returncode != 0:
+        print("SKIP: codeql database create failed "
+              "(extractor unavailable?)")
+        print(create.stderr[-2000:])
+        return 3
+
+    try:
+        baseline, augmented = run_baseline_and_augmented(
+            db, [QUERY], result.pack_dir, scratch / "sarif",
+            codeql_bin=codeql,
+        )
+    except Exception as e:  # CodeQLRunError: query pack not cached etc.
+        print(f"SKIP: analyze failed: {e}")
+        return 3
+
+    base_lines = _rule_hit_lines(baseline.sarif_path)
+    aug_lines = _rule_hit_lines(augmented.sarif_path)
+    print(f"baseline {RULE_ID}: {len(base_lines)} finding(s) "
+          f"at lines {base_lines}")
+    print(f"augmented {RULE_ID}: {len(aug_lines)} finding(s) "
+          f"at lines {aug_lines}")
+
+    if base_lines:
+        print("FAIL: baseline already finds a flow (delta vacuous)")
+        return 1
+    ok = True
+    if SOURCE_PROBE_LINE in aug_lines:
+        print("PASS source channel: exec flow found (fixture source "
+              "row + stock sink model)")
+    else:
+        print("FAIL: augmented run missed the exec flow (source row "
+              "not consumed)")
+        ok = False
+    if SINK_PROBE_LINE in aug_lines:
+        print("PASS sink channel: sinkpkg.runIt flow found (emitted "
+              "sink row consumed — unknown to stock models)")
+    else:
+        print("FAIL: augmented run missed the sinkpkg.runIt flow "
+              "(sink row not consumed)")
+        ok = False
+    if ok:
+        print("PASS: both row channels consumed by the stock query")
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
