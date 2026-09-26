@@ -163,6 +163,81 @@ def apply_prefer_globs(
     return preferred + others
 
 
+#: Producer identity of the cross-file taint engine — the ``tool``
+#: field its scan-shaped findings and SARIF driver carry. Kept as a
+#: local constant (rather than importing ``core.taint``) so the
+#: analysis agent's import graph stays taint-free; a pinning test
+#: asserts it matches ``core.taint.emission.PRODUCER``.
+_TAINT_PRODUCER = "taint-crossfile"
+
+
+def apply_producer_fair_share(
+    findings: list[dict[str, Any]],
+    max_findings: int,
+) -> tuple[list[dict[str, Any]], dict[str, int] | None]:
+    """Per-producer fair-share interleave for a binding findings cap.
+
+    The prioritisation above this point fronts EVERY dataflow-carrying
+    finding before the ``max_findings`` truncation, so a path-emitting
+    producer (the cross-file taint engine, whose findings ALL carry
+    dataflow) could displace every other producer's findings wholesale
+    at a binding cap. This reorders the queue round-robin by producer
+    (``tool`` field), each producer contributing in its OWN existing
+    priority order (dataflow-first, prefer-glob-fronted) — so any
+    cap-length prefix contains a fair share of every producer.
+
+    Deliberately conservative — the input list is returned UNCHANGED
+    (same object, no reorder, ``None`` counts) whenever there is no
+    contention or no taint producer in play:
+
+    * ``max_findings`` doesn't bind (cap <= 0 or fewer findings), or
+    * fewer than two distinct producers are present, or
+    * no finding carries the taint producer's ``tool`` — the interleave
+      is scoped to runs where the path-flooding producer participates;
+      scanner-only runs keep byte-identical prioritisation.
+
+    Returns ``(findings, deferred_by_producer)`` where the dict counts,
+    per producer, the findings the interleave leaves BEYOND the cap
+    window (the ones a subsequent ``[:max_findings]`` truncation
+    defers). ``None`` when the interleave did not fire.
+    """
+    if max_findings <= 0 or len(findings) <= max_findings:
+        return findings, None
+    producer_order: list[str] = []
+    queues: dict[str, list[dict[str, Any]]] = {}
+    has_taint = False
+    for f in findings:
+        producer = f.get("tool") or "unknown"
+        if not isinstance(producer, str):
+            producer = "unknown"
+        if producer == _TAINT_PRODUCER:
+            has_taint = True
+        if producer not in queues:
+            producer_order.append(producer)
+            queues[producer] = []
+        queues[producer].append(f)
+    if not has_taint or len(producer_order) < 2:
+        return findings, None
+
+    interleaved: list[dict[str, Any]] = []
+    cursors = {p: 0 for p in producer_order}
+    while len(interleaved) < len(findings):
+        for producer in producer_order:
+            queue = queues[producer]
+            cursor = cursors[producer]
+            if cursor < len(queue):
+                interleaved.append(queue[cursor])
+                cursors[producer] = cursor + 1
+
+    deferred: dict[str, int] = {}
+    for f in interleaved[max_findings:]:
+        producer = f.get("tool") or "unknown"
+        if not isinstance(producer, str):
+            producer = "unknown"
+        deferred[producer] = deferred.get(producer, 0) + 1
+    return interleaved, deferred
+
+
 def _dir_to_glob(d: str) -> str:
     """Convert a catalog directory path (``src/http``) to an
     fnmatch glob that matches files inside it (``src/http/*``).
@@ -2784,6 +2859,30 @@ class AutonomousSecurityAgentV2:
                 logger.info(
                     "attack-surface ranking (%s): %s of %s findings match %s (sorted to front)", prefer_source, matched, total_before, effective_globs
                 )
+
+        # Per-producer fair-share interleave — fires only when the cap
+        # binds AND the taint producer is present (see
+        # apply_producer_fair_share; unchanged list otherwise). Applied
+        # in BOTH modes: sequential mode truncates right below, and
+        # prep mode hands this ORDER to Phase 4, whose cap keeps the
+        # same fair-share prefix.
+        prioritized_findings, fair_share_deferred = apply_producer_fair_share(
+            prioritized_findings, max_findings,
+        )
+        if fair_share_deferred is not None:
+            from core.security.log_sanitisation import (
+                sanitise_for_terminal as _sft_producer,
+            )
+            deferred_summary = ", ".join(
+                f"{_sft_producer(producer, max_len=64)}={count}"
+                for producer, count in sorted(fair_share_deferred.items())
+            )
+            _fair_share_log = logger.debug if is_prep_only else logger.info
+            _fair_share_log(
+                "producer fair-share: max_findings=%s binds — "
+                "interleaved by producer; beyond-cap per producer: %s",
+                max_findings, deferred_summary or "none",
+            )
 
         if not is_prep_only:
             # Cap in sequential mode — in prep mode, Phase 4 enforces the cap
