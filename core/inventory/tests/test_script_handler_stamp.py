@@ -333,12 +333,11 @@ class TestStampLineModel:
         assert True in planted.values()  # non-vacuous: handler present
 
 
-def _interstitial_state(items: list[dict]) -> dict[str, tuple]:
-    return {
-        it["name"]: (it["line_start"], it["line_end"],
-                     it.get(SCRIPT_HANDLER_FIELD), it.get("span_hash"))
-        for it in _interstitials(items)
-    }
+def _interstitial_state(items: list[dict]) -> list[dict]:
+    """FULL interstitial item dicts (sorted) — a healed record must
+    equal a fresh build's interstitial state field-for-field,
+    including builder-stamped siblings like lexical_dead."""
+    return sorted(_interstitials(items), key=lambda it: it["name"])
 
 
 class TestSpanReconciliation:
@@ -356,11 +355,12 @@ class TestSpanReconciliation:
         out = tmp_path / "out"
         inv = build_inventory(str(target), str(out))
         truth = _interstitial_state(_items_by_file(inv)["handler.php"])
-        assert any(state[2] is True for state in truth.values())
+        assert any(it.get(SCRIPT_HANDLER_FIELD) is True for it in truth)
 
         # Shift the True-stamped span onto the wiring-only
-        # require_once line (5): at BASE behaviour the re-derivation
-        # would slice line 5, stamp False, and every consumer follows.
+        # require_once line (5): without the reconciliation the stamp
+        # re-derivation slices line 5, stamps False, and every
+        # consumer follows.
         ck_path = out / "checklist.json"
         ck = json.loads(ck_path.read_text())
         shifted = 0
@@ -379,6 +379,48 @@ class TestSpanReconciliation:
         healed = build_inventory(str(target), str(out))
         assert _interstitial_state(
             _items_by_file(healed)["handler.php"]) == truth
+
+    def test_heal_restores_builder_sibling_fields(self, tmp_path):
+        # A dead if(false) block: the fresh build tags the
+        # interstitial that STARTS inside it lexical_dead. Replaced
+        # items must re-earn builder-stamped sibling fields too —
+        # full-dict equality with the fresh state, not just
+        # geometry + stamp.
+        php = (
+            "<?php\n"
+            "require_once('lib/common.php');\n"
+            "\n"
+            "function helper($x) {\n"
+            "  return htmlspecialchars($x);\n"
+            "}\n"
+            "if (false) {\n"
+            "  legacy_handler($_POST['cmd']);\n"
+            "}\n"
+            "\n"
+            "$cmd = $_POST['cmd'];\n"
+            "process_line($cmd);\n"
+        )
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "dead.php").write_text(php)
+        out = tmp_path / "out"
+        inv = build_inventory(str(target), str(out))
+        truth = _interstitial_state(_items_by_file(inv)["dead.php"])
+        assert any(it.get("lexical_dead") is True for it in truth)
+
+        ck_path = out / "checklist.json"
+        ck = json.loads(ck_path.read_text())
+        for f in ck.get("files", []):
+            for it in f.get("items", []):
+                if it.get("kind") == "interstitial":
+                    it["line_start"] = it["line_end"] = 2
+                    it.pop("span_hash", None)
+                    it.pop("lexical_dead", None)
+        ck_path.write_text(json.dumps(ck))
+
+        healed = build_inventory(str(target), str(out))
+        assert _interstitial_state(
+            _items_by_file(healed)["dead.php"]) == truth
 
     def test_sha_reuse_backfills_missing_interstitials(self, tmp_path):
         # A record written before the interstitial layer existed never
@@ -437,9 +479,13 @@ class TestSpanReconciliation:
                    "  return $v;\n}\n$c = $_POST['cmd'];\nsystem($c);\n")
         with caplog.at_level(
                 logging.WARNING, logger="core.inventory.script_handler"):
-            changed = reconcile_interstitial_items(items, "php", content)
+            changed = reconcile_interstitial_items(
+                items, "php", content, path="lib/thing.php")
         assert changed is True
-        assert any("interstitial spans disagree" in r.message
+        # The warning names the record (escaped path), so an operator
+        # can find the healed file without diffing checklists.
+        assert any("interstitial spans" in r.getMessage()
+                   and "lib/thing.php" in r.getMessage()
                    for r in caplog.records)
         spans = sorted((it["line_start"], it["line_end"])
                        for it in _interstitials(items))

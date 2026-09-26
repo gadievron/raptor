@@ -1901,9 +1901,29 @@ def _process_single_file(
                 # like the fresh-parse hasher below.
                 items_list = old_entry.get('items')
                 if isinstance(items_list, list):
-                    reconcile_interstitial_items(
-                        items_list, language, content,
+                    healed = reconcile_interstitial_items(
+                        items_list, language, content, path=rel_path,
                     )
+                    if healed:
+                        # Replaced items lost builder-stamped sibling
+                        # fields; re-derive the lexical_dead tag the
+                        # fresh path would give them (same rule:
+                        # tagged only when the span STARTS inside a
+                        # dead range) so a healed record equals a
+                        # fresh build's interstitial state.
+                        dead_ranges = detect_dead_scopes(
+                            language, content)
+                        if dead_ranges:
+                            for it in items_list:
+                                if (not isinstance(it, dict)
+                                        or it.get('kind')
+                                        != 'interstitial'):
+                                    continue
+                                ls = it.get('line_start') or 0
+                                if ls and any(lo <= ls <= hi
+                                              for lo, hi
+                                              in dead_ranges):
+                                    it['lexical_dead'] = True
                     stamp_script_handler_items(
                         items_list, language, content,
                     )

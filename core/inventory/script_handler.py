@@ -614,12 +614,13 @@ def stamp_script_handler_items(
     classifier) converges back to the content's truth on the next
     build instead of persisting indefinitely; content is identical by
     construction, so the re-derivation equals the original parse's.
-    The heal covers the stamp FIELD given the item's recorded span —
-    the slice is taken at the recorded ``line_start``/``line_end``,
-    coordinates that live in the same writable directory, so the
-    reuse path reconciles interstitial geometry first
-    (:func:`reconcile_interstitial_items`); without that step a
-    shifted span makes this function classify the wrong bytes.
+    This function heals the stamp FIELD only — the slice is taken at
+    the recorded ``line_start``/``line_end``, coordinates that live in
+    the same writable directory, so the reuse path reconciles
+    interstitial geometry first (:func:`reconcile_interstitial_items`,
+    whose docstring states the boundary of what THAT heal covers);
+    without the reconciliation a shifted span makes this function
+    classify the wrong bytes.
     Returns True when any item was stamped (informational — the
     builder call sites don't branch on it; the record dicts are
     mutated in place either way).
@@ -649,9 +650,12 @@ def stamp_script_handler_items(
 
 
 def _span_key(line_start: Any, line_end: Any) -> tuple[int, int]:
-    """Comparable (start, end) with the gap-side type guard: bools and
-    non-ints read as 0 / start, matching what the hydration and stamp
-    slicers would actually use."""
+    """Comparable (start, end) for geometry comparison: bools and
+    non-ints read as 0 / start. Not identical to ``_span_source``'s
+    refusal semantics — but every degenerate shape (bool, non-int,
+    zero, end-before-start) yields a key no content-derived
+    interstitial can carry, so a degenerate cached span always
+    compares unequal and resolves toward replacement."""
     start = (line_start if isinstance(line_start, int)
              and not isinstance(line_start, bool) else 0)
     end = (line_end if isinstance(line_end, int)
@@ -663,11 +667,14 @@ def reconcile_interstitial_items(
     items: list[dict[str, Any]],
     language: str,
     content: str,
+    *,
+    path: str | None = None,
 ) -> bool:
     """Re-derive one file record's interstitial geometry from
     ``content`` on the builder's SHA-256 reuse path. Mutates ``items``
     in place; returns True when the cached interstitial set was
-    replaced.
+    replaced. ``path`` names the record in the replacement warning
+    (repo-derived, so it is escaped before logging).
 
     :func:`stamp_script_handler_items` heals the stamp FIELD, but it
     slices content by the item's recorded ``line_start``/``line_end``
@@ -681,16 +688,28 @@ def reconcile_interstitial_items(
     languages take the identity translation view, so on byte-identical
     content the recomputation equals the original parse's. Matching
     geometry keeps the cached items untouched; a disagreement replaces
-    the interstitial set loudly and lets the stamps and span hashes
-    re-derive over the healed spans. A record with no interstitial
-    items (written before the interstitial layer) backfills the same
-    way — the carried-gap rule the include-edge backfill follows.
+    the interstitial set loudly and lets the stamps, span hashes and
+    ``lexical_dead`` tags re-derive over the healed spans (the tag
+    re-derivation lives at the builder call site). A record with no
+    interstitial items (written before the interstitial layer)
+    backfills the same way — the carried-gap rule the include-edge
+    backfill follows.
 
-    Residual, by design: the non-interstitial spans are inputs of this
-    reconciliation, not outputs — a rewritten function span shifts the
-    derived geometry consistently with it. Those items carry their own
-    ``span_hash`` staleness evidence, and re-deriving them needs the
-    full parse the SHA gate exists to skip.
+    Boundary, by design: the non-interstitial (function/global) spans
+    are INPUTS of this reconciliation, not outputs — re-deriving them
+    needs the full parse the SHA gate exists to skip. The heal covers
+    incoherent tamper (an interstitial set that disagrees with the
+    geometry the recorded sibling spans derive) and outright deletion
+    of the layer. A coherent forgery that rewrites a function span
+    TOGETHER WITH the interstitial set derived from it reconciles
+    clean; a function-span-only tamper — inert on the stamp surface
+    before this heal existed — now converges to the forged geometry
+    (loudly, one warning per file). Either variant needs the same
+    run-dir write authority as deleting the record outright, so net
+    attacker power is unchanged; what the heal removes is the silent
+    single-field vector. The ``span_hash`` fields on sibling items are
+    unkeyed content hashes the same authority can recompute —
+    honest-drift evidence, not tamper evidence.
     """
     if (language or "").lower() not in SCRIPT_PER_FILE_LANGUAGES:
         return False
@@ -717,10 +736,15 @@ def reconcile_interstitial_items(
                    for it in fresh]
     if sorted(cached) == sorted(fresh_spans):
         return False
+    # The path is repo-derived (attacker-chosen file name in a hostile
+    # tree) — escape and bound it before it reaches a terminal.
+    from core.security.log_sanitisation import sanitise_for_terminal
     logger.warning(
-        "inventory: cached interstitial spans disagree with the "
-        "content-derived geometry (%d cached, %d derived) — replacing "
-        "them; stamps and span hashes re-derive over the healed spans",
+        "inventory: cached interstitial spans for %s disagree with "
+        "the content-derived geometry (%d cached, %d derived) — "
+        "replacing them; stamps and span hashes re-derive over the "
+        "healed spans",
+        sanitise_for_terminal(path, max_len=160) if path else "<record>",
         len(cached), len(fresh_spans),
     )
     items[:] = [it for it in items
