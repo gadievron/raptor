@@ -74,7 +74,8 @@ def iter_decompressed(path, fmt: str,
                 if total > max_bytes:
                     raise DecompressionLimitExceeded(
                         f"{fmt} stream exceeds {max_bytes} bytes "
-                        f"decompressed — refusing as bomb")
+                        f"decompressed — refusing as bomb",
+                        cap="total_bytes")
                 yield chunk
     except (DecompressionLimitExceeded, UnsupportedArchive):
         raise

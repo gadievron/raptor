@@ -90,23 +90,27 @@ def _safe_dest_path(dest_root: Path, member_name: str) -> Path | None:
     return target
 
 
+def _count_reason(reasons: dict[str, int], reason: str, n: int = 1) -> None:
+    reasons[reason] = reasons.get(reason, 0) + n
+
+
 def _write_members(members: dict[str, bytes], dest: Path,
-                   max_total: int, max_files: int) -> dict[str, int]:
+                   max_total: int, max_files: int) -> dict[str, Any]:
     if len(members) > max_files:
         msg = f"archive has {len(members)} files — exceeds cap of {max_files}"
-        raise DecompressionLimitExceeded(msg)
+        raise DecompressionLimitExceeded(msg, cap="entry_count")
     total = 0
     written = 0
-    dropped = 0
+    reasons: dict[str, int] = {}
     for name, data in members.items():
         total += len(data)
         if total > max_total:
             msg = f"archive exceeds {max_total} bytes extracted — refusing as bomb"
-            raise DecompressionLimitExceeded(msg)
+            raise DecompressionLimitExceeded(msg, cap="total_bytes")
         target = _safe_dest_path(dest, name)
         if target is None:
             logger.warning("core.archive: dropping out-of-tree member %r", name)
-            dropped += 1
+            _count_reason(reasons, "out_of_tree")
             continue
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -117,10 +121,11 @@ def _write_members(members: dict[str, bytes], dest: Path,
             # slipped the safety gate, a disk error) crash extraction of
             # attacker-controlled input — skip it and carry on.
             logger.warning("core.archive: skipping unwritable member %r (%s)", name, e)
-            dropped += 1
+            _count_reason(reasons, "unwritable")
             continue
         written += 1
-    return {"files": written, "bytes": total, "dropped": dropped}
+    return {"files": written, "bytes": total,
+            "dropped": sum(reasons.values()), "dropped_reasons": reasons}
 
 
 class _DiskSink:
@@ -136,7 +141,7 @@ class _DiskSink:
         self._max_files = max_files
         self.total = 0
         self.written = 0
-        self.dropped = 0
+        self.dropped_reasons: dict[str, int] = {}
         self._seen = 0
 
     def __call__(self, name: str, data: bytes) -> None:
@@ -144,16 +149,16 @@ class _DiskSink:
         if self._seen > self._max_files:
             raise DecompressionLimitExceeded(
                 f"archive has {self._seen} files — exceeds cap of "
-                f"{self._max_files}")
+                f"{self._max_files}", cap="entry_count")
         self.total += len(data)
         if self.total > self._max_total:
             raise DecompressionLimitExceeded(
                 f"archive exceeds {self._max_total} bytes extracted — "
-                f"refusing as bomb")
+                f"refusing as bomb", cap="total_bytes")
         target = _safe_dest_path(self._dest, name)
         if target is None:
             logger.warning("core.archive: dropping out-of-tree member %r", name)
-            self.dropped += 1
+            _count_reason(self.dropped_reasons, "out_of_tree")
             return
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -164,13 +169,14 @@ class _DiskSink:
             # must not crash extraction of attacker-controlled input.
             logger.warning(
                 "core.archive: skipping unwritable member %r (%s)", name, e)
-            self.dropped += 1
+            _count_reason(self.dropped_reasons, "unwritable")
             return
         self.written += 1
 
-    def stats(self) -> dict[str, int]:
+    def stats(self) -> dict[str, Any]:
         return {"files": self.written, "bytes": self.total,
-                "dropped": self.dropped}
+                "dropped": sum(self.dropped_reasons.values()),
+                "dropped_reasons": dict(self.dropped_reasons)}
 
 
 def _write_single_file(chunks, src: Path, dest: Path) -> dict[str, int]:
@@ -194,10 +200,16 @@ def extract_to_dir(path, dest, *,
                    max_files: int = DEFAULT_MAX_FILES,
                    max_member_bytes: int = DEFAULT_MAX_MEMBER_BYTES) -> dict[str, Any]:
     """Extract a Tier-1 archive (``path``) into ``dest``; return a summary dict
-    ``{"format", "files", "bytes", "dropped"}`` (``dropped`` counts members
-    rejected at the write boundary — out-of-tree or unwritable names — plus,
-    for zip, members the primitive's safety filter rejected or skipped as
-    encrypted).
+    ``{"format", "files", "bytes", "dropped", "dropped_reasons"}``.
+    ``dropped`` counts members rejected at the write boundary —
+    out-of-tree or unwritable names — plus members the zip/tar
+    primitives' safety filters rejected (traversal / absolute /
+    oversized / ... names, and zip's encrypted entries).
+    ``dropped_reasons`` breaks that count down per reason (the
+    :class:`core.zip.safe_member.UnsafeMemberReason` vocabulary plus
+    ``"encrypted"`` / ``"out_of_tree"`` / ``"unwritable"``) so a
+    consumer can tell hostile member names from benign skips instead
+    of treating a degraded extraction as a clean success.
 
     Tier 1: zip, tar, ``.tar.{gz,xz,bz2}``, and single-file gz/bz2/xz/zst.
     Raises ``UnsupportedArchive`` for unknown formats and
@@ -227,24 +239,23 @@ def extract_to_dir(path, dest, *,
     # cap bounds that dict. The primitives' bomb exceptions are mapped
     # to DecompressionLimitExceeded.
     sink = _DiskSink(dest, max_total_bytes, max_files)
+    # Count members the primitives skip (safety-filter rejects +
+    # zip's encrypted entries) into the summary — per reason — so a
+    # degraded extraction is visible to consumers; pre-fix those
+    # skips were debug logs only and the summary read as a clean
+    # success. One counter serves both the zip and tar arms.
+    skip_reasons: dict[str, int] = {}
+
+    def _count_skip(_info: Any, reason: str) -> None:
+        _count_reason(skip_reasons, reason)
+
     try:
         if fmt == "zip":
-            # Count members the primitive skips (safety-filter rejects
-            # + encrypted entries) into the summary's ``dropped`` so a
-            # degraded extraction is visible to consumers — pre-fix
-            # those skips were debug logs only and the summary read as
-            # a clean success.
-            zip_skips = {"n": 0}
-
-            def _count_zip_skip(_info: Any, _reason: str) -> None:
-                zip_skips["n"] += 1
-
             members = extract_files_from_zip(
                 src, selector=_keep_files, max_member_bytes=max_member_bytes,
                 max_entry_count=max_files, max_total_bytes=max_total_bytes,
-                on_skipped=_count_zip_skip)
+                on_skipped=_count_skip)
             stats = _write_members(members, dest, max_total_bytes, max_files)
-            stats["dropped"] += zip_skips["n"]
         elif fmt == "tar":
             # Stream the on-disk tar member-by-member ("r|*"). read_bytes()
             # would materialise the whole archive in RAM before any cap
@@ -254,7 +265,7 @@ def extract_to_dir(path, dest, *,
                     _iter_file_chunks(fh), selector=_keep_files, mode="r|*",
                     max_member_bytes=max_member_bytes,
                     max_total_bytes=max_total_bytes, max_entry_count=max_files,
-                    sink=sink)
+                    sink=sink, on_skipped=_count_skip)
             stats = sink.stats()
         else:
             # gz/bz2/xz/zst: a compressed tar OR a single compressed
@@ -271,13 +282,14 @@ def extract_to_dir(path, dest, *,
                     chain([head], chunks), selector=_keep_files, mode="r|",
                     max_member_bytes=max_member_bytes,
                     max_total_bytes=max_total_bytes, max_entry_count=max_files,
-                    sink=sink)
+                    sink=sink, on_skipped=_count_skip)
                 stats = sink.stats()
             else:
                 stats = _write_single_file(chain([head], chunks), src, dest)
-    except (ZipTotalBytesExceeded, ZipEntryCountExceeded,
-            TarTotalBytesExceeded, TarEntryCountExceeded) as e:
-        raise DecompressionLimitExceeded(str(e)) from e
+    except (ZipTotalBytesExceeded, TarTotalBytesExceeded) as e:
+        raise DecompressionLimitExceeded(str(e), cap="total_bytes") from e
+    except (ZipEntryCountExceeded, TarEntryCountExceeded) as e:
+        raise DecompressionLimitExceeded(str(e), cap="entry_count") from e
     except ZipOpenError as e:
         # Corrupt / unreadable zip — REFUSE, typed, mirroring the tar
         # arm below (a silently-empty extraction used to be promoted
@@ -289,5 +301,11 @@ def extract_to_dir(path, dest, *,
         # tarfile exceptions or converting corruption into empty success.
         raise ArchiveError(f"corrupt or unreadable tar archive: {e}") from e
 
+    reasons: dict[str, int] = dict(stats.get("dropped_reasons") or {})
+    for reason, n in skip_reasons.items():
+        _count_reason(reasons, reason, n)
+    stats["dropped"] = int(stats.get("dropped") or 0) + sum(
+        skip_reasons.values())
+    stats["dropped_reasons"] = reasons
     stats["format"] = fmt
     return stats

@@ -299,6 +299,17 @@ def _zip_central_directory_bounds(path: Path) -> tuple[int, int] | None:
     return total, cd_size
 
 
+def zip_central_directory_bounds(path: Path) -> tuple[int, int] | None:
+    """Public binding for the EOCD tail probe — ``(entry_count,
+    central_directory_bytes)``, or ``None`` when no EOCD exists (not a
+    zip). Reads only the file tail, never the directory itself; zip64
+    sentinels are returned as-is. Exists so consumers that need a
+    cheap true member total (the engagement ledger's honest
+    truncation residuals) bind a public name instead of the private
+    helper."""
+    return _zip_central_directory_bounds(path)
+
+
 def _zip_members(path: Path) -> set[str]:
     # Gate BEFORE parsing: ZipFile(path) materialises the whole
     # central directory at open (a crafted 200k-entry zip drove ~6x
@@ -493,4 +504,5 @@ def build_manifest(
     )
 
 
-__all__ = ["BinaryManifest", "RuntimeSignal", "build_manifest"]
+__all__ = ["BinaryManifest", "RuntimeSignal", "build_manifest",
+           "zip_central_directory_bounds"]

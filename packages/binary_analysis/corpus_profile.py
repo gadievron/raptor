@@ -307,6 +307,48 @@ def _safe_extension(name: str) -> str:
     return "other"
 
 
+def name_template(name: str) -> str:
+    """Public binding of the fixed-template name-schema vocabulary.
+
+    The engagement ledger's corpus family clustering keys on the SAME
+    template language as :func:`_group_families` — shared, never
+    minted twice (the fixed-template name-schema rule). Consumers
+    outside this module bind here; the private spelling stays the
+    implementation.
+    """
+    return _name_template(name)
+
+
+def safe_extension(name: str) -> str:
+    """Public binding of the charset-validated extension vocabulary
+    (see :func:`_safe_extension`) — the second family-key component
+    shared with external family-clustering consumers."""
+    return _safe_extension(name)
+
+
+def magic4_key(header: bytes) -> str:
+    """Leading-4-byte magic component of a family key (``"short"``
+    when under 4 bytes) — the exact :func:`_magic4` spelling, exposed
+    for external family-clustering consumers."""
+    return header[:4].hex() if len(header) >= 4 else "short"
+
+
+def family_key(name: str, header: bytes) -> str:
+    """One corpus family key in the profiler's grouping vocabulary:
+    ``magic4 | validated extension | name template``.
+
+    For consumers (the engagement ledger) that bind to the family
+    vocabulary without running the full statistical profiler. Honest
+    difference from :func:`_group_families`: the profiler only splits
+    an (extension, template) group by magic when at least two magics
+    have shared-evidence support; this key ALWAYS carries the magic
+    component — a per-file key cannot know group statistics. Every
+    component is validated/fixed-vocabulary by construction, so the
+    key is safe to embed (never raw attacker bytes).
+    """
+    return f"{magic4_key(header)}|{_safe_extension(name)}|{_name_template(name)}"
+
+
 def _size_class(size: int) -> int:
     """Log2 size bucket (exponent). Sizes 0 and 1 share bucket 0."""
     return max(size, 1).bit_length() - 1
@@ -497,7 +539,7 @@ def _collect_samples(
 
 
 def _magic4(sample: _Sample) -> str:
-    return sample.header[:4].hex() if len(sample.header) >= 4 else "short"
+    return magic4_key(sample.header)
 
 
 def _group_families(samples: list[_Sample]) -> tuple[dict[str, list[_Sample]], list[dict[str, Any]]]:
@@ -1455,5 +1497,9 @@ __all__ = [
     "PROFILE_JSON_NAME",
     "PROFILE_REPORT_NAME",
     "SEED_DIR_NAME",
+    "family_key",
+    "magic4_key",
+    "name_template",
     "profile_corpus",
+    "safe_extension",
 ]

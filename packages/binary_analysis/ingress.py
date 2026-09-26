@@ -103,6 +103,21 @@ _LINUX_DRIVER_SYMBOLS = {
     "proc_ioctl": ("ioctl_dispatch", "user_mode_ioctl", "kernel_boundary", 110),
 }
 
+def driver_entry_catalogs() -> dict[str, dict[str, tuple[str, str, str, int]]]:
+    """Read-only copies of the driver/kernel entry-symbol catalogs.
+
+    The engagement ledger's mechanical exposure features cite these
+    catalogs as their extractor — one curated vocabulary, shared with
+    :func:`recover_external_ingress`, never re-listed by a consumer.
+    Values are the ``(kind, external_control, boundary, score)``
+    tuples the ingress recovery uses.
+    """
+    return {
+        "pe": dict(_DRIVER_SYMBOLS),
+        "linux": dict(_LINUX_DRIVER_SYMBOLS),
+    }
+
+
 _PE_EXPORT_SKIP = {
     "DllMain",
     "DllRegisterServer",
@@ -520,4 +535,8 @@ def recover_external_ingress(
     ], records
 
 
-__all__ = ["ExternalIngressCandidate", "recover_external_ingress"]
+__all__ = [
+    "ExternalIngressCandidate",
+    "driver_entry_catalogs",
+    "recover_external_ingress",
+]
