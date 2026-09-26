@@ -35,6 +35,31 @@
     "kind": "literal",
     "note": "closed grammar-node-type taxonomy: the tree-sitter-java node kinds the CFG builder keys refusal/scope tables on; every entry is asserted producible by the installed grammar (core/analysis/tests/test_cfg_node_tables.py) \u2014 grammar structure names, not a learned name vocabulary"
   },
+  "core/analysis/gadget_oracle.py::_EXEC_SINKS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "closed PHP-language taxonomy: builtin code-execution functions (exec/system/eval family) — fixed by the PHP runtime, not a learned per-target vocabulary; per-target sink vocabulary stays the study loop's job (see the SEED-tier comment at the definition)"
+  },
+  "core/analysis/gadget_oracle.py::_FILE_SINKS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "closed PHP-language taxonomy: builtin filesystem-effect functions (unlink/fopen family) — fixed by the PHP runtime, not a learned per-target vocabulary; per-target sink vocabulary stays the study loop's job (see the SEED-tier comment at the definition)"
+  },
+  "core/analysis/gadget_oracle.py::_PROPAGATORS": {
+    "count": 14,
+    "kind": "literal",
+    "note": "closed PHP-language taxonomy: builtin string-shape propagators (sprintf/implode family) for the oracle's direct-flow taint modelling — fixed by the PHP runtime, not a learned per-target vocabulary"
+  },
+  "core/analysis/gadget_oracle.py::_coerce_chain": {
+    "count": 13,
+    "kind": "literal",
+    "note": "schema-key manifest for the bounded re-coercion of one gadget-chain row from untrusted run-dir JSON (persistence keys in lockstep with the scan_tree chain shape, not a name vocabulary)"
+  },
+  "core/analysis/gadget_oracle.py::scan_tree": {
+    "count": 13,
+    "kind": "literal",
+    "note": "schema-key manifest for the artifact's completeness census (parse/read/symlink/special-file counters the qualifier renders) — persistence keys in lockstep with census_qualifier and the consumer tests, not a name vocabulary"
+  },
   "core/analysis/peer_groups.py::_NON_DISTINCTIVE_TYPES": {
     "count": 156,
     "kind": "literal",
