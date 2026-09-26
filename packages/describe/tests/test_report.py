@@ -407,3 +407,111 @@ class TestFormatJsonAsciiEncoded:
             assert raw not in out
         doc = json.loads(out)  # still valid JSON
         assert "x\x9b2J" in doc["target_path"]  # value survives, escaped
+
+
+class TestFuzzHarnessSection:
+    """Shipped fuzz-harness census section — rendering, omission,
+    hostile-name egress, and the read-only failure isolation."""
+
+    @staticmethod
+    def _census(engines=None, truncated=False):
+        from packages.fuzzing.harness_census import (
+            EngineCensus,
+            FuzzHarnessCensus,
+        )
+        engines = engines if engines is not None else [
+            EngineCensus(
+                engine="cargo-fuzz", count=3,
+                examples=["parse_header", "decode"],
+                invocation_hint="/fuzz --binary /tmp/test — cargo-fuzz "
+                                "drives the fuzz/fuzz_targets/ harnesses",
+            ),
+            EngineCensus(
+                engine="libfuzzer", count=1, examples=["fuzz_x"],
+                invocation_hint="/fuzz --binary <compiled-harness> — "
+                                "libFuzzer harness sources ship in-tree",
+            ),
+        ]
+        return FuzzHarnessCensus(
+            target_path=Path("/tmp/test"),
+            engines_checked=["cargo-fuzz", "libfuzzer", "afl", "atheris"],
+            engines=engines,
+            truncated=truncated,
+        )
+
+    def _report_with(self, census):
+        return DescribeReport(
+            target_shape=_shape(),
+            tool_checks=[],
+            target_type_defaults=None,
+            estimate_summary=None,
+            fuzz_census=census,
+        )
+
+    def test_section_renders_counts_examples_hints(self):
+        out = format_text(self._report_with(self._census()))
+        assert "Fuzz harnesses shipped (4):" in out
+        assert "cargo-fuzz: 3 (parse_header, decode, +1 more)" in out
+        assert "libfuzzer: 1 (fuzz_x)" in out
+        assert "/fuzz --binary /tmp/test" in out
+        assert "/fuzz --binary <compiled-harness>" in out
+
+    def test_truncated_census_says_counts_partial(self):
+        out = format_text(self._report_with(self._census(truncated=True)))
+        assert "(counts partial)" in out
+
+    def test_empty_census_omits_section(self):
+        out = format_text(self._report_with(None))
+        assert "Fuzz harness" not in out
+        doc = json.loads(format_json(self._report_with(None)))
+        assert doc["fuzz_harnesses"] is None
+
+    def test_json_carries_census_shape(self):
+        doc = json.loads(format_json(self._report_with(self._census())))
+        fh = doc["fuzz_harnesses"]
+        assert fh["total_harnesses"] == 4
+        assert fh["engines"][0]["engine"] == "cargo-fuzz"
+        assert fh["engines_checked"] == [
+            "cargo-fuzz", "libfuzzer", "afl", "atheris",
+        ]
+
+    def test_hostile_example_names_escaped_at_render(self):
+        # The census vets names, but the renderer must not rely on
+        # that — escape-at-render is the surface's own contract.
+        from packages.fuzzing.harness_census import EngineCensus
+        hostile = EngineCensus(
+            engine="cargo-fuzz", count=1,
+            examples=["evil\x1b]0;pwn\x07name"],
+            invocation_hint="/fuzz --binary /t\x9bmp",
+        )
+        out = format_text(self._report_with(self._census([hostile])))
+        for raw in ("\x1b", "\x07", "\x9b"):
+            assert raw not in out
+
+    def test_build_report_populates_census_end_to_end(self, tmp_path):
+        (tmp_path / "Cargo.toml").write_text("[package]\n")
+        fuzz = tmp_path / "fuzz"
+        (fuzz / "fuzz_targets").mkdir(parents=True)
+        (fuzz / "Cargo.toml").write_text("[package]\n")
+        (fuzz / "fuzz_targets" / "roundtrip.rs").write_text(
+            "fuzz_target!(|data: &[u8]| {});\n")
+        report = build_describe_report(tmp_path)
+        assert report.fuzz_census is not None
+        assert report.fuzz_census.total_harnesses == 1
+        assert "Fuzz harnesses shipped (1):" in format_text(report)
+
+    def test_census_absent_on_harnessless_tree(self, tmp_path):
+        (tmp_path / "main.c").write_text("int main(){return 0;}")
+        report = build_describe_report(tmp_path)
+        assert report.fuzz_census is None
+
+    def test_census_failure_never_fails_report(self, tmp_path, monkeypatch):
+        import packages.fuzzing.harness_census as hc
+
+        def _boom(_path):
+            raise RuntimeError("census exploded")
+
+        monkeypatch.setattr(hc, "census_fuzz_harnesses", _boom)
+        report = build_describe_report(tmp_path)
+        assert report.fuzz_census is None
+        assert "Target analysis:" in format_text(report)
