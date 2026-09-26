@@ -361,12 +361,20 @@ Examples:
                     help="With --orchestrator, print the plan and exit without running")
     ap.add_argument(
         "--engine",
-        choices=["afl", "libfuzzer", "atheris"],
+        choices=["afl", "libfuzzer", "atheris", "cargo-fuzz"],
         default=None,
         help="Force a specific engine on the orchestrator path. "
              "Honoured only when the detected target kind supports it "
-             "(atheris drives python-pkg targets); otherwise the plan "
-             "blocks with the reason. Implies --orchestrator.")
+             "(atheris drives python-pkg targets; cargo-fuzz drives "
+             "rust-crate targets); otherwise the plan blocks with the "
+             "reason. Implies --orchestrator.")
+    ap.add_argument(
+        "--fuzz-target", metavar="NAME",
+        help="cargo-fuzz target to build and run for rust-crate "
+             "targets (a fuzz/fuzz_targets/<NAME>.rs harness). "
+             "Auto-selected when the crate has exactly one; several "
+             "targets block the plan with the list. Implies "
+             "--orchestrator.")
     py_harness_group = ap.add_mutually_exclusive_group()
     py_harness_group.add_argument(
         "--py-harness", metavar="FILE",
@@ -605,14 +613,15 @@ Examples:
     # ORCHESTRATOR PATH (new): capability detection + libFuzzer/AFL++ + telemetry
     # ========================================================================
     use_orchestrator = args.orchestrator
-    if args.engine or args.py_harness or args.py_entry:
-        # Engine selection and the atheris harness flags are
-        # orchestrator-path features; the legacy AFL++ path has no
+    if args.engine or args.py_harness or args.py_entry or args.fuzz_target:
+        # Engine selection and the atheris / cargo-fuzz harness flags
+        # are orchestrator-path features; the legacy AFL++ path has no
         # equivalents, so silently dropping them is never OK.
         if args.legacy:
             ap.error(
                 "--legacy cannot be combined with --engine / "
-                "--py-harness / --py-entry (orchestrator-path flags)")
+                "--py-harness / --py-entry / --fuzz-target "
+                "(orchestrator-path flags)")
         use_orchestrator = True
     if binary_path.is_dir() and not args.orchestrator:
         # Directory targets (source trees, crates, packages) only the
@@ -688,7 +697,8 @@ Examples:
                          py_harness=(Path(args.py_harness)
                                      if args.py_harness else None),
                          py_entry=args.py_entry,
-                         py_payload=args.py_input)
+                         py_payload=args.py_input,
+                         fuzz_target=args.fuzz_target)
         print(plan.summary())
 
         if args.plan_only:
