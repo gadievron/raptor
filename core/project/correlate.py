@@ -105,6 +105,7 @@ def correlate_project(project) -> dict[str, Any]:
                                           run_types, join=join)
     tool_gaps = _build_tool_gaps(run_dirs, findings_by_run, run_types,
                                  join=join)
+    token_drift = _find_token_drift(run_dirs)
     actions = _build_action_list(
         disagreements, new_resolved, tool_gaps, persistent,
         join_uncertain=join.uncertain_pairs,
@@ -123,6 +124,7 @@ def correlate_project(project) -> dict[str, Any]:
         "persistent_findings": persistent,
         "tool_coverage": tool_coverage,
         "trends": trends,
+        "token_enforcement_drift": token_drift,
         "summary": {
             "runs": len(run_dirs),
             "total_unique_findings": n_total_unique,
@@ -131,6 +133,7 @@ def correlate_project(project) -> dict[str, Any]:
             "disagreements": len(disagreements),
             "new_findings": len(new_resolved["new_findings"]),
             "potentially_resolved": len(new_resolved["potentially_resolved"]),
+            "token_enforcement_drift": len(token_drift),
         },
     }
 
@@ -165,6 +168,7 @@ def _empty_result() -> dict[str, Any]:
         "persistent_findings": [],
         "tool_coverage": {},
         "trends": {},
+        "token_enforcement_drift": [],
         "summary": {
             "runs": 0,
             "total_unique_findings": 0,
@@ -173,6 +177,7 @@ def _empty_result() -> dict[str, Any]:
             "disagreements": 0,
             "new_findings": 0,
             "potentially_resolved": 0,
+            "token_enforcement_drift": 0,
         },
     }
 
@@ -634,6 +639,38 @@ def _build_trends(
         trends[label] = history
 
     return trends
+
+
+def _find_token_drift(run_dirs: list[Path]) -> list[dict[str, Any]]:
+    """Token-enforcement drift between consecutive map-bearing runs.
+
+    Compares the per-run ``token-map.json`` artifacts
+    (:mod:`core.concepts.token_map`) pairwise in run-time order — the
+    monitored-invariant view for gated-fragile disproofs whose
+    reconsideration condition names the token as sole guard. Pure
+    comparison over artifacts that already exist: no new pipeline
+    stage, no verdict weight (a ``lost_enforcement`` row is queue food
+    for the operator, never an auto-overturn of the recorded
+    disproof).
+    """
+    try:
+        from core.concepts.token_map import load_token_map, token_map_drift
+    except Exception:  # noqa: BLE001 — enrichment, never a gate
+        return []
+    ordered = sorted(run_dirs, key=safe_run_mtime)
+    maps = [(d.name, load_token_map(d)) for d in ordered]
+    with_maps = [(name, m) for name, m in maps if m]
+    drift_records: list[dict[str, Any]] = []
+    for (p_name, p_map), (c_name, c_map) in zip(with_maps, with_maps[1:]):
+        try:
+            records = token_map_drift(p_map, c_map)
+        except Exception:  # noqa: BLE001 — one bad artifact pair
+            continue
+        for rec in records:
+            rec["prior_run"] = p_name
+            rec["current_run"] = c_name
+            drift_records.append(rec)
+    return drift_records
 
 
 def _build_tool_coverage(run_dirs: list[Path]) -> dict[str, list[str]]:

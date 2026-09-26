@@ -3310,6 +3310,10 @@ def _print_correlate_counts(counts: dict) -> None:
         parts.append(f"New: {int(counts['new_findings'])}")
     if counts.get("potentially_resolved"):
         parts.append(f"Resolved?: {int(counts['potentially_resolved'])}")
+    if counts.get("token_enforcement_drift"):
+        parts.append(
+            f"Token drift: {int(counts['token_enforcement_drift'])}",
+        )
     print(f"  {' | '.join(parts)}")
 
 
@@ -3374,6 +3378,27 @@ def _do_correlate(project, json_out: bool=False) -> None:
         print("\n  Next steps:")
         for cmd in suggested:
             print(f"    → {sanitise_for_terminal(str(cmd), max_len=200)}")
+
+    # --- Token-enforcement drift (compact, hint-tier) ---
+    token_drift = result.get("token_enforcement_drift") or []
+    if token_drift:
+        print(f"\n  Token-enforcement drift ({len(token_drift)}):")
+        for rec in token_drift[:10]:
+            print(
+                "    "
+                f"{sanitise_for_terminal(str(rec.get('file', '?')), max_len=120)}: "
+                f"{sanitise_for_terminal(str(rec.get('prior_status', '?')), max_len=32)}"
+                " -> "
+                f"{sanitise_for_terminal(str(rec.get('current_status', '?')), max_len=32)}"
+                f" [{sanitise_for_terminal(str(rec.get('change', '?')), max_len=32)}]"
+                f" ({sanitise_for_terminal(str(rec.get('prior_run', '?')), max_len=64)}"
+                " -> "
+                f"{sanitise_for_terminal(str(rec.get('current_run', '?')), max_len=64)})",
+            )
+        if len(token_drift) > 10:
+            print(f"    ... and {len(token_drift) - 10} more (use --json)")
+        print("    Hint-tier: a lost_enforcement row is re-review food for "
+              "token-guard disproofs, never an auto-overturn.")
 
     # --- Persistent findings (compact) ---
     persistent = result["persistent_findings"]
