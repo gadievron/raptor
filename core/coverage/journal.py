@@ -2232,8 +2232,16 @@ def entry_earns_function_coverage(entry: ReviewJournalEntry) -> bool:
       assertion carries no evidence gate and must not retire the
       function from review.
 
-    Same direction as :func:`reviewed_set`; the two differ only on
-    edge rows (see its docstring).
+    Same direction as :func:`reviewed_set`, but stricter: the two
+    differ on edge rows (see its docstring) AND on the last two
+    screens — ``reviewed_set`` keeps mechanical echoes and agent
+    marks. That is deliberate scope, not drift: ``reviewed_set`` is a
+    raw "did this run's journal already record this key" lookup (its
+    one production consumer is verdict-reuse's per-pass idempotence
+    guard, where an echo/mark row still means the key was journalled
+    this run), never a coverage authority. Every lane that projects
+    rows into durable coverage or review-retirement must screen
+    through THIS predicate.
     """
     return (
         entry.verdict not in ("error", "dark")
