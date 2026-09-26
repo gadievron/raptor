@@ -2185,13 +2185,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "libexec/raptor-lifecycle-hook\u001f_RAPTOR_INVOCATION_RE": {
-   "digests": [
-    "a7dfcf17837f"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "libexec/raptor-study-prep\u001f\\b(\\w+_t)\\b": {
    "digests": [
     "4b63c9e5db76"
