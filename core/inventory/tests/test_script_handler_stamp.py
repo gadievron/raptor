@@ -381,6 +381,13 @@ class TestSpanReconciliation:
             _items_by_file(healed)["handler.php"]) == truth
 
     def test_heal_restores_builder_sibling_fields(self, tmp_path):
+        # Grammar-dependent: dead-scope detection refuses without a
+        # vouched code view (blank_noncode needs the PHP grammar), so
+        # the fresh build would carry no lexical_dead to compare. The
+        # sibling reconciliation tests stay unguarded on purpose —
+        # they pin fresh-vs-healed CONSISTENCY, which holds under the
+        # regex fallback too.
+        pytest.importorskip("tree_sitter_php")
         # A dead if(false) block: the fresh build tags the
         # interstitial that STARTS inside it lexical_dead. Replaced
         # items must re-earn builder-stamped sibling fields too —
