@@ -50,6 +50,7 @@ never recall.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -165,6 +166,38 @@ class RecallManifest:
     corpus_kind: str = "recall"
     build_command: str | None = None
     tolerance: Tolerance = field(default_factory=Tolerance)
+
+
+def compute_label_digest(manifest: RecallManifest) -> str:
+    """Content digest over the label set a report was scored against.
+
+    Stamped on every recall report (``label_digest``) and pinned by
+    the flip gate on both sides: pruning ``clean_regions`` — or
+    editing any expected/clean label — between the baseline freeze and
+    the candidate run changes the digest and refuses the gate.
+    ``pinned_sha`` + ``expected_total`` alone cannot see a
+    clean-region edit, which would silently blind the FP ceiling.
+
+    Deliberately EXCLUDES the detection profile (the flip pair
+    differs there by design) and the machine-local naming fields
+    (``name``, ``repo_url``, ``local_path``). Order-sensitive on
+    purpose: a reordered label file is a changed label file — the
+    remedy is a re-freeze, never a guess.
+    """
+    from core.json import dumps_canonical
+
+    payload = {
+        "pinned_sha": manifest.pinned_sha,
+        "language": manifest.language,
+        "tolerance": {
+            "line_drift": manifest.tolerance.line_drift,
+            "cwe_family_match": manifest.tolerance.cwe_family_match,
+        },
+        "expected": [e.to_dict() for e in manifest.expected],
+        "clean_regions": [e.to_dict() for e in manifest.clean_regions],
+    }
+    blob = dumps_canonical(payload)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def _parse_provenance(raw: Any, where: str, errors: list[str]) -> Provenance:

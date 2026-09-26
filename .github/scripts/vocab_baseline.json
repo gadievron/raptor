@@ -1518,7 +1518,7 @@
     "note": "recall-manifest schema field names (fp-only twin dict), not name vocabulary \u2014 same class as the report field-name entries"
   },
   "core/recall/score.py::to_dict": {
-    "count": 16,
+    "count": 18,
     "kind": "literal",
     "note": "recall-report field names (counts/percentages/lists of the recall measurement JSON), not name vocabulary \u2014 same class as the finding-dict field-name entries"
   },
