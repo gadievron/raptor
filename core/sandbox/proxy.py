@@ -3457,8 +3457,10 @@ class EgressProxy:
         # task.cancel))` design raised CancelledError, escaped `except
         # Exception` on Python 3.11+, and left timeouts unaccounted.
         relay = asyncio.gather(
-            self._relay(reader, up_writer, "c2u", total),
-            self._relay(up_reader, writer, "u2c", total),
+            self._relay(reader, up_writer, "c2u", total,
+                        src_writer=writer),
+            self._relay(up_reader, writer, "u2c", total,
+                        src_writer=up_writer),
         )
         try:
             sever_reason = await self._supervise_relay(relay, total)
@@ -3531,9 +3533,64 @@ class EgressProxy:
             buf += chunk
         return buf, None
 
+    @staticmethod
+    def _close_tunnel_pair(a: asyncio.StreamWriter,
+                           b: asyncio.StreamWriter) -> None:
+        """Close both legs of a tunnel, idempotently.
+
+        Called from either relay direction when its connection is
+        unusable (reset, or a failed half-close): closing both
+        transports makes the sibling relay's pending ``read()``
+        complete immediately (EOF / connection error) instead of
+        waiting out its own idle timeout. ``StreamWriter.close()`` on
+        an already-closing transport is a no-op, so every EOF/RST
+        interleaving — including both directions tearing down
+        concurrently — may call this without double-close effects.
+        The tunnel SLOT is untouched here: it is released exactly once
+        in ``_handle_client``'s ``finally`` after both relay
+        directions have returned.
+        """
+        for w in (a, b):
+            # Peer may already be gone (OSError); transport may be
+            # detached during loop shutdown (RuntimeError).
+            with contextlib.suppress(OSError, RuntimeError):
+                w.close()
+
     async def _relay(self, src: asyncio.StreamReader,
                      dst: asyncio.StreamWriter,
-                     counter_key: str, counters: dict) -> None:
+                     counter_key: str, counters: dict,
+                     src_writer: asyncio.StreamWriter) -> None:
+        """One direction of an established tunnel.
+
+        *src_writer* is the writer paired with *src* (the same
+        connection), needed so a dead source connection can tear down
+        BOTH legs promptly (see termination contract below).
+
+        Termination contract — the guarantee is that a closed client
+        (or backend) propagates across the relay instead of parking
+        the tunnel until an idle timeout reaps it:
+
+        * src EOF → half-close *dst* (``write_eof``): the far side
+          sees FIN and can finish/close, while the opposite direction
+          keeps relaying — protocols that signal end-of-request by
+          ``shutdown(SHUT_WR)`` still receive their response. A peer
+          that fully closed converges the same way: the far side
+          answers/closes, the sibling direction sees EOF or a write
+          error, and the tunnel completes.
+        * src reset (RST) → nothing can flow in either direction
+          through that connection; close both legs so the sibling
+          relay unblocks now.
+        * dst write failure (reset/broken pipe on drain) → same full
+          teardown: the destination is gone, and bytes the sibling
+          would relay back have nowhere to land.
+        * src idle (no bytes within the idle window) → return WITHOUT
+          touching *dst*: one-direction silence is legitimate (a
+          client is silent for the whole server-push phase of a
+          pooled LLM stream), so idling out one direction must not
+          half-close a healthy tunnel. Idle-parked tunnels are still
+          bounded by the sibling's own idle window and the
+          progress-aware total cap (``_supervise_relay``).
+        """
         while True:
             try:
                 chunk = await asyncio.wait_for(
@@ -3543,7 +3600,23 @@ class EgressProxy:
             except asyncio.TimeoutError:
                 # Idle → let the other direction notice and close.
                 return
+            except (ConnectionResetError, BrokenPipeError):
+                self._close_tunnel_pair(src_writer, dst)
+                return
             if not chunk:
+                # src EOF — relay the half-close. ``write_eof`` can
+                # legitimately fail or be unsupported (transport
+                # already closing after a concurrent sibling teardown;
+                # TLS-wrapping transports report can_write_eof() ==
+                # False); the fallback is full teardown, never a
+                # silent park.
+                try:
+                    if dst.can_write_eof():
+                        dst.write_eof()
+                    else:
+                        self._close_tunnel_pair(src_writer, dst)
+                except (OSError, RuntimeError, NotImplementedError):
+                    self._close_tunnel_pair(src_writer, dst)
                 return
             # Pre-fix the counter was bumped BEFORE `dst.drain()`. If
             # drain raised (peer reset, broken pipe), the counter
@@ -3561,6 +3634,7 @@ class EgressProxy:
             try:
                 await dst.drain()
             except (ConnectionResetError, BrokenPipeError):
+                self._close_tunnel_pair(src_writer, dst)
                 return
             counters[counter_key] += len(chunk)
 
