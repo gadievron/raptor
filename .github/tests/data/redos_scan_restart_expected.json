@@ -154,7 +154,7 @@
    "digests": [
     "7bac92ef17b0"
    ],
-   "exp": 1.01,
+   "exp": 0.87,
    "verdict": "linear"
   },
   "core/audit/auth_witnesses.py\u001f_KEYED_GET_RE": {
@@ -203,7 +203,7 @@
    "digests": [
     "65ffe561ec4e"
    ],
-   "exp": 1.03,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/caller_lock.py\u001f\\b(?:X|X)\\w*\\s*\\(": {
@@ -294,14 +294,14 @@
    "digests": [
     "aa7b1d8b05bf"
    ],
-   "exp": 0.99,
+   "exp": 0.98,
    "verdict": "linear"
   },
   "core/audit/compile_probe.py\u001f_DETERMINE_BUILTIN_RE": {
    "digests": [
     "35c6628de792"
    ],
-   "exp": 0.98,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/compile_probe.py\u001f_IDENT_EXPR_RE": {
@@ -315,7 +315,7 @@
    "digests": [
     "0f64f014c82d"
    ],
-   "exp": 1.99,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/audit/compiler_sweep.py\u001f_DIAG_SUPPRESSION_RE": {
@@ -582,7 +582,7 @@
    "digests": [
     "a56ab90d3d8a"
    ],
-   "exp": 1.03,
+   "exp": 0.97,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001fwrapper_re": {
@@ -680,14 +680,14 @@
    "digests": [
     "c7576fa032bf"
    ],
-   "exp": 2.0,
+   "exp": 1.97,
    "verdict": "adjudicated"
   },
   "core/audit/dark_verify/_resolve.py\u001f_PY_EXT_SUFFIX_GLOBS[3]": {
    "digests": [
     "9337696cf86c"
    ],
-   "exp": 2.0,
+   "exp": 2.03,
    "verdict": "adjudicated"
   },
   "core/audit/decompiler_sanitise.py\u001f_CLASS_MEMBER_RE": {
@@ -954,7 +954,7 @@
    "digests": [
     "ae40fb5f77d0"
    ],
-   "exp": 1.02,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/path_feasibility.py\u001fif_patterns": {
@@ -1031,7 +1031,7 @@
    "digests": [
     "451711e8fcea"
    ],
-   "exp": 1.02,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\bexecv\\w*\\s*\\(": {
@@ -1185,7 +1185,7 @@
    "digests": [
     "6791b0fd26a9"
    ],
-   "exp": 1.02,
+   "exp": 1.04,
    "verdict": "linear"
   },
   "core/audit/ptr_lifecycle.py\u001f_RCU_DEREF_RE": {
@@ -1220,7 +1220,7 @@
    "digests": [
     "87a22b640da8"
    ],
-   "exp": 1.01,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/audit/release_order.py\u001f[\\w\\*\\s]\\b([A-Za-z_]\\w*)\\s*[,)]": {
@@ -1262,7 +1262,7 @@
    "digests": [
     "a0cc73423185"
    ],
-   "exp": 1.02,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/return_contracts.py\u001fdecl_re": {
@@ -1515,7 +1515,7 @@
    "digests": [
     "a99a1964e15b"
    ],
-   "exp": 1.04,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/binary/glibc_versions.py\u001f_SEARCH_RE": {
@@ -1816,7 +1816,7 @@
    "digests": [
     "44a2e5aa9242"
    ],
-   "exp": 1.02,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/inventory/translation_view.py\u001f_CALL_IN_BODY": {
@@ -1830,42 +1830,42 @@
    "digests": [
     "5f33a892b9ad"
    ],
-   "exp": 2.01,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[2]": {
    "digests": [
     "74f670123f14"
    ],
-   "exp": 1.99,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[3]": {
    "digests": [
     "0fb08c380bf3"
    ],
-   "exp": 2.03,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[4]": {
    "digests": [
     "70e776e25c31"
    ],
-   "exp": 1.84,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[5]": {
    "digests": [
     "88e933d23e53"
    ],
-   "exp": 2.01,
+   "exp": 1.98,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[6]": {
    "digests": [
     "29eb48db7b62"
    ],
-   "exp": 2.03,
+   "exp": 1.94,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[7]": {
@@ -2428,7 +2428,7 @@
    "digests": [
     "a467ec7eea86"
    ],
-   "exp": 1.0,
+   "exp": 1.05,
    "verdict": "linear"
   },
   "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001f\\bexploitable by(?:[^.\\n]|\\.(?=\\d))*(?:\\": {
@@ -2485,7 +2485,7 @@
    "digests": [
     "db21eb0cc688"
    ],
-   "exp": 2.01,
+   "exp": 2.17,
    "verdict": "adjudicated"
   },
   "packages/joern/runner.py\u001f_CALL_RE": {

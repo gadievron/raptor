@@ -114,8 +114,15 @@ min-model (the "entry") is drawn from charset(R): entry == "" is the
 leading-density shape (``backslash-s*X``, ``[^.]*X``), entry != "" the
 planted-entry shape (multi-term ``A.*B.*C`` chains, their lazy/DOTALL
 two-term degenerate case ``A.*?B``, head-dense ``,[^;]*x``).  The
-position-density pump — (entry + fill)^k + poison — disposes; pins
-live in ``data/redos_scan_restart_expected.json`` under the same
+position-density pump — (entry + fill)^k + poison — disposes;
+delimited-literal shapes get the UNTERMINATED-DELIMITER pump — the
+opener once, then repeats of a body unit that embeds the delimiter
+(``"`` + ``\\"``*k, never closing) — because a bare planted entry
+either satisfies the continuation (the plant doubles as the close)
+or halts the repeat, so the density shape prices each attempt at
+O(gap) instead of O(run) on string-literal matchers like
+``"(?:\\.|[^"\\])*"``.  Pins live in
+``data/redos_scan_restart_expected.json`` under the same
 propose/refuse/nightly regime as the trailing-span arm, over the
 same universe (call sites and pattern-table entries both).
 
@@ -1373,6 +1380,52 @@ def _gen_min_seq(seq, flags: int) -> str:
     return "".join(_gen_min(node, flags) for node in seq)
 
 
+def _gen_min_embed(node: tuple, flags: int, target: int) -> str:
+    """Min-model of a node that EMBEDS ``target`` wherever the node
+    can consume it — the unterminated-delimiter lane's unit
+    generator.  ``_gen_min`` picks a fixed preferred char per class,
+    so an escape branch like ``\\\\.`` models as ``\\a`` and never
+    carries the delimiter; this variant instantiates each atom to
+    the target char when the atom's set allows it, so the same
+    branch models as ``\\"`` for a double-quote target."""
+    op, arg = node
+    if op is sre_parse.NOT_LITERAL:
+        return chr(target) if arg != target else _gen_min(node, flags)
+    if op is sre_parse.IN:
+        return chr(target) if target in _in_set(arg) \
+            else _gen_min(node, flags)
+    if op is sre_parse.ANY:
+        return chr(target) if (target != 10 or flags & re.DOTALL) \
+            else _gen_min(node, flags)
+    if op in (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT):
+        low = arg[0]
+        return "".join(
+            _gen_min_seq_embed(arg[2], flags, target)
+            for _ in range(min(low, 5))
+        )
+    if op is sre_parse.SUBPATTERN:
+        return _gen_min_seq_embed(arg[3], flags, target)
+    if op is sre_parse.BRANCH:
+        fallback: str | None = None
+        for branch in arg[1]:
+            try:
+                model = _gen_min_seq_embed(branch, flags, target)
+            except _Unsupported:
+                continue
+            if chr(target) in model:
+                return model
+            if fallback is None:
+                fallback = model
+        if fallback is None:
+            raise _Unsupported("no generable branch")
+        return fallback
+    return _gen_min(node, flags)
+
+
+def _gen_min_seq_embed(seq, flags: int, target: int) -> str:
+    return "".join(_gen_min_embed(node, flags, target) for node in seq)
+
+
 def _pump_units(pair: dict, flags: int) -> list[str]:
     """Pump units for a pair: the single overlap char, plus the
     min-model STRING of the first repeat's body — word-granularity
@@ -2013,6 +2066,36 @@ def _find_scan_restart_lanes(parsed, flags: int) -> list[dict]:
                                 "entry": entry, "fill": body,
                                 "poison": poison or "",
                             })
+                        # Unterminated-delimiter lane: when the entry
+                        # char is consumable by R only INSIDE a
+                        # multi-char body unit (an escape pair like
+                        # \" for a string-literal matcher), the
+                        # density pump's bare planted entries either
+                        # satisfy the continuation (the plant doubles
+                        # as the close — the match succeeds early) or
+                        # halt the repeat at the next plant — either
+                        # way each attempt costs O(gap), not O(run).
+                        # The pump for this shape is the opener ONCE,
+                        # then repeats of the embedding unit with no
+                        # close: every embedded entry is a live
+                        # attempt position, and the repeat consumes
+                        # ACROSS the remaining plants (each sits
+                        # inside a unit), so every attempt re-scans
+                        # the whole tail.
+                        if len(entry) == 1:
+                            try:
+                                embed = _gen_min_seq_embed(
+                                    arg[2], flags, ord(entry),
+                                )
+                            except _Unsupported:
+                                embed = ""
+                            if len(embed) > 1 and entry in embed \
+                                    and embed != body:
+                                lanes.append({
+                                    "entry": entry, "fill": embed,
+                                    "poison": poison or "",
+                                    "opener": True,
+                                })
                     if tail["consuming"] and (charset & first):
                         # Overlap lane: when the continuation's first
                         # char is ALSO in charset(R), the split of a
@@ -2049,6 +2132,17 @@ def _build_scan_restart_attack(lane: dict, n: int) -> str | None:
     its own synthesis."""
     if lane.get("starved"):
         return None
+    if lane.get("opener"):
+        # Unterminated-delimiter pump: the opener once, then units
+        # that embed the entry char, never a close — every embedded
+        # entry restarts the scan and the repeat carries each
+        # attempt across the whole remaining run.  Repeating the
+        # ENTRY with the units (the density shape below) would plant
+        # bare entries, which close the very shapes this lane
+        # exists for.
+        unit = lane["fill"]
+        return lane["entry"] + unit * max(2, n // len(unit)) \
+            + lane["poison"]
     if lane.get("once"):
         # Single-attempt ambiguity pump: one entry, then a run the
         # repeat and its continuation must SPLIT.
@@ -3271,6 +3365,15 @@ class TrailingSpanCensus(unittest.TestCase):
           missing the continuation's true first char (universe at
           this cut: zero members; empty fills route LOUD to the
           manual lane rather than minting a pin).
+        * Multi-char-entry embedding: the unterminated-delimiter
+          lane's unit generator targets SINGLE-char entries, so a
+          member whose restart trigger is a multi-char entry
+          recreatable only ACROSS body-unit boundaries is measured
+          by the density/body/overlap lanes alone (universe at this
+          cut: 168 multi-char-entry lanes, each oracle-pinned
+          through its other lanes; a restart at such an entry also
+          needs every entry char re-matched, so single-unit
+          embedding — the covered case — is the dense one).
 
         Accepted over-census: a member mixing closer-anchored dot
         companions with arrow chains can census one row twice —
@@ -3449,6 +3552,77 @@ class ScanRestartCensus(unittest.TestCase):
         self.assertFalse(rule_s(r"^\s*foo"))
         self.assertFalse(rule_s(r"\s*==\s*0\b", 0, "match"))
         self.assertFalse(rule_s(r"\s*(.*)"))
+
+    def test_unterminated_delimiter_pump_is_synthesized(self) -> None:
+        """Generator self-check for the unterminated-delimiter lane
+        (in-process, no timing): a string-literal matcher gets an
+        opener lane whose unit embeds the delimiter through the
+        escape branch, and the built attack is the opener plus
+        escaped-delimiter repeats with NO bare close — the density
+        shape's bare plants satisfy the continuation (each plant
+        doubles as the close), which is exactly how this shape once
+        measured linear.  The run-start-pinned spelling keeps the
+        lane (the oracle disposes it — the pin defeats the pump,
+        not the proposer), and the bounded spelling leaves the
+        universe entirely (no unbounded repeat).  The timing half
+        of this self-check is the nightly
+        ``test_oracle_flags_superlinear_and_passes_fixed``."""
+
+        def lanes_for(pattern: str, flags: int = 0) -> list[dict]:
+            return _site_scan_lanes(_Site(
+                ("<probe>", pattern[:40]), 0, pattern, flags,
+                "search", None,
+            ))
+
+        # The embed generator instantiates the escape branch's ANY
+        # to the delimiter; the plain min-model never carries it.
+        parsed = sre_parse.parse(r'"(?:\\.|[^"\\])*"', 0)
+        repeat_body = next(
+            node for node in parsed if _is_unbounded_repeat(node)
+        )[1][2]
+        self.assertEqual(_gen_min_seq_embed(repeat_body, 0, ord('"')),
+                         '\\"')
+        self.assertNotIn('"', _gen_min_seq(repeat_body, 0))
+
+        openers = [lane for lane in lanes_for(r'"(?:\\.|[^"\\])*"')
+                   if lane.get("opener")]
+        self.assertEqual(
+            [(lane["entry"], lane["fill"]) for lane in openers],
+            [('"', '\\"')],
+        )
+        attack = _build_scan_restart_attack(openers[0], 64)
+        self.assertIsNotNone(attack)
+        self.assertTrue(attack.startswith('"\\"'))
+        # No bare close anywhere: every delimiter after the opener
+        # rides inside an escape pair.
+        for i, ch in enumerate(attack):
+            if ch == '"' and i > 0:
+                self.assertEqual(attack[i - 1], "\\", attack)
+        # Both branches of a two-quote alternation get their own
+        # opener lane; the escape-pair sibling with a DIFFERENT
+        # close delimiter (paren matcher) is the same family.
+        two_quote = (r'"(?:\\.|[^"\\])*"' + r"|'(?:\\.|[^'\\])*'")
+        self.assertEqual(
+            sorted(lane["entry"] for lane in lanes_for(two_quote)
+                   if lane.get("opener")),
+            ['"', "'"],
+        )
+        self.assertEqual(
+            [lane["fill"] for lane in lanes_for(r"\((?:\\.|[^()\\])*\)")
+             if lane.get("opener")],
+            ["\\("],
+        )
+        # Run-start-pinned spelling: still proposed (lane present) —
+        # linear disposition belongs to the oracle, not the proposer.
+        self.assertTrue([
+            lane for lane in lanes_for(r'(?<!\\)"(?:\\.|[^"\\])*"')
+            if lane.get("opener")
+        ])
+        # Bounded spelling: no unbounded repeat, no lanes at all.
+        self.assertEqual(
+            lanes_for(r'"(?:\\.|[^"\\]){0,200}"'
+                      r"|'(?:\\.|[^'\\]){0,200}'"), [],
+        )
 
     def test_members_match_the_pinned_verdicts(self) -> None:
         """Default-tier closure: the live Rule S proposal set equals
@@ -3662,6 +3836,27 @@ class ScanRestartNightly(unittest.TestCase):
         assert exponent is not None
         self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
         exponent, _ = _scan_oracle_classify(r"\b\w[\w.]{0,32}\(", 0)
+        self.assertLess(exponent if exponent is not None else 1.0,
+                        _SUPERLINEAR_EXP)
+        # The unterminated-delimiter exemplar: a string-literal
+        # matcher on an opener plus escaped-delimiter repeats with
+        # no close — every embedded delimiter restarts the scan and
+        # the escape branch carries each attempt across the whole
+        # remaining run.  The density pump's bare plants CLOSE the
+        # literal instead (each plant satisfies the continuation),
+        # which is how this shape once measured linear; the opener
+        # pump must expose it.  The run-start-pinned fix rejects
+        # escaped-delimiter attempts in O(1) and measures linear.
+        exponent, synthesized = _scan_oracle_classify(
+            r'"(?:\\.|[^"\\])*"' + r"|'(?:\\.|[^'\\])*'", 0,
+        )
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        exponent, _ = _scan_oracle_classify(
+            r'(?<!\\)"(?:\\.|[^"\\])*"'
+            + r"|(?<!\\)'(?:\\.|[^'\\])*'", 0,
+        )
         self.assertLess(exponent if exponent is not None else 1.0,
                         _SUPERLINEAR_EXP)
 
