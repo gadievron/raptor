@@ -1417,3 +1417,108 @@ class TestStallKillAddressesTheGroup:
         proc.pid = MagicMock()
         _kill_build_group(proc)
         proc.kill.assert_called_once()
+
+
+# ── Sandbox CPU-limit plumbing at the two spawn sites ───────────────
+
+class TestSandboxCpuLimitsPlumbing:
+    """Both sandboxed spawns must carry a wall-sized RLIMIT_CPU
+    override, and injected runners without the kwarg must keep
+    working via the TypeError fallback."""
+
+    def _patch_budget(self, monkeypatch, *, standing: int, cpus: int) -> None:
+        import os as _os
+
+        import core.sandbox.preexec as preexec
+        monkeypatch.setattr(
+            preexec, "standing_cpu_seconds", lambda: standing,
+        )
+        monkeypatch.setattr(
+            _os, "sched_getaffinity", lambda pid: set(range(cpus)),
+            raising=False,
+        )
+
+    def _capturing_runner(self, captured: dict, stdout: str = ""):
+        def runner(cmd, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                stdout=stdout, stderr="", returncode=0,
+            )
+        return runner
+
+    def test_build_spawn_raises_cpu_for_long_wall(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # The defect direction: a 4 h wall must carry a CPU budget the
+        # multi-threaded JVM cannot exhaust before the wall.
+        self._patch_budget(monkeypatch, standing=3600, cpus=8)
+        target = tmp_path / "src"
+        target.mkdir()
+        (target / "a.c").write_text("int f() { return 0; }")
+        captured: dict = {}
+        build_cpg(
+            target,
+            subprocess_runner=self._capturing_runner(captured),
+            output_dir=tmp_path / "out",
+            timeout=14400,
+        )
+        assert captured["limits"] == {"cpu_seconds": 14400 * 8 + 300}
+
+    def test_query_spawn_floors_at_standing_for_short_wall(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # The other direction: a short wall must not tighten the
+        # standing sandbox posture.
+        self._patch_budget(monkeypatch, standing=3600, cpus=8)
+        f = tmp_path / "cpg.bin"
+        f.write_bytes(b"fake")
+        cpg = JoernCPG(path=f, target=tmp_path)
+        captured: dict = {}
+        run_query(
+            cpg, "cpg.method.l",
+            subprocess_runner=self._capturing_runner(captured),
+            timeout=300,
+        )
+        assert captured["limits"] == {"cpu_seconds": 3600}
+
+    def test_build_strict_runner_falls_back_without_limits(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # An injected runner without the sandbox kwargs (bare
+        # subprocess.run shape) must still be reached via the
+        # TypeError fallback.
+        self._patch_budget(monkeypatch, standing=3600, cpus=8)
+        target = tmp_path / "src"
+        target.mkdir()
+        calls: list = []
+
+        def strict_runner(cmd, capture_output, text, timeout):
+            calls.append(cmd)
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+        cpg = build_cpg(
+            target,
+            subprocess_runner=strict_runner,
+            output_dir=tmp_path / "out",
+        )
+        assert cpg.target == target
+        assert len(calls) == 1
+
+    def test_query_strict_runner_falls_back_without_limits(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        self._patch_budget(monkeypatch, standing=3600, cpus=8)
+        f = tmp_path / "cpg.bin"
+        f.write_bytes(b"fake")
+        cpg = JoernCPG(path=f, target=tmp_path)
+        calls: list = []
+
+        def strict_runner(cmd, capture_output, text, timeout, cwd):
+            calls.append(cmd)
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+        result = run_query(
+            cpg, "cpg.method.l", subprocess_runner=strict_runner,
+        )
+        assert result.errors == []
+        assert len(calls) == 1

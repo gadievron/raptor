@@ -27,6 +27,7 @@ from core.analysis._joern_lines import parse_marker_line, parse_marker_records
 
 from .models import FlowStep, JoernCPG, JoernMethodSummary, JoernResult, TaintFlow
 from .prereqs import _joern_parse_path, _joern_path, joern_tool_paths
+from .tunables import sandbox_cpu_limits
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -689,6 +690,12 @@ def build_cpg(
             output=str(output_dir),
             block_network=True,
             tool_paths=joern_tool_paths(),
+            # The sandbox's standing RLIMIT_CPU counts CPU across all
+            # JVM threads and can fire long before this wall on large
+            # targets — size it to the wall so the wall stays the
+            # binding limit (SIGXCPU killed a kernel-scale build at
+            # ~1 h inside a 4 h derived wall).
+            limits=sandbox_cpu_limits(timeout),
         )
     except TypeError:
         try:
@@ -954,6 +961,11 @@ def run_query(
                 cwd=str(cpg.path.parent),
                 block_network=True,
                 tool_paths=joern_tool_paths(),
+                # This single wall covers importCpg + the query solve,
+                # both multi-threaded JVM work: keep RLIMIT_CPU (which
+                # sums across threads) above wall x CPUs so the wall
+                # stays the binding limit.
+                limits=sandbox_cpu_limits(timeout),
             )
         except TypeError:
             # Runner without the sandbox kwargs (injected stubs,
