@@ -1287,10 +1287,29 @@ def _do_resume(args) -> int:
         return 1
 
     meta = load_run_metadata(out_dir) or {}
-    target_str = meta.get("target_path") or config.get("target_path")
+    # The pinned config governs: the checkpoint fingerprint and drift
+    # gate were built against ITS target, while the run metadata is a
+    # shared lifecycle file another command on the same dir can
+    # rewrite. Metadata stays the fallback for configs that predate
+    # the target_path pin.
+    config_target = config.get("target_path")
+    meta_target = meta.get("target_path")
+    target_str = config_target or meta_target
     if not target_str:
         print("error: run records no target_path", file=sys.stderr)
         return 1
+    if (config_target and meta_target
+            and Path(config_target).resolve()
+            != Path(meta_target).resolve()):
+        # Both paths render on the terminal; the metadata one can
+        # have been rewritten by arbitrary tooling — escape both.
+        print(
+            "warning: pinned config and run metadata disagree on the "
+            f"target ({sanitise_for_terminal(str(config_target), max_len=200)}"
+            f" vs {sanitise_for_terminal(str(meta_target), max_len=200)}) — "
+            "resuming against the pinned config's target",
+            file=sys.stderr,
+        )
     target = Path(target_str).resolve()
     if not target.is_dir():
         print(f"error: target not found: {target}", file=sys.stderr)
