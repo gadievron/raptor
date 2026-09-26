@@ -718,6 +718,40 @@ def _fd_is_regular(fd: int) -> bool:
 #: surfaces as a raised OSError with the journal still line-intact.
 _APPEND_MAX_ATTEMPTS = 3
 
+#: Bounded reopen retries for the post-flock inode re-validation in
+#: :func:`append_entry`. A compactor's tempfile+rename swap can land
+#: between an appender's ``open`` and its ``flock`` — the appender
+#: then holds the ARCHIVED inode, and a row written there is silently
+#: invisible to the live journal. Each mismatch closes and reopens by
+#: NAME (the rename is atomic, so the name always resolves to the
+#: live file). Trade-off, both directions: too low and back-to-back
+#: swaps (each one waking this appender onto a just-archived inode)
+#: exhaust the retries and fail an append that one more reopen would
+#: have landed; too high and a pathological rename storm keeps a
+#: single append spinning open/flock cycles instead of failing loud.
+#: One swap costs exactly one retry, and nothing legitimate swaps the
+#: journal in a tight loop — 5 covers generous compactor overlap.
+_APPEND_REOPEN_ATTEMPTS = 5
+
+
+def _fd_at_path(fd: int, path: Path) -> bool:
+    """True when the open *fd* is still the file the NAME resolves to.
+
+    The (dev, ino) identity check behind the appender's post-flock
+    re-validation: a rename swap between open and flock leaves the fd
+    pointing at the renamed-away (archived) inode while the name
+    already resolves to the replacement. Any stat failure on the path
+    reads as "not the live file" — the caller retries and the reopen
+    surfaces the real error loudly (O_NOFOLLOW refuses a symlink
+    planted in the window).
+    """
+    held = os.fstat(fd)
+    try:
+        now = os.stat(path)
+    except OSError:
+        return False
+    return (held.st_dev, held.st_ino) == (now.st_dev, now.st_ino)
+
 
 def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
     """Locked, torn-write-safe single-line append to review-journal.jsonl.
@@ -747,9 +781,24 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
     (:func:`_append_shard_path`): once a shard crosses the roll
     threshold, subsequent rows open the next numbered sibling, so no
     single file grows past the loader's per-shard retained budgets.
+
+    Rename-swap safety: after the ``flock`` is acquired, the held fd
+    is re-validated against the file the shard NAME currently
+    resolves to (:func:`_fd_at_path`). A compactor's tempfile+rename
+    swap holds the flock across both passes and the swap, so a
+    foreign appender that opened the pre-swap inode blocks on the
+    lock and wakes up holding the ARCHIVED file — pre-fix its row
+    landed there, silently invisible to every live-journal reader. On
+    a (dev, ino) mismatch the fd is released and the open/flock
+    sequence retried by name (bounded by
+    ``_APPEND_REOPEN_ATTEMPTS``, loud OSError on exhaustion); the
+    shard path is re-resolved per attempt so a roll that raced the
+    wait is honoured too. With the flock held and the identity
+    verified, no cooperating compactor can swap the file until this
+    append releases the lock — the compactor's own flock acquisition
+    on the live inode blocks behind ours.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    journal_path = _append_shard_path(out_dir)
     # Provenance stamp (core.coverage.journal_mac): the fold trusts
     # rows for review suppression and $0 verdict reuse, so each row
     # carries a MAC over its own canonical content. Stamped on the
@@ -792,29 +841,62 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
     # the cache exists to avoid. Writers that REPLACE shard files
     # (compaction) call invalidate_load_cache.
     with _append_lock:
-        fd = os.open(
-            str(journal_path),
-            os.O_WRONLY | os.O_APPEND | os.O_CREAT
-            | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK,
-            0o644,
-        )
-        try:
-            if not _fd_is_regular(fd):
-                # A planted FIFO (with a reader — the reader-less case
-                # already failed the open with ENXIO thanks to
-                # O_NONBLOCK) or device node: writing the journal into
-                # it silently discards MAC-stamped rows and every
-                # journal writer queues behind this one on
-                # _append_lock. Same disposition as the symlink plant
-                # (O_NOFOLLOW → ELOOP): raise, journal untouched.
-                msg = (
-                    f"journal path {journal_path} is not a regular "
-                    "file — refusing to append"
-                )
-                raise OSError(msg)
-            if _HAS_FCNTL:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+        for reopen in range(1, _APPEND_REOPEN_ATTEMPTS + 1):
+            # Re-resolved per attempt: a mismatch below means the
+            # shard set was rewritten (or rolled) while this appender
+            # waited on the flock, so the active shard must be
+            # re-derived, not assumed.
+            journal_path = _append_shard_path(out_dir)
+            fd = os.open(
+                str(journal_path),
+                os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK,
+                0o644,
+            )
+            locked = False
             try:
+                if not _fd_is_regular(fd):
+                    # A planted FIFO (with a reader — the reader-less
+                    # case already failed the open with ENXIO thanks
+                    # to O_NONBLOCK) or device node: writing the
+                    # journal into it silently discards MAC-stamped
+                    # rows and every journal writer queues behind this
+                    # one on _append_lock. Same disposition as the
+                    # symlink plant (O_NOFOLLOW → ELOOP): raise,
+                    # journal untouched.
+                    msg = (
+                        f"journal path {journal_path} is not a regular "
+                        "file — refusing to append"
+                    )
+                    raise OSError(msg)
+                if _HAS_FCNTL:
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    locked = True
+                    if not _fd_at_path(fd, journal_path):
+                        # A compactor's rename swapped the file between
+                        # our open and the flock: this fd is the
+                        # ARCHIVED inode — a row written here is lost
+                        # from the live journal. Release and reopen by
+                        # name (only meaningful under flock: without
+                        # fcntl there is no cross-process swap
+                        # discipline to re-validate against).
+                        if reopen == _APPEND_REOPEN_ATTEMPTS:
+                            msg = (
+                                f"journal at {journal_path} was "
+                                f"swapped from under the appender "
+                                f"{_APPEND_REOPEN_ATTEMPTS} times — "
+                                "giving up without writing (row NOT "
+                                "appended; the held fd was the "
+                                "archived inode every attempt)"
+                            )
+                            raise OSError(msg)
+                        logger.debug(
+                            "journal append: %s renamed between open "
+                            "and flock (attempt %d/%d) — reopening the "
+                            "live file", journal_path, reopen,
+                            _APPEND_REOPEN_ATTEMPTS,
+                        )
+                        continue
                 for attempt in range(1, _APPEND_MAX_ATTEMPTS + 1):
                     size_before = os.fstat(fd).st_size
                     written = os.write(fd, data)
@@ -838,11 +920,11 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
                             f"({written} of {len(data)} bytes)"
                         )
                         raise OSError(msg)
+                return
             finally:
-                if _HAS_FCNTL:
+                if locked:
                     fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
+                os.close(fd)
 
 
 def flush_journal(out_dir: Path) -> None:
