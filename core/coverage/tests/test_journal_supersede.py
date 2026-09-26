@@ -524,6 +524,68 @@ class TestTierComposition:
                 / "review-journal.jsonl.pre-supersede").is_file()
 
 
+class TestTimestampTieBreak:
+    """Identical-``ts`` rows within one review identity: the
+    superseding tier must keep the row every latest-wins consumer
+    elects — consumer parity, never a private tie convention."""
+
+    def test_tie_survivor_matches_latest_entries(
+        self, tmp_path: Path,
+    ) -> None:
+        """Two same-identity rows stamped in the same microsecond,
+        differing only in non-identity fields (body, cost): whatever
+        ``latest_entries`` picks for the key BEFORE compaction must be
+        the row that survives ``--supersede``."""
+        ts = now_iso()
+        append_entry(tmp_path, _entry(
+            1, ts=ts, cost_usd=0.2, body=f"{_BODY} emission A"))
+        append_entry(tmp_path, _entry(
+            1, ts=ts, cost_usd=0.3, body=f"{_BODY} emission B"))
+        before = latest_entries(tmp_path)
+
+        stats = compact_journal(tmp_path, supersede=True)
+
+        assert stats.dropped_superseded == 1
+        after = {
+            k: e for k, e in latest_entries(tmp_path).items()
+            if not is_spend_carrier(e)
+        }
+        (key,) = after
+        # Consumer parity: the survivor IS the row the latest-wins
+        # consumers elected on the tie — same non-identity fields,
+        # not merely the same verdict/ts.
+        assert after[key].body == before[key].body
+        assert after[key].cost_usd == before[key].cost_usd
+
+    def test_newer_ts_wins_regardless_of_file_order(
+        self, tmp_path: Path,
+    ) -> None:
+        """Control: a strictly newer ``ts`` always wins, even when
+        the newer row sits EARLIER in the file (out-of-order append —
+        the merge/import shape)."""
+        t1 = now_iso()
+        t2 = now_iso()
+        while t2 <= t1:      # never tie: this test is the ordered arm
+            t2 = now_iso()
+        # Newer row FIRST in file, older row second.
+        append_entry(tmp_path, _entry(
+            1, ts=t2, cost_usd=0.2, body=f"{_BODY} newer"))
+        append_entry(tmp_path, _entry(
+            1, ts=t1, cost_usd=0.3, body=f"{_BODY} older"))
+        before = latest_entries(tmp_path)
+
+        stats = compact_journal(tmp_path, supersede=True)
+
+        assert stats.dropped_superseded == 1
+        after = {
+            k: e for k, e in latest_entries(tmp_path).items()
+            if not is_spend_carrier(e)
+        }
+        (key,) = after
+        assert after[key].ts == t2
+        assert after[key].body == before[key].body
+
+
 class TestSpendFloorProperty:
     """Property test (shared shape with the lossless tier's): over
     randomized journals — live multi-pass rows, reused duplicates,

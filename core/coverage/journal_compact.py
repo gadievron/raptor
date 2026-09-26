@@ -454,9 +454,12 @@ def compact_journal(out_dir: Path, *,
                 stats.bytes_before = os.fstat(fh.fileno()).st_size
 
                 # ── pass 1: newest line per droppable identity ──
-                # winner[identity] = (ts, line_no) — newest ts wins,
-                # later-in-file wins ties (the append-order
-                # convention every latest-wins consumer applies).
+                # winner[identity] = (ts, line_no) — strictly newest
+                # ts wins; on a ts tie the FIRST row in file survives,
+                # matching the strict ``entry.ts > existing.ts``
+                # compare every latest-wins consumer applies
+                # (``latest_entries``, ``merge_into_index``, the
+                # resume per-site fold, the merge-cap collapse).
                 # The superseding tier keeps its own map: the two
                 # rules have different droppability contracts, and a
                 # row can be droppable under both.
@@ -480,7 +483,7 @@ def compact_journal(out_dir: Path, *,
                             "compact a file this tool cannot bound"
                         )
                     prev = table.get(ident)
-                    if prev is None or (ts, line_no) >= prev:
+                    if prev is None or ts > prev[0]:
                         table[ident] = (ts, line_no)
                         return True
                     return False
