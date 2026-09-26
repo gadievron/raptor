@@ -607,6 +607,16 @@ class Collector:
             from core.concepts.audit_bridge import _load_cached
             _load_cached.cache_clear()
 
+    def pending_count(self) -> int:
+        """Buffered rows not yet on disk — the journal checkpoint's
+        provably-empty assertion reads this AFTER :meth:`flush` (a
+        failed write retains its rows, and the checkpoint must skip
+        rather than compact across a write path it cannot prove
+        drained). Journal rows never buffer here (``submit`` appends
+        them synchronously), so zero means every submitted outcome is
+        on disk."""
+        return len(self._log_entries)
+
     def flush(self) -> None:
         """Write all buffered state to disk in bulk.
 

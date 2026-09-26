@@ -814,6 +814,16 @@ class OrchestratorConfig:
     # function loop, and fold tier-2 edge contracts into caller
     # reviews. Default off.
     edges: bool = False
+    # Mid-run journal checkpoint (core.coverage.journal_checkpoint):
+    # when the journal's largest shard crosses the retained-size
+    # trigger, quiesce the review workers and compact (dedup +
+    # supersede, spend-safe tiers only) synchronously at the next
+    # dispatch point / segment boundary — the run pauses for seconds
+    # instead of hitting the loader-budget wall and paying a manual
+    # drain/compact/resume cycle. Default ON; per-run
+    # --no-journal-checkpoint or the project 'journal-checkpoint'
+    # setting ('off') disables the automatic tier for the run.
+    journal_checkpoint: bool = True
     # Set by the end-of-run corrective passes: once final statuses are
     # re-journaled/re-logged, any straggler commit (an abandoned study
     # re-review finishing after the drain gave up on it) must not
@@ -8920,6 +8930,26 @@ def _run_audit_body(
         study_consumer_thread.start()
         logger.info("study-consumer: started")
 
+    # --- Journal-checkpoint quiescer ---
+    # One state machine for every checkpoint call site in this run:
+    # the executor's mid-pass quiesce points (threaded into
+    # run_executor_sync below), and the segment-boundary calls after
+    # the study drain and after the post-loop passes. Constructed
+    # AFTER the study consumer so it can park/resume that thread;
+    # SIGTERM-aware so a drain never contends with a checkpoint.
+    journal_quiescer = None
+    try:
+        from .journal_quiesce import JournalCheckpointQuiescer
+        journal_quiescer = JournalCheckpointQuiescer(
+            config.out_dir,
+            enabled=getattr(config, "journal_checkpoint", True),
+            collector=collector,
+            study_queue=study_queue,
+            should_abort=is_sigterm_requested,
+        )
+    except Exception:  # noqa: BLE001 — hygiene must never cost the run
+        logger.debug("journal quiescer init failed", exc_info=True)
+
     # --- Deepen + study budget reserve ---
     # Hold back the end-of-run consumers' slices so they can execute
     # the work they announce; the discovery loop AND its refinement
@@ -8956,6 +8986,7 @@ def _run_audit_body(
             throttle=throttle,
             study_queue=study_queue,
             concept_index_ref=concept_index_ref,
+            quiescer=journal_quiescer,
         )
     except BaseException:
         # Exception-path cleanup mirroring the success path below:
@@ -9006,18 +9037,20 @@ def _run_audit_body(
                 _env_gate()
             if _check_budget(config, start_time, result):
                 return None, batch
-            return _review_items(
-                batch,
-                config,
-                review_fn,
-                checklist,
-                context_map,
-                fuzz_coverage,
-                evidence_index,
-                discovered_evidence=discovered_evidence,
-                domain_model=domain_model,
-                tier_counters=result.tier_counters,
-            ), batch
+            from .executor import review_work_active
+            with review_work_active():
+                return _review_items(
+                    batch,
+                    config,
+                    review_fn,
+                    checklist,
+                    context_map,
+                    fuzz_coverage,
+                    evidence_index,
+                    discovered_evidence=discovered_evidence,
+                    domain_model=domain_model,
+                    tier_counters=result.tier_counters,
+                ), batch
 
         review_idx = 0
         batch_stop = False
@@ -9110,6 +9143,15 @@ def _run_audit_body(
     # interrupted.
     if is_sigterm_requested():
         return _sigterm_salvage(result, config, collector, start_time)
+
+    # --- Journal checkpoint: post-review-drain segment boundary ---
+    # The executor has returned, the batched pass joined its pool,
+    # and the study consumer is drained (or stop-requested — the
+    # quiescer's park protocol outwaits/asserts the residue). Runs
+    # synchronously on this thread; a skipped or aborted checkpoint
+    # costs nothing (the journal stands).
+    if journal_quiescer is not None:
+        journal_quiescer.run_at_boundary("post-review-drain")
 
     # --- Concept discovery: mine outcomes for invariants ---
     try:
@@ -10371,6 +10413,14 @@ def _run_audit_body(
             collector.flush()
         except Exception:
             logger.debug("collector flush failed", exc_info=True)
+
+    # --- Journal checkpoint: post-loop-passes segment boundary ---
+    # Every review-dispatching pass (deepen, re-review sweeps, IRIS
+    # refinement, bypass pass) has completed and the collector just
+    # flushed: last chance to leave a within-budget journal for the
+    # completion merge and the next segment's resume.
+    if journal_quiescer is not None:
+        journal_quiescer.run_at_boundary("post-loop-passes")
 
     _persist_project_learnings(
         config.out_dir,
@@ -14297,6 +14347,15 @@ class StudyQueue:
         self._progress = 0
         self._working = False
         self._inflight_proc: Any = None
+        # Journal-checkpoint quiesce seam: while a pause is requested,
+        # dequeue_batch returns empty (the consumer parks in its wait
+        # instead of starting new batches) and the quiescer waits for
+        # "paused and not working" — a state that can only hold until
+        # resume, because the dequeue gate is what would flip working
+        # back on. Cooperative and side-effect-free: pause never
+        # cancels a mid-batch step, it just outwaits it (bounded by
+        # the quiescer's own deadline).
+        self._pause_requested = False
 
     def enqueue(self, item: StudyRequest) -> None:
         concept = _extract_concept_from_question(item.question)
@@ -14345,12 +14404,26 @@ class StudyQueue:
         with self._not_empty:
             if self._stop_requested:
                 return []
+            if self._pause_requested:
+                # Parked: wait for resume (or stop) up to the poll
+                # timeout, then hand the consumer an empty batch — its
+                # loop re-runs the budget/stop checks each cycle, so
+                # the pause never blinds them.
+                self._not_empty.wait(timeout=timeout)
+                return []
             if not self._queue and not self._producer_done:
                 self._not_empty.wait(timeout=timeout)
-            if self._stop_requested:
+            if self._stop_requested or self._pause_requested:
                 return []
             batch = self._queue[:max_items]
             del self._queue[:max_items]
+            if batch:
+                # Atomic dequeue→working transition: the quiescer's
+                # "paused and not working" proof must never observe a
+                # dequeued-but-not-yet-working batch (the consumer's
+                # own set_working(True) lands a few lines later and is
+                # then an idempotent no-op).
+                self._working = True
             return batch
 
     def signal_producer_done(self) -> None:
@@ -14408,9 +14481,43 @@ class StudyQueue:
 
     def set_working(self, working: bool) -> None:
         """Mark whether the consumer is mid-batch (prep / study /
-        re-review) as opposed to idle on the queue."""
+        re-review) as opposed to idle on the queue. Notifies the
+        condition: the quiesce waiter parks on it for the
+        working→idle transition."""
         with self._not_empty:
             self._working = working
+            self._not_empty.notify_all()
+
+    def request_pause(self) -> None:
+        """Journal-checkpoint quiesce: gate new batch dequeues (the
+        consumer parks in its dequeue wait) without cancelling a
+        mid-batch step. Idempotent; pair with
+        :meth:`resume_from_pause`."""
+        with self._not_empty:
+            self._pause_requested = True
+            self._not_empty.notify_all()
+
+    def resume_from_pause(self) -> None:
+        """Lift the quiesce pause and wake a parked consumer."""
+        with self._not_empty:
+            self._pause_requested = False
+            self._not_empty.notify_all()
+
+    def wait_quiescent(self, timeout: float) -> bool:
+        """Block until the consumer is provably parked — pause
+        requested and not mid-batch (dequeues are gated, so the state
+        holds until resume) — or done. False on timeout: the caller
+        aborts its checkpoint attempt and resumes dispatch."""
+        deadline = time.monotonic() + timeout
+        with self._not_empty:
+            while True:
+                if self._consumer_done or (
+                        self._pause_requested and not self._working):
+                    return True
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._not_empty.wait(timeout=min(remaining, 1.0))
 
     def drain_state(self) -> tuple[int, bool, bool]:
         """Snapshot for the drain loop: (progress, queue_empty, working)."""
@@ -23350,6 +23457,13 @@ def _collect_reviews_until_budget(
     nothing spent). ``None`` (guard-less run) keeps the pre-existing
     paths byte-equivalent.
     """
+    # Inflight accounting for the journal checkpoint's precondition
+    # guard: phase-pool re-reviews are review work exactly like the
+    # main executor's (they append journal rows through the same
+    # commit path).
+    from .executor import counted_review_call
+    do_review = counted_review_call(do_review)
+
     pre_dispatch_stop = (
         dispatch_gate if dispatch_gate is not None else should_stop
     )

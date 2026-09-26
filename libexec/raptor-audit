@@ -2173,6 +2173,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         dynamic_validation=(False if args.no_dynamic
                             else (True if args.dynamic else None)),
         verdict_reuse=not args.no_verdict_reuse,
+        # Tri-state: explicit opt-out > project 'journal-checkpoint'
+        # setting (resolved in the pipeline) > default on.
+        journal_checkpoint=(
+            False if getattr(args, "no_journal_checkpoint", False)
+            else None
+        ),
         pre_scan=args.pre_scan,
         caller_contract_context=not args.no_caller_contract_context,
         caller_contract_demotion=not args.no_caller_contract_demotion,
@@ -2973,53 +2979,46 @@ def cmd_resume(args: argparse.Namespace) -> int:
         )
         return 1
 
-    # --- segment-boundary journal hygiene ---
+    # --- segment-start journal checkpoint ---
     # Per-segment re-emission of reused verdicts is LOAD-BEARING
     # (core.audit.verdict_reuse: every run carries a complete record
     # of the project state it asserted; same-run re-import "is the
     # point"), so segments keep appending reused rows — and a long
-    # resume chain's journal grows without bound. Auto-compact at the
-    # segment boundary once the file passes half the loader's
-    # retained-entry budget: the newest row per identity survives, so
-    # the run's record stays complete while the chain stops drifting
-    # toward the loader budget and the spend-authorizing refusal
-    # below. Best-effort — a refused auto-compact (e.g. another
-    # process appeared) falls through to the completeness gate, which
-    # decides whether the resume may proceed.
-    from core.coverage.journal import journal_shard_paths
-    from core.coverage.journal_compact import (
-        CompactRefused,
-        auto_compact_threshold_bytes,
-        compact_journal,
-    )
-    # Largest single shard drives the trigger: the budgets the
-    # auto-compact protects are PER-SHARD bounds, and a multi-shard
-    # journal's total size is expected to exceed any one of them.
-    _journal_size = 0
-    for _shard in journal_shard_paths(out_dir):
-        try:
-            _journal_size = max(_journal_size, _shard.stat().st_size)
-        except OSError:
-            continue
-    _compact_threshold = auto_compact_threshold_bytes()
-    if _journal_size > _compact_threshold:
-        print(
-            f"journal is {_journal_size} bytes (over the "
-            f"{_compact_threshold}-byte segment-start "
-            "threshold) — compacting duplicate re-emission rows",
-            flush=True,
+    # resume chain's journal grows without bound. The unified journal
+    # checkpoint (core.coverage.journal_checkpoint) runs here at the
+    # segment boundary: trigger, hysteresis state, and tiers (dedup +
+    # supersede, both spend-safe by the compactor's loss contract)
+    # are shared with the orchestrator's mid-segment quiesce points
+    # and segment-boundary call sites. Best-effort — a refused,
+    # advisory, or aborted checkpoint falls through to the
+    # completeness gate below, which decides whether the resume may
+    # proceed.
+    _ckpt_enabled = _resume_journal_checkpoint_enabled(args, run_cfg, out_dir)
+    if _ckpt_enabled:
+        from core.coverage.journal_checkpoint import (
+            CheckpointBusy,
+            checkpoint_journal,
         )
         try:
-            _cstats = compact_journal(out_dir)
-            print(
-                f"  compacted: {_cstats.rows_before} -> "
-                f"{_cstats.rows_after} rows, {_cstats.bytes_before} "
-                f"-> {_cstats.bytes_after} bytes "
-                f"(backup: {_cstats.backup_path})",
-                flush=True,
-            )
-        except CompactRefused as exc:
-            print(f"  auto-compact skipped: {exc}", file=sys.stderr)
+            _ck = checkpoint_journal(out_dir, boundary="segment-start")
+        except CheckpointBusy as exc:
+            # Nothing runs yet at segment start — a busy guard here is
+            # foreign work in the run dir; skip and let the
+            # completeness gate decide.
+            print(f"  journal checkpoint skipped: {exc}", file=sys.stderr)
+        else:
+            if _ck.fired and _ck.stats is not None:
+                print(
+                    f"journal checkpoint: {_ck.stats.rows_before} -> "
+                    f"{_ck.stats.rows_after} rows, "
+                    f"{_ck.stats.bytes_before} -> "
+                    f"{_ck.stats.bytes_after} bytes "
+                    f"in {_ck.duration_s:.1f}s "
+                    f"(backup: {_ck.stats.backup_path})",
+                    flush=True,
+                )
+            elif _ck.advisory or _ck.aborted:
+                print(f"journal checkpoint: {_ck.reason}", flush=True)
 
     # --- journal completeness gate (spend-authorizing read) ---
     # Everything downstream — the drift gate, the own-run $0 reuse
@@ -3289,6 +3288,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
             bool(run_cfg.get("seed_rereview"))
             or bool(getattr(args, "seed_rereview", False))
         ),
+        # Already resolved for the segment-start checkpoint above;
+        # False pins the whole segment off, None lets the pipeline
+        # re-resolve (same project setting, same default).
+        journal_checkpoint=(None if _ckpt_enabled else False),
         max_workers=_resume_max_workers(args.max_workers, run_cfg),
     )
 
@@ -3474,6 +3477,28 @@ def _max_workers_arg(value: str) -> int:
     return min(workers, MAX_WORKERS_CAP)
 
 
+def _resume_journal_checkpoint_enabled(
+    args: argparse.Namespace,
+    run_cfg: dict,
+    out_dir: Path,
+) -> bool:
+    """Segment checkpoint consent chain: per-segment opt-out flag >
+    the run's persisted choice > the project 'journal-checkpoint'
+    setting > default ON. A settings-substrate failure resolves to
+    the default (the automatic tiers are spend-safe either way)."""
+    if getattr(args, "no_journal_checkpoint", False):
+        return False
+    if run_cfg.get("no_journal_checkpoint"):
+        return False
+    try:
+        from core.project.trust import active_project_journal_checkpoint
+        if active_project_journal_checkpoint(run_dir=out_dir) == "off":
+            return False
+    except Exception:  # noqa: BLE001 — settings read never blocks a resume
+        pass
+    return True
+
+
 def _run_config_from_args(
     args: argparse.Namespace,
     target_path: Path,
@@ -3517,6 +3542,8 @@ def _run_config_from_args(
         "dynamic": args.dynamic,
         "no_dynamic": args.no_dynamic,
         "verdict_reuse": not args.no_verdict_reuse,
+        "no_journal_checkpoint": bool(
+            getattr(args, "no_journal_checkpoint", False)),
         "pre_scan": args.pre_scan,
         "caller_contract_context": not args.no_caller_contract_context,
         "caller_contract_demotion": not args.no_caller_contract_demotion,
@@ -4361,6 +4388,15 @@ def main() -> int:
                             "whose source is unchanged); unchanged "
                             "reviewed functions are then silently "
                             "suppressed as before")
+    p_run.add_argument("--no-journal-checkpoint", action="store_true",
+                       help="Disable the mid-run journal checkpoint "
+                            "(automatic dedup+supersede compaction at "
+                            "quiesced points once the journal nears "
+                            "the loader budget). Overrides the "
+                            "project 'journal-checkpoint' setting. "
+                            "With it off, an over-budget journal must "
+                            "be compacted manually "
+                            "(`raptor-audit journal compact`)")
     p_run.add_argument("--no-auto-siblings", action="store_true",
                        help="Binary targets only: do not auto-run the "
                             "sibling-consistency pass over a mapped "
@@ -4529,6 +4565,14 @@ def main() -> int:
         "--no-supervisor-bound", action="store_true",
         help="Do not default a per-segment wall budget under a Claude "
              "subagent background shell (see `run --help`)",
+    )
+    p_resume.add_argument(
+        "--no-journal-checkpoint", action="store_true",
+        help="Disable the journal checkpoint for THIS segment "
+             "(segment-start compaction included). A run started "
+             "with the opt-out keeps it across segments; this turns "
+             "it OFF for one segment of a run that started without "
+             "it (the persisted run config is unchanged)",
     )
     p_resume.add_argument(
         "--seed-rereview", action="store_true",

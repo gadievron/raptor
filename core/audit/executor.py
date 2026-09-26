@@ -12,7 +12,10 @@ at the cost of non-deterministic observation ordering.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import functools
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
@@ -21,9 +24,56 @@ from core.llm.client import is_budget_exceeded_error
 from core.llm.concurrency import read_throttle_cooldown_s
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 logger = logging.getLogger(__name__)
+
+
+# ── Review-work inflight accounting ──────────────────────────────────
+#
+# Process-global count of review tasks EXECUTING right now (an LLM
+# review, a glance batch, a re-review phase item) across the serial
+# loop, the async workers, and the orchestrator's phase pools. The
+# journal checkpoint's precondition guard reads it
+# (core.coverage.journal_checkpoint._assert_quiesced): the checkpoint
+# must be impossible to enter while review work is in flight — an
+# enforced assertion, not a call-site convention. Counting the WORK
+# (not executor entry) is what lets the quiesced mid-pass checkpoint
+# run inside run_executor_sync's own dispatch loop: the executor is
+# on the stack, but its workers are provably drained.
+
+_review_work_lock = threading.Lock()
+_review_work_count = 0
+
+
+@contextlib.contextmanager
+def review_work_active() -> Iterator[None]:
+    """Scope one executing review-work item (see the section note)."""
+    global _review_work_count
+    with _review_work_lock:
+        _review_work_count += 1
+    try:
+        yield
+    finally:
+        with _review_work_lock:
+            _review_work_count -= 1
+
+
+def review_work_inflight() -> int:
+    """Review-work items executing in this process right now."""
+    with _review_work_lock:
+        return _review_work_count
+
+
+def counted_review_call(fn: Callable) -> Callable:
+    """Wrap *fn* so every call scopes :func:`review_work_active` —
+    the one seam the executor paths and the orchestrator's phase
+    pools share for inflight accounting."""
+    @functools.wraps(fn)
+    def inner(*args: Any, **kwargs: Any) -> Any:
+        with review_work_active():
+            return fn(*args, **kwargs)
+    return inner
 
 
 @dataclass
@@ -218,6 +268,7 @@ def run_executor_sync(
     throttle: Any | None = None,
     study_queue: Any | None = None,
     concept_index_ref: list | None = None,
+    quiescer: Any | None = None,
 ) -> ExecutorStats:
     """Executor entry point — drop-in replacement for the old ``for gap`` loop.
 
@@ -230,10 +281,21 @@ def run_executor_sync(
     *on_tick* is called once per iteration with the current gap, before
     the review function runs.  The orchestrator uses it for Joern
     future draining and ``reviewed_before_joern`` bookkeeping.
+
+    *quiescer* (``core.audit.journal_quiesce``) adds mid-pass journal
+    checkpoint quiesce points: the trigger is polled at dispatch
+    points, and when it fires the loop stops issuing reviews, drains
+    inflight work (bounded), runs the checkpoint synchronously on
+    THIS thread, and resumes dispatch — the run pauses instead of
+    paying a drain/resume cycle. ``None`` keeps the loops
+    byte-equivalent to the pre-quiesce behaviour.
     """
     if review_one_fn is None:
         from .orchestrator import review_one_function
         review_one_fn = review_one_function
+    # One wrap covers the serial loop, the repass, and every async
+    # worker: review_one_fn is the single entry all of them call.
+    review_one_fn = counted_review_call(review_one_fn)
 
     ec = executor_config or ExecutorConfig()
     stats = ExecutorStats()
@@ -267,6 +329,7 @@ def run_executor_sync(
                     throttle=throttle,
                     study_queue=study_queue,
                     concept_index_ref=concept_index_ref,
+                    quiescer=quiescer,
                 ),
             )
         finally:
@@ -365,6 +428,14 @@ def run_executor_sync(
             glance_batch.clear()
             stats.budget_stopped = True
             break
+
+        if quiescer is not None:
+            # Serial loop = permanently quiesced between reviews:
+            # inflight is zero right here, so the checkpoint (rate-
+            # limited trigger poll inside) runs synchronously on this
+            # thread with no drain step. Queued glance tasks are not
+            # inflight work — they hold no fds and no locks.
+            quiescer.maybe_run_quiesced()
 
         tasks = graph.pop_ready(1)
         if not tasks:
@@ -542,6 +613,7 @@ async def _run_async(
     throttle: Any | None = None,
     study_queue: Any | None = None,
     concept_index_ref: list | None = None,
+    quiescer: Any | None = None,
 ) -> ExecutorStats:
     """Async executor with bounded concurrency via throttle.
 
@@ -581,6 +653,7 @@ async def _run_async(
             reviewed_outcomes=reviewed_outcomes,
             study_queue=study_queue,
             concept_index_ref=concept_index_ref,
+            quiescer=quiescer,
         )
     finally:
         if throttle.signal_count:
@@ -616,6 +689,7 @@ async def _run_async_body(
     reviewed_outcomes: dict[str, Any] | None = None,
     study_queue: Any | None = None,
     concept_index_ref: list | None = None,
+    quiescer: Any | None = None,
 ) -> ExecutorStats:
     """Inner body of the async executor, separated so _run_async can
     wrap it in try/finally for throttle cleanup."""
@@ -629,6 +703,12 @@ async def _run_async_body(
     review_idx_box = [0]
     inflight: set[asyncio.Task] = set()
     stopping = False
+    # Journal-checkpoint quiesce state: while a quiesce drain is in
+    # progress, completions must NOT dispatch new work — the drain is
+    # waiting for inflight to reach zero, and _after_completion is the
+    # only post-completion dispatcher. The loop re-primes from the
+    # graph after the checkpoint.
+    quiesce_state = {"draining": False}
 
     batch_review_fn = _get_batch_review_fn(shared, config)
     glance_pending: list[Any] = []
@@ -745,6 +825,12 @@ async def _run_async_body(
         if now - last_checkpoint >= _PROGRESS_CHECKPOINT_INTERVAL:
             _update_run_progress(config.out_dir, result)
             last_checkpoint = now
+        if quiesce_state["draining"]:
+            # Journal-checkpoint quiesce: no new dispatch while the
+            # drain waits for inflight → 0. Newly-ready tasks stay in
+            # the graph; the loop re-primes after the checkpoint (or
+            # after a drain timeout).
+            return
         if _should_stop():
             return
         newly_ready = graph.pop_ready(ec.max_workers)
@@ -947,10 +1033,63 @@ async def _run_async_body(
         held_stall["count"] = 0
         _dispatch_ready(released, suppress=False)
 
+    async def _quiesce_checkpoint() -> None:
+        """Journal-checkpoint quiesce: stop issuing reviews, wait for
+        inflight → 0 (bounded by the quiescer's drain bound), run the
+        checkpoint SYNCHRONOUSLY on this thread, resume dispatch.
+
+        Blocking the event loop for the checkpoint is the design: the
+        loop has nothing inflight by construction when the call runs,
+        and the checkpoint must never be submitted to the executor or
+        wait on executor-produced state (the studywedge self-deadlock
+        class). A drain that cannot reach zero within the bound
+        aborts the attempt — the quiescer notes a retry cooldown and
+        dispatch resumes immediately.
+        """
+        if quiescer is None:  # loop-head guard already excludes this
+            return
+        quiesce_state["draining"] = True
+        try:
+            deadline = time.monotonic() + quiescer.drain_bound_s
+            while inflight:
+                timeout = deadline - time.monotonic()
+                if timeout <= 0:
+                    quiescer.note_drain_timeout(len(inflight))
+                    return
+                done, _p = await asyncio.wait(
+                    inflight,
+                    return_when=asyncio.FIRST_COMPLETED,
+                    timeout=timeout,
+                )
+                inflight.difference_update(done)
+                for t in done:
+                    if not t.cancelled() and t.exception() is not None:
+                        logger.warning(
+                            "unhandled task exception: %s",
+                            t.exception(), exc_info=t.exception(),
+                        )
+                if _should_stop():
+                    return  # the loop head's stop path takes over
+            # inflight is empty; queued glance tasks are not running
+            # work (no fds, no locks). The quiescer parks the study
+            # consumer itself before the checkpoint core runs.
+            quiescer.run_quiesced()
+        finally:
+            quiesce_state["draining"] = False
+
     initial = graph.pop_ready(ec.max_workers)
     _dispatch_ready(initial)
 
     while inflight or glance_pending or hold_set:
+        if (quiescer is not None and not _should_stop()
+                and quiescer.should_attempt()):
+            await _quiesce_checkpoint()
+            if not _should_stop():
+                # Re-prime: completions during the drain deliberately
+                # skipped dispatch, so newly-ready work sits in the
+                # graph.
+                _dispatch_ready(graph.pop_ready(ec.max_workers))
+
         if _should_stop():
             # Stop requested: drop queued glance batches and held
             # tasks — they stay unreviewed gaps.  Without this the
@@ -1214,7 +1353,52 @@ def _process_glance_batch(
     raise. The async caller's except path consults it so already-
     committed members are not error-recorded a second time
     (double-commit + double-tally).
+
+    The whole batch scopes :func:`review_work_active` — a glance
+    batch is review work for the journal checkpoint's inflight guard
+    exactly like an individual review (its escalation/fallback calls
+    nest their own scopes harmlessly; the guard reads a count).
     """
+    with review_work_active():
+        _process_glance_batch_inner(
+            tasks, batch_review_fn, shared, config, result,
+            review_one_fn, review_fn,
+            joern_server=joern_server, audit_log=audit_log,
+            workqueue=workqueue, reviewed_set=reviewed_set,
+            start_time=start_time,
+            layer_disagreements=layer_disagreements,
+            on_progress=on_progress, review_idx=review_idx,
+            total=total, collector=collector, graph=graph,
+            reviewed_outcomes=reviewed_outcomes,
+            committed_keys=committed_keys,
+        )
+
+
+def _process_glance_batch_inner(
+    tasks: list[Any],
+    batch_review_fn: Callable,
+    shared: Any,
+    config: Any,
+    result: Any,
+    review_one_fn: Callable,
+    review_fn: Callable,
+    *,
+    joern_server: Any = None,
+    audit_log: list | None = None,
+    workqueue: list | None = None,
+    reviewed_set: set | None = None,
+    start_time: float = 0.0,
+    layer_disagreements: list | None = None,
+    on_progress: Callable | None = None,
+    review_idx: int = 0,
+    total: int = 0,
+    collector: Any = None,
+    graph: Any = None,
+    reviewed_outcomes: dict[str, Any] | None = None,
+    committed_keys: set | None = None,
+) -> None:
+    """Body of :func:`_process_glance_batch` (split so the inflight
+    scope wraps it without re-indenting the batch logic)."""
     from .orchestrator import _build_context, _commit_outcome, _tally_outcome
 
     if committed_keys is None:

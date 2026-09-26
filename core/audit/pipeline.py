@@ -127,6 +127,12 @@ class AuditPipelineOpts:
     # Cross-function edge obligations (--edges): flag-gated review of
     # tier-1 edge contracts + tier-2 folded edge verdicts.
     edges: bool = False
+    # Mid-run journal checkpoint tri-state: True/False = explicit
+    # per-run choice (--no-journal-checkpoint sets False); None =
+    # defer to the active project's 'journal-checkpoint' setting
+    # ('off' disables), else the default ON. Resolved via
+    # _resolve_journal_checkpoint at config build.
+    journal_checkpoint: bool | None = None
     # Ignore all prior review state — coverage records, the per-run
     # review journal, the project journal index, and recall caches —
     # so every scheduled function is re-reviewed. The corpus runner
@@ -275,6 +281,29 @@ def _resolve_repo_trust(opts: AuditPipelineOpts) -> bool:
         return bool(opts.repo_trusted)
 
 
+def _resolve_journal_checkpoint(opts: AuditPipelineOpts) -> bool:
+    """Resolve the mid-run journal checkpoint: explicit per-run
+    choice wins; else the active project's ``journal-checkpoint``
+    setting (``off`` disables); else the default ON. Best-effort —
+    a project-substrate error must never break the audit (fails
+    toward the default, which is the pre-existing safe behaviour of
+    checkpointing spend-safe tiers only)."""
+    if opts.journal_checkpoint is not None:
+        return bool(opts.journal_checkpoint)
+    try:
+        from core.project.trust import active_project_journal_checkpoint
+        setting = active_project_journal_checkpoint(run_dir=opts.out_dir)
+    except Exception:  # noqa: BLE001 — settings read never blocks a run
+        return True
+    if setting == "off":
+        logger.info(
+            "journal checkpoint: disabled by the project "
+            "'journal-checkpoint' setting (per-run flags override)",
+        )
+        return False
+    return True
+
+
 def _make_llm_client(opts: AuditPipelineOpts):
     """Build the budget-capped LLM client both entry points share.
 
@@ -401,6 +430,7 @@ def _build_orchestrator_config(
         repo_trusted=_resolve_repo_trust(opts),
         verdict_reuse=opts.verdict_reuse,
         edges=opts.edges,
+        journal_checkpoint=_resolve_journal_checkpoint(opts),
         force=opts.force,
         prefilter_skip=opts.prefilter_skip,
         triage=opts.triage,

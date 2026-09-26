@@ -94,9 +94,13 @@ import logging
 import math
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # The loader's per-value spend clamp ceiling — imported (not
 # mirrored) so the compactor's floor accounting can never drift from
@@ -123,16 +127,6 @@ except ImportError:
     _HAS_FCNTL = False
 
 logger = logging.getLogger(__name__)
-
-
-def auto_compact_threshold_bytes() -> int:
-    """Resume auto-compacts the journal at segment start once it
-    exceeds this (half the loader's retained-byte budget):
-    per-segment completeness keeps re-emitting reused rows by design,
-    so without a standing trim a long resume chain drifts toward the
-    loader budget and, past it, toward the spend-authorizing refusal.
-    Derived at CALL time so it always tracks the loader budget."""
-    return _journal._MAX_JOURNAL_BYTES // 2
 
 
 #: Bound on the pass-1 identity map. Real journals carry one identity
@@ -176,6 +170,26 @@ class CompactRefused(RuntimeError):
     """Compaction refused — nothing was modified."""
 
 
+class CompactAborted(CompactRefused):
+    """Compaction aborted cleanly mid-pass (wall-clock bound exceeded
+    or an external abort signal). The shard being processed is
+    untouched — the abort seams live only OUTSIDE the backup+rename
+    window, so a shard is either fully swapped or byte-identical; in
+    a multi-shard set, shards already swapped keep their compacted
+    form and backups (the same mid-set semantics as any refusal)."""
+
+
+#: How many pass-1/pass-2 lines run between abort-seam polls. Trade-
+#: off, both directions: lower and a multi-million-row shard spends
+#: measurable time in monotonic-clock reads and abort callbacks;
+#: higher and the abort/deadline response lags by up to that many
+#: lines of parse work (each line is bounded by the journal's
+#: per-line cap, so the lag is bounded too). 4096 lines is well under
+#: a millisecond of poll overhead per shard while keeping the
+#: response lag to a few MiB of streaming.
+_ABORT_POLL_EVERY_LINES = 4096
+
+
 @dataclass
 class CompactStats:
     """Before/after accounting for one compaction."""
@@ -203,10 +217,21 @@ class CompactStats:
         )
 
 
-def _refuse_live_run(out_dir: Path) -> None:
+def _refuse_live_run(
+    out_dir: Path, allow_worker_pid: int | None = None,
+) -> None:
     """Refuse when the run's recorded worker is still alive — a live
     appender racing the rewrite could land a row on the pre-swap
     inode (the backup) instead of the compacted journal.
+
+    ``allow_worker_pid`` is the mid-run checkpoint's self-permit: the
+    run's OWN process (the recorded worker itself) may compact its
+    journal at a quiesced point — with its workers provably idle, the
+    only appenders left are foreign ones, which the appender's
+    post-flock inode re-validation protects across the swap. The
+    permit matches ONLY when the recorded ``tool_pid`` equals the
+    caller-asserted pid (callers pass ``os.getpid()``); any other
+    live worker still refuses.
 
     The metadata read fails CLOSED: a ``.raptor-run.json`` that exists
     but cannot be read or parsed refuses compaction — the file is
@@ -254,6 +279,9 @@ def _refuse_live_run(out_dir: Path) -> None:
     # live) — a reparented-to-init or recycled-pid record must not
     # refuse compaction forever. The detail names the evidence.
     alive, detail = worker_liveness_for_meta(meta)
+    if alive and allow_worker_pid is not None \
+            and meta.get("tool_pid") == allow_worker_pid:
+        return
     if alive:
         raise CompactRefused(
             f"run at {out_dir} is still in flight ({detail}) — "
@@ -720,20 +748,34 @@ def _slim_stub_line(
 
 def compact_journal(out_dir: Path, *,
                     supersede: bool = False,
-                    slim_clean: bool = False) -> CompactStats:
+                    slim_clean: bool = False,
+                    deadline_monotonic: float | None = None,
+                    should_abort: Callable[[], bool] | None = None,
+                    allow_worker_pid: int | None = None) -> CompactStats:
     """Atomically rewrite the run's journal without its duplicate
     re-emission rows. Returns aggregate before/after stats; raises
     :class:`CompactRefused` when the run is live, the journal is
     absent/unreadable, or a file's identity population exceeds the
     tool's bounds.
 
+    Bounded execution (the mid-run checkpoint's contract): pass
+    ``deadline_monotonic`` (a ``time.monotonic`` timestamp) and/or
+    ``should_abort`` and the passes poll them every
+    ``_ABORT_POLL_EVERY_LINES`` lines plus once before each shard's
+    swap — a trip raises :class:`CompactAborted` with the current
+    shard byte-identical (there is deliberately NO seam between the
+    backup hardlink and the rename, so a shard that reached its swap
+    completes it). ``allow_worker_pid`` threads to
+    :func:`_refuse_live_run` — the mid-run self-permit.
+
     ``supersede=True`` additionally drops every superseded row —
     non-newest per :func:`_supersede_identity` — replacing each
     cost-bearing one with a spend-carrier row in place, and archives
     each original under the ``.pre-supersede`` name family instead of
-    ``.pre-compact``. Opt-in only: this tier is lossy on the LIVE
-    file (full history stays in the archive) and is never applied by
-    the resume auto-compact.
+    ``.pre-compact``. Lossy on the LIVE file only (full history stays
+    in the archive): opt-in on the operator CLI; the journal
+    checkpoint's automatic tier (core.coverage.journal_checkpoint)
+    applies it under the same archival + spend-floor contract.
 
     Shard-aware: every file in the journal's contiguous shard set is
     compacted in place, one atomic swap each (a refusal mid-set
@@ -777,7 +819,15 @@ def compact_journal(out_dir: Path, *,
     out_dir = Path(out_dir)
     if slim_clean:
         supersede = True
-    _refuse_live_run(out_dir)
+    _refuse_live_run(out_dir, allow_worker_pid=allow_worker_pid)
+
+    def _abort_reason() -> str | None:
+        if should_abort is not None and should_abort():
+            return "abort requested"
+        if (deadline_monotonic is not None
+                and time.monotonic() > deadline_monotonic):
+            return "wall-clock bound exceeded"
+        return None
 
     archive_suffix = (
         _BACKUP_SUFFIX_SLIM if slim_clean
@@ -804,11 +854,20 @@ def compact_journal(out_dir: Path, *,
                     "nothing compacted"
                 ) from exc
         for shard_path in shards:
+            reason = _abort_reason()
+            if reason:
+                raise CompactAborted(
+                    f"compaction aborted before {shard_path.name} "
+                    f"({reason}) — that shard is untouched; shards "
+                    "already swapped keep their compacted form and "
+                    "backups"
+                )
             stats = _compact_one_file(shard_path, out_dir,
                                       supersede=supersede,
                                       slim_clean=slim_clean,
                                       archive_suffix=archive_suffix,
-                                      sidecar=sidecar)
+                                      sidecar=sidecar,
+                                      abort_reason=_abort_reason)
             if stats is None:
                 if len(shards) == 1:
                     raise CompactRefused(
@@ -858,6 +917,7 @@ def _compact_one_file(
     slim_clean: bool = False,
     archive_suffix: str = _BACKUP_SUFFIX,
     sidecar: _SidecarWriter | None = None,
+    abort_reason: Callable[[], str | None] | None = None,
 ) -> CompactStats | None:
     """Two-pass compaction of ONE journal shard file, or ``None``
     when the file is missing/unreadable (multi-shard callers skip).
@@ -866,7 +926,25 @@ def _compact_one_file(
     :func:`compact_journal` walk, never per shard): its records are
     synced durable before THIS shard's floor check and swap, and its
     lifetime/flock belong to the caller.
+
+    ``abort_reason`` (non-None return = abort) is polled every
+    ``_ABORT_POLL_EVERY_LINES`` lines in both passes and once after
+    the floor check — every seam sits BEFORE the backup hardlink, so
+    an abort leaves this shard byte-identical and the tmp file
+    cleaned up by the outer finally.
     """
+
+    def _poll_abort(line_no: int) -> None:
+        if abort_reason is None or line_no % _ABORT_POLL_EVERY_LINES:
+            return
+        reason = abort_reason()
+        if reason:
+            raise CompactAborted(
+                f"compaction aborted mid-pass on {journal_path.name} "
+                f"({reason}) — the shard is untouched; in a shard "
+                "set, shards already swapped keep their compacted "
+                "form and backups"
+            )
     from core.source import open_regular
     fh = open_regular(journal_path, "rb")
     if fh is None:
@@ -935,7 +1013,10 @@ def _compact_one_file(
 
                 line_no = -1
                 in_overlong = False
+                polled = 0
                 for raw_line, overlong in _iter_lines(fh):
+                    polled += 1
+                    _poll_abort(polled)
                     if overlong:
                         if not in_overlong:
                             line_no += 1
@@ -997,7 +1078,10 @@ def _compact_one_file(
                     tmp_fd = None      # ownership moved to `out`
                     line_no = -1
                     in_overlong = False
+                    polled = 0
                     for raw_line, overlong in _iter_lines(fh):
+                        polled += 1
+                        _poll_abort(polled)
                         if overlong:
                             if not in_overlong:
                                 line_no += 1
@@ -1100,6 +1184,22 @@ def _compact_one_file(
                         "set, shards already swapped before this one "
                         "keep their compacted form and backups)"
                     )
+
+                # Last abort seam: past this point the shard COMMITS
+                # to its swap — there is deliberately no poll between
+                # the backup hardlink and the rename (an abort inside
+                # that window would leave a backup with no swap, and
+                # the swap itself is a single atomic rename anyway).
+                if abort_reason is not None:
+                    reason = abort_reason()
+                    if reason:
+                        raise CompactAborted(
+                            f"compaction aborted before the swap of "
+                            f"{journal_path.name} ({reason}) — the "
+                            "shard is untouched; in a shard set, "
+                            "shards already swapped keep their "
+                            "compacted form and backups"
+                        )
 
                 # ── backup (hardlink, never deleted), then swap ──
                 backup = _backup_path(journal_path, archive_suffix)

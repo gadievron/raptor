@@ -487,6 +487,38 @@ def active_project_sandbox_floor(
         return None
 
 
+def active_project_journal_checkpoint(
+    run_dir: str | Path | None = None,
+) -> str | None:
+    """The governing project's ``journal-checkpoint`` setting
+    (``on`` / ``off``), or ``None``. Best-effort, same failure
+    posture as :func:`active_project_sandbox_floor` — a missing
+    project or schema mismatch resolves to no setting (the caller's
+    default-ON stands), never a crash. Unlike the trust markers this
+    is plain configuration, not a trust grant: the automatic
+    checkpoint tiers are spend-safe by the compactor's loss contract
+    either way."""
+    try:
+        from core.project.project import ProjectManager
+        mgr = ProjectManager()
+        active = _context_project_name(run_dir)
+        if not active:
+            return None
+        proj = mgr.load(active)
+        if not proj:
+            return None
+        label = proj.get_setting("journal-checkpoint")
+        return label if isinstance(label, str) and label else None
+    except Exception as exc:  # noqa: BLE001 — settings read must never break a run
+        from core.run.pin import ProjectArgvError
+        if isinstance(exc, ProjectArgvError):
+            raise
+        logger.warning(
+            "journal-checkpoint: project setting resolution failed "
+            "(%s) — proceeding with the default", exc)
+        return None
+
+
 def apply_project_sandbox_floor(
     args=None, *, banner: bool = True,
     target_path: str | Path | None = None,

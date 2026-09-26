@@ -79,6 +79,7 @@ def _validate_project(data: dict[str, Any]) -> tuple[bool, list[str]]:
             errors.append("settings must be a dict")
         else:
             from core.project.project import (
+                VALID_JOURNAL_CHECKPOINT,
                 VALID_SANDBOX_FLOORS,
                 VALID_TARGET_KINDS,
             )
@@ -94,6 +95,12 @@ def _validate_project(data: dict[str, Any]) -> tuple[bool, list[str]]:
                             "settings['sandbox-floor'] must be one of "
                             + ", ".join(VALID_SANDBOX_FLOORS)
                             + " ('none' is never a standing consent)")
+                elif key == "journal-checkpoint":
+                    if value not in VALID_JOURNAL_CHECKPOINT:
+                        errors.append(
+                            "settings['journal-checkpoint'] must be "
+                            "one of "
+                            + ", ".join(VALID_JOURNAL_CHECKPOINT))
                 elif key == "build-command":
                     if not isinstance(value, dict):
                         errors.append(
@@ -111,7 +118,8 @@ def _validate_project(data: dict[str, Any]) -> tuple[bool, list[str]]:
                 else:
                     errors.append(
                         f"settings key '{key}' invalid; valid: "
-                        "build-command, sandbox-floor, target-kind")
+                        "build-command, journal-checkpoint, "
+                        "sandbox-floor, target-kind")
 
     return len(errors) == 0, errors
 

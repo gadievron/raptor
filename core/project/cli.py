@@ -467,7 +467,8 @@ def main() -> None:
         "set",
         help=("List or set project settings (registry-validated: "
               "description, notes, threat-model, target-kind, "
-              "build-command[.<lang>], sandbox-floor)"),
+              "build-command[.<lang>], sandbox-floor, "
+              "journal-checkpoint)"),
         usage="raptor project set [<key> <value>] [<name>]",
         **_F,
     )

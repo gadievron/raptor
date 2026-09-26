@@ -127,6 +127,12 @@ _TRUST_MARKER_HELP = {
 # by design.
 VALID_TARGET_KINDS = ("library", "hybrid", "application", "auto")
 
+# ``journal-checkpoint``: plain on/off configuration (not a trust
+# grant — the automatic checkpoint tiers are spend-safe by the
+# compactor's loss contract either way; the lossy slim tier keeps its
+# own operator consent surface on `raptor-audit journal compact`).
+VALID_JOURNAL_CHECKPOINT = ("on", "off")
+
 # VALID_SANDBOX_FLOORS (imported above from core/sandbox/tiers.py —
 # single source of truth, tiny and dependency-free): the untrusted
 # containment-floor consent values. ``none`` is deliberately NOT
@@ -147,11 +153,19 @@ SETTINGS_REGISTRY = {
                       + "|".join(VALID_SANDBOX_FLOORS)
                       + " (consumed at run start; per-run "
                         "--sandbox-floor overrides)"),
+    "journal-checkpoint": ("mid-run journal checkpoint (automatic "
+                           "dedup+supersede tiers), one of: "
+                           + "|".join(VALID_JOURNAL_CHECKPOINT)
+                           + " (default on; per-run "
+                             "--no-journal-checkpoint overrides)"),
 }
 
 # Keys persisted in the ``settings`` dict (the others map to existing
 # top-level Project fields).
-_DICT_SETTINGS_KEYS = ("target-kind", "build-command", "sandbox-floor")
+_DICT_SETTINGS_KEYS = (
+    "target-kind", "build-command", "sandbox-floor",
+    "journal-checkpoint",
+)
 
 # Language slot names for ``build-command.<lang>``.
 _LANG_SLOT_RE = re.compile(r"\A[a-zA-Z0-9_+#.-]{1,32}\Z")
@@ -483,6 +497,12 @@ class Project:
             # consent is never guessed; the run proceeds at the
             # fail-closed default floor.
             settings["sandbox-floor"] = floor
+        checkpoint = raw.get("journal-checkpoint")
+        if isinstance(checkpoint, str) and checkpoint in VALID_JOURNAL_CHECKPOINT:
+            # A label outside the vocabulary (hand-edited JSON) is
+            # DROPPED here — consumers fall back to the default-ON
+            # behaviour rather than guessing what a bogus label meant.
+            settings["journal-checkpoint"] = checkpoint
         return settings
 
     def is_expired_machine_project(self, now: datetime | None = None) -> bool:
@@ -583,6 +603,13 @@ class Project:
                     + ", ".join(VALID_SANDBOX_FLOORS)
                     + f" (got {value!r}){extra}")
             self.settings["sandbox-floor"] = value
+        elif base == "journal-checkpoint":
+            if value not in VALID_JOURNAL_CHECKPOINT:
+                raise ValueError(
+                    "journal-checkpoint must be one of: "
+                    + ", ".join(VALID_JOURNAL_CHECKPOINT)
+                    + f" (got {value!r})")
+            self.settings["journal-checkpoint"] = value
         else:  # pragma: no cover — split_setting_key guards this
             msg = f"Unknown setting {key!r}"
             raise ValueError(msg)
@@ -608,6 +635,9 @@ class Project:
             return self.settings.pop("target-kind", None) is not None
         if base == "sandbox-floor":
             return self.settings.pop("sandbox-floor", None) is not None
+        if base == "journal-checkpoint":
+            return self.settings.pop(
+                "journal-checkpoint", None) is not None
         if base == "build-command":
             commands = self.settings.get("build-command")
             if not isinstance(commands, dict):
@@ -634,6 +664,8 @@ class Project:
             return self.settings.get("target-kind")
         if base == "sandbox-floor":
             return self.settings.get("sandbox-floor")
+        if base == "journal-checkpoint":
+            return self.settings.get("journal-checkpoint")
         if base == "build-command":
             commands = self.settings.get("build-command")
             if not isinstance(commands, dict):
