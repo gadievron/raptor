@@ -393,7 +393,10 @@ class TestCargoFuzzRunnerContract(unittest.TestCase):
 class TestHermeticCargoHome(unittest.TestCase):
     """The host cargo cache is never in the build's write scope; the
     build gets a run-local cargo home seeded by COPY from the host
-    cache's index + .crate archives only."""
+    cache's index + .crate archives only. On the READ side, the host
+    cargo home is granted only through its ``bin/`` subtree — the
+    home's root carries ``credentials.toml`` (the crates.io publish
+    token) and must never be readable by the hostile build."""
 
     def _runner_with_host_home(self, tmp: Path,
                                host_home: Path | None) -> CargoFuzzRunner:
@@ -432,6 +435,10 @@ class TestHermeticCargoHome(unittest.TestCase):
         (host / "bin").mkdir()
         (host / "bin" / "cargo-something").write_text("#!/bin/sh\n")
         (host / "config.toml").write_text("[net]\n")
+        # The credential file that makes the home's ROOT off-limits:
+        # crates.io publish token, right beside bin/.
+        (host / "credentials.toml").write_text(
+            '[registry]\ntoken = "tripwire-publish-token"\n')
         return host
 
     def test_writable_set_never_contains_the_host_cargo_home(self):
@@ -454,9 +461,70 @@ class TestHermeticCargoHome(unittest.TestCase):
             env = runner._build_env()
             self.assertEqual(env["CARGO_HOME"],
                              str(runner.output_dir / "cargo-home"))
-            # The host cache stays READ-allowed (rustup/cargo shims).
+            # Only the shims stay READ-allowed — bin/, never the
+            # home's root (credentials.toml lives there).
             if host is not None:
-                self.assertIn(str(host), runner._rust_tool_paths())
+                tool_paths = runner._rust_tool_paths()
+                self.assertIn(str(host / "bin"), tool_paths)
+                self.assertNotIn(str(host), tool_paths)
+
+    def test_read_set_never_contains_the_cargo_home_root(self):
+        # MUST-level credential boundary (the jazzer lane's precedent
+        # for ~/.gradle and ~/.m2): ~/.cargo/credentials.toml — the
+        # crates.io publish token — sits at the cargo home ROOT, and
+        # the build phase runs hostile build.rs code. The registry is
+        # seeded run-locally OUTSIDE the sandbox, so the only host
+        # cargo-home read the sandboxed build needs is bin/ (the
+        # rustup shims). Asserted at the sandbox seam — the grants the
+        # build call actually receives — for BOTH branches: host cargo
+        # home present and absent.
+        for with_host in (True, False):
+            tmp = _tmpdir(self)
+            host = self._fake_host_cache(tmp) if with_host else None
+            captured: dict = {}
+            runner_box: dict = {}
+            fake = TestCargoFuzzRunnerContract._fake_sandbox(
+                runner_box, captured)
+            with patch("packages.fuzzing.libfuzzer_runner._sandbox_run",
+                       side_effect=fake):
+                runner = self._runner_with_host_home(tmp, host)
+                runner_box["runner"] = runner
+                runner.run()
+            bk = captured["build_kwargs"]
+            read_set = [
+                Path(p).resolve()
+                for p in list(bk["readable_paths"])
+                + list(bk["tool_paths"] or [])
+            ]
+            # No grant path is credentials-shaped, in either branch.
+            for path in read_set:
+                self.assertFalse(path.name.startswith("credentials"),
+                                 f"read grant {path} names a "
+                                 "credential file")
+            if host is None:
+                continue
+            resolved_host = host.resolve()
+            allowed_bin = (resolved_host / "bin")
+            for path in read_set:
+                covers_credentials = (
+                    path == resolved_host              # the root
+                    or path in resolved_host.parents   # an ancestor
+                )
+                self.assertFalse(
+                    covers_credentials,
+                    f"read grant {path} exposes credentials.toml at "
+                    f"the cargo home root {resolved_host}")
+                if resolved_host in path.parents:
+                    # Inside the home, only the bin/ subtree may be
+                    # granted.
+                    self.assertTrue(
+                        path == allowed_bin
+                        or allowed_bin in path.parents,
+                        f"read grant {path} reaches into the cargo "
+                        f"home beyond {allowed_bin}")
+            # The shims themselves stay granted (toolchain preflight
+            # and the build's rustup re-exec path keep working).
+            self.assertIn(allowed_bin, read_set)
 
     def test_seed_copies_index_and_cache_only(self):
         tmp = _tmpdir(self)
