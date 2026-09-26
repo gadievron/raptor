@@ -20,6 +20,7 @@ from .orchestrator import FuzzingOrchestrator, CampaignPlan
 from .libfuzzer_runner import LibFuzzerRunner, LibFuzzerResult, LibFuzzerStats
 from .atheris_runner import AtherisRunner, AtherisResult
 from .atheris_harness import AtherisHarnessSpec, write_atheris_harness
+from .cargofuzz_runner import CargoFuzzRunner, CargoFuzzResult
 from .harness_generator import HarnessGenerator, HarnessSpec, GeneratedHarness
 from .telemetry import FuzzingTelemetry, CampaignStats, FuzzEvent
 from packages.binary_analysis import (
@@ -41,6 +42,8 @@ __all__ = [
     "CampaignPlan",
     "CampaignStats",
     "CapabilityReport",
+    "CargoFuzzResult",
+    "CargoFuzzRunner",
     "CorpusManager",
     "Crash",
     "CrashCollector",
