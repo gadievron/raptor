@@ -116,6 +116,61 @@ atheris is an optional dependency.  When it is not importable the detector
 still reports the target with an install hint (`pip install atheris`) and
 the plan blocks instead of running.
 
+### cargo-fuzz (Rust, alpha)
+
+Coverage-guided fuzzing for Rust crates via
+[cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) — the crate's
+`fuzz/fuzz_targets/*.rs` harnesses compiled as native libFuzzer binaries.
+Detected automatically for `rust-crate` targets (a directory with
+`Cargo.toml`); force it with `--engine cargo-fuzz`.  Alpha caveats up front:
+single-instance campaigns that stop at the first crash (libFuzzer
+semantics), no Rust coverage bridge yet, and no harness synthesis — the fuzz
+targets are the crate's own (`cargo fuzz init` / `cargo fuzz add` scaffold
+them in a trusted context).
+
+Target selection: `--fuzz-target <name>` picks one of the crate's fuzz
+targets; a crate with exactly one auto-selects it, several targets block the
+plan with the list (never a silent pick).  Without an operator `--corpus`,
+the crate's own `fuzz/corpus/<target>/` seeds are staged when present
+(through the same bounded, symlink-refusing corpus stager as every other
+engine).
+
+```bash
+python3 raptor.py fuzz --binary /path/to/crate --fuzz-target parse_input
+python3 raptor.py fuzz --binary /path/to/crate            # single target
+```
+
+The campaign has two phases.  The BUILD (`cargo fuzz build <target>`)
+executes target code — `build.rs`, proc macros — so it runs under the full
+sandbox with the network denied and cargo pinned offline
+(`CARGO_NET_OFFLINE`): dependencies must already be in the local cargo cache
+(the failure message says to run `cargo fetch` once in a trusted context).
+Build artifacts are routed into the run directory (`CARGO_TARGET_DIR`), the
+cargo home the build sees is a hermetic run-local copy seeded from the host
+cache's `registry/index` + `registry/cache` (the host `~/.cargo` is never
+build-writable — a hostile `build.rs` could otherwise poison the shared
+registry extraction that later builds silently compile), and the build's
+write scope additionally covers the crate's `fuzz/` workspace — the one
+place cargo itself must write — while the rest of the crate stays
+read-only.  The CAMPAIGN then executes the built binary directly under the
+strict libFuzzer-runner sandbox (cargo never runs inside the campaign).
+
+A nightly Rust toolchain enables cargo-fuzz's default AddressSanitizer
+build; without one the build degrades to `--sanitizer none` with a hint
+(panics and crashes are still caught, ASan findings are not).
+
+Crashes are usually Rust panics: the panic message, location, and
+`RUST_BACKTRACE=1` frames parsed from the harness output become the triage
+signal on the normalized crash records (`cargofuzz/cargofuzz-crashes.json`),
+and each crash artifact is wrapped as a Witness under `<out>/witnesses/`
+(`produced_by: cargo-fuzz`, with the built binary's hash) — the same record
+shape and store the AFL++ and atheris paths use, so `/validate` and
+`raptor-verified-outcomes` consume cargo-fuzz crashes with no extra wiring.
+
+cargo and cargo-fuzz are optional dependencies.  When either is missing the
+detector still reports the target with an install hint
+(`cargo install cargo-fuzz`) and the plan blocks instead of running.
+
 ## Target Detection
 
 Before any campaign starts, RAPTOR identifies the target and recommends the
@@ -215,10 +270,11 @@ python3 raptor.py fuzz --binary <path> [flags]
 | `--orchestrator` | Force the orchestrator pipeline (target detection + capability checks + engine selection) |
 | `--legacy` | Force the legacy AFL++-only path |
 | `--plan-only` | Print the campaign plan and exit without running |
-| `--engine <afl\|libfuzzer\|atheris>` | Force a specific engine; honoured only when the detected target kind supports it, otherwise the plan blocks. Implies `--orchestrator` |
+| `--engine <afl\|libfuzzer\|atheris\|cargo-fuzz>` | Force a specific engine; honoured only when the detected target kind supports it, otherwise the plan blocks. Implies `--orchestrator` |
 | `--py-harness <file>` | Operator-written atheris `TestOneInput` harness for python-pkg targets. Implies `--orchestrator` |
 | `--py-entry <module:function>` | Scaffold a template atheris harness around this entry point (simple bytes/str case only). Implies `--orchestrator` |
 | `--py-input <bytes\|text>` | Payload type the scaffolded harness feeds the entry point (default: bytes) |
+| `--fuzz-target <name>` | cargo-fuzz target to build and run for rust-crate targets; auto-selected when the crate has exactly one. Implies `--orchestrator` |
 
 ### Witness and exploit flags
 
@@ -515,13 +571,25 @@ out/fuzz_<binary>_<timestamp>/
                                  (skipped with --no-record-witnesses)
   witnesses/                  -- Crash Witness objects for the fuzz
                                  crashes themselves (always recorded;
-                                 atheris campaigns write here too)
+                                 atheris and cargo-fuzz campaigns
+                                 write here too)
   atheris/                    -- atheris campaign results (python-pkg targets)
     corpus/                   -- working corpus (seeds staged in)
     crashes/                  -- crash-* / timeout-* / oom-* artifacts
     atheris-crashes.json      -- normalized crash records with the
                                  Python exception triage signal
   atheris-harness/            -- generated template harness (--py-entry only)
+  cargofuzz/                  -- cargo-fuzz campaign results (rust-crate targets)
+    cargo-target/             -- sandboxed build artifacts (the built
+                                 fuzz-target binary lives here)
+    corpus/                   -- working corpus (seeds staged in)
+    crashes/                  -- crash-* / timeout-* / oom-* artifacts
+    build-stdout.log          -- cargo fuzz build output
+    build-stderr.log
+    cargofuzz-crashes.json    -- normalized crash records with the
+                                 Rust panic triage signal
+  crate-corpus.json           -- record of the crate's own fuzz/corpus/<target>
+                                 seeds being used (cargo-fuzz, no --corpus)
   binary-context-map.json     -- radare2 binary analysis (when enabled)
   coverage-fuzz.json          -- Function-precise runtime coverage record
                                  (gcov-instrumented targets; reaches the

@@ -61,6 +61,14 @@ Python package via atheris (alpha; needs `pip install atheris` and a harness —
 python3 raptor.py fuzz --binary /path/to/pypkg --py-entry mypkg.parser:parse --duration 600
 ```
 
+Rust crate via cargo-fuzz (alpha; needs `cargo install cargo-fuzz` and the
+crate's own `fuzz/fuzz_targets/` harnesses — `--fuzz-target <name>` picks one,
+auto-selected when the crate has exactly one; the sandboxed build is offline,
+so run `cargo fetch` in the crate's fuzz/ dir once in a trusted context first):
+```bash
+python3 raptor.py fuzz --binary /path/to/crate --fuzz-target parse_input --duration 600
+```
+
 ## macOS Shared Memory Fix
 
 If fuzzing fails with "shmget() failed", run:
