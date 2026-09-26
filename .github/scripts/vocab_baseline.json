@@ -504,6 +504,26 @@
     "kind": "literal",
     "note": "closed infrastructure-module registry: the entry points whose transitive in-repo import closure forms the mechanical-detector cache's detector-set identity (any closure-module code change invalidates the whole cache) \u2014 module paths, not a learned name vocabulary; same class as core/analysis/_reach_cache.py::_GRAMMAR_MODULES"
   },
+  "core/audit/disasm_xcheck.py::_CALLEE_STOPWORDS": {
+    "count": 22,
+    "kind": "literal",
+    "note": "English prose-noise filter for callee-name extraction from claim text (pronouns/keywords/generic nouns the name( and call-to shapes capture) — a natural-language noise filter, not a project-API vocabulary; nothing here is learnable from a target, and a miss only adds a junk candidate the address/symbol resolution then fails to match"
+  },
+  "core/audit/disasm_xcheck.py::_PREFIX_TOKENS": {
+    "count": 18,
+    "kind": "literal",
+    "note": "x86 instruction-prefix tokens objdump renders as the first mnemonic-column word (rep/bnd/lock/segment overrides) — ISA facts folded away at the parse seam so the real mnemonic drives control-flow classification; a miss leaves the prefix as the mnemonic, which classifies as a fall-through and weakens refute-grade reachability toward the unsafe direction, so additions here are refute-lane soundness fixes, not vocabulary growth"
+  },
+  "core/audit/disasm_xcheck.py::_WRITE_MNEMONICS": {
+    "count": 31,
+    "kind": "literal",
+    "note": "x86-64 destination-writing mnemonic allowlist for the disasm cross-check's write predicates — ISA facts, not a learned name vocabulary; a miss yields None in BOTH lanes (fail-safe toward inconclusive at the claimed site) and can only shrink the sibling-differential intersection, which the arg1-signal guard bounds; additions are safety-improving in both directions"
+  },
+  "core/audit/disasm_xcheck.py::to_dict": {
+    "count": 11,
+    "kind": "literal",
+    "note": "disasm_xcheck receipt record shape (journal-row schema keys, not a name vocabulary; same class as the baselined manifest/to_dict shapes)"
+  },
   "core/audit/edge_obligations.py::build_edge_obligations": {
     "count": 10,
     "kind": "literal",
