@@ -80,11 +80,11 @@ def uniform_absence_records(
     if not peer_groups:
         return []
     from .consistency_dimensions import (
-        _function_spans,
-        _interface_properties,
+        function_spans,
+        interface_properties,
     )
 
-    spans = _function_spans(source_texts)
+    spans = function_spans(source_texts)
     by_key: dict[tuple[str, str], tuple[int, str]] = {}
     by_name: dict[str, tuple[str, int, str]] = {}
     ambiguous_names: set[str] = set()
@@ -140,7 +140,7 @@ def uniform_absence_records(
             continue
 
         props = [
-            _interface_properties(body) for _s, _line, body in resolved
+            interface_properties(body) for _s, _line, body in resolved
         ]
         for prop in _ABSENCE_PROPERTIES:
             if any(p.get(prop) for p in props):

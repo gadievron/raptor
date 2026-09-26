@@ -1211,6 +1211,13 @@ def _interface_slot_groups(
     return groups
 
 
+#: Public spelling of :func:`_interface_slot_groups` — cross-module
+#: consumers (the mutation corpus) import the join layer by this name;
+#: the underscore spelling stays as the in-module idiom. Rename the
+#: pair together.
+interface_slot_groups = _interface_slot_groups
+
+
 # ── L0: Joern co-callee groups ────────────────────────────────────────
 
 

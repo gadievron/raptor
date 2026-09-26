@@ -288,8 +288,8 @@ def _peer_groups_for_texts(
         from core.analysis.interface_slots import (
             interface_slot_families,
         )
-        from core.analysis.peer_groups import _interface_slot_groups
-        from core.audit.consistency_dimensions import _function_spans
+        from core.analysis.peer_groups import interface_slot_groups
+        from core.audit.consistency_dimensions import function_spans
     except ImportError:  # pragma: no cover - trimmed deployment
         return None
 
@@ -298,9 +298,9 @@ def _peer_groups_for_texts(
         return None
     functions = [
         {"name": name, "file": file_path, "line": start}
-        for file_path, name, start, _lines in _function_spans(texts)
+        for file_path, name, start, _lines in function_spans(texts)
     ]
-    return _interface_slot_groups(families, functions) or None
+    return interface_slot_groups(families, functions) or None
 
 
 def _dimension_hits(
