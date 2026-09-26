@@ -522,6 +522,37 @@ def _dataflow_source_line(finding: Mapping[str, Any]) -> int | None:
     return None
 
 
+def _dataflow_source_file(finding: Mapping[str, Any]) -> str:
+    """The trace source step's file, or ``""`` when the step carries
+    no usable file string (line-only traces keep the pre-existing
+    same-file assumption)."""
+    path = finding.get("dataflow_path") or {}
+    source = path.get("source") or {}
+    file = source.get("file")
+    return file if isinstance(file, str) else ""
+
+
+def _trace_source_is_cross_file(
+    trace_file: str, sink_resolved: Path, repo_root: Path,
+) -> bool:
+    """True when the trace's source step names a DIFFERENT file than
+    the finding's sink file.
+
+    The trace line is only meaningful as a local anchor in the file it
+    was reported against: evaluating a cross-file trace's source line
+    against the SINK file's text classifies the wrong file's lines and
+    can suppress a real cross-file flow. Unresolvable paths count as
+    cross-file — the refusal direction (the finding loses suppression
+    evidence, never gains it)."""
+    p = Path(trace_file)
+    if not p.is_absolute():
+        p = repo_root / trace_file
+    try:
+        return p.resolve() != sink_resolved.resolve()
+    except (OSError, ValueError):
+        return True
+
+
 # Learned source-method names must be plain Java identifiers before
 # they become regex alternates — anything else is refused (a learned
 # name is derived from parsed source, but the boundary revalidates).
@@ -655,6 +686,17 @@ def run_postpass(
         finding_kinds: set = set()
         trace_line = _dataflow_source_line(finding)
         if trace_line is not None:
+            # Same-file guard: a trace whose SOURCE step lives in a
+            # different file than the sink cannot anchor the
+            # value-bound evaluation — its line indexes the wrong
+            # file's text, and the traceless candidate enumeration
+            # below assumes intra-procedural producers, so neither
+            # path is sound for it. Skip with an enumerated refusal.
+            trace_file = _dataflow_source_file(finding)
+            if trace_file and _trace_source_is_cross_file(
+                    trace_file, resolved_path, repo_root):
+                stats.refuse("trace-source-cross-file")
+                continue
             source_lines = [trace_line]
             stats.source_kind("trace")
             # Classify the trace's own source line so the circularity
