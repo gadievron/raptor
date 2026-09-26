@@ -73,6 +73,11 @@ MAX_FINDINGS = 100
 MAX_DEVIANTS_PER_CALLEE = 5
 MAX_VERDICT_CALLEES = 200
 PREPASS_BUDGET_S = 60.0
+#: Sentinel default: the census share derives from census size and
+#: the DIMENSION deadline starts after the census (see
+#: run_consistency_prepass). Explicit floats — including 60.0 — are
+#: honoured verbatim end-to-end.
+_DERIVE_PREPASS = object()
 # Joern-flow escalator budget (§2.3 "Joern flow only budget-
 # permitting"): at most this many CPG caller-closure queries per run;
 # only promote-capable confirmations whose cheap reachability leg
@@ -308,11 +313,25 @@ def _load_census_cache(
     )
     if not isinstance(rows, dict):
         return None
-    return {
+    census = {
         callee: CalleeCensus.from_full_dict(d)
         for callee, d in rows.items()
         if isinstance(d, dict)
     }
+    if any(c.truncated for c in census.values()):
+        # A truncated census is partial statistics — pre-derive
+        # segments cached exactly this shape (30s share on
+        # kernel-scale trees), and serving it on fingerprint match
+        # would pin the truncation forever. Rebuild instead; the
+        # derived budget makes the rebuild complete, and a census
+        # that STILL truncates at the ceiling is re-cached truncated
+        # (this miss then re-buys the bounded rebuild per segment —
+        # the honest cost of a genuinely over-ceiling tree).
+        logger.info(
+            "consistency prepass: cached census is truncated — "
+            "rebuilding under the derived budget")
+        return None
+    return census
 
 
 def _write_census_cache(
@@ -337,7 +356,7 @@ def run_consistency_prepass(
     domain_model: dict[str, Any] | None = None,
     joern_server: Any = None,
     peer_groups: list[Any] | None = None,
-    budget_s: float = PREPASS_BUDGET_S,
+    budget_s: "float | object" = _DERIVE_PREPASS,
     floor_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the standing pre-pass. Returns::
@@ -353,6 +372,17 @@ def run_consistency_prepass(
         }
     """
     t0 = time.monotonic()
+    _derived_prepass = budget_s is _DERIVE_PREPASS
+    if _derived_prepass:
+        # The census share derives (below); the DIMENSION deadline is
+        # re-anchored after the census so a complete kernel-scale
+        # census (up to its own 600s ceiling) is never paid for with
+        # the dimension battery — pre-fix the census consumed the
+        # shared 60s and the census-verdict/lead/handoff dimensions
+        # ran ~30s; post-fix they keep the full budget regardless of
+        # census wall. Explicit budgets keep the single shared
+        # deadline: they bound the whole prepass deliberately.
+        budget_s = PREPASS_BUDGET_S
     # Per-dimension floors: registry defaults unless the audit
     # run-config (the ONLY override surface — never tuning.json,
     # never any file from the scanned repo) carries validated
@@ -452,9 +482,17 @@ def run_consistency_prepass(
             # BEFORE the first _over_budget() check, so without its own
             # deadline one hostile file of module-level assignments
             # stalls prep for hours (per-site scope walks are O(file)).
+            # At the prepass SENTINEL default the census share
+            # derives from census size (see build_return_census) —
+            # the fixed half-of-60s share covered ~18% of a
+            # kernel-scale census and truncated the cached artifact
+            # every segment. An explicit prepass budget (any float,
+            # 60.0 included) keeps the verbatim half: explicit
+            # budgets bound the whole prepass deliberately.
             census = build_return_census(
                 source_texts, joern_server=joern_server,
-                budget_s=budget_s / 2,
+                **({} if _derived_prepass
+                   else {"budget_s": budget_s / 2}),
             )
             if out_dir is not None and census:
                 _write_census_cache(Path(out_dir), _census_fp, census)
@@ -462,6 +500,12 @@ def run_consistency_prepass(
             _dim_failed("census")
             logger.debug("consistency prepass: census build failed",
                          exc_info=True)
+    if _derived_prepass:
+        # Deadline re-anchor (derived mode only): dimension time
+        # starts AFTER the census, whatever the census's derived wall
+        # was. Cache hits re-anchor too (a no-op: near-zero census
+        # wall).
+        t0 = time.monotonic()
 
     # Contract-majority floor overrides reach the census through the
     # per-entry fields (majority_says_check / majority_says_discard_ok

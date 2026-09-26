@@ -928,6 +928,30 @@ def _parse_file(source: str, file_path: str):
 # (partial majority statistics may hint, never mint definitive
 # verdicts).
 _CENSUS_BUDGET_S = 30.0
+# Derived-budget parameters (budget_s=None): the fixed 30s default
+# covered ~18% of a kernel-scale scope (measured 28.2 ms/file on
+# linux-7.2 mm/fs/kernel slices -> ~166 s for the 5,903-file scoped
+# census; every segment logged 'census deadline exceeded'). The
+# derivation allows 50 ms/file (~1.8x measured headroom), floored at
+# the old default and ceilinged hard. Both directions: LOWER ceiling
+# re-creates kernel-scale truncation (partial majority statistics);
+# HIGHER lets a pathological/hostile tree hold the prep phase — the
+# ceiling is the DoS backstop the fixed default used to be. At the
+# ceiling the census still stamps ``truncated`` and verdicts stay
+# hint-tier, exactly as before.
+#: Sentinel default: budget derives from the census size. Explicit
+#: floats (and explicit None = unlimited) are honoured verbatim.
+_DERIVE_BUDGET = object()
+
+_CENSUS_PER_FILE_S = 0.05
+_CENSUS_BUDGET_CEILING_S = 600.0
+
+
+def _derive_census_budget_s(n_files: int) -> float:
+    return min(
+        max(_CENSUS_BUDGET_S, _CENSUS_PER_FILE_S * n_files),
+        _CENSUS_BUDGET_CEILING_S,
+    )
 # Trade-off, both directions: HIGHER admits honest large first-party
 # modules whole (a 24k-line module with >2000 sites used to truncate,
 # degrading cross-file majority statistics to partial data); LOWER
@@ -1189,7 +1213,7 @@ def build_return_census(
     source_texts: dict[str, str],
     *,
     joern_server=None,
-    budget_s: float | None = _CENSUS_BUDGET_S,
+    budget_s: "float | None | object" = _DERIVE_BUDGET,
     max_sites_per_file: int = _CENSUS_MAX_SITES_PER_FILE,
 ) -> dict[str, CalleeCensus]:
     """One parse per file → per-callee usage census (§2.1).
@@ -1205,6 +1229,8 @@ def build_return_census(
     complete census downstream.
     """
     all_sites: list[CallSite] = []
+    if budget_s is _DERIVE_BUDGET:
+        budget_s = _derive_census_budget_s(len(source_texts))
     limiter = _CensusLimiter(
         (time.monotonic() + budget_s) if budget_s is not None else None,
         max_sites_per_file,
