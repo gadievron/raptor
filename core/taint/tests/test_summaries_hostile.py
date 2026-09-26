@@ -21,7 +21,8 @@ import time
 
 import pytest
 
-from core.taint.packs import PackSet, default_pack_names, load_packs
+from core.taint.packs import PackSet, load_packs
+from core.taint.tests import HAND_COMPUTED_PACKS
 from core.taint.summaries import (
     MAX_SOURCE_FILE_BYTES,
     FunctionSummary,
@@ -37,7 +38,7 @@ from core.taint.summaries import (
 
 @pytest.fixture(scope="module")
 def packs() -> PackSet:
-    return load_packs(default_pack_names("python"))
+    return load_packs(HAND_COMPUTED_PACKS)
 
 
 @pytest.fixture(scope="module")

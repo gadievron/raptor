@@ -33,7 +33,8 @@ from core.taint.engine import (
     PropagationResult,
     propagate,
 )
-from core.taint.packs import PackSet, default_pack_names, load_packs
+from core.taint.packs import PackSet, load_packs
+from core.taint.tests import HAND_COMPUTED_PACKS
 from core.taint.summaries import ModuleIndex, index_module_text
 
 #: Virtual root: the indexer below never touches the filesystem.
@@ -42,7 +43,7 @@ _ROOT = Path("/raptor-synthetic-taint-root")
 
 @pytest.fixture(scope="module")
 def packs() -> PackSet:
-    return load_packs(default_pack_names())
+    return load_packs(HAND_COMPUTED_PACKS)
 
 
 def _mem_indexer(texts: dict[str, str]):

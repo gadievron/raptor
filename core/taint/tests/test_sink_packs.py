@@ -160,3 +160,102 @@ def test_execute_storage_claim_is_disjoint_from_the_sqli_claim(
     for sink in sqli:
         assert sink.args == (0,)
         assert sink.sink_class == "sql-injection"
+
+
+# ── secrets-flow ─────────────────────────────────────────────────────
+
+
+def test_secrets_pack_ships_as_pure_data(seed_packs: PackSet):
+    assert "python/secrets-flow" in default_pack_names("python")
+    vocab = seed_packs.taint_class_vocabulary()
+    assert {"secret", "secret-exposure"} <= vocab
+
+
+def test_env_secret_reaches_the_logging_sink(specs: SpecIndex):
+    """End-to-end through the unchanged extractor: a credential read
+    seeds the secret class and the printf-style logging argument
+    (position 1, not just the message) fires the sink."""
+    src = """
+import os
+import logging
+
+def f():
+    token = os.environ.get("API_TOKEN")
+    logging.info("using token %s", token)
+"""
+    s = summarize(src, specs, "f")
+    hits = [ev for ev in s.sink_events if ev.match == "logging.info"]
+    assert [ev.sink_class for ev in hits] == ["secret-exposure"]
+    assert hits[0].cwe == "CWE-532"
+    origins = {f.origin for ev in hits for f in ev.flows}
+    assert origins == {"source:call_return:os.environ.get"}
+
+
+def test_logger_instance_spelling_fires_heuristically(specs: SpecIndex):
+    """logger.debug has no import binding — the method_name entry
+    gated on the receiver named logger is what catches it."""
+    src = """
+import logging
+
+logger = logging.getLogger(__name__)
+
+def f(secret):
+    logger.debug("key=%s", secret)
+"""
+    s = summarize(src, specs, "f")
+    hits = [ev for ev in s.sink_events if ev.match == "debug"]
+    assert [ev.sink_class for ev in hits] == ["secret-exposure"]
+    assert {f.origin for ev in hits for f in ev.flows} == {"param:0"}
+
+
+def test_warning_tier_secrets_sinks_declare_heuristic_confidence(
+    seed_packs: PackSet,
+):
+    """print and Exception fire on ubiquitous calls — the entries must
+    carry the weaker confidence so consumers can weigh them."""
+    pack = pack_named(seed_packs, "secrets-flow")
+    by_match = {s.match: s for s in pack.sinks}
+    assert by_match["print"].confidence == "heuristic"
+    assert by_match["Exception"].confidence == "heuristic"
+    assert by_match["logging.info"].confidence == "exact"
+
+
+def test_argv_claim_carries_no_shell_suppression(seed_packs: PackSet):
+    """Both subprocess.run claims ship: the command-injection entry is
+    suppressed by a literal shell=False, the argv-visibility entry is
+    not — shell mode changes interpretation, not process-table
+    visibility."""
+    runs = {
+        s.sink_class: s for s in seed_packs.sinks
+        if s.match == "subprocess.run"
+    }
+    assert set(runs) == {"command-injection", "secret-exposure"}
+    assert ("shell", "False") in runs["command-injection"].unless_kwargs
+    assert runs["secret-exposure"].unless_kwargs == ()
+    assert runs["secret-exposure"].cwe == "CWE-214"
+
+
+def test_redaction_sanitizers_are_tag_only(seed_packs: PackSet):
+    """Redaction completeness is a call-site property — the pack may
+    record the hop but never kill the flow."""
+    pack = pack_named(seed_packs, "secrets-flow")
+    assert pack.sanitizers
+    for sanitizer in pack.sanitizers:
+        assert sanitizer.semantics == "tag"
+        assert sanitizer.sink_classes == ("secret-exposure",)
+
+
+def test_secrets_rows_emit_or_refuse_accountably(seed_packs: PackSet):
+    """Dotted secrets rows emit models-as-data rows; the method_name
+    logger entries land in the counted refusals with the per-kind
+    reason."""
+    report = emissibility_report(seed_packs, language="python")
+    reasons = {r.row: r.reason for r in report.rejected}
+    assert "method_name" in reasons["sink:method_name:info"]
+    assert "method_name" in reasons["sink:method_name:debug"]
+    emitted_ok = {
+        "sink:dotted_callee:logging.info",
+        "sink:dotted_callee:urllib.parse.urlencode",
+        "source:call_return:os.environ.get",
+    }
+    assert not (emitted_ok & set(reasons))

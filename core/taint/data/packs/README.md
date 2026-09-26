@@ -50,3 +50,7 @@ consumes the label; the label itself is free-form lowercase).
   (Django ORM save/filter, DB-API execute-parameters/fetch, redis
   set/get, pickle dumps/loads) plus the pickle.loads
   deserialization sink.
+* `secrets-flow` — credential sources (getpass, env reads, keyring,
+  boto3 credentials) and secret-exposure sinks (logging, print,
+  query-string encoding, exception messages, subprocess argv);
+  tag-only redaction sanitizers.
