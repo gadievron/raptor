@@ -196,6 +196,9 @@ def _run_understand_prepass_unsafe(
         build_prompt=lambda run_dir: _build_understand_prompt(target, run_dir),
         block_cc_dispatch=block_cc_dispatch,
         claude_bin=claude_bin,
+        # Child phase of the agentic run: thread its project pin so
+        # the understand run lands in the same project.
+        parent_run_dir=agentic_out_dir,
         stage=_stage,
         validate_outputs=_check_outputs,
     )
@@ -404,6 +407,9 @@ def _run_validate_postpass_unsafe(
         block_cc_dispatch=block_cc_dispatch,
         claude_bin=claude_bin,
         context_dirs=(agentic_out_dir,),
+        # Child phase of the agentic run: thread its project pin so
+        # the validate run lands in the same project.
+        parent_run_dir=agentic_out_dir,
         preflight=_preflight,
         stage=_stage,
         # Same outcome contract as the understand pre-pass's

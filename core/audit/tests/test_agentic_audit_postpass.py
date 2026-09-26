@@ -186,7 +186,8 @@ def _postpass_env(tmp_path, monkeypatch):
     audit_dir = tmp_path / "audit_run"
     audit_dir.mkdir()
     monkeypatch.setattr(
-        skill_dispatch, "start_lifecycle", lambda cmd, target: audit_dir,
+        skill_dispatch, "start_lifecycle",
+        lambda cmd, target, parent_run_dir=None: audit_dir,
     )
     fails: list = []
     monkeypatch.setattr(
@@ -282,7 +283,8 @@ class TestRunAuditPostpass:
     def test_lifecycle_start_failure_skips(self, tmp_path, monkeypatch):
         from core.orchestration import skill_dispatch
         monkeypatch.setattr(
-            skill_dispatch, "start_lifecycle", lambda cmd, target: None,
+            skill_dispatch, "start_lifecycle",
+            lambda cmd, target, parent_run_dir=None: None,
         )
         phase = run_audit_postpass(_args(), tmp_path, tmp_path)
         assert phase["completed"] is False

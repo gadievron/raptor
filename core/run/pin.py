@@ -437,6 +437,41 @@ def legacy_probe_allowed(pin: RunPin) -> bool:
     return not pin.authoritative and pin.source == "containment"
 
 
+def resolve_witnessed_run_pin(
+        out_dir: str | os.PathLike[str]) -> tuple[RunPin, bool]:
+    """:func:`resolve_run_pin` cross-checked against the session
+    ledger's out-of-grant pin witness — the read half of
+    :func:`bootstrap_process_pin`, reusable without the
+    process-override side effect.
+
+    The marker the pin comes from is CHILD-WRITABLE (the run dir root
+    is the sandbox write grant), so a witness that DISAGREES wins
+    outright — the marker was rewritten under us. Returns
+    ``(pin, witnessed)``: ``witnessed`` is False when no ledger record
+    exists (pre-witness runs, sessionless contexts) so callers can
+    withhold freeze-cache sealing from an unwitnessed marker.
+    """
+    pin = resolve_run_pin(out_dir)
+    witnessed_ok = False
+    try:
+        from core.project.sessions import ledger_pin_witness
+        found, witnessed, wit_source = ledger_pin_witness(
+            pin.run_dir if pin.run_dir is not None else out_dir)
+        if found:
+            if witnessed != pin.project:
+                logger.warning(
+                    "pin: run marker for %s resolves %r but the session "
+                    "ledger witnessed %r at start; using the witness "
+                    "(the marker may have been tampered with)",
+                    out_dir, pin.project, witnessed)
+                pin = RunPin(witnessed, wit_source or "session",
+                             pin.run_dir, True, True)
+            witnessed_ok = True
+    except Exception:  # noqa: BLE001 — witness is best-effort
+        logger.debug("pin: witness check failed", exc_info=True)
+    return pin, witnessed_ok
+
+
 def bootstrap_process_pin(out_dir: str | os.PathLike[str] | None) -> None:
     """Child-process pin bootstrap: a run's
     child process (scan/codeql/analysis workers spawned with an
@@ -479,32 +514,15 @@ def bootstrap_process_pin(out_dir: str | os.PathLike[str] | None) -> None:
         return
     if not pin.authoritative:
         return
-    # The marker the pin came from is CHILD-WRITABLE (the run dir root
-    # is the sandbox write grant): consult the session ledger's
-    # out-of-grant pin witness before adopting it as this process's
-    # project override. A witness that DISAGREES wins outright — the
-    # marker was rewritten under us; a witness that agrees makes the
-    # adoption sealable. No witness (pre-witness runs, sessionless
-    # contexts) keeps the adoption for compatibility but never SEALS
-    # it into the freeze cache — an unwitnessed marker must stay
+    # Re-resolve through the ledger-witness cross-check (see
+    # resolve_witnessed_run_pin): a witness that DISAGREES wins
+    # outright; a witness that agrees makes the adoption sealable. No
+    # witness keeps the adoption for compatibility but never SEALS it
+    # into the freeze cache — an unwitnessed marker must stay
     # re-verifiable, not laundered into trusted frozen state.
-    witnessed_ok = False
-    try:
-        from core.project.sessions import ledger_pin_witness
-        found, witnessed, wit_source = ledger_pin_witness(
-            pin.run_dir if pin.run_dir is not None else out_dir)
-        if found:
-            if witnessed != pin.project:
-                logger.warning(
-                    "pin: bootstrap for %s — run marker resolves %r but "
-                    "the session ledger witnessed %r at start; using the "
-                    "witness (the marker may have been tampered with)",
-                    out_dir, pin.project, witnessed)
-                pin = RunPin(witnessed, wit_source or "session",
-                             pin.run_dir, True, True)
-            witnessed_ok = True
-    except Exception:  # noqa: BLE001 — witness is best-effort
-        logger.debug("pin: bootstrap witness check failed", exc_info=True)
+    pin, witnessed_ok = resolve_witnessed_run_pin(out_dir)
+    if not pin.authoritative:
+        return
     set_process_project(pin.project if pin.project is not None
                         else ARGV_NONE)
     # Seal the resolved pin in the process freeze cache: consumers in

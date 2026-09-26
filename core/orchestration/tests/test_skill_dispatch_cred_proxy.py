@@ -239,7 +239,7 @@ class TestRunSkillDispatchProxyMode:
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         monkeypatch.setattr(sd, "start_lifecycle",
-                            lambda _c, _t: run_dir)
+                            lambda _c, _t, parent_run_dir=None: run_dir)
         failures: list = []
         monkeypatch.setattr(
             sd, "fail_lifecycle",

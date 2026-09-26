@@ -451,11 +451,28 @@ class StageError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def start_lifecycle(command: str, target: Path) -> Path | None:
+def start_lifecycle(command: str, target: Path,
+                    parent_run_dir: Path | None = None) -> Path | None:
     """Start a new lifecycle-managed run dir.
 
     Returns the OUTPUT_DIR path on success, or None if the helper failed
     or its output couldn't be parsed.
+
+    ``parent_run_dir`` names the lifecycle run dir of the PARENT phase
+    (the /audit or /agentic run this dispatch is a child pass of). The
+    child run must land in the parent RUN's pinned project: the
+    process-scoped ``--project`` override threads as before, but
+    without one the parent run's own pin (freeze-cache first, session-
+    ledger witness checked) is threaded instead of letting the child
+    re-resolve ambiently — a mid-run project switch (another session
+    bumping the machine-wide last-activated default) otherwise
+    re-points the child at a DIFFERENT project, whose target-match
+    gate refuses the start ("target ... is outside project ...") or,
+    on a matching target, silently splits one command's artifacts
+    across two projects. Only AUTHORITATIVE parent pins thread (a real
+    ``project`` key, including the explicit-none pin); the legacy
+    containment fallback authorizes reads only and must not become an
+    argv pin.
 
     The helpers run with `RaptorConfig.get_safe_env()` (strict allowlist)
     rather than the inherited environment. When the pipeline runs against
@@ -478,10 +495,36 @@ def start_lifecycle(command: str, target: Path) -> Path | None:
     try:
         from core.run.pin import ARGV_NONE, get_process_project
         pinned = get_process_project()
+        if pinned is None and parent_run_dir is not None:
+            from core.run.pin import resolve_witnessed_run_pin
+            pin, witnessed = resolve_witnessed_run_pin(parent_run_dir)
+            if pin.authoritative:
+                if not witnessed:
+                    # The pin still threads — the sessionless/detached
+                    # orchestrator (no env credential, no claude-shaped
+                    # ancestor) has no ledger record by construction,
+                    # and a witnessed-only gate would strand exactly
+                    # that child back on the ambient layers. But the
+                    # unwitnessed marker is child-writable, so say so
+                    # loudly. pin.project is registry-vetted here
+                    # (resolution drops pins naming unregistered
+                    # projects, and registered names are
+                    # charset-validated at creation).
+                    logger.warning(
+                        "lifecycle start %s: threading parent run pin "
+                        "%r from %s with NO session-ledger witness "
+                        "(sessionless/detached parent) — the pin comes "
+                        "from the child-writable run marker only",
+                        command, pin.project, parent_run_dir)
+                pinned = pin.project if pin.project is not None \
+                    else ARGV_NONE
         if pinned is not None:
             argv += ["--project", pinned if pinned else ARGV_NONE]
     except Exception:  # noqa: BLE001 — child falls back to its own layers
-        pass
+        logger.debug(
+            "lifecycle start %s: parent pin threading failed — the "
+            "child resolves its project from its own layers", command,
+            exc_info=True)
     try:
         proc = subprocess.run(
             argv,
@@ -680,6 +723,7 @@ def run_skill_dispatch(
     preflight: Callable[[], str | None] | None = None,
     stage: Callable[[Path], None] | None = None,
     validate_outputs: Callable[[Path], str | None] | None = None,
+    parent_run_dir: Path | None = None,
 ) -> SkillDispatchResult:
     """Run one lifecycle-managed, sandboxed ``claude -p`` skill pass.
 
@@ -703,6 +747,11 @@ def run_skill_dispatch(
     read (e.g. the parent pipeline's out_dir): they are appended to the
     sandbox ``add_dirs`` and ``readable_paths``. ``target`` and the run
     dir are always included.
+
+    ``parent_run_dir`` is the parent phase's lifecycle run dir: its
+    project pin is threaded into this pass's lifecycle start so the
+    child run lands in the SAME project as the run that spawned it
+    (see :func:`start_lifecycle`).
 
     May raise: unexpected exceptions propagate AFTER the lifecycle is
     marked failed — callers keep their own never-raise wrapper so the
@@ -752,7 +801,8 @@ def run_skill_dispatch(
 
     t0 = time.monotonic()
 
-    run_dir = start_lifecycle(command, target)
+    run_dir = start_lifecycle(command, target,
+                              parent_run_dir=parent_run_dir)
     if run_dir is None:
         return SkillDispatchResult(ran=False,
                                    skipped_reason="lifecycle start failed",

@@ -781,3 +781,142 @@ class ChildTailPlantTests(unittest.TestCase):
             mode = _stat.S_IMODE(
                 (run_dir / "dispatch-child-tail.log").stat().st_mode)
             self.assertEqual(mode, 0o600)
+
+
+class ParentPinThreadingTests(unittest.TestCase):
+    """start_lifecycle threads the PARENT RUN's project pin.
+
+    A child pass's lifecycle stub re-resolves the project ambiently
+    unless the argv carries the pin; the parent run's own pin is the
+    authority for a child phase — the machine-wide last-activated
+    default can be re-pointed mid-run by another session.
+    """
+
+    def _start(self, parent_run_dir: Path | None = None,
+               process_project: str | None = None,
+               containment: str | None = None,
+               witness: tuple[bool, str | None, str | None] | None = None,
+               ) -> list:
+        from contextlib import ExitStack
+
+        from core.orchestration.skill_dispatch import start_lifecycle
+        captured: dict = {}
+
+        def dispatcher(cmd, *args, **kwargs):
+            captured["argv"] = list(cmd)
+            return _ok(stdout="OUTPUT_DIR=/nonexistent-run\n")
+
+        patches = [
+            patch("core.orchestration.skill_dispatch.subprocess.run",
+                  side_effect=dispatcher),
+            # Hermetic pin resolution: the registry probe answers yes
+            # for the marker's project, containment inference answers
+            # what the test declares — nothing by default (the host
+            # registry must not leak in).
+            patch("core.run.pin._project_exists", lambda name: True),
+            patch("core.run.pin._containment_project",
+                  lambda d: containment),
+            patch("core.run.pin._process_project", process_project),
+            patch("core.run.pin._process_project_set",
+                  process_project is not None),
+        ]
+        if witness is not None:
+            # Pin the ledger witness outcome (found, project, source)
+            # so the host's live session ledger cannot leak in.
+            patches.append(
+                patch("core.project.sessions.ledger_pin_witness",
+                      lambda run_dir, pid=None: witness))
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            start_lifecycle("validate", Path("/target"),
+                            parent_run_dir=parent_run_dir)
+        return captured["argv"]
+
+    def _parent(self, tmp, meta_extra):
+        import json as _json
+        parent = Path(tmp) / "audit-run"
+        parent.mkdir()
+        meta = {"version": 2, "command": "audit", "status": "running",
+                "timestamp": "2026-01-01T00:00:00+00:00"}
+        meta.update(meta_extra)
+        (parent / ".raptor-run.json").write_text(_json.dumps(meta))
+        return parent
+
+    def test_parent_pin_is_threaded(self):
+        with TemporaryDirectory() as tmp:
+            parent = self._parent(tmp, {"project": "p1",
+                                        "project_source": "argv"})
+            argv = self._start(parent_run_dir=parent)
+            self.assertIn("--project", argv)
+            self.assertEqual(argv[argv.index("--project") + 1], "p1")
+
+    def test_projectless_parent_threads_explicit_none(self):
+        # Bound-to-none is authoritative: the child must not fall
+        # through to the ambient layers.
+        with TemporaryDirectory() as tmp:
+            parent = self._parent(tmp, {"project": None,
+                                        "project_source": "argv"})
+            argv = self._start(parent_run_dir=parent)
+            self.assertIn("--project", argv)
+            self.assertEqual(argv[argv.index("--project") + 1], "-")
+
+    def test_process_override_wins_over_parent_pin(self):
+        with TemporaryDirectory() as tmp:
+            parent = self._parent(tmp, {"project": "p1",
+                                        "project_source": "argv"})
+            argv = self._start(parent_run_dir=parent,
+                               process_project="p2")
+            self.assertEqual(argv[argv.index("--project") + 1], "p2")
+
+    def test_legacy_parent_threads_nothing(self):
+        # Pre-series marker (no ``project`` key): containment
+        # inference authorizes reads only — never an argv pin.
+        with TemporaryDirectory() as tmp:
+            parent = self._parent(tmp, {})
+            argv = self._start(parent_run_dir=parent)
+            self.assertNotIn("--project", argv)
+
+    def test_no_parent_run_dir_threads_nothing(self):
+        argv = self._start(parent_run_dir=None)
+        self.assertNotIn("--project", argv)
+
+    def test_named_containment_never_threads(self) -> None:
+        # Pre-series marker (no ``project`` key) sitting inside a
+        # registered project's output dir: containment inference
+        # resolves a NAME, but it authorizes reads only — the name
+        # must still never become an argv pin.
+        with TemporaryDirectory() as tmp:
+            parent = self._parent(tmp, {})
+            argv = self._start(parent_run_dir=parent,
+                               containment="legacyproj")
+            self.assertNotIn("--project", argv)
+
+    def test_unwitnessed_parent_pin_warns_and_still_threads(self) -> None:
+        # No session-ledger witness (the sessionless/detached parent):
+        # the pin threads exactly as before — gating on the witness
+        # would strand that parent back on the ambient layers — but a
+        # loud warning marks the marker-only provenance.
+        with TemporaryDirectory() as tmp:
+            parent = self._parent(tmp, {"project": "p1",
+                                        "project_source": "argv"})
+            with self.assertLogs("core.orchestration.skill_dispatch",
+                                 level="WARNING") as logs:
+                argv = self._start(parent_run_dir=parent,
+                                   witness=(False, None, None))
+            self.assertIn("--project", argv)
+            self.assertEqual(argv[argv.index("--project") + 1], "p1")
+            self.assertTrue(any("NO session-ledger witness" in line
+                                for line in logs.output))
+
+    def test_witnessed_parent_pin_threads_without_warning(self) -> None:
+        # An agreeing witness is the verified path: no warning.
+        with TemporaryDirectory() as tmp:
+            parent = self._parent(tmp, {"project": "p1",
+                                        "project_source": "argv"})
+            with self.assertNoLogs("core.orchestration.skill_dispatch",
+                                   level="WARNING"):
+                argv = self._start(parent_run_dir=parent,
+                                   witness=(True, "p1", "argv"))
+            self.assertIn("--project", argv)
+            self.assertEqual(argv[argv.index("--project") + 1], "p1")

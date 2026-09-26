@@ -455,6 +455,12 @@ def _dispatch_validate_unsafe(
             build_prompt=_prompt,
             block_cc_dispatch=check_repo_claude_trust(str(target_path)),
             context_dirs=(audit_out_dir,),
+            # The post-pass is a child phase of the audit run: its
+            # lifecycle start threads the audit run's project pin so
+            # the validate run lands in the same project (a mid-run
+            # switch of the machine-wide default otherwise re-points
+            # or refuses the child start).
+            parent_run_dir=audit_out_dir,
             stage=_stage,
             # Success = the pipeline's actual outcome, never the CC
             # child's exit status alone: a child whose in-run pipeline
