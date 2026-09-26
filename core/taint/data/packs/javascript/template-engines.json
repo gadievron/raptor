@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "language": "javascript",
+  "framework": "templates",
+  "pack": "template-engines",
+  "sinks": [
+    {
+      "kind": "dotted_callee",
+      "match": "ejs.render",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "ejs.render(template, data) evaluates <% %> blocks in the template string as JavaScript; an attacker-chosen template is server-side code execution."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "ejs.compile",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "ejs.compile(template) compiles the template string into a function whose invocation runs its <% %> blocks."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "pug.render",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "pug.render(source, options) evaluates JavaScript expressions and unbuffered code in the source string; attacker templates execute."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "pug.compile",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "pug.compile(source) compiles the source string; rendering the compiled template runs its embedded JavaScript."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "handlebars.compile",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "Handlebars.compile(input) compiles the template string; attacker templates reach helpers/partials and known prototype-chain escape gadgets."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "mustache.render",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "mustache.render(template, view) is logic-less, so the injection yields data exfiltration from the view rather than code execution — still an attacker-controlled template."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "nunjucks.renderString",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "nunjucks.renderString(str, context) renders the string as a template with expression evaluation; classic SSTI-to-RCE surface."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "lodash.template",
+      "args": [0],
+      "sink_class": "template-injection",
+      "cwe": "CWE-1336",
+      "provenance": "framework_catalog",
+      "rationale": "_.template(string) compiles interpolate/evaluate delimiters into a Function body; an attacker template is direct code execution."
+    }
+  ]
+}

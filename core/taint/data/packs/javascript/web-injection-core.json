@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "language": "javascript",
+  "framework": "node",
+  "pack": "web-injection-core",
+  "sinks": [
+    {
+      "kind": "dotted_callee",
+      "match": "child_process.exec",
+      "args": [0],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "provenance": "framework_catalog",
+      "rationale": "child_process.exec(command) runs the command string through /bin/sh (cmd.exe on Windows); any attacker text in it is shell syntax."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "child_process.execSync",
+      "args": [0],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "provenance": "framework_catalog",
+      "rationale": "Synchronous form of child_process.exec; the command string reaches the same shell interpretation path."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "child_process.spawn",
+      "args": [0],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "provenance": "framework_catalog",
+      "rationale": "child_process.spawn(command, args) executes the named program directly; an attacker-chosen command is arbitrary program execution even without shell:true, and with shell:true the string is shell syntax."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "child_process.spawnSync",
+      "args": [0],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "provenance": "framework_catalog",
+      "rationale": "Synchronous form of child_process.spawn; same command-selection exposure."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "child_process.execFile",
+      "args": [0],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "provenance": "framework_catalog",
+      "rationale": "child_process.execFile(file, args) executes the named file without a shell by default; an attacker-chosen file path is still arbitrary program execution."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "child_process.execFileSync",
+      "args": [0],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "provenance": "framework_catalog",
+      "rationale": "Synchronous form of child_process.execFile; same program-selection exposure."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "child_process.fork",
+      "args": [0],
+      "sink_class": "command-injection",
+      "cwe": "CWE-78",
+      "provenance": "framework_catalog",
+      "rationale": "child_process.fork(modulePath) spawns a new Node process running the named module; an attacker-chosen path executes arbitrary reachable JavaScript."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "eval",
+      "args": [0],
+      "sink_class": "code-injection",
+      "cwe": "CWE-95",
+      "provenance": "framework_catalog",
+      "rationale": "Global eval(x) evaluates its argument as JavaScript in the caller's scope; attacker text is attacker code."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "Function",
+      "args": [0, 1, 2, 3],
+      "sink_class": "code-injection",
+      "cwe": "CWE-95",
+      "provenance": "framework_catalog",
+      "rationale": "new Function(...args, body) compiles every argument into a function (leading arguments are parameter names, the last is the body); a tainted value in any declared position is compiled as code. Real call sites rarely exceed four arguments."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "vm.runInThisContext",
+      "args": [0],
+      "sink_class": "code-injection",
+      "cwe": "CWE-95",
+      "provenance": "framework_catalog",
+      "rationale": "vm.runInThisContext(code) compiles and runs the code string in the current global context; the vm module is not a security boundary."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "vm.runInNewContext",
+      "args": [0],
+      "sink_class": "code-injection",
+      "cwe": "CWE-95",
+      "provenance": "framework_catalog",
+      "rationale": "vm.runInNewContext(code) compiles and runs the code string in a fresh context that can still reach the host process; attacker code executes."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "vm.runInContext",
+      "args": [0],
+      "sink_class": "code-injection",
+      "cwe": "CWE-95",
+      "provenance": "framework_catalog",
+      "rationale": "vm.runInContext(code, context) compiles and runs the code string inside the given contextified object; same execution exposure as the other vm.run* forms."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "vm.Script",
+      "args": [0],
+      "sink_class": "code-injection",
+      "cwe": "CWE-95",
+      "provenance": "framework_catalog",
+      "rationale": "new vm.Script(code) compiles the code string; every runIn* method of the resulting script executes it."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "vm.compileFunction",
+      "args": [0],
+      "sink_class": "code-injection",
+      "cwe": "CWE-95",
+      "provenance": "framework_catalog",
+      "rationale": "vm.compileFunction(code, params) compiles the code string into a callable function body."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "fs.readFile",
+      "args": [0],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "fs.readFile(path, ...) opens whatever path it is given; attacker path segments read files outside the intended directory."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "fs.readFileSync",
+      "args": [0],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "Synchronous form of fs.readFile; same path exposure."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "fs.writeFile",
+      "args": [0],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "fs.writeFile(file, data, ...) creates or truncates whatever path it is given; attacker path segments write outside the intended directory."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "fs.writeFileSync",
+      "args": [0],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "Synchronous form of fs.writeFile; same path exposure."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "fs.createReadStream",
+      "args": [0],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "fs.createReadStream(path) opens the named path for streaming reads — the common Express file-serving shape."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "fs.createWriteStream",
+      "args": [0],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "fs.createWriteStream(path) opens the named path for streaming writes; attacker path segments plant files outside the intended directory."
+    }
+  ],
+  "sanitizers": [
+    {
+      "kind": "dotted_callee",
+      "match": "path.basename",
+      "semantics": "tag",
+      "sink_classes": ["path-traversal"],
+      "provenance": "framework_catalog",
+      "rationale": "path.basename strips directory components, the common containment idiom — but its return can still be '..' (path.basename('/a/..') === '..') and on POSIX it leaves backslash sequences intact, so it tags the hop rather than killing the class."
+    }
+  ],
+  "propagators": [
+    {
+      "kind": "dotted_callee",
+      "match": "path.join",
+      "flow": [{"from": "Argument[*]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "path.join(...paths) concatenates every argument into the returned path; taint in any segment survives."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "path.resolve",
+      "flow": [{"from": "Argument[*]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "path.resolve(...paths) folds every argument into the returned absolute path; an attacker segment can still escape via absolute-path override or dot-dot."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "path.normalize",
+      "flow": [{"from": "Argument[0]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "path.normalize(path) rewrites separators and dot segments but returns the same attacker-chosen location."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "decodeURIComponent",
+      "flow": [{"from": "Argument[0]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "Global decodeURIComponent returns a decoded copy of its argument — decoding often RE-ARMS encoded attack bytes."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "decodeURI",
+      "flow": [{"from": "Argument[0]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "Global decodeURI returns a decoded copy of its argument, same re-arming behaviour as decodeURIComponent."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "querystring.unescape",
+      "flow": [{"from": "Argument[0]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "querystring.unescape(str) percent-decodes its argument (legacy but still shipped); decoded attacker bytes flow onward."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "Buffer.from",
+      "flow": [{"from": "Argument[0]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "Buffer.from(input) wraps its argument's bytes in a Buffer; the content is unchanged attacker data."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "JSON.parse",
+      "flow": [{"from": "Argument[0]", "to": "ReturnValue"}],
+      "provenance": "framework_catalog",
+      "rationale": "JSON.parse(text) returns structured data whose string leaves are substrings of the attacker input."
+    }
+  ]
+}

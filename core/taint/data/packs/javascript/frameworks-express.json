@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "language": "javascript",
+  "framework": "express",
+  "pack": "frameworks-express",
+  "sources": [
+    {
+      "kind": "module_attribute",
+      "match": "express.Request.params",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "req.params carries the decoded route parameters of the matched route — attacker-chosen URL path segments. The express.Request coordinate binds via type annotations; untyped handlers are covered by the stock native model."
+    },
+    {
+      "kind": "module_attribute",
+      "match": "express.Request.query",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "req.query is the parsed query string — attacker-chosen keys and values, including nested objects under the extended parser."
+    },
+    {
+      "kind": "module_attribute",
+      "match": "express.Request.body",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "req.body is the parsed request body (express.json / express.urlencoded) — wholly attacker-chosen."
+    },
+    {
+      "kind": "module_attribute",
+      "match": "express.Request.cookies",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "req.cookies (cookie-parser middleware) exposes unsigned cookie values — client-chosen bytes."
+    },
+    {
+      "kind": "module_attribute",
+      "match": "express.Request.headers",
+      "taint_classes": ["user-input"],
+      "provenance": "framework_catalog",
+      "rationale": "req.headers (http.IncomingMessage) exposes raw request headers — client-chosen values behind common idioms like req.headers.referer."
+    }
+  ],
+  "sinks": [
+    {
+      "kind": "dotted_callee",
+      "match": "express.Response.redirect",
+      "args": [0, 1],
+      "sink_class": "url-redirection",
+      "cwe": "CWE-601",
+      "provenance": "framework_catalog",
+      "rationale": "res.redirect([status,] path) sets the Location header from its path argument — index 0 in the one-argument form, index 1 after a status code; an attacker URL is an open redirect."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "express.Response.location",
+      "args": [0],
+      "sink_class": "url-redirection",
+      "cwe": "CWE-601",
+      "provenance": "framework_catalog",
+      "rationale": "res.location(path) sets the Location header directly; same open-redirect exposure as res.redirect without the implicit status."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "express.Response.sendFile",
+      "args": [0],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "res.sendFile(path) transfers the file at the given path; without the root option pinning a directory, attacker path segments serve files outside the intended tree."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "express.Response.download",
+      "args": [0],
+      "sink_class": "path-traversal",
+      "cwe": "CWE-22",
+      "provenance": "framework_catalog",
+      "rationale": "res.download(path, ...) transfers the file at the given path as an attachment; same traversal exposure as res.sendFile."
+    },
+    {
+      "kind": "dotted_callee",
+      "match": "express.Response.send",
+      "args": [0],
+      "sink_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "framework_catalog",
+      "rationale": "res.send(body) with a string body responds text/html by default — reflected attacker text executes as markup."
+    }
+  ]
+}
