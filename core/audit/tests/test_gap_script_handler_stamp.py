@@ -19,6 +19,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from core.audit.gaps import compute_gaps
 
 _PHP_HANDLER = """\
@@ -160,6 +162,9 @@ class TestStampConsumption:
     def test_builder_stamped_checklist_round_trips(self, tmp_path):
         """End to end: build_inventory → JSON round-trip →
         compute_gaps selects the handler span from the stamp."""
+        # interstitial:10-12 is the tree-sitter extractor's span
+        # identity; the regex fallback draws different boundaries.
+        pytest.importorskip("tree_sitter_php")
         from core.inventory.builder import build_inventory
         target = _write_tree(tmp_path)
         inv = build_inventory(str(target), str(tmp_path / "out"))

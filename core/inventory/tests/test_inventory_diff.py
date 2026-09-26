@@ -10,6 +10,8 @@ file.
 
 import json
 
+import pytest
+
 from core.inventory.builder import build_inventory
 from core.inventory.diff import function_level_diff
 
@@ -122,6 +124,9 @@ def test_stamped_handler_spans_are_hashed_and_diffed(tmp_path):
     # script_handler: true) are reviewable units — the builder hashes
     # them and the function-level diff tracks their changes; wiring
     # spans and pre-stamp interstitials keep the old skip.
+    # The asserted span identities are the tree-sitter extractor's;
+    # the regex fallback draws different interstitial boundaries.
+    pytest.importorskip("tree_sitter_php")
     src = tmp_path / "src"
     src.mkdir()
     (src / "page.php").write_text(_PHP_V1)
