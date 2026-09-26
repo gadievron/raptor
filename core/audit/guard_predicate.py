@@ -443,6 +443,27 @@ def _count(reasons: dict[str, int], key: str, by: int = 1) -> None:
     reasons[key] = reasons.get(key, 0) + by
 
 
+def collect_predicate_sites(
+    source_texts: dict[str, str],
+) -> list[_PredicateSite]:
+    """Every predicate site of both legs — the census's own input,
+    exported so the hypothesis-adjudication path can bind a claim to
+    a site/group without duplicating the extraction."""
+    from .consistency_dimensions import _function_spans
+
+    spans = _function_spans(source_texts)
+    if not spans:
+        return []
+    return loop_guard_sites(spans) + _deref_guard_sites(spans)
+
+
+def predicate_group_key(site: _PredicateSite) -> tuple[str, ...]:
+    """The peer-group key a site votes under (leg-specific)."""
+    if site.leg == "loop":
+        return ("loop", site.base, site.index, site.bound_expr)
+    return ("deref", site.field_name, site.relop, site.bound_expr)
+
+
 class _SignednessCache:
     """Per-(function, var) declared-signedness memo.  The lookup is
     scoped to the ENCLOSING FUNCTION's span (a same-named local in a
@@ -503,13 +524,32 @@ def detect_guard_predicate_deviations(
     cost-rail pin reads it), ``caps_hit`` (any bound truncated the
     census), ``inconclusive_reasons`` (enumerated, module docstring).
 
+    Vote-provenance disclosure (the hypothesis adjudicator's refute
+    leg reads these — group SIZE alone is not a vote, so a refutation
+    must be able to prove the census actually voted the claimed site):
+
+    * ``voted_sites`` — ``(file, line, leg)`` of every member of a
+      COMPLETED vote (a group the deviation cap closed mid-vote is
+      excluded — its members were only partially compared).
+    * ``group_skips`` — group key → enumerated reason for groups the
+      census saw but never voted (call-shaped bound, ops budget,
+      macro divergence below the floor, mid-run closure).
+    * ``excluded_sites`` — ``(file, line, leg)`` → reason for members
+      individually excluded from an otherwise-voted group (macro
+      divergence, seeded sampling).
+
     *seed* keys the over-cap survivor sampling; callers leave it
     ``None`` (fresh entropy per run) outside tests.
     """
     reasons: dict[str, int] = {}
+    voted_sites: set[tuple[str, int, str]] = set()
+    group_skips: dict[tuple[str, ...], str] = {}
+    excluded_sites: dict[tuple[str, int, str], str] = {}
     stats: dict[str, Any] = {
         "sites": 0, "groups": 0, "predicate_ops": 0,
         "caps_hit": False, "inconclusive_reasons": reasons,
+        "voted_sites": voted_sites, "group_skips": group_skips,
+        "excluded_sites": excluded_sites,
     }
     from .consistency_dimensions import _function_spans
 
@@ -524,11 +564,7 @@ def detect_guard_predicate_deviations(
 
     groups: dict[tuple[str, ...], list[_PredicateSite]] = {}
     for s in sites:
-        if s.leg == "loop":
-            key = ("loop", s.base, s.index, s.bound_expr)
-        else:
-            key = ("deref", s.field_name, s.relop, s.bound_expr)
-        groups.setdefault(key, []).append(s)
+        groups.setdefault(predicate_group_key(s), []).append(s)
 
     rnd = random.Random(seed if seed is not None else os.urandom(16))
     bodies = {
@@ -556,7 +592,14 @@ def detect_guard_predicate_deviations(
             # SEEDED-RANDOM survivors, never a deterministic prefix
             # (module docstring — anti-eviction).
             sampled_from = len(members)
-            members = rnd.sample(members, MAX_SITES_PER_GROUP)
+            survivors = rnd.sample(members, MAX_SITES_PER_GROUP)
+            chosen = {id(m) for m in survivors}
+            for m in members:
+                if id(m) not in chosen:
+                    excluded_sites[(m.file, m.line, m.leg)] = (
+                        REASON_CENSUS_DEGRADED
+                    )
+            members = survivors
             stats["caps_hit"] = True
         n = len(members)
         # Vote budget: operator + null-arm + wrong-var votes are one
@@ -567,6 +610,7 @@ def detect_guard_predicate_deviations(
         if ops + group_cost > MAX_PREDICATE_OPS:
             stats["caps_hit"] = True
             _count(reasons, REASON_CENSUS_DEGRADED)
+            group_skips[key] = REASON_CENSUS_DEGRADED
             continue
         ops += group_cost
         n_groups += 1
@@ -575,6 +619,7 @@ def detect_guard_predicate_deviations(
             # The bound expression is part of the group key, so a
             # call-shaped bound is a group-level property.
             _count(reasons, REASON_PREDICATE_DATA_DEPENDENT)
+            group_skips[key] = REASON_PREDICATE_DATA_DEPENDENT
             continue
 
         # Macro-token divergence excludes a member from EVERY vote:
@@ -590,17 +635,24 @@ def detect_guard_predicate_deviations(
                 reasons, REASON_MACRO_DIVERGENT,
                 len(members) - len(voters),
             )
+            for s in members:
+                if s.macro_tokens != modal_macros:
+                    excluded_sites[(s.file, s.line, s.leg)] = (
+                        REASON_MACRO_DIVERGENT
+                    )
         n = len(voters)
         if n < min_sites:
+            group_skips[key] = REASON_MACRO_DIVERGENT
             continue
 
         if voters[0].leg == "deref":
-            _vote_null_arm(voters, key, n, ratio, _emit)
+            _vote_null_arm(voters, key, n, ratio, source_texts, _emit)
         else:
             if not _vote_operator(
                 voters, key, n, ratio, reasons, signedness,
                 source_texts, sampled_from, _emit,
             ):
+                group_skips[key] = REASON_CENSUS_DEGRADED
                 break
             _vote_wrong_variable(
                 voters, key, n, ratio, sampled_from, _emit,
@@ -611,7 +663,13 @@ def detect_guard_predicate_deviations(
             )
         if len(deviations) >= MAX_DEVIATIONS:
             stats["caps_hit"] = True
+            # The cap closed the census mid-group: this group's later
+            # votes never ran, so its members are NOT recorded voted.
+            group_skips[key] = REASON_CENSUS_DEGRADED
             break
+        voted_sites.update(
+            (s.file, s.line, s.leg) for s in voters
+        )
 
     stats["groups"] = n_groups
     stats["predicate_ops"] = ops + signedness.lookups
@@ -826,6 +884,7 @@ def _vote_null_arm(
     key: tuple[str, ...],
     n: int,
     ratio: float,
+    source_texts: dict[str, str],
     emit: Any,
 ) -> None:
     """Null-arm presence vote on the deref-guard leg."""
@@ -856,6 +915,9 @@ def _vote_null_arm(
             majority_relop=s.relop,
             bound_expr=s.bound_expr,
             cwe=_KIND_CWE[KIND_MISSING_NULL_ARM],
+            deviant_guards=_dominating_guards(
+                source_texts, s.file, s.line,
+            ),
             peer_evidence=_evidence(key, s, conforming, n, 0),
         )):
             return
