@@ -162,7 +162,10 @@ def compute_drift(
     from .journal import latest_entries
 
     by_file: dict[str, list[Any]] = {}
-    for entry in latest_entries(Path(out_dir)).values():
+    # fresh=True: drift decides which prior verdicts a resume may
+    # reuse — resume decisions never read the process-local journal
+    # load cache.
+    for entry in latest_entries(Path(out_dir), fresh=True).values():
         if entry.verdict == "error" or not entry.source_hash:
             continue
         if not entry.line_start:
@@ -241,7 +244,10 @@ def journal_spend_usd(out_dir: Path) -> float:
 
     total = 0.0
     try:
-        for entry in load_entries(Path(out_dir)):
+        # fresh=True: this is spend evidence for the resume budget
+        # floor — spend accounting never reads the process-local
+        # journal cache.
+        for entry in load_entries(Path(out_dir), fresh=True):
             cost = _spend_value(entry.cost_usd)
             if cost is not None:
                 total += cost
