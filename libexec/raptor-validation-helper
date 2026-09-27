@@ -2694,24 +2694,29 @@ def _any_elf(executables):
     return any_elf(executables)
 
 
-def _env_build_on_demand(workdir, target, data, build):
+def _env_build_on_demand(workdir, target, data, build,
+                         build_command=None):
     """Delegates to the importable core (also consumed by the Python
     orchestrator's Stage E); returns {rel: (path, sha256)}."""
     from packages.exploitability_validation.env_build_stage import (
         env_build_on_demand,
     )
-    return env_build_on_demand(workdir, target, data, build, log=print)
+    return env_build_on_demand(workdir, target, data, build,
+                               build_command=build_command, log=print)
 
 
-def _run_mitigation_matrix(workdir, target, data, build):
+def _run_mitigation_matrix(workdir, target, data, build,
+                           build_command=None):
     from packages.exploitability_validation.env_build_stage import (
         mitigation_matrix_hook,
     )
-    mitigation_matrix_hook(workdir, target, data, build, log=print)
+    mitigation_matrix_hook(workdir, target, data, build,
+                           build_command=build_command, log=print)
 
 
 def _discover_and_match_binaries(workdir, target, data, build=None,
-                                 mitigation_matrix=False):
+                                 mitigation_matrix=False,
+                                 build_command=None):
     """Discover binaries and match to findings."""
 
     executables = _discover_executables(target)
@@ -2727,7 +2732,8 @@ def _discover_and_match_binaries(workdir, target, data, build=None,
         # "no executable file exists" (adversarial-review finding: an
         # executable configure script silently disabled the feature
         # on typical source trees).
-        env_built = _env_build_on_demand(workdir, target, data, build)
+        env_built = _env_build_on_demand(workdir, target, data, build,
+                                         build_command)
         if env_built:
             # rel-keyed (stems collide: bin/app vs test/app); the
             # matching map below keys by stem only for UNIQUE stems.
@@ -2832,7 +2838,8 @@ def _discover_and_match_binaries(workdir, target, data, build=None,
         print(f"  skipped: {_sft(str(fid), max_len=120)} ({_sft(str(reason), max_len=200)})")
 
     if mitigation_matrix and groups:
-        _run_mitigation_matrix(workdir, target, data, build)
+        _run_mitigation_matrix(workdir, target, data, build,
+                               build_command)
         _save_findings(workdir, data)
 
 
@@ -3236,7 +3243,7 @@ def _run_witness_execution(workdir, target, data, dynamic=None):
 
 
 def prepare_E(workdir, target=None, dynamic=None, build=None,
-              mitigation_matrix=False):
+              mitigation_matrix=False, build_command=None):
     _apply_stage_file(workdir, "D")
 
     # D/E boundary: the attack paths Stage B materialised (and C/D
@@ -3308,7 +3315,8 @@ def prepare_E(workdir, target=None, dynamic=None, build=None,
     # --- Discover binaries ---
     if target:
         _discover_and_match_binaries(workdir, target, data, build=build,
-                                     mitigation_matrix=mitigation_matrix)
+                                     mitigation_matrix=mitigation_matrix,
+                                     build_command=build_command)
     else:
         print("  No --target provided, skipping binary discovery")
 
@@ -4819,6 +4827,10 @@ def main():
     elif "--build" in args:
         build = True
     mitigation_matrix = "--mitigation-matrix" in args
+    # Per-run explicit build command (--build-command): wins over the
+    # project setting and the detector; NOT consent — the build gate
+    # above still decides whether anything builds.
+    build_command = _flag_value(args, "--build-command")
     if "--no-dynamic" in args:
         dynamic = False
     elif "--dynamic" in args:
@@ -4865,7 +4877,8 @@ def main():
         prepare_1(workdir, target, model=model)
     elif stage == "E":
         prepare_E(workdir, target, dynamic=dynamic, build=build,
-                  mitigation_matrix=mitigation_matrix)
+                  mitigation_matrix=mitigation_matrix,
+                  build_command=build_command)
     else:
         STAGES[stage](workdir, target)
 
