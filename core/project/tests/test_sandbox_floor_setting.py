@@ -204,19 +204,74 @@ class TestConsumption(SandboxFloorFixture):
         self.assertIsNone(applied)
         self.assertIsNone(_sandbox_state._project_sandbox_floor)
 
-    def test_operator_disable_skips_the_consent(self):
-        """--sandbox none / --no-sandbox is globally authoritative: a
-        floor consent is moot under it, and the banner must not claim
-        a consent the disable overrides."""
-        self._set_floor("landlock")
+    def _with_cli_disable(self, consent: str | None) -> None:
+        """Enter the CLI-disabled state directly (test-only poke; the
+        gated route is exercised in core/sandbox/tests) with cleanup."""
         _sandbox_state._cli_sandbox_disabled = True
-        try:
-            applied, out = self._apply()
-        finally:
+        _sandbox_state._cli_sandbox_disable_consent = consent
+
+        def _restore() -> None:
             _sandbox_state._cli_sandbox_disabled = False
+            _sandbox_state._cli_sandbox_disable_consent = None
+        self.addCleanup(_restore)
+
+    def test_operator_disable_names_itself_and_its_consent(self):
+        """--sandbox none / --no-sandbox is globally authoritative: a
+        floor consent is moot under it and must not be claimed — but
+        the disable itself must never be INVISIBLE at the consent
+        seam. The notice names the disable and its consent source."""
+        self._set_floor("landlock")
+        self._with_cli_disable("interactive-tty")
+        applied, out = self._apply()
         self.assertIsNone(applied)
         self.assertIsNone(_sandbox_state._project_sandbox_floor)
+        self.assertIn("sandbox DISABLED", out)
+        self.assertIn("consent: interactive-tty", out)
+        # Still no floor-consent claim: the floor banner's spelling
+        # must not appear (the disable overrides the consent).
+        self.assertNotIn("project sandbox-floor: landlock", out)
+
+    def test_operator_disable_unrecorded_consent_is_named(self):
+        """State set outside the gate (no consent stamp) is labelled
+        'unrecorded' — attribution is honest, never guessed."""
+        self._set_floor("landlock")
+        self._with_cli_disable(None)
+        applied, out = self._apply()
+        self.assertIsNone(applied)
+        self.assertIn("consent: unrecorded", out)
+
+    def test_operator_disable_banner_false_logs_instead(self):
+        """banner=False callers have machine-parsed stdout: the
+        disable notice rides the log stream, never print()."""
+        self._set_floor("landlock")
+        self._with_cli_disable("nonce")
+        with self.assertLogs("core.project.trust",
+                             level="WARNING") as logs:
+            applied, out = self._apply(banner=False)
+        self.assertIsNone(applied)
         self.assertEqual(out, "")
+        self.assertTrue(any("sandbox DISABLED" in m
+                            and "consent: nonce" in m
+                            for m in logs.output), logs.output)
+
+    def test_operator_disable_leaves_trust_gate_fail_closed(self):
+        """The disable notice is presentation only: underneath it the
+        repo trust gate keeps its fail-closed posture — a target the
+        checker cannot examine is still refused, disable or no
+        disable."""
+        from core.security.cc_trust import check_repo_claude_trust
+        self._set_floor("landlock")
+        self._with_cli_disable("interactive-tty")
+        applied, out = self._apply()
+        self.assertIsNone(applied)
+        self.assertIn("sandbox DISABLED", out)
+        missing = str(Path(self._tmp.name) / "vanished-target")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            refused = check_repo_claude_trust(
+                missing, trust_override=False)
+        self.assertTrue(refused)
+        self.assertIn("treating as dangerous", buf.getvalue())
 
     def test_darwin_consumption_fails_closed(self):
         """A stored Linux tier consumed on macOS is IGNORED loudly,

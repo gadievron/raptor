@@ -553,8 +553,26 @@ def apply_project_sandbox_floor(
         if _sandbox_state._cli_sandbox_disabled:
             # Operator-explicit sandbox-off (--sandbox none /
             # --no-sandbox) is globally authoritative — a floor
-            # consent is moot, and printing its banner would claim a
-            # consent the disable overrides. Skip quietly.
+            # consent is moot, and printing the floor banner would
+            # claim a consent the disable overrides. But a bare run
+            # must never be INVISIBLE at the consent seam either:
+            # name the disable and the consent source that admitted
+            # it (the disable gate stamps it at acceptance;
+            # "unrecorded" marks state set outside the gate).
+            consent = (_sandbox_state._cli_sandbox_disable_consent
+                       or "unrecorded")
+            notice = (
+                f"[*] sandbox DISABLED for this run (--sandbox none / "
+                f"--no-sandbox; consent: {consent}) — project "
+                f"sandbox-floor not consulted"
+            )
+            if banner:
+                print(notice)
+            else:
+                # banner=False callers have machine-parsed stdout
+                # (libexec dispatch helpers) — keep the disable
+                # visible on the log stream instead.
+                logger.warning("%s", notice)
             return None
     except Exception:  # noqa: BLE001 — consent loading must never break a run
         pass
