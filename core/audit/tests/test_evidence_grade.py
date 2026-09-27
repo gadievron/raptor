@@ -743,7 +743,13 @@ class TestProducerStampClosure:
         default like ``evidence_tool: str = ""`` is a binding in the
         CLASS namespace, not the module's — letting it leak into the
         module pass resolves unrelated function-local Names against
-        it and fabricates violations."""
+        it and fabricates violations.
+
+        The narrowing loses cross-scope resolution (a call reading a
+        closure variable bound in an enclosing function is no longer
+        resolved), which is the documented trade: scope-local truth
+        over an over-approximation that manufactures bindings no
+        producer ever commits."""
         import ast as _ast
 
         _NESTED = (
