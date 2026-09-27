@@ -186,7 +186,17 @@ _SWEEP_CHILD = textwrap.dedent("""
     import ctypes, errno, os, socket, sys
     libc = ctypes.CDLL(None, use_errno=True)
     ALLOWED_FAM = {2, 10}
-    ALLOWED_TYPE = {socket.SOCK_STREAM, socket.SOCK_DGRAM}
+    # Probe whether the UDP block is active (seccomp_block_udp denies
+    # DGRAM on AF_INET/AF_INET6 in the Landlock-only fallback path).
+    _udp_probe = libc.syscall(ctypes.c_long(41),
+                              ctypes.c_ulong(2),
+                              ctypes.c_ulong(socket.SOCK_DGRAM),
+                              ctypes.c_ulong(0))
+    if _udp_probe >= 0:
+        os.close(_udp_probe)
+        ALLOWED_TYPE = {socket.SOCK_STREAM, socket.SOCK_DGRAM}
+    else:
+        ALLOWED_TYPE = {socket.SOCK_STREAM}
     CLO = 0x80000   # SOCK_CLOEXEC
     NB = 0x800      # SOCK_NONBLOCK
     types = list(range(16)) + [

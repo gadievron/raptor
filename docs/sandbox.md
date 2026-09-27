@@ -537,7 +537,39 @@ tell you exactly which isolation tier a run actually got.
 
 `degraded_net_deny` means one specific thing: the per-call Landlock
 TCP-connect deny-all engaged because no namespace backend could
-deliver the requested network block. Its ABSENCE on a proxied run
+deliver the requested network block. On seccomp-enabled profiles
+(`full`, `strict`, `debug`), this fallback also engages a seccomp
+filter blocking IPv4/IPv6 UDP socket creation, including DNS to the
+host's recursive resolver. The same requirement applies after a
+runtime namespace failure and during audit execution; audit does not
+relax the UDP deny. If the profile expects seccomp but libseccomp is
+unavailable, construction refuses with `SandboxSetupError` — the
+Landlock-only fallback cannot close the UDP egress path without it.
+
+Seccomp-less profiles (`network-only`) do not trigger this refusal:
+they accepted reduced isolation at profile selection, so the fallback
+engages Landlock TCP deny without the UDP block. The operator chose
+that trade-off explicitly.
+
+`degraded_net_deny=False` remains the explicit per-call acceptance of
+open network on the fallback.
+
+**Degraded-host escape hatches.** When the refusal fires (no
+namespaces AND no working seccomp), the operator has several options:
+
+- Fix the environment: enable user namespaces (`sysctl
+  kernel.unprivileged_userns_clone=1`), or install/fix libseccomp.
+- `degraded_net_deny=False` per-call: explicitly accept that UDP
+  egress is open on this fallback.
+- `profile="network-only"`: accept the weaker posture (Landlock TCP
+  deny, UDP open) without a per-call opt-out.
+- Docker hosts: run with `--privileged` (enables namespaces) or
+  ensure libseccomp is installed in the image.
+
+Trusted tool execution (`run_trusted()`, profile `none`) is never
+affected — those profiles do not request network blocking.
+
+Its ABSENCE on a proxied run
 that resolved to the tier-2 `landlock_tcp` lane is a named contract,
 not an oversight — on that lane the proxy port allowlist is the live
 network policy and no deny-all engages, so read
@@ -728,6 +760,83 @@ mount namespaces (the read restriction is the substitute), process
 caps are per-UID host-wide, syscall filtering is coarser, and host
 fingerprint sanitisation is unavailable. Under `--sandbox debug`,
 process-info denies are skipped so lldb/sample/dtrace can attach.
+
+---
+
+## Host and network perimeter
+
+RAPTOR's sandbox isolates individual subprocesses — it cannot secure
+the host it runs on. The sandbox is one layer of defence in depth;
+the layers below it are the operator's responsibility.
+
+### Dedicated execution environment
+
+Run RAPTOR inside a dedicated VM or container whose compromise does
+not grant lateral movement to production systems, developer
+workstations, or credential stores. Treat the analysis host as
+disposable infrastructure.
+
+### UID hygiene
+
+The UID running the Claude Code session (and therefore RAPTOR) should
+be an unprivileged, purpose-specific account:
+
+- Not in `sudoers`, `wheel`, `docker`, `lxd`, `disk`, `adm`, or any
+  group that grants privilege escalation or raw device access.
+- No `NOPASSWD` sudo rules. No polkit authorisations.
+- No access to host credentials (`~/.ssh`, `~/.aws`,
+  `~/.config/gcloud`, `~/.kube`). The sandbox blocks reads from
+  inside sandboxed children; the UID having no access in the first
+  place closes the gap for unsandboxed processes in the same session.
+- Home directory should contain only the analysis workspace — nothing
+  else of value.
+
+### Mandatory access control
+
+Confine the session UID with SELinux or AppArmor:
+
+- **SELinux:** a dedicated type (e.g. `raptor_t`) with a policy that
+  denies network connect except to the egress proxy port, denies
+  write to anything outside the workspace and `/tmp`, and denies
+  transitions to privileged domains.
+- **AppArmor:** a profile that achieves the same — deny network,
+  restrict filesystem writes, deny capability acquisition and
+  mount/ptrace.
+
+MAC enforcement is orthogonal to RAPTOR's own Landlock/seccomp
+filters and stacks with them. It catches anything that escapes the
+process-level sandbox or runs outside it.
+
+### Network egress controls
+
+RAPTOR's egress proxy and seccomp UDP block operate inside the host.
+A compromised process that escapes the sandbox can bypass both.
+Network policy must be enforced at a layer the host cannot subvert:
+
+- **Upstream HTTP proxy (recommended).** Set `HTTPS_PROXY` to a
+  corporate or infrastructure proxy with a default-deny allowlist.
+  RAPTOR's egress proxy honours `HTTPS_PROXY` and tunnels through it
+  transparently. The upstream proxy becomes the network-level
+  chokepoint — only explicitly allowed destinations are reachable,
+  regardless of what happens on the analysis host.
+- **Host firewall.** Apply iptables/nftables rules or a security
+  group that drops all egress except to the upstream proxy (and SSH
+  for operator access). Deny DNS directly from the host — force it
+  through the proxy's resolver.
+- **Network-layer enforcement.** The firewall or proxy should run on
+  a device or system outside the analysis host itself. Rules applied
+  only inside the host are bypassable by anything running as the
+  same UID or as root.
+
+### Kernel hardening
+
+- Keep the kernel patched.
+- Enable unprivileged user namespaces where possible — RAPTOR's
+  strongest isolation tier (mount-ns + PID-ns + network-ns) requires
+  them.
+- Disable or restrict `bpf()`, `userfaultfd`, `io_uring` at the
+  sysctl level. The sandbox's seccomp filter blocks these per-child,
+  but a host-wide restriction covers processes outside the sandbox.
 
 ---
 
