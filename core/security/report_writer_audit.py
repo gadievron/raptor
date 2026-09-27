@@ -77,6 +77,20 @@ Mechanism — deliberately explicit and low-maintenance:
   sink (``p = print; p(tainted)``) evades every arm. Adversarial-
   committer shape; review remains the control for deliberate
   evasion.
+* **Foreign-dict-value residual**: taint is VOCABULARY-driven — a
+  subscript / ``.get()`` read of a key outside the key vocabularies
+  (``counts["rows"]``, ``by_class[cls]`` over a ledger's counts
+  block) reads clean even when the dict came from a foreign
+  document, so an f-string interpolating it at a sink is not
+  flagged. Widening to "any subscripted dict whose root is a loaded
+  document" was measured before rejection (the same
+  measure-before-widening discipline as the key vocabularies): a
+  registered-file census of f-string interpolations of subscripted
+  non-vocabulary dict values found ~100 sites across 13 registered
+  writers — a flooding tier, not a cheap heuristic. The control for
+  numeric/label fields of loaded documents is therefore the writer's
+  own unit battery (each registered writer pins its escapes on those
+  slots), not this audit.
 * **Mermaid fence rule** (:data:`_MERMAID_FENCE_FILES`): in the diagram
   renderer, any f-string interpolation *inside* a ```` ```mermaid ````
   fence must be a sanitiser call (``_fence`` / ``sanitise_code``) so a
@@ -484,6 +498,12 @@ _SANITISERS = frozenset({
     "md_fence",
     "md_inline",
     "md_prose",
+    # core.engagement.report's Title-Case render seams built on
+    # md_inline (case change FIRST, escape second — escaping first
+    # would let str.title() mangle the \xHH escape markers). The
+    # shadow arm holds both to building on a canonical sanitiser.
+    "_title_md",
+    "_journal_label_md",
     # core/threat_model's markdown-slot chokepoint (strips structural
     # markdown chars, then escape_nonprintable, byte-capped) — every
     # renderer lane in that module routes untrusted values through it.
@@ -537,6 +557,14 @@ _REPORT_WRITER_FILES = (
     # _esc() helper; the printing CLI (core/project/cli.py) is
     # registered separately.
     "core/engagement/ledger.py",
+    # Engagement report synthesis (render_markdown /
+    # render_summary_lines): verdict wordings, artifact paths,
+    # survivor file/function names, residual messages and no-lane
+    # sample names all originate in a hostile install tree or in
+    # journals recovered from it. Markdown writer — md_inline grade;
+    # terminal summary — sanitise_for_terminal grade via its _esc()
+    # helper.
+    "core/engagement/report.py",
     "core/llm/multi_model/replay.py",
     "core/progress/__init__.py",
     "core/project/cli.py",

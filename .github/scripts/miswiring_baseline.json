@@ -67,6 +67,9 @@
     "artifacts:orphan_reader::coverage-semgrep.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:orphan_reader::coverage-synth.json": {
+      "note": "deliberate design: the engagement report probes a possibly-planted chain-local overlay store for provenance (its recorded target must match the ledger's target_root) before coverage_view may consume it. RAPTOR never writes this file — the path is an ephemeral store name handed to coverage_view's read-only builder — so any on-disk instance is foreign by definition, and this read exists solely to refuse it (fail-closed on mismatch or unknown root)."
+    },
     "artifacts:orphan_reader::database-create-*.log": {
       "note": "externally produced input: the CodeQL CLI writes log/database-create-*.log; database_manager salvages it on creation failure"
     },
