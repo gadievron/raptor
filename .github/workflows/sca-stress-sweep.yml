@@ -119,6 +119,7 @@ jobs:
       - name: Install runtime deps
         # ``raptor-sca`` needs the full runtime dependencies; the
         # sweep then drives the actual scanner against each sample.
+        shell: bash
         run: |
           uv export --locked --no-hashes --no-dev | uv pip install --system -r -
           # CVSS v4 scoring — optional for end users (see the

@@ -111,6 +111,7 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
 
       - name: Install dependencies
+        shell: bash
         run: uv export --locked --no-hashes --no-dev | uv pip install --system -r -
 
       - name: Scan PR merge result

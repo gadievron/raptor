@@ -282,9 +282,9 @@ def _manifest_cache_key_gaps(
 
     ``*.y*ml``: GHA accepts both workflow extensions. A key counts as
     manifest-named when any path segment starts with ``requirements``
-    or is ``pyproject.toml`` — that is exactly the vocabulary
-    is_dependency_manifest claims, so a claimed name moving into a
-    directory cannot drop out of the checked set silently.
+    or is ``pyproject.toml`` or ``uv.lock`` — that is exactly the
+    vocabulary is_dependency_manifest claims, so a claimed name moving
+    into a directory cannot drop out of the checked set silently.
     """
     import re
 
@@ -302,7 +302,8 @@ def _manifest_cache_key_gaps(
     moved = sorted(
         a for a in args
         if "/" in a and any(
-            seg.startswith("requirements") or seg == "pyproject.toml"
+            seg.startswith("requirements")
+            or seg in {"pyproject.toml", "uv.lock"}
             for seg in Path(a).parts
         )
     )
@@ -559,10 +560,11 @@ class TestDispatchFailsOpen:
         "requirements.txt",
         "requirements-dev.txt",
         "pyproject.toml",
+        "uv.lock",
     ])
     def test_dependency_manifest_forces_full_dispatch(self, mini_repo, manifest):
         # Every heavy tier installs from the root manifests (venv jobs
-        # key their caches on hashFiles('requirements*.txt')); pre-fix
+        # key their caches on hashFiles('uv.lock')); pre-fix
         # a manifest-only PR ran only the fast tier, so a pin bump
         # that broke a carved-out tier merged green and reddened that
         # tier's next unrelated run, misattributed.

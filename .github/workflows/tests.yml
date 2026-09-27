@@ -326,6 +326,7 @@ jobs:
 
       - name: Create venv and install deps
         if: steps.venv-cache.outputs.cache-hit != 'true'
+        shell: bash
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
@@ -433,6 +434,7 @@ jobs:
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        shell: bash
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
@@ -593,6 +595,7 @@ jobs:
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        shell: bash
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
@@ -703,6 +706,7 @@ jobs:
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        shell: bash
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
@@ -834,6 +838,7 @@ jobs:
 
       - name: Create venv and install deps
         if: steps.venv-cache.outputs.cache-hit != 'true'
+        shell: bash
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
@@ -1060,6 +1065,7 @@ jobs:
 
       - name: Rebuild venv (rebuild fallback when both restore attempts failed)
         if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+        shell: bash
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate

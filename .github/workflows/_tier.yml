@@ -78,6 +78,7 @@ jobs:
       - name: Reconcile deps
         # Skip if the image's baked deps match the checkout's lockfile.
         # The hash check short-circuits the common path.
+        shell: bash
         run: |
           if [ -f /etc/raptor-ci-deps.hash ] && \
              sha256sum -c /etc/raptor-ci-deps.hash --status; then
@@ -147,6 +148,7 @@ jobs:
         # --system installs into the setup-python interpreter so the test
         # step's `python` resolves the deps without venv activation,
         # matching the image path's "system Python, no venv" model.
+        shell: bash
         run: uv export --locked --no-hashes | uv pip install --system -r -
       - name: Run tests
         env:

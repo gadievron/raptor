@@ -286,18 +286,18 @@ ROOT_HARNESS_FILES = frozenset({
 
 
 def is_dependency_manifest(path: str) -> bool:
-    """Root-level dependency manifests: requirements*.txt and
-    pyproject.toml.
+    """Root-level dependency manifests: requirements*.txt, pyproject.toml,
+    and uv.lock.
 
     Every heavy tier installs from these files (the venv jobs and
-    _tier.yml key their caches on ``hashFiles('requirements*.txt')``),
-    so a manifest-only PR must dispatch the FULL tier set: scoping it
-    to the fast tier let a pin bump that broke a carved-out tier merge
-    green and redden that tier's next unrelated run, misattributed —
-    the same delayed-failure shape as the root-harness case. The
-    sibling CodeQL scoper already treats these files as
-    full-scan-worthy. Root-level only: manifests inside test fixture
-    trees are test data, not the CI install surface.
+    _tier.yml key their caches on ``hashFiles('uv.lock')``), so a
+    manifest-only PR must dispatch the FULL tier set: scoping it to the
+    fast tier let a pin bump that broke a carved-out tier merge green and
+    redden that tier's next unrelated run, misattributed — the same
+    delayed-failure shape as the root-harness case. The sibling CodeQL
+    scoper already treats these files as full-scan-worthy. Root-level
+    only: manifests inside test fixture trees are test data, not the CI
+    install surface.
 
     Trade-off of the root-level restriction: if the install surface
     ever moves into a directory (e.g. a ``requirements/base.txt``
@@ -308,7 +308,7 @@ def is_dependency_manifest(path: str) -> bool:
     here (test_hashfiles_manifests_are_claimed), so moving the venv
     cache keys without widening this pattern fails the suite.
     """
-    return path == "pyproject.toml" or (
+    return path in {"pyproject.toml", "uv.lock"} or (
         "/" not in path and path.startswith("requirements")
     )
 

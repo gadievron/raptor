@@ -50,6 +50,7 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
 
       - name: Install deps
+        shell: bash
         run: |
           # The re-audit hits registries + OSV through the SCA egress client,
           # so it needs the runtime deps (not the dev set).

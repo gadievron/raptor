@@ -133,7 +133,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # source-only changes to the repo.
 COPY pyproject.toml uv.lock ./
 
-RUN uv export --locked --no-hashes | uv pip install --system -r - \
+RUN set -o pipefail \
+    && uv export --locked --no-hashes | uv pip install --system -r - \
     && sha256sum pyproject.toml uv.lock > /etc/raptor-ci-deps.hash
 
 # Build-time smoke import: fail the IMAGE build (not downstream CI) if a

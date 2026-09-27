@@ -182,6 +182,7 @@ jobs:
         # --system installs into the setup-python interpreter so the
         # test step's `python` resolves the deps without venv
         # activation (same model as _tier.yml's runner path).
+        shell: bash
         run: uv export --locked --no-hashes | uv pip install --system -r -
 
       - name: Run replay-determinism suites
@@ -231,6 +232,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install deps
+        shell: bash
         run: uv export --locked --no-hashes | uv pip install --system -r -
 
       - name: Run private-case replay-eval lane

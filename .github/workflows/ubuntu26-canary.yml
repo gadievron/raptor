@@ -119,6 +119,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Create venv and install deps
+        shell: bash
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
