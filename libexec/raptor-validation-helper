@@ -3875,6 +3875,480 @@ def prepare_1(workdir, target=None, model=None):
 
 
 # ---------------------------------------------------------------------------
+# Parts assembly — merge stage-<x>-parts/*.json into the canonical
+# stage output(s).
+#
+# Contract (one flow covers A-F; single-part stages are the degenerate
+# case):
+#   * Stage A: findings array append; duplicate finding id across
+#     parts = conflict. The assembled id set is checked against the
+#     findings.json inventory when present (reported loudly, never
+#     fatal: quarantine-and-proceed makes partial assemblies legal and
+#     the receipt is the re-dispatch target).
+#   * Stage B: hybrid — hypotheses / attack_tree_nodes / attack_paths /
+#     disproven appended into their working docs, attack_surface
+#     dedup-unioned, and the per-finding updates{} dict unioned with
+#     refuse-on-duplicate-key. A part entry whose id matches a
+#     PRE-EXISTING working-doc entry replaces it (an update); the same
+#     id in two PARTS is a conflict.
+#   * Stages C-F: updates{} union, refuse-on-duplicate-key.
+#
+# A part that fails its slice of the contract (parse failure, fragment
+# lint errors, key/id conflict with an earlier part) is QUARANTINED:
+# a named-reason record is written under stage-<x>-parts/quarantine/,
+# the part file itself is never moved or deleted, and the merge
+# proceeds with the good parts. Never last-writer-wins, never
+# all-or-nothing abort.
+#
+# Free text is sanitised EXACTLY ONCE, at part ingestion. Assembly
+# writes therefore bypass _save_artifact (which would re-sanitise) —
+# the promote-time idempotence gate still verifies the result, so a
+# sanitiser regression fails validation instead of corrupting bytes.
+#
+# Part order is observationally irrelevant: parts are read in sorted
+# filename order, conflicts quarantine the LATER part, and every
+# assembled collection is canonically sorted, so re-assembly is
+# byte-stable and independent of arrival order.
+# ---------------------------------------------------------------------------
+
+from collections.abc import Callable  # noqa: E402
+from typing import Any  # noqa: E402
+
+from packages.exploitability_validation import lint as _lint  # noqa: E402
+
+# One ingested part: (filename, parsed data, sha256, sanitised paths).
+_Part = tuple[str, Any, str, list[str]]
+
+
+def _part_sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _quarantine_part(parts_dir: Path, part_name: str, sha: str,
+                     reasons: list[str],
+                     quarantined: list[dict[str, Any]]) -> None:
+    """Record a named-reason quarantine; the part file itself stays put."""
+    qdir = parts_dir / "quarantine"
+    qdir.mkdir(exist_ok=True)
+    from datetime import datetime, timezone
+    record = {
+        "part": part_name,
+        "sha256": sha,
+        "reasons": [str(r) for r in reasons],
+        "quarantined_at": datetime.now(timezone.utc).isoformat(),
+    }
+    save_json(qdir / f"{part_name}.reason.json", record)
+    quarantined.append({"part": part_name, "reasons": record["reasons"]})
+    print(f"⚠️  QUARANTINED {_sft(part_name, max_len=120)}:", file=sys.stderr)
+    for r in record["reasons"]:
+        print(f"    {_sft(str(r), max_len=300)}", file=sys.stderr)
+
+
+def _normalise_part(stage: str, data: Any) -> Any:
+    """Ingestion-shape normalisation (before fragment lint).
+
+    * Stage A: a bare findings array is wrapped as {"findings": [...]},
+      and vuln_type aliases are normalised to their canonical enum
+      values — exactly what the promote path does before validating,
+      so an alias a producer legally used is never a false quarantine.
+    * Stage B: a node's leads_to given as a LIST of ids becomes the
+      canonical comma-separated string (see ATTACK_TREE_SCHEMA — the
+      string form is settled).
+    """
+    if stage == "A":
+        if isinstance(data, list):
+            data = {"findings": data}
+        if isinstance(data, dict):
+            _lint.normalise_findings_vuln_types(data)
+        return data
+    if stage == "B" and isinstance(data, dict):
+        for node in data.get("attack_tree_nodes") or []:
+            if isinstance(node, dict) and isinstance(node.get("leads_to"),
+                                                     list):
+                node["leads_to"] = ",".join(str(x) for x in node["leads_to"])
+    return data
+
+
+def _ingest_parts(stage: str, parts_dir: Path,
+                  quarantined: list[dict[str, Any]]) -> list[_Part]:
+    """Load, lint, and sanitise each part. Returns the good parts as
+    [(name, data, sha, sanitised_paths)] in sorted-name order."""
+    good = []
+    for path in sorted(parts_dir.glob("*.json")):
+        sha = _part_sha(path)
+        data = load_json(path)
+        if data is None:
+            _quarantine_part(parts_dir, path.name, sha,
+                             ["cannot parse JSON"], quarantined)
+            continue
+        data = _normalise_part(stage, data)
+        result = _lint.lint_fragment(stage, data)
+        if result.errors:
+            _quarantine_part(parts_dir, path.name, sha, result.errors,
+                             quarantined)
+            continue
+        for w in result.warnings:
+            # Part filenames are producer-chosen: escape them like any
+            # other untrusted text before they reach the terminal.
+            print(f"WARNING: {_sft(path.name, max_len=120)}: "
+                  f"{_sft(str(w), max_len=300)}",
+                  file=sys.stderr)
+        # The single sanitise pass for this content (ingestion).
+        sanitised = sanitise_free_text(
+            data, _lint.fragment_text_schema(stage, data))
+        good.append((path.name, data, sha, sanitised))
+    return good
+
+
+def _merge_updates(
+    parts: list[_Part], parts_dir: Path,
+    quarantined: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[str]]:
+    """Union the per-finding updates{} dicts; duplicate key across two
+    parts quarantines the later part. Returns (updates, merged_names)."""
+    updates: dict = {}
+    owner: dict = {}
+    merged_names = []
+    for name, data, sha, _sanitised in parts:
+        part_updates = data.get("updates") or {}
+        dupes = sorted(set(part_updates) & set(updates))
+        if dupes:
+            _quarantine_part(
+                parts_dir, name, sha,
+                [f"duplicate update key {fid} (already contributed by "
+                 f"{owner[fid]})" for fid in dupes],
+                quarantined)
+            continue
+        for fid, fields in part_updates.items():
+            updates[fid] = fields
+            owner[fid] = name
+        merged_names.append(name)
+    return {k: updates[k] for k in sorted(updates)}, merged_names
+
+
+def _assemble_a(
+    workdir: Path, parts: list[_Part], parts_dir: Path,
+    quarantined: list[dict[str, Any]],
+) -> tuple[dict[str, tuple[str, Any]], list[str]]:
+    """Stage A: append findings; duplicate id across parts is a
+    conflict. Returns (outputs, merged_names)."""
+    findings: list = []
+    owner: dict = {}
+    merged_names = []
+    for name, data, sha, _sanitised in parts:
+        rows = data.get("findings") or []
+        part_ids = [f.get("id") for f in rows]
+        reasons = [
+            f"duplicate finding id {fid} (already contributed by "
+            f"{owner[fid]})"
+            for fid in sorted({i for i in part_ids if i in owner})
+        ]
+        reasons.extend(
+            f"finding id {fid} appears more than once in this part"
+            for fid in sorted({i for i in part_ids
+                               if part_ids.count(i) > 1})
+        )
+        if reasons:
+            _quarantine_part(parts_dir, name, sha, reasons, quarantined)
+            continue
+        for f in rows:
+            owner[f["id"]] = name
+            findings.append(f)
+        merged_names.append(name)
+
+    findings.sort(key=lambda f: f["id"])
+    assembled = {"stage": "A", "findings": findings}
+    checklist = load_json(workdir / "checklist.json") or {}
+    if isinstance(checklist, dict) and checklist.get("target_path"):
+        assembled["target_path"] = checklist["target_path"]
+
+    # Exact-id-set check against the inventory (loud, never fatal —
+    # see the contract comment above).
+    inventory = load_json(workdir / "findings.json")
+    if isinstance(inventory, dict):
+        expected = {f.get("id") for f in inventory.get("findings", [])
+                    if isinstance(f, dict) and f.get("id")}
+        got = {f["id"] for f in findings}
+        for fid in sorted(expected - got):
+            print(f"WARNING: inventory id {fid} missing from assembled "
+                  "findings", file=sys.stderr)
+        for fid in sorted(got - expected):
+            print(f"WARNING: assembled finding {fid} not in the "
+                  "findings.json inventory", file=sys.stderr)
+
+    return {"stage-a.json": ("stage", assembled)}, merged_names
+
+
+def _dedup_extend(existing: list[Any], new_rows: list[Any],
+                  key: Callable[[dict[str, Any]], Any]) -> None:
+    """Append new_rows to existing, skipping key-duplicates."""
+    seen = {key(r) for r in existing if isinstance(r, dict)}
+    for row in new_rows:
+        if not isinstance(row, dict) or key(row) not in seen:
+            seen.add(key(row) if isinstance(row, dict) else None)
+            existing.append(row)
+
+
+def _assemble_b(
+    workdir: Path, parts: list[_Part], parts_dir: Path,
+    quarantined: list[dict[str, Any]],
+) -> tuple[dict[str, tuple[str, Any]], list[str]]:
+    """Stage B hybrid merge into the six canonical outputs."""
+    # Pre-existing working docs are the merge base: a part entry whose
+    # id matches an existing entry REPLACES it (that is an update, not
+    # a part-vs-part conflict).
+    hypotheses = load_json(workdir / "hypotheses.json")
+    hypotheses = hypotheses if isinstance(hypotheses, list) else []
+    paths_doc = load_json(workdir / "attack-paths.json")
+    paths_doc = paths_doc if isinstance(paths_doc, list) else []
+    tree = load_json(workdir / "attack-tree.json")
+    tree = tree if isinstance(tree, dict) else {}
+    nodes = tree.get("nodes") if isinstance(tree.get("nodes"), list) else []
+    disproven_doc = load_json(workdir / "disproven.json")
+    disproven_doc = (disproven_doc if isinstance(disproven_doc, dict)
+                     else {})
+    disproven = (disproven_doc.get("disproven")
+                 if isinstance(disproven_doc.get("disproven"), list) else [])
+    surface = load_json(workdir / "attack-surface.json")
+    surface = surface if isinstance(surface, dict) else {}
+
+    by_id = {
+        "hypotheses": {h.get("id"): h for h in hypotheses
+                       if isinstance(h, dict)},
+        "attack_tree_nodes": {n.get("id"): n for n in nodes
+                              if isinstance(n, dict)},
+        "attack_paths": {p.get("id"): p for p in paths_doc
+                         if isinstance(p, dict)},
+        "disproven": {d.get("finding"): d for d in disproven
+                      if isinstance(d, dict)},
+    }
+    id_key = {"hypotheses": "id", "attack_tree_nodes": "id",
+              "attack_paths": "id", "disproven": "finding"}
+    part_owner: dict = {}  # (collection, id) -> part name
+
+    updates: dict = {}
+    updates_owner: dict = {}
+    merged_names = []
+
+    for name, data, sha, _sanitised in parts:
+        conflicts = []
+        part_updates = data.get("updates") or {}
+        conflicts.extend(
+            f"duplicate update key {fid} (already contributed by "
+            f"{updates_owner[fid]})"
+            for fid in sorted(set(part_updates) & set(updates)))
+        for coll in by_id:
+            rids = [row.get(id_key[coll]) for row in data.get(coll) or []]
+            # Within-part duplicates would silently collapse via the
+            # by_id merge below — refuse them like Stage A does.
+            conflicts.extend(
+                f"{coll} entry {rid} appears more than once in this part"
+                for rid in sorted({r for r in rids if rids.count(r) > 1},
+                                  key=str))
+            for rid in rids:
+                if (coll, rid) in part_owner:
+                    conflicts.append(
+                        f"duplicate {coll} entry {rid} (already "
+                        f"contributed by {part_owner[(coll, rid)]})")
+        if conflicts:
+            _quarantine_part(parts_dir, name, sha, conflicts, quarantined)
+            continue
+
+        for fid, fields in part_updates.items():
+            updates[fid] = fields
+            updates_owner[fid] = name
+        for coll in by_id:
+            for row in data.get(coll) or []:
+                rid = row.get(id_key[coll])
+                by_id[coll][rid] = row  # replaces a pre-existing entry
+                part_owner[(coll, rid)] = name
+        part_surface = data.get("attack_surface") or {}
+        surface.setdefault("sources", [])
+        surface.setdefault("sinks", [])
+        surface.setdefault("trust_boundaries", [])
+        _dedup_extend(surface["sources"], part_surface.get("sources") or [],
+                      key=lambda r: (r.get("type"), r.get("entry")))
+        _dedup_extend(surface["sinks"], part_surface.get("sinks") or [],
+                      key=lambda r: (r.get("type"), r.get("location")))
+        _dedup_extend(surface["trust_boundaries"],
+                      part_surface.get("trust_boundaries") or [],
+                      key=lambda r: (r.get("boundary"), r.get("check")))
+        merged_names.append(name)
+
+    def _sorted_rows(coll: str) -> list:
+        return [by_id[coll][k] for k in sorted(by_id[coll], key=str)]
+
+    nodes = _sorted_rows("attack_tree_nodes")
+    root = tree.get("root")
+    if not root:
+        node_ids = {n.get("id") for n in nodes}
+        if "ROOT" not in node_ids:
+            referenced = set()
+            for n in nodes:
+                referenced.update(
+                    x for x in str(n.get("leads_to") or "").split(",") if x)
+                referenced.update(n.get("children") or [])
+            top_level = sorted(i for i in node_ids if i not in referenced)
+            nodes.append({
+                "id": "ROOT",
+                "goal": "Attack tree root (synthesised at assembly)",
+                "status": "exploring",
+                "leads_to": ",".join(top_level),
+            })
+            nodes.sort(key=lambda n: str(n.get("id")))
+        root = "ROOT"
+
+    # Referential integrity lives HERE, not in fragment lint — links
+    # legally cross part boundaries and only the merged tree can judge
+    # them. Loud warnings, never fatal: quarantine-and-proceed makes
+    # partial assemblies legal (a dangling target may name a
+    # quarantined part's node — the receipt is the re-dispatch target).
+    node_ids = {n.get("id") for n in nodes}
+    for n in nodes:
+        for tgt in str(n.get("leads_to") or "").split(","):
+            if tgt and tgt not in node_ids:
+                print(f"WARNING: attack-tree node {n.get('id')} leads_to "
+                      f"{_sft(tgt, max_len=80)} which is not in the "
+                      "assembled tree", file=sys.stderr)
+    inventory = load_json(workdir / "findings.json")
+    if isinstance(inventory, dict):
+        known = {f.get("id") for f in inventory.get("findings", [])
+                 if isinstance(f, dict)}
+        for fid in sorted(set(updates) - known):
+            print(f"WARNING: updates key {_sft(str(fid), max_len=80)} is "
+                  "not in the findings.json inventory", file=sys.stderr)
+
+    outputs = {
+        "hypotheses.json": ("hypotheses", _sorted_rows("hypotheses")),
+        "attack-paths.json": ("attack-paths", _sorted_rows("attack_paths")),
+        "attack-tree.json": ("attack-tree",
+                             {"root": root, "nodes": nodes}),
+        "disproven.json": ("disproven",
+                           {"disproven": _sorted_rows("disproven")}),
+        "attack-surface.json": ("attack-surface", surface),
+        "stage-b.json": ("stage", {
+            "stage": "B",
+            "updates": {k: updates[k] for k in sorted(updates)},
+        }),
+    }
+    return outputs, merged_names
+
+
+def assemble_parts(stage: str, workdir: str | Path) -> bool:
+    """Merge stage-<x>-parts/*.json into the canonical stage output(s).
+
+    Returns True when at least one part merged and every assembled
+    output passed validation (quarantines are reported, not fatal);
+    False when nothing could be merged or an assembled output failed.
+    """
+    stage = stage.upper()
+    workdir = Path(workdir)
+    parts_dir = workdir / f"stage-{stage.lower()}-parts"
+    if not parts_dir.is_dir():
+        print(f"ERROR: no parts directory: {parts_dir}", file=sys.stderr)
+        return False
+
+    quarantined: list = []
+    parts = _ingest_parts(stage, parts_dir, quarantined)
+    if not parts and not quarantined:
+        print(f"ERROR: no *.json parts in {parts_dir}", file=sys.stderr)
+        return False
+
+    if stage == "A":
+        outputs, merged_names = _assemble_a(workdir, parts, parts_dir,
+                                            quarantined)
+    elif stage == "B":
+        outputs, merged_names = _assemble_b(workdir, parts, parts_dir,
+                                            quarantined)
+    else:
+        updates, merged_names = _merge_updates(parts, parts_dir, quarantined)
+        inventory = load_json(workdir / "findings.json")
+        if isinstance(inventory, dict):
+            known = {f.get("id") for f in inventory.get("findings", [])
+                     if isinstance(f, dict)}
+            for fid in sorted(set(updates) - known):
+                print(f"WARNING: updates key {_sft(str(fid), max_len=80)} "
+                      "is not in the findings.json inventory",
+                      file=sys.stderr)
+        outputs = {
+            f"stage-{stage.lower()}.json":
+                ("stage", {"stage": stage, "updates": updates}),
+        }
+
+    if not merged_names:
+        print("ERROR: every part was quarantined — nothing to assemble",
+              file=sys.stderr)
+        return False
+
+    # Stamp, then validate EVERY output before writing ANY of them
+    # (content was sanitised once at ingestion; the lint's idempotence
+    # gate verifies that, it does not re-sanitise).
+    failed = False
+    for fname, (schema_type, data) in outputs.items():
+        stamp_provenance(data, _GENERATOR, untrusted=True,
+                         overwrite_generator=False)
+        result = _lint.lint_artifact(schema_type, data, fname)
+        for w in result.warnings:
+            print(f"WARNING: {fname}: {_sft(str(w), max_len=300)}",
+                  file=sys.stderr)
+        if result.errors:
+            failed = True
+            print(f"ERRORS in assembled {fname}:", file=sys.stderr)
+            for e in result.errors:
+                print(f"  {_sft(str(e), max_len=300)}", file=sys.stderr)
+    if failed:
+        print("ERROR: assembled output failed validation — nothing "
+              "promoted", file=sys.stderr)
+        return False
+
+    written = {}
+    for fname, (_schema_type, data) in outputs.items():
+        path = workdir / fname
+        save_json(path, data)  # atomic tempfile+rename
+        written[fname] = _part_sha(path)
+
+    from datetime import datetime, timezone
+    part_index = {name: (data, sha, sanitised)
+                  for name, data, sha, sanitised in parts}
+    receipt = {
+        "stage": stage,
+        "parts": [
+            {
+                "name": name,
+                "sha256": part_index[name][1],
+                "provenance": (part_index[name][0].get("provenance")
+                               if isinstance(part_index[name][0], dict)
+                               else None),
+                "sanitised_fields": part_index[name][2],
+            }
+            for name in merged_names
+        ],
+        "quarantined": quarantined,
+        "outputs": written,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    save_json(workdir / f"stage-{stage.lower()}-assembly-receipt.json",
+              receipt)
+
+    print(f"Assembled stage {stage}: {len(merged_names)} part(s) merged, "
+          f"{len(quarantined)} quarantined -> {', '.join(sorted(written))}")
+    return True
+
+
+def _parts_main(argv: list[str]) -> None:
+    if len(argv) < 2 or argv[0].upper() not in STAGE_LETTERS:
+        print(f"Usage: {sys.argv[0]} parts <A|B|C|D|E|F> <workdir>",
+              file=sys.stderr)
+        sys.exit(1)
+    workdir = Path(argv[1])
+    if not workdir.is_dir():
+        print(f"ERROR: workdir not found: {workdir}", file=sys.stderr)
+        sys.exit(1)
+    if not assemble_parts(argv[0], workdir):
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -3922,8 +4396,11 @@ def _flag_value(args, flag):
 
 def main():
     args = sys.argv[1:]
+    if args and args[0] == "parts":
+        _parts_main(args[1:])
+        return
     if not args or args[0] not in STAGES:
-        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--findings <file>] [--include-dark] [--model <id>] [--no-bridge] [--rank] [--dynamic|--no-dynamic] [--build|--no-build] [--mitigation-matrix] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>] [--project <name|->]", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--findings <file>] [--include-dark] [--model <id>] [--no-bridge] [--rank] [--dynamic|--no-dynamic] [--build|--no-build] [--mitigation-matrix] [--sanitizer-cut <off|on|strict|shadow>] [--sanitizer-cut-parity-log <path>] [--project <name|->] | parts <A|B|C|D|E|F> <workdir>", file=sys.stderr)
         sys.exit(1)
 
     stage = args[0]
