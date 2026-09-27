@@ -180,6 +180,10 @@ class TestHtmlFamilyGroundTruth:
 
 
 class TestDockerContainment:
+    # A real docker run that must sit through the drain grace before
+    # the daemon-side cleanup can be asserted — ~15s of genuine wall
+    # cost even unloaded; over the fast tier's budget.
+    @pytest.mark.slow
     def test_flood_terminates_bounded_and_leaves_no_container(
         self, runtime,
     ):
