@@ -120,6 +120,23 @@ _ALLOWLIST: dict[tuple[str, str], str] = {
         "TemporaryDirectory created in the enclosing with-block"
     ),
     (
+        "packages/ghidra/ebpf_probe.py",
+        'src.write_text(probe.asm, encoding="utf-8")',
+    ): (
+        "probe assembly written into a src dir the probe itself "
+        "creates under its work dir — a fresh process-private "
+        "TemporaryDirectory by default, or the operator-supplied "
+        "--work-dir argument"
+    ),
+    (
+        "packages/ghidra/ebpf_probe.py",
+        '(script_dir / "EbpfProbeDump.java").write_text(',
+    ): (
+        "dump script written into a script dir the probe itself "
+        "creates under the same process-private-or-operator-owned "
+        "work dir as the assembly sources above"
+    ),
+    (
         "packages/ghidra/headless.py",
         '(script_dir / "ExportRaptor.java").write_text(EXPORT_SCRIPT_JAVA, encoding="utf-8")',
     ): (

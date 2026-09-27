@@ -115,6 +115,9 @@
     "artifacts:orphan_reader::pnpm-workspace.yaml": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:orphan_reader::probe-dump.txt": {
+      "note": "written by the embedded EbpfProbeDump Ghidra post-script (Java source lives as a string in packages/ghidra/ebpf_probe.py), not by repo Python; ghidra_decode builds the path, hands it to the sandboxed analyzeHeadless invocation, and reads the dump back for ground-truth comparison, so the indexer only ever sees the read"
+    },
     "artifacts:orphan_reader::project.json": {
       "note": "legacy in-run-dir project marker: nothing in the repo writes a literal project.json today (the registry stores <name>.json; exports embed .project.json) \u2014 the readers are the pin-less legacy-dir shape probes (core/concepts/study.py, libexec/raptor-study-prep) kept so pre-pin operator dirs still promote. Previously suppressed as ambiguous only because the study-prep probe shared a function with a tempfile writer; the merge-promote refactor made that function read-only and surfaced the pre-existing orphan-reader shape."
     },

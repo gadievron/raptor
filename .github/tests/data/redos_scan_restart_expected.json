@@ -2530,6 +2530,27 @@
    "exp": 2.04,
    "verdict": "adjudicated"
   },
+  "packages/ghidra/ebpf_probe.py\u001fPROBE_OBJECTS[70]": {
+   "digests": [
+    "83dbe4d36e7b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/ghidra/ebpf_probe.py\u001fPROBE_OBJECTS[83]": {
+   "digests": [
+    "6def9273e387"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/ghidra/ebpf_probe.py\u001fPROBE_OBJECTS[93]": {
+   "digests": [
+    "209f0ae65cbc"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "packages/joern/runner.py\u001f_CALL_RE": {
    "digests": [
     "809bb4069fbf"

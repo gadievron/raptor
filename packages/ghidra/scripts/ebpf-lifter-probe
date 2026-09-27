@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Run the Ghidra eBPF ISA probe and persist the capability record.
+
+Generates probe objects from RAPTOR-authored assembly (nothing is
+committed as a binary), compares Ghidra's decode against llvm-objdump
+ground truth per ISA v2/v3/v4 feature, and writes the machine-readable
+capability record that :func:`packages.ghidra.ebpf_capability.
+ebpf_lifter_capability` consults. Placement rationale: this is
+dev/operator measurement machinery — capability is earned here and
+merely consulted at analysis time — so it lives in the subsystem
+``scripts/`` dir (never on the ``libexec/`` LLM dispatch surface).
+
+Usage:
+
+    packages/ghidra/scripts/ebpf-lifter-probe
+        [--json] [--no-write] [--work-dir DIR] [--keep-work]
+
+Exit codes: 0 probe ran and every feature passed; 1 probe ran with
+failures (record still written unless --no-write — a failing record
+is exactly what keeps the gate closed); 2 probe unavailable (LLVM BPF
+toolchain or Ghidra/eBPF module absent — nothing written, capability
+stays unknown, consumers stay downgraded).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_REPO_ROOT))
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="Measure Ghidra's eBPF ISA v2/v3/v4 decode "
+                    "fidelity and persist the capability record.")
+    ap.add_argument("--json", action="store_true",
+                    help="Print the full result as JSON")
+    ap.add_argument("--no-write", action="store_true",
+                    help="Measure only; do not persist the record")
+    ap.add_argument("--work-dir",
+                    help="Scratch directory for probe objects and the "
+                         "Ghidra project (default: a temp dir)")
+    ap.add_argument("--keep-work", action="store_true",
+                    help="With --work-dir: leave probe artifacts in "
+                         "place for inspection")
+    args = ap.parse_args()
+
+    from core.security.log_sanitisation import escape_nonprintable
+    from packages.ghidra.ebpf_capability import save_capability_record
+    from packages.ghidra.ebpf_probe import run_probe
+
+    work_dir = None
+    if args.work_dir:
+        work_dir = Path(args.work_dir)
+        work_dir.mkdir(parents=True, exist_ok=True)
+
+    result = run_probe(work_dir=work_dir)
+
+    if work_dir is not None and not args.keep_work:
+        import contextlib
+        import shutil
+        for sub in ("src", "objs", "proj", "gscripts"):
+            shutil.rmtree(work_dir / sub, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            (work_dir / "probe-dump.txt").unlink()
+
+    if result["status"] != "ran":
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print("probe unavailable: "
+                  + escape_nonprintable(str(result["reason"])))
+            print("capability stays unknown — eBPF lifter consumers "
+                  "remain downgraded (fail-closed)")
+        return 2
+
+    record = result["record"]
+    written = None
+    if not args.no_write:
+        written = save_capability_record(record)
+
+    if args.json:
+        out = dict(result)
+        out["record_path"] = str(written) if written else None
+        print(json.dumps(out, indent=2))
+    else:
+        features = record["features"]
+        for name in sorted(features):
+            entry = features[name]
+            verdict = "pass" if entry.get("pass") is True else "FAIL"
+            # Names/reasons can embed tool-derived text — escape
+            # before the terminal (log_sanitisation contract).
+            line = (f"  {verdict:4s}  {escape_nonprintable(name)} "
+                    f"({escape_nonprintable(str(entry.get('object')))}, "
+                    f"-mcpu={escape_nonprintable(str(entry.get('mcpu')))})")
+            if verdict == "FAIL" and entry.get("reason"):
+                line += " — " + escape_nonprintable(str(entry["reason"]))
+            print(line)
+        total = len(features)
+        failed = record["failed_features"]
+        print(f"features: {total - len(failed)}/{total} passed")
+        if record["pass"]:
+            print("probe gate: PASSED — eBPF lifter capability "
+                  "TRUSTED for this Ghidra install")
+        else:
+            print("probe gate: FAILED — eBPF lifter capability "
+                  "DOWNGRADED for this Ghidra install")
+        if written:
+            print(f"record: {written}")
+        elif args.no_write:
+            print("record: not written (--no-write)")
+
+    return 0 if record["pass"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
