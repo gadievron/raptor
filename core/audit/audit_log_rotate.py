@@ -93,9 +93,13 @@ class RotateStats:
     backups: tuple[str, ...] = ()
     #: Non-contiguous numbered shard files, left untouched.
     orphan_shards: tuple[str, ...] = ()
-    #: True when the shard-count bound forced the final shard to
-    #: absorb the remainder and it is still over the read budget.
-    final_shard_over_budget: bool = False
+    #: Resulting shard names still over the per-shard read budget:
+    #: the shard-count bound forcing the final shard to absorb the
+    #: remainder, or a single line larger than the budget's margin
+    #: over the roll threshold pinning ANY shard high. A re-run
+    #: cannot split these smaller (splits are line-bounded), so the
+    #: remedy reports them instead of claiming plain success.
+    over_budget_shards: tuple[str, ...] = ()
 
 
 def _backup_path(shard_path: Path) -> Path:
@@ -247,8 +251,15 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
             tmp.unlink(missing_ok=True)
         raise
 
-    final_over = bool(
-        temps and temps[-1].stat().st_size > _AUDIT_LOG_MAX_BYTES)
+    # EVERY resulting shard is checked, not just the final one: the
+    # absorb arm can only overfill the last temp, but a single line
+    # bigger than the budget's margin over the roll threshold pins
+    # whichever shard it lands in over the budget.
+    over_budget = tuple(
+        _audit_log_shard_name(i + 1)
+        for i, tmp in enumerate(temps)
+        if tmp.stat().st_size > _AUDIT_LOG_MAX_BYTES
+    )
 
     # Byte reconciliation BEFORE any original moves: a rewrite that
     # cannot prove it copied every byte must not replace anything.
@@ -303,13 +314,16 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
     except OSError:
         pass  # best-effort directory durability
 
-    if final_over:
+    if over_budget:
         logger.warning(
-            "audit log rotate at %s: shard bound (%d) reached — the "
-            "final shard absorbed the remainder and is still over the "
-            "read budget (its tail reads bounded). The trail is "
-            "larger than the shard set can hold.",
-            out_dir, _AUDIT_LOG_MAX_SHARDS,
+            "audit log rotate at %s: %d resulting shard(s) remain "
+            "over the read budget (%s) — the shard bound (%d) forced "
+            "the final shard to absorb the remainder, or a single "
+            "line exceeds the budget's margin over the roll "
+            "threshold. Over-budget shards read as a bounded newest "
+            "tail.",
+            out_dir, len(over_budget), ", ".join(over_budget),
+            _AUDIT_LOG_MAX_SHARDS,
         )
     if orphans:
         logger.warning(
@@ -324,5 +338,5 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
         bytes_total=total,
         backups=tuple(backups),
         orphan_shards=orphans,
-        final_shard_over_budget=bool(final_over),
+        over_budget_shards=over_budget,
     )

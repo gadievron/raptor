@@ -162,7 +162,35 @@ class TestRotateSplits:
         stats = rotate_audit_log(tmp_path)
         assert stats.rotated
         assert stats.shards_after == 2
-        assert stats.final_shard_over_budget
+        assert stats.over_budget_shards == (".audit-log.002.jsonl",)
+        assert _trail_bytes(tmp_path) == before
+
+    def test_interior_giant_line_shard_reported_over_budget(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # A single line larger than the read budget pins whichever
+        # shard it lands in over the budget — here the FIRST shard,
+        # while the final shard stays small. The rewrite cannot split
+        # a line, so plain success would misreport a trail that still
+        # partially degrades to tail reads (and a re-run would churn
+        # without converging). The over-budget report must name the
+        # interior shard.
+        _shrink_budgets(monkeypatch)
+        log = tmp_path / record.AUDIT_LOG_FILENAME
+        with log.open("a") as fh:
+            fh.write(json.dumps({
+                "action": "orchestrator_review",
+                "key": "a.c:giant:1",
+                "hypothesis": "x" * 4000,
+            }) + "\n")
+        _plant_rows(log, 10)
+        before = _trail_bytes(tmp_path)
+        stats = rotate_audit_log(tmp_path)
+        assert stats.rotated
+        assert stats.shards_after >= 2
+        assert record.AUDIT_LOG_FILENAME in stats.over_budget_shards
+        last = record.audit_log_paths(tmp_path)[-1]
+        assert last.name not in stats.over_budget_shards
         assert _trail_bytes(tmp_path) == before
 
 

@@ -2936,10 +2936,11 @@ def cmd_audit_log(args: argparse.Namespace) -> int:
             "non-contiguous shard file(s): "
             + ", ".join(stats.orphan_shards)
         )
-    if stats.final_shard_over_budget:
+    if stats.over_budget_shards:
         print(
-            "  warning: shard bound reached — the final shard is "
-            "still over the read budget (its tail reads bounded)"
+            f"  warning: {len(stats.over_budget_shards)} resulting "
+            "shard(s) still over the read budget (tails read "
+            "bounded): " + ", ".join(stats.over_budget_shards)
         )
     return 0
 
