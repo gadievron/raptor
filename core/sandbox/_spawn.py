@@ -1441,6 +1441,8 @@ def run_sandboxed(
     persona: Persona | None = None,
     inherit_netns: bool = False,
     etc_overlay: dict | None = None,
+    stage_files: dict[str, bytes] | None = None,
+    stage_dirs: Sequence[str] | None = None,
     skip_pid_ns: bool = False,
     skip_mount_ns: bool = False,
     require_fresh_procfs: bool = False,
@@ -1454,6 +1456,15 @@ def run_sandboxed(
     max_capture_bytes: int | None = None,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
+
+    stage_files / stage_dirs: forwarded verbatim to
+    ``mount_ns.setup_mount_ns`` (see its docstring for validation and
+    failure contracts) — files/empty dirs materialised in the private
+    tmpfs root pre-pivot, so they exist at their in-sandbox paths
+    without any host-path bind (nothing about their origin appears in
+    the child's mountinfo). Mount-ns lane only; the mountless and
+    skip_mount_ns lanes have no private root to stage into and ignore
+    both.
 
     landlock_required: containment-floor plumbing, set ONLY by
     ``context.run()`` from the call's resolved floor (never a caller
@@ -2939,6 +2950,8 @@ def run_sandboxed(
                                    root_path=_root_dir,
                                    persona=persona,
                                    etc_overlay=etc_overlay,
+                                   stage_files=stage_files,
+                                   stage_dirs=stage_dirs,
                                    rw_submounts_ok=_rw_submounts_ok,
                                    rootfs=rootfs,
                                    require_target_ro=_require_target_ro,

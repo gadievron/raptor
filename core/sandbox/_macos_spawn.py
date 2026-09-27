@@ -632,6 +632,14 @@ def run_sandboxed(cmd: list[str], *,
                   # mount primitive; accepted + ignored for signature
                   # parity with _spawn.run_sandboxed.
                   etc_overlay=None,
+                  # stage_files / stage_dirs: Linux-only — materialise
+                  # caller-supplied files/dirs in the mount-ns private
+                  # tmpfs root pre-pivot (the fake-home relocation
+                  # seam). macOS has no private mount tree to stage
+                  # into; accepted + ignored for signature parity
+                  # with _spawn.run_sandboxed.
+                  stage_files=None,
+                  stage_dirs=None,
                   # skip_pid_ns: Linux-only — opts out of the nested
                   # CLONE_NEWPID so gdb's host-info probe can read
                   # /proc/1/* without the systemd-init permission gap

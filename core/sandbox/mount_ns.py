@@ -1103,6 +1103,7 @@ def setup_mount_ns(target: str | None, output: str | None,
                    persona: Optional["Persona"] = None,
                    etc_overlay: dict | None = None,
                    stage_files: dict | None = None,
+                   stage_dirs: Iterable[str] | None = None,
                    rw_submounts_ok: bool = False,
                    rootfs: str | None = None,
                    require_target_ro: bool = False,
@@ -1174,6 +1175,14 @@ def setup_mount_ns(target: str | None, output: str | None,
     unprivileged UID inside the user-ns. A staging failure logs via
     ``warn_post_fork`` and continues — partial staging is better than
     an aborted sandbox setup.
+
+    `stage_dirs` (Optional[Iterable[str]]): absolute in-sandbox paths
+    materialised as EMPTY directories (mode 0o700) in the tmpfs root
+    before pivot_root, ahead of `stage_files` so staged files can land
+    inside them. Lets callers stage directory SKELETONS whose empty
+    members matter (a private in-sandbox $HOME needs its XDG subdirs
+    to exist even when no file rides them). Same failure contract as
+    `stage_files`: warn via ``warn_post_fork`` and continue.
 
     `src_fds` (Optional[dict[str, int]]): validation-time O_PATH pins
     for the bind SOURCES, keyed by ``_pathpin.canonical_bind_path`` of
@@ -2149,8 +2158,28 @@ def setup_mount_ns(target: str | None, output: str | None,
                 )
         _phase_trace(b"etc_overlay binds: done")
 
-    # 8e. Caller-supplied stage_files — materialise arbitrary files in
-    # the tmpfs root so they appear at their namespace path post-pivot.
+    # 8e. Caller-supplied stage_dirs / stage_files — materialise
+    # directories then files in the tmpfs root so they appear at their
+    # namespace paths post-pivot. Dirs first: staged files may land
+    # inside staged dirs, and empty members of a staged skeleton
+    # (XDG subdirs of a private $HOME) must exist regardless.
+    if stage_dirs:
+        for stage_dir in stage_dirs:
+            if not isinstance(stage_dir, str) or not stage_dir.startswith("/"):
+                warn_post_fork(
+                    b"sandbox: mount_ns: stage_dirs entry must be an "
+                    b"absolute path str; skipping\n"
+                )
+                continue
+            try:
+                os.makedirs(f"{root}{stage_dir}", mode=0o700,
+                            exist_ok=True)
+            except OSError as exc:
+                warn_post_fork(
+                    b"sandbox: mount_ns: stage_dirs failed "
+                    b"(errno=%d); target will not see this directory\n"
+                    % (exc.errno or 0)
+                )
     if stage_files:
         for stage_target, stage_content in stage_files.items():
             if not isinstance(stage_target, str) or not stage_target.startswith("/"):

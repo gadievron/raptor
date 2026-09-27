@@ -1676,27 +1676,34 @@ class TestE2ELandlockReadRestriction(unittest.TestCase):
 
     def test_fake_home_isolates_child_from_real_home(self):
         """run_untrusted defaults fake_home=True. The child's HOME
-        points at an empty per-sandbox dir inside output, NOT the real
-        user's home. Secrets planted in the real home are not readable
-        (restrict_reads blocks them even by absolute path), and tools
-        expanding `~` land inside the fake home.
+        points at a per-sandbox dir, NOT the real user's home: the
+        private /tmp/.home on the mount-ns lane (the ``<output>/.home``
+        intake is copied there so the child's home never names the run
+        directory), ``{output}/.home`` on mountless lanes (no private
+        /tmp to relocate into). Secrets planted in the real home are
+        not readable (restrict_reads blocks them even by absolute
+        path), and tools expanding `~` land inside the fake home.
         """
         from core.sandbox import run_untrusted
         restricted_file = Path.home() / ".raptor_fake_home_regression.txt"
         restricted_file.write_text("REAL-HOME-SECRET\n")
         try:
             with TemporaryDirectory() as out:
-                # 1. Child's HOME points at {output}/.home
+                # 1. Child's HOME points at a fake home — the private
+                # /tmp/.home (mount lane) or {output}/.home (mountless)
                 r = run_untrusted(
                     ["sh", "-c", "echo $HOME"],
                     target=out, output=out,
                     capture_output=True, text=True, timeout=5,
                 )
                 self.assertEqual(r.returncode, 0)
-                self.assertTrue(r.stdout.strip().startswith(out),
-                                f"HOME should be under {out!r}, "
-                                f"got {r.stdout!r}")
-                self.assertTrue(r.stdout.strip().endswith(".home"))
+                child_home = r.stdout.strip()
+                self.assertTrue(
+                    child_home == "/tmp/.home"
+                    or child_home.startswith(out),
+                    f"HOME should be /tmp/.home or under {out!r}, "
+                    f"got {r.stdout!r}")
+                self.assertTrue(child_home.endswith(".home"))
 
                 # 2. Real HOME secret not readable (absolute path)
                 r = run_untrusted(

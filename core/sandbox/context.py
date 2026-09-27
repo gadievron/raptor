@@ -1262,6 +1262,91 @@ def _require_degraded_udp_filter(seccomp_profile: str | None) -> None:
 #: call site into a warning flood.
 _run_root_output_warned: set[str] = set()
 
+#: In-sandbox fake-home location on the mount-ns lane. Lives inside
+#: the per-sandbox private /tmp tmpfs — no host path rides the name,
+#: and no bind mount ties it to the run directory (a bind's mountinfo
+#: root field re-leaks the bind SOURCE path, which is why the fake
+#: home is COPIED into the tmpfs rather than bound from
+#: ``<output>/.home``).
+_TMP_FAKE_HOME = "/tmp/.home"
+
+#: Fake-home intake budgets. The intake (``<output>/.home``) is
+#: writable by any EARLIER sandboxed child sharing the output dir, so
+#: the parent-side staging walk must be bounded. Both directions
+#: matter: legitimate pre-population is a handful of small dotfiles
+#: (gitconfig, tool rc files — hundreds of bytes each), so 256 files /
+#: 8 MiB is an order of magnitude of headroom; raising the caps lets a
+#: hostile prior child make the parent buffer arbitrarily much of its
+#: run-dir plant into memory AND replay it into every subsequent
+#: sandbox's tmpfs budget. Exceeding a cap never fails the run — the
+#: child keeps the attributable ``<output>/.home`` (status quo ante)
+#: with a warning.
+_FAKE_HOME_INGEST_MAX_FILES = 256
+_FAKE_HOME_INGEST_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _stage_fake_home_intake(
+        fake_home_path: str) -> tuple[dict[str, bytes], list[str]] | None:
+    """Map the ``<output>/.home`` intake onto the private ``/tmp/.home``.
+
+    Returns ``(stage_files, stage_dirs)`` for the mount-ns staging
+    seam — file contents keyed by in-sandbox path, plus the directory
+    skeleton (empty XDG subdirs included). Returns ``None`` when the
+    intake cannot be staged faithfully: over the file-count/byte
+    budgets, or any member is not a plain file/directory (a symlink,
+    FIFO, or device in the intake is a plant from an earlier child —
+    following it would read attacker-chosen host paths into the next
+    sandbox). The caller falls back to the attributable
+    ``<output>/.home`` — never a hard failure.
+    """
+    stage_files: dict[str, bytes] = {}
+    stage_dirs: list[str] = [_TMP_FAKE_HOME]
+    total = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(
+                fake_home_path, followlinks=False):
+            rel = os.path.relpath(dirpath, fake_home_path)
+            in_sbx_dir = (_TMP_FAKE_HOME if rel == "."
+                          else os.path.join(_TMP_FAKE_HOME, rel))
+            for name in dirnames:
+                st = os.lstat(os.path.join(dirpath, name))
+                if not stat.S_ISDIR(st.st_mode):
+                    return None
+                stage_dirs.append(os.path.join(in_sbx_dir, name))
+            for name in filenames:
+                host_path = os.path.join(dirpath, name)
+                if len(stage_files) >= _FAKE_HOME_INGEST_MAX_FILES:
+                    return None
+                # O_NOFOLLOW + fstat: the lstat/open race is real in
+                # a dir an earlier sandboxed child could write.
+                fd = os.open(host_path,
+                             os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                try:
+                    st = os.fstat(fd)
+                    if not stat.S_ISREG(st.st_mode):
+                        return None
+                    budget = _FAKE_HOME_INGEST_MAX_BYTES - total
+                    if st.st_size > budget:
+                        return None
+                    data = b""
+                    while len(data) <= budget:
+                        chunk = os.read(fd, 65536)
+                        if not chunk:
+                            break
+                        data += chunk
+                    if len(data) > budget:
+                        # The file grew past its fstat size mid-read
+                        # (concurrent writer) — refuse rather than
+                        # stage a torn/oversize copy.
+                        return None
+                finally:
+                    os.close(fd)
+                total += len(data)
+                stage_files[os.path.join(in_sbx_dir, name)] = data
+    except OSError:
+        return None
+    return stage_files, stage_dirs
+
 
 @contextmanager
 def sandbox(block_network=_UNSET, target: str | None = None, output: str | None = None,
@@ -1827,6 +1912,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # creation would add a race; we set up now so that Landlock's
     # writable_paths covers it. Requires output= so Landlock can write.
     fake_home_env: dict = {}
+    fake_home_path: str | None = None
     if fake_home:
         if not output:
             msg = (
@@ -5866,6 +5952,57 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 _call_writable, _call_env = (
                                     _mountless_write_policy()
                                 )
+                            # Mount-ns lane: relocate the fake home
+                            # into the per-sandbox private /tmp. The
+                            # intake (`<output>/.home`, pre-populated
+                            # by the caller) is COPIED into the tmpfs
+                            # via the staging seam — never bind-
+                            # mounted (a bind's mountinfo root field
+                            # re-leaks the source path) — and HOME/
+                            # XDG_* re-point at /tmp/.home, so the
+                            # child's home stops naming the run
+                            # directory. Mountless lanes keep the
+                            # `<output>/.home` env staged at
+                            # construction: without a private /tmp,
+                            # "/tmp/.home" would be a host-shared,
+                            # attacker-plantable path. An unstageable
+                            # intake (budget breach or non-regular
+                            # member — see _stage_fake_home_intake)
+                            # also keeps the attributable home, with
+                            # a warning.
+                            _call_stage_files: dict[str, bytes] | None
+                            _call_stage_dirs: list[str] | None
+                            _call_stage_files = _call_stage_dirs = None
+                            if not skip_mount and fake_home_path is not None:
+                                _staged = _stage_fake_home_intake(
+                                    fake_home_path)
+                                if _staged is None:
+                                    from core.security.log_sanitisation import (  # noqa: E501
+                                        escape_nonprintable,
+                                    )
+                                    logger.warning(
+                                        "Sandbox: fake-home intake at "
+                                        "%s could not be staged into "
+                                        "the private /tmp (over "
+                                        "budget, unreadable, or a "
+                                        "non-regular member) — the "
+                                        "child keeps it as HOME.",
+                                        escape_nonprintable(
+                                            fake_home_path))
+                                else:
+                                    (_call_stage_files,
+                                     _call_stage_dirs) = _staged
+                                    _hp = fake_home_path
+                                    _call_env = {
+                                        k: (_TMP_FAKE_HOME
+                                            + v[len(_hp):]
+                                            if isinstance(v, str)
+                                            and (v == _hp
+                                                 or v.startswith(
+                                                     _hp + os.sep))
+                                            else v)
+                                        for k, v in _call_env.items()
+                                    }
                             return _spawn_mod.run_sandboxed(
                                 cmd,
                                 target=target, output=output,
@@ -5905,6 +6042,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 strict_env=False,
                                 persona=_persona,
                                 etc_overlay=etc_overlay,
+                                stage_files=_call_stage_files,
+                                stage_dirs=_call_stage_dirs,
                                 # Default True here even though subprocess.run
                                 # defaults to False — _spawn's historical
                                 # behaviour was unconditional os.setsid() and

@@ -467,7 +467,11 @@ class TestFakeHomeXDGRedirection(unittest.TestCase):
 
     def test_all_xdg_vars_redirected(self):
         """Confirm HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME, XDG_DATA_HOME,
-        XDG_STATE_HOME all point inside {output}/.home/."""
+        XDG_STATE_HOME all point inside the fake home. setUp requires
+        the mount-ns lane, where the fake home lives in the per-sandbox
+        private /tmp (/tmp/.home): the ``<output>/.home`` intake is
+        copied there so the child's home never names the run
+        directory."""
         out = self.tmp.name
         r = run_untrusted(
             ["sh", "-c",
@@ -484,8 +488,12 @@ class TestFakeHomeXDGRedirection(unittest.TestCase):
                     "XDG_DATA_HOME", "XDG_STATE_HOME"):
             self.assertIn(key, kv, f"{key} missing from env")
             self.assertTrue(
-                kv[key].startswith(os.path.join(out, ".home")),
-                f"{key}={kv[key]!r} — expected under {out}/.home/",
+                kv[key].startswith("/tmp/.home"),
+                f"{key}={kv[key]!r} — expected under /tmp/.home/",
+            )
+            self.assertNotIn(
+                out, kv[key],
+                f"{key}={kv[key]!r} — must not name the run directory",
             )
 
 
