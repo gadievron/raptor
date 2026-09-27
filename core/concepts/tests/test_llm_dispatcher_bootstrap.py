@@ -133,7 +133,7 @@ class TestSynthesiseCheckerDispatcherBootstrap:
         route_calls: list[tuple] = []
         monkeypatch.setattr(
             lifecycle, "ensure_route_for_model_configs",
-            lambda configs, label=None: route_calls.append(
+            lambda configs, label=None, run_dir=None: route_calls.append(
                 (list(configs), label)),
         )
 
