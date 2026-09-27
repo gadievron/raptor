@@ -23916,6 +23916,40 @@ def _mark_deepen_unadjudicated(outcome: ReviewOutcome, reason: str) -> None:
         outcome.body = f"{body}\n\n{marker}" if body else marker
 
 
+#: Human-readable body markers per deepen-selection stranding reason.
+_DEEPEN_STRANDED_MARKERS: dict[str, str] = {
+    "below_sloc_floor": (
+        f"[deepen stranded: function below the {_MIN_SLOC_FOR_DEEPEN}-SLOC "
+        "deepen floor with no tool evidence — the verdict finishes the "
+        "run without a deepen re-review]"
+    ),
+    "duplicate_hypothesis": (
+        "[deepen stranded: an identical hypothesis for this function "
+        "already went through deepen selection — the verdict finishes "
+        "the run without a deepen re-review]"
+    ),
+}
+
+
+def _mark_deepen_stranded(outcome: ReviewOutcome, reason: str) -> None:
+    """Stamp a verdict the deepen selection stranded outside the pass.
+
+    ``reason`` is a ``_DEEPEN_STRANDED_MARKERS`` key. Same output
+    surfaces and same append-only body discipline as
+    :func:`_mark_deepen_unadjudicated`: the ``review_result`` key
+    rides into the graded findings export, the marker is appended
+    (body prefixes are load-bearing provenance), and the stamp is
+    idempotent across resumed passes.
+    """
+    if outcome.review_result is None:
+        outcome.review_result = {}
+    outcome.review_result["deepen_stranded"] = reason
+    marker = _DEEPEN_STRANDED_MARKERS[reason]
+    body = outcome.body or ""
+    if marker not in body:
+        outcome.body = f"{body}\n\n{marker}" if body else marker
+
+
 def _deepen_stop_reason(result: OrchestratorResult) -> str:
     """Name the stop cause that stranded un-run deepen re-reviews.
 
@@ -23997,6 +24031,13 @@ def _deepen_suspicious(
 
     seen_hypotheses: dict[str, str] = {}
     targets = []
+    # Selection stranding account: a withheld all-refuted outcome on a
+    # tiny function (or a dedup'd repeat hypothesis) never reaches the
+    # deepen lane and finishes the run suspicious-unverified — stamp
+    # each stranded verdict so the run's output names it instead of
+    # dropping it silently.
+    _stranded_dup = 0
+    _stranded_sloc = 0
     for o in suspicious:
         gap = _find_gap_in_checklist(checklist, o.file, o.function)
         if not gap:
@@ -24008,6 +24049,8 @@ def _deepen_suspicious(
         key = f"{o.file}:{o.function}"
         hyp = (o.hypothesis or "").strip()[:200]
         if key in seen_hypotheses and hyp and hyp == seen_hypotheses[key]:
+            _mark_deepen_stranded(o, "duplicate_hypothesis")
+            _stranded_dup += 1
             continue
         if hyp:
             seen_hypotheses[key] = hyp
@@ -24019,8 +24062,22 @@ def _deepen_suspicious(
             # Reduced-context outcomes bypass the SLOC gate: the
             # whole point of the tag is a guaranteed full-context
             # re-review.
+            _mark_deepen_stranded(o, "below_sloc_floor")
+            _stranded_sloc += 1
             continue
         targets.append((o, gap))
+
+    if _stranded_sloc or _stranded_dup:
+        logger.info(
+            "deepen: %d verdict(s) stranded outside the deepen pass "
+            "(%d below the %d-SLOC floor without tool evidence, %d "
+            "duplicate hypotheses) — they finish the run without a "
+            "deepen re-review",
+            _stranded_sloc + _stranded_dup,
+            _stranded_sloc,
+            _MIN_SLOC_FOR_DEEPEN,
+            _stranded_dup,
+        )
 
     if not targets:
         return result

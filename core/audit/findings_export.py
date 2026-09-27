@@ -420,6 +420,16 @@ def build_graded_finding(
     if deepen_unadjudicated:
         finding["deepen_unadjudicated"] = deepen_unadjudicated
 
+    # Deepen-selection stranding record (see orchestrator
+    # _mark_deepen_stranded): the deepen selection skipped this
+    # verdict (sub-floor SLOC without tool evidence, or a dedup'd
+    # repeat hypothesis) — the stamp travels with the exported
+    # finding so a suspicious that stayed unverified for the run is
+    # distinguishable from one deepen adjudicated.
+    deepen_stranded = review_result.get("deepen_stranded")
+    if deepen_stranded:
+        finding["deepen_stranded"] = deepen_stranded
+
     # Caller-contract demotion receipt (see orchestrator
     # _apply_caller_contract_gate): the per-site receipts travel with
     # the finding, and the confidence clamp is ENFORCED here — a
