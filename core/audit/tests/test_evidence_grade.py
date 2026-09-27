@@ -739,12 +739,31 @@ class TestProducerStampClosure:
     @staticmethod
     def _local_bindings(scope_node):
         """name -> set of str constants assigned in this scope, plus
-        the list of paired tuple-assign bindings ({name: const|None})."""
+        the list of paired tuple-assign bindings ({name: const|None}).
+
+        Class bodies inside the scope are pruned: a class-level
+        assignment is a field/attribute default (e.g. a dataclass's
+        ``evidence_tool: str = ""``), not a binding of the like-named
+        LOCAL at a producer call site — resolving it minted a phantom
+        empty stamp for a call whose actual argument is a
+        runtime-computed local. Nothing real is lost to the prune: a
+        class attribute used at a call site is an ``Attribute`` node
+        (never a bare ``Name``), and methods still get their own
+        scope pass via ``_scopes``.
+        """
         import ast as _ast
 
+        in_class: set = set()
+        for cls in _ast.walk(scope_node):
+            if isinstance(cls, _ast.ClassDef) and cls is not scope_node:
+                for inner in _ast.walk(cls):
+                    if inner is not cls:
+                        in_class.add(id(inner))
         consts: dict = {}
         pairs: list = []
         for node in _ast.walk(scope_node):
+            if id(node) in in_class:
+                continue
             if isinstance(node, _ast.Assign):
                 for target in node.targets:
                     if (
