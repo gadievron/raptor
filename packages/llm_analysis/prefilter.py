@@ -25,6 +25,7 @@ cold-start trust accumulation.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from core.llm.task_types import TaskType
@@ -202,6 +203,7 @@ def agentic_fp_analysis(reasoning: str) -> dict[str, Any]:
 def prefilter_for_finding(
     client, item: dict[str, Any],
     pending_claims: dict[str, dict[str, Any]] | None = None,
+    repo: str | Path | None = None,
 ) -> dict[str, Any] | None:
     """Return a short-circuit analysis dict if the scorecard trusts a
     cheap-tier ``clear_fp`` verdict for this finding, or ``None`` to
@@ -218,6 +220,12 @@ def prefilter_for_finding(
     ``agentic:<rule_id>`` scorecard cells never accumulate events and
     ``should_short_circuit`` stays in learning mode forever — the
     calibration loop is silently open.
+
+    ``repo``: the analysis target, threaded to the scorecard's
+    target-diversity gate. Callers pass the ORCHESTRATOR-resolved
+    repo path — deliberately not ``item["repo_path"]``, which comes
+    from the prep report (``setdefault``-stamped, so a prep-report-
+    carried value wins) and could mint fake target diversity.
     """
     from core.llm.scorecard import prefilter_decision
 
@@ -234,6 +242,7 @@ def prefilter_for_finding(
         decision_class=decision_class,
         model=fast_model_name,
         cheap_says_fp=cheap_says_fp,
+        repo=repo,
     )
     if decision.short_circuit:
         logger.info(
@@ -260,6 +269,7 @@ def prefilter_for_finding(
 
 def make_prefilter_fn(
     client, pending_claims: dict[str, dict[str, Any]] | None = None,
+    repo: str | Path | None = None,
 ):
     """Per-finding-memoized prefilter hook for ``dispatch_task``.
 
@@ -292,6 +302,7 @@ def make_prefilter_fn(
             if fid not in cache:
                 cache[fid] = prefilter_for_finding(
                     client, item, pending_claims=pending_claims,
+                    repo=repo,
                 )
             return cache[fid]
 
@@ -302,6 +313,7 @@ def record_prefilter_outcomes(
     client,
     pending_claims: dict[str, dict[str, Any]],
     results: list[dict[str, Any]],
+    repo: str | Path | None = None,
 ) -> int:
     """Adjudicate stashed cheap ``clear_fp`` claims against the full
     ANALYSE verdicts and record them to the scorecard.
@@ -310,6 +322,10 @@ def record_prefilter_outcomes(
     inline after their full analysis; /agentic's split hook/dispatch
     structure needs it as a post-batch pass. Returns the number of
     events recorded. Best-effort — never raises.
+
+    ``repo``: the orchestrator-resolved analysis target for the
+    scorecard's diversity ledger (same provenance rule as
+    :func:`prefilter_for_finding` — never a finding-dict field).
     """
     if not pending_claims:
         return 0
@@ -344,6 +360,7 @@ def record_prefilter_outcomes(
                 full_says_fp=(full_verdict is False),
                 cheap_reasoning=claim.get("cheap_reasoning", ""),
                 full_reasoning=str(result.get("reasoning") or ""),
+                repo=repo,
             )
             n += 1
         except Exception:

@@ -1211,8 +1211,13 @@ def orchestrate(
         # work items, but the cheap FP check is model-independent —
         # see make_prefilter_fn for the dedupe contract.
         from packages.llm_analysis.prefilter import make_prefilter_fn
+        # repo threads the ORCHESTRATOR-resolved target into the
+        # scorecard's target-diversity gate — not the findings'
+        # stamped repo_path field, which a prep report could carry
+        # pre-filled (the setdefault stamp above keeps an existing
+        # value, so that field is prep-report-controlled).
         prefilter_fn = make_prefilter_fn(
-            client, pending_claims=pending_fp_claims,
+            client, pending_claims=pending_fp_claims, repo=repo_path,
         )
 
     analysis_results = dispatch_task(
@@ -1232,6 +1237,7 @@ def orchestrate(
             )
             record_prefilter_outcomes(
                 client, pending_fp_claims, analysis_results,
+                repo=repo_path,
             )
         except Exception:
             logger.debug("prefilter outcome recording failed",

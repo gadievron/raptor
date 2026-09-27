@@ -758,6 +758,10 @@ class AutonomousCodeQLAnalyzer:
             decision_class=decision_class,
             model=fast_model_name,
             cheap_says_fp=cheap_says_fp,
+            # Diversity gate: the repo under analysis. May be None
+            # (callers that skip the threat-model block) — then the
+            # cell must clear the cross-target floor on its own.
+            repo=repo_path,
         )
         if decision.short_circuit:
             self.logger.info(
@@ -899,6 +903,7 @@ class AutonomousCodeQLAnalyzer:
                     full_says_fp=full_says_fp,
                     cheap_reasoning=cheap_reasoning,
                     full_reasoning=analysis.reasoning,
+                    repo=repo_path,
                 )
 
             return analysis

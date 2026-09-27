@@ -55,6 +55,16 @@ def _forged_cells(n_correct: int = 100000) -> dict:
                 },
             },
             "disagreement_samples": [],
+            # A competent forgery fabricates the target-diversity
+            # ledger too — the integrity layer, not the diversity
+            # gate, is what must stop this shape. (It also keeps the
+            # operator-adoption test honest: adopt restores FULL
+            # authority when the adopted history carries diversity.)
+            "repos": {
+                "0" * 16: _NOW_ISO,
+                "1" * 16: _NOW_ISO,
+                "2" * 16: _NOW_ISO,
+            },
         }}},
     }
 
@@ -161,13 +171,15 @@ def test_honest_write_read_roundtrip_verifies_and_trusts(tmp_path):
     sc = ModelScorecard(path)
     # 200 zero-failure observations: Wilson 95% UB ~= 0.019, safely
     # under the 0.05 ceiling (50 would sit at ~0.071 and fall through).
+    # All earned on one target — the same-target grant is what spends.
     for _ in range(200):
         sc.record_event(
             "x:y", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+            repo="/proj/alpha",
         )
     # A fresh instance (fresh read) trusts the measured history.
     assert ModelScorecard(path).should_short_circuit(
-        "x:y", "m",
+        "x:y", "m", repo="/proj/alpha",
     ) == Policy.SHORT_CIRCUIT
     on_disk = json.loads(path.read_text(encoding="utf-8"))
     assert integrity.verify(on_disk, integrity.extract_token(on_disk))

@@ -32,7 +32,10 @@ Persistence shape (JSON, ``out/llm_scorecard.json`` by default)::
                 "this_reasoning":  "...short text...",
                 "other_reasoning": "...short text..."
               }
-            ]
+            ],
+            "repos": {                             // target-diversity ledger:
+              "3f2a...16 hex...": "2026-05-06T..." //   repo_key(target) -> last seen
+            }                                      //   (cheap_short_circuit events only)
           }
         }
       }
@@ -49,6 +52,7 @@ tempfile+rename that replaces the sidecar itself.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import math
 import random
 import time
@@ -105,6 +109,33 @@ DEFAULT_MISS_RATE_CEILING = 0.05
 # CLI's re-derived policy column both default to it, so the display
 # cannot silently hardcode a different gate than the routing applies.
 DEFAULT_SAMPLE_SIZE_FLOOR = 10
+
+# Short-circuit authority must be EARNED on at least this many
+# DISTINCT analysis targets before it may spend on a target that
+# contributed none of the cell's evidence (query-time gate in
+# ``should_short_circuit``; ledger written by ``_apply_event``).
+# Rationale, both directions: LOWER (1-2) lets trust farmed on a
+# single repo — including a hostile one whose findings steer the
+# cheap-vs-full agreement stream — spend as suppression authority on
+# the operator's next, unrelated target; HIGHER delays legitimate
+# cross-target reuse of a genuinely reliable cell and keeps consumers
+# paying full-tier calls longer (the same-target grant softens this:
+# a target that contributed evidence spends its own trust at any
+# diversity). 3 matches the floor SAGE rule replay enforces for the
+# equivalent cross-target question ("did this generalise, or did it
+# only ever work here?").
+REPO_DIVERSITY_FLOOR = 3
+
+# Cap on the per-cell ``repos`` diversity ledger (hashed target key →
+# last-seen timestamp), oldest-last-seen evicted first. Both
+# directions: LARGER remembers contribution history for more targets
+# (same-target grants survive longer between visits) but grows every
+# cell in the sidecar; SMALLER bounds the sidecar but forgets a
+# target's contribution sooner — after eviction that target must
+# either re-contribute or clear the diversity floor like a stranger.
+# Eviction can only SHRINK the distinct-target count, so the cap
+# fails toward withholding authority, never toward granting it.
+MAX_REPO_KEYS = 32
 
 # How many disagreement reasoning samples to keep per cell.
 # Trade-off: larger → richer research surface but bigger sidecar
@@ -463,6 +494,26 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def repo_key(repo: str | Path) -> str:
+    """Stable, non-reversible identity for one analysis target.
+
+    SHA-256 of the resolved absolute path, truncated to 16 hex chars
+    (64 bits — collision-safe at the tens-of-targets scale a
+    ``repos`` ledger holds). Only the hash ever persists: the sidecar
+    is designed to outlive the run, and raw filesystem paths carry
+    usernames and host layout that must not land in a shareable
+    ledger. Two checkouts of the same project at different paths
+    count as distinct targets — the ledger tracks WHERE evidence was
+    earned, and path identity is the only ambient notion of "where"
+    every consumer already has.
+    """
+    resolved = str(Path(repo).resolve())
+    digest = hashlib.sha256(
+        resolved.encode("utf-8", errors="surrogatepass"),
+    )
+    return digest.hexdigest()[:16]
+
+
 def _safe_int(v, default: int = 0) -> int:
     """Coerce to ``int`` defensively — wrong-type/malformed cell fields
     (a hand-edited ``"calls": "abc"``, a JSON list slipped in,
@@ -663,6 +714,7 @@ class ModelScorecard:
         *,
         model_version: str | None = None,
         sample: dict[str, str] | None = None,
+        repo: str | Path | None = None,
     ) -> None:
         """Record one observation for a ``(model, decision_class)``
         cell.
@@ -674,12 +726,22 @@ class ModelScorecard:
         ``outcome="incorrect"`` and only when ``self.retain_samples``
         is true; capped at :data:`MAX_DISAGREEMENT_SAMPLES` per
         cell on a most-recent-wins basis.
+
+        ``repo`` is the analysis target the observation was earned on
+        (any path-like; only its :func:`repo_key` hash persists).
+        Recorded into the cell's target-diversity ledger for
+        ``cheap_short_circuit`` events — the evidence stream
+        :meth:`should_short_circuit` gates on. Callers should pass
+        the OPERATOR-resolved target, never a value read back out of
+        a scanned artifact (a target-supplied path could mint fake
+        diversity). Omitting it keeps the observation counting toward
+        the Wilson math but contributes zero target diversity.
         """
         self._validate_event(event_type, outcome)
         with self._with_lock() as data:
             self._apply_event(
                 data, decision_class, model, event_type, outcome,
-                model_version=model_version, sample=sample,
+                model_version=model_version, sample=sample, repo=repo,
             )
 
     def record_events(self, events: list[dict]) -> None:
@@ -687,7 +749,7 @@ class ModelScorecard:
 
         Each entry: ``{"decision_class": str, "model": str,
         "event_type": str, "outcome": Outcome}`` plus optional
-        ``model_version`` / ``sample`` (same semantics as
+        ``model_version`` / ``sample`` / ``repo`` (same semantics as
         :meth:`record_event`). Every entry is validated BEFORE the
         lock is taken, so a bad entry raises without a partial write.
 
@@ -711,6 +773,7 @@ class ModelScorecard:
                     ev["event_type"], ev["outcome"],
                     model_version=ev.get("model_version"),
                     sample=ev.get("sample"),
+                    repo=ev.get("repo"),
                 )
 
     @staticmethod
@@ -735,6 +798,7 @@ class ModelScorecard:
         *,
         model_version: str | None = None,
         sample: dict[str, str] | None = None,
+        repo: str | Path | None = None,
     ) -> None:
         """Mutate one cell for one observation. Caller holds the lock."""
         cell = self._ensure_cell(data, model, decision_class)
@@ -746,6 +810,13 @@ class ModelScorecard:
             bucket_key(now_iso), {"correct": 0, "incorrect": 0}
         )
         bucket[outcome] += 1
+        # Target-diversity ledger, CHEAP_SHORT_CIRCUIT only: the
+        # ledger must mirror exactly the evidence stream the
+        # short-circuit gate reads. Other event types don't feed
+        # that gate's Wilson math, so a repo passed with them must
+        # not inflate its target diversity either.
+        if repo and event_type == EventType.CHEAP_SHORT_CIRCUIT:
+            self._note_repo(cell, repo_key(repo), now_iso)
         cell["last_seen_at"] = now_iso
         if model_version:
             cell["model_version"] = model_version
@@ -802,6 +873,47 @@ class ModelScorecard:
             cell["disagreement_samples"] = (
                 samples[-MAX_DISAGREEMENT_SAMPLES:]
             )
+
+    @staticmethod
+    def _note_repo(cell: dict, key: str, now_iso: str) -> None:
+        """Record one hashed target key in the cell's diversity
+        ledger (``repos``: hashed key → last-seen timestamp), bounded
+        at :data:`MAX_REPO_KEYS` with oldest-last-seen evicted first.
+        Write-path shape normalisation like the events handling: a
+        junk-shaped ``repos`` value is replaced (it holds no
+        recoverable diversity, and losing it only WITHHOLDS authority
+        — the fail-closed direction). Caller holds the lock."""
+        repos = cell.get("repos")
+        if not isinstance(repos, dict):
+            repos = {}
+            cell["repos"] = repos
+        repos[key] = now_iso
+        if len(repos) > MAX_REPO_KEYS:
+            overflow = len(repos) - MAX_REPO_KEYS
+            for stale in sorted(
+                repos, key=lambda k: str(repos.get(k, "")),
+            )[:overflow]:
+                repos.pop(stale, None)
+
+    def _repo_diversity_ok(
+        self, cell: dict, repo: str | Path | None,
+    ) -> bool:
+        """Whether the cell's earned trust may spend on ``repo``.
+
+        True when the cell's evidence spans at least
+        :data:`REPO_DIVERSITY_FLOOR` distinct targets (the trust
+        demonstrably generalises), or when ``repo`` itself
+        contributed evidence (a target always spends the trust it
+        helped earn, at any diversity). Fail-closed everywhere else:
+        a legacy cell whose records predate the ledger counts as
+        ZERO diversity — never as "unknown = distinct" — and a query
+        without a target identity gets no same-target grant.
+        """
+        repos = cell.get("repos")
+        keys = set(repos) if isinstance(repos, dict) else set()
+        if len(keys) >= REPO_DIVERSITY_FLOOR:
+            return True
+        return bool(repo) and repo_key(repo) in keys
 
     def register_uses(self, uses: list[dict]) -> None:
         """Record per-(model, decision_class) USAGE — a volume/presence signal,
@@ -864,6 +976,7 @@ class ModelScorecard:
         model: str,
         *,
         sample_size_floor: int = DEFAULT_SAMPLE_SIZE_FLOOR,
+        repo: str | Path | None = None,
     ) -> str:
         """Return a :class:`Policy` value for whether to trust the
         cheap-tier verdict on this cell.
@@ -877,9 +990,25 @@ class ModelScorecard:
         ``Policy.LEARNING`` so the consumer runs both cheap and
         full and we accumulate ground-truth comparison data.
 
+        ``repo`` is the target the trust would SPEND on (any
+        path-like; hashed via :func:`repo_key` before comparison). A
+        measured-trustworthy cell additionally passes the
+        target-diversity gate: authority spends only when the cell's
+        evidence spans :data:`REPO_DIVERSITY_FLOOR` distinct targets
+        or ``repo`` itself contributed evidence. Otherwise the
+        answer demotes to ``Policy.LEARNING`` — the consumer keeps
+        running both tiers and recording outcomes, which is exactly
+        what grows the diversity that opens the gate. Never a
+        verdict flip: the gate only withholds the skip. Cells whose
+        records predate the ledger count as zero diversity
+        (fail-closed), so trust farmed on one repo cannot spend on
+        an unrelated target by itself. This gate is query-time and
+        target-relative — the CLI's target-agnostic policy column
+        shows the measured policy, which such a cell still earns.
+
         Operator pins via ``policy_override`` short-circuit the
-        computation entirely; explicit operator intent beats
-        measured drift.
+        computation entirely (including the diversity gate);
+        explicit operator intent beats measured drift.
         """
         with self._with_lock(write=False) as data:
             cell = self._read_cell(data, model, decision_class)
@@ -923,6 +1052,14 @@ class ModelScorecard:
         )
         if policy != Policy.SHORT_CIRCUIT:
             return policy
+        # Target-diversity gate: measured trust may only spend
+        # cross-target once it was earned on REPO_DIVERSITY_FLOOR
+        # distinct targets (or on this very target). LEARNING, not
+        # FALL_THROUGH — the evidence is good, it just hasn't
+        # demonstrated generalisation yet, and learning mode is what
+        # accrues the missing diversity.
+        if not self._repo_diversity_ok(cell, repo):
+            return Policy.LEARNING
         # Cell is short-circuit-worthy. Roll the re-shadowing dice:
         # with probability ``shadow_rate`` we run full anyway so the
         # cell keeps accumulating fresh ground-truth signal and we
@@ -1448,6 +1585,7 @@ class ModelScorecard:
                 "policy_override": "auto",
                 "events": _empty_events(),
                 "disagreement_samples": [],
+                "repos": {},
                 "calls": 0,
                 "cost_usd": 0.0,
                 "tokens": 0,
@@ -1465,6 +1603,7 @@ class ModelScorecard:
             cell.setdefault("model_version", "")
             cell.setdefault("policy_override", "auto")
             cell.setdefault("disagreement_samples", [])
+            cell.setdefault("repos", {})
             cell.setdefault("calls", 0)
             cell.setdefault("cost_usd", 0.0)
             cell.setdefault("tokens", 0)

@@ -192,13 +192,16 @@ def test_learning_mode_returns_none_no_short_circuit(llm):
 def test_short_circuit_on_trusted_cell(llm):
     """Pre-seed scorecard with a trustworthy track record →
     SHORT_CIRCUIT → cheap says clear_fp → returns FP analysis dict and
-    bumps client.short_circuits."""
+    bumps client.short_circuits. Trust is seeded on the SAME target
+    the query names — the diversity gate's same-target grant is what
+    lets a single-repo track record spend here."""
     client, prov = llm
     sc = ModelScorecard(client.config.scorecard_path)
     for _ in range(150):
         sc.record_event(
             "agentic:py/sql-injection", "haiku-stub",
             EventType.CHEAP_SHORT_CIRCUIT, "correct",
+            repo="/proj/alpha",
         )
     client._scorecard = None  # force lazy reload from sidecar
 
@@ -207,7 +210,7 @@ def test_short_circuit_on_trusted_cell(llm):
                  "reasoning": "value is constant 'admin'"}, "raw")
     prov.responder = responder
 
-    result = prefilter_for_finding(client, _finding())
+    result = prefilter_for_finding(client, _finding(), repo="/proj/alpha")
 
     assert result is not None
     assert result["is_true_positive"] is False

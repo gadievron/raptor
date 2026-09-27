@@ -42,16 +42,38 @@ def test_cheap_did_not_claim_fp_never_short_circuits(tmp_path):
 
 
 def test_cheap_says_fp_with_trusted_cell_short_circuits(tmp_path):
+    # Trust earned on the SAME target the skip spends on — the glue
+    # forwards ``repo`` through both the record and the query side.
     sc = ModelScorecard(tmp_path / "sc.json")
     sc.record_events([
         {"decision_class": "x:y", "model": "m",
-         "event_type": EventType.CHEAP_SHORT_CIRCUIT, "outcome": "correct"}
+         "event_type": EventType.CHEAP_SHORT_CIRCUIT, "outcome": "correct",
+         "repo": "/proj/alpha"}
     ] * 200)
     decision = prefilter_decision(
         sc, decision_class="x:y", model="m", cheap_says_fp=True,
+        repo="/proj/alpha",
     )
     assert decision.short_circuit is True
     assert decision.policy == Policy.SHORT_CIRCUIT
+
+
+def test_cheap_says_fp_cross_target_does_not_short_circuit(tmp_path):
+    """Same trusted cell, but the querying target contributed none of
+    the evidence and the cell is below the diversity floor — the glue
+    must surface the withheld grant (LEARNING → no skip)."""
+    sc = ModelScorecard(tmp_path / "sc.json")
+    sc.record_events([
+        {"decision_class": "x:y", "model": "m",
+         "event_type": EventType.CHEAP_SHORT_CIRCUIT, "outcome": "correct",
+         "repo": "/proj/alpha"}
+    ] * 200)
+    decision = prefilter_decision(
+        sc, decision_class="x:y", model="m", cheap_says_fp=True,
+        repo="/proj/stranger",
+    )
+    assert decision.short_circuit is False
+    assert decision.policy == Policy.LEARNING
 
 
 def test_cheap_says_fp_in_learning_falls_through(tmp_path):
@@ -110,6 +132,24 @@ def test_records_incorrect_with_sample_when_cheap_was_wrong(tmp_path):
     assert len(stat.disagreement_samples) == 1
     assert "hardcoded" in stat.disagreement_samples[0]["this_reasoning"]
     assert "user-tainted" in stat.disagreement_samples[0]["other_reasoning"]
+
+
+def test_record_outcome_forwards_repo_to_diversity_ledger(tmp_path):
+    """The record side of the glue threads ``repo`` through to the
+    substrate's target-diversity ledger — without it, consumers could
+    never accrue the diversity the gate demands."""
+    import json
+
+    path = tmp_path / "sc.json"
+    sc = ModelScorecard(path)
+    record_prefilter_outcome(
+        sc, decision_class="x:y", model="m",
+        cheap_says_fp=True, full_says_fp=True,
+        cheap_reasoning="fp", full_reasoning="fp",
+        repo="/proj/alpha",
+    )
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert len(on_disk["models"]["m"]["x:y"]["repos"]) == 1
 
 
 def test_no_record_when_cheap_did_not_claim_fp(tmp_path):

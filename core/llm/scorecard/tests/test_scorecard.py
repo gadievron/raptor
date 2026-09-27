@@ -101,14 +101,23 @@ def test_below_floor_returns_learning(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+# Seeded evidence cycles across three distinct targets so the earned
+# trust clears the cross-target diversity floor (REPO_DIVERSITY_FLOOR)
+# — these helpers build cells whose authority may spend anywhere.
+# The diversity gate itself has its own battery below.
+_REPOS = ("/proj/alpha", "/proj/beta", "/proj/gamma")
+
+
 def _record_correct(sc, dc, model, n):
-    for _ in range(n):
-        sc.record_event(dc, model, EventType.CHEAP_SHORT_CIRCUIT, "correct")
+    for i in range(n):
+        sc.record_event(dc, model, EventType.CHEAP_SHORT_CIRCUIT, "correct",
+                        repo=_REPOS[i % len(_REPOS)])
 
 
 def _record_incorrect(sc, dc, model, n):
-    for _ in range(n):
-        sc.record_event(dc, model, EventType.CHEAP_SHORT_CIRCUIT, "incorrect")
+    for i in range(n):
+        sc.record_event(dc, model, EventType.CHEAP_SHORT_CIRCUIT, "incorrect",
+                        repo=_REPOS[i % len(_REPOS)])
 
 
 def test_clean_run_eventually_trusted(tmp_path):
@@ -327,6 +336,13 @@ def test_freshness_weighting_flips_verdict_on_recent_regression(tmp_path):
                 "operator_feedback": {},
             },
             "disagreement_samples": [],
+            # Three distinct targets: the diversity gate is not what
+            # this test measures — freshness weighting is.
+            "repos": {
+                "0" * 16: f"{cur}-01T00:00:00+00:00",
+                "1" * 16: f"{cur}-01T00:00:00+00:00",
+                "2" * 16: f"{cur}-01T00:00:00+00:00",
+            },
         }}},
     }
     path = tmp_path / "sc.json"
@@ -727,9 +743,11 @@ def test_get_stats_materialises_all_cells(tmp_path):
 def _trusted_cell(sc, dc="x:y", model="m"):
     """Build out a trustworthy cell: 200 correct → Wilson UB safely
     under 5%, so without any shadow_rate the cell should
-    short-circuit deterministically."""
-    for _ in range(200):
-        sc.record_event(dc, model, EventType.CHEAP_SHORT_CIRCUIT, "correct")
+    short-circuit deterministically. Evidence spans three targets so
+    the diversity floor is cleared (see ``_REPOS``)."""
+    for i in range(200):
+        sc.record_event(dc, model, EventType.CHEAP_SHORT_CIRCUIT, "correct",
+                        repo=_REPOS[i % len(_REPOS)])
 
 
 def test_shadow_rate_zero_never_shadows(tmp_path):
@@ -1412,3 +1430,217 @@ class TestFlockWarningOnce:
         hits = [r for r in caplog.records
                 if "flock not available" in r.getMessage()]
         assert len(hits) == 1
+
+
+# ---------------------------------------------------------------------------
+# Target-diversity gate on should_short_circuit
+# ---------------------------------------------------------------------------
+
+
+class TestTargetDiversityGate:
+    """Short-circuit authority must be EARNED on REPO_DIVERSITY_FLOOR
+    distinct targets before it spends on a target that contributed no
+    evidence; a contributing target always spends its own trust. Two
+    directions per the seam contract: withheld on ungrounded trust,
+    preserved on grounded trust, and absence only DEMOTES (LEARNING),
+    never flips to FALL_THROUGH or drops data."""
+
+    DC = "codeql:py/sql-injection"
+
+    def _seed(self, sc, repos, n=100, outcome="correct"):
+        for i in range(n):
+            sc.record_event(
+                self.DC, "haiku", EventType.CHEAP_SHORT_CIRCUIT, outcome,
+                repo=repos[i % len(repos)] if repos else None,
+            )
+
+    # -- withheld: trust farmed on one target cannot spend elsewhere --
+
+    def test_single_target_trust_does_not_spend_cross_target(self, tmp_path):
+        sc = ModelScorecard(tmp_path / "sc.json")
+        self._seed(sc, ["/proj/hostile"])
+        assert sc.should_short_circuit(
+            self.DC, "haiku", repo="/proj/operators-next-target",
+        ) == Policy.LEARNING
+
+    def test_no_target_identity_gets_no_same_target_grant(self, tmp_path):
+        sc = ModelScorecard(tmp_path / "sc.json")
+        self._seed(sc, ["/proj/hostile"])
+        assert sc.should_short_circuit(self.DC, "haiku") == Policy.LEARNING
+
+    def test_two_targets_still_below_floor(self, tmp_path):
+        """Refusal one short of the floor — the counterpart of the
+        replay-at-3 test below, so the constant cannot silently
+        drift downward."""
+        sc = ModelScorecard(tmp_path / "sc.json")
+        self._seed(sc, ["/proj/a", "/proj/b"])
+        assert sc.should_short_circuit(
+            self.DC, "haiku", repo="/proj/stranger",
+        ) == Policy.LEARNING
+
+    def test_legacy_records_count_zero_diversity(self, tmp_path):
+        """Records written before the ledger existed (no repo kwarg)
+        fail CLOSED: never 'unknown = distinct'. Existing accumulated
+        trust stops granting cross-target skips until distinct keyed
+        targets accrue."""
+        sc = ModelScorecard(tmp_path / "sc.json")
+        self._seed(sc, [])          # legacy: no repo on any record
+        assert sc.should_short_circuit(
+            self.DC, "haiku", repo="/proj/anything",
+        ) == Policy.LEARNING
+        assert sc.should_short_circuit(self.DC, "haiku") == Policy.LEARNING
+
+    # -- preserved: grounded trust spends --
+
+    def test_contributing_target_spends_its_own_trust(self, tmp_path):
+        """Byte-identical evidence to the withheld case except the
+        receipt: the querying target IS the one that contributed."""
+        sc = ModelScorecard(tmp_path / "sc.json")
+        self._seed(sc, ["/proj/hostile"])
+        assert sc.should_short_circuit(
+            self.DC, "haiku", repo="/proj/hostile",
+        ) == Policy.SHORT_CIRCUIT
+
+    def test_floor_distinct_targets_open_the_cross_target_gate(self, tmp_path):
+        sc = ModelScorecard(tmp_path / "sc.json")
+        self._seed(sc, ["/proj/a", "/proj/b", "/proj/c"])
+        assert sc.should_short_circuit(
+            self.DC, "haiku", repo="/proj/stranger",
+        ) == Policy.SHORT_CIRCUIT
+        # ...and a target-agnostic query too (batch/CLI-style callers).
+        assert sc.should_short_circuit(self.DC, "haiku") == Policy.SHORT_CIRCUIT
+
+    # -- absence demotes; it never flips or overrides --
+
+    def test_gate_demotes_to_learning_not_fall_through(self, tmp_path):
+        """The evidence is GOOD, it just hasn't demonstrated
+        generalisation — LEARNING (keep measuring, which grows the
+        missing diversity), never FALL_THROUGH (which would brand the
+        cell untrusted)."""
+        sc = ModelScorecard(tmp_path / "sc.json")
+        self._seed(sc, ["/proj/only"])
+        policy = sc.should_short_circuit(self.DC, "haiku", repo="/proj/x")
+        assert policy == Policy.LEARNING
+        assert policy != Policy.FALL_THROUGH
+
+    def test_measured_fall_through_unchanged_by_diversity(self, tmp_path):
+        """A cell with real misses falls through on the measured
+        policy regardless of how diverse its evidence is — the gate
+        only ever WITHHOLDS a grant, it cannot upgrade one."""
+        sc = ModelScorecard(tmp_path / "sc.json")
+        self._seed(sc, ["/proj/a", "/proj/b", "/proj/c"], n=90)
+        self._seed(sc, ["/proj/a", "/proj/b", "/proj/c"], n=10,
+                   outcome="incorrect")
+        assert sc.should_short_circuit(
+            self.DC, "haiku", repo="/proj/a",
+        ) == Policy.FALL_THROUGH
+
+    def test_operator_pin_beats_the_gate(self, tmp_path):
+        """force_short_circuit is explicit operator intent — it
+        already beats measured drift, and it beats the diversity
+        gate the same way."""
+        sc = ModelScorecard(tmp_path / "sc.json")
+        self._seed(sc, ["/proj/only"])
+        sc.set_policy_override(self.DC, "haiku", "force_short_circuit")
+        assert sc.should_short_circuit(
+            self.DC, "haiku", repo="/proj/x",
+        ) == Policy.SHORT_CIRCUIT
+
+    # -- ledger mechanics --
+
+    def test_ledger_only_tracks_cheap_short_circuit_events(self, tmp_path):
+        """Other event types don't feed the gate's Wilson math, so a
+        repo passed with them must not inflate its target diversity."""
+        path = tmp_path / "sc.json"
+        sc = ModelScorecard(path)
+        for repo in ("/proj/a", "/proj/b", "/proj/c"):
+            sc.record_event(self.DC, "haiku", EventType.JUDGE_REVIEW,
+                            "correct", repo=repo)
+        on_disk = json.loads(path.read_text(encoding="utf-8"))
+        cell = on_disk["models"]["haiku"][self.DC]
+        assert cell.get("repos", {}) == {}
+
+    def test_raw_target_path_never_persists(self, tmp_path):
+        """Only the hash lands in the sidecar — it outlives the run
+        and must not leak host filesystem layout."""
+        from core.llm.scorecard.scorecard import repo_key
+        path = tmp_path / "sc.json"
+        sc = ModelScorecard(path)
+        target = "/proj/customer-engagement-acme"
+        sc.record_event(self.DC, "haiku", EventType.CHEAP_SHORT_CIRCUIT,
+                        "correct", repo=target)
+        raw = path.read_text(encoding="utf-8")
+        assert target not in raw
+        assert "acme" not in raw
+        assert repo_key(target) in raw
+
+    def test_repo_key_is_stable_and_path_normalised(self):
+        from core.llm.scorecard.scorecard import repo_key
+        assert repo_key("/proj/a") == repo_key("/proj/a")
+        assert repo_key("/proj/x/../a") == repo_key("/proj/a")
+        assert repo_key(Path("/proj/a")) == repo_key("/proj/a")
+        assert repo_key("/proj/a") != repo_key("/proj/b")
+        assert len(repo_key("/proj/a")) == 16
+
+    def test_ledger_capped_and_eviction_only_shrinks_grants(self, tmp_path):
+        """Cap enforced at MAX_REPO_KEYS with oldest-last-seen evicted
+        first. Eviction can only WITHHOLD (an evicted target loses its
+        same-target grant) — the ≥floor cross-target grant survives
+        because the ledger still holds far more than the floor."""
+        from core.llm.scorecard.scorecard import MAX_REPO_KEYS
+        path = tmp_path / "sc.json"
+        sc = ModelScorecard(path)
+        for i in range(MAX_REPO_KEYS + 5):
+            sc.record_event(self.DC, "haiku", EventType.CHEAP_SHORT_CIRCUIT,
+                            "correct", repo=f"/proj/t{i:03d}")
+        on_disk = json.loads(path.read_text(encoding="utf-8"))
+        repos = on_disk["models"]["haiku"][self.DC]["repos"]
+        assert len(repos) == MAX_REPO_KEYS
+        # Cross-target grant still opens (diversity far above floor)
+        # once the cell also clears the Wilson floor.
+        self._seed(sc, ["/proj/t000"], n=100)
+        assert sc.should_short_circuit(
+            self.DC, "haiku", repo="/proj/never-seen",
+        ) == Policy.SHORT_CIRCUIT
+
+    def test_eviction_order_is_oldest_last_seen(self):
+        """Unit check on the eviction primitive: the stalest
+        last-seen entries go first, newest survive."""
+        from core.llm.scorecard.scorecard import MAX_REPO_KEYS
+        cell = {"repos": {}}
+        for i in range(MAX_REPO_KEYS + 3):
+            ModelScorecard._note_repo(
+                cell, f"k{i:03d}", f"2026-01-{(i % 27) + 1:02d}T00:00:00",
+            )
+        repos = cell["repos"]
+        assert len(repos) == MAX_REPO_KEYS
+        # The three stalest timestamps at eviction time are gone;
+        # the most recent writes survive.
+        assert f"k{MAX_REPO_KEYS + 2:03d}" in repos
+
+    def test_under_cap_keeps_every_target(self, tmp_path):
+        """Counter-direction of the cap: below MAX_REPO_KEYS nothing
+        is evicted — every contributing target keeps its grant."""
+        from core.llm.scorecard.scorecard import MAX_REPO_KEYS
+        path = tmp_path / "sc.json"
+        sc = ModelScorecard(path)
+        n = min(10, MAX_REPO_KEYS)
+        for i in range(n):
+            sc.record_event(self.DC, "haiku", EventType.CHEAP_SHORT_CIRCUIT,
+                            "correct", repo=f"/proj/t{i}")
+        on_disk = json.loads(path.read_text(encoding="utf-8"))
+        assert len(on_disk["models"]["haiku"][self.DC]["repos"]) == n
+
+    def test_junk_shaped_ledger_reads_as_zero_diversity(self, tmp_path):
+        """A hand-corrupted ``repos`` value withholds authority
+        (fail-closed) instead of raising out of the trust surface."""
+        path = tmp_path / "sc.json"
+        sc = ModelScorecard(path)
+        self._seed(sc, ["/proj/a", "/proj/b", "/proj/c"])
+        on_disk = json.loads(path.read_text(encoding="utf-8"))
+        on_disk["models"]["haiku"][self.DC]["repos"] = "junk"
+        path.write_text(json.dumps(on_disk), encoding="utf-8")
+        integrity.stamp_file(path)
+        assert ModelScorecard(path).should_short_circuit(
+            self.DC, "haiku", repo="/proj/a",
+        ) == Policy.LEARNING

@@ -256,9 +256,10 @@ def test_disagreement_records_incorrect(llm, tmp_path, monkeypatch):
 
 
 def test_short_circuit_skips_full_when_cell_trusted(llm, tmp_path, monkeypatch):
-    """Pre-seed scorecard with a trustworthy track record. Cheap
-    claims clear_safe → full ANALYSE skipped, result reflects
-    cheap reasoning."""
+    """Pre-seed scorecard with a trustworthy track record on the
+    SAME target under review (the diversity gate's same-target
+    grant). Cheap claims clear_safe → full ANALYSE skipped, result
+    reflects cheap reasoning."""
     client, prov = llm
     sc = ModelScorecard(client.config.scorecard_path)
     # One batched write: 150 record_event calls are 150 full
@@ -269,6 +270,7 @@ def test_short_circuit_skips_full_when_cell_trusted(llm, tmp_path, monkeypatch):
             "model": "haiku-stub",
             "event_type": EventType.CHEAP_SHORT_CIRCUIT,
             "outcome": "correct",
+            "repo": str(tmp_path),
         }
         for _ in range(150)
     ])

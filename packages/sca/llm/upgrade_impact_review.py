@@ -184,6 +184,7 @@ def assess_upgrade_impact(
         decision_class=decision_class,
         model=fast_model_name,
         cheap_says_fp=cheap_says_safe,    # "FP" for our gate = "safe" here
+        repo=target,                      # diversity gate: the project under review
     )
     if decision.short_circuit:
         if cheap_preflight_hit:
@@ -257,6 +258,7 @@ def assess_upgrade_impact(
         full_says_fp=full_says_safe,
         cheap_reasoning=cheap_reasoning,
         full_reasoning=verdict.summary,
+        repo=target,
     )
     return verdict
 

@@ -1033,6 +1033,7 @@ class DataflowValidator:
             decision_class=decision_class,
             model=fast_model_name,
             cheap_says_fp=cheap_says_fp,
+            repo=repo_path,   # diversity gate: the repo under analysis
         )
         if decision.short_circuit:
             self.logger.info(
@@ -1210,6 +1211,7 @@ class DataflowValidator:
                     full_says_fp=full_says_fp,
                     cheap_reasoning=cheap_reasoning,
                     full_reasoning=validation.reasoning,
+                    repo=repo_path,
                 )
 
             return validation
