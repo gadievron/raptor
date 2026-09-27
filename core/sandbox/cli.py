@@ -15,6 +15,7 @@ import sys
 
 from . import state
 from . import tiers as _tiers
+from .errors import SandboxDisableRefusedError
 from .profiles import PROFILES
 
 logger = logging.getLogger(__name__)
@@ -28,10 +29,24 @@ SANDBOX_FLOOR_CHOICES = (*_tiers.CONSENTABLE_FLOOR_LABELS, "none")
 
 
 def _set_cli_state(profile: str) -> None:
-    """Internal: update both CLI-state flags coherently. No logging.
+    """Internal: update the CLI-state flags coherently. No logging.
 
     Single source of truth for transitions so disable_from_cli() and
-    set_cli_profile() can't desync the two globals.
+    set_cli_profile() can't desync the globals.
+
+    ``profile == "none"`` is the consent chokepoint: the disable is a
+    REQUEST for tier NONE, honoured only when
+    ``disable_consent.resolve_disable_consent`` finds a consent of
+    matching authority (interactive TTY on stdin+stderr, or a
+    validated launcher/CI-minted nonce). Without one the request
+    raises :class:`~core.sandbox.errors.SandboxDisableRefusedError` —
+    a refusal that stops the run, never a silent re-enable and never
+    a downgrade. Gating here (state-set time) covers every
+    argv-reachable route — ``--no-sandbox``, ``--sandbox none``, and
+    programmatic ``set_cli_profile("none")`` from argv-parsing entry
+    points — in one place; the per-call ``sandbox(disabled=True)``
+    kwarg is deliberately NOT gated (it is not argv-reachable, and
+    the threat is command-line composition).
     """
     if profile not in PROFILES:
         msg = (
@@ -39,6 +54,14 @@ def _set_cli_state(profile: str) -> None:
             f"Valid profiles: {sorted(PROFILES)}."
         )
         raise ValueError(msg)
+    if profile == "none":
+        from . import disable_consent as _dc
+        consent = _dc.resolve_disable_consent()
+        if consent is None:
+            raise SandboxDisableRefusedError(_dc.REFUSAL_MESSAGE)
+        state._cli_sandbox_disable_consent = consent
+    else:
+        state._cli_sandbox_disable_consent = None
     state._cli_sandbox_profile = profile
     state._cli_sandbox_disabled = (profile == "none")
 
@@ -47,14 +70,20 @@ def disable_from_cli() -> None:
     """Called by command entry points when `--no-sandbox` is passed.
 
     Produces the same post-condition as `set_cli_profile('none')` — both
-    routes call `_set_cli_state('none')` under the hood. The difference
-    is the WARNING log line: this function logs "Sandboxing disabled by
-    --no-sandbox flag" naming the specific CLI flag the user passed, so
-    audit logs attribute the disable to `--no-sandbox` rather than
-    `--sandbox none`. Call sites should match the flag users typed.
+    routes call `_set_cli_state('none')` under the hood, including its
+    consent gate: an unconsented call raises
+    ``SandboxDisableRefusedError`` and leaves state untouched. The
+    difference is the WARNING log line: this function logs "Sandboxing
+    disabled by --no-sandbox flag" naming the specific CLI flag the user
+    passed, so audit logs attribute the disable to `--no-sandbox` rather
+    than `--sandbox none`. Call sites should match the flag users typed.
+    The warning fires AFTER the gate — a refused request never logs a
+    disable that did not happen — and names the consent source.
     """
-    logger.warning("Sandboxing disabled by --no-sandbox flag")
     _set_cli_state("none")
+    logger.warning(
+        "Sandboxing disabled by --no-sandbox flag (consent: %s)",
+        state._cli_sandbox_disable_consent)
 
 
 def set_cli_profile(profile: str) -> None:
@@ -63,14 +92,23 @@ def set_cli_profile(profile: str) -> None:
     Forces every subsequent `sandbox()` / `run()` invocation in the process
     to use the named profile regardless of what the code requests. This is
     the granular alternative to `--no-sandbox`: users can pick `full`,
-    `network-only`, or `none` instead of a binary on/off.
+    `network-only`, or `none` instead of a binary on/off. `none` goes
+    through the same consent gate as `--no-sandbox` (see
+    `_set_cli_state`); the WARNING fires after the gate so a refused
+    request never logs a disable that did not happen.
 
     Called only from CLI-parsed argparse values — never from env, config,
     or target repo content — to keep the sandbox unescapable by prompt
     injection.
     """
-    logger.warning("Sandbox profile forced to %r by CLI --sandbox flag", profile)
     _set_cli_state(profile)
+    if profile == "none":
+        logger.warning(
+            "Sandbox profile forced to 'none' by CLI --sandbox flag "
+            "(consent: %s)", state._cli_sandbox_disable_consent)
+    else:
+        logger.warning(
+            "Sandbox profile forced to %r by CLI --sandbox flag", profile)
 
 
 def _validate_floor_label(label: str, *, surface: str,
@@ -447,10 +485,28 @@ def apply_cli_args(
                     )
                 _validated_tools.append(str(rp))
 
+    # Consent-gated disable: SandboxDisableRefusedError is a refusal,
+    # not a validation typo — but at a CLI boundary it gets the same
+    # clean parser.error UX as the incoherence checks above (single
+    # line, exit 2, no traceback). Library callers (parser=None) see
+    # the exception itself, NOT a ValueError downgrade: the refusal
+    # must keep its BaseException lineage so a broad `except
+    # Exception` between here and the run can never swallow it and
+    # proceed at a posture the gate refused to decide.
     if no_sandbox:
-        disable_from_cli()
+        try:
+            disable_from_cli()
+        except SandboxDisableRefusedError as exc:
+            if parser is not None:
+                parser.error(str(exc))
+            raise
     elif profile is not None:
-        set_cli_profile(profile)
+        try:
+            set_cli_profile(profile)
+        except SandboxDisableRefusedError as exc:
+            if parser is not None:
+                parser.error(str(exc))
+            raise
     if floor is not None:
         set_cli_sandbox_floor(floor)
     if audit:

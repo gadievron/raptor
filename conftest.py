@@ -513,12 +513,14 @@ def _sessions_registry_in_tmp(monkeypatch):
     # entry-point-owns-the-process reason. A leaked disable makes
     # consent chokepoints (apply_project_sandbox_floor and every
     # sandbox construction) silently skip in victim tests. Reset the
-    # PAIR coherently — cli._set_cli_state keeps them in lockstep, so
+    # TRIPLE coherently — cli._set_cli_state keeps them in lockstep, so
     # resetting one alone would leave an incoherent combination no
-    # real process can reach.
+    # real process can reach (the disable-consent stamp is non-None
+    # only while the disable flag is True).
     from core.sandbox import state as _sbx_state
     _sbx_state._cli_sandbox_disabled = False
     _sbx_state._cli_sandbox_profile = None
+    _sbx_state._cli_sandbox_disable_consent = None
 
 
 @pytest.fixture(autouse=True)

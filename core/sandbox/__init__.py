@@ -702,6 +702,7 @@ from .context import (
 )
 from .errors import (
     SANDBOX_ENGAGE_EXIT_CODE,
+    SandboxDisableRefusedError,
     SandboxFloorError,
     SandboxSetupError,
 )
@@ -766,6 +767,8 @@ __all__ = [
     "_SANDBOX_KWARGS",
     "ConnectTarget",
     "ObserveProfile",
+    # CLI-disable refusal (typed subtype; consent gate said no)
+    "SandboxDisableRefusedError",
     # Containment-floor refusal (typed subtype with achievable/floor)
     "SandboxFloorError",
     # Engagement-failure signal (fail-loud, never silently degrade)

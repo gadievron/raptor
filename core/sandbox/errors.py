@@ -98,6 +98,28 @@ class SandboxSetupError(BaseException):
         super().__init__(msg)
 
 
+class SandboxDisableRefusedError(SandboxSetupError):
+    """A CLI sandbox disable (``--no-sandbox`` / ``--sandbox none``)
+    was requested without a matching-authority consent — refused.
+
+    The disable is a request for tier NONE, honoured only when
+    ``core.sandbox.disable_consent.resolve_disable_consent`` finds a
+    consent source (interactive TTY on stdin+stderr, or a validated
+    launcher/CI-minted nonce). Refusal means the run STOPS — the
+    request is never silently downgraded to "run sandboxed anyway"
+    (which would quietly invert the operator's stated intent) and
+    never granted with a warning.
+
+    BaseException semantics are inherited deliberately: a broad
+    ``except Exception`` between the argparse boundary and the run
+    proper must not be able to swallow the refusal and proceed —
+    in either direction (bare OR sandboxed) proceeding would decide
+    a posture question the gate just refused to decide. CLI entry
+    points route this through ``parser.error`` (clean exit-2 UX);
+    library callers see the exception itself.
+    """
+
+
 class SandboxFloorError(SandboxSetupError):
     """Containment floor could not be met — the target never executed.
 

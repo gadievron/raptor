@@ -1994,45 +1994,13 @@ class TestCliProfile(unittest.TestCase):
         with self.assertRaises(ValueError):
             set_cli_profile("fulll")
 
-    def test_set_cli_profile_none_also_disables(self):
-        """profile='none' must set both _cli_sandbox_profile and _cli_sandbox_disabled
-        so existing disabled-checks continue to work."""
-        from core.sandbox import set_cli_profile
-        from core.sandbox import state as mod_state
-        set_cli_profile("none")
-        self.assertEqual(mod_state._cli_sandbox_profile, "none")
-        self.assertTrue(mod_state._cli_sandbox_disabled)
-
-    def test_set_cli_profile_switches_coherently(self):
-        """Switching profile='none' → 'full' must un-stick the disabled flag."""
-        from core.sandbox import set_cli_profile
-        from core.sandbox import state as mod_state
-        set_cli_profile("none")
-        self.assertTrue(mod_state._cli_sandbox_disabled)
-        set_cli_profile("full")
-        self.assertEqual(mod_state._cli_sandbox_profile, "full")
-        self.assertFalse(mod_state._cli_sandbox_disabled)
-
-    def test_disable_from_cli_coherent_after_profile_full(self):
-        """disable_from_cli() after set_cli_profile('full') must disable — it
-        used to leave _cli_sandbox_profile='full' and silently win."""
-        from core.sandbox import disable_from_cli, set_cli_profile
-        from core.sandbox import state as mod_state
-        set_cli_profile("full")
-        self.assertEqual(mod_state._cli_sandbox_profile, "full")
-        disable_from_cli()
-        # Both flags must be coherent after the disable.
-        self.assertEqual(mod_state._cli_sandbox_profile, "none")
-        self.assertTrue(mod_state._cli_sandbox_disabled)
-
-    def test_set_cli_profile_overrides_code_profile(self):
-        """CLI --sandbox takes precedence over caller-passed profile= arg."""
-        from core.sandbox import set_cli_profile
-        set_cli_profile("none")
-        # Code asks for full, CLI said none — CLI wins.
-        with sandbox(profile="full") as run:
-            result = run(["echo", "ok"], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0)
+    # NOTE: the profile="none" state-transition tests that used to
+    # live here (none-also-disables, switches-coherently,
+    # disable-after-full, CLI-none-overrides-code-profile) and the
+    # --no-sandbox apply_cli_args case migrated to module-level
+    # pytest functions right below this class: setting profile "none"
+    # is now consent-gated, and the ``no_sandbox_consent`` fixture
+    # (conftest) is the designated mint path for tests.
 
     def test_add_cli_args_adds_both_flags(self):
         """add_cli_args attaches --sandbox and --no-sandbox to an argparse parser."""
@@ -2073,19 +2041,6 @@ class TestCliProfile(unittest.TestCase):
         with self.assertRaises(SystemExit):
             parser.parse_args(["--sandbox", "full", "--no-sandbox"])
 
-    def test_apply_cli_args_no_sandbox_alone(self):
-        """--no-sandbox sets BOTH flags coherently via shared _set_cli_state."""
-        import argparse
-
-        from core.sandbox import add_cli_args, apply_cli_args
-        from core.sandbox import state as mod_state
-        parser = argparse.ArgumentParser()
-        add_cli_args(parser)
-        args = parser.parse_args(["--no-sandbox"])
-        apply_cli_args(args)
-        self.assertTrue(mod_state._cli_sandbox_disabled)
-        self.assertEqual(mod_state._cli_sandbox_profile, "none")
-
     def test_apply_cli_args_sandbox_network_only(self):
         """--sandbox network-only sets profile, does NOT set disabled."""
         import argparse
@@ -2110,6 +2065,76 @@ class TestCliProfile(unittest.TestCase):
         apply_cli_args(args)
         self.assertIsNone(mod_state._cli_sandbox_profile)
         self.assertFalse(mod_state._cli_sandbox_disabled)
+
+
+# --- profile "none" transitions (consent-gated) -----------------------
+# Migrated out of TestCliProfile: setting profile "none" now requires a
+# disable consent, minted per-test by the ``no_sandbox_consent``
+# fixture (conftest — the designated test-suite mint path). State
+# restore rides the autouse ``_sandbox_state_guard``.
+
+
+def test_set_cli_profile_none_also_disables(no_sandbox_consent):
+    """profile='none' must set both _cli_sandbox_profile and
+    _cli_sandbox_disabled so existing disabled-checks continue to
+    work — and now also stamps the consent source."""
+    from core.sandbox import set_cli_profile
+    from core.sandbox import state as mod_state
+    set_cli_profile("none")
+    assert mod_state._cli_sandbox_profile == "none"
+    assert mod_state._cli_sandbox_disabled
+    assert mod_state._cli_sandbox_disable_consent in (
+        "interactive-tty", "nonce")
+
+
+def test_set_cli_profile_switches_coherently(no_sandbox_consent):
+    """Switching profile='none' → 'full' must un-stick the disabled
+    flag AND clear the consent stamp."""
+    from core.sandbox import set_cli_profile
+    from core.sandbox import state as mod_state
+    set_cli_profile("none")
+    assert mod_state._cli_sandbox_disabled
+    set_cli_profile("full")
+    assert mod_state._cli_sandbox_profile == "full"
+    assert not mod_state._cli_sandbox_disabled
+    assert mod_state._cli_sandbox_disable_consent is None
+
+
+def test_disable_from_cli_coherent_after_profile_full(no_sandbox_consent):
+    """disable_from_cli() after set_cli_profile('full') must disable — it
+    used to leave _cli_sandbox_profile='full' and silently win."""
+    from core.sandbox import disable_from_cli, set_cli_profile
+    from core.sandbox import state as mod_state
+    set_cli_profile("full")
+    assert mod_state._cli_sandbox_profile == "full"
+    disable_from_cli()
+    # Both flags must be coherent after the disable.
+    assert mod_state._cli_sandbox_profile == "none"
+    assert mod_state._cli_sandbox_disabled
+
+
+def test_set_cli_profile_overrides_code_profile(no_sandbox_consent):
+    """CLI --sandbox takes precedence over caller-passed profile= arg."""
+    from core.sandbox import set_cli_profile
+    set_cli_profile("none")
+    # Code asks for full, CLI said none — CLI wins.
+    with sandbox(profile="full") as run:
+        result = run(["echo", "ok"], capture_output=True, text=True)
+    assert result.returncode == 0
+
+
+def test_apply_cli_args_no_sandbox_alone(no_sandbox_consent):
+    """--no-sandbox sets BOTH flags coherently via shared _set_cli_state."""
+    import argparse
+
+    from core.sandbox import add_cli_args, apply_cli_args
+    from core.sandbox import state as mod_state
+    parser = argparse.ArgumentParser()
+    add_cli_args(parser)
+    args = parser.parse_args(["--no-sandbox"])
+    apply_cli_args(args)
+    assert mod_state._cli_sandbox_disabled
+    assert mod_state._cli_sandbox_profile == "none"
 
 
 @pytest.mark.skipif(

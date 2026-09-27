@@ -7852,6 +7852,15 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             _delivered_tier)
         _tier_info["containment_floor"] = _tiers.tier_label(_floor)
         _tier_info["floor_source"] = _floor_source
+        if state._cli_sandbox_disabled:
+            # Accepted CLI disable (--no-sandbox / --sandbox none):
+            # stamp its consent provenance so forensic readers
+            # (sandbox-summary, verified-outcomes) can attribute the
+            # bare run to a consent source. "unrecorded" marks state
+            # set outside the gate (direct test pokes); production
+            # disables always carry a source.
+            _tier_info["disable_consent"] = (
+                state._cli_sandbox_disable_consent or "unrecorded")
         if _netns_inherited_drop:
             # The requested network block was inherited away (see the
             # inherit_netns gate at the kwarg pop) — forensic readers

@@ -101,23 +101,99 @@ def _resolver_seam_leak_guard():
 
 @pytest.fixture(autouse=True)
 def _consent_env_guard():
-    """Strip the degraded-untrusted consent variable around every test.
+    """Strip the consent variables around every test.
 
     RAPTOR_ALLOW_DEGRADED_UNTRUSTED steers untrusted-run refusal
     behaviour, so a shell or CI job exporting it flips fail-closed
     expectations across this directory (four refusal tests turn red
-    under an exported consent). Tests that exercise the opt-in set it
-    explicitly via monkeypatch.setenv, which composes with this guard:
-    the guard strips first, the test sets, both restore in LIFO order.
+    under an exported consent). RAPTOR_NO_SANDBOX_NONCE gets the same
+    treatment: an ambient nonce exported by an operator's shell would
+    let in-process disable-gate tests resolve a consent the test never
+    granted. Tests that exercise the opt-ins set them explicitly via
+    monkeypatch.setenv (or the ``no_sandbox_consent`` fixture), which
+    composes with this guard: the guard strips first, the test sets,
+    both restore in LIFO order.
     """
-    saved = os.environ.pop("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", None)
+    _vars = ("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "RAPTOR_NO_SANDBOX_NONCE")
+    saved = {v: os.environ.pop(v, None) for v in _vars}
     try:
         yield
     finally:
-        if saved is not None:
-            os.environ["RAPTOR_ALLOW_DEGRADED_UNTRUSTED"] = saved
-        else:
-            os.environ.pop("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", None)
+        for v, val in saved.items():
+            if val is not None:
+                os.environ[v] = val
+            else:
+                os.environ.pop(v, None)
+
+
+@pytest.fixture
+def no_sandbox_consent(monkeypatch, tmp_path):
+    """Mint a real, test-scoped consent for the CLI sandbox disable.
+
+    THE migration path for tests that legitimately drive
+    ``set_cli_profile("none")`` / ``disable_from_cli()`` /
+    ``--no-sandbox`` in-process: under pytest the process has no
+    interactive TTY on stdin+stderr, so the disable gate refuses
+    unless a valid nonce consent exists. This fixture goes through
+    the REAL validation path — a digest-content consent file, mode
+    0600, in a consents directory redirected to tmp_path — rather
+    than stubbing the gate, so migrated tests still exercise the
+    production consent logic. This conftest is also the designated
+    OUT-OF-RUNTIME mint surface for the test suite (the runtime
+    module only ever re-exports an already-accepted consent).
+
+    Returns the nonce string (already exported via monkeypatch.setenv).
+    """
+    import secrets
+
+    from core.sandbox import disable_consent as dc
+
+    d = tmp_path / "consents.d"
+    d.mkdir(mode=0o700)
+    monkeypatch.setattr(dc, "_consents_dir", lambda: d)
+    nonce = secrets.token_hex(dc.NONCE_HEX_LEN // 2)
+    path = d / dc._nonce_filename(nonce)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, (dc._nonce_digest(nonce) + "\n").encode("ascii"))
+    finally:
+        os.close(fd)
+    monkeypatch.setenv(dc.NONCE_ENV_VAR, nonce)
+    return nonce
+
+
+@pytest.fixture
+def no_sandbox_consent_subprocess():
+    """Mint a disable consent a SUBPROCESS can validate.
+
+    The ``no_sandbox_consent`` fixture redirects the consents
+    directory via monkeypatch, which a child process never sees —
+    subprocess-based gate tests (the invocation-shape battery) need
+    the consent file in the REAL per-uid consents directory the child
+    will resolve. Yields the nonce (the test passes it via the child
+    env explicitly); removes the file afterwards. Same conftest-only
+    mint-path rule as above.
+    """
+    import secrets
+
+    from core.sandbox import disable_consent as dc
+
+    d = dc._consents_dir()
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    nonce = secrets.token_hex(dc.NONCE_HEX_LEN // 2)
+    path = d / dc._nonce_filename(nonce)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, (dc._nonce_digest(nonce) + "\n").encode("ascii"))
+    finally:
+        os.close(fd)
+    try:
+        yield nonce
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 @pytest.fixture(autouse=True)
@@ -147,6 +223,7 @@ def _sandbox_state_guard():
     state_names = [
         # CLI overrides
         "_cli_sandbox_disabled", "_cli_sandbox_profile",
+        "_cli_sandbox_disable_consent",
         "_cli_sandbox_audit", "_cli_sandbox_audit_verbose",
         "_cli_sandbox_audit_budget",
         "_cli_sandbox_readable_paths", "_cli_sandbox_tool_paths",

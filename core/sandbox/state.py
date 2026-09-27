@@ -107,6 +107,14 @@ _getcap_path_cache = None
 # disable its own sandbox.
 _cli_sandbox_disabled = False   # True when --no-sandbox passed
 _cli_sandbox_profile = None     # str profile name when --sandbox <name> passed
+# Consent provenance for an ACCEPTED CLI disable: "interactive-tty"
+# (operator at a terminal on stdin+stderr) or "nonce" (validated
+# launcher/CI-minted RAPTOR_NO_SANDBOX_NONCE). None whenever
+# _cli_sandbox_disabled is False. Written ONLY by
+# core.sandbox.cli._set_cli_state — the same entry-point-argparse-only
+# rule as the flags above; the gate that fills it fails closed
+# (core.sandbox.disable_consent.resolve_disable_consent).
+_cli_sandbox_disable_consent: str | None = None
 # Audit flags — orthogonal to profile. `--audit` engages audit mode on
 # the active profile (proxy log-and-allow + SCMP_ACT_TRACE + tracer);
 # `--verbose` (only with --audit) flips the tracer from filtered to
