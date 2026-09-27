@@ -120,6 +120,7 @@ def _run(agent, monkeypatch, *, analysis_crashes: bool,
         monkeypatch.setattr(agent_mod, "save_json", _failing_save_json)
 
     stored: list[tuple] = []
+    stored_kwargs: list[dict] = []
     monkeypatch.setattr(
         hooks, "compute_finding_source_hash", lambda p, line: "h" * 16,
     )
@@ -129,7 +130,7 @@ def _run(agent, monkeypatch, *, analysis_crashes: bool,
     )
     monkeypatch.setattr(
         hooks, "store_finding_verdict",
-        lambda *a, **k: (stored.append(a), True)[1],
+        lambda *a, **k: (stored.append(a), stored_kwargs.append(k), True)[2],
     )
 
     the_finding = finding if finding is not None else _finding()
@@ -140,7 +141,7 @@ def _run(agent, monkeypatch, *, analysis_crashes: bool,
     report = agent.process_findings(
         sarif_paths=["fake.sarif"], checklist=None, emit_journal=False,
     )
-    return report, stored
+    return report, stored, stored_kwargs
 
 
 class TestSageStoreGate:
@@ -151,7 +152,7 @@ class TestSageStoreGate:
         suppression — pre-fix the store gated on ``vuln.analysis``
         only, and the error path leaves that dict populated."""
         agent = _make_agent(tmp_path)
-        report, stored = _run(agent, monkeypatch, analysis_crashes=True)
+        report, stored, _ = _run(agent, monkeypatch, analysis_crashes=True)
 
         rec = next(r for r in report["results"]
                    if r.get("finding_id") == "F1")
@@ -162,13 +163,19 @@ class TestSageStoreGate:
         """Control: the same verdict WITHOUT the crash stores as
         false_positive — the gate only excludes errored records."""
         agent = _make_agent(tmp_path)
-        report, stored = _run(agent, monkeypatch, analysis_crashes=False)
+        report, stored, stored_kwargs = _run(
+            agent, monkeypatch, analysis_crashes=False,
+        )
 
         rec = next(r for r in report["results"]
                    if r.get("finding_id") == "F1")
         assert rec.get("status") != "error"
         assert len(stored) == 1
         assert stored[0][-1] == "false_positive"
+        # Receipt honesty: a bare-LLM verdict (no mechanical receipt
+        # on the finding) stores with an EMPTY evidence_tool — it must
+        # never mint a receipt from LLM say-so.
+        assert stored_kwargs[0].get("evidence_tool") == ""
 
 
 class TestSageStoreAbstainedVerdicts:
@@ -236,7 +243,7 @@ class TestSageHashReadBounded:
         f = _finding()
         f["startLine"] = 0
         f["endLine"] = 0
-        _report, stored = _run(
+        _report, stored, _kwargs = _run(
             agent, monkeypatch, analysis_crashes=False, finding=f,
         )
         assert len(stored) == 1

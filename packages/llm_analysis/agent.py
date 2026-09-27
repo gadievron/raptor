@@ -4194,6 +4194,9 @@ class AutonomousSecurityAgentV2:
                             finding_verdict_source_hash,
                             store_finding_verdict,
                         )
+                        from packages.llm_analysis.verification_tier import (
+                            mechanical_receipt,
+                        )
                         _rel, _fn, _line = _finding_coords(finding)
                         _rule = (finding.get("rule_id")
                                  or finding.get("check_id") or "")
@@ -4230,6 +4233,9 @@ class AutonomousSecurityAgentV2:
                                         store_finding_verdict(
                                             str(self.repo_path), _rule,
                                             _rel, _fn, _src_hash, _v,
+                                            evidence_tool=mechanical_receipt(
+                                                vuln.to_dict(), _v,
+                                            ),
                                         ):
                                     sage_fp_stored += 1
                     except Exception:

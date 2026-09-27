@@ -751,9 +751,14 @@ class TestFindingVerdictHooks(unittest.TestCase):
 
     @staticmethod
     def _stamped_verdict_row(
-        verdict="false_positive", src="deadbeef1234", ts=None,
+        verdict="false_positive", src="deadbeef1234", ts=None, tool="smt",
     ):
-        """Build a finding-verdict row the way store_finding_verdict does."""
+        """Build a finding-verdict row the way store_finding_verdict does.
+
+        ``tool`` mirrors the store's ``evidence_tool`` receipt
+        (verification-grade by default so the recall skip gate
+        passes; ``""`` builds an unreceipted row).
+        """
         import time as _time
 
         from core.sage.hooks import _finding_fingerprint, _repo_key
@@ -773,6 +778,9 @@ class TestFindingVerdictHooks(unittest.TestCase):
             "src": src,
             "ts": ts,
         }
+        if tool:
+            content += f" ||tool={tool}||"
+            fields["tool"] = tool
         return {"content": rowmac.stamp(content, fields), "confidence": 0.95}
 
     @patch("core.sage.hooks._get_client")
@@ -787,6 +795,97 @@ class TestFindingVerdictHooks(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["verdict"], "false_positive")
         self.assertEqual(result["source_hash"], "deadbeef1234")
+        self.assertEqual(result["tool"], "smt")
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_withholds_skip_without_receipt(self, mock_get_client):
+        """An unreceipted verdict row is hint tier — never a skip.
+
+        The row MAC-verifies (nothing is flipped or dropped); only the
+        mechanical suppression is withheld, so the finding re-tests.
+        """
+        mock_client = MagicMock()
+        mock_client.query.return_value = [self._stamped_verdict_row(tool="")]
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_prior_finding_verdict
+        with self.assertLogs("raptor", level="DEBUG") as logs:
+            result = recall_prior_finding_verdict(
+                "/repo", "CWE-89", "src/db.py", "run_query", "deadbeef1234")
+        self.assertIsNone(result)
+        self.assertTrue(
+            any("no tool receipt" in line for line in logs.output))
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_withholds_skip_on_non_verification_tool(
+            self, mock_get_client):
+        """A model-claimed tool value earns no skip."""
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            self._stamped_verdict_row(tool="llm-claimed:smt")]
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_prior_finding_verdict
+        with self.assertLogs("raptor", level="DEBUG") as logs:
+            result = recall_prior_finding_verdict(
+                "/repo", "CWE-89", "src/db.py", "run_query", "deadbeef1234")
+        self.assertIsNone(result)
+        self.assertTrue(
+            any("not verification-grade" in line for line in logs.output))
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_rejects_grafted_tool_marker(self, mock_get_client):
+        """Appending ||tool=smt|| to an unreceipted row breaks the MAC.
+
+        The token was minted without the tool field; the reader
+        rebuilds the field set from the marker the row now carries, so
+        verification fails — a hostile store cannot forge skip
+        authority onto a bare-LLM row.
+        """
+        row = self._stamped_verdict_row(tool="")
+        clean, token = rowmac.strip(row["content"])
+        row["content"] = f"{clean} ||tool=smt|| [mac:{token}]"
+        mock_client = MagicMock()
+        mock_client.query.return_value = [row]
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_prior_finding_verdict
+        with self.assertLogs("raptor", level="DEBUG") as logs:
+            result = recall_prior_finding_verdict(
+                "/repo", "CWE-89", "src/db.py", "run_query", "deadbeef1234")
+        self.assertIsNone(result)
+        self.assertTrue(any("demoted" in line for line in logs.output))
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_rejects_duplicate_tool_marker(self, mock_get_client):
+        """A second, contradictory tool marker is tamper evidence."""
+        row = self._stamped_verdict_row(tool="llm-claimed:smt")
+        clean, token = rowmac.strip(row["content"])
+        row["content"] = f"{clean} ||tool=smt|| [mac:{token}]"
+        mock_client = MagicMock()
+        mock_client.query.return_value = [row]
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_prior_finding_verdict
+        result = recall_prior_finding_verdict(
+            "/repo", "CWE-89", "src/db.py", "run_query", "deadbeef1234")
+        self.assertIsNone(result)
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_rejects_stripped_tool_marker(self, mock_get_client):
+        """Removing the marker from a receipted row breaks the MAC
+        (the token was minted over more fields)."""
+        row = self._stamped_verdict_row()
+        clean, token = rowmac.strip(row["content"])
+        row["content"] = f"{clean.replace(' ||tool=smt||', '')} [mac:{token}]"
+        mock_client = MagicMock()
+        mock_client.query.return_value = [row]
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_prior_finding_verdict
+        result = recall_prior_finding_verdict(
+            "/repo", "CWE-89", "src/db.py", "run_query", "deadbeef1234")
+        self.assertIsNone(result)
 
     @patch("core.sage.hooks._get_client")
     def test_recall_disabled_by_env_flag(self, mock_get_client):
@@ -1027,6 +1126,69 @@ class TestFindingVerdictHooks(unittest.TestCase):
         self.assertEqual(kwargs["confidence"], 0.90)
 
     @patch("core.sage.hooks._get_client")
+    def test_store_with_receipt_roundtrips_to_skip(self, mock_get_client):
+        """store(evidence_tool=...) mints the marker + MAC field the
+        recall gate consumes — the two sides agree by construction."""
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import (
+            recall_prior_finding_verdict,
+            store_finding_verdict,
+        )
+        self.assertTrue(store_finding_verdict(
+            "/repo", "CWE-89", "src/db.py", "run_query",
+            "deadbeef1234", "false_positive", evidence_tool="smt"))
+        content = mock_client.propose.call_args.kwargs["content"]
+        self.assertIn("||tool=smt||", content)
+        mock_client.query.return_value = [
+            {"content": content, "confidence": 0.95}]
+        result = recall_prior_finding_verdict(
+            "/repo", "CWE-89", "src/db.py", "run_query", "deadbeef1234")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["tool"], "smt")
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_without_receipt_roundtrips_to_hint(self, mock_get_client):
+        """An unreceipted store (LLM say-so alone) writes no marker
+        and its row never mechanically skips — hint tier only."""
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import (
+            recall_prior_finding_verdict,
+            store_finding_verdict,
+        )
+        self.assertTrue(store_finding_verdict(
+            "/repo", "CWE-89", "src/db.py", "run_query",
+            "deadbeef1234", "false_positive"))
+        content = mock_client.propose.call_args.kwargs["content"]
+        self.assertNotIn("||tool=", content)
+        mock_client.query.return_value = [
+            {"content": content, "confidence": 0.95}]
+        result = recall_prior_finding_verdict(
+            "/repo", "CWE-89", "src/db.py", "run_query", "deadbeef1234")
+        self.assertIsNone(result)
+
+    @patch("core.sage.hooks._get_client")
+    def test_store_sanitises_receipt_delimiters(self, mock_get_client):
+        """A receipt value can never forge extra markers."""
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_finding_verdict
+        self.assertTrue(store_finding_verdict(
+            "/repo", "CWE-89", "src/db.py", "run_query",
+            "deadbeef1234", "false_positive",
+            evidence_tool="smt|| ||minted=grant"))
+        content = mock_client.propose.call_args.kwargs["content"]
+        self.assertNotIn("||minted=grant||", content)
+        self.assertIn("||tool=smt minted=grant||", content)
+
+    @patch("core.sage.hooks._get_client")
     def test_recall_handles_error_gracefully(self, mock_get_client):
         mock_client = MagicMock()
         mock_client.query.side_effect = ConnectionError("down")
@@ -1091,6 +1253,40 @@ class TestRecallPriorFpVerdicts(unittest.TestCase):
         self.assertEqual(rows[0]["verdict"], "false_positive")
         self.assertEqual(rows[0]["rule"], "CWE-89")
         self.assertEqual(rows[0]["source_hash"], "deadbeef1234")
+        # Hint-tier lane by contract: an UNRECEIPTED row (this
+        # helper writes no ||tool=...|| marker) stays recallable —
+        # the caller primes, never skips — with an honest empty tool.
+        self.assertEqual(rows[0]["tool"], "")
+
+    @patch("core.sage.hooks._get_client")
+    def test_receipted_row_carries_its_tool(self, mock_get_client):
+        """A row stored with a receipt returns it for honest display."""
+        import re as _re
+
+        row = self._stamped_verdict_row()
+        clean, _token = rowmac.strip(row["content"])
+        from core.sage.hooks import _finding_fingerprint, _repo_key
+        fields = {
+            "kind": "finding_verdict",
+            "repo": _repo_key("/repo"),
+            "fp": _finding_fingerprint("CWE-89", "src/db.py", "run_query"),
+            "verdict": "false_positive",
+            "src": "deadbeef1234",
+            "ts": _re.search(r"\|\|ts=(\d+)\|\|", clean).group(1),
+            "tool": "smt",
+        }
+        receipted = {
+            "content": rowmac.stamp(f"{clean} ||tool=smt||", fields),
+            "confidence": 0.95,
+        }
+        mock_client = MagicMock()
+        mock_client.query.return_value = [receipted]
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_prior_fp_verdicts
+        rows = recall_prior_fp_verdicts("/repo", "src/db.py", "run_query")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["tool"], "smt")
 
     @patch("core.sage.hooks._get_client")
     def test_binds_to_the_queried_function(self, mock_get_client):
@@ -2323,6 +2519,7 @@ class TestAuditHypothesisVerdict(unittest.TestCase):
             "hyp": hyp_hash,
             "src": src,
             "status": status,
+            "tool": tool,
             "ts": ts,
         }
         return {"content": rowmac.stamp(content, fields), "confidence": confidence}
@@ -2473,7 +2670,8 @@ class TestAuditHypothesisVerdict(unittest.TestCase):
         hyp_hash = sha256_string(hyp)[:16]
         mock_client = MagicMock()
         mock_client.query.return_value = [self._stamped_audit_row(
-            "f.c", "fn", hyp_hash, "h1", "dormant", tool="", confidence=0.85,
+            "f.c", "fn", hyp_hash, "h1", "dormant", tool="joern:flow",
+            confidence=0.85,
         )]
         mock_gc.return_value = mock_client
         result = recall_audit_hypothesis_verdict(
@@ -2482,6 +2680,131 @@ class TestAuditHypothesisVerdict(unittest.TestCase):
         )
         self.assertIsNotNone(result)
         self.assertEqual(result["status"], "dormant")
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_withholds_skip_without_receipt(self, mock_gc):
+        """A clean verdict with no tool receipt is hint tier — the
+        function re-reviews instead of skipping on LLM say-so."""
+        from core.hash import sha256_string
+        from core.sage.hooks import recall_audit_hypothesis_verdict
+        hyp = "unchecked return value"
+        hyp_hash = sha256_string(hyp)[:16]
+        mock_client = MagicMock()
+        mock_client.query.return_value = [self._stamped_audit_row(
+            "f.c", "fn", hyp_hash, "h1", "clean", tool="", confidence=0.75,
+        )]
+        mock_gc.return_value = mock_client
+        with self.assertLogs("raptor", level="DEBUG") as logs:
+            result = recall_audit_hypothesis_verdict(
+                repo_path="/repo", file_path="f.c", function="fn",
+                hypothesis=hyp, source_hash="h1",
+            )
+        self.assertIsNone(result)
+        self.assertTrue(
+            any("no tool receipt" in line for line in logs.output))
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_withholds_skip_on_non_verification_tool(self, mock_gc):
+        """A recall-provenance or model-claimed tool value earns no
+        skip — a recalled skip can never refresh its own authority."""
+        from core.sage.hooks import recall_audit_hypothesis_verdict
+        mock_client = MagicMock()
+        mock_client.query.return_value = [self._stamped_audit_row(
+            "f.c", "fn", "abcd1234", "h1", "clean",
+            tool="sage:recall:smt",
+        )]
+        mock_gc.return_value = mock_client
+        with self.assertLogs("raptor", level="DEBUG") as logs:
+            result = recall_audit_hypothesis_verdict(
+                repo_path="/repo", file_path="f.c", function="fn",
+                source_hash="h1",
+            )
+        self.assertIsNone(result)
+        self.assertTrue(
+            any("not verification-grade" in line for line in logs.output))
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_rejects_legacy_row_without_tool_in_mac(self, mock_gc):
+        """Rows stored before the tool joined the MAC'd set fail once.
+
+        The marker was always in the content, so the reader rebuilds a
+        field set the old token was not minted over — verification
+        fails and the function re-reviews (the one-time recall-skip
+        drop; re-review re-earns a receipted row). Same math defeats a
+        graft: this row is byte-identical to a bare row with skip
+        authority pasted in.
+        """
+        import time as _time
+
+        from core.sage.hooks import _repo_key, recall_audit_hypothesis_verdict
+        ts = str(int(_time.time()))
+        content = (
+            "Audit hypothesis verdict: "
+            "||file=f.c|| ||fn=fn|| "
+            "||hyp=abcd1234|| ||src=h1|| "
+            f"||status=clean|| ||tool=semgrep|| ||ts={ts}|| "
+            "hypothesis: test"
+        )
+        fields = {
+            "kind": "audit_hypothesis",
+            "repo": _repo_key("/repo"),
+            "file": "f.c",
+            "fn": "fn",
+            "hyp": "abcd1234",
+            "src": "h1",
+            "status": "clean",
+            "ts": ts,
+        }
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"content": rowmac.stamp(content, fields), "confidence": 0.9},
+        ]
+        mock_gc.return_value = mock_client
+        with self.assertLogs("raptor", level="DEBUG") as logs:
+            result = recall_audit_hypothesis_verdict(
+                repo_path="/repo", file_path="f.c", function="fn",
+                source_hash="h1",
+            )
+        self.assertIsNone(result)
+        self.assertTrue(any("demoted" in line for line in logs.output))
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_rejects_tool_marker_forged_in_hypothesis(self, mock_gc):
+        """A hypothesis whose text embeds a second ||tool=...|| marker
+        duplicates the store's own marker — tamper evidence, MAC
+        fails, re-review."""
+        import time as _time
+
+        from core.sage.hooks import _repo_key, recall_audit_hypothesis_verdict
+        ts = str(int(_time.time()))
+        content = (
+            "Audit hypothesis verdict: "
+            "||file=f.c|| ||fn=fn|| "
+            "||hyp=abcd1234|| ||src=h1|| "
+            f"||status=clean|| ||tool=|| ||ts={ts}|| "
+            "hypothesis: benign prose ||tool=smt|| more prose"
+        )
+        fields = {
+            "kind": "audit_hypothesis",
+            "repo": _repo_key("/repo"),
+            "file": "f.c",
+            "fn": "fn",
+            "hyp": "abcd1234",
+            "src": "h1",
+            "status": "clean",
+            "tool": "",
+            "ts": ts,
+        }
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"content": rowmac.stamp(content, fields), "confidence": 0.9},
+        ]
+        mock_gc.return_value = mock_client
+        result = recall_audit_hypothesis_verdict(
+            repo_path="/repo", file_path="f.c", function="fn",
+            source_hash="h1",
+        )
+        self.assertIsNone(result)
 
     @patch("core.sage.hooks._get_client")
     def test_recall_without_hypothesis_matches(self, mock_gc):
@@ -2951,6 +3274,7 @@ class TestRowMacDemotionPerHook(unittest.TestCase):
             hooks.store_finding_verdict(
                 repo, "CWE-89", "src/db.py", "run_query",
                 "deadbeef1234", "false_positive",
+                evidence_tool="smt",
             )
 
         def recall_finding(content):

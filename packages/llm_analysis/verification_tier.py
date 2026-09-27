@@ -157,6 +157,94 @@ def derive_verification_tier(finding: dict[str, Any]) -> str:
     return VerificationTier.LLM_ONLY.value
 
 
+def mechanical_receipt(finding: dict[str, Any], verdict: str) -> str:
+    """The evidence-grade tool stamp backing one stored verdict, or ``""``.
+
+    Companion to :func:`derive_verification_tier` for the SAGE
+    verdict-store path: the store's ``evidence_tool`` receipt must name
+    a mechanical receipt the finding dict actually carries AND whose
+    direction matches the verdict being stored — an SMT sat witness
+    (the path is satisfiable) must never receipt a ``false_positive``
+    suppression, and a mechanical refutation must never receipt an
+    ``exploitable``. Direction-mismatched or absent receipts return
+    ``""``: the verdict still stores (hint tier, lower confidence), it
+    just earns no cross-run skip.
+
+    Spellings returned are enumerated members of the evidence-grade
+    admission surface (``core.audit.evidence_grade``), so the recall
+    side's ``is_tool_evidence`` gate recognises them. The
+    ``structural-treesitter`` dataflow method has no enumerated
+    spelling today and deliberately returns ``""`` (named residual —
+    hint tier until the registry learns a spelling for it).
+    """
+    confirming = verdict == "exploitable"
+    refuting = verdict in ("false_positive", "not_exploitable")
+    if not confirming and not refuting:
+        return ""
+
+    analysis = finding.get("analysis") or {}
+
+    if confirming:
+        # Mechanical-grade execution oracle only (same gate as the
+        # CONFIRMED tier): heuristic shapes are target-forgeable.
+        outcome = finding.get("execute_outcome")
+        if outcome in _DYNAMIC_OUTCOMES:
+            exec_detail = finding.get("execute_detail")
+            grade = (
+                exec_detail.get("evidence_grade")
+                if isinstance(exec_detail, dict) else None
+            )
+            intent = finding.get("intent_match") or {}
+            if grade == "mechanical" and intent.get("verdict") != "off_target":
+                if outcome == "sanitizer_report":
+                    return "dynamic:sanitizer"
+                if outcome == "exit_signal":
+                    return "dynamic:crash"
+                return "dynamic"
+
+        # An SMT model is a sat witness on the path conditions —
+        # confirming direction only.
+        smt = analysis.get("smt_witness") or finding.get("smt_witness") or {}
+        if isinstance(smt, dict) and smt.get("model"):
+            return "smt"
+
+    fo = analysis.get("fail_open") or finding.get("fail_open") or {}
+    if isinstance(fo, dict):
+        fo_outcome = fo.get("outcome")
+        rule = fo.get("rule_id")
+        if not isinstance(rule, str):
+            rule = ""
+        direction_ok = (
+            (confirming and fo_outcome == "confirmed")
+            or (refuting and fo_outcome == "refuted")
+        )
+        if direction_ok and rule and not rule.endswith("-naming"):
+            return f"fail_open:{rule}"
+
+    dv = (
+        analysis.get("dataflow_validation")
+        or finding.get("dataflow_validation")
+        or {}
+    )
+    if isinstance(dv, dict):
+        dv_verdict = dv.get("verdict")
+        dv_tier = dv.get("tier")
+        direction_ok = (
+            (confirming and dv_verdict == "confirmed")
+            or (refuting and dv_verdict == "refuted")
+        )
+        if direction_ok and dv_tier not in LLM_AUTHORED_DV_TIERS and (
+            dv.get("method") == "codeql-iris" or dv_tier == "iris_tier1"
+        ):
+            # codeql-iris = prebuilt pack-resident query: mechanical
+            # premises. codeql-iris-llm (LLM-authored predicates) and
+            # structural-treesitter (no enumerated spelling) do not
+            # mint a receipt here.
+            return "codeql:dataflow"
+
+    return ""
+
+
 def sort_results_by_tier(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Stable-sort report results: confirmed, tool_backed, then the
     rest. Findings without a tier (prep-only mode) keep their relative

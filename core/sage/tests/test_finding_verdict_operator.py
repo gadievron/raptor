@@ -74,9 +74,12 @@ class FakeOperatorClient:
         return True
 
 
-def _stored_row(memory_id, verdict, src="abc123def456", note=""):
+def _stored_row(memory_id, verdict, src="abc123def456", note="", tool="smt"):
     """Build a verdict row byte-identical to what the store hook
-    writes (content grammar + MAC over the decision fields)."""
+    writes (content grammar + MAC over the decision fields).
+    ``tool`` mirrors the store's ``evidence_tool`` receipt (default a
+    verification-grade one so recall's skip gate passes; pass ``""``
+    for an unreceipted row)."""
     from core.sage.hooks import _finding_fingerprint, _fp_domain, _repo_key
     fp = _finding_fingerprint(RULE, FILE, FN)
     ts = str(int(time.time()))
@@ -86,16 +89,20 @@ def _stored_row(memory_id, verdict, src="abc123def456", note=""):
         f"||src={src}|| ||verdict={verdict}|| "
         f"||ts={ts}||"
     )
-    if note:
-        content += f" {note}"
-    content = rowmac.stamp(content, {
+    fields = {
         "kind": "finding_verdict",
         "repo": _repo_key(REPO),
         "fp": fp,
         "verdict": verdict,
         "src": src,
         "ts": ts,
-    })
+    }
+    if tool:
+        content += f" ||tool={tool}||"
+        fields["tool"] = tool
+    if note:
+        content += f" {note}"
+    content = rowmac.stamp(content, fields)
     return _Memory(memory_id, content, _fp_domain(REPO))
 
 

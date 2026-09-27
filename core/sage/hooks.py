@@ -923,6 +923,7 @@ def recall_prior_finding_verdict(
             ts = ts_match.group(1)
             for v in _SUPPRESS_VERDICTS:
                 if f"||verdict={v}||" in content:
+                    tool_fields = _tool_fields_from_content(content)
                     fields = {
                         "kind": "finding_verdict",
                         "repo": _repo_key(repo_path),
@@ -930,16 +931,24 @@ def recall_prior_finding_verdict(
                         "verdict": v,
                         "src": source_hash,
                         "ts": ts,
+                        **tool_fields,
                         **_mint_fields_from_content(content),
                     }
                     if not _row_mac_ok("finding_verdict", fields, token):
                         break
                     if not _row_ts_fresh("finding_verdict", ts):
                         break
+                    if not _skip_receipt_ok(
+                        "finding_verdict",
+                        tool_fields.get("tool", ""),
+                        fields,
+                    ):
+                        break
                     _metric_inc("recall_hits")
                     return {
                         "verdict": v,
                         "source_hash": source_hash,
+                        "tool": tool_fields.get("tool", ""),
                         "confidence": recall_row_confidence(row),
                     }
         return None
@@ -1012,6 +1021,7 @@ def recall_prior_fp_verdicts(
             for v in _SUPPRESS_VERDICTS:
                 if f"||verdict={v}||" not in content:
                     continue
+                tool_fields = _tool_fields_from_content(content)
                 fields = {
                     "kind": "finding_verdict",
                     "repo": _repo_key(repo_path),
@@ -1019,17 +1029,24 @@ def recall_prior_fp_verdicts(
                     "verdict": v,
                     "src": src,
                     "ts": ts,
+                    **tool_fields,
                     **_mint_fields_from_content(content),
                 }
                 if not _row_mac_ok("finding_verdict", fields, token):
                     break
                 if not _row_ts_fresh("finding_verdict", ts):
                     break
+                # No receipt gate here: this recall feeds hint-tier FP
+                # primers by contract (the caller never skips on it),
+                # so unreceipted rows stay recallable. The rebuild
+                # keeps receipted rows MAC-verifiable and the returned
+                # tool honest.
                 _metric_inc("recall_hits")
                 rows.append({
                     "verdict": v,
                     "rule": rule,
                     "source_hash": src,
+                    "tool": tool_fields.get("tool", ""),
                     "confidence": recall_row_confidence(row),
                 })
                 break
@@ -1048,6 +1065,7 @@ def store_finding_verdict(
     verdict: str,
     *,
     note: str = "",
+    evidence_tool: str = "",
     mint: Mapping[str, str] | None = None,
     client: SageClient | None = None,
 ) -> bool:
@@ -1055,7 +1073,17 @@ def store_finding_verdict(
 
     All verdicts are stored (building the knowledge base), but only
     ``false_positive`` and ``not_exploitable`` trigger suppression on
-    future recall.
+    future recall — and only when the row carries a mechanical
+    receipt or operator mint provenance (the recall side's
+    ``_skip_receipt_ok`` gate); unreceipted rows stay recallable as
+    hint tier and the finding re-tests.
+
+    ``evidence_tool`` is the mechanical receipt backing the verdict
+    (empty when the verdict rests on LLM say-so alone). Non-empty
+    values land as an explicit ``||tool=...||`` marker AND join the
+    MAC'd decision-field set (self-describing versioning, same as
+    ``mint``), so a receipt cannot be grafted onto or stripped from a
+    stored row after the fact.
 
     ``note`` is free-form audit text appended AFTER the marker fields
     (the operator verdict CLI records its provenance stamp there).
@@ -1117,6 +1145,10 @@ def store_finding_verdict(
             "src": source_hash,
             "ts": ts,
         }
+        if evidence_tool:
+            clean_tool = _s(evidence_tool)
+            content += f" ||tool={clean_tool}||"
+            fields["tool"] = clean_tool
         if mint:
             for key in _MINT_FIELD_KEYS:
                 value = mint.get(key)
@@ -1209,6 +1241,76 @@ def _mint_fields_from_content(content: str) -> dict[str, str]:
         if values:
             fields[key] = values[0]
     return fields
+
+
+_TOOL_MARKER_RE = re.compile(r"\|\|tool=([^|]*)\|\|")
+
+
+def _tool_fields_from_content(content: str) -> dict[str, str]:
+    """Receipt field a stored verdict row itself declares.
+
+    Same self-describing-versioning discipline as
+    :func:`_mint_fields_from_content`: the store side puts the
+    verdict's backing tool receipt in the content as an explicit
+    ``||tool=...||`` marker AND in the MAC'd decision-field set, so
+    the verifier rebuilds the field set from the marker the row
+    carries. Finding-verdict rows without the marker (every
+    pre-receipt row, and rows whose analysis carried no mechanical
+    receipt) reconstruct the original field set and keep verifying —
+    they simply carry no receipt, so the skip gate withholds the
+    mechanical suppression and the finding re-tests.
+    Audit-hypothesis rows have always carried the marker OUTSIDE the
+    MAC'd set, so pre-receipt rows there fail verification and demote
+    to hint — a one-time recall-skip drop; re-review re-earns a
+    receipted row. A duplicated marker is tamper evidence (no store
+    writes the key twice) and injects the reserved duplicate
+    sentinel, which no minted token covers, so verification fails —
+    the fail direction is re-test.
+    """
+    values = _TOOL_MARKER_RE.findall(content)
+    if len(values) > 1:
+        return {_MINT_DUP_SENTINEL: "duplicate-markers"}
+    if values:
+        return {"tool": values[0]}
+    return {}
+
+
+def _skip_receipt_ok(hook: str, tool: str, fields: Mapping[str, str]) -> bool:
+    """Whether a MAC-verified verdict row carries mechanical-skip
+    authority.
+
+    The recall side's receipt gate: a recalled prior verdict may skip
+    analysis only when the row's MAC'd ``tool`` field passes the
+    evidence-grade firewall (``is_tool_evidence`` — a receipt from a
+    tool run the pipeline made), or the row carries MAC-verified
+    operator mint provenance (the /review fp ceremony/grant — the
+    sanctioned standing-suppression route, human authority). A bare
+    LLM verdict earns storage, confidence, and hint tier, never the
+    skip: one steered model verdict must not become a standing
+    TTL-length suppression. Withholding the skip never flips the
+    stored verdict and never drops the row — the item re-tests
+    through the ordinary analysis path.
+
+    Callers gate AFTER ``_row_mac_ok``: both the receipt and the mint
+    markers consulted here are already tamper-checked members of the
+    row's reconstructed field set.
+    """
+    if any(key in fields for key in _MINT_FIELD_KEYS):
+        return True
+    if not tool:
+        logger.debug(
+            "SAGE %s: prior verdict carries no tool receipt — "
+            "hint tier only, re-testing", hook,
+        )
+        return False
+    from core.audit.evidence_grade import is_tool_evidence
+    if is_tool_evidence(tool):
+        return True
+    logger.debug(
+        "SAGE %s: prior verdict tool %r is not verification-grade — "
+        "hint tier only, re-testing", hook, tool,
+    )
+    return False
 
 
 class VerdictWalkTruncated(RuntimeError):
@@ -1325,6 +1427,7 @@ def _iter_verdict_rows(
                 "verdict": verdict,
                 "src": src,
                 "ts": ts,
+                **_tool_fields_from_content(text),
                 **_mint_fields_from_content(text),
             }
             mac_ok = _row_mac_ok("finding_verdict", fields, token)
@@ -1725,6 +1828,13 @@ def store_audit_hypothesis_verdict(
                 "hyp": hyp_hash,
                 "src": source_hash,
                 "status": status,
+                # The receipt joins the MAC'd set (recall rebuilds it
+                # from the row's own ||tool=...|| marker), so a graft
+                # or strip of the marker fails verification. Rows
+                # stored before the tool joined the set fail MAC once
+                # on recall and re-review — a one-time recall-skip
+                # drop that re-earns a receipted row.
+                "tool": _s(evidence_tool),
                 "ts": ts,
             },
         )
@@ -1795,6 +1905,7 @@ def recall_audit_hypothesis_verdict(
             for s in _AUDIT_SKIP_STATUSES:
                 if f"||status={s}||" in content:
                     row_hyp = re.search(r"\|\|hyp=([^|]*)\|\|", content)
+                    tool_fields = _tool_fields_from_content(content)
                     fields = {
                         "kind": "audit_hypothesis",
                         "repo": _repo_key(repo_path),
@@ -1803,16 +1914,16 @@ def recall_audit_hypothesis_verdict(
                         "hyp": row_hyp.group(1) if row_hyp else "",
                         "src": source_hash,
                         "status": s,
+                        **tool_fields,
                         "ts": ts,
                     }
                     if not _row_mac_ok("audit_hypothesis", fields, token):
                         break
                     if not _row_ts_fresh("audit_hypothesis", ts):
                         break
-                    tool = ""
-                    tool_match = re.search(r"\|\|tool=([^|]*)\|\|", content)
-                    if tool_match:
-                        tool = tool_match.group(1)
+                    tool = tool_fields.get("tool", "")
+                    if not _skip_receipt_ok("audit_hypothesis", tool, fields):
+                        break
                     _metric_inc("recall_hits")
                     return {
                         "status": s,
