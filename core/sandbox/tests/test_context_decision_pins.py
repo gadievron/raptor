@@ -882,7 +882,9 @@ def test_audit_degrade_marker_lands_in_audit_run_dir_alone(
     target = tmp_path / "tgt"
     target.mkdir()
     rec = _SpawnRecorder()
-    _Driver(monkeypatch, rec, mount=False)
+    _Driver(monkeypatch, rec, mount=False, seccomp=False)
+    monkeypatch.setattr(context, "_require_degraded_udp_filter",
+                        lambda _: None)
     with context.sandbox(target=str(target), audit=True,
                          audit_run_dir=str(audit_dir)) as run:
         run(["/bin/true"], capture_output=True, timeout=60)
