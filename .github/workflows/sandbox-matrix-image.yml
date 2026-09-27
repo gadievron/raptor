@@ -15,7 +15,7 @@ name: Sandbox matrix image
 # Tags pushed:
 #   :u24             — moving tag the PR-time subset pulls.
 #   :u24-<hash>      — content tag (first 12 hex of sha256 over the u24
-#                      Dockerfile, rustup-proxy.c and requirements*.txt)
+#                      Dockerfile, rustup-proxy.c, pyproject.toml and uv.lock)
 #                      for traceability + rollback. Soft anchor, same as
 #                      ci-deps-image's req-<hash>: the weekly rebuild and
 #                      a python-version bump refresh the image under an
@@ -45,7 +45,7 @@ name: Sandbox matrix image
 # package settings -> Danger Zone -> Change visibility -> Private.
 #
 # Staleness ("rebirth") trade-off, accepted: a PR that changes
-# requirements or the matrix Dockerfile still runs the subset against
+# dependencies or the matrix Dockerfile still runs the subset against
 # the image built from main — the new image is only born when this
 # workflow fires on the merge. run-matrix.sh degrades correctly in the
 # gap: the sxv.reqhash label mismatch makes lanes build fresh venvs
@@ -58,8 +58,8 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'requirements.txt'
-      - 'requirements-dev.txt'
+      - 'pyproject.toml'
+      - 'uv.lock'
       - 'core/sandbox/scripts/feature-matrix/images/**'
       - 'core/sandbox/scripts/feature-matrix/run-matrix.sh'
       - '.github/workflows/sandbox-matrix-image.yml'
@@ -121,7 +121,7 @@ jobs:
           # order — the hash must be reproducible from a checkout).
           cthash="$(cat core/sandbox/scripts/feature-matrix/images/Dockerfile \
                         core/sandbox/scripts/feature-matrix/images/rustup-proxy.c \
-                        requirements.txt requirements-dev.txt \
+                        pyproject.toml uv.lock \
                     | sha256sum | cut -c1-12)"
           docker tag raptor-sandbox-matrix:u24 "${image}:u24"
           docker tag raptor-sandbox-matrix:u24 "${image}:u24-${cthash}"

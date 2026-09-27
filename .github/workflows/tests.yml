@@ -315,21 +315,21 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Restore venv from cache
         id: venv-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
 
       - name: Create venv and install deps
         if: steps.venv-cache.outputs.cache-hit != 'true'
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv export --locked --no-hashes | uv pip install -r -
 
       - name: Verify venv exists
         run: test -d "$VENV_PATH" || (echo "venv missing at $VENV_PATH" && exit 1)
@@ -339,7 +339,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
 
   # Fast tier: everything under core/ and packages/ except the two
   # heavyweight subdirs that get their own jobs (sandbox, exploit_feasibility).
@@ -409,7 +409,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           fail-on-cache-miss: true
 
       - name: Backoff before retry
@@ -423,7 +423,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
             venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
@@ -436,7 +436,7 @@ jobs:
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv export --locked --no-hashes | uv pip install -r -
 
       - name: Restore venv permissions and fix symlinks
         run: |
@@ -569,7 +569,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           fail-on-cache-miss: true
 
       - name: Backoff before retry
@@ -583,7 +583,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
             venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
@@ -596,7 +596,7 @@ jobs:
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv export --locked --no-hashes | uv pip install -r -
 
       - name: Restore venv permissions and fix symlinks
         run: |
@@ -679,7 +679,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           fail-on-cache-miss: true
 
       - name: Backoff before retry
@@ -693,7 +693,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
             venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
@@ -706,7 +706,7 @@ jobs:
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv export --locked --no-hashes | uv pip install -r -
 
       - name: Restore venv permissions and fix symlinks
         run: |
@@ -823,28 +823,28 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Restore venv from cache
         id: venv-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
 
       - name: Create venv and install deps
         if: steps.venv-cache.outputs.cache-hit != 'true'
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv export --locked --no-hashes | uv pip install -r -
 
       - name: Save venv to cache
         if: steps.venv-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
 
       - name: Run sandbox tests (macOS)
         env:
@@ -1036,7 +1036,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           fail-on-cache-miss: true
 
       - name: Backoff before retry
@@ -1050,7 +1050,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
             venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
 
@@ -1063,7 +1063,7 @@ jobs:
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv export --locked --no-hashes | uv pip install -r -
 
       - name: Restore venv permissions and fix symlinks
         run: |
@@ -1179,13 +1179,9 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install pytest
-        # grep + pip install keeps requirements-dev.txt the single
-        # source of truth for the pytest pin (lint.yml's ruff idiom)
-        # — a hand-typed copy here drifted a minor version behind the
-        # dev pin, so this suite ran under a different pytest per
-        # lane than the nightly sweep, the exact collection-behaviour
-        # divergence the pin rationale names.
-        run: pip install "$(grep -E '^pytest==' requirements-dev.txt)"
+        # grep + pip install keeps pyproject.toml the single source
+        # of truth for the pytest pin (lint.yml's ruff idiom).
+        run: pip install "$(grep -oE 'pytest==[0-9.]+' pyproject.toml)"
 
       - name: Run prompt-envelope audit
         run: |
@@ -1218,9 +1214,9 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install pytest
-        # grep + pip install keeps requirements-dev.txt the single
-        # source of truth for the pytest pin (lint.yml's ruff idiom).
-        run: pip install "$(grep -E '^pytest==' requirements-dev.txt)"
+        # grep + pip install keeps pyproject.toml the single source
+        # of truth for the pytest pin (lint.yml's ruff idiom).
+        run: pip install "$(grep -oE 'pytest==[0-9.]+' pyproject.toml)"
 
       - name: Run ReDoS idiom census
         run: python -m pytest .github/tests/test_redos_idiom_census.py -q
@@ -1247,13 +1243,9 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install pytest
-        # grep + pip install keeps requirements-dev.txt the single
-        # source of truth for the pytest pin (lint.yml's ruff idiom)
-        # — a hand-typed copy here drifted a minor version behind the
-        # dev pin, so this suite ran under a different pytest per
-        # lane than the nightly sweep, the exact collection-behaviour
-        # divergence the pin rationale names.
-        run: pip install "$(grep -E '^pytest==' requirements-dev.txt)"
+        # grep + pip install keeps pyproject.toml the single source
+        # of truth for the pytest pin (lint.yml's ruff idiom).
+        run: pip install "$(grep -oE 'pytest==[0-9.]+' pyproject.toml)"
 
       - name: Run CI filter-coverage tests
         # Both dirs: filter-coverage tests AND the checker-script

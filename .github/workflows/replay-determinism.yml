@@ -152,7 +152,7 @@ jobs:
         run: python3 .github/scripts/check_transcript_seam.py
 
   # Public tier: hermetic record/replay determinism suites. Installs
-  # the dev requirements into the runner's system Python (the
+  # the dev dependencies into the runner's system Python (the
   # _tier.yml runner-path model); no credentials, no LLM dispatch, no
   # spend — replay never reaches a provider by construction, the
   # harness suppresses the transport availability probe client
@@ -176,13 +176,13 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Install deps
         # --system installs into the setup-python interpreter so the
         # test step's `python` resolves the deps without venv
         # activation (same model as _tier.yml's runner path).
-        run: uv pip install --system -r requirements-dev.txt
+        run: uv export --locked --no-hashes | uv pip install --system -r -
 
       - name: Run replay-determinism suites
         env:
@@ -228,10 +228,10 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Install deps
-        run: uv pip install --system -r requirements-dev.txt
+        run: uv export --locked --no-hashes | uv pip install --system -r -
 
       - name: Run private-case replay-eval lane
         env:

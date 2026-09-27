@@ -134,7 +134,7 @@ jobs:
       # and token-initiated pushes never trigger workflows — without
       # this dispatch, dockerhub-publish would build :<version> from
       # the pre-stamp commit. (Today the two trees build identical
-      # images — the Dockerfile COPYs only requirements*.txt, no
+      # images — the Dockerfile COPYs only pyproject.toml/uv.lock, no
       # stamp target — but the versioned image must be built from
       # the ref it claims to be, and any future COPY of stamped
       # files inherits correctness instead of silently shipping the

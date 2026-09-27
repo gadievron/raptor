@@ -13,8 +13,7 @@ package map, rule authoring, the sandbox model — see
 ```bash
 git clone https://github.com/gadievron/raptor.git
 cd raptor
-pip install -r requirements.txt
-pip install -r requirements-dev.txt   # ruff, mypy
+uv sync --locked                      # installs all deps from uv.lock
 pip install semgrep                    # required for /scan
 ```
 
@@ -65,9 +64,8 @@ in new dependencies when an existing module covers it.
   vars or hardcode values.
 - **Findings** follow the standard schema in `core/models/` — don't invent
   new finding shapes.
-- **New pip dependencies** need justification. Check `requirements.txt`
-  first; if something similar is already available in core, use that
-  instead.
+- **New dependencies** need justification. Check `pyproject.toml` first;
+  if something similar is already available in core, use that instead.
 
 
 ## Adding commands

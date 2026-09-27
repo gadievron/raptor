@@ -84,7 +84,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip==26.2.1
           # The refresh script needs urllib3 (core.http dependency)
-          # but nothing else from requirements-dev — keep this fast.
+          # but nothing else from the dev set — keep this fast.
           pip install 'urllib3==2.7.0,<3.0'
 
       - name: Run refresh

@@ -1,15 +1,15 @@
-# CI dependency image — requirements-dev.txt baked in so the Python
+# CI dependency image — dev dependencies baked in so the Python
 # unit-test tiers skip the per-job venv build + artifact download. That
 # fan-out (one venv download per tier × ~14 tiers) is what queues under
 # a concurrent-runner cap; running the tiers inside this image removes
 # it. Rebuilt by .github/workflows/ci-deps-image.yml whenever
-# requirements*.txt (or this Dockerfile) change.
+# pyproject.toml, uv.lock, or this Dockerfile change.
 #
 # Base pinned to bookworm to match the devcontainer
 # (mcr.microsoft.com/devcontainers/python:3-3.14-bookworm, glibc 2.36)
 # so platform-sensitive wheels resolve identically — notably z3-solver
 # 4.15.4.0's manylinux_2_34 wheel (see the cap rationale in
-# requirements-dev.txt). PYTHON_VERSION here must track tests.yml's
+# pyproject.toml/uv.lock). PYTHON_VERSION here must track tests.yml's
 # env.PYTHON_VERSION (3.14).
 
 # --- coccinelle build stage --------------------------------------------
@@ -125,12 +125,16 @@ RUN set -eux; \
 
 WORKDIR /opt/raptor-ci
 
+# uv for lockfile-driven installs (the image path in _tier.yml also
+# uses it for reconciliation on hash mismatch).
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 # Copy only the manifests first so the dependency layer cache survives
 # source-only changes to the repo.
-COPY requirements.txt requirements-dev.txt ./
+COPY pyproject.toml uv.lock ./
 
-RUN pip install --no-cache-dir -r requirements-dev.txt \
-    && sha256sum requirements.txt requirements-dev.txt > /etc/raptor-ci-deps.hash
+RUN uv export --locked --no-hashes | uv pip install --system -r - \
+    && sha256sum pyproject.toml uv.lock > /etc/raptor-ci-deps.hash
 
 # Build-time smoke import: fail the IMAGE build (not downstream CI) if a
 # pinned dependency can't import on this base.

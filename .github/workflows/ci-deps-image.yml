@@ -8,7 +8,7 @@ name: CI deps image
 # Tags pushed:
 #   :main        — moving tag the test tiers pull. Updated on every build.
 #   :req-<hash>  — content tag (first 12 hex of sha256 over the ci-deps
-#                  Dockerfile + requirements*.txt — the Dockerfile is IN
+#                  Dockerfile + pyproject.toml + uv.lock — the Dockerfile is IN
 #                  the hash because it defines the image as much as the
 #                  pins do: a Dockerfile-only change under an unchanged
 #                  req-hash silently replaced the anchor's content, so a
@@ -28,8 +28,8 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'requirements.txt'
-      - 'requirements-dev.txt'
+      - 'pyproject.toml'
+      - 'uv.lock'
       - '.github/docker/ci-deps.Dockerfile'
       - '.github/workflows/ci-deps-image.yml'
   workflow_dispatch:
@@ -96,7 +96,7 @@ jobs:
           # order — the hash must be reproducible from a checkout;
           # same idiom as sandbox-matrix-image.yml's cthash).
           reqhash="$(cat .github/docker/ci-deps.Dockerfile \
-                         requirements.txt requirements-dev.txt \
+                         pyproject.toml uv.lock \
                      | sha256sum | cut -c1-12)"
           docker build \
             -f .github/docker/ci-deps.Dockerfile \

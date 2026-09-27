@@ -53,13 +53,13 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Create venv and install deps
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          uv export --locked --no-hashes | uv pip install -r -
           uv tool install semgrep==1.177.0
 
       - name: Install external tools (radare2 + gcc)

@@ -51,7 +51,7 @@ except ImportError as _e:
 try:
     # Probe botocore, not boto3: everything RAPTOR needs for Bedrock
     # SigV4 (the dispatcher's signer in core/llm/dispatcher/auth.py)
-    # imports botocore only, and requirements.txt ships botocore
+    # imports botocore only, and pyproject.toml ships botocore
     # without boto3. Probing boto3 here made a botocore-only install
     # fail detection while the actual signing path worked.
     import botocore as _botocore_module  # noqa: F401 — availability probe

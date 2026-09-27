@@ -77,26 +77,23 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Create venv and install deps
         run: |
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
-          # semgrep is deliberately NOT a requirements dep (optional
+          # Dev deps + grammar wheels in one export (grammars are an
+          # optional-dependency group in pyproject.toml, locked in
+          # uv.lock).
+          uv export --locked --no-hashes --extra grammars | uv pip install -r -
+          # semgrep is deliberately NOT a pyproject.toml dep (optional
           # tool, same as radare2/LLVM below), but the audit-pipeline
           # slow tests exercise real sweeps: G2's receipt gate demands
           # an EXECUTED confirmed sweep, so without the binary those
           # tests can only skip. Installed here so the nightly keeps
           # covering the sweep → record → report → feedback chain.
           uv tool install semgrep==1.177.0
-          # Grammar wheels: grammar-dependent tests skip-with-reason
-          # where these are absent (every PR tier), which means the
-          # span-accurate detection paths were never exercised in CI
-          # at all. The nightly installs them so that family runs
-          # somewhere, same rationale as semgrep above.
-          uv pip install -r requirements-grammars.txt
 
       - name: Install binary-analysis toolchain (radare2 + LLVM 21)
         # continue-on-error so a transient apt/LLVM mirror outage doesn't

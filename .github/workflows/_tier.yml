@@ -76,16 +76,15 @@ jobs:
         with:
           persist-credentials: false
       - name: Reconcile deps
-        # Skip if the image's baked requirements match the checkout.
-        # pip must resolve every package to verify satisfaction (~10-15s);
-        # the hash check short-circuits that on the common path.
+        # Skip if the image's baked deps match the checkout's lockfile.
+        # The hash check short-circuits the common path.
         run: |
           if [ -f /etc/raptor-ci-deps.hash ] && \
              sha256sum -c /etc/raptor-ci-deps.hash --status; then
             echo "Image deps match checkout — skipping reconcile"
           else
-            echo "Hash mismatch or missing — running pip install"
-            pip install --no-cache-dir -r requirements-dev.txt
+            echo "Hash mismatch or missing — reconciling via uv"
+            uv export --locked --no-hashes | uv pip install --system -r -
           fi
       - name: Run tests
         env:
@@ -114,7 +113,7 @@ jobs:
             --junit-xml "$RUNNER_TEMP/pytest-junit.xml"
 
   # Fallback path: fork PRs can't pull the private image, so install into
-  # the runner's system Python (uv's cache keyed on requirements*.txt).
+  # the runner's system Python (uv's cache keyed on uv.lock).
   runner:
     if: ${{ !inputs.use_container }}
     runs-on: ubuntu-latest
@@ -143,12 +142,12 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
       - name: Install deps
         # --system installs into the setup-python interpreter so the test
         # step's `python` resolves the deps without venv activation,
         # matching the image path's "system Python, no venv" model.
-        run: uv pip install --system -r requirements-dev.txt
+        run: uv export --locked --no-hashes | uv pip install --system -r -
       - name: Run tests
         env:
           TEST_PATH: ${{ inputs.test_path }}
