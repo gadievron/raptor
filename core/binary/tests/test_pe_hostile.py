@@ -24,6 +24,8 @@ import random
 import struct
 import time
 
+import pytest
+
 from core.binary import pe as pe_mod
 from core.binary.pe import PeFacts, _RvaResolver, extract_pe_facts
 from core.security.log_sanitisation import (
