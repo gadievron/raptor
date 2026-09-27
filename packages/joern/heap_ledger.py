@@ -100,12 +100,17 @@ def _row_live(row: dict) -> bool:
     """A row is live while its recorded (pid, starttime) still names
     a running process."""
     pid = row.get("pid")
-    if not isinstance(pid, int) or pid <= 0:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
     starttime = _pid_starttime(pid)
     if starttime is not None:
-        recorded = row.get("starttime")
-        return recorded is None or recorded == starttime
+        # The recorded starttime must MATCH — a row without one (or
+        # with a crafted null) would otherwise live as long as its
+        # pid number stays occupied by anyone, defeating the
+        # pid-reuse defense the key exists for. Rows this module
+        # writes always carry the spawn-time value on Linux; a None
+        # here means the pid was already dead at write time.
+        return row.get("starttime") == starttime
     if Path("/proc").is_dir():
         # procfs exists but the pid's entry is gone: dead.
         return False
@@ -118,6 +123,20 @@ def _row_live(row: dict) -> bool:
     except OSError:
         return True
     return True
+
+
+def _row_mb(row: dict) -> int:
+    """A row's committed MB: a real non-negative int, else 0.
+
+    The ledger file is same-uid writable, so admission must not trust
+    row schema it did not write: a crafted negative ``mb`` would make
+    the committed sum deeply negative and reopen the correlated-OOM
+    overcommit the ledger exists to prevent (and ``bool`` is an
+    ``int`` subtype, so ``True`` rows must not count as 1 MB)."""
+    mb = row.get("mb")
+    if isinstance(mb, bool) or not isinstance(mb, int):
+        return 0
+    return max(0, mb)
 
 
 def _read_rows(path: Path) -> list[dict]:
@@ -217,11 +236,38 @@ def reserve_heap_mb(
     path = _LEDGER_PATH if ledger_path is None else ledger_path
     granted = requested_mb
     row_id = uuid.uuid4().hex
+    try:
+        granted = _admit_locked(
+            path, requested_mb, derived=derived, pid=pid, row_id=row_id,
+        )
+    except OSError:
+        # The ledger is advisory bookkeeping: a full or read-only
+        # state dir must not kill the JVM boot it was arbitrating
+        # (release/rebind already degrade the same way). The grant
+        # falls back to the unclamped derivation — exactly the
+        # pre-ledger behaviour.
+        logger.warning(
+            "joern heap ledger unavailable — granting %d MB "
+            "unclamped (admission bookkeeping skipped)",
+            granted, exc_info=True,
+        )
+    return HeapReservation(
+        row_id=row_id,
+        requested_mb=requested_mb,
+        granted_mb=granted,
+        ledger_path=path,
+    )
+
+
+def _admit_locked(
+    path: Path, requested_mb: int, *,
+    derived: bool, pid: int, row_id: str,
+) -> int:
+    """The locked admission transaction; returns the granted MB."""
+    granted = requested_mb
     with artifact_lock(path, subject="joern JVM heap ledger"):
         rows = [r for r in _read_rows(path) if _row_live(r)]
-        committed = sum(
-            r["mb"] for r in rows if isinstance(r.get("mb"), int)
-        )
+        committed = sum(_row_mb(r) for r in rows)
         budget = _host_budget_mb()
         if budget is not None and committed + requested_mb > budget:
             available = budget - committed
@@ -262,12 +308,7 @@ def reserve_heap_mb(
             "created_at": time.time(),
         })
         _write_rows(path, rows)
-    return HeapReservation(
-        row_id=row_id,
-        requested_mb=requested_mb,
-        granted_mb=granted,
-        ledger_path=path,
-    )
+    return granted
 
 
 @contextlib.contextmanager

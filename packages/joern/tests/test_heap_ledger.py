@@ -15,6 +15,8 @@ import subprocess
 import threading
 from pathlib import Path
 
+import pytest
+
 from packages.joern import heap_ledger
 from packages.joern.heap_ledger import (
     _HEAP_GRANT_FLOOR_MB,
@@ -180,6 +182,89 @@ class TestConcurrentAdmission:
         for t in threads:
             t.join(timeout=60)
         assert sorted(grants) == [4000, 6000]
+
+
+class TestHostileRowSchema:
+    """The ledger file is same-uid writable: admission must not trust
+    row schema it did not write. A crafted row may steer grants but
+    must never OPEN the budget (negative sums) or become immortal."""
+
+    def test_negative_mb_does_not_open_the_budget(self, tmp_path,
+                                                  monkeypatch):
+        _set_budget(monkeypatch, 10000)
+        ledger = tmp_path / "l.json"
+        me = os.getpid()
+        rows = [
+            {"id": "neg", "pid": me, "starttime": _pid_starttime(me),
+             "mb": -(10 ** 9), "derived": True, "created_at": 0.0},
+            {"id": "real", "pid": me, "starttime": _pid_starttime(me),
+             "mb": 6000, "derived": True, "created_at": 0.0},
+        ]
+        ledger.write_text(json.dumps({"version": 1, "rows": rows}))
+        res = reserve_heap_mb(6000, derived=True, ledger_path=ledger)
+        # The poisoned row counts as 0, not -1e9: only 4000 remains.
+        assert res.granted_mb == 4000
+
+    def test_bool_mb_counts_as_zero(self, tmp_path, monkeypatch):
+        _set_budget(monkeypatch, 4096)
+        ledger = tmp_path / "l.json"
+        me = os.getpid()
+        row = {"id": "b", "pid": me, "starttime": _pid_starttime(me),
+               "mb": True, "derived": True, "created_at": 0.0}
+        ledger.write_text(json.dumps({"version": 1, "rows": [row]}))
+        res = reserve_heap_mb(4096, derived=True, ledger_path=ledger)
+        assert res.granted_mb == 4096
+
+    def test_null_starttime_row_evicts(self, tmp_path, monkeypatch):
+        # A row with starttime null would otherwise live as long as
+        # its pid NUMBER stays occupied by anyone — immortal when
+        # pinned to pid 1 — defeating the pid-reuse defense.
+        if _pid_starttime(1) is None:
+            pytest.skip("no readable /proc/1/stat on this platform")
+        _set_budget(monkeypatch, 10000)
+        ledger = tmp_path / "l.json"
+        row = {"id": "immortal", "pid": 1, "starttime": None,
+               "mb": 9000, "derived": True, "created_at": 0.0}
+        ledger.write_text(json.dumps({"version": 1, "rows": [row]}))
+        res = reserve_heap_mb(9000, derived=True, ledger_path=ledger)
+        assert res.granted_mb == 9000
+        assert "immortal" not in {r["id"] for r in _rows(ledger)}
+
+
+class TestLedgerUnavailable:
+    def test_reserve_degrades_when_ledger_write_fails(
+            self, tmp_path, monkeypatch, caplog):
+        # The ledger is advisory bookkeeping — a full or read-only
+        # state dir must not kill the JVM boot it arbitrates (the
+        # release/rebind paths already degrade to a debug log).
+        _set_budget(monkeypatch, 8192)
+
+        def boom(path, rows):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(heap_ledger, "_write_rows", boom)
+        with caplog.at_level("WARNING"):
+            res = reserve_heap_mb(
+                4096, derived=True, ledger_path=tmp_path / "l.json")
+        assert res.granted_mb == 4096
+        assert "ledger unavailable" in caplog.text
+        res.release()  # must not raise either
+
+    def test_reserve_degrades_when_ledger_dir_unwritable(
+            self, tmp_path, monkeypatch):
+        if os.geteuid() == 0:
+            pytest.skip("root bypasses directory permissions")
+        _set_budget(monkeypatch, 8192)
+        ro = tmp_path / "ro"
+        ro.mkdir()
+        ro.chmod(0o500)
+        try:
+            res = reserve_heap_mb(
+                4096, derived=True,
+                ledger_path=ro / "sub" / "l.json")
+        finally:
+            ro.chmod(0o700)
+        assert res.granted_mb == 4096
 
 
 class TestHeapAdmissionContext:
