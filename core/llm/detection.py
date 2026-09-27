@@ -14,6 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.config import RaptorConfig
+from core.llm.models_config_perm import (
+    WorldReadableModelsConfigError,
+    loose_mode_bits,
+    refuse_exposed_inline_keys,
+)
 from core.logging import get_logger
 
 logger = get_logger()
@@ -697,6 +702,22 @@ def _read_config_models() -> list:
     versioned snapshot (``claude-haiku-4-5-20251001``). See
     :mod:`core.llm.model_resolution` for the resolver and its failure
     posture (verbatim passthrough on any error).
+
+    Permission gate: this loader reads the identical file the
+    dispatcher credential seeder does, so it applies the identical
+    fail-closed gate (:mod:`core.llm.models_config_perm`) — a
+    group/other-readable file that carries inline ``api_key`` entries
+    refuses to load instead of carrying the exposed keys into live
+    transports.
+
+    Raises:
+        WorldReadableModelsConfigError: the file is group/other-
+            readable AND carries inline API keys, and
+            ``RAPTOR_ALLOW_WORLD_READABLE_MODELS_JSON=1`` is not set.
+            The message names the ``chmod 600`` remedy. Deliberately
+            NOT folded into the return-[] error posture below — a
+            silent zero-model result would hide the refusal (and its
+            remedy) behind whatever downstream fallback runs next.
     """
     try:
         from core.json import load_json_with_comments
@@ -720,8 +741,20 @@ def _read_config_models() -> list:
         else:
             return []
 
+        # Fail-closed permission gate, BEFORE anything consumes the
+        # entries' api_key fields (_apply_anthropic_resolution uses
+        # them for the network inventory fetch).
+        loose_mode = loose_mode_bits(config_path)
+        if loose_mode is not None:
+            refuse_exposed_inline_keys(config_path, loose_mode, model_list)
+
         _warn_unknown_roles(model_list, config_path)
         return _apply_anthropic_resolution(model_list)
+    except WorldReadableModelsConfigError:
+        # The refusal must surface — swallowing it into the return-[]
+        # posture turns a named, remediable exposure into a silent
+        # zero-model brick.
+        raise
     except Exception as e:  # noqa: BLE001
         logger.debug("detection: model list parse failed, returning []: %s", e)
         return []

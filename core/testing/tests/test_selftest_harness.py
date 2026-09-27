@@ -79,9 +79,15 @@ def _poison_llm_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     home = tmp_path / "poison-home"
     cfg_dir = home / ".config" / "raptor"
     cfg_dir.mkdir(parents=True)
+    # Key-bearing fixtures must be private (0600): the models-config
+    # permission gate fail-closes on a group/other-readable keyed
+    # file, and the poison here is the CONTENT being reachable, not
+    # its mode.
     (cfg_dir / "models.json").write_text(json.dumps(keyed))
+    (cfg_dir / "models.json").chmod(0o600)
     explicit = tmp_path / "keyed-models.json"
     explicit.write_text(json.dumps(keyed))
+    explicit.chmod(0o600)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("RAPTOR_CONFIG", str(explicit))
     for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",

@@ -579,6 +579,9 @@ class TestHermeticByDefault:
             "name": "fake", "provider": "anthropic",
             "model": "fake-model", "api_key": "sk-test-not-a-real-key",
         }]}))
+        # Key-bearing fixture must be private: the loader fail-closes
+        # on a group/other-readable models.json with inline keys.
+        fake_models.chmod(0o600)
         monkeypatch.setenv("RAPTOR_CONFIG", str(fake_models))
         monkeypatch.delenv(_LIVE_LLM_OPT_IN, raising=False)
 

@@ -182,6 +182,9 @@ class TestAuditDispatcherSelfServe:
                 },
             ],
         }))
+        # Key-bearing fixture must be private: the loader fail-closes
+        # on a group/other-readable models.json with inline keys.
+        config.chmod(0o600)
         monkeypatch.setenv("RAPTOR_CONFIG", str(config))
 
         from core.audit.pipeline import AuditPipelineOpts, _make_llm_client

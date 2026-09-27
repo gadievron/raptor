@@ -78,6 +78,13 @@ def _get_configured_models() -> list[dict]:
 
     The JSON file supports // line comments (stripped before parsing).
     Uses _read_config_models() from detection.py for shared parsing logic.
+
+    Raises:
+        core.llm.models_config_perm.WorldReadableModelsConfigError:
+            the config file is group/other-readable AND carries inline
+            API keys (and the override env is not set) — the shared
+            fail-closed permission gate, identical to the dispatcher
+            seeder's. The message names the ``chmod 600`` remedy.
     """
     return _read_config_models()
 

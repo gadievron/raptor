@@ -10,7 +10,30 @@ covered too. Its history and load-bearing mechanics live on
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _private_fixture_files():
+    """Create fixture files private (umask 0o077) for every test in
+    this directory.
+
+    Many tests here write keyed ``models.json`` fixtures with plain
+    ``write_text``, whose mode otherwise inherits the RUNNER's umask
+    (frequently 0644/0664) — and the models-config permission gate
+    (``core.llm.models_config_perm``) fail-closes on a
+    group/other-readable file that carries inline API keys. Pinning
+    the umask keeps those fixtures hermetic against the runner's
+    environment; tests exercising the gate itself set an explicit
+    loose mode with ``chmod`` after creation, which wins over umask.
+    """
+    old = os.umask(0o077)
+    try:
+        yield
+    finally:
+        os.umask(old)
 
 
 
