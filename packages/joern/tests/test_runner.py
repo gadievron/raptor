@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -538,12 +540,14 @@ class TestCleanupCpg:
     def test_removes_stray_query_scratch_dirs(self, tmp_path: Path):
         """A hard-killed query never reaches run_query's own rmtree —
         its raptor-query-* scratch (wrapper + workspace copy) must not
-        pin the CPG dir alive forever."""
+        pin the CPG dir alive forever. Strays qualify by AGE."""
         cpg_dir = tmp_path / "cpg_dir"
         stray = cpg_dir / "raptor-query-abc123"
         (stray / "workspace").mkdir(parents=True)
         (stray / "workspace" / "cpg.bin").write_bytes(b"copy")
         (stray / "query.sc").write_text("cpg.method.l")
+        old = time.time() - 25 * 3600
+        os.utime(stray, (old, old))
         f = cpg_dir / "cpg.bin"
         f.write_bytes(b"data")
         cpg = JoernCPG(path=f, target=tmp_path)
@@ -551,6 +555,26 @@ class TestCleanupCpg:
         cleanup_cpg(cpg)
         assert not stray.exists()
         assert not cpg_dir.exists()
+
+    def test_fresh_query_scratch_survives_sibling_cleanup(
+            self, tmp_path: Path):
+        """A FRESH raptor-query-* dir is a sibling session's possibly
+        in-flight query against the same shared cache slot — a
+        sibling's cleanup_cpg must not delete its cwd/tmpdir out from
+        under it mid-query. It ages into the sweep instead."""
+        cpg_dir = tmp_path / "cpg_dir"
+        live = cpg_dir / "raptor-query-live01"
+        live.mkdir(parents=True)
+        (live / "query.sc").write_text("cpg.method.l")
+        f = cpg_dir / "cpg.bin"
+        f.write_bytes(b"data")
+        cpg = JoernCPG(path=f, target=tmp_path)
+
+        cleanup_cpg(cpg)
+        assert (live / "query.sc").exists()
+        # The slot dir stays (non-empty) — reclaimed by a later
+        # cleanup once the stray ages out.
+        assert cpg_dir.exists()
 
     def test_stray_query_dir_symlink_not_followed(self, tmp_path: Path):
         """Same symlink guard as workspace/: a link squatting at a

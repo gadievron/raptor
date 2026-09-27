@@ -2112,7 +2112,11 @@ def cleanup_cpg(cpg: JoernCPG) -> None:
     ``workspace/`` removal stays for that legacy layout; current
     queries run in per-query ``raptor-query-*`` scratch dirs, which
     are removed by ``run_query`` itself — the sweep here reclaims
-    only the strays a hard-killed query leaves behind."""
+    only the strays a hard-killed query leaves behind. The sweep is
+    AGE-GATED (same threshold as the build-scratch sweep): when the
+    CPG lives in a shared cache slot, a sibling session's query can
+    be live in its own scratch dir at this instant — an unconditional
+    sweep would delete the cwd/tmpdir out from under it mid-query."""
     try:
         cpg.path.unlink(missing_ok=True)
         parent = cpg.path.parent
@@ -2121,8 +2125,15 @@ def cleanup_cpg(cpg: JoernCPG) -> None:
         # follow a symlink planted at that name.
         if workspace.is_dir() and not workspace.is_symlink():
             shutil.rmtree(workspace, ignore_errors=True)
+        now = time.time()
         for stray in parent.glob("raptor-query-*"):
-            if stray.is_dir() and not stray.is_symlink():
+            if not stray.is_dir() or stray.is_symlink():
+                continue
+            try:
+                age = now - stray.stat().st_mtime
+            except OSError:
+                continue
+            if age > _CPG_BUILD_DIR_MAX_AGE_S:
                 shutil.rmtree(stray, ignore_errors=True)
         try:
             parent.rmdir()
