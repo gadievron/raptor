@@ -3223,7 +3223,14 @@ def _run_witness_execution(workdir, target, data, dynamic=None):
     except ImportError:
         _floor_errors = ()
     try:
-        stats = run_witness_stage(data, target, llm_call=_llm_call)
+        # run_dir=workdir: witness provenance binds to the directory
+        # holding findings.json. Without it the stage defaulted to the
+        # TARGET tree — records were stamped against the wrong binding
+        # (and the .witness-binding nonce landed in the target), so
+        # Stage F's sanitise pass stripped every witness_execution
+        # record it later verified against the workdir.
+        stats = run_witness_stage(data, target, llm_call=_llm_call,
+                                  run_dir=workdir)
     except _floor_errors:
         # Record-then-raise: the stage stamped the structured
         # unverifiable-environment record on the refused finding —
