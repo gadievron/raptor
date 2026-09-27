@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from core.security.prompt_framing import (
     SECURITY_AUDIT_FRAMING,
     with_audit_framing,
@@ -78,7 +80,9 @@ class TestSystemShape:
         # The pre-fix generation-shaped header must not resurface.
         assert "BUG TO REPLICATE" not in system
 
-    def test_retry_and_fp_sections_conditional(self):
+    def test_retry_and_fp_sections_conditional(self) -> None:
+        from packages.checker_synthesis.models import Match
+
         seed = _seed()
         _u, base_sys = build_synthesis_prompt(seed, "semgrep")
         assert "RETRY" not in base_sys
@@ -87,6 +91,15 @@ class TestSystemShape:
             seed, "semgrep", retry_feedback="rule did not match the seed",
         )
         assert "RETRY" in retry_sys
+        fp = Match(
+            file="src/other.c", line=42,
+            snippet="memcpy(dst, src, n);", metavars={},
+        )
+        fp_user, fp_sys = build_synthesis_prompt(
+            seed, "semgrep", prior_fps=[fp],
+        )
+        assert "PRIOR FALSE POSITIVES" in fp_sys
+        assert 'kind="prior-false-positives"' in fp_user
 
 
 class TestUntrustedBlockShape:
@@ -109,14 +122,17 @@ class TestDefenseState:
     transparent_payload, mirroring the taint-summary/spec-inference
     classes); triage keeps the encoded envelope."""
 
-    def test_synthesis_renders_plaintext_all_profiles(self):
-        seed = _seed()
-        for model_id in ("", "claude-opus-4-8", "anthropic.claude-mythos-5"):
-            user, _system = build_synthesis_prompt(
-                seed, "semgrep", model_id=model_id,
-            )
-            assert "strcpy" in user  # payload in the clear
-            assert not re.search(r"[A-Za-z0-9+/=]{80,}", user)
+    @pytest.mark.parametrize(
+        "model_id", ["", "claude-opus-4-8", "anthropic.claude-fable-5"],
+    )
+    def test_synthesis_renders_plaintext_all_profiles(
+        self, model_id: str,
+    ) -> None:
+        user, _system = build_synthesis_prompt(
+            _seed(), "semgrep", model_id=model_id,
+        )
+        assert "strcpy" in user  # payload in the clear
+        assert not re.search(r"[A-Za-z0-9+/=]{80,}", user)
 
     def test_synthesis_keeps_structural_defenses(self):
         seed = _seed()
