@@ -2149,13 +2149,23 @@ def _trace_to_attack_path(trace: dict[str, Any], trace_file: Path) -> dict[str, 
     path_id = trace.get("id", trace_file.stem)
     if not isinstance(path_id, str) or not path_id:
         path_id = trace_file.stem
+    # Clamp proximity to the attack-path schema's 0-10 integer range:
+    # the field is LLM-authored in the trace file, and an out-of-range
+    # or non-numeric value would rank the imported path above every
+    # Stage-B-produced one (or crash later numeric sorts).
+    proximity = trace.get("proximity", 0)
+    try:
+        proximity = int(proximity)
+    except (TypeError, ValueError):
+        proximity = 0
+    proximity = max(0, min(10, proximity))
     path = {
         "id": path_id,
         "name": trace.get("name", f"Imported trace: {trace_file.stem}"),
         # finding may not exist yet (trace ran before /validate) — leave blank
         "finding": trace.get("finding", ""),
         "steps": trace.get("steps", []),
-        "proximity": trace.get("proximity", 0),
+        "proximity": proximity,
         "blockers": trace.get("blockers", []),
         "branches": trace.get("branches", []),
         "status": "uncertain",
@@ -2170,13 +2180,24 @@ def _trace_to_attack_path(trace: dict[str, Any], trace_file: Path) -> dict[str, 
     if attacker_control:
         path["attacker_control"] = attacker_control
 
-    # If the trace summary has a verdict, record it as a note for Stage B.
-    # LLM-shaped traces render summary as a plain STRING often enough —
-    # .get on it crashed the whole import pre-fix; skip-with-nothing is
-    # the file's established degradation for malformed optional fields.
+    # trace_verdict is ENUM-constrained, derived from the summary's
+    # boolean fields — the prose verdict used to ride the field
+    # verbatim, handing the trace's LLM a free-string authority
+    # channel into Stage B prompts. The prose survives as an
+    # explicitly-named note field instead. LLM-shaped traces render
+    # summary as a plain STRING often enough — .get on it crashed the
+    # whole import pre-fix; skip-with-nothing is the file's
+    # established degradation for malformed optional fields.
     summary = trace.get("summary")
-    if isinstance(summary, dict) and summary.get("verdict"):
-        path["trace_verdict"] = summary["verdict"]
+    if isinstance(summary, dict):
+        if summary.get("flow_confirmed"):
+            path["trace_verdict"] = "flow_confirmed"
+        elif summary.get("sink_reachable"):
+            path["trace_verdict"] = "sink_reachable"
+        else:
+            path["trace_verdict"] = "flow_unconfirmed"
+        if summary.get("verdict"):
+            path["trace_verdict_note"] = str(summary["verdict"])
 
     # Forward SMT path-feasibility hints when present and well-formed.  Both
     # fields are optional — Stage E falls back to extracting conditions from
