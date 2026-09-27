@@ -35,6 +35,7 @@ from typing import Any, TYPE_CHECKING
 
 from core.atomic_fs import write_bytes_atomically, write_text_atomically
 from core.json import load_json, save_json
+from core.sage.hooks import RULE_REPLAY_MIN_TARGETS
 
 from .cwe_families import cwe_siblings
 
@@ -57,7 +58,14 @@ def _default_library_dir() -> Path:
 
 _REPLAY_TP_THRESHOLD = 0.80
 _MIN_TARGETS_FOR_PRUNE = 3
-_MIN_TARGETS_FOR_REPLAY = 1
+# Replay floor sourced from the SAGE lane's constant so the two
+# replay gates cannot drift apart again: with the disk library at a
+# lower floor than ``should_replay_rule``, rules replayed here kept
+# accruing ``targets`` records below the stronger lane's gate and
+# eventually cleared it on evidence the stronger lane would have
+# refused to act on. See RULE_REPLAY_MIN_TARGETS for the
+# both-directions rationale on the value itself.
+_MIN_TARGETS_FOR_REPLAY = RULE_REPLAY_MIN_TARGETS
 
 
 def _body_hash(body: str) -> str:

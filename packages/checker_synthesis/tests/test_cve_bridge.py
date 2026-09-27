@@ -358,6 +358,16 @@ class TestSynthesiseFromCve:
         lib = RuleLibrary(tmp_path / "lib")
         entry = lib.all_entries()[0]
         assert len(entry.targets) == 1  # the swept repo_root
+        # One target is below the replay floor — the entry must be
+        # VISIBLE (the original regression: targets=[] hid it from
+        # replay forever) but replays only after the floor accrues.
+        assert lib.find_replayable("CWE-120", "semgrep") == []
+        from packages.checker_synthesis.models import Match, MatchTriage
+        for t in ("t2", "t3"):
+            matches = [Match(file=f"{t}.c", line=1)]
+            triage = [MatchTriage(match=matches[0], status="variant",
+                                  reasoning="")]
+            lib.update("cve-rule-0", t, matches, triage)
         replayable = lib.find_replayable("CWE-120", "semgrep")
         assert [e.rule_id for e in replayable] == ["cve-rule-0"]
 

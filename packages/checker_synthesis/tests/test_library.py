@@ -292,15 +292,40 @@ class TestRuleLibraryFind:
         assert lib.find_replayable("CWE-89", "semgrep") == []
 
     def test_find_replayable_with_high_tp(self, tmp_path):
+        # Replay authority is earned across distinct targets, not on
+        # the minting target alone — accrue evidence on two more.
         lib = RuleLibrary(tmp_path / "lib")
         result = _result(triage_status="variant")
         rule_file = tmp_path / "r1.yml"
         rule_file.write_text(result.rule.body)
         result.rule_path = rule_file
         lib.promote(result, target_hash="t1")
+        for t in ("t2", "t3"):
+            matches = [Match(file=f"{t}.py", line=1)]
+            triage = [MatchTriage(match=matches[0], status="variant",
+                                  reasoning="")]
+            lib.update("r1", t, matches, triage)
 
         found = lib.find_replayable("CWE-89", "semgrep")
         assert len(found) == 1
+
+    def test_find_replayable_refuses_below_target_floor(self, tmp_path):
+        # Two targets is one short of the floor: a perfect TP rate
+        # demonstrated on too few targets must not replay — the
+        # counterpart of the 3-target grant above, so the floor
+        # cannot silently drift back down.
+        lib = RuleLibrary(tmp_path / "lib")
+        result = _result(triage_status="variant")
+        rule_file = tmp_path / "r1.yml"
+        rule_file.write_text(result.rule.body)
+        result.rule_path = rule_file
+        lib.promote(result, target_hash="t1")
+        matches = [Match(file="t2.py", line=1)]
+        triage = [MatchTriage(match=matches[0], status="variant",
+                              reasoning="")]
+        lib.update("r1", "t2", matches, triage)
+
+        assert lib.find_replayable("CWE-89", "semgrep") == []
 
 
 class TestRuleLibraryUpdate:
@@ -807,6 +832,13 @@ class TestCweFamilyLookup:
         rule_file.write_text(result.rule.body)
         result.rule_path = rule_file
         lib.promote(result, target_hash="t1")
+        # Clear the replay floor so the sibling-CWE lookup is what
+        # the assertion measures, not the target-diversity gate.
+        for t in ("t2", "t3"):
+            matches = [Match(file=f"{t}.py", line=1)]
+            triage = [MatchTriage(match=matches[0], status="variant",
+                                  reasoning="")]
+            lib.update("r1", t, matches, triage)
 
         found = lib.find_replayable("CWE-89", "semgrep")
         assert len(found) == 1

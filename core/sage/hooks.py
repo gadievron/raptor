@@ -1576,7 +1576,20 @@ SUPPRESS_TTL_DAYS = _SUPPRESS_TTL_DAYS
 _RULE_LIBRARY_DOMAIN = "raptor-rule-library"
 
 _RULE_REPLAY_MIN_TP_RATE = 0.8
-_RULE_REPLAY_MIN_TARGETS = 3
+
+# The ONE replay floor: a proven rule replays mechanically (skipping
+# synthesis) only after it has been tested on this many distinct
+# targets. Public because the disk rule library
+# (packages.checker_synthesis.library) sources its replay gate from
+# the same constant — two independently-tuned floors let the weaker
+# lane accumulate ``targets`` records that clear the stronger lane's
+# gate. LOWER (1-2) replays rules whose precision was only ever
+# demonstrated on the target that minted them — single-repo TP rates
+# routinely collapse on the next codebase; HIGHER delays legitimate
+# reuse of rules that already generalised, costing a synthesis run
+# per target with no added evidence quality.
+RULE_REPLAY_MIN_TARGETS = 3
+_RULE_REPLAY_MIN_TARGETS = RULE_REPLAY_MIN_TARGETS
 
 
 def store_proven_rule_metadata(

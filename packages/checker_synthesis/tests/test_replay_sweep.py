@@ -20,7 +20,9 @@ def _manifest_entry(
     cwe: str = "CWE-787",
     tp_rate: float = 0.9,
     dual_control: bool = True,
-    n_targets: int = 1,
+    # Default clears the replay floor (RULE_REPLAY_MIN_TARGETS): a
+    # helper-built "good" entry is replayable unless a test narrows it.
+    n_targets: int = 3,
     archived: bool = False,
     rule_tier: str | None = None,
 ) -> dict:
@@ -104,6 +106,9 @@ class TestReplayableEntries:
             # distinguishes fixed from unfixed code — not replayable.
             _manifest_entry("dual-no-mutant", rule_tier="sweep_once"),
             _manifest_entry("no-targets", n_targets=0),
+            # One target short of the replay floor — precision proven
+            # on too few targets must not sweep.
+            _manifest_entry("below-floor", n_targets=2),
             _manifest_entry("archived", archived=True),
             _manifest_entry("odd-engine", engine="codeql"),
         ]
@@ -293,7 +298,7 @@ class TestRecording:
         report = rs.run_sweep([target], library_dir=lib_dir, record=True)
         assert report.recorded_updates == 1
         entry = RuleLibrary(lib_dir).all_entries()[0]
-        assert len(entry.targets) == 2  # original + sweep target
+        assert len(entry.targets) == 4  # seeded targets + sweep target
         sweep_rec = entry.targets[-1]
         assert sweep_rec.matches == 3
         assert sweep_rec.tp_rate is None  # no triage → no verdict
@@ -327,7 +332,7 @@ class TestRecording:
         report = rs.run_sweep([target], library_dir=lib_dir, record=True)
         assert report.recorded_updates == 1
         entry = RuleLibrary(lib_dir).all_entries()[0]
-        assert len(entry.targets) == 2  # original + zero-match sweep target
+        assert len(entry.targets) == 4  # seeded targets + zero-match sweep target
         sweep_rec = entry.targets[-1]
         assert sweep_rec.matches == 0
         assert sweep_rec.tp_rate is None  # no triage → no verdict
@@ -355,7 +360,7 @@ class TestRecording:
         assert report.matches == []
         assert len(report.errors) == 1
         entry = RuleLibrary(lib_dir).all_entries()[0]
-        assert len(entry.targets) == 1  # original only — no sweep record
+        assert len(entry.targets) == 3  # seeded targets only — no sweep record
         assert (lib_dir / "manifest.json").read_text() == before
 
     def test_errored_run_keeps_matches_but_records_no_coverage(
@@ -402,7 +407,7 @@ class TestRecording:
         assert report.matches == []
         assert len(report.errors) == 1
         entry = RuleLibrary(lib_dir).all_entries()[0]
-        assert len(entry.targets) == 1
+        assert len(entry.targets) == 3  # seeded targets only — no sweep record
 
     def test_errored_rule_does_not_feed_auto_archive(
         self, tmp_path, monkeypatch,
@@ -412,7 +417,7 @@ class TestRecording:
         # NOT retire the rule — failed scans are not evidence the
         # rule never fires.
         lib_dir = _write_library(
-            tmp_path, [_manifest_entry("dud", n_targets=1)],
+            tmp_path, [_manifest_entry("dud")],
         )
         manifest = json.loads((lib_dir / "manifest.json").read_text())
         manifest["rules"][0]["total_variants"] = 0
@@ -436,7 +441,7 @@ class TestRecording:
         # Enough zero-match targets push a never-firing rule over the
         # prune threshold — sweep evidence alone can retire it.
         lib_dir = _write_library(
-            tmp_path, [_manifest_entry("dud", n_targets=1)],
+            tmp_path, [_manifest_entry("dud")],
         )
         # Strip prior variant evidence so the rule counts as never
         # having fired.
