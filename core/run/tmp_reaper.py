@@ -146,6 +146,11 @@ _DIR_PREFIXES = (
     # binary_oracle_cli.py); the artifacts outlive the resolve call and
     # are rmtree'd atexit, which SIGKILL skips.
     "raptor-oracle-envbuild-",
+    # Binary-oracle c++filt demangle scratch (core/analysis/
+    # binary_oracle.py TemporaryDirectory); context-managed, so
+    # survival past the floor means the process died mid-batch
+    # (SIGKILL/OOM skip __exit__).
+    "raptor-bo-demangle-",
     # Corpus excerpt trees (core/audit/corpus/run_corpus.py); ownership
     # passes to the corpus loop, released in its finally. The owner
     # holds a scratch keepalive while live (excerpt trees are written
