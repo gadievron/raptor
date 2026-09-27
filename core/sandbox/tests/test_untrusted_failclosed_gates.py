@@ -73,7 +73,9 @@ class TestStrictRequiresSeccomp(unittest.TestCase):
 
     @requires_landlock
     def test_full_profile_refuses_without_seccomp_on_landlock_fallback(self):
-        with patch.object(ctx._seccomp, "check_seccomp_available",
+        with patch.object(ctx._probes, "check_net_available",
+                          return_value=False), \
+             patch.object(ctx._seccomp, "check_seccomp_available",
                           return_value=False):
             with self.assertRaises(SandboxSetupError) as cm:
                 with ctx.sandbox(profile="full", target=self.tmp.name,
