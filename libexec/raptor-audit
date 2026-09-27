@@ -2886,6 +2886,64 @@ def cmd_backlog(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit_log(args: argparse.Namespace) -> int:
+    """Audit-log trail maintenance. ``audit-log rotate <out-dir>``
+    re-splits an oversized trail VERBATIM into a contiguous shard set
+    with every shard under the writer's roll threshold — the remedy
+    for a pre-rotation trail past the per-shard read budget, which
+    the loader otherwise reads as a bounded newest tail. Rows are
+    never rewritten or dropped (per-row integrity stamps still
+    verify — they bind to the run dir, not the file name); originals
+    are preserved as ``<name>.pre-rotate`` backups; live runs are
+    refused.
+    """
+    if getattr(args, "audit_log_command", None) != "rotate":
+        print(
+            "error: usage: raptor-audit audit-log rotate <out-dir>",
+            file=sys.stderr,
+        )
+        return 1
+    out_dir = Path(args.out_dir).resolve()
+    if not out_dir.is_dir():
+        print(f"error: {out_dir} is not a directory", file=sys.stderr)
+        return 1
+    from core.audit.audit_log_rotate import RotateRefused, rotate_audit_log
+    try:
+        stats = rotate_audit_log(out_dir)
+    except RotateRefused as exc:
+        print(f"error: {sanitise_for_terminal(str(exc), max_len=1000)}",
+              file=sys.stderr)
+        return 1
+    print(f"audit log: {out_dir}")
+    if not stats.rotated:
+        print(
+            f"  no-op: {stats.shards_before} shard(s), "
+            f"{stats.bytes_total} byte(s) — nothing over the read "
+            "budget"
+        )
+    else:
+        print(
+            f"  shards: {stats.shards_before} -> {stats.shards_after} "
+            f"({stats.bytes_total} byte(s), preserved verbatim)"
+        )
+        print(
+            "  backups: " + ", ".join(stats.backups)
+            + " (same directory)"
+        )
+    if stats.orphan_shards:
+        print(
+            f"  left untouched: {len(stats.orphan_shards)} "
+            "non-contiguous shard file(s): "
+            + ", ".join(stats.orphan_shards)
+        )
+    if stats.final_shard_over_budget:
+        print(
+            "  warning: shard bound reached — the final shard is "
+            "still over the read budget (its tail reads bounded)"
+        )
+    return 0
+
+
 def cmd_resume(args: argparse.Namespace) -> int:
     """Re-enter a failed/interrupted audit run AS THE SAME RUN.
 
@@ -4732,6 +4790,25 @@ def main() -> int:
              "token-premise finding, deduped per entry)",
     )
 
+    p_audit_log = sub.add_parser(
+        "audit-log",
+        help="Audit-log trail maintenance",
+    )
+    audit_log_sub = p_audit_log.add_subparsers(dest="audit_log_command")
+    p_alrotate = audit_log_sub.add_parser(
+        "rotate",
+        help="Re-split an oversized .audit-log.jsonl trail verbatim "
+             "into shards under the roll threshold (originals backed "
+             "up as <name>.pre-rotate; rows and their integrity "
+             "stamps preserved; live runs refused) — the remedy for "
+             "a trail past the read budget, which otherwise reads as "
+             "a bounded newest tail",
+    )
+    p_alrotate.add_argument(
+        "out_dir",
+        help="Run output directory containing .audit-log.jsonl",
+    )
+
     args = parser.parse_args()
     if getattr(args, "project", None) is not None:
         from core.run.pin import set_process_project
@@ -4782,6 +4859,7 @@ def main() -> int:
         "journal": cmd_journal,
         "coverage": cmd_coverage,
         "token-map": cmd_token_map,
+        "audit-log": cmd_audit_log,
     }
 
     return dispatch[args.command](args)

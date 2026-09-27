@@ -610,7 +610,7 @@ Query audit state across all four layers:
 | `annotations/<source_path>.md` | Human-written per-function notes (read as review context; never written by the LLM) |
 | `findings.json` | Findings in standard format (fed to `/validate`) |
 | `gaps.json` | Gap list used for this run |
-| `.audit-log.jsonl` | Full audit trail |
+| `.audit-log.jsonl` | Full audit trail (event log; rolls to numbered sibling shards — `.audit-log.002.jsonl`, … — below the per-shard read budget; readers load the contiguous set. `raptor-audit audit-log rotate <out-dir>` re-splits a pre-rotation oversized trail verbatim, backing up originals as `<name>.pre-rotate`; live runs are refused) |
 | `review-journal.jsonl` | Per-function review decisions (strategies, hypotheses, tools, cost) |
 | `return-census.json` | Return-usage census from the consistency pre-pass (six-value usage enum per call site) |
 | `field-census.json` | Field-access census from the lifecycle channel pre-pass (per-field write sites with rhs provenance, read sites with use context) |

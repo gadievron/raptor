@@ -290,6 +290,15 @@ def _refuse_live_run(
         )
 
 
+def refuse_live_run(out_dir: Path) -> None:
+    """Public seam for sibling run-dir rewriters (the audit-log
+    rotate remedy): raise :class:`CompactRefused` while the run
+    recorded at *out_dir* is still in flight. Same fail-closed
+    contract as compaction's own gate — an unreadable run record
+    refuses, an absent one stays permissive."""
+    _refuse_live_run(out_dir)
+
+
 def _backup_path(journal_path: Path, suffix: str = _BACKUP_SUFFIX) -> Path:
     """First free ``.pre-compact`` / ``.pre-supersede`` name — an
     existing backup is never overwritten (it may be the only copy of a
