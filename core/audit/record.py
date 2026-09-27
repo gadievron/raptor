@@ -226,6 +226,12 @@ class AuditLogDisclosure:
     #: Numbered shard files beyond the contiguous set (interior
     #: shard deleted, or a plant).
     orphan_shards: tuple[str, ...] = field(default=())
+    #: Contiguous-set shards that could not be read while a LATER
+    #: shard could — the first shard deleted out from under a rolled
+    #: trail (the writer always creates it before rolling), or a
+    #: shard vanishing mid-load. The survivors must not masquerade
+    #: as the whole trail.
+    missing_shards: tuple[str, ...] = ()
 
     @property
     def reason(self) -> str:
@@ -246,6 +252,10 @@ class AuditLogDisclosure:
             bits.append(
                 "non-contiguous shard file(s) not read: "
                 + ", ".join(self.orphan_shards))
+        if self.missing_shards:
+            bits.append(
+                "unreadable shard(s) with later shards present: "
+                + ", ".join(self.missing_shards))
         return "; ".join(bits)
 
 
@@ -271,10 +281,12 @@ def load_audit_log_disclosed(
     row_capped: list[str] = []
     paths = audit_log_paths(out_dir)
     shards_read = 0
+    unreadable: list[str] = []
     for p in paths:
         try:
             size = p.stat().st_size
         except OSError:
+            unreadable.append(p.name)
             continue
         shards_read += 1
         total_bytes += size
@@ -299,13 +311,19 @@ def load_audit_log_disclosed(
             row_capped.append(p.name)
         rows.extend(shard_rows)
     orphans = _audit_log_orphan_names(out_dir, len(paths))
+    # An unreadable shard counts as loss only when some LATER shard
+    # was read: the empty dir (no trail yet) reads shard 1 as absent
+    # too, and that must stay a complete-empty load. shard 1 absent
+    # with shard 2 present means the trail's head was deleted.
+    missing = tuple(unreadable) if shards_read else ()
     disclosure = AuditLogDisclosure(
-        complete=not (tail_read or row_capped or orphans),
+        complete=not (tail_read or row_capped or orphans or missing),
         total_bytes=total_bytes,
         shards=shards_read,
         tail_read_shards=tuple(tail_read),
         row_capped_shards=tuple(row_capped),
         orphan_shards=tuple(orphans),
+        missing_shards=missing,
     )
     if not disclosure.complete:
         logger.warning(

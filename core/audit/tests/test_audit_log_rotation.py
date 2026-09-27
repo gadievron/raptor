@@ -213,6 +213,21 @@ class TestLoaderHonesty:
         assert disclosure.complete
         assert disclosure.total_bytes == 0
 
+    def test_deleted_first_shard_disclosed(self, tmp_path: Path):
+        # The writer always creates shard 1 before rolling — shard 2
+        # present with shard 1 absent means the trail's head was
+        # deleted, and the survivors must not masquerade as the
+        # whole trail. (Two-direction twin of the complete-empty
+        # case above.)
+        _plant_raw_rows(
+            tmp_path / ".audit-log.002.jsonl", [_row(1)])
+        rows, disclosure = record.load_audit_log_disclosed(tmp_path)
+        assert [r["seq"] for r in rows] == [1]
+        assert not disclosure.complete
+        assert disclosure.missing_shards == (
+            record.AUDIT_LOG_FILENAME,)
+        assert record.AUDIT_LOG_FILENAME in disclosure.reason
+
 
 class TestMacAcrossRotation:
     def test_verified_load_across_rotation_boundary(
