@@ -10,7 +10,11 @@ import stat
 
 import pytest
 
-from core.source.gated import ReadBudgetExceededError, read_text_gated
+from core.source.gated import (
+    ReadBudgetExceededError,
+    read_bytes_gated,
+    read_text_gated,
+)
 
 
 class TestReadTextGated:
@@ -115,6 +119,71 @@ class TestReadTextGated:
         p.write_bytes(b"\xff\xfe\xff")
         with pytest.raises(UnicodeDecodeError):
             read_text_gated(p, 1024)
+
+
+class TestReadBytesGated:
+    """The bytes flavor: one body carries the gates for both flavors,
+    so every refusal class must hold without the decode step."""
+
+    def test_reads_raw_bytes_undecoded(self, tmp_path):
+        p = tmp_path / "bin.dat"
+        p.write_bytes(b"\xff\xfe\x00payload")
+        assert read_bytes_gated(p, 1024) == b"\xff\xfe\x00payload"
+
+    def test_bom_not_stripped(self, tmp_path):
+        p = tmp_path / "bom.dat"
+        p.write_bytes(b"\xef\xbb\xbfpayload")
+        assert read_bytes_gated(p, 1024) == b"\xef\xbb\xbfpayload"
+
+    def test_over_budget_raises_budget_error(self, tmp_path):
+        p = tmp_path / "big.dat"
+        p.write_bytes(b"x" * 64)
+        with pytest.raises(ReadBudgetExceededError):
+            read_bytes_gated(p, 8)
+
+    def test_fifo_refused_not_hung(self, tmp_path):
+        fifo = tmp_path / "wedge.dat"
+        os.mkfifo(fifo)
+        with pytest.raises(ValueError, match="not a regular file"):
+            read_bytes_gated(fifo, 1024)
+
+    def test_symlink_to_device_refused(self, tmp_path):
+        dev = "/dev/zero"
+        if not os.path.exists(dev):
+            pytest.skip("no /dev/zero on this platform")
+        link = tmp_path / "link.dat"
+        link.symlink_to(dev)
+        with pytest.raises(ValueError, match="not a regular file"):
+            read_bytes_gated(link, 1024)
+
+    def test_nofollow_refuses_symlink(self, tmp_path):
+        target = tmp_path / "real.dat"
+        target.write_bytes(b"via-link")
+        link = tmp_path / "link.dat"
+        link.symlink_to(target)
+        with pytest.raises(OSError):
+            read_bytes_gated(link, 1024, follow_symlinks=False)
+
+    def test_grow_recheck_refuses(self, tmp_path, monkeypatch):
+        p = tmp_path / "grow.dat"
+        p.write_bytes(b"ab")
+        real_fstat = os.fstat
+
+        def grow_after_fstat(fd):
+            st = real_fstat(fd)
+            with p.open("ab") as fh:  # raw-open: fixture grows its own tmp file
+                fh.write(b"Z" * 64)
+            return st
+
+        monkeypatch.setattr(os, "fstat", grow_after_fstat)
+        with pytest.raises(ReadBudgetExceededError, match="grew"):
+            read_bytes_gated(p, 4)
+
+    def test_text_flavor_delegates_to_bytes_body(self, tmp_path):
+        p = tmp_path / "t.txt"
+        p.write_text("payload")
+        assert read_text_gated(p, 1024) == read_bytes_gated(
+            p, 1024).decode("utf-8")
 
 
 class TestJsonDelegation:
