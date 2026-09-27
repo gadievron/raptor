@@ -537,7 +537,15 @@ tell you exactly which isolation tier a run actually got.
 
 `degraded_net_deny` means one specific thing: the per-call Landlock
 TCP-connect deny-all engaged because no namespace backend could
-deliver the requested network block. Its ABSENCE on a proxied run
+deliver the requested network block. This fallback also requires a
+working seccomp filter and blocks IPv4/IPv6 UDP socket creation,
+including DNS to the host's recursive resolver. The same requirement
+applies after a runtime namespace failure and during audit execution;
+audit does not relax the UDP deny. A seccomp-disabled profile or a
+missing libseccomp causes a setup refusal on this fallback, even with
+a containment-floor waiver. `degraded_net_deny=False` remains the
+explicit per-call acceptance of open network on the fallback.
+Its ABSENCE on a proxied run
 that resolved to the tier-2 `landlock_tcp` lane is a named contract,
 not an oversight — on that lane the proxy port allowlist is the live
 network policy and no deny-all engages, so read
@@ -817,6 +825,9 @@ The egress proxy allowlist needs the full set of GHCR hosts:
 
 ## Related documentation
 
+- [DNS egress review](sandbox-dns-egress-review.md) -- comparison with
+  the September 2026 resolver-bypass incident, affected fallback paths,
+  regression coverage, and remaining network-policy boundaries.
 - [Commands reference](commands.md) -- CLI flags (`--sandbox`,
   `--audit`, `--audit-verbose`, `--audit-budget`).
 - [Security model](security.md) -- how the sandbox fits RAPTOR's own

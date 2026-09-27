@@ -1157,6 +1157,23 @@ def _nproc_eagain_retry_decision(
     return _nproc_pressure_evidence()
 
 
+def _require_degraded_udp_filter(seccomp_profile: str | None) -> None:
+    """A TCP-only fallback must not leave a recursive DNS egress path."""
+    if (not seccomp_profile or seccomp_profile == "none"
+            or not check_seccomp_available()):
+        from .errors import SandboxSetupError
+        raise SandboxSetupError(
+            "Sandbox: network namespace unavailable; Landlock only "
+            "restricts TCP, and the required seccomp UDP/DNS block "
+            "cannot engage — refusing network-blocked execution.",
+            "Enable network namespaces, or install working libseccomp "
+            "and select a seccomp-enabled profile (e.g. full). "
+            "degraded_net_deny=False explicitly accepts open egress "
+            "on this fallback; a containment-floor waiver does not "
+            "waive the required UDP/DNS filter.",
+        )
+
+
 @contextmanager
 def sandbox(block_network=_UNSET, target: str | None = None, output: str | None = None,
             map_root: bool = False, limits: dict | None = None,
@@ -1380,7 +1397,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                  (Landlock net rules are port-scoped, not address-scoped),
                  which breaks daemon-IPC tools; known offenders are nudged
                  to no-daemon mode via env (GRADLE_OPTS, NX_DAEMON). bind/
-                 listen and UDP are untouched. When the degraded deny
+                 listen are untouched; seccomp denies IPv4/IPv6 UDP
+                 socket creation, including DNS. This fallback refuses
+                 to run without a working seccomp filter. When the TCP deny
                  cannot engage either (no Landlock ABI v4+ — which also
                  leaves an allowed_tcp_ports allowlist unenforceable on
                  this path), the context raises SandboxSetupError
@@ -2320,8 +2339,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # nested containers), the block previously evaporated to a one-shot
     # warning and the child ran with full host network. Landlock ABI v4+
     # can express "deny every TCP connect" with a handled-but-empty net
-    # ruleset, restoring most of the intent: no TCP egress (EACCES), UDP
-    # and bind/listen untouched (see the BIND_TCP design rationale).
+    # ruleset: no TCP egress (EACCES). Pair it with seccomp's UDP deny
+    # so the host resolver cannot carry DNS queries outside the sandbox.
+    # bind/listen stay untouched (see the BIND_TCP design rationale).
     # Deliberately NOT engaged when the caller supplied their own
     # allowed_tcp_ports — that allowlist is already the network policy.
     # Loopback caveat: Landlock net rules are port-scoped, so the deny
@@ -2348,6 +2368,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         _ll_net_capable = (sys.platform != "darwin"
                            and check_landlock_available()
                            and _get_landlock_abi() >= 4)
+        if _ll_net_capable:
+            _require_degraded_udp_filter(seccomp_profile)
+            seccomp_block_udp = True
         if _ll_net_capable and not allowed_tcp_ports:
             _degraded_tcp_deny = True
             if state.warn_once("_degraded_tcp_deny_warned"):
@@ -2355,8 +2378,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     "Sandbox: block_network requested but no namespace "
                     "backend is available — falling back to Landlock "
                     "TCP-connect deny (all TCP connects fail with "
-                    "EACCES, including loopback; bind/listen and UDP "
-                    "are unaffected). Daemon-IPC tools are nudged to "
+                    "EACCES, including loopback; seccomp blocks UDP/DNS; "
+                    "bind/listen are unaffected). Daemon-IPC tools are nudged to "
                     "no-daemon mode via env. Pass "
                     "degraded_net_deny=False to opt out for workloads "
                     "that need loopback TCP."
@@ -6994,6 +7017,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         and degraded_net_deny):
                     if (landlock_available and _get_landlock_abi() >= 4
                             and not allowed_tcp_ports):
+                        _require_degraded_udp_filter(seccomp_profile)
                         _demoted_net_deny = True
                         if state.warn_once("_demoted_tcp_deny_warned"):
                             logger.warning(
@@ -7003,7 +7027,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 "Landlock TCP-connect deny for this "
                                 "call (all TCP connects fail with "
                                 "EACCES, including loopback; "
-                                "bind/listen and UDP are unaffected).",
+                                "seccomp blocks UDP/DNS; "
+                                "bind/listen are unaffected).",
                             )
                     # Network-axis waiver: deliberately the RAW env
                     # var, not the floor consent chain — a tier floor
@@ -7080,7 +7105,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                             else writable_paths),
                         allowed_tcp_ports=allowed_tcp_ports,
                         seccomp_profile=seccomp_profile,
-                        seccomp_block_udp=seccomp_block_udp,
+                        seccomp_block_udp=(seccomp_block_udp
+                                           or _demoted_net_deny),
                         readable_paths=_preexec_readable,
                         deny_all_tcp_connect=(_degraded_tcp_deny
                                               or _demoted_net_deny),
@@ -7254,7 +7280,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 )
                             _sc_preexec = _la_make_seccomp(
                                 seccomp_profile,
-                                block_udp=seccomp_block_udp,
+                                block_udp=(seccomp_block_udp
+                                           or _demoted_net_deny),
                                 audit_mode=True,
                                 observe_mode=bool(observe and nonlocal_audit_mode),
                                 # The audit fallback executes the BARE
@@ -8074,7 +8101,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                           # seccomp is. macOS: seatbelt's blanket
                           # network deny covers UDP/loopback wholesale.
                           udp_block_engaged=bool(
-                              (seccomp_block_udp and seccomp_engaged)
+                              ((seccomp_block_udp or _demoted_net_deny)
+                               and seccomp_engaged)
                               or (use_seatbelt
                                   and (block_network
                                        or use_egress_proxy))))
