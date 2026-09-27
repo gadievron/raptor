@@ -1135,16 +1135,25 @@ _LOAD_CACHE_MAX_PATHS = 4
 #: summed per-shard ``retained_bytes`` (the loader's own accounting
 #: of raw row bytes kept; Python object overhead rides on top, in a
 #: ratio the per-shard retained budgets already bound). Stores evict
-#: LRU-oldest until under the cap; a SINGLE record over the cap is
-#: simply not cached — the load still returns normally, at the
-#: pre-cache cost for that run dir. Trade-off, both directions: too
-#: low and mega-journals lose the cache exactly where a re-parse
-#: hurts most (the reload storm this cache exists to collapse); too
-#: high and a long-lived multi-run process pins gibibytes of parsed
-#: rows (a fully-sharded record alone can reach
-#: _MAX_JOURNAL_SHARDS x the per-shard budget ≈ 16 GiB). 1 GiB
-#: holds ~4 max-size single-shard journals, or one moderately
-#: sharded one.
+#: LRU-oldest until under the cap. A SINGLE record over the cap
+#: sheds at SHARD granularity instead of refusing to cache: sealed
+#: shards' parsed rows are evicted earliest-shard-first
+#: (:func:`_shed_sealed_rows`) until the record fits, so a
+#: kernel-scale multi-shard journal keeps PARTIAL caching — retained
+#: shards serve from memory, only the shed shards (plus the active
+#: shard's delta) re-parse per load. The pre-shed refusal gave such
+#: a journal ZERO caching, returning the reload storm this cache
+#: exists to collapse exactly at the scale where a full re-parse
+#: hurts most. Only a record with nothing sheddable that still
+#: exceeds the cap (single-shard or incomplete — no sealed rows to
+#: shed) is not cached at all, at the pre-cache cost for that run
+#: dir. Trade-off, both directions: too low and mega-journals
+#: re-parse most of their shards per load (bounded regression
+#: toward the pre-cache cost, never worse); too high and a
+#: long-lived multi-run process pins gibibytes of parsed rows (a
+#: fully-sharded record alone can reach _MAX_JOURNAL_SHARDS x the
+#: per-shard budget ≈ 16 GiB). 1 GiB holds ~4 max-size single-shard
+#: journals, or the hottest ~5 shards of a mega-journal.
 _LOAD_CACHE_MAX_BYTES = 1 << 30
 
 #: Racy-mtime window (ns), git's racy-lstat rule: a shard whose
@@ -1206,6 +1215,13 @@ class _ShardLoadState:
     racy: bool = True
     offset: int = 0          # byte offset after the last fully-consumed line
     tail: bytes = b""        # raw bytes ending at ``offset`` (fingerprint)
+    #: Parsed rows evicted under the cache byte cap
+    #: (:func:`_shed_sealed_rows`): ``entries``/``sizes`` were dropped
+    #: to free memory while the rest of the record stays cached. Set
+    #: only on SEALED shards of a COMPLETE record; a shed shard is
+    #: re-parsed cold on the next load, never served or extended from
+    #: this state.
+    rows_evicted: bool = False
 
 
 @dataclass
@@ -1229,11 +1245,13 @@ class _CachedLoad:
     complete: bool
     reason: str | None
     pruned_total: int        # aggregate, including the final dedup pass
-    result_entries: list[ReviewJournalEntry]  # final post-dedup view
+    #: Final post-dedup view, or ``None`` once any shard's rows were
+    #: shed under the byte cap (the memoized result aliases every
+    #: shard's entry objects, so keeping it would pin the memory the
+    #: shed just freed) — a shed record rebuilds per serve by
+    #: re-parsing only the shed shards.
+    result_entries: list[ReviewJournalEntry] | None
     extensible: bool         # complete AND active shard ended at a boundary
-    #: Summed per-shard retained raw bytes — the record's cost under
-    #: the ``_LOAD_CACHE_MAX_BYTES`` aggregate bound.
-    retained_bytes: int
     #: Loader knobs this parse depended on (budgets + JSON backend):
     #: a view computed under different budgets or a different parser
     #: is NOT equivalent to a cold load under the current ones (rows
@@ -1241,6 +1259,18 @@ class _CachedLoad:
     #: mismatch — budget tunables, or the containment tests'
     #: monkeypatched budgets/backends — forces a full reload.
     config: tuple[int, int, int, int, int, bool]
+
+    def cached_bytes(self) -> int:
+        """The record's live cost under ``_LOAD_CACHE_MAX_BYTES``:
+        summed per-shard retained raw bytes, EXCLUDING shed shards
+        (their rows are gone — counting them would double-charge a
+        shed record and starve the shards it still retains).
+        Computed from the shard states so shedding can never desync
+        an accounting field."""
+        return sum(
+            0 if s.rows_evicted else s.retained_bytes
+            for s in self.shard_states
+        )
 
 
 _load_cache: dict[str, _CachedLoad] = {}
@@ -1289,18 +1319,67 @@ def invalidate_load_cache(out_dir: Path | str) -> None:
         _load_cache.pop(key, None)
 
 
+def _shed_sealed_rows(record: _CachedLoad) -> bool:
+    """Evict sealed shards' parsed rows from *record*, earliest shard
+    first, until it fits ``_LOAD_CACHE_MAX_BYTES``. Returns True when
+    it fits.
+
+    Shard-granular partial caching for records too big to cache
+    whole: the shed shards' ``entries``/``sizes`` are dropped (and
+    the memoized ``result_entries``, which aliases the same entry
+    objects — keeping it would pin the memory just freed) while
+    their pins and the remaining shards' rows stay. The next load
+    reuses the retained shards' rows and re-parses only the shed
+    shards from byte 0 (:func:`_serve_or_extend_set`).
+
+    Eviction order is earliest-shard-first, deterministically: every
+    serve touches every shard of the set, so per-shard recency is
+    uniform within a record (record-level LRU still orders records
+    against each other) — any fixed choice re-parses the same byte
+    count, and a stable one keeps repeated shed/rebuild cycles
+    re-parsing the SAME shards instead of thrashing across the set.
+
+    Only COMPLETE records shed: an incomplete record is served
+    solely by its exact whole-set pin (never rebuilt or extended),
+    so shedding any part of it would leave nothing servable — and
+    the ACTIVE shard's rows never shed (they are the extension arm's
+    resume state, and the roll threshold bounds them well under the
+    cap).
+    """
+    if not record.complete:
+        return False
+    for state in record.shard_states[:-1]:
+        if record.cached_bytes() <= _LOAD_CACHE_MAX_BYTES:
+            break
+        if state.rows_evicted:
+            continue
+        state.entries = []
+        state.sizes = []
+        state.rows_evicted = True
+        record.result_entries = None
+    return record.cached_bytes() <= _LOAD_CACHE_MAX_BYTES
+
+
 def _cache_store(cache_key: str, record: _CachedLoad) -> None:
     """Insert/refresh *record* at LRU-newest; evict past the count
-    AND aggregate-byte caps. Caller holds ``_load_cache_lock``."""
+    AND aggregate-byte caps. Caller holds ``_load_cache_lock``.
+
+    A record alone over the byte cap sheds sealed shards' rows
+    (:func:`_shed_sealed_rows`) rather than refusing outright —
+    partial caching for mega-journals. A record that cannot fit even
+    fully shed (nothing sheddable: single-shard, or incomplete) is
+    not cached at all — and never at other records' expense (routing
+    it through the eviction loop would flush every older record
+    before self-evicting); the load already returned normally
+    (pre-cache cost).
+    """
     _load_cache.pop(cache_key, None)
-    if record.retained_bytes > _LOAD_CACHE_MAX_BYTES:
-        # A single record over the aggregate cap is not cached at
-        # all: evicting every other run dir would still not fit it,
-        # and the load already returned normally (pre-cache cost).
+    if (record.cached_bytes() > _LOAD_CACHE_MAX_BYTES
+            and not _shed_sealed_rows(record)):
         return
     _load_cache[cache_key] = record
     while (len(_load_cache) > _LOAD_CACHE_MAX_PATHS
-           or sum(r.retained_bytes for r in _load_cache.values())
+           or sum(r.cached_bytes() for r in _load_cache.values())
            > _LOAD_CACHE_MAX_BYTES):
         # Evict LRU-oldest first; terminates before evicting the
         # just-inserted record — alone it satisfies both caps (count
@@ -1315,6 +1394,12 @@ def _cached_result(cached: _CachedLoad) -> JournalLoad:
     # result). The entry OBJECTS are shared — frozen by contract: no
     # journal consumer mutates a loaded entry (audited; corrections
     # are appended as NEW rows, never edited onto loaded ones).
+    if cached.result_entries is None:
+        # A shed record has no memoized result; callers rebuild via
+        # _finalize_set instead of serving. Failing loud beats
+        # serving an empty view as the journal's content.
+        msg = "internal: identity-serve of a shed cache record"
+        raise RuntimeError(msg)
     return JournalLoad(
         entries=list(cached.result_entries),
         complete=cached.complete,
@@ -1359,9 +1444,13 @@ def load_entries_checked(
     Results may be served from the process-local incremental cache
     (unchanged shard set → cached copy; grown active shard or a
     rolled shard set → cached prefix plus a parse of only the new
-    bytes/files); for any in-budget byte sequence the served result
-    equals a cold parse of the same bytes (pinned by the equivalence
-    test in core/coverage/tests/test_journal_load_cache.py).
+    bytes/files). A shard set too large to cache whole is cached
+    PARTIALLY: sealed shards' rows shed earliest-first under the
+    cache byte cap and re-parse per load while the retained shards
+    serve from memory (``_LOAD_CACHE_MAX_BYTES``). In every case,
+    for any in-budget byte sequence the served result equals a cold
+    parse of the same bytes (pinned by the equivalence test in
+    core/coverage/tests/test_journal_load_cache.py).
     ``fresh=True`` bypasses the cache for this call and repopulates
     it from the fresh parse — the mandatory contract for
     spend-authorizing consumers (:func:`require_complete_entries`,
@@ -1447,6 +1536,12 @@ def _serve_or_extend_set(
     sealed = cached.shard_states[:-1]
     active = cached.shard_states[-1]
     for state in sealed:
+        if state.rows_evicted:
+            # Shed shard (_shed_sealed_rows): no cached rows to
+            # vouch for, so no pin to honor — it is re-parsed cold
+            # below either way, reading exactly the bytes a cold
+            # load of the current file would read.
+            continue
         # Sealed shards never legitimately change: exact pins only.
         # A racy pin (sealed less than one clock tick before the
         # store — i.e. just after a roll) cannot vouch for itself,
@@ -1456,12 +1551,13 @@ def _serve_or_extend_set(
         if state.racy or not _shard_pin_matches(
                 out_dir, state, check_tail=False):
             return None
+    shed = any(s.rows_evicted for s in sealed)
     new_names = names_now[len(cached_names):]
     from core.source import open_regular
     fh = open_regular(out_dir / active.name, "rb")
     if fh is None:
         return None
-    extended = False
+    resumed = False
     try:
         try:
             st = os.fstat(fh.fileno())
@@ -1479,37 +1575,47 @@ def _serve_or_extend_set(
                     != active.mtime_ns
                     or not _tail_matches(fh, active)):
                 return None
-            _cache_store(cache_key, cached)
-            return _cached_result(cached)
-        if st.st_size < active.offset:
-            # Truncated below the consumed prefix.
-            return None
-        if not cached.extensible:
-            # Complete but the active shard's parse ended mid-line: a
-            # writer completing that line merges it with the next
-            # append into ONE line a cold parse reads differently —
-            # never resume past an unterminated tail.
-            return None
-        if not _tail_matches(fh, active):
-            return None            # head rewritten in place
-        # Pop the record BEFORE handing its lists to the extension: a
-        # BaseException (KeyboardInterrupt, SystemExit) escaping the
-        # streaming loop mid-extension must leave this key COLD — a
-        # torn record whose lists already carry part of the delta but
-        # whose offset still points at the old boundary would
-        # re-consume the delta on the next call and serve duplicated
-        # entries. _finalize_set re-stores the finished record on
-        # success.
-        _load_cache.pop(cache_key, None)
-        extended = True
-        _consume_shard_stream(fh, out_dir / active.name, active)
-        _finish_shard_pin(fh, active)
+            if not shed:
+                _cache_store(cache_key, cached)
+                return _cached_result(cached)
+            # Shed record over an unchanged set: the retained shard
+            # states are reusable verbatim but the memoized result
+            # is gone — fall through to rebuild by re-parsing ONLY
+            # the shed shards (partial caching's steady state). Pop
+            # first, same rationale as the extension arm below.
+            _load_cache.pop(cache_key, None)
+            resumed = True
+        else:
+            if st.st_size < active.offset:
+                # Truncated below the consumed prefix.
+                return None
+            if not cached.extensible:
+                # Complete but the active shard's parse ended
+                # mid-line: a writer completing that line merges it
+                # with the next append into ONE line a cold parse
+                # reads differently — never resume past an
+                # unterminated tail.
+                return None
+            if not _tail_matches(fh, active):
+                return None            # head rewritten in place
+            # Pop the record BEFORE handing its lists to the
+            # extension: a BaseException (KeyboardInterrupt,
+            # SystemExit) escaping the streaming loop mid-extension
+            # must leave this key COLD — a torn record whose lists
+            # already carry part of the delta but whose offset still
+            # points at the old boundary would re-consume the delta
+            # on the next call and serve duplicated entries.
+            # _finalize_set re-stores the finished record on success.
+            _load_cache.pop(cache_key, None)
+            resumed = True
+            _consume_shard_stream(fh, out_dir / active.name, active)
+            _finish_shard_pin(fh, active)
     finally:
         # Close errors on a read-only fd carry no data-loss risk for
         # the reader; the parse (and any degrade decision) is done.
         with contextlib.suppress(OSError):
             fh.close()
-    if not extended:
+    if not resumed:
         return None
     states = list(cached.shard_states)
     for name in new_names:
@@ -1518,6 +1624,17 @@ def _serve_or_extend_set(
         # every newly-appeared shard is parsed from byte 0, and the
         # new last shard becomes the active one.
         states.append(_load_shard_cold(out_dir / name))
+    if shed:
+        # Re-parse exactly the shed shards from byte 0; every
+        # retained shard's rows are reused verbatim. The re-parsed
+        # state carries a fresh pin, so _finalize_set stores a whole
+        # record again (which _cache_store may shed again — the
+        # deterministic earliest-first order re-sheds the SAME
+        # shards, so the per-load re-parse set stays stable).
+        states = [
+            _load_shard_cold(out_dir / s.name) if s.rows_evicted else s
+            for s in states
+        ]
     return _finalize_set(out_dir, cache_key, states, snapshot=snap)
 
 
@@ -1946,7 +2063,6 @@ def _finalize_set(
             pruned_total=pruned_total,
             result_entries=entries,
             extensible=complete and states[-1].at_line_boundary,
-            retained_bytes=sum(s.retained_bytes for s in states),
             config=_loader_config(),
         ))
     else:

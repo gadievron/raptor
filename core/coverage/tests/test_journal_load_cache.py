@@ -924,6 +924,234 @@ class TestCacheBounds:
         assert len(load_entries(a)) == 4
 
 
+class TestShardShedding:
+    """Shard-granular partial caching for records over the byte cap.
+
+    A COMPLETE multi-shard record that alone exceeds
+    ``_LOAD_CACHE_MAX_BYTES`` sheds sealed shards' rows
+    earliest-first instead of refusing to cache: retained shards
+    serve from memory, shed shards re-parse per load, and every
+    served result still equals a cold parse of the same bytes.
+    """
+
+    def _sharded(self, tmp_path: Path) -> tuple[Path, list[int]]:
+        """Three-shard journal written directly (two sealed + one
+        active), aged past the racy window. Returns per-shard file
+        sizes (== retained bytes: every row is unique and in-budget).
+        """
+        run = tmp_path / "run"
+        run.mkdir()
+        sizes: list[int] = []
+        for shard_no, rows in (
+            (1, range(4)), (2, range(4, 8)), (3, range(8, 10)),
+        ):
+            p = run / journal_mod._journal_shard_name(shard_no)
+            p.write_bytes(b"".join(_row(i) for i in rows))
+            sizes.append(p.stat().st_size)
+        _age_all(run)
+        return run, sizes
+
+    def _cap_to_shed_first(
+        self, monkeypatch: pytest.MonkeyPatch, sizes: list[int],
+    ) -> int:
+        # Cap below the total but big enough once the FIRST shard's
+        # rows are shed: exactly one shard must be evicted.
+        cap = sizes[1] + sizes[2] + 5
+        assert cap < sum(sizes)
+        monkeypatch.setattr(journal_mod, "_LOAD_CACHE_MAX_BYTES", cap)
+        return cap
+
+    def test_over_cap_multishard_record_partially_cached(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        read_counter: dict[str, int],
+    ) -> None:
+        # The headline case: pre-shed, this record was refused
+        # outright and every load re-parsed the whole set.
+        run, sizes = self._sharded(tmp_path)
+        cap = self._cap_to_shed_first(monkeypatch, sizes)
+        first = load_entries_checked(run)
+        assert first.complete and len(first.entries) == 10
+        with journal_mod._load_cache_lock:
+            record = journal_mod._load_cache[os.path.realpath(run)]
+            states = record.shard_states
+            assert states[0].rows_evicted, "earliest shard not shed"
+            assert states[0].entries == [] and states[0].sizes == [], (
+                "shed shard still pins its parsed rows"
+            )
+            assert not states[1].rows_evicted, (
+                "shed went past the point where the record fits"
+            )
+            assert not states[2].rows_evicted, "active shard shed"
+            assert record.result_entries is None, (
+                "memoized result kept — it aliases the shed rows"
+            )
+            assert record.cached_bytes() <= cap
+        _reset(read_counter)
+        second = load_entries_checked(run)
+        # Only the shed shard re-parses; the retained shards' rows
+        # serve from memory (fingerprint/pin probes aside). Byte
+        # accounting FIRST — the cold-reference load below also runs
+        # through the counter.
+        assert read_counter["bytes"] >= sizes[0]
+        assert read_counter["bytes"] < sizes[0] + sizes[1], (
+            "a retained shard's rows were re-read — partial caching "
+            "did not engage"
+        )
+        assert second == first
+        assert second == _cold_dir(tmp_path, run, "shed")
+
+    def test_reshed_is_deterministic_across_loads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        read_counter: dict[str, int],
+    ) -> None:
+        # The rebuild re-stores a whole record and _cache_store sheds
+        # again: earliest-first must pick the SAME shard every time,
+        # keeping the per-load re-parse cost stable (no thrash).
+        run, sizes = self._sharded(tmp_path)
+        self._cap_to_shed_first(monkeypatch, sizes)
+        load_entries_checked(run)
+        _reset(read_counter)
+        load_entries_checked(run)
+        second_bytes = read_counter["bytes"]
+        for _ in range(3):
+            _reset(read_counter)
+            result = load_entries_checked(run)
+            assert len(result.entries) == 10
+            assert read_counter["bytes"] == second_bytes
+            with journal_mod._load_cache_lock:
+                record = journal_mod._load_cache[os.path.realpath(run)]
+                assert [
+                    s.name for s in record.shard_states if s.rows_evicted
+                ] == [journal_mod._journal_shard_name(1)]
+
+    def test_extension_over_shed_record(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        read_counter: dict[str, int],
+    ) -> None:
+        # A grown active shard still extends: delta-parse the active
+        # shard, re-parse only the shed shard, reuse the retained one.
+        run, sizes = self._sharded(tmp_path)
+        self._cap_to_shed_first(monkeypatch, sizes)
+        load_entries_checked(run)
+        appended = _row(10)
+        active = run / journal_mod._journal_shard_name(3)
+        with active.open("ab") as f:
+            f.write(appended)
+        _reset(read_counter)
+        result = load_entries_checked(run)
+        assert result.complete and len(result.entries) == 11
+        # Byte accounting first — the cold-reference load below also
+        # runs through the counter.
+        assert read_counter["bytes"] >= sizes[0] + len(appended)
+        assert read_counter["bytes"] < sizes[0] + sizes[1], (
+            "extension over a shed record re-read a retained shard"
+        )
+        assert result == _cold_dir(tmp_path, run, "shed-ext")
+
+    def test_shed_shard_rewrite_still_cold_equivalent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A shed shard's pin is SKIPPED on serve — safe because the
+        # shard is re-parsed cold either way. Prove it: a same-size
+        # same-mtime in-place rewrite of the shed shard (invisible to
+        # any pin) is picked up, because its bytes are re-read per
+        # load. The served result must equal a cold parse of the
+        # CURRENT bytes.
+        run, sizes = self._sharded(tmp_path)
+        self._cap_to_shed_first(monkeypatch, sizes)
+        load_entries_checked(run)
+        shed = run / journal_mod._journal_shard_name(1)
+        st = os.stat(shed)
+        data = shed.read_bytes()
+        swapped = data.replace(b'"verdict": "clean"',
+                               b'"verdict": "error"')
+        assert len(swapped) == len(data) and swapped != data
+        shed.write_bytes(swapped)
+        os.utime(shed, ns=(st.st_atime_ns, st.st_mtime_ns))
+        result = load_entries_checked(run)
+        assert result == _cold_dir(tmp_path, run, "shed-rewrite")
+        assert [e.verdict for e in result.entries[:4]] == ["error"] * 4
+
+    def test_retained_shard_tamper_forces_cold_reload(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Retained shards keep their exact pins: touching one refuses
+        # the serve and the whole set re-parses cold.
+        run, sizes = self._sharded(tmp_path)
+        self._cap_to_shed_first(monkeypatch, sizes)
+        load_entries_checked(run)
+        retained = run / journal_mod._journal_shard_name(2)
+        with retained.open("ab") as f:
+            f.write(_row(99))
+        _age(retained)
+        result = load_entries_checked(run)
+        assert result == _cold_dir(tmp_path, run, "shed-tamper")
+        assert len(result.entries) == 11
+
+    def test_fresh_reads_everything_despite_shed_record(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        read_counter: dict[str, int],
+    ) -> None:
+        # Spend-authorizing consumers stay fully fresh-routed: a shed
+        # record in the cache changes nothing for fresh=True.
+        run, sizes = self._sharded(tmp_path)
+        self._cap_to_shed_first(monkeypatch, sizes)
+        load_entries_checked(run)
+        _reset(read_counter)
+        entries = require_complete_entries(run)
+        assert len(entries) == 10
+        assert read_counter["bytes"] >= sum(sizes), (
+            "the spend-authorizing chokepoint served cached rows"
+        )
+
+    def test_nothing_sheddable_still_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Bound direction: an INCOMPLETE multi-shard record over the
+        # cap has nothing sheddable (it is served solely by its exact
+        # whole-set pin) and stays uncached — the byte cap holds.
+        monkeypatch.setattr(journal_mod, "_MAX_RETAINED_ENTRIES", 2)
+        monkeypatch.setattr(journal_mod, "_READ_BUDGET_MULTIPLIER", 1000)
+        monkeypatch.setattr(
+            journal_mod, "_JOURNAL_SHARD_ROLL_BYTES", 600)
+        for i in range(30):
+            target = journal_mod._append_shard_path(tmp_path)
+            with target.open("ab") as f:
+                f.write(_row(i))
+        _age_all(tmp_path)
+        monkeypatch.setattr(journal_mod, "_LOAD_CACHE_MAX_BYTES", 10)
+        result = load_entries_checked(tmp_path)
+        assert not result.complete
+        with journal_mod._load_cache_lock:
+            assert (os.path.realpath(tmp_path)
+                    not in journal_mod._load_cache), (
+                "an incomplete over-cap record was cached (what rows "
+                "would a shed incomplete record even serve?)"
+            )
+
+    def test_aggregate_bound_holds_with_shed_record(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Bound direction: shed records count their RETAINED bytes
+        # against the aggregate cap like any other record.
+        run, sizes = self._sharded(tmp_path)
+        cap = self._cap_to_shed_first(monkeypatch, sizes)
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / JOURNAL_FILENAME).write_bytes(_row(0))
+        _age(other / JOURNAL_FILENAME)
+        load_entries(other)
+        load_entries_checked(run)
+        with journal_mod._load_cache_lock:
+            total = sum(
+                r.cached_bytes()
+                for r in journal_mod._load_cache.values()
+            )
+            assert total <= cap, (
+                f"aggregate cached bytes {total} exceed the cap {cap}"
+            )
+
+
 class TestThreadSafety:
     def test_concurrent_loads_during_appends_across_rolls(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
