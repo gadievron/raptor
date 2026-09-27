@@ -2,7 +2,12 @@
 
 Self-contained, stdlib-only. Flags any workflow ``run:`` step whose
 script contains a shell PIPELINE (``cmd | cmd`` — the ``| tee log``
-idiom is the recurring case) without pipefail protection.
+idiom is the recurring case) without pipefail protection. Composite
+actions under ``.github/actions/`` are scanned too — a composite run
+step must declare ``shell:``, and only the literal ``bash`` keyword
+earns the implicit pipefail, so custom templates flag here (and an
+omitted shell flags before GHA rejects it at run time) — keyed
+``actions/<dir>/action.yml::runs::<step>``.
 
 Why: GitHub Actions' DEFAULT shell for ``run:`` steps is ``bash -e``
 only — no ``pipefail`` — so the exit code of everything left of a
@@ -210,6 +215,88 @@ def parse_steps(workflow_name: str, text: str) -> list[Step]:
     return steps
 
 
+def parse_action_steps(action_name: str, text: str) -> list[Step]:
+    """Composite-action variant of :func:`parse_steps`: one flat
+    ``steps:`` list under ``runs:`` instead of per-job lists, so the
+    literal ``runs`` stands in for the job in the finding key. Same
+    block-style assumptions as the workflow parser.
+    """
+    lines = text.split("\n")
+    steps: list[Step] = []
+
+    runs_at = None
+    for i, ln in enumerate(lines):
+        if ln.rstrip() == "runs:":
+            runs_at = i
+            break
+    if runs_at is None:
+        return steps
+
+    steps_indent = None
+    step_item_indent = None
+    current: Step | None = None
+    run_indent = None
+
+    key_re = re.compile(r"^([A-Za-z0-9_-]+):")
+
+    for ln in lines[runs_at + 1:]:
+        if ln.strip() == "" or ln.lstrip().startswith("#"):
+            if current is not None and run_indent is not None:
+                current.run_body.append("")
+            continue
+        ind = _indent(ln)
+        stripped = ln.strip()
+
+        # New top-level section after runs: — the block ended.
+        if ind == 0:
+            break
+
+        # Inside a run body?
+        if current is not None and run_indent is not None:
+            if ind > run_indent:
+                current.run_body.append(ln)
+                continue
+            run_indent = None  # body ended; fall through
+
+        if stripped == "steps:":
+            steps_indent = ind
+            continue
+        if steps_indent is None:
+            continue
+
+        # New step item.
+        if stripped.startswith("- ") or stripped == "-":
+            if step_item_indent is None:
+                step_item_indent = ind
+            if ind == step_item_indent:
+                current = Step(
+                    workflow=action_name, job="runs", index=len(steps),
+                )
+                steps.append(current)
+                stripped = stripped[1:].strip()
+                if not stripped:
+                    continue
+                ind = ind + 2
+
+        if current is None:
+            continue
+
+        m = key_re.match(stripped)
+        if m:
+            keyname = m.group(1)
+            value = stripped[len(keyname) + 1:].strip()
+            if keyname == "name" and not current.name:
+                current.name = value.strip("'\"")
+            elif keyname == "shell":
+                current.shell = value.strip("'\"")
+            elif keyname == "run":
+                if value in ("|", "|-", "|+", ">", ">-", ">+"):
+                    run_indent = ind
+                elif value:
+                    current.run_body.append(value)
+    return steps
+
+
 def _has_pipe(line: str) -> bool:
     code = _EXPR_RE.sub("", line)
     code = _SQUOTE_RE.sub("''", code)
@@ -253,6 +340,14 @@ def step_findings(steps: list[Step]) -> list[Step]:
             continue
         if step.shell == "bash":
             continue
+        if step.shell in ("pwsh", "powershell"):
+            # Out of scope, not credited-safe: the gate polices bash's
+            # missing pipefail, and the protections it can demand
+            # (`set -o pipefail`, PIPESTATUS) are bash syntax a
+            # PowerShell step cannot adopt. PowerShell pipelines have
+            # no pipefail equivalent — native-command exit codes are
+            # the author's job ($LASTEXITCODE) either way.
+            continue
         if _unprotected_pipe(step):
             findings.append(step)
     return findings
@@ -267,6 +362,19 @@ def scan_tree(root: Path) -> list[Step]:
             wf.name, wf.read_text(encoding="utf-8", errors="replace"),
         )
         findings.extend(step_findings(steps))
+    # Repo-local composite actions: a composite run step must declare
+    # shell:, and anything but the literal `bash` keyword is
+    # pipefail-less (an omitted shell flags here before GHA rejects
+    # it at run time); nothing else scans them (the workflow-shape
+    # tests stop at the uses: boundary).
+    actions_dir = root / ".github" / "actions"
+    if actions_dir.is_dir():
+        for af in sorted(actions_dir.rglob("action.y*ml")):
+            steps = parse_action_steps(
+                af.relative_to(root / ".github").as_posix(),
+                af.read_text(encoding="utf-8", errors="replace"),
+            )
+            findings.extend(step_findings(steps))
     return findings
 
 

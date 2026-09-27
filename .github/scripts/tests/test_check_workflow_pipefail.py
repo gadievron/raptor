@@ -315,3 +315,85 @@ class TestRealRepoProtectedSites:
         assert baseline - findings == set(), (
             "stale baseline row(s) — refresh workflow_pipefail_baseline.json"
         )
+
+
+def _action_tree(tmp_path: Path, body: str, name: str = "demo") -> Path:
+    af = tmp_path / ".github" / "actions" / name / "action.yml"
+    af.parent.mkdir(parents=True, exist_ok=True)
+    af.write_text(body, encoding="utf-8")
+    # scan_tree requires the workflows dir to exist as the root marker.
+    (tmp_path / ".github" / "workflows").mkdir(exist_ok=True)
+    return tmp_path
+
+
+def _action(step_lines: str) -> str:
+    return (
+        "name: Fixture action\n"
+        "description: fixture\n"
+        "runs:\n"
+        "  using: composite\n"
+        "  steps:\n"
+        + step_lines
+    )
+
+
+class TestCompositeActions:
+    """Repo-local composite actions get the same pipefail census as
+    workflow steps: a composite run step must declare shell:, and
+    only the literal `bash` keyword carries the implicit pipefail;
+    no other gate looks past the uses: boundary."""
+
+    def test_action_bash_shell_credited(self, lint, tmp_path):
+        root = _action_tree(tmp_path, _action(
+            "    - name: Fetch\n"
+            "      shell: bash\n"
+            "      run: |\n"
+            "          curl -s example | tee out.log\n"
+        ))
+        # shell: bash is credited in actions exactly as in workflows —
+        # so this variant passes...
+        assert lint.scan_tree(root) == []
+
+    def test_action_omitted_shell_pipe_flagged(self, lint, tmp_path):
+        root = _action_tree(tmp_path, _action(
+            "    - name: Fetch\n"
+            "      run: |\n"
+            "          curl -s example | tee out.log\n"
+        ))
+        findings = lint.scan_tree(root)
+        assert [f.key for f in findings] == [
+            "actions/demo/action.yml::runs::Fetch",
+        ]
+
+    def test_set_pipefail_protects_action_step(self, lint, tmp_path):
+        root = _action_tree(tmp_path, _action(
+            "    - name: Fetch\n"
+            "      run: |\n"
+            "          set -euo pipefail\n"
+            "          curl -s example | tee out.log\n"
+        ))
+        assert lint.scan_tree(root) == []
+
+    def test_pwsh_step_out_of_scope(self, lint, tmp_path):
+        # The demanded protections are bash syntax a pwsh step cannot
+        # adopt; PowerShell pipelines carry no pipefail concept.
+        root = _action_tree(tmp_path, _action(
+            "    - name: Status\n"
+            "      shell: pwsh\n"
+            "      run: |\n"
+            "          wsl.exe --status 2>&1 | Out-String\n"
+        ))
+        assert lint.scan_tree(root) == []
+
+    def test_workflow_and_action_findings_combine(self, lint, tmp_path):
+        _tree(tmp_path, UNPROTECTED_TEE)
+        _action_tree(tmp_path, _action(
+            "    - name: Fetch\n"
+            "      run: |\n"
+            "          curl -s example | tee out.log\n"
+        ))
+        keys = sorted(f.key for f in lint.scan_tree(tmp_path))
+        assert keys == [
+            "actions/demo/action.yml::runs::Fetch",
+            "wf.yml::build::Run gate",
+        ]
