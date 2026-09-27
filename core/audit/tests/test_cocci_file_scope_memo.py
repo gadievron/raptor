@@ -5,9 +5,10 @@ audit, so the orchestrator's coccinelle leg memoizes the FILE sweep
 (one spatch per rule-content x file-content) and derives each
 function's verdict afterwards. Covers: per-function match
 attribution, single-spawn across functions, error results never
-pinned, substrate skips preserved, and the byte-compatible
-single-function wrapper (including both directions of its +50
-fallback window). Hermetic — spatch is stubbed at the
+pinned, substrate skips preserved, vocab-rendered rules keyed on the
+rendered bytes with a bounded tempfile lifecycle, and the
+byte-compatible single-function wrapper (including both directions
+of its +50 fallback window). Hermetic — spatch is stubbed at the
 ``packages.coccinelle.runner`` boundary.
 """
 
@@ -171,6 +172,92 @@ class TestFileScopedMemoAttribution:
         assert confirmed == []
         assert "coccinelle" in skipped
         assert not calls, "spatch must not spawn on a PHP subject"
+
+
+class TestVocabRenderedMemo:
+    # The @vocab marker sits immediately before the construct it
+    # extends (an inline alternation here) — renderer contract.
+    _VOCAB_RULE = (
+        "@r@ expression E; @@\n"
+        "// @vocab: deallocators\n"
+        "* \\(kfree\\|free\\)(E)\n"
+    )
+
+    def _vocab(self, *names: str) -> SimpleNamespace:
+        return SimpleNamespace(deallocators=frozenset(names))
+
+    def _rule(self, tmp_path: Path) -> Path:
+        rule = tmp_path / "rules" / "dealloc.cocci"
+        rule.write_text(self._VOCAB_RULE)
+        return rule
+
+    def test_same_vocab_hits_the_memo(self, tmp_path, monkeypatch):
+        _write_tree(tmp_path)
+        rule = self._rule(tmp_path)
+        calls = _stub_runner(monkeypatch, match_lines=[2])
+        cfg = _Cfg(tmp_path)
+        vocab = self._vocab("my_free")
+
+        _dispatch(cfg, rule, function_name="a", line_start=1,
+                  domain_vocab=vocab)
+        _dispatch(cfg, rule, function_name="b", line_start=100,
+                  domain_vocab=vocab)
+
+        assert len(calls) == 1
+        # The RENDERED rule (spliced vocabulary) is what ran.
+        assert "my_free" in calls[0]["rule_text"]
+
+    def test_vocab_change_is_a_miss(self, tmp_path, monkeypatch):
+        _write_tree(tmp_path)
+        rule = self._rule(tmp_path)
+        calls = _stub_runner(monkeypatch, match_lines=[2])
+        cfg = _Cfg(tmp_path)
+
+        _dispatch(cfg, rule, function_name="a", line_start=1,
+                  domain_vocab=self._vocab("my_free"))
+        _dispatch(cfg, rule, function_name="a", line_start=1,
+                  domain_vocab=self._vocab("other_free"))
+
+        assert len(calls) == 2
+        assert "other_free" in calls[1]["rule_text"]
+
+    def test_rendered_tempfile_does_not_outlive_the_step(
+        self, tmp_path, monkeypatch,
+    ):
+        _write_tree(tmp_path)
+        rule = self._rule(tmp_path)
+        calls = _stub_runner(monkeypatch, match_lines=[2])
+        cfg = _Cfg(tmp_path)
+
+        _dispatch(cfg, rule, function_name="a", line_start=1,
+                  domain_vocab=self._vocab("my_free"))
+
+        rendered = Path(calls[0]["rule"])
+        assert rendered != rule, "a rendered tempfile must have run"
+        assert not rendered.exists(), (
+            "the rendered tempfile must be unlinked when the step ends"
+        )
+
+    def test_memo_hit_never_dereferences_the_dead_tempfile(
+        self, tmp_path, monkeypatch,
+    ):
+        """The memoized result's rule_id is the SOURCE rule path, so
+        replay works after the rendered tempfile is gone."""
+        _write_tree(tmp_path)
+        rule = self._rule(tmp_path)
+        calls = _stub_runner(monkeypatch, match_lines=[2])
+        cfg = _Cfg(tmp_path)
+        vocab = self._vocab("my_free")
+
+        _dispatch(cfg, rule, function_name="a", line_start=1,
+                  domain_vocab=vocab)
+        assert not Path(calls[0]["rule"]).exists()
+        confirmed = _dispatch(
+            cfg, rule, function_name="a", line_start=1,
+            domain_vocab=vocab,
+        )
+        assert confirmed == ["coccinelle:dealloc"]
+        assert len(calls) == 1
 
 
 class TestSingleFunctionWrapper:

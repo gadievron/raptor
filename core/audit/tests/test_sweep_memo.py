@@ -347,16 +347,16 @@ class TestToolChainMemoWiring:
             assert confirmed == ["smt:check-oob"]
         assert len(calls) == 1
 
-    def test_vocab_rendered_coccinelle_not_memoized(
+    def test_vocab_rendered_coccinelle_memoized_on_rendered_bytes(
         self, tmp_path, monkeypatch,
     ):
-        """A DomainVocabulary re-renders the rule per run state, so the
-        SOURCE rule's hash is not the effective rule identity — the
-        sweep must run unmemoized."""
+        """A vocab-bearing dispatch renders the rule ONCE up front and
+        keys the memo on the rendered content — the second dispatch
+        with the same vocabulary is a hit, not a re-render + re-run."""
         _write_target(tmp_path)
         rule = tmp_path / "rules" / "uaf.cocci"
         rule.parent.mkdir(exist_ok=True)
-        rule.write_text("@@ @@\n")
+        rule.write_text("@@ @@\n")  # markerless: render() returns None
         cfg = _Cfg(tmp_path)
         calls = []
 
@@ -364,15 +364,15 @@ class TestToolChainMemoWiring:
             calls.append(kw)
             return SweepResult(
                 tool="coccinelle", file_path="src/a.c",
-                function_name="", outcome="confirmed",
+                function_name="f", outcome="confirmed",
                 rule_id=str(rule), matches=[{"line": 3}],
             )
 
         monkeypatch.setattr(orch, "run_coccinelle_file_sweep", stub)
         chain = [{"type": "coccinelle", "config": {"rule": str(rule)}}]
-        vocab = object()  # opaque run-state input — must disable the memo
+        vocab = object()  # markerless rule: vocab splices nothing
         for _ in range(2):
-            _run_tool_chain(
+            confirmed = _run_tool_chain(
                 chain,
                 config=cfg,
                 file_path="src/a.c",
@@ -382,7 +382,8 @@ class TestToolChainMemoWiring:
                 line_start=1,
                 domain_vocab=vocab,
             )
-        assert len(calls) == 2
+            assert confirmed == ["coccinelle:uaf"]
+        assert len(calls) == 1
 
     def test_coccinelle_memo_is_file_scoped_across_functions(
         self, tmp_path, monkeypatch,

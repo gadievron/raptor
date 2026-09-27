@@ -1826,6 +1826,7 @@ def run_coccinelle_file_sweep(
     defines: dict[str, str] | None = None,
     domain_vocab: Any = None,
     language: str | None = None,
+    rendered_rule: str | None = None,
 ) -> SweepResult:
     """Run a Coccinelle rule against a single C file — FILE scope.
 
@@ -1856,6 +1857,12 @@ def run_coccinelle_file_sweep(
         domain_vocab: DomainVocabulary used to render vocabulary
             placeholders in the rule to a tempfile before running;
             when None the rule file is run as-is.
+        rendered_rule: Path to an ALREADY vocab-rendered rule file.
+            When set it is run instead of ``cocci_rule`` and
+            ``domain_vocab`` is not consulted; the caller owns the
+            tempfile's lifecycle (it is not unlinked here). Lets the
+            orchestrator render once, hash the rendered bytes for the
+            memo key, and skip a second render inside the sweep.
 
     Returns:
         SweepResult with the FULL unfiltered match set;
@@ -1910,7 +1917,9 @@ def run_coccinelle_file_sweep(
 
         effective_rule = cocci_rule
         _rendered_tmp = None
-        if domain_vocab is not None:
+        if rendered_rule is not None:
+            effective_rule = rendered_rule
+        elif domain_vocab is not None:
             # Rendering reads the rule file and writes a tempfile: IO
             # and text-decode errors are the legitimate failure set.
             with contextlib.suppress(OSError, ValueError):

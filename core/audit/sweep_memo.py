@@ -28,7 +28,8 @@ Scope and soundness contract:
   and the step runs unmemoized.  The coccinelle leg memoizes at FILE
   scope — spatch always scans the whole file, so its key carries no
   function/line dimension and one entry serves every function in the
-  file (scoping happens after retrieval).
+  file (scoping happens after retrieval); a vocab-rendered rule keys
+  on the RENDERED rule bytes, so a vocabulary change is a miss.
 * The memo lives exactly one run (it is owned by the run's
   ``OrchestratorConfig``) and the audited target tree is read-only for
   that lifetime, which is what bounds inputs the key cannot

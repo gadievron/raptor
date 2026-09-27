@@ -20980,43 +20980,82 @@ def _run_tool_chain(
                     # file content) serves every function in the file,
                     # and the per-function range filter + outcome
                     # classification run AFTER retrieval.
+                    _cc_rendered: Path | None = None
+                    _cc_pass_vocab: Any = None
                     if domain_vocab is None:
                         _cc_rule_hash = _memo_hash_file(tool_cfg["rule"])
                     else:
-                        # A DomainVocabulary re-renders the rule text
-                        # per run state and has no stable content hash
-                        # — vocab-rendered sweeps run unmemoized
-                        # (a None key part disables the memo).
-                        _cc_rule_hash = None
+                        # Render ONCE up front so the rendered bytes
+                        # (seed rule + spliced vocabulary) become the
+                        # memo's rule identity: dispatches sharing a
+                        # vocabulary hash alike, a vocabulary change
+                        # misses. The rendered tempfile is passed down
+                        # so the sweep does not render a second time.
+                        try:
+                            from engine.coccinelle.vocab_renderer import (
+                                render as _render_cocci_rule,
+                            )
+                            _cc_rendered = _render_cocci_rule(
+                                Path(tool_cfg["rule"]), domain_vocab,
+                            )
+                        except (OSError, ValueError):
+                            # Render failed here — run unmemoized and
+                            # let the sweep retry its own render (its
+                            # failure path runs the seed rule).
+                            _cc_rule_hash = None
+                            _cc_pass_vocab = domain_vocab
+                        else:
+                            # render() returns None when the rule has
+                            # no @vocab marker or nothing spliced —
+                            # the seed rule runs as-is.
+                            _cc_rule_hash = _memo_hash_file(
+                                _cc_rendered
+                                if _cc_rendered is not None
+                                else tool_cfg["rule"],
+                            )
 
                     def _run_cocci_file() -> Any:
                         return run_coccinelle_file_sweep(
                             target_path=effective_target,
                             file_path=file_path,
                             cocci_rule=tool_cfg["rule"],
-                            domain_vocab=domain_vocab,
+                            domain_vocab=_cc_pass_vocab,
+                            rendered_rule=(
+                                str(_cc_rendered)
+                                if _cc_rendered is not None
+                                else None
+                            ),
                             language=_cc_language,
                         )
 
-                    _cc_file_result = _memoized_sweep_step(
-                        config,
-                        "coccinelle",
-                        {
-                            "rule": _cc_rule_hash,
-                            "file": _memo_hash_file(
-                                effective_target / file_path),
-                            "path": file_path,
-                            # spatch -D defines steer what the rule
-                            # matches, so they are a key dimension: a
-                            # stable rendering of the sorted
-                            # (name, value) pairs — empty because this
-                            # leg passes no defines. Any caller that
-                            # routes defines through the memoized path
-                            # MUST fold them into this part.
-                            "defines": "",
-                        },
-                        _run_cocci_file,
-                    )
+                    try:
+                        _cc_file_result = _memoized_sweep_step(
+                            config,
+                            "coccinelle",
+                            {
+                                "rule": _cc_rule_hash,
+                                "file": _memo_hash_file(
+                                    effective_target / file_path),
+                                "path": file_path,
+                                # spatch -D defines steer what the
+                                # rule matches, so they are a key
+                                # dimension: a stable rendering of the
+                                # sorted (name, value) pairs — empty
+                                # because this leg passes no defines.
+                                # Any caller that routes defines
+                                # through the memoized path MUST fold
+                                # them into this part.
+                                "defines": "",
+                            },
+                            _run_cocci_file,
+                        )
+                    finally:
+                        # The rendered tempfile never outlives this
+                        # step: the memoized result records only the
+                        # source rule path (rule_id), so a later memo
+                        # hit never dereferences a dead tempfile.
+                        if _cc_rendered is not None:
+                            _cc_rendered.unlink(missing_ok=True)
 
                     cocci_result = scope_coccinelle_result(
                         _cc_file_result,
