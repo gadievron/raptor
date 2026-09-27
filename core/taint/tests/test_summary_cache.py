@@ -4,6 +4,7 @@ vocabulary digest + version), bounded size, fail-closed persistence."""
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -88,6 +89,25 @@ def test_vocabulary_digest_changes_with_specs(packs: PackSet) -> None:
 
 def test_vocabulary_digest_is_stable(packs: PackSet) -> None:
     assert vocabulary_digest(packs) == vocabulary_digest(packs)
+
+
+def test_vocabulary_digest_covers_the_sink_class_gate(
+    packs: PackSet,
+) -> None:
+    # Two vocabularies differing ONLY in one sink's
+    # only_taint_classes gate must not share a digest: the extractor
+    # copies the gate into every SinkEvent, so a summary cached under
+    # one gate is stale under the other — an aliased digest would
+    # serve it anyway.
+    first = packs.sinks[0]
+    new_gate = (("secret",) if first.only_taint_classes != ("secret",)
+                else ("user-input",))
+    gated = replace(
+        packs,
+        sinks=(replace(first, only_taint_classes=new_gate),
+               *packs.sinks[1:]),
+    )
+    assert vocabulary_digest(gated) != vocabulary_digest(packs)
 
 
 def test_digest_none_equals_empty_intake(packs: PackSet) -> None:

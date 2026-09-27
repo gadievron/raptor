@@ -89,9 +89,14 @@ def vocabulary_digest(
     """
     learned = learned if learned is not None else LearnedIntake()
     def sink_row(s: Any) -> list:
+        # only_taint_classes rides as a list cell like the source row's
+        # taint_classes: the loader admits only absent (== the empty
+        # default, every class) or a non-empty list, so the empty cell
+        # is unambiguous.
         return [s.kind, s.match, s.sink_class, s.cwe, list(s.args),
                 list(s.kwargs), s.receiver_hint, s.confidence,
-                [list(p) for p in s.unless_kwargs], s.store_key, s.tier]
+                [list(p) for p in s.unless_kwargs],
+                list(s.only_taint_classes), s.store_key, s.tier]
 
     payload: dict[str, Any] = {
         "version": SUMMARY_VERSION,
