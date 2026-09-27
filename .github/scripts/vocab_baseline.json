@@ -1015,10 +1015,6 @@
     "count": 22,
     "kind": "literal"
   },
-  "core/audit/transform_sequence.py::_DOUBLE_ENCODE_CLASSES": {
-    "count": 11,
-    "kind": "alternation"
-  },
   "core/audit/transform_sequence.py::_SECURITY_TRANSFORM_RE": {
     "count": 23,
     "kind": "alternation"
