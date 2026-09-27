@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.analysis._joern_lines import parse_marker_line, parse_marker_records
+from core.fs_lock import artifact_lock
 
 from .models import FlowStep, JoernCPG, JoernMethodSummary, JoernResult, TaintFlow
 from .prereqs import _joern_parse_path, _joern_path, joern_tool_paths
@@ -1563,6 +1564,42 @@ def _prune_scoped_cpg_slots(cache_dir: Path, *, active_slot: str) -> None:
         logger.info("pruned stale scoped CPG cache slot %s", stale)
 
 
+# In-progress build scratch under the cache dir (SAME filesystem as
+# the slots, so the promote below is an atomic os.replace). Hidden
+# name: slot discovery and the scoped-slot prune iterate the cache
+# dir by prefix and must never mistake scratch for a slot.
+_CPG_BUILD_DIR_PREFIX = ".cpg-build-"
+
+# Age bound for orphaned build scratch (builder crashed between
+# mkdtemp and its cleanup). Generous on purpose: the longest
+# legitimate build wall is the derived CPG-build cap (4 h) and a
+# too-tight bound would sweep a LIVE sibling's in-progress build out
+# from under it mid-write; much larger just leaves multi-GB scratch
+# on the project disk longer after a crash.
+_CPG_BUILD_DIR_MAX_AGE_S = 24 * 3600.0
+
+
+def _sweep_stale_cpg_build_dirs(cache_dir: Path) -> None:
+    """Remove crashed builders' orphaned scratch dirs (best-effort)."""
+    now = time.time()
+    try:
+        entries = list(cache_dir.iterdir())
+    except OSError:
+        return
+    for d in entries:
+        if not d.name.startswith(_CPG_BUILD_DIR_PREFIX):
+            continue
+        if not d.is_dir() or d.is_symlink():
+            continue
+        try:
+            age = now - d.stat().st_mtime
+        except OSError:
+            continue
+        if age > _CPG_BUILD_DIR_MAX_AGE_S:
+            shutil.rmtree(d, ignore_errors=True)
+            logger.info("removed stale CPG build scratch %s", d)
+
+
 def _write_cpg_manifest(
     cpg_dir: Path, target: Path, content_hash: str,
     languages: set[str] | None = None, build_time_ms: int = 0,
@@ -1733,6 +1770,23 @@ def load_cached_cpg(
         )
         return None
 
+    # Torn-read close: every check above ran against the manifest
+    # snapshot, but a concurrent builder promotes a new graph into
+    # this slot as unlink-manifest → replace cpg.bin → write-manifest.
+    # A reader that raced that sequence may have validated the OLD
+    # manifest against the NEW cpg.bin (or a mid-promote mix). If the
+    # manifest changed — or vanished — since the snapshot, report a
+    # miss and let the caller re-enter. The residual race (a promote
+    # landing after this re-read) can only serve a NEWER graph for the
+    # same slot contract, never a differently-scoped or (once slots
+    # are target-keyed) different-target one.
+    if _read_cpg_manifest(cpg_dir) != manifest:
+        logger.info(
+            "CPG cache at %s changed under this reader (concurrent "
+            "rebuild) — treating as a miss", cpg_dir,
+        )
+        return None
+
     langs = set(manifest.get("languages", []))
     # Recency bump: the scoped-slot prune orders by slot mtime, which
     # otherwise only moves at build time — a frequently-HIT old slot
@@ -1808,36 +1862,82 @@ def build_cpg_cached(
         return cached
 
     cpg_dir = cache_dir / cpg_cache_slot_name(scope_exclude_dirs)
-    cpg = build_cpg(
-        target,
-        languages=languages,
-        output_dir=cpg_dir,
-        timeout=timeout,
-        subprocess_runner=subprocess_runner,
-        on_progress=on_progress,
-        heap_mb=heap_mb,
-        frontend_args=frontend_args,
-        exclude_dirs=combined_excludes,
-    )
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    _sweep_stale_cpg_build_dirs(cache_dir)
 
-    # Cache admission gates. A manifest is a promise that cpg.bin is a
-    # complete graph for content_hash, so it is written only when
-    # (a) the build path signalled success (a timeout / stall-kill can
-    # leave a partial file that would otherwise become a permanent
-    # cache hit), and (b) the flatgraph tail manifest parses to a
-    # method count — a fresh successful build always has one, so an
-    # unreadable tail here means truncation (or a format this probe
-    # cannot vouch for; that degrades to rebuild-per-run, never to
-    # serving an unverifiable graph).
-    if cpg.exists() and not cpg.build_failed:
-        method_count = cpg_method_count(cpg.path)
-        if method_count is None:
-            logger.warning(
-                "CPG at %s has no parseable flatgraph manifest — "
-                "refusing to cache it (this run still uses the build; "
-                "the next run rebuilds)", cpg.path,
+    # Slot lock: pre-lock, two sessions missing the same slot built
+    # DIRECTLY into cpg_dir concurrently — interleaved c2cpg output
+    # streams into one cpg.bin (corruption), and the loser's manifest
+    # described the winner's bytes. The lock serialises the
+    # miss→build→admit critical section per slot; artifact_lock
+    # degrades loudly (never silently unlocked) when flock is
+    # unavailable.
+    with artifact_lock(cpg_dir / "cpg.bin", subject="joern CPG cache slot"):
+        # Double-checked reload: a sibling holding the lock may have
+        # completed this exact build while we queued — a fresh cache
+        # hit here saves a full rebuild.
+        cached = load_cached_cpg(
+            target, cache_dir,
+            expected_frontend_fingerprint=frontend_args.fingerprint(),
+            current_content_hash=content_hash,
+            scope_exclude_dirs=scope_exclude_dirs,
+        )
+        if cached is not None:
+            return cached
+
+        # Build into private scratch on the SAME filesystem, then
+        # promote atomically. Readers (load_cached_cpg holds no lock)
+        # never observe a half-written cpg.bin in the slot.
+        build_dir = Path(tempfile.mkdtemp(
+            prefix=_CPG_BUILD_DIR_PREFIX, dir=cache_dir))
+        keep = False
+        try:
+            cpg = build_cpg(
+                target,
+                languages=languages,
+                output_dir=build_dir,
+                timeout=timeout,
+                subprocess_runner=subprocess_runner,
+                on_progress=on_progress,
+                heap_mb=heap_mb,
+                frontend_args=frontend_args,
+                exclude_dirs=combined_excludes,
             )
-        else:
+
+            # Cache admission gates. A manifest is a promise that
+            # cpg.bin is a complete graph for content_hash, so the
+            # build is promoted only when (a) the build path signalled
+            # success (a timeout / stall-kill can leave a partial file
+            # that would otherwise become a permanent cache hit), and
+            # (b) the flatgraph tail manifest parses to a method count
+            # — a fresh successful build always has one, so an
+            # unreadable tail here means truncation (or a format this
+            # probe cannot vouch for; that degrades to
+            # rebuild-per-run, never to serving an unverifiable
+            # graph).
+            if not cpg.exists() or cpg.build_failed:
+                return cpg
+            method_count = cpg_method_count(cpg.path)
+            if method_count is None:
+                logger.warning(
+                    "CPG at %s has no parseable flatgraph manifest — "
+                    "refusing to cache it (this run still uses the "
+                    "build; the next run rebuilds)", cpg.path,
+                )
+                # The handle points into the scratch dir; this run
+                # queries it there and cleanup_cpg removes it.
+                keep = True
+                return cpg
+
+            # Ordered promote. The manifest is unlinked FIRST so a
+            # reader racing the replace sees manifest-missing (a miss)
+            # rather than old-manifest-describing-new-bytes; it is
+            # rewritten LAST, when the bytes it vouches for are in
+            # place. os.replace is atomic (same filesystem — scratch
+            # lives under cache_dir for exactly this reason).
+            cpg_dir.mkdir(parents=True, exist_ok=True)
+            (cpg_dir / "manifest.json").unlink(missing_ok=True)
+            os.replace(cpg.path, cpg_dir / "cpg.bin")
             _write_cpg_manifest(
                 cpg_dir, target, content_hash,
                 languages=cpg.languages,
@@ -1848,8 +1948,15 @@ def build_cpg_cached(
                 scope_exclude_dirs=scope_exclude_dirs,
             )
             _prune_scoped_cpg_slots(cache_dir, active_slot=cpg_dir.name)
-
-    return cpg
+            return JoernCPG(
+                path=cpg_dir / "cpg.bin",
+                target=cpg.target,
+                languages=cpg.languages,
+                build_time_ms=cpg.build_time_ms,
+            )
+        finally:
+            if not keep:
+                shutil.rmtree(build_dir, ignore_errors=True)
 
 
 def cleanup_cpg(cpg: JoernCPG) -> None:
