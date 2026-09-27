@@ -93,6 +93,21 @@ the commands that produce one.  Nothing executes the target.
 
 ## Pipeline Stages
 
+Each LLM stage writes its output to a small `stage-X.json` file; the next
+stage's prep script merges it into the cumulative `findings.json`.  Stage
+inputs are immutable: the prep script never deletes a stage file.  Instead it
+records a consumption receipt in `stage-receipts.json` (content hash, size,
+timestamp, consumption count) and archives a byte-identical, hash-named copy
+under `stage-inputs/`.  The receipt carries the consume semantics --
+already-consumed content never merges twice, while a rewritten stage file
+(new content hash) merges again -- so delegated agents can safely re-read
+their stage output after the next prep has run, and a post-hoc audit can see
+exactly which bytes each merge consumed.  Stage A is the one reset-shaped
+apply (it rebuilds the findings container rather than merging updates), so
+its skip additionally requires that `findings.json` still match the
+receipted build: a re-run in a shared output directory rebuilds a clean
+container instead of carrying an earlier run's later-stage fields forward.
+
 ### Stage 0 -- Inventory (Mechanical)
 
 Builds `checklist.json` via `core.inventory`.  This is the ground-truth file
@@ -544,6 +559,9 @@ out/validate_<target>_<timestamp>/     (project mode: <project>/validate-<timest
   build/                    -- Compiled PoCs (Stage A)
   coverage-llm.json         -- Coverage record: items analysed (Stage 1)
   coverage-read.json        -- Coverage record: files read (Stage 1)
+  stage-{a..f}.json         -- Per-stage LLM outputs (retained after merge)
+  stage-receipts.json       -- Consumption receipts (hash, timestamp) per stage file
+  stage-inputs/             -- Byte-identical archive of each consumed stage file
 ```
 
 ### Validation gates

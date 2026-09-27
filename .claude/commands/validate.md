@@ -11,7 +11,7 @@ Validates that vulnerability findings are real, reachable, and exploitable befor
 
 **You (Claude) ARE the LLM for this pipeline.** You perform the analysis work in LLM stages (A-D, F). Mechanical stages (0, E, 1) run via Python/libexec scripts.
 
-**Data flow:** Each stage writes a small `stage-X.json` file with only its own output. The prep script merges it into the cumulative `findings.json` and deletes the stage file. Claude never reads or writes findings.json directly.
+**Data flow:** Each stage writes a small `stage-X.json` file with only its own output. The prep script merges it into the cumulative `findings.json` and records a consumption receipt (`stage-receipts.json`, content hash + timestamp) plus a byte-identical archive copy under `stage-inputs/`. Stage inputs are immutable: the stage file stays in place — delegated agents may re-read it, and post-hoc audits see exactly what each merge consumed. Already-consumed content never merges twice (the receipt hash gates re-application); a rewritten stage file re-merges. Stage A is a container reset, so its skip also requires findings.json to still match the receipted build — a shared-out-dir re-run rebuilds clean rather than keeping stale later-stage fields. Claude never reads or writes findings.json directly.
 
 **Prep script:** Before each LLM stage, run the prep script which merges the previous stage's output, validates, and sets up the current stage:
 
