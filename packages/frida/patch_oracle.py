@@ -44,6 +44,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from core.json import load_jsonl
 from core.logging import configure_cli_logging, get_logger
 from core.security.log_sanitisation import sanitise_for_terminal as _sft
 
@@ -147,15 +148,15 @@ def _judge_side(side_dir: Path, binary: Path, sinks: Sequence[str],
 
     evidence = collect_runtime_evidence([side_dir],
                                         target_path=str(binary))
-    events_total = 0
-    events_path = side_dir / "events.jsonl"
-    if events_path.is_file():
-        try:
-            with events_path.open(encoding="utf-8",
-                                  errors="replace") as f:
-                events_total = sum(1 for line in f if line.strip())
-        except OSError:
-            pass
+    # Bounded trail read: the events file is written under
+    # instrumentation of the target binary, so its size and line
+    # shape are target-influenced — count records through the
+    # budgeted JSONL loader instead of buffering arbitrary lines.
+    events_total = len(load_jsonl(
+        side_dir / "events.jsonl",
+        max_line_bytes=1024 * 1024,
+        max_total_bytes=256 * 1024 * 1024,
+    ))
     paths = [{
         "finding": _FINDING_ID,
         "steps": [{"function": s} for s in sinks],

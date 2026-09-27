@@ -415,10 +415,15 @@ class DomainModel:
 
     @classmethod
     def load(cls, path: Path) -> DomainModel:
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return cls()
+        # Bounded, fd-gated read: domain models sit in run output
+        # directories whose write grant sandboxed code holds, so the
+        # loader must refuse FIFOs and oversize plants rather than
+        # buffer them. A missing, oversize, or malformed file loads
+        # as an empty model — the same degrade-never-crash contract
+        # the drift loader below applies to record shapes.
+        from core.json import load_json
+
+        raw = load_json(path, max_bytes=64 * 1024 * 1024)
         if not isinstance(raw, dict):
             return cls()
         # Tolerate schema drift in on-disk models: any record written by

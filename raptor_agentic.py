@@ -3887,10 +3887,10 @@ def main() -> int:
                     from core.sage.hooks import store_sca_outcomes
                     sca_findings_path = sca_out / "findings.json"
                     if sca_findings_path.exists():
-                        import json as _sca_json
-                        sca_data = _sca_json.loads(
-                            sca_findings_path.read_text(encoding="utf-8")
-                        )
+                        # Bounded loader: the findings file sits in a
+                        # run directory whose write grant sandboxed
+                        # code holds — never slurp it unbounded.
+                        sca_data = load_json(sca_findings_path)
                         sca_sage_outcomes = []
                         for row in (sca_data if isinstance(sca_data, list) else []):
                             sca_info = row.get("sca") or {}
