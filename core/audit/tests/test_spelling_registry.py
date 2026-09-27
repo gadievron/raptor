@@ -78,6 +78,18 @@ class TestRegistryAdmission:
         assert not eg.is_tool_evidence("regtool:novel-variant")
         assert not eg.is_verification_evidence("regtool:novel-variant")
 
+    def test_whitespace_padded_spelling_admits_same_grade(
+        self, registry: None,
+    ) -> None:
+        # Producer-side " + " joins are pre-existing hygiene: both
+        # composite parsers strip each part before the registry
+        # consult, so padding never changes the admitted grade.
+        assert eg.is_tool_evidence("semgrep:rule-1 + regtool:confirmed")
+        assert eg.is_verification_evidence(
+            "semgrep:rule-1 + regtool:confirmed",
+        )
+        assert eg.is_verification_evidence(" regtool:confirmed ")
+
     def test_bare_root_grants_nothing(self, registry: None) -> None:
         # The namespace also sits in _TOOL_NAMESPACES (see fixture):
         # without the registry override the root check would admit it.

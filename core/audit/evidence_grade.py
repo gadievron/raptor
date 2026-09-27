@@ -258,6 +258,14 @@ def _channel_detection_classifier(namespace: str):
 # explicitly; namespace membership alone never buys admission (no
 # prefix trust — registry entries override the ``_TOOL_NAMESPACES``
 # root check for their namespace).
+#
+# Spelling lookups see WHITESPACE-STRIPPED parts: both composite
+# parsers (``is_tool_evidence`` / ``is_verification_evidence`` —
+# pipeline's ``_is_verification_evidence`` delegates here) strip each
+# ``+``-part before any registry consult, pre-existing join hygiene
+# for producer-side ``" + "`` joins. The mapping below therefore
+# matches stripped spellings exactly; a padded key would be a dead
+# entry.
 _ROLE_VERIFICATION = "verification"
 _ROLE_DETECTION = "detection"
 _EXACT_SPELLING_REGISTRY: dict[str, dict[str, str]] = {
@@ -313,6 +321,13 @@ def registered_spelling_role(part: str) -> str | None:
     unlisted (an unlisted spelling under an owned namespace carries
     NO role: it fails closed out of verification grade and out of the
     aggregation floor, and is ignored by the composite policy).
+
+    One caller (the orchestrator's ``_is_detection_only``) consults
+    this with the UNSTRIPPED part while the composite parsers strip
+    first. Where the two disagree, a whitespace-padded spelling misses
+    the mapping here and returns None, which that gate treats as
+    detection-only — the disagreement direction is deny-at-the-
+    stricter-gate, never a grant.
     """
     ns = part.split(":", 1)[0] if ":" in part else part
     return _EXACT_SPELLING_REGISTRY.get(ns, {}).get(part)
