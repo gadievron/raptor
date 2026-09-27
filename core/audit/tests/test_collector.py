@@ -865,3 +865,101 @@ class TestFlushExceptionTotal:
 
         monkeypatch.setattr(collector, "_flush_audit_log", boom)
         collector.flush()  # must not raise
+
+
+class TestDomainSliceStamp:
+    """Journal rows carry the per-function domain-slice fingerprint."""
+
+    _SOURCE = (
+        "int check_pw(const char *pw) {\n"
+        "    return strcmp(pw, stored) == 0;\n"
+        "}\n"
+    )
+
+    def _setup(self, tmp_path: Path, *, with_model: bool = True):
+        import json as _json
+
+        from core.concepts.audit_bridge import _load_cached
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "auth.c").write_text(self._SOURCE, encoding="utf-8")
+        run = tmp_path / "run1"
+        run.mkdir()
+        if with_model:
+            (run / "domain-model.json").write_text(
+                _json.dumps({
+                    "concepts": [{
+                        "id": "pw_compare_rules",
+                        "description": (
+                            "check_pw must compare in constant time"
+                        ),
+                    }],
+                    "invariants": [],
+                    "contracts": [],
+                }),
+                encoding="utf-8",
+            )
+        _load_cached.cache_clear()
+        return run, target
+
+    @staticmethod
+    def _gap() -> dict[str, Any]:
+        return {
+            "file": "auth.c", "name": "check_pw",
+            "line_start": 1, "line_end": 3,
+        }
+
+    def _append(self, run: Path, target: Path, gap=None) -> None:
+        from core.audit.collector import append_journal_for_outcome
+        append_journal_for_outcome(
+            out_dir=run,
+            target_path=target,
+            run_id="run1",
+            outcome=_FakeOutcome(file="auth.c", function="check_pw"),
+            gap=gap or self._gap(),
+        )
+
+    def test_stamp_matches_the_fold_recompute(self, tmp_path: Path) -> None:
+        from core.audit.context import domain_slice_hash_for
+        from core.coverage.journal import load_entries
+        run, target = self._setup(tmp_path)
+        self._append(run, target)
+        [entry] = load_entries(run)
+        assert entry.domain_slice_hash is not None
+        # Record-time stamp and reuse-time recompute are the SAME
+        # code path — they must agree on unchanged input.
+        assert entry.domain_slice_hash == domain_slice_hash_for(
+            run, target, "auth.c", "check_pw", 1, 3)
+
+    def test_no_model_no_stamp(self, tmp_path: Path) -> None:
+        from core.coverage.journal import load_entries
+        run, target = self._setup(tmp_path, with_model=False)
+        self._append(run, target)
+        [entry] = load_entries(run)
+        assert entry.domain_slice_hash is None
+
+    def test_edge_rows_not_stamped(self, tmp_path: Path) -> None:
+        from core.coverage.journal import load_entries
+        run, target = self._setup(tmp_path)
+        gap = dict(self._gap(), edge_callee="auth.c:stored_cmp")
+        self._append(run, target, gap=gap)
+        [entry] = load_entries(run)
+        assert entry.domain_slice_hash is None
+
+    def test_renderer_failure_stamps_nothing(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        import core.audit.context as context_mod
+        from core.coverage.journal import load_entries
+
+        def _boom(*a, **kw):
+            raise RuntimeError("renderer failure")
+
+        monkeypatch.setattr(context_mod, "domain_slice_hash_for", _boom)
+        run, target = self._setup(tmp_path)
+        self._append(run, target)
+        # The row still lands — a slice-stamp failure must never cost
+        # the review record — just without the stamp.
+        [entry] = load_entries(run)
+        assert entry.verdict
+        assert entry.domain_slice_hash is None

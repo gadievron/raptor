@@ -378,6 +378,40 @@ def append_journal_for_outcome(
             logger.debug("domain model hash failed", exc_info=True)
             domain_model_hash = None
 
+    # Per-function domain-model slice stamp: the fingerprint of the
+    # domain-model prompt blocks THIS review was briefed with
+    # (same code path as build_context's assembly — see
+    # core.audit.context.domain_slice_hash_for). The gap fold's
+    # context-staleness gate compares it against a recompute so a
+    # model regeneration that leaves this function's slice
+    # byte-identical keeps the verdict reuse-eligible. Best-effort:
+    # any failure stamps nothing and the whole-model-hash behaviour
+    # applies (fail toward re-review). Edge rows and binary-path rows
+    # are not stamped — their prompt context is assembled differently
+    # and function-grade verdict reuse is what the stamp serves.
+    domain_slice_hash: str | None = None
+    if not edge_callee and domain_model_hash is not None:
+        try:
+            from core.inventory.binary_builder import BINARY_PATH_PREFIX
+            if not outcome.file.startswith(BINARY_PATH_PREFIX):
+                from .context import domain_slice_hash_for
+                domain_slice_hash = domain_slice_hash_for(
+                    out_dir,
+                    target_path,
+                    outcome.file,
+                    outcome.function,
+                    gap.get("line_start", 0),
+                    gap.get("line_end"),
+                )
+        except (ImportError, OSError):
+            domain_slice_hash = None
+        except Exception:
+            logger.debug(
+                "domain slice hash failed for %s:%s",
+                outcome.file, outcome.function, exc_info=True,
+            )
+            domain_slice_hash = None
+
     verdict_rationale = None
     counter_hypothesis = None
     if review_result:
@@ -489,6 +523,7 @@ def append_journal_for_outcome(
         cwe=review_result.get("cwe") if review_result else None,
         strategies=strategies,
         domain_model_hash=domain_model_hash,
+        domain_slice_hash=domain_slice_hash,
         domain_concepts_available=domain_concepts,
         invariants_available=invariants_available,
         hypotheses=hypotheses_list,
