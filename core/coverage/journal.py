@@ -1294,6 +1294,28 @@ class _CachedLoad:
     #: mismatch — budget tunables, or the containment tests'
     #: monkeypatched budgets/backends — forces a full reload.
     config: tuple[int, int, int, int, int, bool]
+    #: Memoized latest-per-key collapse of ``result_entries``
+    #: (:func:`latest_entries`): built lazily on the first
+    #: latest-view consumer, carried incrementally across
+    #: active-shard extensions (:func:`_carry_latest_view` folds only
+    #: the delta rows), and reset to ``None`` whenever it can no
+    #: longer be locally proven equal to a from-scratch collapse of
+    #: the served result — shed rows, an in-stream prune during the
+    #: delta, non-monotone delta timestamps — after which the next
+    #: consumer rebuilds it from scratch. The values alias winner
+    #: entries out of ``result_entries`` (no extra row memory beyond
+    #: the key strings and dict), so it is never kept on a shed
+    #: record, where it would pin the memory the shed just freed.
+    latest_view: dict[str, ReviewJournalEntry] | None = None
+    #: Max ``entry.ts`` across every row the view covers (equal to
+    #: the max over the winners: the globally newest row always wins
+    #: its own key). The strict-monotonicity guard for the
+    #: incremental fold — a delta row folds in O(1) only when its
+    #: ``ts`` is strictly newer than everything already covered;
+    #: otherwise a back-dated twin could flip which duplicate the
+    #: cross-shard prune keeps, and the fold cannot prove
+    #: equivalence locally (see :func:`_carry_latest_view`).
+    latest_view_ts_max: str = ""
 
     def cached_bytes(self) -> int:
         """The record's live cost under ``_LOAD_CACHE_MAX_BYTES``:
@@ -1392,6 +1414,12 @@ def _shed_sealed_rows(record: _CachedLoad) -> bool:
         state.sizes = []
         state.rows_evicted = True
         record.result_entries = None
+        # The memoized latest view aliases the same entry objects as
+        # the memoized result: keeping either would pin the memory
+        # this shed just freed (a unique-key mega-journal's view is
+        # nearly every row).
+        record.latest_view = None
+        record.latest_view_ts_max = ""
     return record.cached_bytes() <= _LOAD_CACHE_MAX_BYTES
 
 
@@ -1587,6 +1615,12 @@ def _serve_or_extend_set(
                 out_dir, state, check_tail=False):
             return None
     shed = any(s.rows_evicted for s in sealed)
+    # Incremental latest-view fold inputs, captured BEFORE the delta
+    # parse mutates the active state in place (_carry_latest_view).
+    old_view = cached.latest_view
+    old_view_ts_max = cached.latest_view_ts_max
+    old_active_len = len(active.entries)
+    old_active_pruned = active.pruned
     new_names = names_now[len(cached_names):]
     from core.source import open_regular
     fh = open_regular(out_dir / active.name, "rb")
@@ -1670,7 +1704,81 @@ def _serve_or_extend_set(
             _load_shard_cold(out_dir / s.name) if s.rows_evicted else s
             for s in states
         ]
-    return _finalize_set(out_dir, cache_key, states, snapshot=snap)
+    result = _finalize_set(out_dir, cache_key, states, snapshot=snap)
+    if old_view is not None and not shed:
+        # Pure extension of an unshed record: carry the memoized
+        # latest view forward by folding only the delta rows. A shed
+        # record re-parsed sealed shards from CURRENT bytes the old
+        # view never covered (shed shards skip the pin check), so it
+        # never carries — its view rebuilds from scratch lazily.
+        _carry_latest_view(
+            cache_key, old_view, old_view_ts_max, states,
+            len(cached.shard_states) - 1,
+            old_active_len, old_active_pruned,
+        )
+    return result
+
+
+def _carry_latest_view(
+    cache_key: str,
+    old_view: dict[str, ReviewJournalEntry],
+    old_ts_max: str,
+    states: list[_ShardLoadState],
+    active_idx: int,
+    old_active_len: int,
+    old_active_pruned: int,
+) -> None:
+    """Carry a record's memoized latest-per-key view across an
+    active-shard extension by folding ONLY the delta rows — O(delta)
+    per load instead of O(journal) per consumer call. Caller holds
+    ``_load_cache_lock``.
+
+    A silent no-op (the view rebuilds lazily from scratch on the
+    next :func:`latest_entries` call) whenever LOCAL reasoning
+    cannot prove the fold equal to a from-scratch collapse of the
+    new served result:
+
+    * the extended record did not survive the store (uncacheable
+      outcome, shed under the byte cap) or is incomplete — nothing
+      provably current to maintain;
+    * the in-stream prune fired during the delta parse
+      (``state.pruned`` moved): it rewrites the active list in
+      place, so the positional slice no longer identifies exactly
+      the appended rows;
+    * any delta row's ``ts`` is not strictly newer than everything
+      already covered: the cross-shard final prune keeps the LAST
+      positional twin while the collapse keeps the highest-``ts``
+      first-position row, and only strict monotonicity makes those
+      provably pick the same winner — genuine appends carry
+      strictly-monotone microsecond stamps (see
+      :func:`latest_entries`), so a back-dated or tied delta row is
+      hostile input and pays one full recollapse, never a wrong
+      view. Pinned by the differential-equivalence test in
+      core/coverage/tests/test_journal_latest_view.py.
+    """
+    record = _load_cache.get(cache_key)
+    if (record is None or record.shard_states is not states
+            or not record.complete
+            or record.result_entries is None):
+        return
+    active = states[active_idx]
+    if active.pruned != old_active_pruned:
+        return
+    delta = active.entries[old_active_len:]
+    for state in states[active_idx + 1:]:
+        delta.extend(state.entries)
+    ts_max = old_ts_max
+    for entry in delta:
+        if entry.ts <= ts_max:
+            return
+        ts_max = entry.ts
+    # The old record was popped before the extension began and served
+    # results are copies, so its view dict is exclusively ours to
+    # reuse in place — no O(keys) copy per extension.
+    for entry in delta:
+        old_view[entry.key] = entry
+    record.latest_view = old_view
+    record.latest_view_ts_max = ts_max
 
 
 def _shard_pin_matches(
@@ -2638,6 +2746,22 @@ def latest_function_grade_collapse(
     return result
 
 
+def _latest_collapse(
+    entries: Iterable[ReviewJournalEntry],
+) -> dict[str, ReviewJournalEntry]:
+    """Latest-per-``entry.key`` collapse over pre-loaded *entries*:
+    strict ``>`` on ``entry.ts``, first-in-file winning ties — THE
+    tie-break convention (see :func:`latest_entries`), shared by the
+    fresh path, the memoized view build, and the incremental
+    extension fold's equivalence oracle so they cannot drift."""
+    best: dict[str, ReviewJournalEntry] = {}
+    for entry in entries:
+        existing = best.get(entry.key)
+        if existing is None or entry.ts > existing.ts:
+            best[entry.key] = entry
+    return best
+
+
 def latest_entries(
     out_dir: Path, *, fresh: bool = False,
 ) -> dict[str, ReviewJournalEntry]:
@@ -2650,16 +2774,46 @@ def latest_entries(
     theoretically-possible tie, matching :func:`merge_into_index`
     and preserving idempotent-merge semantics.
 
+    Served from the load cache's memoized latest-per-key view when
+    the run dir's record is current: the collapse runs once per
+    cached parse (built lazily here, carried incrementally across
+    active-shard extensions by :func:`_carry_latest_view`), so
+    per-function consumers — the audit context builder calls this
+    twice per reviewed function — pay one view-sized dict copy per
+    call instead of re-collapsing the whole journal. The maintained
+    view always equals a from-scratch collapse of the same served
+    load (pinned by the differential-equivalence test in
+    core/coverage/tests/test_journal_latest_view.py). The returned
+    dict is the caller's own; the entry objects are shared and
+    frozen by contract, matching :func:`load_entries`.
+
     ``fresh`` threads through to :func:`load_entries` for callers on
     the spend/resume side (drift computation) that must never read
-    the process-local load cache.
+    the process-local load cache — the fresh path collapses its own
+    fresh parse and never touches the memoized view.
     """
-    best: dict[str, ReviewJournalEntry] = {}
-    for entry in load_entries(out_dir, fresh=fresh):
-        existing = best.get(entry.key)
-        if existing is None or entry.ts > existing.ts:
-            best[entry.key] = entry
-    return best
+    if fresh:
+        return _latest_collapse(load_entries(out_dir, fresh=True))
+    out_dir = Path(out_dir)
+    cache_key = os.path.realpath(out_dir)
+    with _load_cache_lock:
+        loaded = _load_checked_locked(out_dir, cache_key, fresh=False)
+        record = _load_cache.get(cache_key)
+        if record is not None and record.result_entries is not None:
+            # The record at this key was stored/refreshed by the load
+            # above under this same lock hold, so its memoized result
+            # IS the served view. (A record shed by that store has no
+            # memoized result — fall through to a transient collapse
+            # that pins nothing.)
+            if record.latest_view is None:
+                record.latest_view = _latest_collapse(
+                    record.result_entries)
+                record.latest_view_ts_max = max(
+                    (e.ts for e in record.latest_view.values()),
+                    default="",
+                )
+            return dict(record.latest_view)
+    return _latest_collapse(loaded.entries)
 
 
 # ── Project-level index ──────────────────────────────────────────────
