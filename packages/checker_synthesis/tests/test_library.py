@@ -327,6 +327,57 @@ class TestRuleLibraryFind:
 
         assert lib.find_replayable("CWE-89", "semgrep") == []
 
+    @staticmethod
+    def _manifest_lib(tmp_path: Path, target_hashes: list[str]) -> RuleLibrary:
+        # promote()/update() dedup targets by hash on append, so the
+        # duplicate-hash vector is a hand-edited manifest.json — write
+        # it directly.
+        lib_dir = tmp_path / "lib"
+        (lib_dir / "semgrep").mkdir(parents=True)
+        (lib_dir / "semgrep" / "r1.yml").write_text(
+            "rules: []\n", encoding="utf-8",
+        )
+        entry = {
+            "rule_id": "r1",
+            "engine": "semgrep",
+            "cwe": "CWE-89",
+            "body_hash": "hash-r1",
+            "rule_path": "semgrep/r1.yml",
+            "dual_control": True,
+            "promoted_at": "2026-01-01T00:00:00Z",
+            "tp_rate": 0.9,
+            "fp_rate": 0.1,
+            "total_variants": 3,
+            "rule_tier": "library",
+            "targets": [
+                {
+                    "target_hash": h,
+                    "ts": "2026-01-01T00:00:00Z",
+                    "matches": 2,
+                    "variants": 1,
+                    "tp_rate": 0.9,
+                }
+                for h in target_hashes
+            ],
+        }
+        (lib_dir / "manifest.json").write_text(
+            json.dumps({"rules": [entry]}), encoding="utf-8",
+        )
+        return RuleLibrary(lib_dir)
+
+    def test_find_replayable_counts_distinct_target_hashes(self, tmp_path):
+        # Three records sharing one hash are one target's evidence —
+        # they must not clear the three-target floor.
+        lib = self._manifest_lib(tmp_path, ["t1", "t1", "t1"])
+        assert lib.find_replayable("CWE-89", "semgrep") == []
+
+    def test_find_replayable_admits_three_distinct_hashes(self, tmp_path):
+        # Control for the duplicate-hash refusal: the same manifest
+        # shape with three distinct hashes replays.
+        lib = self._manifest_lib(tmp_path, ["t1", "t2", "t3"])
+        found = lib.find_replayable("CWE-89", "semgrep")
+        assert [e.rule_id for e in found] == ["r1"]
+
 
 class TestRuleLibraryUpdate:
     def test_update_adds_target(self, tmp_path):

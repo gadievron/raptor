@@ -143,7 +143,11 @@ def replayable_entries(
     for e in lib.active_entries():
         if e.tp_rate < _REPLAY_TP_THRESHOLD:
             continue
-        if len(e.targets) < _MIN_TARGETS_FOR_REPLAY:
+        # Distinct target identities, not records (mirrors
+        # find_replayable): duplicate-hash records in a hand-edited
+        # manifest are one target's evidence and must not clear the
+        # floor.
+        if len({t.target_hash for t in e.targets}) < _MIN_TARGETS_FOR_REPLAY:
             continue
         if not e.dual_control:
             continue

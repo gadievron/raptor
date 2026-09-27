@@ -118,6 +118,22 @@ class TestReplayableEntries:
         assert [e.rule_id for e in cc] == ["good-cocci"]
         assert unsupported == ["odd-engine (engine=codeql)"]
 
+    def test_floor_counts_distinct_target_hashes(self, tmp_path):
+        # Three records sharing one hash are one target's evidence —
+        # they must not clear the floor (writers dedup on append; the
+        # vector is a hand-edited manifest). Distinct-hash control in
+        # the same sweep pins the grant direction.
+        dup = _manifest_entry("dup-hash")
+        dup["targets"] = [
+            dict(t, target_hash="t0") for t in dup["targets"]
+        ]
+        entries = [dup, _manifest_entry("distinct-hashes")]
+        lib = RuleLibrary(_write_library(tmp_path, entries))
+        sg, cc, unsupported = rs.replayable_entries(lib)
+        assert [e.rule_id for e in sg] == ["distinct-hashes"]
+        assert cc == []
+        assert unsupported == []
+
     def test_gates_match_library_constants(self, tmp_path):
         # An entry exactly at the replay threshold passes here iff
         # find_replayable would pass it — pin against drift.

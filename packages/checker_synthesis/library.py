@@ -403,7 +403,12 @@ class RuleLibrary:
         candidates = [
             e for e in self.find(cwe, engine)
             if e.tp_rate >= _REPLAY_TP_THRESHOLD
-            and len(e.targets) >= _MIN_TARGETS_FOR_REPLAY
+            # Distinct target identities, not records: the machinery
+            # writers dedup by target_hash on append, but the floor
+            # must hold against a manifest whose records repeat one
+            # hash — duplicate records are one target's evidence.
+            and len({t.target_hash for t in e.targets})
+            >= _MIN_TARGETS_FOR_REPLAY
             and e.dual_control
             and e.rule_tier == "library"
         ]
