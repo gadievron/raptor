@@ -53,11 +53,19 @@ class TestDispatchDepthGrowth:
         from core.audit.ts_extract import _PARSE_CACHE
 
         def cost(depth: int) -> float:
+            # Best-of-3: even process_time takes one-off spikes on a
+            # contended host (scheduler migration, lazy init landing
+            # in one sample); the minimum is the honest cost of the
+            # algorithm. A cubic regression is ~8x on minima too, so
+            # the pin below still fails it by an order.
             src = _nested_switch_tower(depth)
-            _PARSE_CACHE.clear()
-            t0 = time.process_time()
-            extract_dispatch_tables(f"d{depth}.c", src)
-            return time.process_time() - t0
+            samples = []
+            for _ in range(3):
+                _PARSE_CACHE.clear()
+                t0 = time.process_time()
+                extract_dispatch_tables(f"d{depth}.c", src)
+                samples.append(time.process_time() - t0)
+            return min(samples)
 
         cost(50)  # warm-up
         small = max(cost(300), 0.005)
