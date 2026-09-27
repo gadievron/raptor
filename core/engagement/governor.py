@@ -78,12 +78,23 @@ ledger-file edit that rewrites tiers, amendments or statuses is
 within the accepted local-file trust model: the document sits behind
 the run directory's write grants, exactly like the C1 status slots it
 extends.
+
+Concurrency, stated plainly: the budget verbs (reserve / reconcile /
+death / degradation) are read-check-write — the load and the
+validated write each take the document flock separately, so the
+envelope check is race-free only under the engagement's
+SINGLE-ORCHESTRATOR assumption (one governor process per run
+directory, which is how every caller runs it). Cross-process
+DOCUMENT integrity still holds unconditionally — every write is
+flocked and atomic — so a second orchestrator could transiently
+over-admit a reservation, never corrupt the ledger.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import os
 import random
 import re
@@ -97,11 +108,17 @@ from core.engagement.ledger import (
     TIER_CORE,
     TIER_FULL,
     TIER_NEAR_FULL,
+    append_policy_amendment,
     append_residual,
     is_artifact_id,
+    load_ledger,
+    load_policy_amendments,
     set_artifact_policies,
+    set_artifact_policy,
+    set_artifact_status,
     update_engagement_policy,
 )
+from core.run.estimator import estimate_from_scorecard
 from core.security.log_sanitisation import sanitise_for_terminal
 
 logger = logging.getLogger(__name__)
@@ -672,13 +689,730 @@ def render_policy_lines(doc: dict[str, Any]) -> list[str]:
     return lines
 
 
+# ══ Budget governor (M4) ═════════════════════════════════════════════
+#
+# Every segment launch charges a PESSIMISTIC reservation against the
+# operator's envelope; a clean ledger close reconciles it to the
+# measured actual; a segment that dies unreconciled KEEPS its
+# reservation charged, and enough consecutive unreconciled deaths PARK
+# the artifact with a named reason. Estimates are shape-aware from
+# ledger mechanical facts only — never an LLM judgment. Budgets,
+# envelopes and costs are operator/config/estimator-derived, never
+# target bytes; figures read back out of the sandbox-writable document
+# still clamp (mirroring the resume spend-evidence doctrine).
+
+# Per-tier work units — the scorecard-call volume one artifact's chain
+# is expected to spend at that depth (T1 map: a couple of calls; T2
+# +study: order ten; T3 audit + siblings + validate: order sixty).
+# Both directions: understating a tier's call volume makes
+# reservations admit more work than the envelope funds; overstating
+# it makes feasibility park engagements the envelope could complete.
+_TIER_UNITS: dict[str, int] = {
+    TIER_T0: 0, TIER_T1: 2, TIER_T2: 10, TIER_T3: 60,
+}
+# Pessimistic per-tier fallbacks when the scorecard cannot estimate
+# (<5 recorded calls for the model, or no model given). Both
+# directions: too LOW and a cold-start engagement books cheap
+# reservations and blows through the envelope; too HIGH and cold-start
+# feasibility parks work the envelope could fund. Values sit at the
+# expensive end of observed chain shapes so the cold-start error
+# direction is refuse-to-overspend.
+_TIER_FALLBACK_USD: dict[str, float] = {
+    TIER_T0: 0.0, TIER_T1: 1.0, TIER_T2: 8.0, TIER_T3: 75.0,
+}
+
+#: Cost shapes — mechanical, from ledger facts alone.
+SHAPE_PARSER = "parser_shaped"
+SHAPE_RUNTIME = "runtime_heavy"
+SHAPE_BALANCED = "balanced"
+# Shape multipliers, both directions: parser-shaped artifacts (static
+# input-format attack surface) dominate audit/validate call volume —
+# under-multiplying them starves exactly the artifacts the engagement
+# exists for; runtime-heavy artifacts (big, few libraries — engines,
+# blobs with thin import surface) spend mostly mechanical passes —
+# over-charging them wastes envelope headroom on work that never
+# happens. Parser wins when both patterns match.
+_SHAPE_MULTIPLIER: dict[str, float] = {
+    SHAPE_PARSER: 2.5, SHAPE_RUNTIME: 0.4, SHAPE_BALANCED: 1.0,
+}
+#: Input-channel kinds that mark an artifact parser-shaped (the
+#: channel vocabulary is the ledger's input_channels extraction).
+_PARSER_CHANNEL_KINDS: frozenset[str] = frozenset({"file", "stream"})
+# Runtime-heavy pattern: large body, thin dynamic linkage. Both
+# directions: a lower size bar sweeps ordinary tools into the cheap
+# lane; a higher one misses real engines. A larger needed bound lets
+# integration-heavy binaries (many libraries = many seams to audit)
+# ride the cheap lane.
+_RUNTIME_HEAVY_MIN_BYTES = 8 * 1024 * 1024
+_RUNTIME_HEAVY_MAX_NEEDED = 3
+
+# Consecutive unreconciled segment deaths before an artifact parks.
+# Both directions: lower and one transient infrastructure flap parks
+# real work; higher and a crash-looping artifact burns that many
+# reservations (each kept charged) before the governor stops feeding
+# it.
+PARK_AFTER_DEATHS = 3
+
+# Feasibility verdict boundaries (S16). Both directions: a smaller
+# conflict ratio parks unattended engagements over mild pessimism in
+# the estimates; a larger one lets an unattended engagement start work
+# it can only fund a fraction of. want > envelope is "tight"
+# (degradation territory); want > envelope * ratio is "conflict".
+_CONFLICT_RATIO = 2.0
+VERDICT_FITS = "fits"
+VERDICT_TIGHT = "tight"
+VERDICT_CONFLICT = "conflict"
+
+# Money ceiling on any figure read back from the document — the
+# document sits inside sandbox write grants, so read-side budget math
+# clamps exactly like the resume spend-evidence doctrine: an
+# overclaim clamps to the ceiling (refuse-to-spend direction), an
+# underclaim/NaN clamps to $0.
+_MAX_USD = 1e7
+
+# Escalation records share the bounded amendment trail; per-kind cap
+# so one repeating condition cannot exhaust the trail. Both
+# directions: too low hides that a condition kept firing; too high
+# and one noisy kind crowds out the degradation/park history the
+# trail exists to keep.
+_MAX_SAME_ESCALATIONS = 8
+
+#: Status states that mean an artifact's chain has not started (a
+#: missing status slot counts — the build stamps ``inventoried``).
+_UNSTARTED_STATES: frozenset[str] = frozenset({"", "inventoried",
+                                               "queued"})
+
+
+def _usd(value: Any) -> float:
+    """Finite, bounded, non-negative money figure from document data
+    (``0.0`` for non-numeric shapes)."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return 0.0
+    v = float(value)
+    if not math.isfinite(v):
+        v = _MAX_USD if v > 0 else 0.0
+    return min(max(0.0, v), _MAX_USD)
+
+
+def _row_status_state(row: dict[str, Any]) -> str:
+    status = row.get("status")
+    if isinstance(status, dict):
+        return str(status.get("state") or "")
+    return ""
+
+
+def artifact_shape(row: dict[str, Any]) -> str:
+    """Mechanical cost shape from ledger facts: parser-shaped when the
+    recovered input channels include a byte-stream kind; runtime-heavy
+    when the artifact is large with thin dynamic linkage; balanced
+    otherwise. Parser wins when both match."""
+    for feature in row.get("exposure") or []:
+        if (isinstance(feature, dict)
+                and feature.get("feature") == "input_channels"):
+            kinds = feature.get("value")
+            # Type-gate each entry: the document is sandbox-writable
+            # and an unhashable entry (list/dict) in a tampered value
+            # would raise on the set probe — degrade, never crash.
+            if isinstance(kinds, list) and any(
+                    isinstance(k, str) and k in _PARSER_CHANNEL_KINDS
+                    for k in kinds):
+                return SHAPE_PARSER
+    size = row.get("size_bytes")
+    links = row.get("links") or {}
+    needed = links.get("needed") if isinstance(links, dict) else None
+    n_needed = len(needed) if isinstance(needed, list) else 0
+    if (isinstance(size, int) and size >= _RUNTIME_HEAVY_MIN_BYTES
+            and n_needed <= _RUNTIME_HEAVY_MAX_NEEDED):
+        return SHAPE_RUNTIME
+    return SHAPE_BALANCED
+
+
+def estimate_artifact_usd(
+    row: dict[str, Any],
+    tier: str,
+    *,
+    model: str | None = None,
+    max_parallel: int = 3,
+) -> tuple[float, str]:
+    """Pessimistic per-artifact estimate for one tier's chain:
+    scorecard-fed (``cost_high`` — the pessimistic end) when the model
+    has history, per-tier fallback otherwise, then shape-multiplied.
+    Returns ``(usd, source)`` with source ``scorecard`` / ``fallback``
+    / ``none`` (T0 costs nothing)."""
+    units = _TIER_UNITS.get(tier, 0)
+    if units <= 0:
+        return 0.0, "none"
+    base: float | None = None
+    source = "fallback"
+    if model:
+        est = estimate_from_scorecard(model, units,
+                                      max_parallel=max_parallel)
+        if est is not None:
+            base = est.cost_high
+            source = "scorecard"
+    if base is None:
+        base = _TIER_FALLBACK_USD.get(tier, _TIER_FALLBACK_USD[TIER_T3])
+    usd = _usd(base * _SHAPE_MULTIPLIER[artifact_shape(row)])
+    return round(usd, 6), source
+
+
+def committed_usd(doc: dict[str, Any]) -> float:
+    """The envelope charge currently booked across the document:
+    reconciled reservations charge their measured actual, open
+    (``reserved``) ones — including a parked artifact's kept
+    reservation — charge the pessimistic figure."""
+    total = 0.0
+    for row in doc.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        res = row.get("reservation")
+        if not isinstance(res, dict):
+            continue
+        if res.get("state") == "reconciled":
+            total += _usd(res.get("actual_usd"))
+        elif res.get("state") == "reserved":
+            total += _usd(res.get("reserved_usd"))
+    return round(min(total, _MAX_USD), 6)
+
+
+def policy_want(
+    doc: dict[str, Any],
+    *,
+    model: str | None = None,
+) -> tuple[float, dict[str, float], str]:
+    """What the materialized depth policy STILL wants to spend: the
+    summed per-artifact estimates over assigned rows that are not
+    parked and carry no reservation — rows whose reservation is open
+    or reconciled are already charged by :func:`committed_usd`, so
+    counting them here would double-charge. Returns ``(want_usd,
+    by_tier, estimate_source)`` — source ``scorecard`` / ``fallback``
+    / ``mixed`` / ``none``."""
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    for row in doc.get("rows") or []:
+        if isinstance(row, dict):
+            rows_by_id.setdefault(str(row.get("artifact_id") or ""), row)
+    want = 0.0
+    by_tier: dict[str, float] = {}
+    sources: set[str] = set()
+    for artifact_id, slot in load_assignments(doc).items():
+        row = rows_by_id.get(artifact_id)
+        if row is None:
+            continue
+        if _row_status_state(row) == "parked":
+            continue
+        res = row.get("reservation")
+        if isinstance(res, dict) and res.get("state") in ("reserved",
+                                                          "reconciled"):
+            # A reconciled row's spend is history, and an OPEN
+            # reservation's figure is already booked by committed_usd —
+            # estimating either again double-charges the envelope and
+            # falsely parks a fundable resume (a killed run holding an
+            # open reservation the envelope exactly funds must fit).
+            continue
+        tier = str(slot.get("tier") or TIER_T0)
+        usd, source = estimate_artifact_usd(row, tier, model=model)
+        if usd > 0:
+            want += usd
+            by_tier[tier] = round(by_tier.get(tier, 0.0) + usd, 6)
+            sources.add(source)
+    if not sources:
+        combined = "none"
+    elif len(sources) == 1:
+        combined = sources.pop()
+    else:
+        combined = "mixed"
+    return round(min(want, _MAX_USD), 6), by_tier, combined
+
+
+@dataclass(frozen=True)
+class FeasibilityVerdict:
+    """S16 launch-time feasibility: policy want vs operator envelope.
+    Library code only computes and records — an interactive CALLER
+    surfaces the choice; unattended enforcement parks BEFORE spend."""
+
+    verdict: str
+    want_usd: float
+    envelope_usd: float | None
+    by_tier: dict[str, float] = field(default_factory=dict)
+    estimate_source: str = "none"
+
+    def lines(self) -> list[str]:
+        env = ("uncapped" if self.envelope_usd is None
+               else f"${self.envelope_usd:.2f}")
+        out = [
+            f"Engagement feasibility: policy wants ~${self.want_usd:.2f}"
+            f" vs envelope {env} — {self.verdict}",
+        ]
+        for tier in sorted(self.by_tier, reverse=True):
+            out.append(f"  {_esc(tier):<4s} ~${self.by_tier[tier]:.2f}")
+        out.append(f"  estimates: {_esc(self.estimate_source)}")
+        return out
+
+
+def _envelope(doc: dict[str, Any],
+              envelope_usd: float | None) -> float | None:
+    """Effective envelope: the caller's figure wins; else the
+    engagement policy block's persisted one; else None (uncapped)."""
+    if envelope_usd is not None:
+        return _usd(envelope_usd)
+    block = doc.get("policy")
+    if isinstance(block, dict) and isinstance(
+            block.get("envelope_usd"), (int, float)):
+        return _usd(block["envelope_usd"])
+    return None
+
+
+def set_envelope(output_dir: Any, envelope_usd: float) -> bool:
+    """Persist the operator's engagement envelope on the policy block
+    (operator/config-derived — refuses non-finite or out-of-range
+    figures rather than clamping an operator's typo)."""
+    if (isinstance(envelope_usd, bool)
+            or not isinstance(envelope_usd, (int, float))
+            or not math.isfinite(float(envelope_usd))
+            or not 0.0 <= float(envelope_usd) <= _MAX_USD):
+        raise ValueError(f"invalid envelope figure: {envelope_usd!r}")
+    return update_engagement_policy(output_dir, {
+        "envelope_usd": round(float(envelope_usd), 6),
+    })
+
+
+def launch_feasibility(
+    doc: dict[str, Any],
+    envelope_usd: float | None = None,
+    *,
+    model: str | None = None,
+) -> FeasibilityVerdict:
+    """Compute the S16 verdict over the materialized policy: remaining
+    envelope (envelope minus already-committed) against the policy's
+    want."""
+    want, by_tier, source = policy_want(doc, model=model)
+    envelope = _envelope(doc, envelope_usd)
+    if envelope is None:
+        verdict = VERDICT_FITS
+    else:
+        remaining = max(0.0, envelope - committed_usd(doc))
+        if want > remaining * _CONFLICT_RATIO:
+            verdict = VERDICT_CONFLICT
+        elif want > remaining:
+            verdict = VERDICT_TIGHT
+        else:
+            verdict = VERDICT_FITS
+    return FeasibilityVerdict(
+        verdict=verdict, want_usd=want, envelope_usd=envelope,
+        by_tier=by_tier, estimate_source=source,
+    )
+
+
+def is_engagement_parked(doc: dict[str, Any]) -> bool:
+    """True when the whole engagement carries a park record (S16
+    pre-spend park or an operator park)."""
+    block = doc.get("policy")
+    return isinstance(block, dict) and isinstance(
+        block.get("parked"), dict)
+
+
+def park_engagement(
+    output_dir: Any,
+    reason: str,
+    *,
+    want_usd: float | None = None,
+    envelope_usd: float | None = None,
+) -> bool:
+    """Park the WHOLE engagement, durably: a ``parked`` record on the
+    policy block, a residual, and an amendment — all before any
+    segment spend."""
+    record: dict[str, Any] = {"reason": str(reason)[:200], "at": _now()}
+    if want_usd is not None:
+        record["want_usd"] = _usd(want_usd)
+    if envelope_usd is not None:
+        record["envelope_usd"] = _usd(envelope_usd)
+    ok = update_engagement_policy(output_dir, {"parked": record})
+    if ok:
+        append_residual(output_dir, "engagement_parked",
+                        str(reason)[:200])
+        append_policy_amendment(output_dir, {
+            "kind": "engagement_parked", "reason": str(reason)[:200],
+        })
+    return ok
+
+
+def enforce_feasibility(
+    output_dir: Any,
+    doc: dict[str, Any],
+    envelope_usd: float | None = None,
+    *,
+    attended: bool,
+    model: str | None = None,
+) -> FeasibilityVerdict:
+    """Record the launch feasibility verdict and enforce S16: an
+    unattended conflict parks the engagement BEFORE spend. An attended
+    conflict only records — the interactive caller owns the structured
+    choice (never this library)."""
+    verdict = launch_feasibility(doc, envelope_usd, model=model)
+    update_engagement_policy(output_dir, {
+        "feasibility": {
+            "verdict": verdict.verdict,
+            "want_usd": verdict.want_usd,
+            "envelope_usd": verdict.envelope_usd,
+            "estimate_source": verdict.estimate_source,
+            "at": _now(),
+        },
+    })
+    if verdict.verdict == VERDICT_CONFLICT and not attended:
+        park_engagement(
+            output_dir, "feasibility_conflict",
+            want_usd=verdict.want_usd,
+            envelope_usd=verdict.envelope_usd,
+        )
+    return verdict
+
+
+# ── Per-segment reservations ─────────────────────────────────────────
+
+def park_artifact(output_dir: Any, artifact_id: str,
+                  reason: str) -> bool:
+    """Park one artifact, durably: ledger status ``parked`` with the
+    named reason, plus a residual and an amendment."""
+    ok = set_artifact_status(output_dir, artifact_id, "parked",
+                             detail=str(reason)[:200])
+    if ok:
+        append_residual(output_dir, "artifact_parked",
+                        str(reason)[:200], artifact_id=artifact_id)
+        append_policy_amendment(output_dir, {
+            "kind": "artifact_parked", "artifact_id": artifact_id,
+            "reason": str(reason)[:200],
+        })
+    return ok
+
+
+def _find_row(doc: dict[str, Any],
+              artifact_id: str) -> dict[str, Any] | None:
+    for row in doc.get("rows") or []:
+        if (isinstance(row, dict)
+                and row.get("artifact_id") == artifact_id):
+            return row
+    return None
+
+
+def reserve_segment(
+    output_dir: Any,
+    artifact_id: str,
+    segment: int,
+    *,
+    model: str | None = None,
+    envelope_usd: float | None = None,
+    max_parallel: int = 3,
+) -> dict[str, Any] | None:
+    """Charge a segment's pessimistic reservation at launch. Refuses
+    (returns ``None``, with a durable ``reservation_refused``
+    residual) when the ENGAGEMENT is parked, the artifact has no
+    ledger row / policy slot, is parked, or the charge would push the
+    committed total over the envelope. A prior unreconciled
+    reservation on the same artifact is REPLACED (its deaths carry) —
+    the artifact never double-charges.
+    """
+    if not is_artifact_id(artifact_id):
+        raise ValueError(f"invalid artifact id: {artifact_id!r}")
+    doc = load_ledger(output_dir)
+    if doc is None:
+        return None
+    if is_engagement_parked(doc):
+        # Fail closed: an engagement-level park (S16 feasibility
+        # conflict) refuses every reservation — otherwise per-segment
+        # spend walks straight past the park that exists to stop it.
+        append_residual(output_dir, "reservation_refused",
+                        "engagement is parked",
+                        artifact_id=artifact_id)
+        return None
+    row = _find_row(doc, artifact_id)
+    slot = row.get("policy") if isinstance(row, dict) else None
+    if row is None or not isinstance(slot, dict):
+        append_residual(output_dir, "reservation_refused",
+                        "no ledger row / policy slot",
+                        artifact_id=artifact_id if row else None)
+        return None
+    if _row_status_state(row) == "parked":
+        append_residual(output_dir, "reservation_refused",
+                        "artifact is parked",
+                        artifact_id=artifact_id)
+        return None
+    tier = str(slot.get("tier") or TIER_T0)
+    usd, source = estimate_artifact_usd(row, tier, model=model,
+                                        max_parallel=max_parallel)
+    prior = row.get("reservation")
+    prior_deaths = 0
+    prior_charge = 0.0
+    if isinstance(prior, dict):
+        deaths = prior.get("deaths")
+        if isinstance(deaths, int) and not isinstance(deaths, bool):
+            prior_deaths = max(0, min(deaths, 1_000))
+        if prior.get("state") == "reserved":
+            prior_charge = _usd(prior.get("reserved_usd"))
+    envelope = _envelope(doc, envelope_usd)
+    if envelope is not None:
+        committed_after = committed_usd(doc) - prior_charge + usd
+        if committed_after > envelope:
+            append_residual(
+                output_dir, "reservation_refused",
+                f"reserving {usd:.2f} would commit "
+                f"{committed_after:.2f} of a {envelope:.2f} envelope",
+                artifact_id=artifact_id)
+            return None
+    reservation: dict[str, Any] = {
+        "segment": int(segment),
+        "reserved_usd": usd,
+        "state": "reserved",
+        "deaths": prior_deaths,
+        "updated_at": _now(),
+        "estimate_source": source,
+        "shape": artifact_shape(row),
+    }
+    if not set_artifact_policy(output_dir, artifact_id,
+                               reservation=reservation):
+        return None
+    return reservation
+
+
+def reconcile_segment(
+    output_dir: Any,
+    artifact_id: str,
+    actual_usd: float,
+) -> dict[str, Any] | None:
+    """Clean ledger close: the reservation reconciles to the MEASURED
+    actual — typically down from the pessimistic figure, but an actual
+    above the reservation still commits (the money is already spent;
+    refusing the write would hide it) and leaves a durable
+    ``reconcile_over_reservation`` residual. The death counter resets.
+    Only an OPEN reservation reconciles — a reconcile with no
+    reservation is a caller bug, returned as ``None``."""
+    if not is_artifact_id(artifact_id):
+        raise ValueError(f"invalid artifact id: {artifact_id!r}")
+    doc = load_ledger(output_dir)
+    row = _find_row(doc, artifact_id) if doc else None
+    prior = row.get("reservation") if isinstance(row, dict) else None
+    if not isinstance(prior, dict) or prior.get("state") != "reserved":
+        return None
+    actual = _usd(actual_usd)
+    reserved = _usd(prior.get("reserved_usd"))
+    reservation = dict(prior)
+    reservation.update({
+        "state": "reconciled",
+        "actual_usd": actual,
+        "deaths": 0,
+        "updated_at": _now(),
+    })
+    if not set_artifact_policy(output_dir, artifact_id,
+                               reservation=reservation):
+        return None
+    if actual > reserved:
+        append_residual(
+            output_dir, "reconcile_over_reservation",
+            f"actual {actual:.2f} exceeded the reserved "
+            f"{reserved:.2f} — envelope excess recorded",
+            artifact_id=artifact_id)
+    return reservation
+
+
+def record_segment_death(
+    output_dir: Any,
+    artifact_id: str,
+    *,
+    detail: str = "",
+) -> dict[str, Any] | None:
+    """An unreconciled segment death: the reservation stays charged
+    (pessimism is the point — the dead segment may have spent it) and
+    the death counter increments. At :data:`PARK_AFTER_DEATHS` the
+    artifact parks with the named reason; deaths past that still
+    COUNT but never re-park (no duplicate park amendment/residual per
+    extra death). Returns ``{"deaths": n, "parked": bool}`` or
+    ``None`` when the artifact has no reservation to keep."""
+    if not is_artifact_id(artifact_id):
+        raise ValueError(f"invalid artifact id: {artifact_id!r}")
+    doc = load_ledger(output_dir)
+    row = _find_row(doc, artifact_id) if doc else None
+    if row is None:
+        return None
+    prior = row.get("reservation")
+    if not isinstance(prior, dict) or prior.get("state") != "reserved":
+        return None
+    deaths = prior.get("deaths")
+    deaths = deaths if (isinstance(deaths, int)
+                        and not isinstance(deaths, bool)
+                        and deaths >= 0) else 0
+    deaths = min(deaths + 1, 1_000)
+    reservation = dict(prior)
+    reservation.update({"deaths": deaths, "updated_at": _now()})
+    if not set_artifact_policy(output_dir, artifact_id,
+                               reservation=reservation):
+        return None
+    parked = False
+    if (deaths >= PARK_AFTER_DEATHS
+            and _row_status_state(row) != "parked"):
+        # Already-parked artifacts keep counting deaths (the figure
+        # stays honest) without minting a duplicate park record.
+        reason = f"unreconciled_deaths:{deaths}"
+        if detail:
+            reason = f"{reason} ({str(detail)[:120]})"
+        parked = park_artifact(output_dir, artifact_id, reason)
+    return {"deaths": deaths, "parked": parked}
+
+
+# ── Degradation ladder (S15) + escalations (S9 contact) ─────────────
+
+def apply_degradation(
+    output_dir: Any,
+    *,
+    reason: str,
+    model: str | None = None,
+) -> dict[str, Any] | None:
+    """One rung of budget-pressure degradation, recorded as a policy
+    AMENDMENT (S15 — a resume that loads the slots sees the amended
+    policy, never the launch policy):
+
+    1. revoke one UNSTARTED stratified-sample promotion (back to its
+       floor — sampling is verification spend, first to give);
+    2. else park the UNSTARTED artifact with the largest outstanding
+       estimate — exhausting NON-signal-earned candidates before any
+       signal-earned T3 parks — stamping the parked slot's tier and
+       basis into the amendment and the park detail, reason
+       ``budget_pressure``.
+
+    One call = one rung on one artifact = one amendment. Returns the
+    action record, or ``None`` when nothing is left to degrade.
+    """
+    doc = load_ledger(output_dir)
+    if doc is None:
+        return None
+    candidates: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    for row in doc.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        artifact_id = str(row.get("artifact_id") or "")
+        slot = row.get("policy")
+        if not is_artifact_id(artifact_id) or not isinstance(slot, dict):
+            continue
+        if _row_status_state(row) not in _UNSTARTED_STATES:
+            continue
+        # A reservation slot — open OR reconciled — means a segment
+        # was already funded for this artifact; degrading it frees
+        # nothing (reconciled money is spent, an open reservation is
+        # the in-flight segment's). Only truly unfunded work degrades.
+        if isinstance(row.get("reservation"), dict):
+            continue
+        candidates.append((artifact_id, slot, row))
+
+    # Rung 1: revoke a sample promotion.
+    for artifact_id, slot, _row in sorted(candidates,
+                                          key=lambda c: c[0]):
+        if slot.get("basis") != BASIS_SAMPLE:
+            continue
+        floor = str(slot.get("floor") or TIER_T0)
+        if floor not in TIER_BUCKET:
+            floor = TIER_T0
+        revoked = dict(slot)
+        revoked.update({
+            "tier": floor,
+            "bucket": TIER_BUCKET[floor].value,
+            "basis": "sample_revoked",
+            "assigned_at": _now(),
+        })
+        if not set_artifact_policy(output_dir, artifact_id,
+                                   policy=revoked):
+            continue
+        append_policy_amendment(output_dir, {
+            "kind": "degradation", "action": "sample_revoked",
+            "artifact_id": artifact_id, "tier": floor,
+            "reason": str(reason)[:200],
+        })
+        return {"action": "sample_revoked",
+                "artifact_id": artifact_id, "tier": floor}
+
+    # Rung 2: park the most expensive unstarted artifact. Signal-earned
+    # T3 rows are the engagement's reason to exist (the parser-shaped
+    # ones also carry the LARGEST estimates, so a naive largest-first
+    # rung sheds exactly the hottest artifact at the first park) —
+    # they park only after every non-signal candidate is exhausted.
+    def _best(
+        pool: list[tuple[str, dict[str, Any], dict[str, Any]]],
+    ) -> tuple[float, str, dict[str, Any]] | None:
+        best: tuple[float, str, dict[str, Any]] | None = None
+        for artifact_id, slot, row in pool:
+            tier = str(slot.get("tier") or TIER_T0)
+            usd, _source = estimate_artifact_usd(row, tier,
+                                                 model=model)
+            if usd <= 0:
+                continue
+            # Highest estimate wins; the LOWER artifact id breaks
+            # ties so the rung is deterministic over any order.
+            if (best is None or usd > best[0]
+                    or (usd == best[0] and artifact_id < best[1])):
+                best = (usd, artifact_id, slot)
+        return best
+
+    non_signal = [c for c in candidates
+                  if c[1].get("basis") != BASIS_SIGNAL]
+    signal_earned = [c for c in candidates
+                     if c[1].get("basis") == BASIS_SIGNAL]
+    best = _best(non_signal) or _best(signal_earned)
+    if best is not None:
+        usd, artifact_id, slot = best
+        tier_token = _copy_token(slot.get("tier"), "unrecognized")
+        basis_token = _copy_token(slot.get("basis"), "unrecognized")
+        park_detail = (f"budget_pressure tier={tier_token} "
+                       f"basis={basis_token}")
+        if park_artifact(output_dir, artifact_id, park_detail):
+            append_policy_amendment(output_dir, {
+                "kind": "degradation",
+                "action": "parked_budget_pressure",
+                "artifact_id": artifact_id,
+                "estimated_usd": usd,
+                "tier": tier_token,
+                "basis": basis_token,
+                "reason": str(reason)[:200],
+            })
+            return {"action": "parked_budget_pressure",
+                    "artifact_id": artifact_id,
+                    "estimated_usd": usd,
+                    "tier": tier_token,
+                    "basis": basis_token}
+    return None
+
+
+def record_escalation(output_dir: Any, *, kind: str,
+                      message: str) -> bool:
+    """A governor escalation event (e.g. the coverage journal's
+    index-over-budget refusal), durable on the amendment trail.
+    Bounded per kind so a repeating condition cannot exhaust the
+    trail. No-op (``False``) when the output dir carries no ledger."""
+    kind_token = _copy_token(kind, "")
+    if not kind_token:
+        raise ValueError(f"invalid escalation kind: {kind!r}")
+    same = sum(
+        1 for a in load_policy_amendments(output_dir)
+        if a.get("kind") == "escalation"
+        and a.get("escalation") == kind_token
+    )
+    if same >= _MAX_SAME_ESCALATIONS:
+        return False
+    seq = append_policy_amendment(output_dir, {
+        "kind": "escalation",
+        "escalation": kind_token,
+        "message": str(message)[:300],
+    })
+    return seq > 0
+
+
 __all__ = [
     "BASIS_CLASS_DEFAULT",
     "BASIS_FLOOR",
     "BASIS_NEEDED_BY_T3",
     "BASIS_SAMPLE",
     "BASIS_SIGNAL",
+    "PARK_AFTER_DEATHS",
     "POLICY_VERSION",
+    "SHAPE_BALANCED",
+    "SHAPE_PARSER",
+    "SHAPE_RUNTIME",
     "T3_SIGNAL_FEATURES",
     "TIER_BUCKET",
     "TIER_ORDER",
@@ -686,14 +1420,33 @@ __all__ = [
     "TIER_T1",
     "TIER_T2",
     "TIER_T3",
+    "VERDICT_CONFLICT",
+    "VERDICT_FITS",
+    "VERDICT_TIGHT",
     "DepthAssignment",
     "DepthPolicy",
+    "FeasibilityVerdict",
+    "apply_degradation",
+    "artifact_shape",
     "assign_depth",
+    "committed_usd",
     "depth_label",
+    "enforce_feasibility",
     "ensure_policy",
+    "estimate_artifact_usd",
+    "is_engagement_parked",
+    "launch_feasibility",
     "load_assignments",
+    "park_artifact",
+    "park_engagement",
+    "policy_want",
+    "reconcile_segment",
+    "record_escalation",
+    "record_segment_death",
     "render_policy_lines",
+    "reserve_segment",
     "schedule_order",
+    "set_envelope",
     "tier_bucket",
     "write_policy",
 ]

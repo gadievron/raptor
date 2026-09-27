@@ -3401,6 +3401,34 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
                         logger.error(
                             "journal: %s — run %s NOT merged (the run "
                             "journal keeps its rows)", e, run_dir)
+                        # Engagement contact: when this project
+                        # carries an artifact ledger, a frozen index
+                        # merge is a governor-visible event (depth
+                        # policy relies on journal verdicts reaching
+                        # the index). Only THIS terminal refusal arm
+                        # is contact: an eviction-resolved merge
+                        # above still lands (disclosure recorded,
+                        # counts conserved, re-merge at headroom
+                        # re-lands full rows), and escalating on that
+                        # designed degradation would burn the
+                        # per-kind escalation bound on non-failures
+                        # and mask a later genuine freeze. Best
+                        # effort — the journal never grows a hard
+                        # engagement dependency, and a project
+                        # without a ledger is a no-op.
+                        try:
+                            from core.engagement.governor import (
+                                record_escalation,
+                            )
+                            record_escalation(
+                                project_dir,
+                                kind="journal_index_over_budget",
+                                message=str(e),
+                            )
+                        except Exception:
+                            logger.debug(
+                                "journal: governor escalation not "
+                                "recorded", exc_info=True)
                         return 0
                     # Shed the OLDEST incoming identities until the
                     # estimated savings cover the overshoot (25%
