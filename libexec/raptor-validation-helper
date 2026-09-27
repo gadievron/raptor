@@ -36,6 +36,8 @@ if not (os.environ.get("CLAUDECODE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 import hashlib  # noqa: E402
+import json  # noqa: E402
+import stat  # noqa: E402
 
 from core.artifacts.provenance import sanitise_free_text, stamp_provenance  # noqa: E402
 from core.inventory.lookup import normalise_path  # noqa: E402
@@ -855,24 +857,359 @@ def _deep_merge(target, source):
             target[key] = value
 
 
+# ─── immutable stage inputs (consume-by-copy receipts) ──────────────
+
+#: Receipt ledger recording every stage-file consumption: which file
+#: was merged, its content hash, and when. The receipt IS the consume
+#: marker — the pre-fix delete of the stage file broke delegated
+#: agents that re-read their stage output after the next prep ran
+#: (stage inputs are immutable from their side) and erased the
+#: post-hoc record of what each merge actually saw.
+STAGE_RECEIPTS_FILENAME = "stage-receipts.json"
+
+#: Durable per-stage archive under the workdir: a byte-identical,
+#: hash-named copy of each consumed stage file. The in-place original
+#: stays the LLM's to rewrite (rewritten content re-consumes); the
+#: archive copy preserves exactly the bytes each merge consumed even
+#: after such a rewrite. Never deleted mid-run.
+STAGE_ARCHIVE_DIRNAME = "stage-inputs"
+
+#: Consumption events kept in the ledger's ``history`` list. Bounds
+#: the ledger against a retry loop that rewrites and re-consumes
+#: stage files indefinitely (the ledger is rewritten whole on every
+#: consumption). Higher keeps a longer event trail at linearly
+#: growing rewrite cost; lower starts dropping the EARLY events a
+#: post-hoc audit reads first. Skip correctness never degrades: the
+#: per-file ``receipts`` map (latest consumption per file) and the
+#: hash-named archive copies are not capped.
+_RECEIPT_HISTORY_CAP = 100
+
+
+def _read_workdir_bytes(path: Path) -> "bytes | None":
+    """Raw bytes of a workdir artifact, or None when refused/unreadable.
+
+    One read serves the parse, the receipt hash, and the archive copy
+    — hashing a second read could describe different bytes than the
+    ones the merge consumed. The workdir holds LLM-authored artifacts,
+    so the read goes through ``core.source.gated``'s discipline, the
+    same gate ``load_json`` reads stage files through: regular files
+    only, checked on the OPENED fd (a planted FIFO stats as 0 bytes
+    and then blocks a plain reader forever; a symlink to a device
+    passes any size gate and feeds unbounded bytes), ``O_NONBLOCK``
+    open, and the byte budget checked on the fstat size AND re-checked
+    after a capped read (a file that grows mid-read is refused, not
+    buffered unbounded). Budget mirrors ``load_json``'s default.
+    """
+    from core.json.utils import DEFAULT_JSON_MAX_BYTES
+    from core.source.gated import read_bytes_gated
+    try:
+        return read_bytes_gated(path, DEFAULT_JSON_MAX_BYTES)
+    except FileNotFoundError:
+        return None
+    except (ValueError, OSError) as e:
+        print(f"  ⚠️  {_sft(path.name, max_len=64)} not consumed: "
+              f"{_sft(str(e), max_len=200)}", file=sys.stderr)
+        return None
+
+
+def _load_stage_receipts(workdir: "str | Path") -> dict:
+    """The receipts ledger, or a fresh one when absent or malformed.
+
+    Malformed reads as no-receipts: consumption re-applies, matching
+    the no-ledger state. Fail-open toward re-merge is safe here — the
+    merge is idempotent-by-content for update stages and a rebuild
+    for stage A, and neither mints a verdict.
+    """
+    data = load_json(Path(workdir) / STAGE_RECEIPTS_FILENAME)
+    if not isinstance(data, dict) or not isinstance(
+            data.get("receipts"), dict):
+        return {"schema": 1, "receipts": {}, "history": []}
+    if not isinstance(data.get("history"), list):
+        data["history"] = []
+    return data
+
+
+def _stage_consumed_unchanged(workdir: "str | Path", filename: str,
+                              digest: str) -> bool:
+    """True when the latest receipt for *filename* matches *digest*.
+
+    The immutable-inputs replacement for "the file is gone": content
+    already consumed never re-applies; rewritten content (new hash)
+    does — exactly the delete regime's reachable behaviours, kept as
+    metadata instead of by removal.
+    """
+    entry = _load_stage_receipts(workdir)["receipts"].get(filename)
+    return isinstance(entry, dict) and entry.get("sha256") == digest
+
+
+def _stage_a_container_unchanged(workdir: "str | Path",
+                                 filename: str) -> bool:
+    """True when findings.json still matches what the receipted stage-A
+    build wrote — the only state in which skipping stage A is a
+    genuine no-op.
+
+    Stage A's apply is a container RESET, not an idempotent update
+    merge. In a shared ``--out`` re-run, run 1's later-stage merges
+    (stage-B summaries, rulings) live in findings.json; skipping an
+    unchanged stage-a.json there would carry run 1's stale verdicts
+    into run 2, where the delete regime rebuilt a clean container.
+    The receipt records findings.json's sha256 as built; any drift —
+    or a missing/unreadable findings.json, or a receipt without the
+    field — re-applies. Fail-open toward the rebuild: that is the
+    delete regime's reset, and stage A never mints a verdict.
+    """
+    entry = _load_stage_receipts(workdir)["receipts"].get(filename)
+    expected = (entry.get("findings_sha256")
+                if isinstance(entry, dict) else None)
+    if not isinstance(expected, str) or not expected:
+        return False
+    current = _read_workdir_bytes(Path(workdir) / "findings.json")
+    if current is None:
+        return False
+    return hashlib.sha256(current).hexdigest() == expected
+
+
+def _warn_archive_failure(filename: str, reason: str) -> None:
+    """Stderr warning for a refused/failed archive copy (the
+    best-effort path — the receipt hash stays the consumption
+    authority). Both fields go through ``_sft``: the filename is
+    helper-derived, but an OSError's text can carry a path from a
+    hostile plant in the workdir."""
+    print(f"  ⚠️  stage-input archive copy failed for "
+          f"{_sft(str(filename), max_len=64)}: "
+          f"{_sft(reason, max_len=200)}", file=sys.stderr)
+
+
+def _open_archive_dir_fd(workdir: "str | Path") -> int:
+    """fd of the ``stage-inputs/`` directory, refusing any plant at
+    that name; raises ``OSError`` on refusal.
+
+    ``O_EXCL | O_NOFOLLOW`` on the archive file guards only the FINAL
+    path component — a symlink pre-planted AT ``stage-inputs`` would
+    route the copy outside the run dir while the receipt claimed a
+    run-dir path. So: mkdir (EEXIST tolerated — whatever occupies the
+    name is vetted next), then open the name itself with
+    ``O_DIRECTORY | O_NOFOLLOW`` plus an fstat ``S_ISDIR`` re-check
+    (belt-and-braces where either flag is unavailable). A symlink
+    (dangling or not), regular file, or anything else at the name
+    fails the open instead of being traversed. The caller creates the
+    archive file fd-relatively (openat semantics) so no path
+    component is re-traversed after this vetting.
+    """
+    archive_dir = Path(workdir) / STAGE_ARCHIVE_DIRNAME
+    try:
+        os.mkdir(archive_dir)
+    except FileExistsError:
+        pass  # existing entry vetted by the no-follow open below
+    flags = (os.O_RDONLY
+             | getattr(os, "O_DIRECTORY", 0)
+             | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_CLOEXEC", 0))
+    fd = os.open(str(archive_dir), flags)
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(
+                f"plant at the {STAGE_ARCHIVE_DIRNAME} name: not a "
+                f"directory")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _existing_archive_matches(dir_fd: int, name: str,
+                              raw: bytes) -> bool:
+    """True when the entry already at the archive *name* is a regular
+    file holding exactly *raw* — the earlier-consume dedup case.
+
+    An EEXIST on the exclusive create is NOT proof the content is
+    already archived: the hash name is predictable from LLM-authored
+    content, so a plant (wrong-bytes file, symlink) can occupy it.
+    Verified through the same directory fd, no-follow, fd-checked
+    regularity, capped read — anything that fails is the caller's
+    archive-failure path.
+    """
+    flags = (os.O_RDONLY
+             | getattr(os, "O_NONBLOCK", 0)
+             | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_CLOEXEC", 0))
+    try:
+        fd = os.open(name, flags, dir_fd=dir_fd)
+    except OSError:
+        return False
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size != len(raw):
+            return False
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1  # fdopen owns it now
+            existing = fh.read(len(raw) + 1)
+        return existing == raw
+    except OSError:
+        return False
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _archive_stage_input(workdir: "str | Path", filename: str,
+                         raw: bytes, digest: str) -> "str | None":
+    """Copy the consumed bytes into the per-stage archive; return the
+    workdir-relative archive path, or None on failure.
+
+    Hash-named (``stage-a-<sha12>.json``), so identical content
+    deduplicates naturally and a later rewrite of the in-place file
+    can never disturb what an earlier merge saw. The workdir holds
+    LLM-authored artifacts, so every component of the archive path is
+    plantable: the ``stage-inputs`` directory is opened no-follow and
+    vetted (``_open_archive_dir_fd``), and the copy is created
+    fd-relatively with ``O_EXCL | O_NOFOLLOW`` — a plant at the
+    predictable hash name refuses instead of being followed or
+    overwritten, and counts as archived only after byte-identity is
+    verified (``_existing_archive_matches``). Best-effort: the
+    receipt hash is the consumption authority; every refusal warns
+    and the receipt records ``archived_to: null`` — never a path this
+    call did not itself write or verify.
+    """
+    name = f"{Path(filename).stem}-{digest[:12]}.json"
+    rel = f"{STAGE_ARCHIVE_DIRNAME}/{name}"
+    try:
+        dir_fd = _open_archive_dir_fd(workdir)
+    except (OSError, NotImplementedError) as e:
+        _warn_archive_failure(filename, str(e))
+        return None
+    try:
+        create_flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                        | getattr(os, "O_NOFOLLOW", 0)
+                        | getattr(os, "O_CLOEXEC", 0))
+        try:
+            fd = os.open(name, create_flags, 0o644, dir_fd=dir_fd)
+        except FileExistsError:
+            if _existing_archive_matches(dir_fd, name, raw):
+                # Same bytes already archived (an earlier consume of
+                # identical content) — the honest dedup case.
+                return rel
+            _warn_archive_failure(
+                filename,
+                "existing entry at the archive name does not hold "
+                "the consumed bytes — refusing to claim it")
+            return None
+        try:
+            view = memoryview(raw)
+            written = 0
+            while written < len(view):
+                n = os.write(fd, view[written:])
+                if n <= 0:
+                    raise OSError(
+                        f"short write: os.write returned {n}")
+                written += n
+        finally:
+            os.close(fd)
+    except (OSError, NotImplementedError) as e:
+        _warn_archive_failure(filename, str(e))
+        return None
+    finally:
+        os.close(dir_fd)
+    return rel
+
+
+def _record_stage_receipt(workdir: "str | Path", filename: str,
+                          stage_letter: str, digest: str, size: int,
+                          archived_to: "str | None",
+                          findings_sha256: "str | None" = None) -> None:
+    """Record a consumption receipt — the metadata that replaced the
+    pre-fix delete of the stage file.
+
+    ``findings_sha256`` (stage A only): sha256 of findings.json as the
+    build wrote it, so the stage-A skip can tell a genuine no-op retry
+    from a shared ``--out`` re-run whose container has since accrued
+    later-stage merges (see ``_stage_a_container_unchanged``).
+
+    Plain ``save_json``: the ledger is helper-owned mechanical
+    bookkeeping (like the auto-sink-watch ledger), not an LLM-derived
+    working doc — no provenance stamp.
+    """
+    ledger = _load_stage_receipts(workdir)
+    consumed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    prev = ledger["receipts"].get(filename)
+    count = (prev.get("consumed_count", 0)
+             if isinstance(prev, dict) else 0)
+    if not isinstance(count, int) or count < 0:
+        count = 0
+    entry = {
+        "stage": stage_letter.upper(),
+        "sha256": digest,
+        "size": size,
+        "consumed_at": consumed_at,
+        "archived_to": archived_to,
+        "consumed_count": count + 1,
+    }
+    if findings_sha256 is not None:
+        entry["findings_sha256"] = findings_sha256
+    ledger["receipts"][filename] = entry
+    ledger["history"].append({
+        "file": filename,
+        "stage": stage_letter.upper(),
+        "sha256": digest,
+        "consumed_at": consumed_at,
+    })
+    ledger["history"] = ledger["history"][-_RECEIPT_HISTORY_CAP:]
+    save_json(Path(workdir) / STAGE_RECEIPTS_FILENAME, ledger)
+
+
 def _apply_stage_file(workdir, stage_letter):
-    """Merge stage-X.json into findings.json, then delete the stage file.
+    """Merge stage-X.json into findings.json and record a consumption
+    receipt. Stage inputs are immutable: the stage file stays in place
+    (delegated agents may re-read it) and a byte-identical copy lands
+    in the per-stage archive; the receipt (content hash + timestamp)
+    carries the consume semantics the pre-fix delete provided.
 
     Stage A: stage-a.json contains a full findings container — builds findings.json.
     Stages B-F: stage-X.json contains per-finding updates — merges into findings.json.
 
-    Returns True if a stage file was found and applied.
+    Returns True if a stage file was found and applied. False when the
+    file is absent, empty/invalid, or already consumed with unchanged
+    content (the receipt-metadata equivalent of the pre-fix
+    deleted-after-consumption state). For stage A the skip is
+    additionally conditioned on findings.json still matching the
+    receipted build (``_stage_a_container_unchanged``) — its apply is
+    a reset, and a drifted container must be rebuilt as the delete
+    regime did.
     """
     stage_path = Path(workdir) / f"stage-{stage_letter.lower()}.json"
     if not stage_path.exists():
         return False
 
-    staged = load_json(stage_path)
+    raw = _read_workdir_bytes(stage_path)
+    staged = None
+    if raw is not None:
+        try:
+            # utf-8-sig mirrors core.json.load_json's BOM tolerance.
+            staged = json.loads(raw.decode("utf-8-sig"))
+        except ValueError:
+            staged = None
     if not staged:
         print(f"  ⚠️  stage-{stage_letter.lower()}.json exists but is empty/invalid", file=sys.stderr)
         return False
 
+    digest = hashlib.sha256(raw).hexdigest()
+    if _stage_consumed_unchanged(workdir, stage_path.name, digest) and (
+            stage_letter.upper() != "A"
+            or _stage_a_container_unchanged(workdir, stage_path.name)):
+        # Already-consumed content never re-applies — the exact skip
+        # the pre-fix delete provided (the file was simply gone),
+        # expressed as receipt metadata so re-readers and post-hoc
+        # audits still find the file in place. Stage A additionally
+        # requires an undrifted findings.json: its apply is a reset,
+        # so a container carrying later-stage merges (shared --out
+        # re-run) rebuilds clean instead of skipping.
+        print(f"  stage-{stage_letter.lower()}.json already consumed "
+              f"(content unchanged since receipt) — merge skipped, "
+              f"file kept in place")
+        return False
+
     findings_path = Path(workdir) / "findings.json"
+    findings_digest: "str | None" = None
 
     if stage_letter.upper() == "A":
         # Build: stage-a.json IS the findings container
@@ -880,6 +1217,13 @@ def _apply_stage_file(workdir, stage_letter):
         container = create_empty_findings("A", target_path, staged.get("vuln_type_focus"))
         container["findings"] = staged.get("findings", [])
         _save_artifact(findings_path, container)
+        # Hash the container as built: the stage-A skip is valid only
+        # while findings.json still matches this state (an unreadable
+        # read-back records nothing — the skip then re-applies, the
+        # reset-biased direction).
+        built = _read_workdir_bytes(findings_path)
+        if built is not None:
+            findings_digest = hashlib.sha256(built).hexdigest()
         count = len(container["findings"])
         print(f"  Built findings.json from stage-a.json: {count} findings")
     else:
@@ -965,17 +1309,17 @@ def _apply_stage_file(workdir, stage_letter):
         _save_artifact(findings_path, container)
         print(f"  Merged stage-{stage_letter.lower()}.json: {applied} findings updated")
 
-    # Delete the stage file. Guard the unlink — pre-fix
-    # `stage_path.unlink()` raised `FileNotFoundError` if the
-    # file disappeared between the read above and here (rare
-    # but real: parallel /project clean, operator manually
-    # rm'ing the file mid-stage, an aborted-and-restarted
-    # validate run that moved the file). The exception leaked
-    # and crashed the stage-merge call, leaving the operator
-    # with a partial state where the merge happened but the
-    # cleanup didn't. Subsequent stage retries hit the same
-    # condition. `missing_ok=True` makes the unlink idempotent.
-    stage_path.unlink(missing_ok=True)
+    # Consume-by-copy: the stage file stays in place (delegated
+    # agents re-read their stage output after the next prep runs;
+    # deleting it broke them and erased the post-hoc audit trail).
+    # The receipt's content hash is what now prevents the same
+    # content from merging twice; the archive copy preserves the
+    # exact bytes this merge consumed.
+    archived_to = _archive_stage_input(
+        workdir, stage_path.name, raw, digest)
+    _record_stage_receipt(workdir, stage_path.name, stage_letter,
+                          digest, len(raw), archived_to,
+                          findings_sha256=findings_digest)
     return True
 
 

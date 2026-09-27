@@ -7,12 +7,15 @@ every refusal (unreadable, non-regular, over-cap) collapses into one
 with a REQUIRED file — config, budget-gated JSON, spec documents —
 need the opposite: each refusal class surfaces as a distinct
 exception so the caller can report it (and only it) precisely.
-:func:`read_text_gated` is the single body for that flavor; it grew
-up as ``core.json.utils._read_text_gated`` backing ``load_json`` and
-is promoted here so non-JSON strict readers consume the same
-discipline instead of re-growing their own fstat/budget idiom
+:func:`read_bytes_gated` is the single body for that flavor
+(:func:`read_text_gated` is its decode wrapper); it grew up as
+``core.json.utils._read_text_gated`` backing ``load_json`` and is
+promoted here so non-JSON strict readers consume the same discipline
+instead of re-growing their own fstat/budget idiom
 (``core.json.utils`` imports THIS implementation — one body, both
-flavors' doctrine in one module family).
+flavors' doctrine in one module family). The bytes flavor serves
+consume-by-copy callers that must hash/archive the exact bytes they
+parsed without a second read.
 
 Raising vs None-flavor is the only axis that kept the two apart;
 the gates are identical in kind:
@@ -35,7 +38,7 @@ import os
 import stat as _stat_mod
 from pathlib import Path
 
-__all__ = ["ReadBudgetExceededError", "read_text_gated"]
+__all__ = ["ReadBudgetExceededError", "read_bytes_gated", "read_text_gated"]
 
 
 class ReadBudgetExceededError(ValueError):
@@ -49,15 +52,20 @@ class ReadBudgetExceededError(ValueError):
     """
 
 
-def read_text_gated(
+def read_bytes_gated(
     p: str | Path,
     max_bytes: int | None,
     *,
     follow_symlinks: bool = True,
-    encoding: str = "utf-8-sig",
     budget_error: type[ValueError] = ReadBudgetExceededError,
-) -> str:
-    """Open-then-fstat gated read of a required text file.
+) -> bytes:
+    """Open-then-fstat gated read of a required file, returning raw
+    bytes.
+
+    The byte-mode body behind :func:`read_text_gated` — identical
+    gates, no decode — for callers that hash, archive, or re-serve
+    the exact consumed bytes and therefore must not read twice (a
+    second read could describe different bytes than the first).
 
     Both gates check the OPEN fd's inode, not a name that can be
     swapped between calls:
@@ -79,11 +87,8 @@ def read_text_gated(
     Raises ``ValueError`` for non-regular files, *budget_error*
     (default :class:`ReadBudgetExceededError`, a ``ValueError``) for
     over-budget files — so a strict caller can report the refusal
-    distinctly — ``OSError`` for open/read failures (``ELOOP`` when
-    ``follow_symlinks=False`` meets a link), and
-    ``UnicodeDecodeError`` (a ``ValueError``) for bytes *encoding*
-    cannot decode. The default ``utf-8-sig`` transparently strips a
-    UTF-8 BOM and is byte-identical to ``utf-8`` for BOM-less files.
+    distinctly — and ``OSError`` for open/read failures (``ELOOP``
+    when ``follow_symlinks=False`` meets a link).
     """
     flags = (
         os.O_RDONLY
@@ -112,10 +117,37 @@ def read_text_gated(
                 f"file grew past max_bytes={max_bytes} during read: {p}"
             )
             raise budget_error(msg)
-        return raw.decode(encoding)
+        return raw
     finally:
         if fd >= 0:
             try:
                 os.close(fd)
             except OSError:
                 pass
+
+
+def read_text_gated(
+    p: str | Path,
+    max_bytes: int | None,
+    *,
+    follow_symlinks: bool = True,
+    encoding: str = "utf-8-sig",
+    budget_error: type[ValueError] = ReadBudgetExceededError,
+) -> str:
+    """Open-then-fstat gated read of a required text file.
+
+    Thin decode wrapper over :func:`read_bytes_gated` — one body
+    carries the gates for both flavors (see there for the fd-checked
+    regularity, O_NONBLOCK, and grow-recheck contract).
+
+    Raises as :func:`read_bytes_gated`, plus ``UnicodeDecodeError``
+    (a ``ValueError``) for bytes *encoding* cannot decode. The
+    default ``utf-8-sig`` transparently strips a UTF-8 BOM and is
+    byte-identical to ``utf-8`` for BOM-less files.
+    """
+    return read_bytes_gated(
+        p,
+        max_bytes,
+        follow_symlinks=follow_symlinks,
+        budget_error=budget_error,
+    ).decode(encoding)
