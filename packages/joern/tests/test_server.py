@@ -1365,3 +1365,40 @@ class TestGraphIdentityLease:
                           return_value={"success": True}):
             srv.close_workspace()
         assert srv._graph_lease is None
+
+
+class TestImportRetryAfterServerReplacement:
+    """A sibling session's restart replaces the shared JVM while THIS
+    handle's import is in flight: the import's post dies mid-flight
+    (dead old JVM / new credential on the replacement). The failed
+    import must leave the handle cleanly retryable — no fabricated
+    loaded state, no stale lease — so the caller's ordinary retry
+    against the replacement server succeeds with a fresh lease."""
+
+    def test_failed_import_leaves_handle_cleanly_retryable(
+            self, tmp_path):
+        p = tmp_path / "cpg.bin"
+        p.write_bytes(b"stub")
+        srv = JoernServer()
+        srv._base_url = "http://127.0.0.1:9999"
+
+        responses = [
+            None,  # import unit: transport died under the replacement
+            {"success": True, "stdout": "workspace..."},   # retry unit
+            {"success": True, "stdout": 'val res0: String = "42"'},
+            {"success": True, "stdout": "warmup"},
+        ]
+
+        def fake(self_srv, query_str, *, timeout=30):
+            return responses.pop(0)
+
+        with patch.object(JoernServer, "_post_sync", fake):
+            assert srv.import_cpg(p) is False
+            assert srv._cpg_loaded is False
+            assert srv._graph_lease is None
+            epoch = srv._cpg_load_epoch
+
+            assert srv.import_cpg(p) is True
+        assert srv._cpg_loaded is True
+        assert srv._graph_lease is not None
+        assert srv._cpg_load_epoch == epoch + 1
