@@ -110,8 +110,11 @@ def _row_index(rows):
 def _sink_label(s):
     # Pins the producer's rejection-label format for sinks: the class
     # is part of the key, because (kind, match) alone cannot name a
-    # sink uniquely across packs.
-    return f"sink:{s.kind}:{s.match or s.kind}:{s.sink_class}"
+    # sink uniquely across packs; the only_taint_classes gate is the
+    # trailing cell (empty when ungated), because the gate splits the
+    # fate of same-(kind, match, sink_class) twins at the matrix.
+    return (f"sink:{s.kind}:{s.match or s.kind}:{s.sink_class}"
+            f":{','.join(s.only_taint_classes)}")
 
 
 def _source_label(s):
@@ -353,9 +356,65 @@ def test_duplicate_kind_match_sinks_stay_uniquely_attributed():
     # The unmapped twin is a counted refusal whose label names it
     # unambiguously (class included).
     (rej,) = conv.rejected
-    assert rej.row == "sink:dotted_callee:subprocess.run:secret-exposure"
+    assert rej.row == "sink:dotted_callee:subprocess.run:secret-exposure:"
     assert "no models-as-data sink kind" in rej.reason
     # And the arithmetic still balances over the duplicate pair.
+    _accounting(conv, ps)
+
+
+def test_class_gated_sink_refuses_with_the_gate_reason() -> None:
+    # A gated sink whose class HAS a kind mapping must still refuse —
+    # at the matrix, with the class-gate reason: a models-as-data row
+    # carries no taint-class dimension, so emitting one would drop
+    # the gate and re-fire the sink on every tracked flow (the exact
+    # misfire the engine's gate exists to stop). Without the
+    # class_gated= threading it would have converted.
+    gated = SinkSpec(
+        kind="dotted_callee", sink_class="command-injection",
+        cwe="CWE-78", match="subprocess.run", args=(0,),
+        only_taint_classes=("secret",),
+        provenance="framework_catalog")
+    ps = _pack_set(sinks=(gated,))
+    conv = rows_from_pack_set(ps, language="python")
+    assert conv.rows == ()
+    (rej,) = conv.rejected
+    assert "class-gated sink" in rej.reason
+    assert "drop the gate" in rej.reason
+    assert rej.row == (
+        "sink:dotted_callee:subprocess.run:command-injection:secret")
+    _accounting(conv, ps)
+
+
+def test_gated_and_ungated_sink_twins_stay_uniquely_attributed() -> None:
+    # Same-(kind, match, sink_class) twins differing ONLY in the
+    # only_taint_classes gate take different fates — the ungated twin
+    # converts, the gated twin is a matrix refusal — so the gate is
+    # the discriminator that must ride the label: without it the
+    # refusal would name both twins and the accounting join would
+    # wrongly exclude the converted one.
+    ungated = SinkSpec(
+        kind="dotted_callee", sink_class="command-injection",
+        cwe="CWE-78", match="subprocess.run", args=(0,),
+        provenance="framework_catalog")
+    gated = SinkSpec(
+        kind="dotted_callee", sink_class="command-injection",
+        cwe="CWE-78", match="subprocess.run", args=(0,),
+        only_taint_classes=("secret",),
+        provenance="framework_catalog")
+    ps = _pack_set(sinks=(ungated, gated))
+    conv = rows_from_pack_set(ps, language="python")
+    # The ungated twin converts — exactly one row, unaffected by the
+    # refusal of its namesake.
+    assert [(r.type_name, r.path, r.model_kind) for r in conv.rows] == [
+        ("subprocess", "Member[run].Argument[0]", "command-injection")]
+    # The gated twin is a counted refusal whose label names it
+    # unambiguously (gate included).
+    (rej,) = conv.rejected
+    assert rej.row == (
+        "sink:dotted_callee:subprocess.run:command-injection:secret")
+    assert rej.row != _sink_label(ungated)
+    assert "class-gated sink" in rej.reason
+    # And the arithmetic still balances over the twin pair.
     _accounting(conv, ps)
 
 

@@ -157,8 +157,17 @@ def _sink_label(sink: SinkSpec) -> str:
     convert — so the class rides in the label. Without it a single
     refusal would be attributable to either twin (and an accounting
     join over the labels would wrongly exclude the converted one).
+
+    ``only_taint_classes`` rides as the trailing cell for the same
+    reason: the gate splits the fate of same-``(kind, match,
+    sink_class)`` twins — a gated sink is a matrix refusal (a
+    models-as-data row has no taint-class dimension) while its
+    ungated twin converts — so without it the refusal would be
+    attributable to the converted twin. Empty (ungated, the common
+    case) renders as an empty trailing cell.
     """
-    return f"sink:{sink.kind}:{sink.match or sink.kind}:{sink.sink_class}"
+    return (f"sink:{sink.kind}:{sink.match or sink.kind}"
+            f":{sink.sink_class}:{_classes_cell(sink.only_taint_classes)}")
 
 
 def _classes_cell(classes: Sequence[str]) -> str:
@@ -239,6 +248,7 @@ def rows_from_pack_set(
         cell = mad_emissibility(
             language=language, role=role, kind=entry.kind,
             provenance=entry.provenance,
+            class_gated=bool(getattr(entry, "only_taint_classes", ())),
         )
         if not cell.emissible:
             rejected.append(RejectedRow(
