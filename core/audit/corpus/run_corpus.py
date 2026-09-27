@@ -24,7 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -1592,10 +1592,38 @@ def _run_audit_on_target(
     return outcomes_by_id, bare_key_entries, out_dir
 
 
+def _iter_audit_log_rows(log_path: Path) -> Iterator[dict[str, Any]]:
+    """Rows of *log_path* in append order, expanded to the contiguous
+    shard set when it names the audit log's first shard — a rolled
+    trail's later rows live in numbered siblings, and scoring shard 1
+    alone would silently drop every outcome after the roll point."""
+    from core.audit.record import AUDIT_LOG_FILENAME, audit_log_paths
+
+    if log_path.name == AUDIT_LOG_FILENAME:
+        paths = audit_log_paths(log_path.parent)
+    else:
+        paths = [log_path]
+    for p in paths:
+        if not p.exists():
+            continue
+        with Path(p).open() as f:  # raw-open: run log written by this harness (eval lane)
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    entry = loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict):
+                    yield entry
+
+
 def _parse_audit_log_outcomes(
     log_path: Path,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    """Index review/promotion rows of one ``.audit-log.jsonl``.
+    """Index review/promotion rows of one ``.audit-log.jsonl``
+    (expanded to its shard set — see :func:`_iter_audit_log_rows`).
 
     Returns ``(outcomes_by_id, bare_key_entries)``. Keys indexed per
     row: the raw log key (``file:function[:line]``), the derived bare
@@ -1623,57 +1651,39 @@ def _parse_audit_log_outcomes(
     # let unqualified rows update the qualified aliases too.
     qualified_by_bare: dict[str, str] = {}
     raw_entries: list[dict[str, Any]] = []
-    if log_path.exists():
-        with Path(log_path).open() as f:  # raw-open: run log written by this harness (eval lane)
-            for raw in f:
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    entry = loads(raw)
-                except ValueError:
-                    continue
-                if entry.get("action") not in ("orchestrator_review", "sweep_promotion"):
-                    continue
-                key = entry.get("key", "")
-                if not key:
-                    continue
-                raw_entries.append(entry)
-                qualified = entry.get("function_qualified") or ""
-                if qualified:
-                    head, _, tail = key.rpartition(":")
-                    base = head if (head and tail.isdigit()) else key
-                    file_part = base.rsplit(":", 1)[0]
-                    if file_part:
-                        qualified_by_bare[base] = (
-                            f"{file_part}:{qualified}"
-                        )
+    for entry in _iter_audit_log_rows(log_path):
+        if entry.get("action") not in ("orchestrator_review", "sweep_promotion"):
+            continue
+        key = entry.get("key", "")
+        if not key:
+            continue
+        raw_entries.append(entry)
+        qualified = entry.get("function_qualified") or ""
+        if qualified:
+            head, _, tail = key.rpartition(":")
+            base = head if (head and tail.isdigit()) else key
+            file_part = base.rsplit(":", 1)[0]
+            if file_part:
+                qualified_by_bare[base] = (
+                    f"{file_part}:{qualified}"
+                )
 
     # Receipt-floor pre-pass: a refutation_gate row that floored the
     # function to suspicious is deterministic mechanical evidence; the
     # rows it produced must be recognizable downstream (the phase-2
     # quality suppression exempts them, like any tool confirmation).
     floored_bases: set[str] = set()
-    if log_path.exists():
-        with Path(log_path).open() as f:  # raw-open: run log written by this harness (eval lane)
-            for raw in f:
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    entry = loads(raw)
-                except ValueError:
-                    continue
-                if (
-                    entry.get("action") == "refutation_gate"
-                    and entry.get("applied")
-                    and entry.get("demote_to") == "suspicious"
-                ):
-                    key = entry.get("key", "")
-                    head, _, tail = key.rpartition(":")
-                    floored_bases.add(
-                        head if (head and tail.isdigit()) else key,
-                    )
+    for entry in _iter_audit_log_rows(log_path):
+        if (
+            entry.get("action") == "refutation_gate"
+            and entry.get("applied")
+            and entry.get("demote_to") == "suspicious"
+        ):
+            key = entry.get("key", "")
+            head, _, tail = key.rpartition(":")
+            floored_bases.add(
+                head if (head and tail.isdigit()) else key,
+            )
 
     for entry in raw_entries:
         key = entry.get("key", "")

@@ -38,6 +38,37 @@ class TestAggregateStrategyStats:
         assert stats["memory"]["wins"] == 1
         assert stats["memory"]["misses"] == 0
 
+    def test_reads_full_shard_set(self, tmp_path):
+        # A rolled trail's later review rows live in numbered
+        # siblings; weights computed from shard 1 alone would freeze
+        # at the roll point.
+        _write_audit_log(tmp_path / "run1", [
+            {"action": "orchestrator_review", "status": "finding",
+             "strategies": ["memory"]},
+        ])
+        with open(tmp_path / "run1" / ".audit-log.002.jsonl", "w") as f:
+            f.write(json.dumps(
+                {"action": "orchestrator_review", "status": "clean",
+                 "strategies": ["memory"]}) + "\n")
+        stats = aggregate_strategy_stats([tmp_path / "run1"])
+        assert stats["memory"]["wins"] == 1
+        assert stats["memory"]["misses"] == 1
+        assert stats["memory"]["total"] == 2
+
+    def test_non_contiguous_shard_not_read(self, tmp_path):
+        # Contiguity-by-construction: a planted high-numbered file
+        # does not extend the set.
+        _write_audit_log(tmp_path / "run1", [
+            {"action": "orchestrator_review", "status": "finding",
+             "strategies": ["memory"]},
+        ])
+        with open(tmp_path / "run1" / ".audit-log.005.jsonl", "w") as f:
+            f.write(json.dumps(
+                {"action": "orchestrator_review", "status": "clean",
+                 "strategies": ["memory"]}) + "\n")
+        stats = aggregate_strategy_stats([tmp_path / "run1"])
+        assert stats["memory"]["total"] == 1
+
     def test_ignores_non_review_entries(self, tmp_path):
         _write_audit_log(tmp_path / "run1", [
             {"action": "feedback", "status": "finding",

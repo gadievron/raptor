@@ -196,6 +196,36 @@ class TestBuildSignalIndex:
         index = build_signal_index([run])
         assert index.detectors["a.c:f"] == {"callback_lifetime_cross"}
 
+    def test_audit_log_shard_siblings_harvested(self, tmp_path):
+        # A rolled trail's later receipts live in numbered siblings —
+        # the harvest must expand each audit-log location to its full
+        # shard set (same shape as the journal expansion).
+        run = _write_run_dir(tmp_path, audit_log=[
+            {"action": "refutation_gate", "gate": "contract",
+             "key": "a.c:f:1", "applied": True},
+        ])
+        shard2 = run / "demo-repo" / ".audit-log.002.jsonl"
+        shard2.write_text(json.dumps(
+            {"action": "sweep_promotion", "key": "a.c:g:9",
+             "status": "suspicious", "evidence_tool": "smt:check-x"},
+        ) + "\n")
+        index = build_signal_index([run])
+        assert index.gates["a.c:f"] == {"contract"}
+        assert index.tools["a.c:g"] == {"smt:check-x"}
+
+    def test_non_contiguous_audit_shard_not_read(self, tmp_path):
+        run = _write_run_dir(tmp_path, audit_log=[
+            {"action": "refutation_gate", "gate": "contract",
+             "key": "a.c:f:1", "applied": True},
+        ])
+        orphan = run / "demo-repo" / ".audit-log.005.jsonl"
+        orphan.write_text(json.dumps(
+            {"action": "sweep_promotion", "key": "a.c:g:9",
+             "status": "suspicious", "evidence_tool": "smt:check-x"},
+        ) + "\n")
+        index = build_signal_index([run])
+        assert "a.c:g" not in index.tools
+
     def test_malformed_lines_skipped(self, tmp_path):
         d = tmp_path / "run" / "repo"
         d.mkdir(parents=True)

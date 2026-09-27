@@ -157,7 +157,16 @@ def build_signal_index(run_dirs: Iterable[Path]) -> SignalIndex:
             continue
         seen.add(run_dir)
 
-        for log_path in sorted(run_dir.rglob(".audit-log.jsonl")):
+        # Expand each audit-log location to its full shard set — a
+        # rolled trail's later receipt rows live in numbered siblings
+        # (same shape as the journal expansion below).
+        from core.audit.record import audit_log_paths
+        audit_dirs = sorted(
+            {p.parent for p in run_dir.rglob(".audit-log.jsonl")})
+        for log_path in (
+            shard for d in audit_dirs
+            for shard in audit_log_paths(d) if shard.is_file()
+        ):
             for entry in _iter_jsonl(log_path):
                 action = entry.get("action", "")
                 raw_key = entry.get("key", "")

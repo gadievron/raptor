@@ -43,10 +43,25 @@ def aggregate_strategy_stats(
         lambda: {"wins": 0, "misses": 0, "total": 0},
     )
 
+    from core.audit.record import audit_log_paths
+
+    # Full shard set per dir: a rolled trail's later review rows live
+    # in numbered siblings, and weights computed from shard 1 alone
+    # would silently freeze at the roll point.
     for log_dir in log_dirs:
-        log_path = log_dir / ".audit-log.jsonl"
-        if not log_path.exists():
-            continue
+        for log_path in audit_log_paths(log_dir):
+            _tally_strategy_log(log_path, stats)
+
+    return dict(stats)
+
+
+def _tally_strategy_log(
+    log_path: Path,
+    stats: dict[str, dict[str, int]],
+) -> None:
+    """Accumulate one shard's ``orchestrator_review`` rows into
+    *stats* (missing / unreadable shards contribute nothing)."""
+    if log_path.exists():
         try:
             with open(log_path, encoding="utf-8") as f:  # raw-open: RAPTOR-written strategy log in the run dir
                 for line in f:
@@ -81,9 +96,7 @@ def aggregate_strategy_stats(
                             stats[strat]["misses"] += 1
                             stats[strat]["total"] += 1
         except OSError:
-            continue
-
-    return dict(stats)
+            pass
 
 
 def compute_strategy_weights(
@@ -149,6 +162,10 @@ def find_project_log_dirs(
                 continue
             if child == out_dir:
                 continue
+            # Presence probe only: shard 1 keeps the historical
+            # filename on rolled trails (the aggregator expands to
+            # the full shard set), so this stays a valid existence
+            # test for "this sibling has an audit trail".
             log_path = child / ".audit-log.jsonl"
             if not log_path.exists():
                 continue

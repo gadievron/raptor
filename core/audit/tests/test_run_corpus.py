@@ -109,6 +109,55 @@ class TestBareKeyIndexBuilder:
         assert bare["src/db.go:Scan"]["key"] == "src/db.go:Scan:33"
 
 
+class TestShardedAuditLog:
+    """A rolled trail's later rows live in numbered siblings — the
+    outcome index must see them, or every status decided after the
+    roll point silently vanishes from scoring."""
+
+    def _write(self, path, entries):
+        path.write_text(
+            "".join(json.dumps(e) + "\n" for e in entries),
+        )
+
+    def test_shard_sibling_rows_indexed_last_row_wins(self, tmp_path):
+        out = tmp_path / "out"
+        out.mkdir()
+        self._write(out / ".audit-log.jsonl",
+                    [_entry("src/db.go:Scan:33", "suspicious")])
+        self._write(out / ".audit-log.002.jsonl",
+                    [_entry("src/db.go:Scan:33", "clean")])
+        outcomes, _ = rc._parse_audit_log_outcomes(
+            out / ".audit-log.jsonl")
+        # Shard 2 is later in append order: its row is the last word.
+        assert outcomes["src/db.go:Scan:33"]["status"] == "clean"
+
+    def test_non_contiguous_shard_not_indexed(self, tmp_path):
+        out = tmp_path / "out"
+        out.mkdir()
+        self._write(out / ".audit-log.jsonl",
+                    [_entry("src/db.go:Scan:33", "suspicious")])
+        self._write(out / ".audit-log.005.jsonl",
+                    [_entry("src/db.go:Scan:33", "clean")])
+        outcomes, _ = rc._parse_audit_log_outcomes(
+            out / ".audit-log.jsonl")
+        assert outcomes["src/db.go:Scan:33"]["status"] == "suspicious"
+
+    def test_receipt_floor_seen_across_shards(self, tmp_path):
+        # The floor pre-pass reads the trail separately — it must
+        # expand to the shard set too.
+        out = tmp_path / "out"
+        out.mkdir()
+        self._write(out / ".audit-log.jsonl",
+                    [_entry("src/db.go:Scan:33", "suspicious")])
+        self._write(out / ".audit-log.002.jsonl", [{
+            "action": "refutation_gate", "key": "src/db.go:Scan:33",
+            "applied": True, "demote_to": "suspicious",
+        }])
+        outcomes, _ = rc._parse_audit_log_outcomes(
+            out / ".audit-log.jsonl")
+        assert outcomes["src/db.go:Scan:33"].get("receipt_floored") is True
+
+
 class TestAmbiguousStrippedKeyFallback:
     def test_line_mismatch_resolves_via_bare_fallback(
         self, tmp_path, no_pipeline, monkeypatch,
