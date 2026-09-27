@@ -340,6 +340,93 @@ class TestReviewPathStampsFlag:
         assert _is_counter_escalated(outcome)
 
 
+class TestDeepenCounterEscalationFloor:
+    """The counter-escalation floor applies inside deepen too: deepen
+    exempts only the ungrounded-refutation leg of the all-refuted
+    demotion. A deepen response whose own compelling counter
+    machine-raised the verdict may not un-raise it with the same
+    response's refutation record — only a verification-grade receipt
+    may."""
+
+    _COMPELLING_COUNTER = (
+        "A caller could pass a capacity larger than the actual "
+        "destination allocation or a length larger than the source "
+        "allocation, turning the guarded copy into an overflow or "
+        "over-read despite correct internal clamping."
+    )
+
+    def _deepen_ctx(self) -> dict[str, Any]:
+        return {
+            "file": "copy.c",
+            "function": "bounded_copy",
+            "line_start": 1,
+            "line_end": 8,
+            "source": "size_t bounded_copy(void) { return 0; }",
+            "deepen": True,
+        }
+
+    def test_deepen_escalated_ungrounded_refutations_do_not_demote(
+        self, tmp_path: Path,
+    ):
+        from core.audit.llm_review import make_review_fn
+        from core.audit.tests.test_llm_review import FakeLLMClient
+
+        client = FakeLLMClient({
+            "status": "clean",
+            "body": "STEP 5 — VERDICT\nClean.",
+            "hypothesis": "overflows dst if len exceeds cap - 1",
+            "counter_hypothesis": self._COMPELLING_COUNTER,
+            "counter_direction": "supports_vuln",
+            # Every hypothesis refuted, none grounded (no local
+            # counter) — the record that must not un-raise the
+            # machine-escalated verdict.
+            "hypotheses": [
+                {"mechanism": "memcpy overflow", "confidence": "refuted"},
+                {"mechanism": "src over-read", "confidence": "refuted"},
+            ],
+        })
+        review_fn = make_review_fn(client)
+        outcome = review_fn(
+            self._deepen_ctx(), _make_toolless_config(tmp_path),
+        )
+        assert outcome.status == "suspicious"
+        assert outcome.review_result["all_refuted_demotion_withheld"] \
+            == "counter-escalation-floor"
+        assert "all_refuted_demotion" not in outcome.review_result
+        # Escalation provenance stays FIRST; the withhold marker is
+        # spliced after it.
+        assert outcome.body.startswith("[counter-hypothesis escalation:")
+        assert "[withheld all-refuted demotion:" in outcome.body
+
+    def test_deepen_unescalated_ungrounded_refutations_still_demote(
+        self, tmp_path: Path,
+    ):
+        # The blessed lane: a model-emitted suspicious whose deepen
+        # re-review refutes everything demotes even when the
+        # refutations carry no grounded local counter — deepen IS the
+        # verification lane for grounding.
+        from core.audit.llm_review import make_review_fn
+        from core.audit.tests.test_llm_review import FakeLLMClient
+
+        client = FakeLLMClient({
+            "status": "suspicious",
+            "body": "STEP 5 — VERDICT\nSuspicious.",
+            "hypothesis": "overflows dst if len exceeds cap - 1",
+            "hypotheses": [
+                {"mechanism": "memcpy overflow", "confidence": "refuted"},
+                {"mechanism": "src over-read", "confidence": "refuted"},
+            ],
+        })
+        review_fn = make_review_fn(client)
+        outcome = review_fn(
+            self._deepen_ctx(), _make_toolless_config(tmp_path),
+        )
+        assert outcome.status == "clean"
+        assert outcome.review_result["all_refuted_demotion"] is True
+        assert outcome.review_result["all_refuted_grounding"] \
+            == "deepen-verified"
+
+
 class TestAntiSelfRefutationRows:
     """The anti-self-refutation gate's escalations are machine-raised
     too — same producer class (model-clean, machine-suspicious), same

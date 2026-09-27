@@ -1441,8 +1441,15 @@ def make_review_fn(
                 ]
                 withhold_reason = ""
                 if ctx.get("deepen"):
+                    # Deepen exempts ONLY the ungrounded-refutation
+                    # leg: the full-context re-review is itself the
+                    # verification lane for grounding. The
+                    # counter-escalation floor below still applies —
+                    # a deepen response whose own compelling counter
+                    # machine-raised the verdict may not un-raise it
+                    # with the same response's refutation record.
                     ungrounded = []
-                elif ungrounded:
+                if ungrounded:
                     withhold_reason = (
                         f"{len(ungrounded)} of {len(hypotheses)} "
                         "refutation(s) carry no grounded local counter"
