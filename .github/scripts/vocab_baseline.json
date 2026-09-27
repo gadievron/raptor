@@ -1697,6 +1697,11 @@
     "count": 33,
     "kind": "literal"
   },
+  "core/sandbox/proxy.py::_KNOWN_DOH_PROVIDERS": {
+    "count": 12,
+    "kind": "literal",
+    "note": "static set of known DNS-over-HTTPS provider hostnames; the egress proxy warns when any appear in the allowlist since a sandboxed child can bypass DNS controls via HTTPS"
+  },
   "core/sandbox/proxy.py::_PROXY_EVENT_RESULTS": {
     "count": 13,
     "kind": "literal",
@@ -1730,6 +1735,11 @@
   "core/sandbox/seccomp.py::_SECCOMP_BLOCK_ALWAYS": {
     "count": 13,
     "kind": "literal"
+  },
+  "core/sandbox/summary.py::_ESCAPE_PRIMITIVE_KEYWORDS": {
+    "count": 12,
+    "kind": "literal",
+    "note": "syscall-level escape primitive keywords for post-run denial triage; matched only against seccomp-type denial cmd fields to classify escape-attempt signatures"
   },
   "core/sandbox/tracer.py::_MUTATION_PATH_ARGS": {
     "count": 23,
