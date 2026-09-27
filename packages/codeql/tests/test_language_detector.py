@@ -16,6 +16,9 @@ files ending in ``.lock`` (``poetry.lock``, ``yarn.lock``,
 ``Gemfile.lock``) are not swallowed by IGNORE_SUFFIXES.
 """
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -29,6 +32,36 @@ def _write(repo: Path, rel: str, content: str = "") -> None:
     p = repo / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
+
+
+def _git_env(repo: Path) -> dict:
+    """Hermetic git env — host/global/system config must not steer
+    the fixture repo (hooks templates, fsmonitor, ignore files)."""
+    return {
+        **os.environ,
+        "HOME": str(repo),
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+    }
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True, capture_output=True, env=_git_env(repo),
+    )
+
+
+def _init_commit_all(repo: Path) -> None:
+    subprocess.run(
+        ["git", "init", "-q", str(repo)],
+        check=True, capture_output=True, env=_git_env(repo),
+    )
+    _git(repo, "add", "-A")
+    _git(
+        repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+        "commit", "-qm", "init", "--no-gpg-sign",
+    )
 
 
 class TestBuildManifestPromotion:
@@ -897,6 +930,296 @@ class TestNoExtractorUnambiguousMembers:
                           (".nim", "nim"), (".jl", "julia"),
                           (".f90", "fortran")):
             assert LanguageDetector.NO_EXTRACTOR_EXTENSIONS[ext] == lang
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+class TestGitTrackedBaseline:
+    """Git targets census the TRACKED baseline, not the raw walk.
+
+    A raw walk also counts untracked content nested inside the target
+    — run-output directories, clone caches, scratch worktrees — whose
+    names no ignore-list can enumerate. Those files inflated per-
+    language file counts and distorted the confidence ratios the
+    file-count / build-file / confidence gates reason over. Directions:
+    a git repo with untracked scratch counts tracked files only; a
+    non-git tree (and a git dir with an empty index) keeps the walk
+    census unchanged.
+    """
+
+    def _tracked_python_with_untracked_go_scratch(self, tmp_path: Path,
+                                                  *, git: bool) -> Path:
+        # Tracked (or plain, in the non-git direction): a Python repo.
+        for i in range(3):
+            _write(tmp_path, f"src/mod{i}.py", "x = 1\n")
+        _write(tmp_path, "pyproject.toml", "[project]\nname='x'\n")
+        if git:
+            _init_commit_all(tmp_path)
+        # Untracked scratch under an arbitrary name no ignore-list
+        # knows — the clone-cache / run-dir shape.
+        for i in range(10):
+            _write(tmp_path, f"scratch-clone/pkg/m{i}.go", "package m\n")
+        _write(tmp_path, "scratch-clone/go.mod", "module m\n")
+        return tmp_path
+
+    def test_untracked_scratch_not_counted_in_git_repo(self, tmp_path: Path):
+        repo = self._tracked_python_with_untracked_go_scratch(
+            tmp_path, git=True,
+        )
+        det = LanguageDetector(repo)
+        stats = det._scan_repository()
+        detected = det.detect_languages(scan=stats)
+
+        assert "python" in detected
+        assert detected["python"].file_count == 3
+        # The untracked go module must be fully invisible: no file
+        # count, and its go.mod must not register as build evidence.
+        assert "go" not in detected
+        assert "go.mod" not in stats["build_files"]
+        assert stats["extensions"].get(".go", 0) == 0
+
+    def test_non_git_tree_keeps_walk_census(self, tmp_path: Path):
+        # Same tree WITHOUT git — current walk behavior preserved:
+        # the go module is real content and must be detected.
+        repo = self._tracked_python_with_untracked_go_scratch(
+            tmp_path, git=False,
+        )
+        detected = LanguageDetector(repo).detect_languages()
+
+        assert "python" in detected
+        assert "go" in detected
+        assert detected["go"].file_count == 10
+
+    def test_empty_index_falls_back_to_walk(self, tmp_path: Path):
+        # `git init` over a source dump: nothing tracked yet — the
+        # walk is the only census signal and must still be used.
+        for i in range(3):
+            _write(tmp_path, f"m{i}.py", "x = 1\n")
+        subprocess.run(
+            ["git", "init", "-q", str(tmp_path)],
+            check=True, capture_output=True, env=_git_env(tmp_path),
+        )
+
+        det = LanguageDetector(tmp_path)
+        assert det._git_tracked_files() is None
+        assert "python" in det.detect_languages()
+
+    def test_non_git_dir_has_no_baseline(self, tmp_path: Path):
+        _write(tmp_path, "a.py", "")
+        assert LanguageDetector(tmp_path)._git_tracked_files() is None
+
+    def test_tracked_listing_matches_index(self, tmp_path: Path):
+        _write(tmp_path, "a.py", "")
+        _write(tmp_path, "src/b.py", "")
+        _init_commit_all(tmp_path)
+        _write(tmp_path, "untracked.py", "")
+
+        entries = LanguageDetector(tmp_path)._git_tracked_files()
+        assert entries is not None
+        assert sorted(entries) == ["a.py", "src/b.py"]
+
+    def test_tracked_ignore_dirs_pruned_with_indicator_evidence(
+            self, tmp_path: Path):
+        # Tracked content under an IGNORE_DIRS segment keeps the
+        # walk's policy: excluded from counts, but its presence still
+        # registers as pruned-dir structural evidence.
+        _write(tmp_path, "a.js", "// js\n")
+        _write(tmp_path, "b.js", "// js\n")
+        _write(tmp_path, "node_modules/lodash/lodash.js", "// vendored\n")
+        _init_commit_all(tmp_path)
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert "node_modules/" in stats["indicators"]
+        assert stats["scanned_files"] == 2
+
+    def test_tracked_declared_lock_build_file_kept(self, tmp_path: Path):
+        # IGNORE_SUFFIXES parity on the tracked lane: declared *.lock
+        # manifests survive; undeclared lock files stay ignored.
+        _write(tmp_path, "poetry.lock", "[[package]]\n")
+        _write(tmp_path, "flake.lock", "{}")
+        _write(tmp_path, "app.py", "")
+        _init_commit_all(tmp_path)
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert "poetry.lock" in stats["build_files"]
+        assert "flake.lock" not in stats["build_files"]
+
+    def test_tracked_path_deleted_from_worktree_not_counted(
+            self, tmp_path: Path):
+        _write(tmp_path, "a.py", "")
+        _write(tmp_path, "b.py", "")
+        _write(tmp_path, "gone.py", "")
+        _init_commit_all(tmp_path)
+        (tmp_path / "gone.py").unlink()
+
+        stats = LanguageDetector(tmp_path)._scan_repository()
+
+        assert stats["extensions"][".py"] == 2
+
+    def test_untracked_ignored_build_dirs_still_register_indicators(
+            self, tmp_path: Path):
+        # A clean fully-committed BUILT checkout: bin/ and obj/ are
+        # gitignored build outputs — never in ls-files — but they are
+        # the csharp structural indicators. The tracked lane must
+        # still register their PRESENCE (dir-only probe), or a real
+        # C# module loses its indicator boost and the detection flips.
+        for i in range(100):
+            _write(tmp_path, f"py/mod{i}.py", "x = 1\n")
+        for i in range(5):
+            _write(tmp_path, f"App/Class{i}.cs", "class C {}\n")
+        _write(tmp_path, "App/App.csproj", "<Project/>")
+        _write(tmp_path, ".gitignore", "bin/\nobj/\n")
+        _init_commit_all(tmp_path)
+        # Untracked (ignored) build outputs.
+        _write(tmp_path, "App/bin/Debug/app.dll", "")
+        _write(tmp_path, "App/obj/project.assets.json", "{}")
+
+        det = LanguageDetector(tmp_path)
+        stats = det._scan_repository()
+        detected = det.detect_languages(scan=stats)
+
+        assert {"bin/", "obj/"} <= stats["indicators"]
+        assert "csharp" in detected
+        assert detected["csharp"].file_count == 5
+        # Presence only — nothing under the ignored dirs is counted.
+        assert stats["extensions"].get(".dll", 0) == 0
+
+    def test_unmerged_paths_counted_once(self, tmp_path: Path):
+        # Mid-merge, a conflicted path holds three index stages and
+        # plain `ls-files` prints the name once per stage — the census
+        # must count the file once.
+        _write(tmp_path, "a.py", "base = 1\n")
+        subprocess.run(
+            ["git", "init", "-q", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True, env=_git_env(tmp_path),
+        )
+        _git(tmp_path, "add", "-A")
+        commit = ["-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                  "commit", "-aqm", "c", "--no-gpg-sign"]
+        _git(tmp_path, *commit)
+        _git(tmp_path, "checkout", "-q", "-b", "side")
+        _write(tmp_path, "a.py", "side = 1\n")
+        _git(tmp_path, *commit)
+        _git(tmp_path, "checkout", "-q", "main")
+        _write(tmp_path, "a.py", "main = 1\n")
+        _git(tmp_path, *commit)
+        merge = subprocess.run(
+            ["git", "-C", str(tmp_path), "-c", "user.name=t",
+             "-c", "user.email=t@example.invalid", "merge", "side"],
+            check=False, capture_output=True, env=_git_env(tmp_path),
+        )
+        assert merge.returncode != 0, "fixture must be mid-conflict"
+        unmerged = subprocess.run(
+            ["git", "-C", str(tmp_path), "ls-files", "-u"],
+            check=True, capture_output=True, env=_git_env(tmp_path),
+        )
+        assert unmerged.stdout, "fixture must hold unmerged index stages"
+
+        det = LanguageDetector(tmp_path)
+        entries = det._git_tracked_files()
+        assert entries is not None
+        assert entries.count("a.py") == 1
+        assert det._scan_repository()["extensions"][".py"] == 1
+
+    def test_probe_timeout_falls_back_to_walk(
+            self, tmp_path: Path, monkeypatch):
+        _write(tmp_path, "a.py", "")
+        _write(tmp_path, "b.py", "")
+        _write(tmp_path, "c.py", "")
+        _init_commit_all(tmp_path)
+
+        def _raise(*_a, **_k):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+
+        monkeypatch.setattr(subprocess, "run", _raise)
+        det = LanguageDetector(tmp_path)
+        assert det._git_tracked_files() is None
+        assert "python" in det.detect_languages()
+
+    def test_git_binary_absent_falls_back_to_walk(
+            self, tmp_path: Path, monkeypatch):
+        _write(tmp_path, "a.py", "")
+        _write(tmp_path, "b.py", "")
+        _write(tmp_path, "c.py", "")
+        _init_commit_all(tmp_path)
+
+        def _raise(*_a, **_k):
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(subprocess, "run", _raise)
+        det = LanguageDetector(tmp_path)
+        assert det._git_tracked_files() is None
+        assert "python" in det.detect_languages()
+
+    def test_probe_failure_on_gitdir_target_warns(
+            self, tmp_path: Path, monkeypatch):
+        # A target CARRYING a .git entry whose baseline probe fails is
+        # a downgrade a hostile repo can trigger — it must be loud,
+        # unlike the legit non-git-target case (debug only).
+        _write(tmp_path, "a.py", "")
+        (tmp_path / ".git").mkdir()  # structurally invalid repo
+
+        mock_logger = MagicMock()
+        monkeypatch.setattr(ld_mod, "logger", mock_logger)
+
+        assert LanguageDetector(tmp_path)._git_tracked_files() is None
+        warns = [str(c.args[0]) for c in mock_logger.warning.call_args_list]
+        assert any("baseline" in w for w in warns), (
+            f"expected loud baseline-degrade WARN; got: {warns}"
+        )
+
+    def test_untracked_source_exclusion_warns(
+            self, tmp_path: Path, monkeypatch):
+        # Dirty-tree visibility: untracked source never enters the
+        # census, but its exclusion must be loud — and an untracked
+        # build manifest gets its own line (a manifest steers the
+        # build-file gate, so dropping it can flip a detection).
+        for i in range(3):
+            _write(tmp_path, f"m{i}.py", "x = 1\n")
+        _init_commit_all(tmp_path)
+        _write(tmp_path, "newmod/go.mod", "module m\n")
+        _write(tmp_path, "newmod/main.go", "package main\n")
+
+        mock_logger = MagicMock()
+        monkeypatch.setattr(ld_mod, "logger", mock_logger)
+
+        LanguageDetector(tmp_path).detect_languages()
+
+        warns = [
+            c.args[0] % tuple(c.args[1:]) if c.args[1:] else c.args[0]
+            for c in mock_logger.warning.call_args_list
+        ]
+        assert any("untracked source" in w for w in warns), (
+            f"expected untracked-source-exclusion WARN; got: {warns}"
+        )
+        assert any("go.mod" in w for w in warns), (
+            f"expected untracked-manifest WARN naming go.mod; got: {warns}"
+        )
+
+    def test_census_info_logs_post_filter_count(
+            self, tmp_path: Path, monkeypatch):
+        # The census banner must report what is COUNTED, not the raw
+        # listing size (which includes entries the ignore policy then
+        # drops).
+        _write(tmp_path, "a.py", "")
+        _write(tmp_path, "b.py", "")
+        _write(tmp_path, "node_modules/lodash/lodash.js", "")
+        _init_commit_all(tmp_path)
+
+        mock_logger = MagicMock()
+        monkeypatch.setattr(ld_mod, "logger", mock_logger)
+
+        LanguageDetector(tmp_path)._scan_repository()
+
+        banner = [
+            c.args for c in mock_logger.info.call_args_list
+            if "tracked baseline" in str(c.args[0])
+        ]
+        assert banner, "census banner missing"
+        assert banner[0][1] == 2, (
+            f"banner must carry the post-filter count (2), got {banner[0][1]}"
+        )
 
 
 class TestScanCapDerivation:
