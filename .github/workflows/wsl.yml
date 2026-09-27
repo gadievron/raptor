@@ -193,7 +193,12 @@ jobs:
             --json-out "$HOME/wsl-verify/facts.json"
 
       - name: Stage artifact on the Windows side
-        if: always()
+        # Gated on the setup outcome: when provisioning fails there
+        # is no wsl-bash shell, and an ungated always() step dies
+        # with "wsl-bash: command not found" — masking the real
+        # error as the job's reported failure (it did, on the leg's
+        # first live run).
+        if: always() && steps.setup.outcome == 'success'
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
@@ -396,7 +401,12 @@ jobs:
             --json-out "$HOME/wsl-verify/sandbox.json"
 
       - name: Stage artifact on the Windows side
-        if: always()
+        # Gated on the setup outcome: when provisioning fails there
+        # is no wsl-bash shell, and an ungated always() step dies
+        # with "wsl-bash: command not found" — masking the real
+        # error as the job's reported failure (it did, on the leg's
+        # first live run).
+        if: always() && steps.setup.outcome == 'success'
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
