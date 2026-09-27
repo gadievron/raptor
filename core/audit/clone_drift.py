@@ -27,12 +27,19 @@ Two legs, deliberately unequal in evidence rank:
   group has no majority worth the name, so this leg never promotes
   alone and only participates in cross-namespace aggregation.
 
-Bounds (documented per the series rule): ≤ ``MAX_CLONE_FUNCTIONS``
-function bodies enter the winnower (largest first is deliberately NOT
-used — deterministic file order keeps runs reproducible), candidate
-pairs must share ≥ ``MIN_SHARED_FINGERPRINTS`` fingerprints before a
-Jaccard is computed, ≤ ``MAX_CLONE_PAIRS`` pairs are reported, and
-fix regions are capped at ``MAX_REGION_CHARS`` characters.
+Bounds (documented per the series rule): function bodies entering
+the winnower are bounded by a floor-derive-ceiling cap
+(``_derive_function_cap``; floor = the historical fixed
+``MAX_CLONE_FUNCTIONS``; largest first is deliberately NOT used —
+deterministic file order keeps runs reproducible), candidate pairs
+must share ≥ ``MIN_SHARED_FINGERPRINTS`` fingerprints before a
+Jaccard is computed, reported pairs are bounded by
+``_derive_pair_cap`` (floor = the historical ``MAX_CLONE_PAIRS``),
+and fix regions are capped at ``MAX_REGION_CHARS`` characters.
+A bitten cap is never silent: it warns and stamps ``caps_hit`` plus
+exact kept/dropped counts into the dimension telemetry
+(``_mark_cap``), so partial coverage can never read as a clean
+zero-deviation result.
 """
 
 from __future__ import annotations
@@ -86,8 +93,32 @@ CLONE_SIMILARITY = 0.85
 # reject true drifted copies of small regions.
 FIX_ANCHOR_SIMILARITY = 0.75
 MIN_CLONE_TOKENS = 40
+# Floor of the derived function cap (the historical fixed constant).
+# Not lower: small targets must keep exactly the historical
+# behaviour, and the winnower needs a real population for clone
+# groups to form at all. The scale and ceiling live on
+# ``_derive_function_cap``.
 MAX_CLONE_FUNCTIONS = 500
+# Not lower: 8000 admitted bodies keep fingerprinting linear and the
+# candidate-pair index (a few hundred winnowed prints per body) in
+# the tens of MB — cutting it would silently re-collapse coverage on
+# exactly the medium/large targets the derivation exists for. Not
+# higher: past ~8000 bodies the shared-pair index and its
+# O(P log P) sort start to dominate the prepass wall budget, and
+# every extra reported pair multiplies downstream lead volume.
+MAX_CLONE_FUNCTIONS_CEILING = 8_000
+# Floor of the derived pair cap (the historical fixed constant).
+# Not lower: the historical bound is the compatibility contract for
+# small targets. Scale and ceiling on ``_derive_pair_cap``.
 MAX_CLONE_PAIRS = 40
+# Not lower: at the function-cap ceiling the winnower legitimately
+# surfaces hundreds of candidate pairs on monorepo-class targets —
+# a fixed 40 silently dropped all but the first screenful. Not
+# higher: each reported pair costs several regex passes over both
+# bodies and can mint up to ``_MAX_DIVERGENCES_PER_PAIR`` leads;
+# 400 pairs bounds the lead volume this detection-grade leg (which
+# never promotes alone) may inject into aggregation.
+MAX_CLONE_PAIRS_CEILING = 400
 MIN_SHARED_FINGERPRINTS = 8
 MAX_REGION_CHARS = 3000
 _MAX_DIVERGENCES_PER_PAIR = 3
@@ -161,6 +192,58 @@ def _containment(region: frozenset[int], body: frozenset[int]) -> float:
     return len(region & body) / len(region)
 
 
+def _derive_function_cap(total_chars: int) -> int:
+    """Floor-derive-ceiling bound on bodies entering the winnower.
+
+    One admitted body per 2 KiB of input: typical function bodies run
+    1–4 KiB, so the derived cap tracks the target's real function
+    count within a small factor instead of collapsing a medium tree
+    to its first ``MAX_CLONE_FUNCTIONS`` spans. Floor and ceiling
+    trade-offs are documented on the constants."""
+    return min(
+        max(MAX_CLONE_FUNCTIONS, total_chars // 2048),
+        MAX_CLONE_FUNCTIONS_CEILING,
+    )
+
+
+def _derive_pair_cap(n_bodies: int) -> int:
+    """Floor-derive-ceiling bound on reported clone pairs — one per
+    ten admitted bodies. Floor and ceiling trade-offs are documented
+    on the constants."""
+    return min(
+        max(MAX_CLONE_PAIRS, n_bodies // 10),
+        MAX_CLONE_PAIRS_CEILING,
+    )
+
+
+def _mark_cap(
+    telemetry: dict[str, Any] | None,
+    cap: str,
+    *,
+    cap_value: int,
+    kept: int,
+    dropped: int,
+    what: str,
+) -> None:
+    """Honest truncation accounting — a bitten cap must never read as
+    full coverage. Warned always; recorded into the prepass dimension
+    telemetry when the caller passed it: ``caps_hit`` name list plus
+    exact counted stats (the taint-engine idiom)."""
+    logger.warning(
+        "clone_drift: %s cap hit — kept %d, %d %s beyond the cap "
+        "left unexamined (cap %d)",
+        cap, kept, dropped, what, cap_value,
+    )
+    if telemetry is None:
+        return
+    caps = telemetry.setdefault("caps_hit", [])
+    if cap not in caps:
+        caps.append(cap)
+    telemetry[f"{cap}_cap"] = cap_value
+    telemetry[f"{cap}_kept"] = kept
+    telemetry[f"{cap}_dropped"] = dropped
+
+
 @dataclass(frozen=True)
 class _FnBody:
     file: str
@@ -174,11 +257,28 @@ class _FnBody:
 def _function_bodies(
     source_texts: dict[str, str],
     *,
-    max_functions: int = MAX_CLONE_FUNCTIONS,
+    max_functions: int | None = None,
+    telemetry: dict[str, Any] | None = None,
 ) -> list[_FnBody]:
+    if max_functions is None:
+        max_functions = _derive_function_cap(
+            sum(len(text) for text in source_texts.values()),
+        )
+    spans = function_spans(source_texts)
     bodies: list[_FnBody] = []
-    for file_path, name, start, lines in function_spans(source_texts):
+    for idx, (file_path, name, start, lines) in enumerate(spans):
         if len(bodies) >= max_functions:
+            # ``function_spans`` returns a materialised list off the
+            # shared parse cache, so the exact residue is free to
+            # count — the historical bare ``break`` read as full
+            # coverage while dropping every span past the cap.
+            _mark_cap(
+                telemetry, "clone_functions",
+                cap_value=max_functions,
+                kept=len(bodies),
+                dropped=len(spans) - idx,
+                what="function span(s)",
+            )
             break
         text = "\n".join(lines)
         tokens = _normalise_tokens(text)
@@ -311,20 +411,27 @@ def detect_clone_drift(
     source_texts: dict[str, str],
     *,
     similarity: float = CLONE_SIMILARITY,
-    max_pairs: int = MAX_CLONE_PAIRS,
+    max_functions: int | None = None,
+    max_pairs: int | None = None,
     telemetry: dict[str, Any] | None = None,
 ) -> list[CloneDriftDeviation]:
     """Generic winnowing leg (detection-grade). See module docstring
-    for bounds and the divergence classes."""
+    for bounds and the divergence classes. ``max_functions`` /
+    ``max_pairs`` default to the floor-derive-ceiling caps; an
+    explicit value always wins."""
     if source_texts and not _grammar_ready():
         _signal_degraded(
             telemetry, "winnowing",
             "tree-sitter unavailable — clone winnowing skipped",
         )
         return []
-    bodies = _function_bodies(source_texts)
+    bodies = _function_bodies(
+        source_texts, max_functions=max_functions, telemetry=telemetry,
+    )
     if len(bodies) < 2:
         return []
+    if max_pairs is None:
+        max_pairs = _derive_pair_cap(len(bodies))
 
     # Inverted fingerprint index → candidate pairs.
     by_print: dict[int, list[int]] = {}
@@ -341,9 +448,24 @@ def detect_clone_drift(
 
     deviations: list[CloneDriftDeviation] = []
     n_pairs = 0
-    for (ia, ib), count in sorted(
-            shared.items(), key=lambda kv: (-kv[1], kv[0])):
+    candidates = sorted(shared.items(), key=lambda kv: (-kv[1], kv[0]))
+    for pos, ((ia, ib), count) in enumerate(candidates):
         if n_pairs >= max_pairs:
+            # Only candidates still above the fingerprint floor were
+            # ever going to be examined — count exactly those, so a
+            # tail of sub-floor candidates does not fake a bite.
+            dropped = sum(
+                1 for _, c in candidates[pos:]
+                if c >= MIN_SHARED_FINGERPRINTS
+            )
+            if dropped:
+                _mark_cap(
+                    telemetry, "clone_pairs",
+                    cap_value=max_pairs,
+                    kept=n_pairs,
+                    dropped=dropped,
+                    what="candidate pair(s)",
+                )
             break
         if count < MIN_SHARED_FINGERPRINTS:
             continue
