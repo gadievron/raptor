@@ -21251,6 +21251,38 @@ def _run_tool_chain(
                             language=_cc_language,
                         )
 
+                    # Lookahead prewarm (caller-side of the memo
+                    # seam): once a few distinct files have missed on
+                    # this rendered rule, batch upcoming inventory
+                    # files through directory-chunked multi-file
+                    # spatch invocations and pin their file-scope
+                    # verdicts into the sweep memo — the memoized
+                    # step below then hits. Advisory and
+                    # failure-inert: any error (import included)
+                    # leaves this dispatch on the plain path.
+                    if _cc_rule_hash is not None:
+                        try:
+                            from .cocci_prewarm import (
+                                maybe_prewarm as _cc_prewarm,
+                            )
+                            _cc_prewarm(
+                                config,
+                                effective_target=effective_target,
+                                file_path=file_path,
+                                rule_source=tool_cfg["rule"],
+                                exec_rule=(
+                                    str(_cc_rendered)
+                                    if _cc_rendered is not None
+                                    else tool_cfg["rule"]
+                                ),
+                                rule_hash=_cc_rule_hash,
+                            )
+                        except Exception:  # noqa: BLE001
+                            logger.debug(
+                                "cocci prewarm hook failed; serial "
+                                "path continues", exc_info=True,
+                            )
+
                     try:
                         _cc_file_result = _memoized_sweep_step(
                             config,
