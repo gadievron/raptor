@@ -1366,8 +1366,14 @@ class OrchestratorResult:
     # but the combined posterior crossed the promote threshold).
     aggregation_promoted: int = 0
     # Glance-suspicious outcomes escalated to a full individual review
-    # instead of committing the 500-token guess (capped per run).
+    # instead of committing the 500-token guess (capped per run; cap
+    # derived from checklist size in core.audit.executor).
     glance_escalated: int = 0
+    # Glance-suspicious outcomes that WOULD have escalated but hit the
+    # per-run cap — their glance verdict committed as final. Run-summary
+    # counter; per-function records live in suppressions.jsonl
+    # (verdict=glance_escalation_capped, dropped=false).
+    glance_escalation_capped: int = 0
     # Non-primary medium/high-confidence hypotheses that a mechanical
     # tool confirmed (secondary-hypothesis dispatch lane).
     secondary_confirmed: int = 0

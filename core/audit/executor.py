@@ -1242,10 +1242,73 @@ async def _run_async_body(
 _GLANCE_BATCH_SIZE = 10
 
 # Per-run cap on glance-suspicious escalations to full individual
-# review. The glance prompt biases toward clean, so suspicious rates
-# are low — the cap bounds the worst case (a model that flags
-# everything) without starving the common one.
-_MAX_GLANCE_ESCALATIONS_PER_RUN = 20
+# review, derived from run size:
+#
+#   cap = clamp(_GLANCE_ESCALATION_FLOOR,
+#               checklist_functions // _GLANCE_ESCALATION_DIVISOR,
+#               _GLANCE_ESCALATION_CEILING)
+#
+# Cost model: every escalation converts a ~500-token glance guess into
+# one full-priced individual review (full context budget — orders of
+# magnitude more tokens than the glance itself), so the cap defends
+# real dollars. The glance prompt biases toward clean, so honest
+# suspicious rates are low; the divisor (1 escalation per 50 checklist
+# functions, 2%) sits above the observed honest rate while bounding a
+# model that flags everything. Both directions: LOWER (the old fixed
+# 20) silently commits the cheap glance guess as the FINAL verdict for
+# ≥99.8% of glance-suspicious functions on a kernel-scale checklist
+# (~125k functions) — a silent depth downgrade on a verdict-carrying
+# path; HIGHER buys full reviews with real money on a signal the
+# glance tier exists to keep cheap, and the checklist size that drives
+# the derivation is TARGET-derived — a hostile tree inflating its
+# function count must not be able to buy unbounded escalation spend,
+# hence the absolute ceiling (2,000 ≈ $200-1,000 at typical per-review
+# cost, itself still inside the run's LLM budget guard, which remains
+# the hard backstop). Exhaustion is disclosed loudly: one warning plus
+# a per-function suppressions.jsonl record (dropped=false) so coverage
+# accounting can see which verdicts committed at glance depth.
+_GLANCE_ESCALATION_FLOOR = 20
+_GLANCE_ESCALATION_DIVISOR = 50
+_GLANCE_ESCALATION_CEILING = 2000
+
+# Derived-cap memo: (checklist-object, cap) pairs keyed on object
+# identity (the stored strong reference pins the id) — same discipline
+# as refutation.py's checklist caches. Small FIFO bound so long-lived
+# processes don't accumulate dead checklists.
+_GLANCE_CAP_MEMO_MAX = 4
+_glance_cap_memo: list[tuple[Any, int]] = []
+
+
+def _glance_escalation_cap(shared: Any) -> int:
+    """Per-run glance-escalation cap for this run's checklist size.
+
+    Falls back to the floor when the shared state carries no usable
+    checklist (tests, degraded runs) — the pre-derivation behaviour.
+    """
+    checklist = getattr(shared, "checklist", None)
+    if not isinstance(checklist, dict):
+        return _GLANCE_ESCALATION_FLOOR
+    files = checklist.get("files")
+    if not isinstance(files, list) or not files:
+        return _GLANCE_ESCALATION_FLOOR
+    for obj, cap in _glance_cap_memo:
+        if obj is checklist:
+            return cap
+    n_functions = 0
+    for fentry in files:
+        if isinstance(fentry, dict):
+            items = fentry.get("items")
+            if isinstance(items, list):
+                n_functions += len(items)
+    cap = max(
+        _GLANCE_ESCALATION_FLOOR,
+        min(n_functions // _GLANCE_ESCALATION_DIVISOR,
+            _GLANCE_ESCALATION_CEILING),
+    )
+    _glance_cap_memo.append((checklist, cap))
+    if len(_glance_cap_memo) > _GLANCE_CAP_MEMO_MAX:
+        _glance_cap_memo.pop(0)
+    return cap
 
 
 def _escalate_glance_suspicious(task: Any, shared: Any, result: Any) -> bool:
@@ -1260,10 +1323,29 @@ def _escalate_glance_suspicious(task: Any, shared: Any, result: Any) -> bool:
 
     Returns True when the caller should run the full review instead of
     committing the glance outcome; False when the cap is exhausted
-    (the glance outcome then commits as before — nothing is lost).
+    (the glance outcome then commits as before — but the depth
+    downgrade is DISCLOSED: one warning on first exhaustion here, and
+    a per-function suppressions.jsonl record written by the caller).
     """
+    cap = _glance_escalation_cap(shared)
     with result._lock:
-        if result.glance_escalated >= _MAX_GLANCE_ESCALATIONS_PER_RUN:
+        if result.glance_escalated >= cap:
+            result.glance_escalation_capped += 1
+            first_denial = result.glance_escalation_capped == 1
+            if first_denial:
+                # Once per run, not per function: at kernel scale the
+                # denials number in the thousands and a per-function
+                # warning would bury the log. Per-function records go
+                # to suppressions.jsonl via the caller.
+                logger.warning(
+                    "glance escalation cap exhausted (%d escalations, "
+                    "cap derived from checklist size): further "
+                    "glance-suspicious functions commit their ~500-token "
+                    "glance verdict WITHOUT a full individual review — "
+                    "per-function records in suppressions.jsonl "
+                    "(verdict=glance_escalation_capped)",
+                    cap,
+                )
             return False
         result.glance_escalated += 1
 
@@ -1288,6 +1370,54 @@ def _escalate_glance_suspicious(task: Any, shared: Any, result: Any) -> bool:
         )
     task.gap["force_review"] = True
     return True
+
+
+def _record_glance_cap_disclosure(
+    config: Any, task: Any, outcome: Any,
+) -> None:
+    """suppressions.jsonl record for a glance verdict that would have
+    escalated to a full review but hit the per-run cap.
+
+    Coverage-visible disclosure through the house single-writer
+    chokepoint (``core.analysis.reach_chokepoint.record_suppression``,
+    same channel as the vendored/oracle triage decisions).
+    ``dropped=False`` — nothing was suppressed; the record marks a
+    review-DEPTH downgrade so downstream readers can distinguish
+    "reviewed in full" from "committed at glance depth because the
+    escalation budget ran out". Best-effort like every suppressions
+    write — a failure here never blocks the commit path.
+    """
+    out_dir = getattr(config, "out_dir", None)
+    if not out_dir:
+        return
+    try:
+        from pathlib import Path
+
+        from core.analysis.reach_chokepoint import record_suppression
+    except ImportError:
+        return
+    file_path = task.gap.get("file", "") or ""
+    function = task.gap.get("name", "") or ""
+    line = task.gap.get("line_start", 0) or 0
+    record_suppression(
+        Path(out_dir),
+        finding={
+            "finding_id": f"audit-glance-cap:{file_path}:{function}:{line}",
+            "rule_id": "audit:glance-escalation-cap",
+            "file_path": file_path,
+            "line": line,
+            "function": function,
+        },
+        verdict="glance_escalation_capped",
+        reason=(
+            "glance flagged suspicious but the per-run escalation cap "
+            "was exhausted — the ~500-token glance verdict committed "
+            "without a full individual review"
+        ),
+        dropped=False,
+        extra={"stage": "glance-escalation",
+               "glance_status": str(outcome.status)},
+    )
 
 
 def _is_glance(task: Any, shared: Any) -> bool:
@@ -1430,10 +1560,16 @@ def _process_glance_batch_inner(
             # individual review instead of committing the guess. The
             # glance outcome is discarded (its verdict is replaced by
             # the full review) but its LLM spend stays on the ledger.
-            if (
-                outcome.status == "suspicious"
-                and _escalate_glance_suspicious(task, shared, result)
-            ):
+            # Past the cap the guess commits as before, but never
+            # silently: the depth downgrade is disclosed per function.
+            glance_escalates = False
+            if outcome.status == "suspicious":
+                glance_escalates = _escalate_glance_suspicious(
+                    task, shared, result,
+                )
+                if not glance_escalates:
+                    _record_glance_cap_disclosure(config, task, outcome)
+            if glance_escalates:
                 if outcome.cost_usd:
                     with result._lock:
                         result.total_cost_usd += outcome.cost_usd
