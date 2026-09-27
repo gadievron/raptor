@@ -568,16 +568,28 @@ def _demangle_linkage_names(linkage_names: Iterable[str]) -> dict[str, str]:
     # Full sandbox, same rationale as _run: the mangled names being
     # demangled are attacker-derived strings from the binary's DWARF.
     # input= routes through the subprocess+preexec sandbox path.
+    # c++filt reads nothing and writes nothing beyond stdin/stdout, so
+    # a throwaway scratch dir as output= plus restrict_reads=True is
+    # the whole filesystem surface: writes confined to the scratch
+    # dir, reads confined to the system allowlist (toolchain + libc —
+    # all c++filt needs). Without them the sandbox applies no
+    # filesystem confinement (bare-run posture) and a c++filt parser
+    # bug over hostile mangled bytes would execute with the
+    # filesystem reachable.
     from core.sandbox import run as _sandbox_run
     try:
         # errors="replace": mangled names are attacker-derived bytes; a
         # non-UTF-8 c++filt echo must degrade, not raise mid-classify.
-        proc = _sandbox_run(
-            ["c++filt"], block_network=True,
-            input="\n".join(seen),
-            capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=30,
-        )
+        with tempfile.TemporaryDirectory(
+                prefix="raptor-bo-demangle-") as scratch:
+            proc = _sandbox_run(
+                ["c++filt"], block_network=True,
+                restrict_reads=True,
+                output=scratch,
+                input="\n".join(seen),
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=30,
+            )
     except (OSError, subprocess.TimeoutExpired):
         return {}
     lines = proc.stdout.splitlines()
