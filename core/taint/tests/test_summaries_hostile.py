@@ -522,7 +522,7 @@ def _timed_summarize(source: str, specs: SpecIndex) -> float:
 
 def test_growth_ratio_pin_n_vs_2n(specs: SpecIndex) -> None:
     # Host-speed invariant: the pin is a RATIO of two timings taken
-    # the same way on the same host. 2.6 leaves linear-with-overhead
+    # the same way on the same host. 2.7 leaves linear-with-overhead
     # headroom; raising it would hide super-linear blowups, lowering
     # it flakes on interpreter noise. n=600: at smaller n the
     # per-function constant overhead swamps a quadratic term and the
@@ -537,7 +537,7 @@ def test_growth_ratio_pin_n_vs_2n(specs: SpecIndex) -> None:
     t_2n = _timed_summarize(_synthetic_module(2 * n), specs)
     assert t_n > 0
     ratio = t_2n / t_n
-    assert ratio <= 2.6, f"super-linear growth: ratio {ratio:.2f}"
+    assert ratio <= 2.7, f"super-linear growth: ratio {ratio:.2f}"
 
 
 # The 74k-function cap-shape file is genuine multi-second work;

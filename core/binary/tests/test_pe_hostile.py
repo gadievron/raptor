@@ -61,6 +61,7 @@ def _rich_image() -> bytes:
     ))
 
 
+@pytest.mark.slow
 class TestMutationFuzz:
     def test_ten_thousand_seeded_mutations_never_raise(self, tmp_path):
         """The never-raises contract under random damage. Seeded —
