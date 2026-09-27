@@ -432,6 +432,33 @@ class ProjectMutationGuardTest(unittest.TestCase):
             (Path(self.output_dir) / "oldproj").exists(),
             "the container itself must not be adopted as a run")
 
+    def test_adopting_the_project_dir_itself_sweeps_children(self):
+        # `adopt myapp <the project's own output dir>` used to take
+        # the single-run repair path (inside-project match), try to
+        # shutil.move the dir into itself, and warn "Cannot move a
+        # directory into itself". It must sweep the children instead:
+        # correctly-pinned runs are skipped, projectless ones claimed,
+        # and no nested <dir>/<dir> is ever created.
+        from core.json import load_json, save_json
+        self._completed_run("scan_pinned")
+        d = Path(self.output_dir) / "scan_orphan"
+        d.mkdir(parents=True)
+        save_json(d / ".raptor-run.json", {
+            "version": 2, "command": "scan", "status": "completed",
+            "project": None, "project_source": "argv",
+            "target_path": self.target_code,
+        })
+        added = self.mgr.add_directory("myapp", self.output_dir)
+        self.assertEqual(added, 1)
+        meta = load_json(d / ".raptor-run.json")
+        self.assertEqual(meta["project"], "myapp")
+        self.assertFalse(
+            (Path(self.output_dir) / Path(self.output_dir).name).exists(),
+            "the project dir must never be nested into itself")
+        pinned = load_json(
+            Path(self.output_dir) / "scan_pinned" / ".raptor-run.json")
+        self.assertEqual(pinned["project"], "myapp")
+
     def test_remove_run_rejects_path_shaped_names(self):
         victim = Path(self.tmpdir.name) / "victim"
         victim.mkdir()
@@ -585,9 +612,13 @@ class ForceAndRepairTest(unittest.TestCase):
 
 
 class AddRepairScopeTest(unittest.TestCase):
-    """The add-repair overrides ONLY pins naming missing projects —
-    an authoritative pin to an existing other project (or explicit
-    projectless) is the run's identity."""
+    """The add-repair never overrides a pin naming an EXISTING other
+    project (that pin is the run's identity). Pins naming MISSING
+    projects are repaired in place; PROJECTLESS pins on in-place runs
+    are CLAIMED — adopt's documented purpose is retro-creating a
+    project around project-less runs, and a run already sitting
+    inside the project dir had no other remedy (its trust markers and
+    settings never resolved)."""
 
     def setUp(self):
         self.tmpdir = TemporaryDirectory()
@@ -620,10 +651,48 @@ class AddRepairScopeTest(unittest.TestCase):
         meta = load_json(d / ".raptor-run.json")
         self.assertEqual(meta["project"], "otherapp")
 
-    def test_explicit_projectless_pin_is_not_overridden(self):
+    def test_projectless_pin_is_claimed_in_place(self):
+        # A run launched via --out into the project path before the
+        # project existed (or explicitly projectless) keeps
+        # project=null forever — trust markers and settings never
+        # resolve for it, and adopt used to skip it silently. The
+        # explicit operator adopt claims it: pin rewritten, counted
+        # as added (its projections fire for this project).
         from core.json import load_json
         d = self._present_run("scan_none", None, source="none")
-        self.mgr.add_directory("myapp", str(d))
+        added = self.mgr.add_directory("myapp", str(d))
+        self.assertEqual(added, 1)
+        meta = load_json(d / ".raptor-run.json")
+        self.assertEqual(meta["project"], "myapp")
+        self.assertEqual(meta["project_source"], "adopted")
+
+    def test_projectless_argv_pin_is_claimed_in_place(self):
+        # project_source="argv" with project=null is the
+        # `--project -` shape — the exact pin the screen
+        # validate-calib-followup run carried.
+        from core.json import load_json
+        d = self._present_run("scan_argvnone", None, source="argv")
+        added = self.mgr.add_directory("myapp", str(d))
+        self.assertEqual(added, 1)
+        meta = load_json(d / ".raptor-run.json")
+        self.assertEqual(meta["project"], "myapp")
+
+    def test_projectless_foreign_target_is_not_claimed(self):
+        # The foreign-target refusal still gates the claim: a
+        # null-pinned run recording a DIFFERENT codebase must not
+        # enter this project's stores.
+        from core.json import load_json, save_json
+        d = Path(self.output_dir) / "scan_foreign_null"
+        d.mkdir(parents=True)
+        other_code = Path(self.tmpdir.name) / "othercode"
+        other_code.mkdir()
+        save_json(d / ".raptor-run.json", {
+            "version": 2, "command": "scan", "status": "completed",
+            "project": None, "project_source": "argv",
+            "target_path": str(other_code),
+        })
+        added = self.mgr.add_directory("myapp", str(d))
+        self.assertEqual(added, 0)
         meta = load_json(d / ".raptor-run.json")
         self.assertIsNone(meta["project"])
 

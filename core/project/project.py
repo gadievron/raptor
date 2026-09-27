@@ -1701,6 +1701,7 @@ class ProjectManager:
             except Exception:  # noqa: BLE001 — write_run_pin backstops
                 pass
             dest = dest_base / run_src.name
+            _claimed_in_place = False
             try:
                 dest.mkdir()
             except FileExistsError:
@@ -1717,9 +1718,8 @@ class ProjectManager:
                             if isinstance(_m, dict) else None)
                     # Repair ONLY a pin naming a MISSING project (the
                     # rename-crash artifact): an authoritative pin to
-                    # an EXISTING other project — or an explicit
-                    # projectless pin — is the run's identity, and
-                    # topology must not override it.
+                    # an EXISTING other project is the run's identity,
+                    # and topology must not override it.
                     if (isinstance(_pin, str) and _pin != project.name
                             and self.load(_pin) is None):
                         from core.run.metadata import write_run_pin
@@ -1728,6 +1728,30 @@ class ProjectManager:
                             "adopt: re-pointed the stale pin on "
                             "already-present run %s (named missing "
                             "project %r)", dest.name, _pin)
+                    # A PROJECTLESS pin on a run sitting in place
+                    # inside this project's output dir is the adopt
+                    # command's core case ("retro-create a project
+                    # around existing project-less run(s)"): a run
+                    # launched via --out into the project path before
+                    # the project existed kept project=null, so trust
+                    # markers and settings never resolved for it.
+                    # Topology alone must not override a projectless
+                    # pin — but adopt is an explicit operator claim,
+                    # the same authority the moved-run path exercises
+                    # unconditionally. Liveness was checked above
+                    # (run_src == dest here). Restricted to the
+                    # in-place case: a name COLLISION between an
+                    # outside source and an unrelated in-project run
+                    # must not silently re-pin the bystander.
+                    elif (_pin is None and isinstance(_m, dict) and _m
+                            and run_src.resolve() == dest.resolve()):
+                        from core.run.metadata import write_run_pin
+                        write_run_pin(dest, project.name, "adopted")
+                        logger.info(
+                            "adopt: claimed projectless in-place run "
+                            "%s for project %r", dest.name,
+                            project.name)
+                        _claimed_in_place = True
                     # Witnesses naming missing projects for this dir
                     # get the same repair — a rename that crashed (or
                     # skipped a held ledger) leaves witness=old vs
@@ -1741,24 +1765,27 @@ class ProjectManager:
                 except Exception:  # noqa: BLE001 — repair best-effort
                     logger.debug("adopt: stale-pin repair failed",
                                  exc_info=True)
-                return False
-            dest.rmdir()
-            try:
-                shutil.move(str(run_src), str(dest))
-            except (FileNotFoundError, shutil.Error) as e:
-                # A concurrent adopt of the same source won the move —
-                # skip this run, keep the batch going.
-                logger.warning("adopt skipped for %s: %s",
-                               run_src.name, e)
-                return False
-            generate_run_metadata(dest)
-            # The move changed the run's governing project: rewrite
-            # the pin to the adopting project so the projections
-            # below (and every later consumer) resolve HERE — the
-            # pre-move pin (a foreign project, or none) must not
-            # keep steering a run that now lives in this project.
-            from core.run.metadata import write_run_pin
-            write_run_pin(dest, project.name, "adopted")
+                if not _claimed_in_place:
+                    return False
+            if not _claimed_in_place:
+                dest.rmdir()
+                try:
+                    shutil.move(str(run_src), str(dest))
+                except (FileNotFoundError, shutil.Error) as e:
+                    # A concurrent adopt of the same source won the
+                    # move — skip this run, keep the batch going.
+                    logger.warning("adopt skipped for %s: %s",
+                                   run_src.name, e)
+                    return False
+                generate_run_metadata(dest)
+                # The move changed the run's governing project:
+                # rewrite the pin to the adopting project so the
+                # projections below (and every later consumer)
+                # resolve HERE — the pre-move pin (a foreign project,
+                # or none) must not keep steering a run that now
+                # lives in this project.
+                from core.run.metadata import write_run_pin
+                write_run_pin(dest, project.name, "adopted")
             # An adopted run already had its completion, so the
             # projections that make its data VISIBLE (journal → index
             # merge, reads-manifest conversion, coverage snapshot)
@@ -1828,26 +1855,37 @@ class ProjectManager:
         # command. The metadata lock file survives the deletion.
         _run_remnants = (src / ".raptor-run.json.lock").exists()
         # And a src already INSIDE this project's output dir is a
-        # REPAIR, never an import of its subdirectories.
+        # REPAIR, never an import of its subdirectories. The project
+        # output dir ITSELF is the exception: it is never a single
+        # run, so `adopt <name> <project-dir>` means "sweep the
+        # children" (repairing/claiming each in place) — the pre-fix
+        # single-run route tried to shutil.move the dir into itself
+        # and warned "Cannot move a directory into itself".
         try:
-            _inside_project = src.resolve().is_relative_to(
-                project.output_path.resolve())
+            _src_res = src.resolve()
+            _proj_res = project.output_path.resolve()
+            _is_project_dir = _src_res == _proj_res
+            _inside_project = (not _is_project_dir
+                               and _src_res.is_relative_to(_proj_res))
         except (OSError, ValueError):
+            _is_project_dir = False
             _inside_project = False
-        _is_container = (not _inside_project
-                         and not _run_remnants
-                         and ((src / "project.json").is_file()
-                              or (_has_child_runs
-                                  and not is_run_directory(
-                                      src, strict=True))))
+        _is_container = (_is_project_dir
+                         or (not _inside_project
+                             and not _run_remnants
+                             and ((src / "project.json").is_file()
+                                  or (_has_child_runs
+                                      and not is_run_directory(
+                                          src, strict=True)))))
         # Inside-project and remnant-bearing dirs take the single-run
         # (repair) path even when the lenient match fails — a
         # marker-destroyed dir with an unprefixed name otherwise fell
         # through to the child-import loop, and the planted subdir was
         # adopted anyway.
-        if (_inside_project or _run_remnants
-                or (is_run_directory(src, strict=False)
-                    and not _is_container)):
+        if (not _is_project_dir
+                and (_inside_project or _run_remnants
+                     or (is_run_directory(src, strict=False)
+                         and not _is_container))):
             # Single run directory
             if _adopt_one(src):
                 added = 1
