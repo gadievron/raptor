@@ -165,6 +165,12 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          # The drvfs workspace is owned by the Windows-side user;
+          # from inside the distro that is a foreign owner and git
+          # refuses it as dubious. Trust exactly this checkout (git's
+          # hint names the .git path, so both are listed).
+          git config --global --add safe.directory "$PWD"
+          git config --global --add safe.directory "$PWD/.git"
           git -c core.autocrlf=false clone --quiet "$PWD" "$HOME/raptor"
           python3 -m venv "$HOME/venv"
           . "$HOME/venv/bin/activate"
@@ -233,6 +239,12 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          # The drvfs workspace is owned by the Windows-side user;
+          # from inside the distro that is a foreign owner and git
+          # refuses it as dubious. Trust exactly this checkout (git's
+          # hint names the .git path, so both are listed).
+          git config --global --add safe.directory "$PWD"
+          git config --global --add safe.directory "$PWD/.git"
           git -c core.autocrlf=false clone --quiet "$PWD" "$HOME/raptor"
           git -c core.autocrlf=true clone --quiet "$PWD" "$HOME/raptor-crlf"
           python3 -m venv "$HOME/venv"
@@ -328,6 +340,12 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          # The drvfs workspace is owned by the Windows-side user;
+          # from inside the distro that is a foreign owner and git
+          # refuses it as dubious. Trust exactly this checkout (git's
+          # hint names the .git path, so both are listed).
+          git config --global --add safe.directory "$PWD"
+          git config --global --add safe.directory "$PWD/.git"
           git -c core.autocrlf=false clone --quiet "$PWD" "$HOME/raptor"
           python3 -m venv "$HOME/venv"
           . "$HOME/venv/bin/activate"
@@ -433,6 +451,12 @@ jobs:
         shell: wsl-bash {0}
         run: |
           set -euo pipefail
+          # The drvfs workspace is owned by the Windows-side user;
+          # from inside the distro that is a foreign owner and git
+          # refuses it as dubious. Trust exactly this checkout (git's
+          # hint names the .git path, so both are listed).
+          git config --global --add safe.directory "$PWD"
+          git config --global --add safe.directory "$PWD/.git"
           git -c core.autocrlf=false clone --quiet "$PWD" "$HOME/raptor"
           python3 -m venv "$HOME/venv"
           . "$HOME/venv/bin/activate"
