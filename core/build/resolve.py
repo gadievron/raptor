@@ -23,9 +23,27 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 logger = logging.getLogger(__name__)
+
+
+class ResolvedBuild(NamedTuple):
+    """A resolved build command plus where to run it.
+
+    ``subdir`` is the working directory RELATIVE to the target root
+    ("" = the root itself). Detector synthesis populates it when the
+    build system lives in a subdirectory (GNU screen's autotools live
+    in src/); operator settings always get "" — the operator's command
+    runs at the root exactly as before, and can embed its own ``cd``.
+    Consumers that execute the command MUST honour it: running a
+    subdir-detected command at the root is guaranteed to fail
+    (``autoreconf: error: 'configure.ac' is required``).
+    """
+
+    command: str
+    source: str
+    subdir: str = ""
 
 
 def resolve_build_command(
@@ -34,7 +52,7 @@ def resolve_build_command(
     *,
     settings: dict[str, Any] | None = None,
     run_dir: Path | str | None = None,
-) -> tuple[str, str] | None:
+) -> ResolvedBuild | None:
     """The build command for *target*, or ``None`` when nothing resolves.
 
     ``settings`` is the project settings mapping (the ``settings`` key
@@ -43,14 +61,15 @@ def resolve_build_command(
     target (the one-target rule trust markers follow: a setting made
     for project A must not steer a run against tree B).
 
-    Returns ``(command, source)``.
+    Returns :class:`ResolvedBuild` — ``(command, source, subdir)``.
     """
     slots = _build_command_slots(settings, target, run_dir)
     if slots:
         if lang and slots.get(lang):
-            return str(slots[lang]), f"project-setting:{lang}"
+            return ResolvedBuild(str(slots[lang]), f"project-setting:{lang}")
         if slots.get("default"):
-            return str(slots["default"]), "project-setting:default"
+            return ResolvedBuild(str(slots["default"]),
+                                 "project-setting:default")
         # No default and no (or unmatched) lang: a project with exactly
         # ONE populated language slot still expressed an operator
         # intent — honour it rather than reporting "no setting".
@@ -68,7 +87,7 @@ def resolve_build_command(
                     "%r request (set build-command.%s or default to "
                     "silence this)", slot, lang, lang,
                 )
-            return str(command), f"project-setting:{slot}"
+            return ResolvedBuild(str(command), f"project-setting:{slot}")
 
     detected = _detect(target, lang)
     if detected is not None:
@@ -110,7 +129,7 @@ def _build_command_slots(
         return {}
 
 
-def _detect(target: Path | str, lang: str | None) -> tuple[str, str] | None:
+def _detect(target: Path | str, lang: str | None) -> ResolvedBuild | None:
     """Detector synthesis (chain link 2). Best-effort, never raises."""
     try:
         from core.build.build_detector import BuildDetector
@@ -126,8 +145,24 @@ def _detect(target: Path | str, lang: str | None) -> tuple[str, str] | None:
         for candidate in languages:
             bs = detector.detect_build_system(candidate)
             if bs is not None and bs.command:
-                return str(bs.command), f"detected:{bs.type}"
+                return ResolvedBuild(str(bs.command), f"detected:{bs.type}",
+                                     _rel_subdir(bs.working_dir, target))
     except Exception:  # noqa: BLE001 — resolution is best-effort by contract
         logger.debug("resolve_build_command: detector synthesis failed",
                      exc_info=True)
     return None
+
+
+def _rel_subdir(working_dir: Path | str, target: Path | str) -> str:
+    """*working_dir* relative to *target* root, "" for the root itself.
+
+    The detector guards against out-of-tree working dirs already; if
+    one slips through anyway, "" (build at the root) is the safe
+    degrade — same behaviour as before subdir threading existed.
+    """
+    try:
+        rel = Path(working_dir).resolve().relative_to(Path(target).resolve())
+    except (ValueError, OSError):
+        return ""
+    posix = rel.as_posix()
+    return "" if posix == "." else posix

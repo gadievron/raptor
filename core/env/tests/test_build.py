@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 from types import SimpleNamespace
+
+import pytest
 from unittest.mock import patch
 
 from core.env.build import (
@@ -98,7 +100,9 @@ def _fake_container_layer(rootfs_planter=None, build_ok=True):
         # record what matters while it exists.
         fake_build_image.context_had_repo = (
             _P(context_dir) / "src" / "Makefile").is_file()
-        return SimpleNamespace(ok=build_ok, stderr_tail="boom" if not build_ok else "")
+        return SimpleNamespace(ok=build_ok,
+                               stderr_tail="boom" if not build_ok else "",
+                               logs_tail="")
 
     def fake_export_rootfs(image_ref, dest_dir, **kw):
         if rootfs_planter:
@@ -148,8 +152,25 @@ class TestContainerizedBuild:
             containerized_build(
                 self._repo(tmp_path), "make",
                 out_dir=tmp_path / "out", toolchain=HARDENED_TOOLCHAIN)
-        assert "RUN CFLAGS='" in fake_build.dockerfile
+        assert "RUN export CFLAGS='" in fake_build.dockerfile
         assert "-fstack-protector-strong" in fake_build.dockerfile
+
+    def test_flags_exported_across_command_chain(self, tmp_path):
+        """A `KEY=V command` prefix binds to the first simple command
+        only — chained builds (autoreconf && ./configure && make) got
+        NO toolchain flags past the first link, so "hardened" matrix
+        postures compiled unhardened. Assignments must be exported."""
+        patches, fake_build = _fake_container_layer(
+            lambda d: _plant_elf(__import__("pathlib").Path(d) / "src" / "a"))
+        with patches[0], patches[1], patches[2], patches[3]:
+            containerized_build(
+                self._repo(tmp_path), "./configure && make",
+                out_dir=tmp_path / "out", toolchain=HARDENED_TOOLCHAIN)
+        run_lines = [ln for ln in fake_build.dockerfile.splitlines()
+                     if ln.startswith("RUN ")]
+        assert len(run_lines) == 1
+        assert run_lines[0].startswith("RUN export CFLAGS='")
+        assert run_lines[0].endswith("; ./configure && make")
 
     def test_build_failure_is_structured(self, tmp_path):
         patches, _ = _fake_container_layer(build_ok=False)
@@ -176,6 +197,106 @@ class TestContainerizedBuild:
                 out_dir=tmp_path / "out")
         assert not product.ok
         assert product.reason == "copy_failed"
+
+
+class TestBuildSubdir:
+    """Subdir threading (screen-shape: build system lives in src/).
+
+    The live failure this pins: a detector-resolved subdir command run
+    at the repo root dies with `autoreconf: error: 'configure.ac' is
+    required` — the WORKDIR must extend by the subdir, and the flag
+    prefix must stay glued to the command on the same RUN line.
+    """
+
+    def _repo(self, tmp_path):
+        repo = tmp_path / "repo"
+        (repo / "src").mkdir(parents=True)
+        (repo / "src" / "Makefile").write_text("all:\n\tcc -o app main.c\n")
+        (repo / "src" / "main.c").write_text("int main(void){return 0;}\n")
+        (repo / "Makefile").write_text("all:\n")  # root copy for context probe
+        return repo
+
+    def test_subdir_extends_workdir(self, tmp_path):
+        from pathlib import Path
+
+        def planter(dest):
+            _plant_elf(Path(dest) / "src" / "src" / "app")
+
+        patches, fake_build = _fake_container_layer(planter)
+        with patches[0], patches[1], patches[2], patches[3]:
+            product = containerized_build(
+                self._repo(tmp_path), "make",
+                out_dir=tmp_path / "out", subdir="src")
+        assert "WORKDIR /src/src\n" in fake_build.dockerfile
+        assert product.ok
+        assert product.build_subdir == "src"
+        # artifacts stay keyed relative to the REPO root
+        assert list(product.artifacts) == ["src/app"]
+
+    def test_empty_subdir_is_root_workdir(self, tmp_path):
+        patches, fake_build = _fake_container_layer(
+            lambda d: _plant_elf(__import__("pathlib").Path(d) / "src" / "a"))
+        with patches[0], patches[1], patches[2], patches[3]:
+            containerized_build(
+                self._repo(tmp_path), "make", out_dir=tmp_path / "out")
+        assert "WORKDIR /src\n" in fake_build.dockerfile
+
+    def test_subdir_keeps_flag_prefix_on_run_line(self, tmp_path):
+        patches, fake_build = _fake_container_layer(
+            lambda d: _plant_elf(
+                __import__("pathlib").Path(d) / "src" / "src" / "a"))
+        with patches[0], patches[1], patches[2], patches[3]:
+            containerized_build(
+                self._repo(tmp_path), "make", out_dir=tmp_path / "out",
+                toolchain=HARDENED_TOOLCHAIN, subdir="src")
+        assert "WORKDIR /src/src\n" in fake_build.dockerfile
+        assert "RUN export CFLAGS='" in fake_build.dockerfile
+
+    def test_aux_stage_inherits_subdir(self, tmp_path):
+        patches, fake_build = _fake_container_layer(
+            lambda d: _plant_elf(
+                __import__("pathlib").Path(d) / "src" / "src" / "a"))
+        with patches[0], patches[1], patches[2], patches[3]:
+            containerized_build(
+                self._repo(tmp_path), "make", out_dir=tmp_path / "out",
+                subdir="src",
+                aux_builds={"src-cmplog": {"AFL_LLVM_CMPLOG": "1"}})
+        assert "WORKDIR /src-cmplog/src\n" in fake_build.dockerfile
+
+    @pytest.mark.parametrize("bad", [
+        "/abs", "../up", "a/../b", "-flag", "a b", "a\nb", "a'b",
+        'a"b', "a\\b", "./x", "a//b",
+    ])
+    def test_hostile_subdir_is_rejected_input(self, tmp_path, bad):
+        # The value comes from detector synthesis over repo content
+        # (directory names in the scanned tree) and enters the
+        # Dockerfile WORKDIR line raw — same structured-failure
+        # contract as a hostile build command.
+        patches, fake_build = _fake_container_layer()
+        with patches[0], patches[1], patches[2], patches[3]:
+            product = containerized_build(
+                self._repo(tmp_path), "make",
+                out_dir=tmp_path / "out", subdir=bad)
+        assert not product.ok
+        assert product.reason == "rejected_input"
+        assert not hasattr(fake_build, "dockerfile")  # never reached docker
+
+    def test_nested_subdir_ok(self, tmp_path):
+        from pathlib import Path
+        repo = tmp_path / "repo"
+        (repo / "pkg" / "native").mkdir(parents=True)
+        (repo / "pkg" / "native" / "Makefile").write_text("all:\n")
+
+        def planter(dest):
+            _plant_elf(Path(dest) / "src" / "pkg" / "native" / "app")
+
+        patches, fake_build = _fake_container_layer(planter)
+        with patches[0], patches[1], patches[2], patches[3]:
+            product = containerized_build(
+                repo, "make", out_dir=tmp_path / "out",
+                subdir="pkg/native")
+        assert "WORKDIR /src/pkg/native\n" in fake_build.dockerfile
+        assert product.ok
 
 
 class TestSecurityHardening:
@@ -401,7 +522,7 @@ class TestRunEnvAndAuxBuilds:
             containerized_build(
                 self._repo(tmp_path), "make", out_dir=tmp_path / "out",
                 run_env={"AFL_USE_ASAN": "1"})
-        assert "RUN AFL_USE_ASAN='1' make" in fake_build.dockerfile
+        assert "RUN export AFL_USE_ASAN='1'; make" in fake_build.dockerfile
 
     def test_aux_build_stage_shape(self, tmp_path):
         from pathlib import Path as _P
@@ -415,7 +536,7 @@ class TestRunEnvAndAuxBuilds:
         # aux copy happens BEFORE any build runs (pristine tree)
         assert df.index("COPY src /src-cmplog") < df.index("RUN ")
         assert "WORKDIR /src-cmplog" in df
-        assert "RUN AFL_LLVM_CMPLOG='1' make" in df
+        assert "RUN export AFL_LLVM_CMPLOG='1'; make" in df
 
     def test_hostile_run_env_refused(self, tmp_path):
         import pytest as _pytest
@@ -476,8 +597,8 @@ class TestDockerfileValueValidation:
         build_id = fake_build.kwargs["labels"]["raptor-env-build.id"]
         cflags = "-fstack-protector-strong -fPIE -D_FORTIFY_SOURCE=2 -O1"
         ldflags = "-Wl,-z,relro,-z,now -pie"
-        flag_prefix = (
-            f"CFLAGS='{cflags}' CXXFLAGS='{cflags}' LDFLAGS='{ldflags}' "
+        flags = (
+            f"CFLAGS='{cflags}' CXXFLAGS='{cflags}' LDFLAGS='{ldflags}'"
         )
         assert fake_build.dockerfile == (
             f"FROM {DEFAULT_BUILD_IMAGE}\n"
@@ -485,9 +606,9 @@ class TestDockerfileValueValidation:
             f"COPY src /src\n"
             f"COPY src /src-cmplog\n"
             f"WORKDIR /src\n"
-            f"RUN AFL_USE_ASAN='1' {flag_prefix}make -j2 all\n"
+            f"RUN export AFL_USE_ASAN='1' {flags}; make -j2 all\n"
             f"WORKDIR /src-cmplog\n"
-            f"RUN AFL_LLVM_CMPLOG='1' {flag_prefix}make -j2 all\n"
+            f"RUN export AFL_LLVM_CMPLOG='1' {flags}; make -j2 all\n"
         )
 
     def test_hostile_commands_rejected_structured(self, tmp_path):

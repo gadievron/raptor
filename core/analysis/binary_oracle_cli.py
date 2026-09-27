@@ -488,18 +488,21 @@ def _env_build_debug_binaries(
                 "nothing detected) — oracle runs without a binary"
             )
             return [], False
-        command, source = resolved
+        command, source, subdir = resolved
         # Fail-CLOSED naming: anything not explicitly operator-set is
         # treated as guessed (a future third source defaults untrusted).
         guessed = not source.startswith("project-setting:")
+        # subdir is a repo-derived directory name — hostile bytes.
+        where = f", in {sanitise_for_terminal(subdir)}/" if subdir else ""
         print(f"binary-oracle: env build-on-demand: '{command}' "
-              f"({source})")
+              f"({source}{where})")
         from core.env.build import containerized_build
         from core.env.spec import ToolchainSpec
         out_dir = _envbuild_out_dir()
         product = containerized_build(
             repo, command, out_dir=out_dir,
             toolchain=ToolchainSpec(debug=True),
+            subdir=subdir,
         )
         if not product.ok:
             # reason/detail carry containerized build output of the

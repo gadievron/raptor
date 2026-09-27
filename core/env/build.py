@@ -127,6 +127,8 @@ class BuildProduct:
     toolchain: ToolchainSpec | None = None
     base_image: str = DEFAULT_BUILD_IMAGE
     build_command: str = ""
+    build_subdir: str = ""
+    #: working dir of the build relative to the repo root ("" = root)
     rootfs: Path | None = None
     #: populated only when the caller passed ``keep_rootfs``: the
     #: exported image filesystem (repo at ``/src``, built artifacts in
@@ -145,9 +147,18 @@ def containerized_build(
     keep_rootfs: Path | str | None = None,
     run_env: dict[str, str] | None = None,
     aux_builds: dict[str, dict[str, str]] | None = None,
+    subdir: str = "",
 ) -> BuildProduct:
     """Build *repo_dir* with *command* in a container; extract ELF
     executables produced under the repo tree into ``out_dir``.
+
+    ``subdir``: working directory for the build RELATIVE to the repo
+    root ("" = the root). Thread it from
+    :func:`core.build.resolve.resolve_build_command` — a detector-
+    synthesized command for a build system living in a subdirectory
+    (GNU screen's autotools live in src/) fails at the root. It cannot
+    be folded into *command* as ``cd <subdir> && `` because the
+    toolchain/env prefix would then apply to the ``cd`` only.
 
     ``run_env``: extra KEY=VALUE pairs prefixed to the build RUN line
     (e.g. AFL_USE_ASAN=1 — instrumentation toggles the wrapper compiler
@@ -179,7 +190,7 @@ def containerized_build(
             repo_dir, command, out_dir=out_dir, toolchain=toolchain,
             base_image=base_image, timeout_seconds=timeout_seconds,
             keep_rootfs=keep_rootfs, run_env=run_env,
-            aux_builds=aux_builds,
+            aux_builds=aux_builds, subdir=subdir,
         )
     except BaseException:
         if keep_rootfs:
@@ -206,6 +217,7 @@ def _containerized_build(
     keep_rootfs: Path | str | None,
     run_env: dict[str, str] | None = None,
     aux_builds: dict[str, dict[str, str]] | None = None,
+    subdir: str = "",
 ) -> BuildProduct:
     from core.container.build import build_image
     from core.container.export import export_rootfs
@@ -219,7 +231,8 @@ def _containerized_build(
     build_id = uuid.uuid4().hex[:12]
     tag = f"raptor-env-build:{build_id}"
     product = BuildProduct(ok=False, toolchain=toolchain,
-                           base_image=base_image, build_command=command)
+                           base_image=base_image, build_command=command,
+                           build_subdir=subdir)
 
     # Refuse untrusted Dockerfile-bound values BEFORE any work. The
     # build command reaches this seam from detector/LLM synthesis over
@@ -232,6 +245,7 @@ def _containerized_build(
     try:
         _validate_build_command(command)
         _validate_base_image(base_image)
+        _validate_subdir(subdir)
         _flag_prefix(toolchain)  # validates every toolchain field
     except ValueError as exc:
         product.reason, product.detail = "rejected_input", str(exc)[:500]
@@ -264,9 +278,13 @@ def _containerized_build(
         for aux_name in (aux_builds or {}):
             _validate_aux_name(aux_name)
             dockerfile += f"COPY src /{aux_name}\n"
+        # A validated subdir extends WORKDIR rather than folding a
+        # `cd` into the command: the RUN line must stay a plain
+        # command so the exported assignments below govern all of it.
+        wd_suffix = f"/{subdir}" if subdir else ""
         dockerfile += (
-            f"WORKDIR /src\n"
-            f"RUN {env_prefix}{_flag_prefix(toolchain)}{command}\n"
+            f"WORKDIR /src{wd_suffix}\n"
+            + _run_line(env_prefix, _flag_prefix(toolchain), command)
         )
         for aux_name, aux_env in (aux_builds or {}).items():
             # aux stages do NOT inherit run_env: the canonical use is
@@ -278,9 +296,9 @@ def _containerized_build(
             # this wrong (silent sanitizer-crash false negatives,
             # found empirically; see the pin comment).
             dockerfile += (
-                f"WORKDIR /{aux_name}\n"
-                f"RUN {_env_prefix(aux_env)}"
-                f"{_flag_prefix(toolchain)}{command}\n"
+                f"WORKDIR /{aux_name}{wd_suffix}\n"
+                + _run_line(_env_prefix(aux_env),
+                            _flag_prefix(toolchain), command)
             )
         try:
             built = build_image(
@@ -297,7 +315,14 @@ def _containerized_build(
             )
             if not built.ok:
                 product.reason = "build_failed"
-                product.detail = (built.stderr_tail or "")[-1000:]
+                # Both streams: under the legacy builder the failing
+                # step's output (`configure: error: ...`) is on STDOUT
+                # — a stderr-only detail showed just the deprecation
+                # banner and hid the real error.
+                product.detail = "\n".join(
+                    tail for tail in ((built.stderr_tail or "")[-1000:],
+                                      (built.logs_tail or "")[-1000:])
+                    if tail.strip())
                 return product
 
             rootfs = Path(keep_rootfs) if keep_rootfs else Path(tmp) / "rootfs"
@@ -442,6 +467,48 @@ def _validate_base_image(base_image: str) -> None:
     shape so a value can never smuggle additional instructions."""
     if not _IMAGE_REF_RE.fullmatch(base_image):
         raise ValueError(f"invalid base image reference: {base_image!r}")
+
+
+#: Segments of a build subdir as the WORKDIR line accepts them. Same
+#: threat model as the build command: the value comes from detector
+#: synthesis over repo content (directory NAMES in the scanned tree),
+#: so it is UNTRUSTED and interpolated raw into the Dockerfile.
+_SUBDIR_SEGMENT_RE = re.compile(r"[A-Za-z0-9._+-]+")
+
+
+def _validate_subdir(subdir: str) -> None:
+    """Refuse build subdirs that can escape their WORKDIR line or the
+    /src tree. Empty string ("" = build at the repo root) is valid."""
+    if not subdir:
+        return
+    if any(ch in subdir for ch in "\n\r\x00\\ \t'\""):
+        raise ValueError(
+            "build subdir contains whitespace, a quote, or a line "
+            "break — refusing (Dockerfile instruction injection)")
+    if subdir.startswith(("/", "-")):
+        raise ValueError(f"build subdir must be relative: {subdir!r}")
+    segments = subdir.split("/")
+    if any(seg in ("", ".", "..") for seg in segments):
+        raise ValueError(f"build subdir escapes the repo tree: {subdir!r}")
+    for seg in segments:
+        if not _SUBDIR_SEGMENT_RE.fullmatch(seg):
+            raise ValueError(f"invalid build subdir segment: {seg!r}")
+
+
+def _run_line(env_prefix: str, flag_prefix: str, command: str) -> str:
+    """The Dockerfile RUN line, with all assignments EXPORTED.
+
+    A bare ``KEY=V command`` prefix binds to the first simple command
+    only: for a chained build (``autoreconf -fi && ./configure &&
+    make``) the toolchain flags silently never reached configure or
+    make — a "hardened" mitigation-matrix posture compiled with no
+    hardening at all. ``export A=..; command`` governs every command
+    in the chain (including an operator-embedded ``cd``).
+    """
+    assignments = f"{env_prefix}{flag_prefix}".strip()
+    if not assignments:
+        return f"RUN {command}\n"
+    return f"RUN export {assignments}; {command}\n"
 
 
 def _env_prefix(run_env: dict[str, str] | None) -> str:

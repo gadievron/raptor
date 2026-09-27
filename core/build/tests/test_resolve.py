@@ -19,17 +19,17 @@ class TestOperatorSlots:
         settings = {"build-command": {"default": "make",
                                       "cpp": "cmake --build build"}}
         got = resolve_build_command(tmp_path, "cpp", settings=settings)
-        assert got == ("cmake --build build", "project-setting:cpp")
+        assert got == ("cmake --build build", "project-setting:cpp", "")
 
     def test_default_slot_when_lang_slot_absent(self, tmp_path):
         settings = {"build-command": {"default": "make -j4"}}
         got = resolve_build_command(tmp_path, "cpp", settings=settings)
-        assert got == ("make -j4", "project-setting:default")
+        assert got == ("make -j4", "project-setting:default", "")
 
     def test_default_slot_without_lang(self, tmp_path):
         settings = {"build-command": {"default": "make"}}
         got = resolve_build_command(tmp_path, settings=settings)
-        assert got == ("make", "project-setting:default")
+        assert got == ("make", "project-setting:default", "")
 
     def test_operator_setting_beats_detector(self, tmp_path):
         _makefile_target(tmp_path)
@@ -43,12 +43,12 @@ class TestSingleSlotFallback:
     def test_lone_lang_slot_used_without_lang(self, tmp_path):
         settings = {"build-command": {"c": "make smoke"}}
         got = resolve_build_command(tmp_path, settings=settings)
-        assert got == ("make smoke", "project-setting:c")
+        assert got == ("make smoke", "project-setting:c", "")
 
     def test_lone_lang_slot_used_for_other_lang(self, tmp_path):
         settings = {"build-command": {"c": "make smoke"}}
         got = resolve_build_command(tmp_path, "cpp", settings=settings)
-        assert got == ("make smoke", "project-setting:c")
+        assert got == ("make smoke", "project-setting:c", "")
 
     def test_multiple_lang_slots_without_default_ambiguous(self, tmp_path):
         settings = {"build-command": {"c": "make", "java": "mvn package"}}
@@ -61,9 +61,10 @@ class TestDetectorFallback:
         _makefile_target(tmp_path)
         got = resolve_build_command(tmp_path, "cpp", settings={})
         assert got is not None
-        command, source = got
+        command, source, subdir = got
         assert source.startswith("detected:")
         assert command
+        assert subdir == ""  # Makefile at the root
 
     def test_lang_hint_narrows_order_not_coverage(self, tmp_path):
         """A 'c' hint must still find the Makefile — regression from
@@ -78,6 +79,37 @@ class TestDetectorFallback:
     def test_none_when_nothing_resolves(self, tmp_path):
         # Empty dir: no setting, nothing for the detector.
         assert resolve_build_command(tmp_path, "cpp", settings={}) is None
+
+
+class TestSubdirThreading:
+    def test_detected_subdir_build_reports_subdir(self, tmp_path):
+        """Screen-shape: autotools live in src/, root has none. The
+        resolved command MUST carry subdir='src' — running it at the
+        root fails with `autoreconf: error: 'configure.ac' is
+        required` (the live Stage E env-build failure this fixes)."""
+        (tmp_path / "COPYING").write_text("license\n")
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "configure.ac").write_text("AC_INIT([screen],[5.0])\n")
+        (src / "Makefile.in").write_text("all:\n")
+        (src / "screen.c").write_text("int main(void){return 0;}\n")
+        got = resolve_build_command(tmp_path, "c", settings={})
+        assert got is not None
+        assert got.source.startswith("detected:")
+        assert got.subdir == "src"
+
+    def test_root_build_reports_empty_subdir(self, tmp_path):
+        _makefile_target(tmp_path)
+        got = resolve_build_command(tmp_path, "c", settings={})
+        assert got is not None
+        assert got.subdir == ""
+
+    def test_operator_setting_always_root_subdir(self, tmp_path):
+        # Operator commands run at the root exactly as before —
+        # they can embed their own `cd`.
+        settings = {"build-command": {"default": "cd src && make"}}
+        got = resolve_build_command(tmp_path, settings=settings)
+        assert got == ("cd src && make", "project-setting:default", "")
 
 
 class TestActiveProjectPath:
@@ -101,7 +133,7 @@ class TestActiveProjectPath:
              patch("core.project.trust.run_target_matches_project",
                    return_value=True):
             got = resolve_build_command(tmp_path / "src")
-        assert got == ("make smoke", "project-setting:default")
+        assert got == ("make smoke", "project-setting:default", "")
 
 
 class TestLoneSlotVisibility:
@@ -112,7 +144,7 @@ class TestLoneSlotVisibility:
             got = resolve_build_command(tmp_path, "cpp", settings=settings)
         # Behavior unchanged (deliberate, pinned above) — but the
         # cross-language serve is operator-visible now.
-        assert got == ("mvn package", "project-setting:java")
+        assert got == ("mvn package", "project-setting:java", "")
         assert any("lone populated slot" in r.message for r in caplog.records)
 
     def test_matching_slot_serve_stays_quiet(self, tmp_path, caplog):

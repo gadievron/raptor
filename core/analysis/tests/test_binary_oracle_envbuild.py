@@ -51,7 +51,7 @@ class TestEnvBuildHook:
         with patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "project-setting:default")), \
+                   return_value=("make", "project-setting:default", "")), \
              patch("core.env.build.containerized_build",
                    return_value=_product(tmp_path=tmp_path)):
             paths, guessed = _env_build_debug_binaries(tmp_path)
@@ -65,7 +65,7 @@ class TestEnvBuildHook:
         with patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "detected:make")), \
+                   return_value=("make", "detected:make", "")), \
              patch("core.env.build.containerized_build",
                    return_value=_product(tmp_path=tmp_path)):
             paths, guessed = _env_build_debug_binaries(tmp_path)
@@ -77,7 +77,7 @@ class TestEnvBuildHook:
         with patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "detected:make")), \
+                   return_value=("make", "detected:make", "")), \
              patch("core.env.build.containerized_build",
                    return_value=_product(ok=False, tmp_path=tmp_path)):
             paths, guessed = _env_build_debug_binaries(tmp_path)

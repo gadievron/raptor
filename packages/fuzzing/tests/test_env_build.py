@@ -85,7 +85,7 @@ class TestCandidacy:
              patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "detected:make")):
+                   return_value=("make", "detected:make", "")):
             ok, why = env_build_candidate(_repo(tmp_path))
         assert ok and why == ""
 
@@ -99,7 +99,7 @@ class TestCandidacy:
         with patch("shutil.which", return_value="/usr/bin/docker"), \
              patch("core.project.trust.resolve_build_execution", gate), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "detected:make")):
+                   return_value=("make", "detected:make", "")):
             ok, _ = env_build_candidate(_repo(tmp_path), build=True)
         assert ok
         assert seen["explicit"] is True
@@ -127,7 +127,7 @@ class TestEnvBuildForFuzzing:
         with patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "project-setting:default")), \
+                   return_value=("make", "project-setting:default", "")), \
              patch("core.env.build.containerized_build", fake_build):
             res = env_build_for_fuzzing(_repo(tmp_path), out)
         assert res.ok
@@ -152,7 +152,7 @@ class TestEnvBuildForFuzzing:
         with patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "detected:make")), \
+                   return_value=("make", "detected:make", "")), \
              patch("core.env.build.containerized_build",
                    lambda *a, **kw: _product(rootfs=rootfs)):
             res = env_build_for_fuzzing(_repo(tmp_path), out)
@@ -163,7 +163,7 @@ class TestEnvBuildForFuzzing:
         with patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "detected:make")), \
+                   return_value=("make", "detected:make", "")), \
              patch("core.env.build.containerized_build",
                    lambda *a, **kw: _product(ok=False)):
             res = env_build_for_fuzzing(_repo(tmp_path), tmp_path / "out")
@@ -183,7 +183,7 @@ class TestEnvBuildForFuzzing:
         with patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "detected:make")), \
+                   return_value=("make", "detected:make", "")), \
              patch("core.env.build.containerized_build", fake_build):
             res = env_build_for_fuzzing(_repo(tmp_path), out)
         assert not res.ok
@@ -203,7 +203,7 @@ class TestRemediations:
         with patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "detected:make")), \
+                   return_value=("make", "detected:make", "")), \
              patch("core.env.build.containerized_build") as build:
             res = env_build_for_fuzzing(_repo(tmp_path), out)
         build.assert_not_called()
@@ -231,7 +231,7 @@ class TestSanitizerAndCmplog:
         with patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "project-setting:default")), \
+                   return_value=("make", "project-setting:default", "")), \
              patch("core.env.build.containerized_build", fake_build):
             res = env_build_for_fuzzing(_repo(tmp_path), out,
                                         sanitizer="asan", cmplog=True)
@@ -251,7 +251,7 @@ class TestSanitizerAndCmplog:
         with patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "detected:make")), \
+                   return_value=("make", "detected:make", "")), \
              patch("core.env.build.containerized_build",
                    lambda *a, **kw: _product(rootfs=rootfs)):
             res = env_build_for_fuzzing(_repo(tmp_path), out, cmplog=True)
@@ -284,7 +284,7 @@ class TestBrokenAflBlocklist:
         with patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "detected:make")), \
+                   return_value=("make", "detected:make", "")), \
              patch("core.env.build.containerized_build", fake_build):
             res = env_build_for_fuzzing(_repo(tmp_path), out)
         assert not res.ok
@@ -308,7 +308,7 @@ class TestBrokenAflBlocklist:
         with patch("core.project.trust.resolve_build_execution",
                    return_value=True), \
              patch("core.build.resolve.resolve_build_command",
-                   return_value=("make", "detected:make")), \
+                   return_value=("make", "detected:make", "")), \
              patch("core.env.build.containerized_build", fake_build):
             res = env_build_for_fuzzing(_repo(tmp_path), out)
         assert res.ok

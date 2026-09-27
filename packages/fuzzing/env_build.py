@@ -146,7 +146,7 @@ def env_build_for_fuzzing(
             ok=False, reason="no_build_command",
             detail="no operator setting and detector synthesis found "
                    "nothing")
-    command, source = resolved
+    command, source, subdir = resolved
     guessed = not source.startswith("project-setting:")
     if guessed:
         logger.warning(
@@ -182,6 +182,7 @@ def env_build_for_fuzzing(
         keep_rootfs=rootfs_dir,
         run_env=run_env,
         aux_builds=aux,
+        subdir=subdir,
     )
     if not product.ok:
         return FuzzEnvBuild(
