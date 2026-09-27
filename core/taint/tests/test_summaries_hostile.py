@@ -520,6 +520,7 @@ def _timed_summarize(source: str, specs: SpecIndex) -> float:
     return best
 
 
+@pytest.mark.slow
 def test_growth_ratio_pin_n_vs_2n(specs: SpecIndex) -> None:
     # Host-speed invariant: the pin is a RATIO of two timings taken
     # the same way on the same host. 2.7 leaves linear-with-overhead

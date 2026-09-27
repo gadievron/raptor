@@ -60,6 +60,8 @@ from __future__ import annotations
 import ast
 import re
 import sys
+
+import pytest
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -373,6 +375,7 @@ def census_offenders(rel: str, source: str) -> list[str]:
     return [msg for _, msg in sorted(set(offenders))]
 
 
+@pytest.mark.slow
 def test_no_unadjudicated_crlf_line_model_sites() -> None:
     repo = repo_root()
     offenders: list[str] = []
