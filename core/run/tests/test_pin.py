@@ -94,6 +94,30 @@ class ResolveForStartTest(_PinCase):
                           return_value=os.getpid()):
             self.assertEqual(resolve_pin_for_start(), (None, "session"))
 
+    def test_threaded_env_marker_demotes_argv_to_threaded(self):
+        # Harness-synthesized --project (skill dispatch threading a
+        # parent pin into a lifecycle child) must not record the
+        # operator-explicit "argv" source: the child sets the env
+        # marker, and the pin writer records "threaded". Both shapes —
+        # the null pin (`--project -`) and a named project.
+        from core.run.pin import PIN_THREADED_ENV
+        with patch.dict(os.environ, {PIN_THREADED_ENV: "1"}):
+            set_process_project("-")
+            self.assertEqual(resolve_pin_for_start(), (None, "threaded"))
+            set_process_project("pinned")
+            self.assertEqual(resolve_pin_for_start(),
+                             ("pinned", "threaded"))
+
+    def test_bootstrap_adoption_records_threaded(self):
+        # adopt_process_pin promotes a run-marker pin to the process
+        # override in-process (no argv, no env) — a run started later
+        # in that process records "threaded" too.
+        set_process_project("-", threaded=True)
+        self.assertEqual(resolve_pin_for_start(), (None, "threaded"))
+        # An operator-typed flag afterwards clears the harness flag.
+        set_process_project("-")
+        self.assertEqual(resolve_pin_for_start(), (None, "argv"))
+
     def test_invalid_argv_is_hard_error(self):
         set_process_project("no-such-project")
         with self.assertRaises(ProjectArgvError):

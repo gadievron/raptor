@@ -56,11 +56,24 @@ logger = logging.getLogger(__name__)
 RUN_METADATA_FILE = ".raptor-run.json"
 
 #: The pin's provenance enum (``project_source`` in run metadata).
-PIN_SOURCES = ("argv", "session", "symlink", "none", "adopted", "merged")
+#: ``argv`` means the OPERATOR typed ``--project`` at this entry point;
+#: ``threaded`` means the harness synthesized the override (parent-pin
+#: threading via skill dispatch, or a process bootstrap adopting a run
+#: marker). The two were one value until 2026-09: every lifecycle child
+#: recorded ``argv`` for a flag no human passed, so a null pin's record
+#: claimed an operator explicitness that never happened.
+PIN_SOURCES = ("argv", "threaded", "session", "symlink", "none",
+               "adopted", "merged")
 
 #: Explicit bound-to-none argv value (``--project -``): special-cased
 #: BEFORE name validation at every consumer.
 ARGV_NONE = "-"
+
+#: Env marker set by harness code that passes ``--project`` to a child
+#: on the operator's behalf (see PIN_SOURCES: argv vs threaded). The
+#: child's entry point parses the flag normally; this is how the pin
+#: writer still tells the two apart.
+PIN_THREADED_ENV = "RAPTOR_PROJECT_PIN_THREADED"
 
 _WALK_DEPTH = 8
 
@@ -72,6 +85,7 @@ _WALK_DEPTH = 8
 #: check-then-set exists on the read paths.
 _process_project: str | None = None
 _process_project_set = False
+_process_project_threaded = False
 
 
 @dataclass(frozen=True)
@@ -95,14 +109,19 @@ class RunPin:
     writes_allowed: bool
 
 
-def set_process_project(value: str | None) -> None:
+def set_process_project(value: str | None, *,
+                        threaded: bool = False) -> None:
     """Record the entry point's ``--project`` argv (``'-'`` = explicit
     bound-to-none; None = flag not given). Validation against the
     project registry happens at resolution (hard error, never a
-    fallback)."""
-    global _process_project, _process_project_set
+    fallback). ``threaded=True`` marks a HARNESS-set override (pin
+    bootstrap adoption) so a run started later in this process records
+    provenance ``threaded``, not ``argv``."""
+    global _process_project, _process_project_set, \
+        _process_project_threaded
     _process_project = value
     _process_project_set = value is not None
+    _process_project_threaded = threaded and value is not None
 
 
 def get_process_project() -> str | None:
@@ -162,10 +181,20 @@ def resolve_pin_for_start() -> tuple[str | None, str]:
     """
     override = get_process_project()
     if override is not None:
+        # Provenance honesty: "argv" is reserved for a flag the
+        # OPERATOR typed. A harness-synthesized override — parent-pin
+        # threading (env marker, set by skill dispatch around the
+        # child spawn) or an in-process bootstrap adoption — records
+        # "threaded" so a null pin can't masquerade as an explicit
+        # `--project -`.
+        source = "threaded" if (
+            _process_project_threaded
+            or os.environ.get(PIN_THREADED_ENV) == "1"
+        ) else "argv"
         if override == ARGV_NONE:
-            return None, "argv"
+            return None, source
         _validate_argv_project(override)
-        return override, "argv"
+        return override, source
 
     from core.project.sessions import session_binding
     name, state = session_binding()
@@ -524,7 +553,7 @@ def bootstrap_process_pin(out_dir: str | os.PathLike[str] | None) -> None:
     if not pin.authoritative:
         return
     set_process_project(pin.project if pin.project is not None
-                        else ARGV_NONE)
+                        else ARGV_NONE, threaded=True)
     # Seal the resolved pin in the process freeze cache: consumers in
     # THIS process resolving the same run dir later must see the value
     # read at bootstrap, not whatever a sandboxed child rewrote the

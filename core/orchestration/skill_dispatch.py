@@ -571,6 +571,11 @@ def start_lifecycle(command: str, target: Path,
                     else ARGV_NONE
         if pinned is not None:
             argv += ["--project", pinned if pinned else ARGV_NONE]
+            # The flag is harness-synthesized, not operator-typed: the
+            # marker makes the child record pin provenance "threaded"
+            # instead of "argv" (core.run.pin.PIN_SOURCES).
+            from core.run.pin import PIN_THREADED_ENV
+            safe_env[PIN_THREADED_ENV] = "1"
     except Exception:  # noqa: BLE001 — child falls back to its own layers
         logger.debug(
             "lifecycle start %s: parent pin threading failed — the "
