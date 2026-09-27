@@ -334,7 +334,11 @@ class TestConsumersOnSlimRows:
         outcome = outcome_from_entry(entry)
         assert outcome.status == "clean"
         assert outcome.cost_usd == 0.0
-        assert "offloaded" in outcome.body
+        assert "offloaded at the index write boundary" in outcome.body
+        # An index stub has NO sidecar file — the marker points at
+        # the producing run's journal, never at the run-side slim
+        # tier's sidecar name.
+        assert "review-journal-bodies.jsonl" not in outcome.body
         assert outcome.hypothesis == ""
         assert _BODY not in outcome.body
 

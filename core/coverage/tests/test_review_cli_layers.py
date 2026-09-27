@@ -320,6 +320,50 @@ def test_show_no_readjudication_section_without_records(tmp_path, capsys):
     assert "Re-adjudication" not in out
 
 
+# ── show: offload-marker attribution ─────────────────────────────────
+
+def _offload_pointer(sidecar: str) -> dict:
+    return {
+        "sidecar": sidecar, "offset": 0, "bytes": 0,
+        "sha256": "0" * 64, "fields": ["body", "hypotheses"],
+    }
+
+
+def test_show_index_stub_points_at_the_producing_run(tmp_path, capsys):
+    """An index write-boundary stub has an EMPTY sidecar name and NO
+    sidecar file on disk — the marker must send the operator to the
+    producing run's journal, never to review-journal-bodies.jsonl."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    row = _entry("src/a.c", "foo", verdict="clean")
+    row["body_offload"] = _offload_pointer("")
+    _write_index(project, {"k1": row})
+
+    _cli.cmd_show(_ns(
+        file="src/a.c", function="foo", project=str(project),
+    ))
+    out = capsys.readouterr().out
+    assert "index write-boundary slim" in out
+    assert "run r1's journal" in out
+    assert "review-journal-bodies.jsonl" not in out
+
+
+def test_show_compact_stub_wording_unchanged(tmp_path, capsys):
+    """A run-side slim stub (journal compact --slim-clean) has a real
+    sidecar file; the established marker keeps naming it."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    row = _entry("src/a.c", "foo", verdict="clean")
+    row["body_offload"] = _offload_pointer("review-journal-bodies.jsonl")
+    _write_journal(run_dir, [row])
+
+    _cli.cmd_show(_ns(file="src/a.c", function="foo", out=str(run_dir)))
+    out = capsys.readouterr().out
+    assert "review-journal-bodies.jsonl" in out
+    assert "journal compact --slim-clean" in out
+    assert "index write-boundary slim" not in out
+
+
 # ── compact: legacy-key re-homing ────────────────────────────────────
 
 def test_compact_rehomes_legacy_keys(tmp_path, capsys):

@@ -551,6 +551,44 @@ class TestOutcomeFromEntry:
             "the run that actually reviewed"
         )
 
+    def test_index_stub_marker_points_at_the_producing_run(
+        self, tmp_path,
+    ):
+        # Index write-boundary stub: EMPTY sidecar name, and no
+        # sidecar file is ever written for it — the marker must point
+        # at the producing run's journal, never at
+        # review-journal-bodies.jsonl (a file the operator would hunt
+        # and never find).
+        target = _write_target(tmp_path)
+        entry = _entry(
+            target, body="", hypotheses=[],
+            body_offload={
+                "sidecar": "", "offset": 0, "bytes": 0,
+                "sha256": "0" * 64, "fields": ["body", "hypotheses"],
+            },
+        )
+        outcome = outcome_from_entry(entry)
+        assert "offloaded at the index write boundary" in outcome.body
+        assert "the journal of run run1" in outcome.body
+        assert "review-journal-bodies.jsonl" not in outcome.body
+
+    def test_compact_stub_marker_wording_unchanged(self, tmp_path):
+        # Run-side slim stub (journal compact --slim-clean): a real
+        # sidecar file exists, and the established marker names it.
+        target = _write_target(tmp_path)
+        entry = _entry(
+            target, body="", hypotheses=[],
+            body_offload={
+                "sidecar": "review-journal-bodies.jsonl",
+                "offset": 0, "bytes": 42,
+                "sha256": "0" * 64, "fields": ["body", "hypotheses"],
+            },
+        )
+        outcome = outcome_from_entry(entry)
+        assert ("[body and hypotheses offloaded: "
+                "review-journal-bodies.jsonl — journal compact "
+                "--slim-clean]") in outcome.body
+
     def test_reused_finding_is_not_tool_backed(self, tmp_path):
         # No live tool receipt: tools_dispatched is empty and the
         # evidence is journal:recall — compute_tier must cap at
