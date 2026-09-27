@@ -321,6 +321,105 @@ class TestBuildSeam:
         assert (tmp_path / "decomp-map.json").is_file()
 
 
+def _git_available() -> bool:
+    import shutil
+    return shutil.which("git") is not None
+
+
+class TestGitignoreLive:
+    """Real-semgrep scope fence at the decomp-tree shape.
+
+    Decomp-trees are emitted under run output directories that are
+    routinely gitignored (RAPTOR's own ``out/`` is). The semgrep
+    runner's default scope pins (``--no-git-ignore``,
+    ``--x-ignore-semgrepignore-files`` in build_cmd) are all that keep
+    this leg — and the decomp-tree sweep, which rides the same runner
+    default — from reading such a tree as vacuously clean: rc 0, no
+    errors, empty paths.scanned, every file "not examined",
+    parsed_rate 0.0.
+
+    The runner's own live scope tests pin that default on a python
+    rule with a file-pattern ``.gitignore``, asserting on findings.
+    This lane depends on a different shape: the C conformance probe
+    (a never-matching rule), a directory-pattern ``.gitignore``
+    (``out/``), a nested synthetic tree, and the ``files_examined``
+    channel — the conformance leg reads paths.scanned, never
+    findings. Pin the default on exactly that shape, in both
+    directions that exist today: the default scans the tree, and a
+    call site that duplicates ``--no-git-ignore`` through extra_args
+    fails LOUDLY (semgrep refuses the repeated option at rc 2, an
+    engine error) — never a silent scope change.
+
+    Trusted local fixture content (authored here), hence
+    ``unsandboxed=True`` — same posture as the runner's own live
+    scope tests.
+    """
+
+    @staticmethod
+    def _gitignored_tree(tmp_path: Path) -> Path:
+        import subprocess
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True,
+                       timeout=60)
+        (repo / ".gitignore").write_text("out/\n", encoding="utf-8")
+        tree = repo / "out" / "decomp-tree"
+        tree.mkdir(parents=True)
+        # Synthetic decompiler-shaped pseudo-C — authored fixture,
+        # no target-derived content.
+        (tree / "g001_FUN_00101000.c").write_text(
+            "undefined8 FUN_00101000(long param_1)\n"
+            "{\n  return *(undefined8 *)(param_1 + 8);\n}\n",
+            encoding="utf-8",
+        )
+        return tree
+
+    @pytest.mark.skipif(
+        not _git_available(), reason="git not installed")
+    def test_default_scans_gitignored_tree(self, tmp_path):
+        """Regression fence for the runner's scope default: a bare
+        run_rule on a decomp-tree under a gitignored directory of a
+        git repo examines the tree's files. A revert of the default
+        turns every such sweep/conformance scan vacuously clean —
+        this fails first, on the exact shape this lane consumes."""
+        from packages.ghidra.decomp_conformance import _PROBE_RULE
+        from packages.semgrep.runner import is_available, run_rule
+        if not is_available():
+            pytest.skip("semgrep not installed")
+        tree = self._gitignored_tree(tmp_path)
+
+        result = run_rule(tree, str(_PROBE_RULE), timeout=300,
+                          unsandboxed=True)
+        assert result.returncode in (0, 1)
+        assert result.errors == []
+        assert any("g001_FUN_00101000.c" in str(p)
+                   for p in result.files_examined)
+
+    @pytest.mark.skipif(
+        not _git_available(), reason="git not installed")
+    def test_duplicated_scope_flag_errors_loudly(self, tmp_path):
+        """Duplicate-flag direction: build_cmd already emits
+        ``--no-git-ignore``; a call site that adds it again through
+        extra_args (belt-and-braces) does not get a quietly-doubled
+        no-op — semgrep refuses the repeated option (rc 2), and
+        run_rule surfaces that as an engine error. Pins that the
+        wrong belt-and-braces pattern fails LOUDLY at the first live
+        scan instead of silently changing scan scope, and documents
+        why call sites must leave the scope flags to the runner."""
+        from packages.ghidra.decomp_conformance import _PROBE_RULE
+        from packages.semgrep.runner import is_available, run_rule
+        if not is_available():
+            pytest.skip("semgrep not installed")
+        tree = self._gitignored_tree(tmp_path)
+
+        result = run_rule(tree, str(_PROBE_RULE), timeout=300,
+                          unsandboxed=True,
+                          extra_args=["--no-git-ignore"])
+        assert result.returncode == 2
+        assert result.errors
+        assert result.files_examined == []
+
+
 class TestChildScan:
     def test_scan_tree_verdicts(self, tmp_path):
         pytest.importorskip("tree_sitter")
