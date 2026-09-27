@@ -69,7 +69,7 @@ def test_module_list_derivation(det, tmp_path):
     assert "botocore" in mods
     assert "tree_sitter" in mods
     assert "tree_sitter_go" in mods
-    # Actively installed by requirements-dev.txt: not optional.
+    # Actively installed by the dev dependency group: not optional.
     assert "z3" not in mods
     assert "bs4" not in mods
     # Transitively guaranteed on bare CI (instructor -> openai).

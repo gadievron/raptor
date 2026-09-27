@@ -382,7 +382,7 @@ RAPTOR dogfoods a fair bit of its own security tooling, but it is worth being ho
 | Dataflow corpus | Precision / recall / FP-category tracking for validator behaviour | Developer-run benchmark and corpus tests | `core/dataflow/corpus/`, `core/dataflow/scripts/corpus-metrics` |
 | CI controls doc guard | Documented paths exist, ruff config matches, README links to the doc | PRs | `.github/tests/test_ci_controls_docs.py` |
 
-Not currently enforced: `mypy` is installed in `requirements-dev.txt` but does not block anything; Ruff formatting is not enforced; Semgrep is part of RAPTOR's scanner surface, but we do not yet have a dedicated "scan RAPTOR with RAPTOR" Semgrep workflow.
+Not currently enforced: `mypy` is pinned in `pyproject.toml` but does not block anything; Ruff formatting is not enforced; Semgrep is part of RAPTOR's scanner surface, but we do not yet have a dedicated "scan RAPTOR with RAPTOR" Semgrep workflow.
 
 ---
 
@@ -630,8 +630,8 @@ See LICENSE for the full text. Review the licences for all dependencies before c
 ## Python Dependencies
 
 RAPTOR uses `pyproject.toml` and `uv.lock` as the source of truth for
-Python dependencies. The checked-in `requirements.txt` files remain as
-compatibility exports for one transition window.
+Python dependencies. The checked-in `requirements.txt` remains as a
+compatibility export for users who prefer `pip install`.
 
 Useful installs:
 

@@ -1106,8 +1106,7 @@ def check_lang() -> tuple[str | None, list]:
         warnings.append(
             "no tree-sitter grammars installed — inventory degrades "
             "to regex extraction (fewer functions, no spans); "
-            "install the grammar wheels listed in requirements.txt "
-            "(tree-sitter, tree-sitter-python, tree-sitter-c, ...)"
+            "install the grammar wheels with uv sync --extra grammars"
         )
         return "  lang: tree-sitter ✗", warnings
     except Exception:  # noqa: BLE001

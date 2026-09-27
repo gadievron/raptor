@@ -1461,7 +1461,7 @@ ARTIFACT_RE = re.compile(
     r"^[A-Za-z0-9._\-{}*]+\.(json|jsonl|sarif|md|csv|ya?ml|log|txt)$")
 COMMON_NONARTIFACTS = {
     "README.md", "CLAUDE.md", "MEMORY.md", "requirements.txt",
-    "requirements-dev.txt", "pyproject.toml", "package.json",
+    "pyproject.toml", "uv.lock", "package.json",
     "settings.json", "settings.local.json", "config.yaml", "config.yml",
     "compile_commands.json", "Dockerfile", "docker-compose.yml", "index.md",
     "SKILL.md", "PIPELINE.md",

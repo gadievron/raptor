@@ -165,9 +165,9 @@ def main(argv: list[str] | None = None) -> int:
     if not php_grammar_available():
         print(
             "raptor-gadget-scan: capability absent — tree-sitter-php "
-            "is not installed (pip install -r "
-            "requirements-grammars.txt). No scan ran; absence of "
-            "output is NOT evidence of gadget absence.",
+            "is not installed (uv sync --extra grammars). No scan "
+            "ran; absence of output is NOT evidence of gadget "
+            "absence.",
             file=sys.stderr,
         )
         return 3

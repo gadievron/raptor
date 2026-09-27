@@ -167,58 +167,53 @@ def test_auto_pr_publishers_rebase_onto_main() -> None:
 
 def test_workflow_pytest_installs_use_the_single_source_pin() -> None:
     """Workflows installing pytest standalone must take the pin from
-    requirements-dev.txt (the grep idiom lint.yml uses for ruff) —
+    pyproject.toml (the grep idiom lint.yml uses for ruff) —
     hand-typed copies drifted a minor version behind the dev pin, so
-    the same suite ran under different pytest versions per lane (the
-    collection-behaviour divergence the 'pinned exactly' rationale in
-    requirements-dev.txt exists to prevent). Same mechanism as the
-    semgrep pin-drift class; this ends the pytest member."""
+    the same suite ran under different pytest versions per lane.
+    Same mechanism as the semgrep pin-drift class; this ends the
+    pytest member."""
     import re
 
     for wf in sorted((REPO / ".github" / "workflows").glob("*.y*ml")):
-        # A hand pin spells a version digit after ``==``; the grep
-        # idiom spells ``'^pytest=='`` with no version literal. The
-        # installer spelling set is every way pip is invoked in this
-        # tree's workflows (pip / pip3 / python -m pip /
-        # python3 -m pip / uv pip) — a pin through any of them is the
-        # same drift member.
         hand_pins = re.findall(
             r"(?:uv +pip|(?:python3? +-m +)?pip3?) +install[^\n]*pytest==\d\S*",
             wf.read_text(encoding="utf-8"),
         )
         assert not hand_pins, (
             f"{wf.name} hand-pins pytest ({hand_pins}) — install via "
-            "pip install \"$(grep -E '^pytest==' requirements-dev.txt)\" "
-            "so requirements-dev.txt stays the single source"
+            "the lockfile so pyproject.toml stays the single source"
         )
 
 
 def test_grammar_wheel_pins_match_requirements_comment_block() -> None:
-    """requirements-grammars.txt instructs maintainers to keep its
-    versions in sync with the commented tree-sitter block in
-    requirements.txt — a hand-sync with no oracle (in sync today by
-    luck of review). Exact parity, both directions: same wheel set,
-    same versions."""
+    """The grammars extra in pyproject.toml is the source of truth.
+    requirements.txt carries a commented tree-sitter block for users
+    who pip-install — it must stay in sync."""
     import re
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib  # type: ignore[no-redef]
 
+    pyproject = tomllib.loads(_read("pyproject.toml"))
     grammar_pin = re.compile(r"^(tree-sitter[A-Za-z0-9-]*)==(\S+)$")
     commented_pin = re.compile(r"^#\s*(tree-sitter[A-Za-z0-9-]*)==(\S+)$")
     grammars = {
         m.group(1): m.group(2)
-        for line in _read("requirements-grammars.txt").splitlines()
-        if (m := grammar_pin.match(line.strip()))
+        for dep in pyproject["project"]["optional-dependencies"]["grammars"]
+        if (m := grammar_pin.match(dep.strip()))
     }
     commented = {
         m.group(1): m.group(2)
         for line in _read("requirements.txt").splitlines()
         if (m := commented_pin.match(line.strip()))
     }
-    assert grammars, "grammar pin extraction went vacuous"
+    assert grammars, "grammar pin extraction from pyproject.toml went vacuous"
     assert commented, "requirements.txt commented-block extraction went vacuous"
     assert grammars == commented, (
-        "requirements-grammars.txt and requirements.txt's commented "
+        "pyproject.toml grammars extra and requirements.txt's commented "
         "tree-sitter block drifted — update both together:\n"
-        f"only in grammars file: {sorted(set(grammars) - set(commented))}\n"
+        f"only in pyproject.toml: {sorted(set(grammars) - set(commented))}\n"
         f"only in requirements comment: {sorted(set(commented) - set(grammars))}\n"
         f"version mismatches: "
         f"{sorted(k for k in grammars.keys() & commented.keys() if grammars[k] != commented[k])}"
