@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Route cross-artifact hypotheses over a run's engagement ledger.
+
+Reads the engagement ledger in an output directory, collects candidate
+hypotheses (sibling seed files, binary sink edges, DT_NEEDED symbol
+overlap, corpus families x parser boundaries), and writes one
+intake-schema seed file per artifact under <out-dir>/routing/ plus a
+routing-report.json. Feed a routed file to an audit run with
+--hypothesis-seeds.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="raptor-engage-route",
+        description=(
+            "Route cross-artifact hypotheses from an engagement "
+            "ledger into per-artifact seed files."
+        ),
+    )
+    p.add_argument(
+        "out_dir",
+        help="Run output directory carrying the engagement ledger",
+    )
+    p.add_argument(
+        "--json", action="store_true",
+        help="Print the routing report as JSON",
+    )
+    args = p.parse_args()
+
+    out_dir = Path(args.out_dir)
+    if not out_dir.is_dir():
+        sys.stderr.write(
+            f"raptor-engage-route: not a directory: "
+            f"{_sft(str(out_dir))}\n",
+        )
+        return 2
+
+    from core.engagement.router import (
+        ROUTING_DIR_NAME,
+        ROUTING_REPORT_FILENAME,
+        route_hypotheses,
+    )
+
+    report = route_hypotheses(out_dir)
+    if report is None:
+        sys.stderr.write(
+            "raptor-engage-route: no engagement ledger in "
+            f"{_sft(str(out_dir))} — run the engagement ledger "
+            "build first\n",
+        )
+        return 1
+
+    if args.json:
+        print(json.dumps(report, indent=2))
+        return 0
+
+    artifacts = report.get("artifacts") or {}
+    total_written = sum(
+        a.get("written", 0) for a in artifacts.values()
+    )
+    print(
+        f"routed {total_written} hypothesis seed(s) across "
+        f"{len(artifacts)} artifact(s)",
+    )
+    for artifact_id in sorted(artifacts):
+        entry = artifacts[artifact_id]
+        extras = []
+        if entry.get("over_cap"):
+            extras.append(f"{entry['over_cap']} beyond quota")
+        if entry.get("function_capped"):
+            extras.append(
+                f"{entry['function_capped']} function-capped",
+            )
+        suffix = f" ({', '.join(extras)})" if extras else ""
+        print(
+            f"  {artifact_id}: {entry.get('written', 0)} seed(s) -> "
+            f"{entry.get('seed_file', '')}{suffix}",
+        )
+    for cls, stats in (report.get("producers") or {}).items():
+        misses = stats.get("misses") or {}
+        if misses:
+            detail = ", ".join(
+                f"{reason}={count}"
+                for reason, count in sorted(misses.items())
+            )
+            print(f"  misses[{cls}]: {detail}")
+    for note in report.get("notes") or []:
+        print(f"  note: {_sft(str(note))}")
+    if report.get("over_cap_total"):
+        print(
+            f"  saturation: {report['over_cap_total']} ranked "
+            f"candidate(s) dropped beyond quota "
+            f"({report.get('escalations', 0)} escalated to the "
+            "governor)",
+        )
+    print(
+        f"report: "
+        f"{out_dir / ROUTING_DIR_NAME / ROUTING_REPORT_FILENAME}",
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
