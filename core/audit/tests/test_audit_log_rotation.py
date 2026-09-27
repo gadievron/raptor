@@ -179,6 +179,25 @@ class TestLoaderHonesty:
         assert not disclosure.complete
         assert disclosure.orphan_shards == (".audit-log.003.jsonl",)
 
+    def test_noncanonical_shard_spelling_disclosed(
+        self, tmp_path: Path,
+    ):
+        # ``.audit-log.0002.jsonl`` parses to the same number as the
+        # canonical ``.audit-log.002.jsonl`` — the path walk generates
+        # canonical names only, so the wider-padded file is never
+        # read. It must surface as an orphan, not sit silently
+        # shadowed by the canonical shard it collides with.
+        _plant_raw_rows(
+            tmp_path / record.AUDIT_LOG_FILENAME, [_row(0)])
+        _plant_raw_rows(
+            tmp_path / ".audit-log.002.jsonl", [_row(1)])
+        _plant_raw_rows(
+            tmp_path / ".audit-log.0002.jsonl", [_row(999)])
+        rows, disclosure = record.load_audit_log_disclosed(tmp_path)
+        assert [r["seq"] for r in rows] == [0, 1]
+        assert not disclosure.complete
+        assert disclosure.orphan_shards == (".audit-log.0002.jsonl",)
+
     def test_row_cap_keeps_newest_and_discloses(
         self, tmp_path: Path, monkeypatch,
     ):
