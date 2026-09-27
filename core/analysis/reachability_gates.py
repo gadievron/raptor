@@ -20,6 +20,7 @@ from core.analysis._joern_lines import (
     extract_scalar_marker,
     parse_marker_records,
 )
+from core.security.log_sanitisation import sanitise_for_terminal
 
 logger = logging.getLogger(__name__)
 
@@ -520,23 +521,46 @@ def check_sink_guarded(
         summary = extract_scalar_marker(
             result.raw_output or "", "JOERN_GUARD_SUMMARY:",
         )
+        # Degraded probes warn, never whisper: this probe feeds
+        # suppression decisions (guarded-sink demotion, promotion
+        # veto), so a down channel must be operator-visible even
+        # though every consumer fails closed on GUARD_UNAVAILABLE.
+        # ``function_name`` passed the identifier check above;
+        # server-derived reply text is escaped and bounded.
         if summary is None:
-            if result.errors:
-                logger.debug(
-                    "guard query error for %s: %s",
-                    function_name, result.errors,
-                )
+            logger.warning(
+                "guard probe for %s returned no parseable summary "
+                "marker — verdict unavailable%s",
+                function_name,
+                (
+                    ": " + sanitise_for_terminal(str(result.errors))
+                    if result.errors else ""
+                ),
+            )
             return GUARD_UNAVAILABLE
         m = re.fullmatch(r"(\d+)/(\d+)", summary)
         if m is None:
+            logger.warning(
+                "guard probe for %s returned a malformed summary %s "
+                "— verdict unavailable",
+                function_name, sanitise_for_terminal(summary),
+            )
             return GUARD_UNAVAILABLE
         unguarded = int(m.group(1))
         total = int(m.group(2))
         if total == 0:
             return None
         return "guarded" if unguarded == 0 else "unguarded"
-    except Exception:
-        logger.debug("guard query exception for %s", function_name, exc_info=True)
+    except Exception as exc:
+        # The exception message can carry hostile server/reply bytes —
+        # escape and bound it like the other degraded branches; the
+        # full traceback stays at DEBUG.
+        logger.warning(
+            "guard probe exception for %s — verdict unavailable: %s",
+            function_name,
+            sanitise_for_terminal(f"{type(exc).__name__}: {exc}"),
+        )
+        logger.debug("guard probe exception detail", exc_info=True)
         return GUARD_UNAVAILABLE
 
 

@@ -1163,6 +1163,103 @@ class TestCheckSinkGuardedTriState:
         assert verdict is None
 
 
+class TestCheckSinkGuardedDegradeLoudness:
+    """Degraded guard probes must be operator-visible: the probe feeds
+    suppression decisions, so a down channel warns instead of logging
+    at DEBUG (invisible at default level)."""
+
+    _LOGGER = "core.analysis.reachability_gates"
+
+    def _warnings(self, caplog) -> list[str]:
+        return [
+            r.getMessage() for r in caplog.records
+            if r.levelname == "WARNING" and r.name == self._LOGGER
+        ]
+
+    def test_query_exception_warns(self, caplog) -> None:
+        class _Boom(_FakeJoernServer):
+            def query(self, *a, **kw):
+                raise RuntimeError("socket reset")
+        with caplog.at_level("WARNING", logger=self._LOGGER):
+            verdict = rg.check_sink_guarded("fn", _Boom())
+        assert verdict == rg.GUARD_UNAVAILABLE
+        warnings = self._warnings(caplog)
+        assert len(warnings) == 1
+        assert "fn" in warnings[0]
+
+    def test_missing_marker_warns_with_errors(self, caplog) -> None:
+        server = _FakeJoernServer(
+            raw_output="", errors=["server restarting"],
+        )
+        with caplog.at_level("WARNING", logger=self._LOGGER):
+            verdict = rg.check_sink_guarded("fn", server)
+        assert verdict == rg.GUARD_UNAVAILABLE
+        warnings = self._warnings(caplog)
+        assert len(warnings) == 1
+        assert "server restarting" in warnings[0]
+
+    def test_exception_message_escaped_and_bounded(self, caplog) -> None:
+        # A hostile exception message (control bytes + flooding
+        # length — server/reply bytes ride exception text) must land
+        # escaped and truncated in the WARNING; the traceback is
+        # DEBUG-only.
+        hostile = "\x1b]0;pwn\x07" + "A" * 100_000
+
+        class _Boom(_FakeJoernServer):
+            def query(self, *a, **kw):
+                raise RuntimeError(hostile)
+        with caplog.at_level("WARNING", logger=self._LOGGER):
+            verdict = rg.check_sink_guarded("fn", _Boom())
+        assert verdict == rg.GUARD_UNAVAILABLE
+        warnings = self._warnings(caplog)
+        assert len(warnings) == 1
+        assert "\x1b" not in warnings[0]
+        assert "\\x1b" in warnings[0]
+        assert "chars]" in warnings[0]  # explicit elision marker
+        assert len(warnings[0]) < 1000  # bounded, not the 100 KB flood
+
+    def test_malformed_summary_warns_escaped(self, caplog) -> None:
+        # Server-derived reply text is escaped before logging —
+        # control bytes must not reach the terminal raw.
+        server = _FakeJoernServer(
+            raw_output="JOERN_GUARD_SUMMARY:\x1b[31mbanana",
+        )
+        with caplog.at_level("WARNING", logger=self._LOGGER):
+            verdict = rg.check_sink_guarded("fn", server)
+        assert verdict == rg.GUARD_UNAVAILABLE
+        warnings = self._warnings(caplog)
+        assert len(warnings) == 1
+        assert "\x1b" not in warnings[0]
+
+    def test_healthy_verdicts_do_not_warn(self, caplog) -> None:
+        with caplog.at_level("WARNING", logger=self._LOGGER):
+            assert rg.check_sink_guarded(
+                "fn", _FakeJoernServer(raw_output="JOERN_GUARD_SUMMARY:0/2"),
+            ) == "guarded"
+            assert rg.check_sink_guarded(
+                "fn", _FakeJoernServer(raw_output="JOERN_GUARD_SUMMARY:1/2"),
+            ) == "unguarded"
+        assert self._warnings(caplog) == []
+
+    def test_deterministic_non_answers_do_not_warn(self, caplog) -> None:
+        # No server / dead server / invalid name / no tested sinks are
+        # deterministic non-answers or health-gate territory, not
+        # per-probe degradation — they stay quiet here.
+        with caplog.at_level("WARNING", logger=self._LOGGER):
+            assert rg.check_sink_guarded("fn", None) is None
+            assert rg.check_sink_guarded(
+                "fn", _FakeJoernServer(alive=False),
+            ) == rg.GUARD_UNAVAILABLE
+            assert rg.check_sink_guarded(
+                "bad name!",
+                _FakeJoernServer(raw_output="JOERN_GUARD_SUMMARY:0/1"),
+            ) is None
+            assert rg.check_sink_guarded(
+                "fn", _FakeJoernServer(raw_output="JOERN_GUARD_SUMMARY:0/0"),
+            ) is None
+        assert self._warnings(caplog) == []
+
+
 class TestBinaryOracleAbsentUnannotatedNamesake:
     """The suppression invariant ("EVERY returned candidate is dead")
     must be structural: an unannotated FUNCTION namesake blocks the
