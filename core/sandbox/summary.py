@@ -73,6 +73,7 @@ from core.logging import log_security_event as _log_security_event
 from core.security.redaction import redact_secrets
 
 from . import evidence as _evidence
+from .escalation_signatures import HOSTILE_IOCTL_CMDS, HOSTILE_SOCKET_ARGS
 
 logger = logging.getLogger(__name__)
 
@@ -1358,11 +1359,27 @@ _FILESYSTEM_ESCAPE_PREFIXES = (
     "/var/run/", "/run/",
 )
 
+_CONTAINER_ESCAPE_PATHS = frozenset({
+    "/var/run/docker.sock",
+    "/run/docker.sock",
+    "/run/containerd/containerd.sock",
+    "/var/run/containerd/containerd.sock",
+    "/var/run/crio/crio.sock",
+    "/run/crio/crio.sock",
+    "/run/podman/podman.sock",
+    "/var/run/podman/podman.sock",
+})
+
 _MAX_TRIAGE_EXAMPLES = 5
 
 
 def _triage_denials(records: list[dict]) -> dict[str, Any]:
     """Classify denial records into escape-attempt signature categories.
+
+    Handles two record formats transparently:
+    - Enforcement-mode records from observe.py (``type``/``cmd``/``returncode``)
+    - Audit-mode records from the tracer (``audit: True``, ``syscall``,
+      decoded ``socket_family``/``ioctl_cmd``/``path`` fields)
 
     Returns a dict suitable for embedding in sandbox-summary.json under
     the ``triage`` key.
@@ -1379,6 +1396,29 @@ def _triage_denials(records: list[dict]) -> dict[str, Any]:
         dtype = rec.get("type", "")
         cmd = str(rec.get("cmd", "")).lower()
         path = str(rec.get("path", ""))
+        is_audit = rec.get("audit", False) or rec.get("observe", False)
+
+        if is_audit:
+            sock_fam = rec.get("socket_family", "")
+            sock_type = rec.get("socket_type", "")
+            ioctl_cmd = rec.get("ioctl_cmd", "")
+
+            if path in _CONTAINER_ESCAPE_PATHS:
+                buckets["escape_primitives"].append(
+                    f"connect:{path}")
+                continue
+            if sock_fam in HOSTILE_SOCKET_ARGS:
+                buckets["escape_primitives"].append(
+                    f"socket({sock_fam})")
+                continue
+            if sock_type in HOSTILE_SOCKET_ARGS:
+                buckets["escape_primitives"].append(
+                    f"socket({sock_type})")
+                continue
+            if ioctl_cmd in HOSTILE_IOCTL_CMDS:
+                buckets["escape_primitives"].append(
+                    f"ioctl({ioctl_cmd})")
+                continue
 
         # Escape primitives: syscall-level denials only (type=seccomp).
         # Matching against cmd alone — not paths or other detail fields

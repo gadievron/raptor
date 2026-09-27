@@ -145,5 +145,102 @@ class TestTriageDenials(unittest.TestCase):
                                f"{prefix} should be filesystem_escape")
 
 
+class TestAuditModeEnrichment(unittest.TestCase):
+    """Tracer-format records (audit: True) carry decoded socket/ioctl
+    fields. The triage classifier should use them for refined
+    classification."""
+
+    def test_docker_sock_is_escape_primitive(self):
+        records = [
+            {"type": "network", "cmd": "<sandbox audit: connect>",
+             "audit": True, "syscall": "connect",
+             "path": "/var/run/docker.sock", "returncode": 0},
+        ]
+        result = _triage_denials(records)
+        self.assertEqual(result["escape_primitives"]["count"], 1)
+        self.assertIn("connect:/var/run/docker.sock",
+                       result["escape_primitives"]["examples"])
+        self.assertEqual(result["severity"], "critical")
+
+    def test_containerd_sock_is_escape_primitive(self):
+        records = [
+            {"type": "network", "cmd": "<sandbox audit: connect>",
+             "audit": True, "syscall": "connect",
+             "path": "/run/containerd/containerd.sock", "returncode": 0},
+        ]
+        result = _triage_denials(records)
+        self.assertEqual(result["escape_primitives"]["count"], 1)
+
+    def test_run_symlink_form_of_docker_sock(self):
+        records = [
+            {"type": "network", "cmd": "<sandbox audit: connect>",
+             "audit": True, "syscall": "connect",
+             "path": "/run/docker.sock", "returncode": 0},
+        ]
+        result = _triage_denials(records)
+        self.assertEqual(result["escape_primitives"]["count"], 1)
+
+    def test_af_packet_is_escape_primitive(self):
+        records = [
+            {"type": "seccomp", "cmd": "<sandbox audit: socket>",
+             "audit": True, "syscall": "socket",
+             "socket_family": "AF_PACKET", "socket_type": "SOCK_RAW",
+             "returncode": 0},
+        ]
+        result = _triage_denials(records)
+        self.assertEqual(result["escape_primitives"]["count"], 1)
+        self.assertEqual(result["severity"], "critical")
+
+    def test_sock_raw_is_escape_primitive(self):
+        records = [
+            {"type": "seccomp", "cmd": "<sandbox audit: socket>",
+             "audit": True, "syscall": "socket",
+             "socket_family": "AF_INET", "socket_type": "SOCK_RAW",
+             "returncode": 0},
+        ]
+        result = _triage_denials(records)
+        self.assertEqual(result["escape_primitives"]["count"], 1)
+
+    def test_tiocsti_is_escape_primitive(self):
+        records = [
+            {"type": "seccomp", "cmd": "<sandbox audit: ioctl>",
+             "audit": True, "syscall": "ioctl",
+             "ioctl_cmd": "TIOCSTI", "returncode": 0},
+        ]
+        result = _triage_denials(records)
+        self.assertEqual(result["escape_primitives"]["count"], 1)
+
+    def test_tiocsctty_is_escape_primitive(self):
+        records = [
+            {"type": "seccomp", "cmd": "<sandbox audit: ioctl>",
+             "audit": True, "syscall": "ioctl",
+             "ioctl_cmd": "TIOCSCTTY", "returncode": 0},
+        ]
+        result = _triage_denials(records)
+        self.assertEqual(result["escape_primitives"]["count"], 1)
+        self.assertEqual(result["severity"], "critical")
+
+    def test_ordinary_audit_connect_is_network(self):
+        records = [
+            {"type": "network", "cmd": "<sandbox audit: connect>",
+             "audit": True, "syscall": "connect",
+             "path": "/tmp/ordinary.sock", "returncode": 0},
+        ]
+        result = _triage_denials(records)
+        self.assertEqual(result["escape_primitives"]["count"], 0)
+        self.assertEqual(result["network_probing"]["count"], 1)
+
+    def test_audit_and_enforcement_records_coexist(self):
+        records = [
+            {"type": "seccomp", "cmd": "ptrace call", "returncode": 1},
+            {"type": "network", "cmd": "<sandbox audit: connect>",
+             "audit": True, "syscall": "connect",
+             "path": "/var/run/docker.sock", "returncode": 0},
+        ]
+        result = _triage_denials(records)
+        self.assertEqual(result["escape_primitives"]["count"], 2)
+        self.assertEqual(result["severity"], "critical")
+
+
 if __name__ == "__main__":
     unittest.main()
