@@ -3191,6 +3191,14 @@ def _run_witness_execution(workdir, target, data, dynamic=None):
     try:
         from core.llm.client import LLMClient
         client = LLMClient()
+        # Standalone-CLI dispatcher bootstrap: the helper is its own
+        # parent, so a Bedrock-routed model has no RAPTOR_LLM_SOCKET
+        # and every witness-spec call dies with "requires the RAPTOR
+        # LLM dispatcher" (one failure per eligible finding). Same
+        # self-serve as raptor-llm-ask; no-op when a route exists or
+        # none is needed, never raises.
+        from core.llm.dispatcher.lifecycle import ensure_route_for_client
+        ensure_route_for_client(client, label="validate-witness")
     except Exception as e:  # noqa: BLE001 — no LLM, no witness specs
         print(f"  Witness execution: no LLM available "
               f"({_sft(str(e), max_len=200)}); skipped",
@@ -3856,6 +3864,11 @@ def _rank_priority_targets(checklist: dict, out_dir) -> None:
             ])
 
         client = LLMClient()
+        # Standalone-CLI dispatcher bootstrap (see the witness-stage
+        # site): Bedrock-routed models need a dispatcher route the
+        # helper's parent doesn't provide. No-op otherwise.
+        from core.llm.dispatcher.lifecycle import ensure_route_for_client
+        ensure_route_for_client(client, label="validate-rank")
         # Ordering is an opening move, not the run: cap its budget
         # well below the client default (inert on the claude-code
         # transport, which reports $0 — the head cap bounds that
