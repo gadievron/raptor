@@ -1316,6 +1316,23 @@ class _CachedLoad:
     #: cross-shard prune keeps, and the fold cannot prove
     #: equivalence locally (see :func:`_carry_latest_view`).
     latest_view_ts_max: str = ""
+    #: Duplicate-row prune count already disclosed for this cache
+    #: generation. The prune warning's inputs are stable across
+    #: extensions — finalize re-aggregates the SAME cached per-shard
+    #: in-stream counts, and the cross-shard dedup re-run re-finds
+    #: the SAME historical duplicates — so without this baseline
+    #: every consumer load that finalized re-warned one
+    #: byte-identical line (hundreds per run at production load
+    #: frequency). With it, an extension warns only when NEW rows
+    #: pruned beyond the baseline (delta + cumulative, so a growing
+    #: problem stays visible; same convention as the corrupt-line
+    #: counter, which never re-warns lines a prior call reported). A
+    #: whole-record drop (invalidate_load_cache, uncacheable outcome,
+    #: LRU eviction) resets to cold-parse semantics: the next
+    #: generation warns its full count again — a fresh process never
+    #: loses the signal, since the on-disk duplicate rows persist
+    #: until an offline compact.
+    warned_pruned: int = 0
 
     def cached_bytes(self) -> int:
         """The record's live cost under ``_LOAD_CACHE_MAX_BYTES``:
@@ -1621,6 +1638,11 @@ def _serve_or_extend_set(
     old_view_ts_max = cached.latest_view_ts_max
     old_active_len = len(active.entries)
     old_active_pruned = active.pruned
+    # Same-generation continuation: the popped record's disclosed
+    # prune count carries into the re-finalize so only NEW prunes
+    # warn (a cold parse — record dropped or absent — starts at 0
+    # and warns the full count again).
+    warned_pruned = cached.warned_pruned
     new_names = names_now[len(cached_names):]
     from core.source import open_regular
     fh = open_regular(out_dir / active.name, "rb")
@@ -1704,7 +1726,10 @@ def _serve_or_extend_set(
             _load_shard_cold(out_dir / s.name) if s.rows_evicted else s
             for s in states
         ]
-    result = _finalize_set(out_dir, cache_key, states, snapshot=snap)
+    result = _finalize_set(
+        out_dir, cache_key, states, snapshot=snap,
+        warned_pruned=warned_pruned,
+    )
     if old_view is not None and not shed:
         # Pure extension of an unshed record: carry the memoized
         # latest view forward by folding only the delta rows. A shed
@@ -2123,10 +2148,16 @@ def _finalize_set(
     states: list[_ShardLoadState],
     *,
     snapshot: "frozenset[str] | None" = None,
+    warned_pruned: int = 0,
 ) -> JournalLoad:
     """Aggregate the shard states into one JournalLoad, emit the
     set-level warnings, and store/drop the cache record. Caller holds
     ``_load_cache_lock``.
+
+    *warned_pruned* is the prune count the popped predecessor record
+    already disclosed (0 on a cold parse — a new cache generation
+    always warns its full count): the prune warning fires only for
+    rows BEYOND it (see ``_CachedLoad.warned_pruned``).
 
     The cross-shard final dedup runs on a COPY of the concatenated
     lists, so the cached per-shard states always stay the pristine
@@ -2179,15 +2210,33 @@ def _finalize_set(
         # per-shard state (see the docstring).
         freed_rows, _freed = _prune_reemission_rows(entries, sizes)
         pruned_total += freed_rows
-    if pruned_total:
-        logger.warning(
-            "journal: %s exceeded the retained-entry budget or spans "
-            "shards — pruned %d duplicate re-emission row(s) at load "
-            "(newest per identity kept; no verdict or spend evidence "
-            "lost); %s",
-            out_dir / JOURNAL_FILENAME, pruned_total,
-            compact_hint(out_dir),
-        )
+    if pruned_total > warned_pruned:
+        # Once per cache generation, then delta-only: an extension
+        # finalize re-derives the same historical count, so re-warning
+        # it verbatim on every consumer load is pure console noise
+        # that scales with load frequency. New prunes beyond the
+        # disclosed baseline still warn, with the cumulative count so
+        # a growing duplicate problem stays visible. The prune itself
+        # is unchanged either way.
+        if warned_pruned:
+            logger.warning(
+                "journal: %s pruned %d NEW duplicate re-emission "
+                "row(s) at load (%d total this load generation; "
+                "newest per identity kept; no verdict or spend "
+                "evidence lost); %s",
+                out_dir / JOURNAL_FILENAME,
+                pruned_total - warned_pruned, pruned_total,
+                compact_hint(out_dir),
+            )
+        else:
+            logger.warning(
+                "journal: %s exceeded the retained-entry budget or "
+                "spans shards — pruned %d duplicate re-emission "
+                "row(s) at load (newest per identity kept; no "
+                "verdict or spend evidence lost); %s",
+                out_dir / JOURNAL_FILENAME, pruned_total,
+                compact_hint(out_dir),
+            )
     if incomplete_reason:
         logger.warning(
             "journal: PARTIAL load of %s — %s (%d entries loaded); "
@@ -2207,6 +2256,11 @@ def _finalize_set(
             result_entries=entries,
             extensible=complete and states[-1].at_line_boundary,
             config=_loader_config(),
+            # Everything up to pruned_total is now disclosed; max()
+            # is belt-and-braces (append-only bytes cannot lower the
+            # re-derived count, but a lower one must never re-arm a
+            # warning already emitted).
+            warned_pruned=max(warned_pruned, pruned_total),
         ))
     else:
         # Uncacheable outcome (missing/refused shard, I/O degrade,
