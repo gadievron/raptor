@@ -235,9 +235,16 @@ def ensure_route_for_model_configs(
     return ensure_inprocess_dispatcher_env(label=label, run_dir=run_dir)
 
 
-def ensure_route_for_client(client: Any, label: str) -> None:
+def ensure_route_for_client(
+    client: Any,
+    label: str,
+    *,
+    run_dir: Path | None = None,
+) -> None:
     """Self-serve the in-process dispatcher for a client's resolved
-    models (primary + fallbacks), by *label*.
+    models (primary + fallbacks), by *label*. ``run_dir`` follows the
+    :func:`ensure_inprocess_dispatcher_env` audit-log placement
+    contract — pass the run output directory when the caller has one.
 
     The one implementation of the bootstrap every standalone
     LLM-calling CLI used to open-code: pipeline runs inherit a
@@ -264,7 +271,7 @@ def ensure_route_for_client(client: Any, label: str) -> None:
     try:
         configs = [getattr(client.config, "primary_model", None)]
         configs += list(getattr(client.config, "fallback_models", []) or [])
-        ensure_route_for_model_configs(configs, label=label)
+        ensure_route_for_model_configs(configs, label=label, run_dir=run_dir)
     except WorldReadableModelsConfigError as exc:
         import sys
         # The message embeds the config path (operator env) — render

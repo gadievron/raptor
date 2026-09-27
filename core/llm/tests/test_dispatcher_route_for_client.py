@@ -26,7 +26,8 @@ def test_plumbs_primary_and_fallbacks_in_order(monkeypatch):
     calls: list[tuple] = []
     monkeypatch.setattr(
         lifecycle, "ensure_route_for_model_configs",
-        lambda configs, label: calls.append((list(configs), label)),
+        lambda configs, label, run_dir=None:
+            calls.append((list(configs), label, run_dir)),
     )
     primary = SimpleNamespace(provider="bedrock")
     fb1 = SimpleNamespace(provider="anthropic")
@@ -34,22 +35,23 @@ def test_plumbs_primary_and_fallbacks_in_order(monkeypatch):
     lifecycle.ensure_route_for_client(
         _client(primary, [fb1, fb2]), "test-cli",
     )
-    assert calls == [([primary, fb1, fb2], "test-cli")]
+    assert calls == [([primary, fb1, fb2], "test-cli", None)]
 
 
 def test_none_fallbacks_tolerated(monkeypatch):
     calls: list[tuple] = []
     monkeypatch.setattr(
         lifecycle, "ensure_route_for_model_configs",
-        lambda configs, label: calls.append((list(configs), label)),
+        lambda configs, label, run_dir=None:
+            calls.append((list(configs), label, run_dir)),
     )
     primary = SimpleNamespace(provider="bedrock")
     lifecycle.ensure_route_for_client(_client(primary, None), "test-cli")
-    assert calls == [([primary], "test-cli")]
+    assert calls == [([primary], "test-cli", None)]
 
 
 def test_never_raises_when_route_bringup_fails(monkeypatch):
-    def _boom(configs, label):
+    def _boom(configs, label, run_dir=None):
         raise RuntimeError("socket bind failed")
     monkeypatch.setattr(
         lifecycle, "ensure_route_for_model_configs", _boom,
@@ -60,7 +62,7 @@ def test_never_raises_when_route_bringup_fails(monkeypatch):
 def test_never_raises_on_config_less_client(monkeypatch):
     monkeypatch.setattr(
         lifecycle, "ensure_route_for_model_configs",
-        lambda configs, label: None,
+        lambda configs, label, run_dir=None: None,
     )
 
     class _Hostile:
@@ -69,3 +71,17 @@ def test_never_raises_on_config_less_client(monkeypatch):
             raise AttributeError("no config on this client")
 
     lifecycle.ensure_route_for_client(_Hostile(), "test-cli")  # no raise
+
+
+def test_run_dir_passes_through(monkeypatch, tmp_path):
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        lifecycle, "ensure_route_for_model_configs",
+        lambda configs, label, run_dir=None:
+            calls.append((list(configs), label, run_dir)),
+    )
+    primary = SimpleNamespace(provider="bedrock")
+    lifecycle.ensure_route_for_client(
+        _client(primary, None), "test-cli", run_dir=tmp_path,
+    )
+    assert calls == [([primary], "test-cli", tmp_path)]

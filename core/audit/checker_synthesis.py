@@ -143,8 +143,10 @@ def _hypothesis_self_classified_refuted(
 def _build_llm_callable(config: Any):
     """Build a ``packages.checker_synthesis.LLMCallable`` from /audit's
     LLM config. Returns ``(callable, client)`` or None when no LLM is
-    available. The caller reads ``client.total_cost`` after synthesis to
-    feed the cost back into the budget tracker."""
+    available. Spend is attributed per callable (each caller reads its
+    own ``cost_usd`` accumulator); the client rides along for identity
+    metadata (``model_name``), so sharing one client across callables
+    never double-counts."""
     try:
         from core.llm.task_types import TaskType
     except ImportError:
@@ -154,6 +156,14 @@ def _build_llm_callable(config: Any):
     # and the per-call reservation gate. Falls back to a fresh client
     # (pinned to the run's primary model) for library callers.
     client = getattr(config, "llm_budget_client", None)
+    if client is None:
+        # One fresh client per CONFIG object, not per call: drain
+        # reaches synthesis once per backlog row against one shared
+        # config, and route bring-up (below) moves provider
+        # credentials out of the environment on the first call — a
+        # client rebuilt for row 2+ would resolve post-move and
+        # silently switch transport (or resolve no model at all).
+        client = getattr(config, "_synth_client_memo", None)
     if client is None:
         try:
             # Transcript seam: identical to LLMClient(...) with no
@@ -165,9 +175,45 @@ def _build_llm_callable(config: Any):
         models = getattr(config, "models", None)
         if models and models[0] != "default":
             model = models[0]
-        client = build_llm_client(pinned_model=model) if model else build_llm_client()
+        try:
+            client = (build_llm_client(pinned_model=model) if model
+                      else build_llm_client())
+        except Exception as exc:  # noqa: BLE001 — unresolvable config is
+            # "no LLM available", not a per-row synthesis error: callers
+            # (drain's no-llm stop, the phase drivers) already own that
+            # verdict, and letting it raise here mislabels one transport
+            # fact as N row failures that burn retry attempts.
+            logger.warning("checker_synthesis: no LLM client: %s", exc)
+            return None
+        try:
+            config._synth_client_memo = client
+        except Exception:  # noqa: BLE001 — a config refusing attribute
+            # writes (frozen/slotted) keeps the per-call construction
+            # it always had; no such caller exists today.
+            pass
     if not hasattr(client, "generate_structured"):
         return None
+
+    # Dispatcher-only providers (Bedrock) need an in-process route.
+    # Pipeline runs already have one — from the parent launcher or the
+    # pipeline's own client bring-up (the gate no-ops on an existing
+    # socket) — but standalone entry points that reach synthesis
+    # directly — `raptor-audit backlog drain` — are
+    # their own parent and must bring it up here. Beside the client on
+    # purpose: bring-up moves provider credentials from the environment
+    # into the dispatcher's store, so a client resolved AFTER it may
+    # see no credentials at all — the client must exist first, the
+    # route second. Shared gate (never raises; no-op when a route
+    # exists or none is needed).
+    try:
+        from core.llm.dispatcher.lifecycle import ensure_route_for_client
+    except ImportError:  # no dispatcher machinery, no route to serve
+        pass
+    else:
+        ensure_route_for_client(
+            client, "checker-synthesis",
+            run_dir=getattr(config, "out_dir", None),
+        )
 
     # Persistent-auth fail-closed: the synthesis engine (packages.
     # checker_synthesis) catches exceptions around its LLM calls, so
