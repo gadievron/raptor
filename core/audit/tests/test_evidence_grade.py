@@ -1081,3 +1081,268 @@ class TestProducerStampClosure:
             "attribute stamp writers emit firewall-rejected stamps: "
             f"{violations}"
         )
+
+
+class TestStampPartOrderClosure:
+    """Mechanical closure of stamp-part consumers against positional
+    trust.
+
+    ``is_verification_evidence`` stops scanning at the first
+    ``llm-claimed:`` part — everything after the claim marker is
+    quarantined by POSITION in the composite. A consumer that splits an
+    ``evidence_tool`` composite on ``"+"`` and sorts, set-dedups, or
+    otherwise re-orders the parts before rejoining could surface a
+    quarantined tail part ahead of the claim marker and mint
+    verification grade from a model claim. This census enumerates every
+    runtime ``.split("+")`` site under core/ and packages/ and asserts
+    none feeds ``sorted()``/``set()``/``frozenset()``/``reversed()``
+    (or an in-place ``.sort()``, or a set-shaped comprehension) into a
+    ``"+".join``. Order-preserving rejoins (plain lists, strip
+    comprehensions, generator expressions) stay open — only re-ordering
+    shapes are violations.
+    """
+
+    _REPO_ROOT = Path(__file__).resolve().parents[3]
+    _REORDERERS = ("sorted", "set", "frozenset", "reversed")
+
+    @classmethod
+    def _runtime_modules(cls):
+        for top in ("core", "packages"):
+            for path in sorted((cls._REPO_ROOT / top).rglob("*.py")):
+                parts = path.relative_to(cls._REPO_ROOT).parts
+                if "tests" in parts or "scripts" in parts:
+                    continue
+                yield path
+
+    @staticmethod
+    def _scopes(tree):
+        import ast as _ast
+
+        yield tree
+        for node in _ast.walk(tree):
+            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                yield node
+
+    @staticmethod
+    def _scope_nodes(scope_node):
+        """Walk *scope_node* without descending into nested scopes
+        (same per-scope narrowing as TestProducerStampClosure)."""
+        import ast as _ast
+
+        for child in _ast.iter_child_nodes(scope_node):
+            if isinstance(child, (
+                _ast.FunctionDef, _ast.AsyncFunctionDef,
+                _ast.ClassDef, _ast.Lambda,
+            )):
+                continue
+            yield child
+            yield from TestStampPartOrderClosure._scope_nodes(child)
+
+    @classmethod
+    def _is_split_call(cls, node) -> bool:
+        import ast as _ast
+
+        return (
+            isinstance(node, _ast.Call)
+            and isinstance(node.func, _ast.Attribute)
+            and node.func.attr == "split"
+            and len(node.args) >= 1
+            and isinstance(node.args[0], _ast.Constant)
+            and node.args[0].value == "+"
+        )
+
+    @classmethod
+    def _is_parts_expr(cls, node, parts_names: set) -> bool:
+        """Expression yielding split-on-plus parts (order preserved)."""
+        import ast as _ast
+
+        if cls._is_split_call(node):
+            return True
+        if isinstance(node, _ast.Name):
+            return node.id in parts_names
+        if isinstance(node, (_ast.ListComp, _ast.GeneratorExp)):
+            return any(
+                cls._is_parts_expr(g.iter, parts_names)
+                for g in node.generators
+            )
+        if (
+            isinstance(node, _ast.Call)
+            and isinstance(node.func, _ast.Name)
+            and node.func.id in ("list", "tuple")
+        ):
+            return bool(node.args) and cls._is_parts_expr(
+                node.args[0], parts_names,
+            )
+        return False
+
+    @classmethod
+    def _is_reordered_parts(
+        cls, node, parts_names: set, reorder_names: set,
+    ) -> bool:
+        """Expression yielding split parts in a DIFFERENT order."""
+        import ast as _ast
+
+        if isinstance(node, _ast.Name):
+            return node.id in reorder_names
+        if (
+            isinstance(node, _ast.Call)
+            and isinstance(node.func, _ast.Name)
+            and node.func.id in cls._REORDERERS
+        ):
+            return bool(node.args) and cls._is_parts_expr(
+                node.args[0], parts_names,
+            )
+        if isinstance(node, _ast.SetComp):
+            return any(
+                cls._is_parts_expr(g.iter, parts_names)
+                for g in node.generators
+            )
+        return False
+
+    @classmethod
+    def _scope_violations(cls, scope, rel) -> tuple:
+        import ast as _ast
+
+        nodes = list(cls._scope_nodes(scope))
+        split_sites = sum(1 for n in nodes if cls._is_split_call(n))
+        parts_names: set = set()
+        reorder_names: set = set()
+        # Two passes give one-hop transitivity (parts -> alias ->
+        # reordered alias) without a full fixpoint.
+        for _ in range(2):
+            for node in nodes:
+                target = None
+                if isinstance(node, _ast.Assign) and len(
+                    node.targets,
+                ) == 1 and isinstance(node.targets[0], _ast.Name):
+                    target = node.targets[0].id
+                elif isinstance(node, _ast.AnnAssign) and isinstance(
+                    node.target, _ast.Name,
+                ) and node.value is not None:
+                    target = node.target.id
+                if target is None:
+                    continue
+                if cls._is_parts_expr(node.value, parts_names):
+                    parts_names.add(target)
+                elif cls._is_reordered_parts(
+                    node.value, parts_names, reorder_names,
+                ):
+                    reorder_names.add(target)
+        violations = []
+        for node in nodes:
+            if not isinstance(node, _ast.Call):
+                continue
+            fn = node.func
+            if not isinstance(fn, _ast.Attribute):
+                continue
+            if (
+                fn.attr == "join"
+                and isinstance(fn.value, _ast.Constant)
+                and fn.value.value == "+"
+                and node.args
+                and cls._is_reordered_parts(
+                    node.args[0], parts_names, reorder_names,
+                )
+            ):
+                violations.append((
+                    f"{rel}:{node.lineno}",
+                    "re-ordered split('+') parts rejoined with '+'",
+                ))
+            elif (
+                fn.attr == "sort"
+                and isinstance(fn.value, _ast.Name)
+                and fn.value.id in parts_names
+            ):
+                violations.append((
+                    f"{rel}:{node.lineno}",
+                    "in-place sort of split('+') parts",
+                ))
+        return violations, split_sites
+
+    @classmethod
+    def _census(cls) -> tuple:
+        import ast as _ast
+
+        violations: list = []
+        split_sites = 0
+        for path in cls._runtime_modules():
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if '.split("+")' not in text and ".split('+')" not in text:
+                continue
+            rel = path.relative_to(cls._REPO_ROOT)
+            for scope in cls._scopes(_ast.parse(text)):
+                v, s = cls._scope_violations(scope, rel)
+                violations.extend(v)
+                split_sites += s
+        return violations, split_sites
+
+    def test_no_runtime_consumer_reorders_stamp_parts(self):
+        violations, split_sites = self._census()
+        # Non-vacuity: the census must actually see the consumer
+        # surface (evidence_grade, llm_review, orchestrator, export
+        # all split composites today).
+        assert split_sites >= 10, (
+            "census no longer sees split('+') consumer sites"
+        )
+        assert not violations, (
+            "stamp-part consumers re-order '+'-joined parts before "
+            "rejoining — part order is load-bearing (the first "
+            "llm-claimed: part quarantines everything after it): "
+            f"{violations}"
+        )
+
+    def test_detector_catches_reorder_shapes(self):
+        import ast as _ast
+
+        bad_snippets = (
+            'def f(ev):\n'
+            '    return "+".join(sorted(ev.split("+")))\n',
+
+            'def f(ev):\n'
+            '    return "+".join(set(ev.split("+")))\n',
+
+            'def f(ev):\n'
+            '    parts = [p.strip() for p in ev.split("+")]\n'
+            '    ordered = sorted(parts)\n'
+            '    return "+".join(ordered)\n',
+
+            'def f(ev):\n'
+            '    parts = ev.split("+")\n'
+            '    parts.sort()\n'
+            '    return "+".join(parts)\n',
+
+            'def f(ev):\n'
+            '    return "+".join({p.strip() for p in ev.split("+")})\n',
+        )
+        for snippet in bad_snippets:
+            hits = [
+                v
+                for scope in self._scopes(_ast.parse(snippet))
+                for v in self._scope_violations(scope, "synthetic.py")[0]
+            ]
+            assert hits, f"detector missed a reorder shape:\n{snippet}"
+
+    def test_detector_ignores_order_preserving_consumers(self):
+        import ast as _ast
+
+        ok_snippets = (
+            # Fresh collections (not split parts) may sort freely.
+            'def f(a, b):\n'
+            '    return "+".join(sorted({a, b}))\n',
+
+            # Order-preserving rejoin of split parts.
+            'def f(ev):\n'
+            '    parts = ev.split("+")\n'
+            '    return "+".join(parts)\n',
+
+            # The documented strip-and-rejoin hygiene shape.
+            'def f(ev):\n'
+            '    return "+".join(p.strip() for p in ev.split("+"))\n',
+        )
+        for snippet in ok_snippets:
+            hits = [
+                v
+                for scope in self._scopes(_ast.parse(snippet))
+                for v in self._scope_violations(scope, "synthetic.py")[0]
+            ]
+            assert not hits, f"detector over-flags a benign shape:\n{snippet}"
