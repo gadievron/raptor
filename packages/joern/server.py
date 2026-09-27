@@ -1899,12 +1899,25 @@ class JoernServer:
         matched: compile errors in the guarded query can echo the
         require line itself, and matching the echo would misclassify
         every such error as a swap and pay a re-import for it.
+
+        Record/sentinel lines are excluded before matching (the same
+        rule ``_has_scala_error`` applies): record payloads reproduce
+        the SCANNED repo's own strings, and a target file carrying a
+        thrown-form string that surfaces in a flow record would
+        otherwise classify every query on it as a swap — paying up to
+        the re-import cap in full CPG imports and then failing the
+        tier, from one string constant in the analysed code.
         """
-        text = f"{stdout}\n{stderr}"
-        return (
-            f"requirement failed: {_LEASE_MISMATCH}" in text
-            or f"Not found: {_LEASE_VAL}" in text
-        )
+        for raw_line in f"{stdout}\n{stderr}".splitlines():
+            line = _strip_ansi(raw_line)
+            if any(marker in line for marker in _RECORD_LINE_MARKERS):
+                continue
+            if (
+                f"requirement failed: {_LEASE_MISMATCH}" in line
+                or f"Not found: {_LEASE_VAL}" in line
+            ):
+                return True
+        return False
 
     def _recover_graph_lease(self, seen_epoch: int) -> bool:
         """Re-import this handle's graph after a detected swap.

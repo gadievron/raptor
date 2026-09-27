@@ -1300,6 +1300,29 @@ class TestGraphIdentityLease:
         assert JoernServer._lease_swapped(echo, "") is False
         assert JoernServer._lease_swapped("val res0: Int = 1", "") is False
 
+    def test_swap_classifier_ignores_record_line_payloads(self):
+        # Record/sentinel lines carry the SCANNED repo's own text: a
+        # target file containing the thrown-form string verbatim must
+        # not classify every query on it as a swap (each false swap
+        # costs a full re-import, and the cap then kills the tier).
+        payload = (
+            "JOERN_FLOW:src/evil.c:12:parse|"
+            "log(\"requirement failed: "
+            f"{_LEASE_MISMATCH}\")"
+        )
+        assert JoernServer._lease_swapped(payload, "") is False
+        assert JoernServer._lease_swapped(
+            f"METHOD_SUMMARY:handler|Not found: {_LEASE_VAL}", "",
+        ) is False
+        # ...while a genuine thrown form alongside record output
+        # still classifies.
+        mixed = (
+            "JOERN_FLOW:src/ok.c:3:f|snippet\n"
+            "java.lang.IllegalArgumentException: requirement "
+            f"failed: {_LEASE_MISMATCH}"
+        )
+        assert JoernServer._lease_swapped(mixed, "") is True
+
     def test_swap_recovers_reimports_and_retries_once(self, tmp_path):
         srv = JoernServer()
         srv._base_url = "http://127.0.0.1:9999"
