@@ -214,7 +214,7 @@ class TestDispatcherGate:
         out.mkdir()
         sweep_calls: list = []
         monkeypatch.setattr(
-            orch, "run_coccinelle_sweep",
+            orch, "run_coccinelle_file_sweep",
             lambda **kw: sweep_calls.append(kw),
         )
         cfg = _Cfg(tmp_path, out_dir=out)
@@ -242,11 +242,14 @@ class TestDispatcherGate:
         assert "php" in skip_rows[0]["reason"]
 
     def test_c_subject_dispatches(self, tmp_path, monkeypatch):
+        from core.audit.sweep import SweepResult
+
         rule = _tree(tmp_path)
         monkeypatch.setattr(
-            orch, "run_coccinelle_sweep",
-            lambda **kw: SimpleNamespace(
-                outcome="refuted", details=None, errors=[],
+            orch, "run_coccinelle_file_sweep",
+            lambda **kw: SweepResult(
+                tool="coccinelle", file_path=kw["file_path"],
+                function_name="", outcome="refuted",
                 rule_id=str(rule), matches=[],
             ),
         )
@@ -343,7 +346,7 @@ class TestHostileSentinelFilenames:
         )
         sweep_calls: list = []
         monkeypatch.setattr(
-            orch, "run_coccinelle_sweep",
+            orch, "run_coccinelle_file_sweep",
             lambda **kw: sweep_calls.append(kw),
         )
         cfg = _Cfg(tmp_path)
@@ -364,14 +367,17 @@ class TestHostileSentinelFilenames:
     ):
         # The anti-suppression direction: a C-family subject with a
         # sentinel name dispatches and its verdicts survive.
+        from core.audit.sweep import SweepResult
+
         rule = _tree(tmp_path)
         (tmp_path / "(path-check)").write_text(
             "int f(void){ return 0; }\n",
         )
         monkeypatch.setattr(
-            orch, "run_coccinelle_sweep",
-            lambda **kw: SimpleNamespace(
-                outcome="confirmed", details=None, errors=[],
+            orch, "run_coccinelle_file_sweep",
+            lambda **kw: SweepResult(
+                tool="coccinelle", file_path=kw["file_path"],
+                function_name="", outcome="confirmed",
                 rule_id=str(rule), matches=[{"line": 1}],
             ),
         )
@@ -405,13 +411,13 @@ class TestSkippedMemoReplay:
             runs.append(kw)
             return SweepResult(
                 tool="coccinelle", file_path=kw["file_path"],
-                function_name=kw["function_name"], outcome="skipped",
+                function_name="", outcome="skipped",
                 rule_id=str(rule),
                 details={"reason": "r", "substrate": {"covered": False}},
             )
 
         monkeypatch.setattr(
-            orch, "run_coccinelle_sweep", _skipping_sweep,
+            orch, "run_coccinelle_file_sweep", _skipping_sweep,
         )
         cfg = _Cfg(tmp_path)
         memo = SweepMemo()

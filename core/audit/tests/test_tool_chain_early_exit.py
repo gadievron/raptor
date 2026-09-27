@@ -85,7 +85,7 @@ class TestEarlyExitFires:
             orch, "run_semgrep_sweep", lambda **kw: _sg_result(),
         )
         monkeypatch.setattr(
-            orch, "run_coccinelle_sweep",
+            orch, "run_coccinelle_file_sweep",
             lambda **kw: cocci_calls.append(kw),
         )
         skipped: set = set()
@@ -119,7 +119,7 @@ class TestEarlyExitFires:
             lambda *a, **kw: (inv_calls.append(1), _InvRes())[1],
         )
         monkeypatch.setattr(
-            orch, "run_coccinelle_sweep",
+            orch, "run_coccinelle_file_sweep",
             lambda **kw: cocci_calls.append(kw),
         )
         chain = [
@@ -145,7 +145,7 @@ class TestEarlyExitFires:
             orch, "run_semgrep_sweep", lambda **kw: _sg_result(),
         )
         monkeypatch.setattr(
-            orch, "run_coccinelle_sweep", lambda **kw: None,
+            orch, "run_coccinelle_file_sweep", lambda **kw: None,
         )
         _run(cfg, _chain(rule, cocci), check=_promotion_grade_receipt)
         rows = [
@@ -180,7 +180,7 @@ class TestEarlyExitFires:
 
         monkeypatch.setattr(orch, "run_semgrep_sweep", sg_stub)
         monkeypatch.setattr(
-            orch, "run_coccinelle_sweep", lambda **kw: None,
+            orch, "run_coccinelle_file_sweep", lambda **kw: None,
         )
         chain = [
             {"type": "semgrep", "config": {"rule": str(rule)}},
@@ -218,7 +218,7 @@ class TestFullChainRuns:
             orch, "run_semgrep_sweep", lambda **kw: _sg_result(),
         )
         monkeypatch.setattr(
-            orch, "run_coccinelle_sweep",
+            orch, "run_coccinelle_file_sweep",
             lambda **kw: (cocci_calls.append(kw), _sg_result("refuted"))[1],
         )
         skipped: set = set()
@@ -237,7 +237,7 @@ class TestFullChainRuns:
             orch, "run_semgrep_sweep", lambda **kw: _sg_result(),
         )
         monkeypatch.setattr(
-            orch, "run_coccinelle_sweep",
+            orch, "run_coccinelle_file_sweep",
             lambda **kw: (cocci_calls.append(kw), _sg_result("refuted"))[1],
         )
         _run(cfg, _chain(rule, cocci), check=None)
@@ -278,7 +278,7 @@ class TestFullChainRuns:
             orch, "run_semgrep_sweep", lambda **kw: _sg_result("refuted"),
         )
         monkeypatch.setattr(
-            orch, "run_coccinelle_sweep",
+            orch, "run_coccinelle_file_sweep",
             lambda **kw: (cocci_calls.append(kw), _sg_result("refuted"))[1],
         )
         confirmed = _run(

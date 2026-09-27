@@ -89,8 +89,17 @@ def _leg_specs(tmp_path: Path):
                    lambda **kw: _sweep("smt", outcome))
 
     def _patch_cocci(mp, outcome):
-        mp.setattr(orch, "run_coccinelle_sweep",
-                   lambda **kw: _sweep("coccinelle", outcome))
+        # File-scoped runner: confirmed results need an in-range match
+        # or the scoper re-derives them to refuted.
+        mp.setattr(
+            orch, "run_coccinelle_file_sweep",
+            lambda **kw: SweepResult(
+                tool="coccinelle", file_path="src/a.c",
+                function_name="", outcome=outcome,
+                rule_id="coccinelle:rule",
+                matches=[{"line": 1}] if outcome == "confirmed" else [],
+            ),
+        )
 
     def _patch_codeql(mp, outcome):
         import core.audit.sweep as sweep_mod

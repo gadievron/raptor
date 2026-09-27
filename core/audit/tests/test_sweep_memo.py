@@ -350,6 +350,9 @@ class TestToolChainMemoWiring:
     def test_vocab_rendered_coccinelle_not_memoized(
         self, tmp_path, monkeypatch,
     ):
+        """A DomainVocabulary re-renders the rule per run state, so the
+        SOURCE rule's hash is not the effective rule identity — the
+        sweep must run unmemoized."""
         _write_target(tmp_path)
         rule = tmp_path / "rules" / "uaf.cocci"
         rule.parent.mkdir(exist_ok=True)
@@ -361,11 +364,11 @@ class TestToolChainMemoWiring:
             calls.append(kw)
             return SweepResult(
                 tool="coccinelle", file_path="src/a.c",
-                function_name="f", outcome="confirmed",
-                rule_id=str(rule),
+                function_name="", outcome="confirmed",
+                rule_id=str(rule), matches=[{"line": 3}],
             )
 
-        monkeypatch.setattr(orch, "run_coccinelle_sweep", stub)
+        monkeypatch.setattr(orch, "run_coccinelle_file_sweep", stub)
         chain = [{"type": "coccinelle", "config": {"rule": str(rule)}}]
         vocab = object()  # opaque run-state input — must disable the memo
         for _ in range(2):
@@ -380,6 +383,41 @@ class TestToolChainMemoWiring:
                 domain_vocab=vocab,
             )
         assert len(calls) == 2
+
+    def test_coccinelle_memo_is_file_scoped_across_functions(
+        self, tmp_path, monkeypatch,
+    ):
+        """The memo key carries no function/line dimension: a second
+        function in the same file replays the file sweep instead of
+        spawning a second spatch."""
+        _write_target(tmp_path)
+        rule = tmp_path / "rules" / "uaf.cocci"
+        rule.parent.mkdir(exist_ok=True)
+        rule.write_text("@@ @@\n")
+        cfg = _Cfg(tmp_path)
+        calls = []
+
+        def stub(**kw):
+            calls.append(kw)
+            return SweepResult(
+                tool="coccinelle", file_path="src/a.c",
+                function_name="", outcome="confirmed",
+                rule_id=str(rule), matches=[{"line": 3}],
+            )
+
+        monkeypatch.setattr(orch, "run_coccinelle_file_sweep", stub)
+        chain = [{"type": "coccinelle", "config": {"rule": str(rule)}}]
+        for fn, line in (("f", 1), ("g", 100)):
+            _run_tool_chain(
+                chain,
+                config=cfg,
+                file_path="src/a.c",
+                function_name=fn,
+                source="",
+                hypothesis="use after free of `p`",
+                line_start=line,
+            )
+        assert len(calls) == 1
 
     def test_stateful_channel_never_memoized(self, tmp_path, monkeypatch):
         assert "smt_invariant" not in MEMOIZABLE_STEP_TYPES

@@ -1818,25 +1818,30 @@ def _filter_identifier_consistent(
     return consistent
 
 
-def run_coccinelle_sweep(
+def run_coccinelle_file_sweep(
     *,
     target_path: Path,
     file_path: str,
-    function_name: str,
     cocci_rule: str,
     defines: dict[str, str] | None = None,
-    line_start: int | None = None,
-    line_end: int | None = None,
     domain_vocab: Any = None,
     language: str | None = None,
 ) -> SweepResult:
-    """Run a Coccinelle rule against a single C file.
+    """Run a Coccinelle rule against a single C file — FILE scope.
+
+    spatch always scans the whole file, so this is the natural memo
+    unit: the result depends only on (rule content, file content,
+    defines), never on which function the caller is auditing. Per-function
+    range filtering and confirmed/refuted classification happen in
+    :func:`scope_coccinelle_result` AFTER any memo retrieval, so one
+    spatch invocation serves every function in the file.
 
     Args:
         target_path: Root of the target codebase.
         file_path: Relative path to the C source file.
-        function_name: Function being audited.
-        cocci_rule: Path to the .cocci rule file.
+        cocci_rule: Path to the .cocci rule file. Always recorded as
+            ``rule_id`` — never a rendered tempfile path, which would
+            poison a memoized result with a path that stops existing.
         language: Canonical language of the file when the caller
             already knows it (inventory-stamped); None detects it via
             the canonical machinery. Non-C-family files yield
@@ -1844,19 +1849,18 @@ def run_coccinelle_sweep(
             and exits 0 with zero matches on foreign source, so its
             silence there is not evidence.
         defines: Optional spatch -D defines (e.g. {"func": "parse_input"}).
-        line_start: Restricts matches to the audited function's span;
-            matches outside it are dropped. When ``line_end`` is
-            missing, a ``line_start + 50`` window applies (same
-            fallback as the semgrep leg). Falsy ``line_start``
-            disables the filter (whole-file rules).
-        line_end: Upper bound of the match-filter range; see
-            ``line_start``.
+            Defines steer what the rule matches, so they are part of
+            the sweep's result identity: a caller memoizing this sweep
+            must carry a defines dimension in its memo key before
+            passing any defines through the memoized path.
         domain_vocab: DomainVocabulary used to render vocabulary
             placeholders in the rule to a tempfile before running;
             when None the rule file is run as-is.
 
     Returns:
-        SweepResult with outcome and matches.
+        SweepResult with the FULL unfiltered match set;
+        ``outcome="confirmed"`` iff any match anywhere in the file.
+        ``function_name`` is ``""`` (file scope).
     """
     escape = _check_path_containment(target_path, file_path, "coccinelle")
     if escape:
@@ -1867,7 +1871,7 @@ def run_coccinelle_sweep(
         return SweepResult(
             tool="coccinelle",
             file_path=file_path,
-            function_name=function_name,
+            function_name="",
             outcome="error",
             errors=[f"file not found: {full_path}"],
         )
@@ -1886,7 +1890,7 @@ def run_coccinelle_sweep(
         return SweepResult(
             tool="coccinelle",
             file_path=file_path,
-            function_name=function_name,
+            function_name="",
             outcome="skipped",
             rule_id=cocci_rule,
             details={"reason": cov.reason, "substrate": cov.as_receipt()},
@@ -1899,7 +1903,7 @@ def run_coccinelle_sweep(
             return SweepResult(
                 tool="coccinelle",
                 file_path=file_path,
-                function_name=function_name,
+                function_name="",
                 outcome="error",
                 errors=["coccinelle (spatch) not installed"],
             )
@@ -1940,7 +1944,7 @@ def run_coccinelle_sweep(
             return SweepResult(
                 tool="coccinelle",
                 file_path=file_path,
-                function_name=function_name,
+                function_name="",
                 outcome="error",
                 errors=spatch_errors
                 or [f"spatch exited with code {returncode}"],
@@ -1954,42 +1958,151 @@ def run_coccinelle_sweep(
             else:
                 matches.append({"raw": str(f)})
 
-        if line_start:
-            # Apply the range filter whenever the caller placed the
-            # function at all — requiring BOTH bounds let a match
-            # anywhere in the file confirm a per-function hypothesis
-            # when production passed line_end=None (the exact
-            # wrong-function bug the semgrep leg fixed). Without a
-            # real end bound, fall back to the same +50 window the
-            # semgrep call sites use.
-            effective_end = line_end if line_end else line_start + 50
-            matches = [
-                m for m in matches
-                if _match_in_range(m, line_start, effective_end)
-            ]
-
-        outcome = "confirmed" if matches else "refuted"
-        result = SweepResult(
+        return SweepResult(
             tool="coccinelle",
             file_path=file_path,
-            function_name=function_name,
-            outcome=outcome,
+            function_name="",
+            outcome="confirmed" if matches else "refuted",
             matches=matches,
             rule_id=cocci_rule,
         )
-        if cov is not None:
-            # Licensed refutations carry their substrate receipt;
-            # unknown-language coverage fails open by tier policy.
-            return license_refutation(result, cov)
-        return result
     except Exception as exc:  # noqa: BLE001
         return SweepResult(
             tool="coccinelle",
             file_path=file_path,
-            function_name=function_name,
+            function_name="",
             outcome="error",
             errors=[str(exc)],
         )
+
+
+def scope_coccinelle_result(
+    file_result: SweepResult,
+    *,
+    target_path: Path,
+    function_name: str,
+    line_start: int | None = None,
+    line_end: int | None = None,
+    language: str | None = None,
+) -> SweepResult:
+    """Narrow a file-scoped Coccinelle result to one function.
+
+    Works on a deep copy so a memoized ``file_result`` can be scoped
+    to any number of functions without cross-contamination.
+
+    Args:
+        file_result: Output of :func:`run_coccinelle_file_sweep`
+            (possibly replayed from the sweep memo).
+        target_path: Root of the target codebase (substrate-receipt
+            recompute).
+        function_name: Function being audited — stamped on the
+            returned result.
+        line_start: Restricts matches to the audited function's span;
+            matches outside it are dropped. When ``line_end`` is
+            missing, a ``line_start + 50`` window applies (same
+            fallback as the semgrep leg). Falsy ``line_start``
+            disables the filter (whole-file rules).
+        line_end: Upper bound of the match-filter range; see
+            ``line_start``.
+        language: Canonical language hint for the substrate-receipt
+            recompute; None detects it via the canonical machinery.
+
+    Returns:
+        SweepResult with the function-scoped match set and
+        confirmed/refuted re-derived from it. Non-match outcomes
+        (error / skipped / inconclusive / novel) pass through with
+        only ``function_name`` stamped.
+    """
+    scoped = copy.deepcopy(file_result)
+    scoped.function_name = function_name
+    if scoped.outcome not in ("confirmed", "refuted"):
+        # error / skipped payloads (reasons, substrate receipts) are
+        # function-independent — nothing else to narrow.
+        return scoped
+
+    matches = scoped.matches
+    if line_start:
+        # Apply the range filter whenever the caller placed the
+        # function at all — requiring BOTH bounds let a match
+        # anywhere in the file confirm a per-function hypothesis
+        # when production passed line_end=None (the exact
+        # wrong-function bug the semgrep leg fixed). Without a
+        # real end bound, fall back to the same +50 window the
+        # semgrep call sites use.
+        effective_end = line_end if line_end else line_start + 50
+        matches = [
+            m for m in matches
+            if _match_in_range(m, line_start, effective_end)
+        ]
+    scoped.matches = matches
+    scoped.outcome = "confirmed" if matches else "refuted"
+
+    # Recompute the substrate license instead of carrying it in the
+    # file result: file_substrate_coverage is deterministic and
+    # process-cached, and the file runner already crossed the gate
+    # (covered=False never reaches this branch), so this is a cheap
+    # cache hit — not a second detection pass.
+    try:
+        cov = file_substrate_coverage(
+            "coccinelle",
+            target_path=target_path,
+            file_path=scoped.file_path,
+            language=language,
+        )
+    except Exception:  # noqa: BLE001 — receipt is best-effort here
+        cov = None
+    if cov is not None:
+        # Licensed refutations carry their substrate receipt;
+        # unknown-language coverage fails open by tier policy.
+        return license_refutation(scoped, cov)
+    return scoped
+
+
+def run_coccinelle_sweep(
+    *,
+    target_path: Path,
+    file_path: str,
+    function_name: str,
+    cocci_rule: str,
+    defines: dict[str, str] | None = None,
+    line_start: int | None = None,
+    line_end: int | None = None,
+    domain_vocab: Any = None,
+    language: str | None = None,
+) -> SweepResult:
+    """Run a Coccinelle rule against a single C file, function-scoped.
+
+    Composition of :func:`run_coccinelle_file_sweep` and
+    :func:`scope_coccinelle_result` — same signature and result
+    semantics as the historical single-function sweep. Callers that
+    audit many functions per file should memoize the file sweep and
+    scope per function instead (the orchestrator's coccinelle leg
+    does).
+
+    See the two component functions for argument semantics.
+    """
+    escape = _check_path_containment(target_path, file_path, "coccinelle")
+    if escape:
+        # Containment errors historically carry function_name="" —
+        # return before the scoper would stamp the function on them.
+        return escape
+
+    file_result = run_coccinelle_file_sweep(
+        target_path=target_path,
+        file_path=file_path,
+        cocci_rule=cocci_rule,
+        defines=defines,
+        domain_vocab=domain_vocab,
+        language=language,
+    )
+    return scope_coccinelle_result(
+        file_result,
+        target_path=target_path,
+        function_name=function_name,
+        line_start=line_start,
+        line_end=line_end,
+        language=language,
+    )
 
 
 # SMT verb names → libexec shim basenames. Only verbs with an actual

@@ -3643,12 +3643,12 @@ class TestToolChain:
         def mock_cocci(**kw):
             return SweepResult(
                 tool="coccinelle", file_path=kw.get("file_path", "<codebase>"),
-                function_name=kw["function_name"],
-                outcome="confirmed",
+                function_name="",
+                outcome="confirmed", matches=[{"line": 1}],
             )
 
         monkeypatch.setattr(orch_mod, "run_smt_verb_direct", mock_smt)
-        monkeypatch.setattr(orch_mod, "run_coccinelle_sweep", mock_cocci)
+        monkeypatch.setattr(orch_mod, "run_coccinelle_file_sweep", mock_cocci)
 
         chain = [
             {"type": "smt", "config": {"verb": "check-oob"}},
@@ -3677,12 +3677,12 @@ class TestToolChain:
         def mock_cocci(**kw):
             return SweepResult(
                 tool="coccinelle", file_path=kw.get("file_path", "<codebase>"),
-                function_name=kw["function_name"],
-                outcome="confirmed",
+                function_name="",
+                outcome="confirmed", matches=[{"line": 1}],
             )
 
         monkeypatch.setattr(orch_mod, "run_smt_verb_direct", mock_smt)
-        monkeypatch.setattr(orch_mod, "run_coccinelle_sweep", mock_cocci)
+        monkeypatch.setattr(orch_mod, "run_coccinelle_file_sweep", mock_cocci)
 
         chain = [
             {"type": "smt", "config": {"verb": "check-oob"}},
@@ -3713,12 +3713,12 @@ class TestToolChain:
         def mock_cocci(**kw):
             return SweepResult(
                 tool="coccinelle", file_path=kw.get("file_path", "<codebase>"),
-                function_name=kw["function_name"],
-                outcome="confirmed",
+                function_name="",
+                outcome="confirmed", matches=[{"line": 1}],
             )
 
         monkeypatch.setattr(orch_mod, "run_smt_verb_direct", mock_smt)
-        monkeypatch.setattr(orch_mod, "run_coccinelle_sweep", mock_cocci)
+        monkeypatch.setattr(orch_mod, "run_coccinelle_file_sweep", mock_cocci)
 
         chain = [
             {"type": "smt", "config": {"verb": "check-oob"}},

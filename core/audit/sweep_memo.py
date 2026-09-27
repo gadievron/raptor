@@ -25,7 +25,10 @@ Scope and soundness contract:
   values that select what the tool looks at (function name, line
   range, hypothesis binding).  Paths and mtimes alone never key an
   entry.  Any input that cannot be hashed makes the whole key ``None``
-  and the step runs unmemoized.
+  and the step runs unmemoized.  The coccinelle leg memoizes at FILE
+  scope — spatch always scans the whole file, so its key carries no
+  function/line dimension and one entry serves every function in the
+  file (scoping happens after retrieval).
 * The memo lives exactly one run (it is owned by the run's
   ``OrchestratorConfig``) and the audited target tree is read-only for
   that lifetime, which is what bounds inputs the key cannot

@@ -248,9 +248,11 @@ from .smt_promotion_gate import (
 )
 from .sweep import (
     SarifCache,
+    run_coccinelle_file_sweep,
     run_coccinelle_sweep,
     run_semgrep_sweep,
     run_smt_verb_direct,
+    scope_coccinelle_result,
 )
 from .joern_health import (
     JoernChannelHealth,
@@ -20964,49 +20966,70 @@ def _run_tool_chain(
                     _cc_line_end = _checklist_line_end(
                         config, file_path, function_name,
                     ) or None
+                    # Inventory-stamped language (canonical); None
+                    # lets the sweep detect it. Run-stable either
+                    # way, so the memo key needs no language
+                    # dimension.
+                    _cc_language = _inventory_language_hint(
+                        config, file_path,
+                    )
 
-                    def _run_cocci() -> Any:
-                        return run_coccinelle_sweep(
-                            target_path=effective_target,
-                            file_path=file_path,
-                            function_name=function_name,
-                            cocci_rule=tool_cfg["rule"],
-                            line_start=line_start or None,
-                            # Real function bound from the checklist
-                            # (same source the semgrep leg uses); the
-                            # sweep falls back to a +50 window when
-                            # unresolvable.
-                            line_end=_cc_line_end,
-                            domain_vocab=domain_vocab,
-                            # Inventory-stamped language (canonical);
-                            # None lets the sweep detect it. Run-stable
-                            # either way, so the memo key needs no
-                            # language dimension.
-                            language=_inventory_language_hint(
-                                config, file_path,
-                            ),
-                        )
-
+                    # spatch scans the whole file regardless of which
+                    # function is under audit, so the memo unit is the
+                    # FILE sweep: one spatch run per (rule content,
+                    # file content) serves every function in the file,
+                    # and the per-function range filter + outcome
+                    # classification run AFTER retrieval.
                     if domain_vocab is None:
-                        cocci_result = _memoized_sweep_step(
-                            config,
-                            "coccinelle",
-                            {
-                                "rule": _memo_hash_file(tool_cfg["rule"]),
-                                "file": _memo_hash_file(
-                                    effective_target / file_path),
-                                "path": file_path,
-                                "function": function_name,
-                                "line_start": line_start or 0,
-                                "line_end": _cc_line_end or 0,
-                            },
-                            _run_cocci,
-                        )
+                        _cc_rule_hash = _memo_hash_file(tool_cfg["rule"])
                     else:
                         # A DomainVocabulary re-renders the rule text
                         # per run state and has no stable content hash
-                        # — vocab-rendered sweeps run unmemoized.
-                        cocci_result = _run_cocci()
+                        # — vocab-rendered sweeps run unmemoized
+                        # (a None key part disables the memo).
+                        _cc_rule_hash = None
+
+                    def _run_cocci_file() -> Any:
+                        return run_coccinelle_file_sweep(
+                            target_path=effective_target,
+                            file_path=file_path,
+                            cocci_rule=tool_cfg["rule"],
+                            domain_vocab=domain_vocab,
+                            language=_cc_language,
+                        )
+
+                    _cc_file_result = _memoized_sweep_step(
+                        config,
+                        "coccinelle",
+                        {
+                            "rule": _cc_rule_hash,
+                            "file": _memo_hash_file(
+                                effective_target / file_path),
+                            "path": file_path,
+                            # spatch -D defines steer what the rule
+                            # matches, so they are a key dimension: a
+                            # stable rendering of the sorted
+                            # (name, value) pairs — empty because this
+                            # leg passes no defines. Any caller that
+                            # routes defines through the memoized path
+                            # MUST fold them into this part.
+                            "defines": "",
+                        },
+                        _run_cocci_file,
+                    )
+
+                    cocci_result = scope_coccinelle_result(
+                        _cc_file_result,
+                        target_path=effective_target,
+                        function_name=function_name,
+                        line_start=line_start or None,
+                        # Real function bound from the checklist
+                        # (same source the semgrep leg uses); the
+                        # scoper falls back to a +50 window when
+                        # unresolvable.
+                        line_end=_cc_line_end,
+                        language=_cc_language,
+                    )
                 _cc_oc = _classify_sweep_outcome(cocci_result)
                 if _cc_oc == "confirmed":
                     confirmed.append(f"coccinelle:{Path(tool_cfg['rule']).stem}")
