@@ -4934,6 +4934,107 @@ class TestEnrichSummariesFromJoern:
         )
         assert taint_summary["a.c:f"] is existing
 
+    def test_hostile_method_cannot_clobber_truncation_marker(self):
+        """``_truncation`` is reserved for the builder's in-band
+        truncation marker (a plain dict — it fails the
+        ``source != "joern_cpg"`` overwrite guard, so without the
+        collision guard a hostile method literally named
+        ``_truncation`` with no file path overwrote it). The marker
+        must survive the merge verbatim; the hostile summary is kept
+        under the escaped empty-file colon spelling."""
+        from core.audit.orchestrator import _enrich_summaries_from_joern
+        from packages.joern.models import JoernMethodSummary
+
+        class FakeServer:
+            def run_summary_batch(self, methods, *, timeout=None):
+                return {
+                    "_truncation": JoernMethodSummary(
+                        method="_truncation", taint_rules=["x"],
+                        preconditions=[], returns=[],
+                    ),
+                }
+
+        marker = {"truncated": True, "skipped_files": 2}
+        taint_summary: dict = {"_truncation": marker}
+        _enrich_summaries_from_joern(
+            FakeServer(),
+            # Empty file key: the one path that yields a colon-less
+            # summary key equal to the reserved marker name.
+            {"": [{"source_method": "_truncation", "source_param": "",
+                   "sink_call": "x", "sink_arg_idx": 0, "steps": []}]},
+            taint_summary,
+        )
+        assert taint_summary["_truncation"] is marker
+        escaped = taint_summary[":_truncation"]
+        assert escaped.source == "joern_cpg"
+        assert escaped.function == "_truncation"
+
+    def test_hostile_method_without_marker_never_mints_reserved_key(self):
+        """No-marker merge order — no truncation occurred, the
+        common case: the hostile ``_truncation`` summary must land
+        under the escaped colon spelling and the bare reserved key
+        must never be minted (readers treat its presence as the
+        truncation record, and a ``FunctionSummary`` there breaks
+        dict-shaped marker reads)."""
+        from core.audit.orchestrator import _enrich_summaries_from_joern
+        from packages.joern.models import JoernMethodSummary
+
+        class FakeServer:
+            def run_summary_batch(self, methods, *, timeout=None):
+                return {
+                    "_truncation": JoernMethodSummary(
+                        method="_truncation", taint_rules=["x"],
+                        preconditions=[], returns=[],
+                    ),
+                }
+
+        taint_summary: dict = {}
+        _enrich_summaries_from_joern(
+            FakeServer(),
+            {"": [{"source_method": "_truncation", "source_param": "",
+                   "sink_call": "x", "sink_arg_idx": 0, "steps": []}]},
+            taint_summary,
+        )
+        assert "_truncation" not in taint_summary
+        escaped = taint_summary[":_truncation"]
+        assert escaped.source == "joern_cpg"
+        assert escaped.function == "_truncation"
+
+    def test_hostile_method_collision_warns_exactly_once(self, caplog):
+        """The relocation is announced: exactly one constant warning
+        line (no target-derived bytes — the guard only fires when
+        the method name is literally ``_truncation``)."""
+        from core.audit.orchestrator import _enrich_summaries_from_joern
+        from packages.joern.models import JoernMethodSummary
+
+        class FakeServer:
+            def run_summary_batch(self, methods, *, timeout=None):
+                return {
+                    "_truncation": JoernMethodSummary(
+                        method="_truncation", taint_rules=["x"],
+                        preconditions=[], returns=[],
+                    ),
+                }
+
+        taint_summary: dict = {"_truncation": {"truncated": True}}
+        with caplog.at_level(
+                "WARNING", logger="core.audit.joern_backend"):
+            _enrich_summaries_from_joern(
+                FakeServer(),
+                {"": [{"source_method": "_truncation",
+                       "source_param": "", "sink_call": "x",
+                       "sink_arg_idx": 0, "steps": []}]},
+                taint_summary,
+            )
+        expected = (
+            "joern_summary_batch: a method literally named "
+            "'_truncation' (no file path) collides with the "
+            "reserved truncation marker key — its summary is "
+            "stored under ':_truncation' instead"
+        )
+        assert [rec.getMessage() for rec in caplog.records
+                if rec.getMessage() == expected] == [expected]
+
     def test_empty_flows_is_noop(self):
         from core.audit.orchestrator import _enrich_summaries_from_joern
 

@@ -46,6 +46,12 @@ _MAX_JOERN_FLOWS_BYTES = 256 * 1024 * 1024
 # on PATH — both probed and rejected; see lang_config's profile note.
 _UNPROFILED_EXTENSIONS = frozenset({".rb", ".php", ".scala"})
 
+# Reserved key in the taint-summary results dict: the builder's
+# in-band truncation marker. ``enrich_summaries_from_joern`` must
+# never write a method summary under this exact name — see the
+# collision guard at its merge loop.
+_TRUNCATION_KEY = "_truncation"
+
 
 def _joern_extensions() -> frozenset[str]:
     """Non-C extensions with a curated Joern language profile.
@@ -1623,6 +1629,25 @@ def enrich_summaries_from_joern(
     for method_name, js in summaries.items():
         file_path = file_for_method.get(method_name, "")
         key = f"{file_path}:{method_name}" if file_path else method_name
+        if key == _TRUNCATION_KEY:
+            # ``_truncation`` is reserved for the in-band truncation
+            # marker the taint-summary builder stamps into this dict
+            # (colon-free by construction — every builder key carries
+            # a ``file:method`` colon). A hostile target exposing a
+            # method literally named ``_truncation`` with no file
+            # path would otherwise clobber the marker: a plain-dict
+            # marker fails the ``source != "joern_cpg"`` overwrite
+            # guard below. Keep the summary under the explicit
+            # empty-file colon spelling instead of dropping it —
+            # collision-free because the bare branch above is the
+            # only producer of colon-less keys.
+            key = f":{method_name}"
+            logger.warning(
+                "joern_summary_batch: a method literally named "
+                "'_truncation' (no file path) collides with the "
+                "reserved truncation marker key — its summary is "
+                "stored under ':_truncation' instead",
+            )
 
         fs = FunctionSummary(
             function=method_name,
