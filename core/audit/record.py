@@ -27,7 +27,9 @@ What remains here:
 from __future__ import annotations
 
 import logging
+import os
 import re
+import stat as _stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,6 +37,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 AUDIT_LOG_FILENAME = ".audit-log.jsonl"
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 
 #: PER-SHARD read budgets for the audit event log (see
 #: load_audit_log). Historically these were whole-log budgets and the
@@ -226,11 +230,14 @@ class AuditLogDisclosure:
     #: Numbered shard files beyond the contiguous set (interior
     #: shard deleted, or a plant).
     orphan_shards: tuple[str, ...] = field(default=())
-    #: Contiguous-set shards that could not be read while a LATER
-    #: shard could — the first shard deleted out from under a rolled
-    #: trail (the writer always creates it before rolling), or a
-    #: shard vanishing mid-load. The survivors must not masquerade
-    #: as the whole trail.
+    #: Contiguous-set shards whose bytes were not parsed. Two loss
+    #: classes: ABSENT while a LATER shard was read (the first shard
+    #: deleted out from under a rolled trail — the writer always
+    #: creates it before rolling — or a shard vanishing mid-load),
+    #: and PRESENT-BUT-UNREADABLE (a symlink or unopenable file at a
+    #: shard name — the O_NOFOLLOW read discipline refuses it), which
+    #: always counts. Either way the survivors must not masquerade as
+    #: the whole trail.
     missing_shards: tuple[str, ...] = ()
 
     @property
@@ -254,8 +261,8 @@ class AuditLogDisclosure:
                 + ", ".join(self.orphan_shards))
         if self.missing_shards:
             bits.append(
-                "unreadable shard(s) with later shards present: "
-                + ", ".join(self.missing_shards))
+                "unreadable or deleted shard(s) in the contiguous "
+                "set: " + ", ".join(self.missing_shards))
         return "; ".join(bits)
 
 
@@ -281,13 +288,35 @@ def load_audit_log_disclosed(
     row_capped: list[str] = []
     paths = audit_log_paths(out_dir)
     shards_read = 0
+    absent: list[str] = []
     unreadable: list[str] = []
     for p in paths:
         try:
-            size = p.stat().st_size
+            st = os.lstat(p)
+        except OSError:
+            absent.append(p.name)
+            continue
+        # Present-but-unreadable is a different loss class from
+        # absent: an entry EXISTS at a contiguous shard name and its
+        # bytes were not parsed, so the load can never be complete —
+        # whereas an absent shard 1 with nothing after it is just an
+        # empty trail. lstat + O_NOFOLLOW mirror the read discipline
+        # of core.json.load_jsonl, which loads a symlinked or
+        # unopenable trail as [] (best-effort, debug-level) — without
+        # this probe those shards would vanish from the disclosure.
+        if not _stat.S_ISREG(st.st_mode):
+            unreadable.append(p.name)
+            continue
+        try:
+            probe_fd = os.open(
+                str(p), os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC)
         except OSError:
             unreadable.append(p.name)
             continue
+        try:
+            size = os.fstat(probe_fd).st_size
+        finally:
+            os.close(probe_fd)
         shards_read += 1
         total_bytes += size
         if size > _AUDIT_LOG_MAX_BYTES:
@@ -311,11 +340,13 @@ def load_audit_log_disclosed(
             row_capped.append(p.name)
         rows.extend(shard_rows)
     orphans = _audit_log_orphan_names(out_dir, len(paths))
-    # An unreadable shard counts as loss only when some LATER shard
-    # was read: the empty dir (no trail yet) reads shard 1 as absent
-    # too, and that must stay a complete-empty load. shard 1 absent
-    # with shard 2 present means the trail's head was deleted.
-    missing = tuple(unreadable) if shards_read else ()
+    # An ABSENT shard counts as loss only when some LATER shard was
+    # read: the empty dir (no trail yet) reads shard 1 as absent too,
+    # and that must stay a complete-empty load. shard 1 absent with
+    # shard 2 present means the trail's head was deleted. A
+    # present-but-UNREADABLE shard always counts.
+    lost = set(unreadable) | (set(absent) if shards_read else set())
+    missing = tuple(p.name for p in paths if p.name in lost)
     disclosure = AuditLogDisclosure(
         complete=not (tail_read or row_capped or orphans or missing),
         total_bytes=total_bytes,

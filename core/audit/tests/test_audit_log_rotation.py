@@ -21,6 +21,7 @@ anything the budgets kept out. These tests pin:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -227,6 +228,42 @@ class TestLoaderHonesty:
         assert disclosure.missing_shards == (
             record.AUDIT_LOG_FILENAME,)
         assert record.AUDIT_LOG_FILENAME in disclosure.reason
+
+    def test_symlink_shard_disclosed_not_followed(self, tmp_path: Path):
+        # A symlink planted at a contiguous shard name is refused by
+        # the O_NOFOLLOW read discipline (load_jsonl loads it as [],
+        # best-effort) — the disclosure must carry that loss instead
+        # of reporting the survivors complete, and the link target's
+        # content must never appear in the rows.
+        _plant_raw_rows(tmp_path / record.AUDIT_LOG_FILENAME, [_row(0)])
+        victim = tmp_path / "outside-secret.jsonl"
+        _plant_raw_rows(victim, [_row(777)])
+        (tmp_path / ".audit-log.002.jsonl").symlink_to(victim)
+        rows, disclosure = record.load_audit_log_disclosed(tmp_path)
+        assert [r["seq"] for r in rows] == [0]
+        assert not disclosure.complete
+        assert disclosure.missing_shards == (".audit-log.002.jsonl",)
+        assert "unreadable" in disclosure.reason
+
+    @pytest.mark.skipif(
+        os.geteuid() == 0, reason="mode 000 does not block root")
+    def test_unopenable_shard_disclosed(self, tmp_path: Path):
+        # Present-but-unreadable (permission refusal): an entry
+        # EXISTS at the shard name and its bytes were not parsed —
+        # complete must flip off even though the shard is the last
+        # one (no later shard needs to vouch for it, unlike the
+        # deleted-head case above).
+        _plant_raw_rows(tmp_path / record.AUDIT_LOG_FILENAME, [_row(0)])
+        shard2 = tmp_path / ".audit-log.002.jsonl"
+        _plant_raw_rows(shard2, [_row(1)])
+        shard2.chmod(0)
+        try:
+            rows, disclosure = record.load_audit_log_disclosed(tmp_path)
+        finally:
+            shard2.chmod(0o644)
+        assert [r["seq"] for r in rows] == [0]
+        assert not disclosure.complete
+        assert disclosure.missing_shards == (".audit-log.002.jsonl",)
 
 
 class TestMacAcrossRotation:
