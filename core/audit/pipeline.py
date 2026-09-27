@@ -552,92 +552,21 @@ _STATUS_RANK = STATUS_RANK
 _SUSPICIOUS_RANK = STATUS_RANK["suspicious"]
 NON_MECHANICAL = ("prefilter:", "llm-claimed:")
 _NON_MECHANICAL = NON_MECHANICAL
-# Per-part markers for the composite parse in
-# _is_verification_evidence. Same strings as NON_MECHANICAL, split by
-# role: an llm-claimed part starts the model's claim text (stop), a
-# prefilter part is an atomic pipeline stamp (skip).
-_LLM_CLAIM_PREFIX = "llm-claimed:"
-_PREFILTER_PREFIX = "prefilter:"
 
 
 def _is_verification_evidence(ev: str) -> bool:
     """True when evidence is strong enough to break a merge tie.
 
-    Fail-closed allowlist: a stamp counts only when at least one
-    ``+``-part is a receipt the evidence-grade firewall recognises
-    (:func:`core.audit.evidence_grade.is_tool_evidence` — registered
-    producer namespaces, poison/miscasing/LLM-vocabulary rejection)
-    AND the part is not detection-role (``_is_detection_only`` — the
-    role tables for SMT verbs and stock Coccinelle rules). A stamp in
-    a namespace no producer table names is NOT verification, whatever
-    it looks like — provenance-only stamps (``journal:recall:*``,
-    ``sage:recall:*``, ``reachability:dead_code``,
-    ``mechanical:guard_sufficiency``, ``sarif:no_alerts``,
-    ``inventory:*``) record how a verdict was reached, and each one's
-    own doctrine says it must not break a merge tie.
-
-    Composite parse: the surviving outcome's provenance leads
-    (evidence-combine in ``_merge_outcomes``), so a stamp whose FIRST
-    part is non-mechanical (``llm-claimed:``, ``prefilter:``) is never
-    verification. Scanning later parts stops at the first
-    ``llm-claimed:`` part: ``sanitize_llm_evidence_tool`` namespaces
-    the model's whole raw string, so everything after that marker is
-    the claim's own text (``llm-claimed:smt+joern`` is one model
-    answer, not a receipt trailing a claim) — while a genuine receipt
-    BEFORE the marker (``smt:check-integer-narrowing+llm-claimed:smt``,
-    the evidence-combine shape) keeps its verification status.
-
-    Aggregation-promotion receipt: ``orchestrator.
-    _aggregate_channel_confirmations`` mints ``"+".join(confirmed)``
-    when two or more INDEPENDENT detection-role channels jointly cross
-    the posterior confirm threshold — by construction no single part
-    of that stamp is a verification receipt (that is the whole point
-    of aggregating), so the per-part rule alone would silently
-    un-grade a genuinely confirmed row. Mirror of the producer and of
-    ``is_tool_evidence``'s two-namespace floor (same rule in
-    ``_probe_backed_suspicious``): a composite whose parts span >=2
-    DISTINCT detection-role namespaces (``_is_detection_only`` — the
-    producer's own precondition for every part it joins) is
-    verification, PROVIDED the stamp carries no ``llm-claimed:`` /
-    ``prefilter:`` part anywhere (a contaminated composite is not the
-    pristine aggregation receipt — the claim-tail rule above stays
-    closed) and the evidence-grade firewall accepts the whole stamp
-    (poison namespaces, miscased spellings, malformed joins).
+    Thin delegate: verification-grade admission lives in ONE place —
+    :func:`core.audit.evidence_grade.is_verification_evidence` (the
+    exact-spelling registry, the fail-closed allowlist, the composite
+    parse, and the >=2-distinct-detection-namespaces
+    aggregation-promotion rule are all documented there). This name
+    stays for the merge tie-break below and the orchestrator's
+    demotion-gate wrapper import.
     """
-    if not ev or ev.startswith(_NON_MECHANICAL):
-        return False
-    from core.audit.evidence_grade import is_tool_evidence
-    detection_namespaces: set[str] = set()
-    contaminated = False
-    for part in ev.split("+"):
-        part = part.strip()
-        if not part:
-            continue
-        low = part.lower()
-        if low.startswith(_LLM_CLAIM_PREFIX):
-            contaminated = True
-            break
-        if low.startswith(_PREFILTER_PREFIX):
-            contaminated = True
-            continue
-        # Import guard only: pipeline↔orchestrator is a potential
-        # import cycle; _is_detection_only itself is a pure string
-        # check (stock-rule role tables). Unknown namespaces come
-        # back False — they never count toward the aggregation floor.
-        detection = False
-        with contextlib.suppress(ImportError):
-            from core.audit.orchestrator import _is_detection_only
-            detection = _is_detection_only(part)
-        if detection:
-            detection_namespaces.add(low.split(":", 1)[0])
-            continue
-        if is_tool_evidence(part):
-            return True
-    return (
-        not contaminated
-        and len(detection_namespaces) >= 2
-        and is_tool_evidence(ev)
-    )
+    from core.audit.evidence_grade import is_verification_evidence
+    return is_verification_evidence(ev)
 
 
 def _has_any_mechanical_evidence(ev: str) -> bool:

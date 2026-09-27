@@ -15,6 +15,7 @@ Grading happens at two levels:
 
 from __future__ import annotations
 
+import contextlib
 import enum
 import functools
 import importlib
@@ -243,6 +244,122 @@ def _channel_detection_classifier(namespace: str):
     return getattr(mod, "is_detection_rule_id", None)
 
 
+# ── Single spelling registry ─────────────────────────────────────────
+# ONE module-level admission table for namespaces whose
+# verification-grade spellings are enumerated PER SPELLING. For a
+# namespace registered here the bare root grants nothing: a spelling
+# listed with the "verification" role is a full receipt, a spelling
+# listed with the "detection" role corroborates and aggregates but
+# never convicts alone, and an UNLISTED spelling is not
+# verification-grade (fail-closed) while remaining non-poisonous —
+# the composite policy in :func:`is_tool_evidence` ignores it
+# alongside known receipts, so the alarm channel stays quiet on
+# legitimate runs. A new tool lane earns each spelling here
+# explicitly; namespace membership alone never buys admission (no
+# prefix trust — registry entries override the ``_TOOL_NAMESPACES``
+# root check for their namespace).
+_ROLE_VERIFICATION = "verification"
+_ROLE_DETECTION = "detection"
+_EXACT_SPELLING_REGISTRY: dict[str, dict[str, str]] = {}
+
+
+def registry_owns(part: str) -> bool:
+    """True when *part*'s namespace admits by enumerated spelling only."""
+    ns = part.split(":", 1)[0] if ":" in part else part
+    return ns in _EXACT_SPELLING_REGISTRY
+
+
+def registered_spelling_role(part: str) -> str | None:
+    """Role of *part* under the exact-spelling registry.
+
+    ``"verification"`` / ``"detection"`` for listed spellings; None
+    when the namespace is not registry-owned OR the exact spelling is
+    unlisted (an unlisted spelling under an owned namespace carries
+    NO role: it fails closed out of verification grade and out of the
+    aggregation floor, and is ignored by the composite policy).
+    """
+    ns = part.split(":", 1)[0] if ":" in part else part
+    return _EXACT_SPELLING_REGISTRY.get(ns, {}).get(part)
+
+
+# Verification-role spellings each classifier-owned channel mints,
+# mirrored here for hosts where the channel module itself cannot be
+# imported. When the channel authority is unavailable the string
+# heuristics in ``_is_detection_variant`` still recognise the KNOWN
+# detection variants, but an UNKNOWN variant cannot be graded — it
+# used to fall through to namespace-prefix admission and grade as
+# full verification evidence. Admission now fails closed to the
+# spellings below (plus the bare-namespace ``VALID_EVIDENCE_TOOLS``
+# entries): unknown variants are ignored (non-poisonous), never
+# admitted. Sources per namespace: sweep._SMT_VERB_ROLES
+# verification rows (bare + ``:witness``; the ``:witness`` suffix
+# keeps its receipt on every verb except check-encoding-residual,
+# mirroring sweep.is_detection_rule_id) plus the orchestrator's
+# ``smt:disproof:sat`` stamp; joern_verify's endpoint-bound stamps;
+# sweep's symbolic role split; each census channel's registry-grade
+# rule-id constants. sanwit / gadget_oracle enumerate nothing — the
+# whole namespace is detection-grade by the channels' own
+# classifiers.
+_SMT_FALLBACK_VERIFICATION_VERBS = (
+    "check-overflow", "check-oob", "check-null-deref",
+    "validate-path", "check-lock-discipline",
+    "check-integer-narrowing",
+)
+_SMT_FALLBACK_WITNESS_VERBS = _SMT_FALLBACK_VERIFICATION_VERBS + (
+    "invariant-preservation", "check-overflow-to-oob",
+    "check-negative-bypass", "check-auth-bypass",
+    "check-resource-leak", "check-null-propagation",
+    "check-early-release", "check-lock-domain", "check-toctou",
+)
+_CLASSIFIER_FALLBACK_VERIFICATION: dict[str, frozenset[str]] = {
+    "joern": frozenset({"joern:flow", "joern:guard-dominance"}),
+    "smt": frozenset(
+        {f"smt:{v}" for v in _SMT_FALLBACK_VERIFICATION_VERBS}
+        | {f"smt:{v}:witness" for v in _SMT_FALLBACK_WITNESS_VERBS}
+        | {"smt:disproof:sat"},
+    ),
+    "symbolic": frozenset({
+        "symbolic:symbolic-pc-hijack", "symbolic:symbolic-reach-crash",
+    }),
+    "consistency": frozenset({
+        "consistency:return-check", "consistency:flag-mode",
+        "consistency:cleanup", "consistency:argument-shape",
+        "consistency:sanitize-sink", "consistency:guard-presence",
+        "consistency:clone-drift", "consistency:guard-predicate",
+    }),
+    "fail_open": frozenset({
+        "fail_open:handler-outcome", "fail_open:ignored-return",
+        "fail_open:tristate", "fail_open:return-domain",
+        "fail_open:recover-continue", "fail_open:unawaited",
+    }),
+    "ptr_lifecycle": frozenset({"ptr_lifecycle:stale-alias"}),
+    "lock_region": frozenset({"lock_region:callback-under-lock"}),
+    "resource_bounds": frozenset({
+        "resource_bounds:unbounded-accumulation",
+    }),
+    "release_order": frozenset({
+        "release_order:release-before-verify",
+    }),
+    "protocol_state": frozenset({
+        "protocol_state:invariant-violated",
+    }),
+    "sanwit": frozenset(),
+    "gadget_oracle": frozenset(),
+}
+
+# Pipeline-minted dynamic-tail receipt families that keep
+# verification role in the classifier-unavailable fallback. Each
+# entry is an explicitly registered multi-segment family whose tail
+# is pipeline-derived (never model text — sanitize_llm_evidence_tool
+# namespaces raw model strings before they can reach this check).
+# Bounded families for existing lanes, not namespace prefix trust.
+_CLASSIFIER_FALLBACK_VERIFICATION_FAMILIES: dict[str, tuple[str, ...]] = {
+    # sweep.py mints ``joern:taint:<function>-><sink>``; the joern
+    # channel classifies the whole family verification-role.
+    "joern": ("joern:taint:",),
+}
+
+
 def _is_detection_variant(part: str) -> bool:
     """Detection-role channel stamps (``consistency:*-majority``,
     ``fail_open:*-naming``, ``ptr_lifecycle:*-naming``, ...).
@@ -255,6 +372,13 @@ def _is_detection_variant(part: str) -> bool:
     alarm.
     """
     namespace = part.split(":", 1)[0] if ":" in part else part
+    if namespace in _EXACT_SPELLING_REGISTRY:
+        # Exact-spelling registry namespaces never reach the channel
+        # classifiers or the string heuristics: listed spellings carry
+        # their enumerated role; unlisted spellings carry NO role here
+        # (and fail closed out of verification grade in
+        # _is_single_tool_evidence).
+        return registered_spelling_role(part) == _ROLE_DETECTION
     classify = _channel_detection_classifier(namespace)
     if classify is not None:
         try:
@@ -307,6 +431,13 @@ def _is_detection_variant(part: str) -> bool:
             "check-resource-leak", "check-null-propagation",
             "check-early-release", "check-lock-domain", "check-toctou",
         )
+    # symbolic (angr) channel: bare reachability is detection-role —
+    # some stdin reaching an address is guard-blind evidence; PC-hijack
+    # solves and replayed crashes keep verification role (mirrors
+    # sweep.is_detection_rule_id's symbolic split).
+    if part.startswith(("symbolic:", "symbolic-")):
+        tail = part.split(":", 1)[1] if ":" in part else part
+        return tail == "symbolic-reach"
     return False
 
 
@@ -346,9 +477,34 @@ def _is_single_tool_evidence(part: str) -> bool:
             # receipt and must qualify on its own merits (a wrapped
             # detection-role variant still may not convict).
             return _is_single_tool_evidence(part[len(wrapper):])
+    if registry_owns(part):
+        # Exact-spelling registry namespace: only the enumerated
+        # verification spellings qualify — the bare root and unlisted
+        # variants fail closed (ignored by the composite policy,
+        # never poisonous).
+        return registered_spelling_role(part) == _ROLE_VERIFICATION
     if _is_detection_variant(part):
         return False
     root = part.split(":", maxsplit=1)[0] if ":" in part else part
+    if root in _DETECTION_CLASSIFIER_MODULES and \
+            _channel_detection_classifier(root) is None:
+        # Channel authority unavailable: the string heuristics in
+        # _is_detection_variant recognise the KNOWN detection
+        # variants, but an UNKNOWN variant cannot be graded — fail
+        # closed to the enumerated verification spellings instead of
+        # admitting the whole namespace by prefix. Non-poisonous: an
+        # unadmitted part is simply not evidence; is_tool_evidence
+        # ignores it next to known receipts.
+        if part in VALID_EVIDENCE_TOOLS:
+            return True
+        if part in _CLASSIFIER_FALLBACK_VERIFICATION.get(
+                root, frozenset()):
+            return True
+        return any(
+            part.startswith(family)
+            for family in
+            _CLASSIFIER_FALLBACK_VERIFICATION_FAMILIES.get(root, ())
+        )
     return root in _TOOL_NAMESPACES or part in _TOOL_NAMESPACES
 
 
@@ -443,6 +599,114 @@ def sanitize_llm_evidence_tool(raw: str) -> str:
     if value.startswith(LLM_CLAIM_PREFIX):
         return value
     return f"{LLM_CLAIM_PREFIX}{value}"
+
+
+_PREFILTER_PREFIX = "prefilter:"
+# The surviving outcome's provenance leads in the merge tie-break: a
+# stamp whose FIRST part is one of these is never verification.
+_NON_MECHANICAL_LEAD = (_PREFILTER_PREFIX, LLM_CLAIM_PREFIX)
+
+
+def is_verification_evidence(ev: str) -> bool:
+    """True when evidence is strong enough to break a merge tie.
+
+    The single verification-grade admission authority: the merge
+    tie-break (``core.audit.pipeline._is_verification_evidence``
+    delegates here) and the orchestrator's demotion-gate wrapper both
+    consume this predicate.
+
+    Fail-closed allowlist: a stamp counts only when at least one
+    ``+``-part is a receipt this module recognises
+    (:func:`is_tool_evidence` — registered producer namespaces,
+    poison/miscasing/LLM-vocabulary rejection) AND the part is not
+    detection-role (the exact-spelling registry, the channel
+    classifiers, and the orchestrator's ``_is_detection_only`` role
+    tables). A stamp in a namespace no producer table names is NOT
+    verification, whatever it looks like — provenance-only stamps
+    (``journal:recall:*``, ``sage:recall:*``,
+    ``reachability:dead_code``, ``mechanical:guard_sufficiency``,
+    ``sarif:no_alerts``, ``inventory:*``) record how a verdict was
+    reached, and each one's own doctrine says it must not break a
+    merge tie.
+
+    Exact-spelling registry namespaces admit per enumerated spelling
+    only: a listed verification spelling qualifies, a listed detection
+    spelling counts toward the aggregation floor, and an unlisted
+    spelling earns nothing (fail-closed, non-poisonous).
+
+    Composite parse: the surviving outcome's provenance leads
+    (evidence-combine in ``pipeline._merge_outcomes``), so a stamp
+    whose FIRST part is non-mechanical (``llm-claimed:``,
+    ``prefilter:``) is never verification. Scanning later parts stops
+    at the first ``llm-claimed:`` part: ``sanitize_llm_evidence_tool``
+    namespaces the model's whole raw string, so everything after that
+    marker is the claim's own text (``llm-claimed:smt+joern`` is one
+    model answer, not a receipt trailing a claim) — while a genuine
+    receipt BEFORE the marker
+    (``smt:check-integer-narrowing+llm-claimed:smt``, the
+    evidence-combine shape) keeps its verification status.
+
+    Aggregation-promotion receipt: ``orchestrator.
+    _aggregate_channel_confirmations`` mints ``"+".join(confirmed)``
+    when two or more INDEPENDENT detection-role channels jointly cross
+    the posterior confirm threshold — by construction no single part
+    of that stamp is a verification receipt (that is the whole point
+    of aggregating), so the per-part rule alone would silently
+    un-grade a genuinely confirmed row. Mirror of the producer and of
+    ``is_tool_evidence``'s two-namespace floor (same rule in
+    ``_probe_backed_suspicious``): a composite whose parts span >=2
+    DISTINCT detection-role namespaces (``_is_detection_only`` — the
+    producer's own precondition for every part it joins) is
+    verification, PROVIDED the stamp carries no ``llm-claimed:`` /
+    ``prefilter:`` part anywhere (a contaminated composite is not the
+    pristine aggregation receipt — the claim-tail rule above stays
+    closed) and the whole stamp passes :func:`is_tool_evidence`
+    (poison namespaces, miscased spellings, malformed joins).
+    """
+    if not ev or ev.startswith(_NON_MECHANICAL_LEAD):
+        return False
+    detection_namespaces: set[str] = set()
+    contaminated = False
+    for part in ev.split("+"):
+        part = part.strip()
+        if not part:
+            continue
+        low = part.lower()
+        if low.startswith(LLM_CLAIM_PREFIX):
+            contaminated = True
+            break
+        if low.startswith(_PREFILTER_PREFIX):
+            contaminated = True
+            continue
+        if registry_owns(part):
+            # Exact-spelling registry namespaces: the enumerated role
+            # decides; an unlisted spelling is fail-closed — neither
+            # verification nor aggregation-eligible, ignored.
+            role = registered_spelling_role(part)
+            if role == _ROLE_VERIFICATION:
+                return True
+            if role == _ROLE_DETECTION:
+                detection_namespaces.add(low.split(":", 1)[0])
+            continue
+        # Import guard only: evidence_grade↔orchestrator is a
+        # potential import cycle; _is_detection_only itself is a pure
+        # string check (stock-rule role tables). Unknown namespaces
+        # come back False — they never count toward the aggregation
+        # floor.
+        detection = False
+        with contextlib.suppress(ImportError):
+            from core.audit.orchestrator import _is_detection_only
+            detection = _is_detection_only(part)
+        if detection:
+            detection_namespaces.add(low.split(":", 1)[0])
+            continue
+        if is_tool_evidence(part):
+            return True
+    return (
+        not contaminated
+        and len(detection_namespaces) >= 2
+        and is_tool_evidence(ev)
+    )
 
 
 _RECEIPT_MAP: dict[str, tuple] = {
