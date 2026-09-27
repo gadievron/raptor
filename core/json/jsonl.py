@@ -36,6 +36,7 @@ import json
 import logging
 import os
 import stat as _stat
+from collections import deque
 from typing import Any, TYPE_CHECKING
 
 from core.json.utils import _loads, _reject_non_finite
@@ -127,6 +128,8 @@ def load_jsonl(
     *,
     max_line_bytes: int | None = None,
     max_total_bytes: int | None = None,
+    oversize_tail: bool = False,
+    max_records: int | None = None,
 ) -> list[Any]:
     """Read back a JSONL trail as a list of parsed records.
 
@@ -149,6 +152,31 @@ def load_jsonl(
     - ``max_line_bytes``: an over-long line is skipped like a
       malformed one. The check runs after the line is materialised,
       so pair it with ``max_total_bytes`` for a hard memory bound.
+    - ``oversize_tail``: changes the ``max_total_bytes`` overflow arm
+      from refuse-whole (``[]``) to a bounded NEWEST-tail read: seek
+      to ``size - max_total_bytes``, discard through the first
+      newline (the seek lands mid-line), then parse normally. The
+      budget still binds — at most ``max_total_bytes`` bytes are ever
+      read — but a legitimately overgrown trail degrades to its
+      newest records instead of vanishing. Trade-off, both
+      directions: without the flag a trail one byte over budget
+      silently loses EVERY record (an over-review/telemetry-blackout
+      cliff a production multi-segment trail actually fell off);
+      with it a hostile multi-GiB plant still costs only one
+      budget's worth of read+parse work. Callers whose consumers need
+      oldest-first completeness must not set it — they get the loud
+      refusal instead.
+    - ``max_records``: retained-record COUNT bound; the NEWEST
+      records win (a byte budget alone does not bound reader memory —
+      parsed-object overhead is per record, so a flood of minimal
+      rows under the byte budget can still retain millions of
+      objects). Trade-off, both directions: too low and a legitimate
+      dense trail loses its oldest records (the safe over-review
+      direction — every consumer of these trails treats a missing
+      record as "not yet done"); unbounded and the tiny-row flood
+      OOMs the reader through object overhead the byte budgets
+      cannot see. Newest-wins (not stop-early) so last-row-per-key
+      consumers keep seeing the true last row.
 
     Lines parse through the shared ``core.json`` backend (orjson when
     installed — trail loops are its best-measured win). Non-finite
@@ -167,23 +195,50 @@ def load_jsonl(
         # "nothing trustworthy to read".
         logger.debug("load_jsonl: cannot open %s", path, exc_info=True)
         return []
+    discard_first_partial_line = False
     if max_total_bytes is not None:
         try:
             size = os.fstat(fd).st_size
         except OSError:
             size = None
         if size is not None and size > max_total_bytes:
+            if not oversize_tail:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                logger.warning(
+                    "load_jsonl: refusing oversize trail %s "
+                    "(%d bytes > max_total_bytes=%d)",
+                    path, size, max_total_bytes,
+                )
+                return []
             try:
-                os.close(fd)
+                os.lseek(fd, size - max_total_bytes, os.SEEK_SET)
             except OSError:
-                pass
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                logger.warning(
+                    "load_jsonl: oversize trail %s is not seekable — "
+                    "nothing read (%d bytes > max_total_bytes=%d)",
+                    path, size, max_total_bytes,
+                )
+                return []
+            discard_first_partial_line = True
             logger.warning(
-                "load_jsonl: refusing oversize trail %s "
-                "(%d bytes > max_total_bytes=%d)",
-                path, size, max_total_bytes,
+                "load_jsonl: trail %s is over budget (%d bytes > "
+                "max_total_bytes=%d) — reading the newest %d bytes "
+                "only; older records are NOT loaded",
+                path, size, max_total_bytes, max_total_bytes,
             )
-            return []
-    records: list[Any] = []
+    # deque(maxlen): newest-wins retention for the ``max_records``
+    # bound — the list/deque split keeps the unbounded path
+    # allocation-identical to the historical one.
+    records: list[Any] | deque[Any]
+    appended_total = 0
+    records = deque(maxlen=max_records) if max_records is not None else []
     try:
         f = os.fdopen(fd, "rb")
     except OSError:
@@ -192,11 +247,17 @@ def load_jsonl(
         except OSError:
             pass
         logger.debug("load_jsonl: cannot read %s", path, exc_info=True)
-        return records
+        return list(records) if max_records is not None else records
     with f:
         try:
             oversize_lines = 0
             invalid_lines = 0
+            if discard_first_partial_line:
+                # The tail seek lands mid-line; everything up to and
+                # including the first newline belongs to a record
+                # whose head is beyond the budget. Bounded: at most
+                # ``max_total_bytes`` bytes remain past the seek.
+                f.readline()
             # File iteration splits on ``\n`` only; ``splitlines`` on
             # each chunk restores the bare-``\r`` separators the old
             # text-mode universal-newlines read accepted (foreign
@@ -221,6 +282,7 @@ def load_jsonl(
                     try:
                         records.append(
                             _loads(line, parse_constant=_reject_non_finite))
+                        appended_total += 1
                     except ValueError:
                         # json.JSONDecodeError (both backends) and the
                         # non-finite rejection are ValueError subclasses.
@@ -244,4 +306,12 @@ def load_jsonl(
                 "load_jsonl: skipped %d invalid-UTF-8 line(s) in %s",
                 invalid_lines, path,
             )
-    return records
+        evicted = appended_total - len(records)
+        if evicted:
+            logger.warning(
+                "load_jsonl: retained only the newest %d of %d "
+                "record(s) in %s (max_records bound); older records "
+                "are NOT loaded",
+                len(records), appended_total, path,
+            )
+    return list(records) if max_records is not None else records

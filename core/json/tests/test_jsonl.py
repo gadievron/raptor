@@ -352,6 +352,115 @@ class TestLoadJsonlBudgets:
         assert load_jsonl(p, max_line_bytes=10, max_total_bytes=10) == []
 
 
+class TestLoadJsonlOversizeTail:
+    """``oversize_tail=True``: an over-budget trail degrades to its
+    bounded newest tail instead of loading as ``[]`` — while the
+    budget keeps binding on hostile input (two-direction contract)."""
+
+    def _trail(self, tmp_path: Path, n: int = 200) -> Path:
+        p = tmp_path / "trail.jsonl"
+        for i in range(n):
+            append_jsonl(p, {"i": i}, compact=True)
+        return p
+
+    def test_tail_reads_newest_records(self, tmp_path: Path):
+        p = self._trail(tmp_path)
+        size = p.stat().st_size
+        records = load_jsonl(p, max_total_bytes=size // 4,
+                             oversize_tail=True)
+        # Legitimate-scale direction: the trail is no longer lost.
+        assert records, "over-budget trail must not load as []"
+        # Newest records win, in original order, ending at the true
+        # last record.
+        assert records[-1] == {"i": 199}
+        idx = [r["i"] for r in records]
+        assert idx == sorted(idx)
+        # Hostile direction: the budget still binds — the oldest
+        # records beyond the tail are NOT loaded.
+        assert {"i": 0} not in records
+        assert len(records) < 200
+
+    def test_tail_budget_bounds_bytes_read(self, tmp_path: Path):
+        p = self._trail(tmp_path)
+        budget = 64
+        records = load_jsonl(p, max_total_bytes=budget,
+                             oversize_tail=True)
+        # At most ``budget`` bytes past the seek survive: the memory
+        # bound a hostile multi-GiB plant meets.
+        assert records
+        line_bytes = sum(
+            len(json.dumps(r, separators=(",", ":"))) + 1
+            for r in records
+        )
+        assert line_bytes <= budget
+
+    def test_tail_discards_partial_first_line(self, tmp_path: Path):
+        p = self._trail(tmp_path)
+        size = p.stat().st_size
+        records = load_jsonl(p, max_total_bytes=size - 3,
+                             oversize_tail=True)
+        # The seek lands mid-line; the cut record must be skipped,
+        # not parsed as garbage, and everything after it survives.
+        assert all(isinstance(r, dict) and "i" in r for r in records)
+        assert records[-1] == {"i": 199}
+
+    def test_under_budget_identical_to_plain_load(self, tmp_path: Path):
+        p = self._trail(tmp_path, n=5)
+        size = p.stat().st_size
+        assert load_jsonl(p, max_total_bytes=size, oversize_tail=True) \
+            == load_jsonl(p)
+
+    def test_default_still_refuses_whole(self, tmp_path: Path):
+        p = self._trail(tmp_path)
+        assert load_jsonl(p, max_total_bytes=32) == []
+
+    def test_tail_warns(self, tmp_path: Path, caplog):
+        p = self._trail(tmp_path)
+        with caplog.at_level("WARNING", logger="core.json.jsonl"):
+            load_jsonl(p, max_total_bytes=64, oversize_tail=True)
+        assert any("over budget" in r.message for r in caplog.records)
+
+
+class TestLoadJsonlMaxRecords:
+    """``max_records``: newest-wins retained-count bound."""
+
+    def _trail(self, tmp_path: Path, n: int = 50) -> Path:
+        p = tmp_path / "trail.jsonl"
+        for i in range(n):
+            append_jsonl(p, {"i": i}, compact=True)
+        return p
+
+    def test_over_bound_keeps_newest(self, tmp_path: Path):
+        p = self._trail(tmp_path)
+        records = load_jsonl(p, max_records=10)
+        # Hostile direction: the count bound binds (object-overhead
+        # OOM defence the byte budgets cannot see).
+        assert len(records) == 10
+        # Newest-wins: last-row-per-key consumers still see the true
+        # last record.
+        assert records == [{"i": i} for i in range(40, 50)]
+
+    def test_under_bound_keeps_all(self, tmp_path: Path):
+        # Legitimate-scale direction: a trail within the bound loads
+        # complete and order-identical to the unbounded read.
+        p = self._trail(tmp_path, n=8)
+        assert load_jsonl(p, max_records=8) == load_jsonl(p)
+
+    def test_none_unbounded_unchanged(self, tmp_path: Path):
+        p = self._trail(tmp_path)
+        assert len(load_jsonl(p)) == 50
+
+    def test_eviction_warns(self, tmp_path: Path, caplog):
+        p = self._trail(tmp_path)
+        with caplog.at_level("WARNING", logger="core.json.jsonl"):
+            load_jsonl(p, max_records=10)
+        assert any("newest 10 of 50" in r.message for r in caplog.records)
+
+    def test_returns_plain_list(self, tmp_path: Path):
+        p = self._trail(tmp_path, n=3)
+        assert type(load_jsonl(p, max_records=2)) is list
+
+
 def test_o_nofollow_available():
     # The hardening this module exists for requires O_NOFOLLOW on the
     # platforms RAPTOR supports (Linux/macOS).
