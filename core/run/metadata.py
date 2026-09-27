@@ -1623,7 +1623,11 @@ def _promote_checklist(project_dir: Path) -> None:
 
     Scans sibling run dirs for checklist.json files. Takes the newest
     and copies it to project_dir/checklist.json, merging checked_by
-    from older checklists.
+    from older checklists. Every candidate passes the checklist frame
+    gate first: a TAMPERED run-local frame is skipped with a warning
+    (promotion re-stamps at project level, so promoting one would
+    launder it into a verified project checklist); unstamped legacy
+    and relocated frames stay promotable at the legacy tier.
     """
     from core.json import load_json
 
@@ -1659,6 +1663,7 @@ def _promote_checklist(project_dir: Path) -> None:
     # released before the next load. Accumulating every sibling first
     # held N × the per-file budget live at once — a project with many
     # runs turned promotion into the run start's high-water mark.
+    from core.inventory import _single_file_frame_gate
     from core.inventory.builder import _carry_forward_coverage
     promoted = None
     for d in sorted(children, key=lambda d: (_safe_mtime(d), d.name),
@@ -1690,6 +1695,21 @@ def _promote_checklist(project_dir: Path) -> None:
             # accessor would follow a symlinked slot back to the
             # project checklist (self-promotion).
             data = load_json(cl, max_bytes=RUN_ARTIFACT_MAX_BYTES)  # checklist-direct-read: run-local only, symlink-excluded above
+            # Frame gate on the raw candidate: save_checklist below
+            # RE-STAMPS whatever it is handed at project level, so an
+            # ungated promotion would launder a frame every direct
+            # read refuses as tampered into a freshly-verified project
+            # checklist. A TAMPERED candidate is skipped (loud warning
+            # from the gate, naming the file + the rebuild remedy) and
+            # the scan continues to the next-newest sibling — the same
+            # degrade direction as the sharded arm, whose accessor
+            # read already returns {} for a tampered index. If no
+            # candidate survives, nothing is promoted (fail-closed).
+            # Unstamped/relocated candidates demote-and-promote at the
+            # legacy tier, exactly like every other reader.
+            if isinstance(data, dict) and not _single_file_frame_gate(
+                    data, cl, "checklist promotion"):
+                continue
         else:
             from core.inventory import read_checklist
             data = read_checklist(d)

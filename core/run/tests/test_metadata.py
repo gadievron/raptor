@@ -2064,6 +2064,126 @@ class PromoteChecklistStreamingTest(unittest.TestCase):
             self.assertEqual(got, {"semgrep", "llm"})
 
 
+class PromoteChecklistFrameGateTest(unittest.TestCase):
+    """Run-local promotion candidates pass the checklist frame gate.
+
+    ``save_checklist`` RE-STAMPS the promoted document at project
+    level, so an ungated tampered run-local candidate would launder a
+    frame every direct read refuses into a freshly-verified project
+    checklist. Tampered candidates are skipped (loud warning naming
+    the file); unstamped legacy candidates keep promoting at the
+    legacy tier; verified candidates promote as before.
+    """
+
+    def _doc(self, name="f1"):
+        return {"files": [{"path": "a.c", "lines": 9, "items": [
+            {"name": name, "line_start": 1, "line_end": 9}]}]}
+
+    def test_tampered_candidate_refused(self):
+        import json as _json
+        import logging
+
+        from core.inventory import read_checklist, save_checklist
+        from core.run.metadata import _promote_checklist
+        with TemporaryDirectory() as d:
+            proj = Path(d)
+            run = proj / "run_001"
+            run.mkdir()
+            save_checklist(run, self._doc())
+            cl = run / "checklist.json"
+            on_disk = _json.loads(cl.read_text())
+            on_disk["files"][0]["items"][0]["name"] = "backdoor"
+            cl.write_text(_json.dumps(on_disk))  # valid-stamp-then-edited
+
+            records = []
+            handler = logging.Handler()
+            handler.emit = records.append
+            logging.getLogger("core.inventory").addHandler(handler)
+            try:
+                _promote_checklist(proj)
+            finally:
+                logging.getLogger("core.inventory").removeHandler(handler)
+
+            # Fail-closed: the only candidate was refused — nothing
+            # promoted, the planted content never reaches the project
+            # checklist.
+            self.assertFalse((proj / "checklist.json").exists())
+            self.assertEqual(read_checklist(proj), {})
+            warned = " ".join(r.getMessage() for r in records)
+            self.assertIn("FAILED frame authentication", warned)
+            self.assertIn(str(cl), warned)  # names the refused file
+
+    def test_tampered_candidate_skipped_to_next_newest(self):
+        import json as _json
+
+        from core.inventory import read_checklist, save_checklist
+        from core.run.metadata import _promote_checklist
+        with TemporaryDirectory() as d:
+            import os as _os
+            proj = Path(d)
+            old_run = proj / "run_001"
+            old_run.mkdir()
+            save_checklist(old_run, self._doc("honest"))
+            new_run = proj / "run_002"
+            new_run.mkdir()
+            save_checklist(new_run, self._doc("victim"))
+            cl = new_run / "checklist.json"
+            on_disk = _json.loads(cl.read_text())
+            on_disk["files"][0]["items"][0]["name"] = "backdoor"
+            cl.write_text(_json.dumps(on_disk))
+            # Pin the ordering AFTER all writes: the tampered run is
+            # the newest candidate, the honest one next.
+            _os.utime(old_run, (1_700_000_000, 1_700_000_000))
+            _os.utime(new_run, (1_700_000_100, 1_700_000_100))
+
+            _promote_checklist(proj)
+
+            promoted = read_checklist(proj)
+            names = [i["name"] for f in promoted["files"]
+                     for i in f["items"]]
+            self.assertEqual(names, ["honest"])  # next-newest won
+            self.assertNotIn(
+                "backdoor", (proj / "checklist.json").read_text())
+
+    def test_unstamped_candidate_still_promotes(self):
+        import json as _json
+
+        from core.inventory import checklist_frame_mac, read_checklist
+        from core.run.metadata import _promote_checklist
+        with TemporaryDirectory() as d:
+            proj = Path(d)
+            run = proj / "run_001"
+            run.mkdir()
+            # Token-less pre-MAC legacy candidate: never refused.
+            (run / "checklist.json").write_text(_json.dumps(self._doc()))
+
+            _promote_checklist(proj)
+
+            promoted = read_checklist(proj)
+            names = [i["name"] for f in promoted["files"]
+                     for i in f["items"]]
+            self.assertEqual(names, ["f1"])
+            # The project copy is freshly stamped by save_checklist.
+            on_disk = _json.loads((proj / "checklist.json").read_text())
+            self.assertIn(checklist_frame_mac.FRAME_TOKEN_KEY, on_disk)
+
+    def test_verified_candidate_promotes(self):
+        from core.inventory import read_checklist, save_checklist
+        from core.run.metadata import _promote_checklist
+        with TemporaryDirectory() as d:
+            proj = Path(d)
+            run = proj / "run_001"
+            run.mkdir()
+            save_checklist(run, self._doc())
+
+            _promote_checklist(proj)
+
+            promoted = read_checklist(proj)
+            names = [i["name"] for f in promoted["files"]
+                     for i in f["items"]]
+            self.assertEqual(names, ["f1"])
+
+
 class ChecklistInheritanceTargetMatchTest(_ProjectRunCase):
     """A run only inherits the project-level checklist when the
     checklist's recorded ``target_path`` matches the run's target —

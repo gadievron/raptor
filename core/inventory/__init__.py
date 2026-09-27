@@ -200,6 +200,13 @@ _MAX_CHECKLIST_BYTES = 256 * 1024 * 1024
 # go through ``core.source.open_regular`` (O_NOFOLLOW + regular-file
 # check on the opened fd), and the accessors' flock covers sharded
 # reads and writes exactly like single-file ones.
+#
+# Frame authentication: BOTH on-disk forms carry an HMAC frame token
+# (``index.json`` top level for sharded, document top level for
+# single-file) minted at the write chokepoint and verified by every
+# accessor read — see ``core.inventory.checklist_frame_mac`` for the tier
+# semantics (verified / tampered fails closed / unstamped and
+# relocated demote to the legacy tier).
 
 CHECKLIST_DIR_NAME = "checklist"
 CHECKLIST_INDEX_NAME = "index.json"
@@ -368,6 +375,27 @@ def _load_checklist_index(index_path: "Path") -> dict[str, Any]:
             f"{total_declared} total shard bytes (over the "
             f"{_MAX_CHECKLIST_TOTAL_BYTES}-byte aggregate budget)"
         )
+    # Frame authentication (every sharded read routes through here).
+    # The slot binding is DERIVED from the reader's own resolved
+    # location (<slot>/checklist/index.json), never read from the
+    # artifact. Tampered fails closed; unstamped/relocated demote to
+    # the legacy tier with a warning.
+    from . import checklist_frame_mac
+
+    provenance = checklist_frame_mac.frame_provenance(
+        index, checklist_frame_mac.frame_binding(index_path.parent.parent),
+        checklist_frame_mac.FORM_SHARDED)
+    if provenance == checklist_frame_mac.FRAME_TAMPERED:
+        raise ChecklistIntegrityError(
+            f"checklist index at {index_path} FAILED frame "
+            f"authentication — its integrity token does not match the "
+            f"manifest (in-place edit or forged frame); rebuild the "
+            f"inventory to restore it"
+        )
+    if provenance in (checklist_frame_mac.FRAME_UNSTAMPED,
+                      checklist_frame_mac.FRAME_RELOCATED):
+        checklist_frame_mac.warn_demoted_frame(
+            index_path, provenance, "checklist index")
     return index
 
 
@@ -628,7 +656,15 @@ def _write_sharded_checklist(
             f"checklist exceeds the {_MAX_CHECKLIST_BYTES}-byte "
             f"single-file budget and carries no 'files' list to shard."
         )
-    meta = {k: v for k, v in data.items() if k != "files"}
+    from . import checklist_frame_mac
+
+    # The frame token never rides into the index meta: a stale
+    # single-file token surviving a single-file→sharded transition
+    # would sit inside the MAC-covered manifest looking like a live
+    # stamp. The sharded form's own token is minted over the index
+    # document below.
+    meta = {k: v for k, v in data.items()
+            if k not in ("files", checklist_frame_mac.FRAME_TOKEN_KEY)}
     plan = _plan_checklist_shards(files, _CHECKLIST_SHARD_TARGET_BYTES)
 
     parent = checklist_path.parent
@@ -672,6 +708,15 @@ def _write_sharded_checklist(
         }
         stamp_provenance(index_doc, "core-inventory", untrusted=False,
                          overwrite_generator=False)
+        # Frame token over the finished manifest (provenance stamp
+        # included): shard-content authenticity chains through the
+        # MAC-covered per-shard sha256 rows. mint None (no usable
+        # key) persists unstamped — readers then apply legacy tier.
+        token = checklist_frame_mac.mint_frame(
+            index_doc, checklist_frame_mac.frame_binding(checklist_path.parent),
+            checklist_frame_mac.FORM_SHARDED)
+        if token is not None:
+            index_doc[checklist_frame_mac.FRAME_TOKEN_KEY] = token
         index_content = dumps_artifact(index_doc) + "\n"
         if len(index_content.encode("utf-8")) > _MAX_CHECKLIST_INDEX_BYTES:
             raise ChecklistBudgetExceededError(
@@ -723,7 +768,28 @@ def _write_checklist_locked(
     from core.atomic_fs import write_text_atomically
     from core.json import dumps_artifact
 
-    content = dumps_artifact(data) + "\n"
+    from . import checklist_frame_mac
+
+    token: dict[str, str] | None = None
+    if isinstance(data, dict):
+        # Strip any stale or planted frame token FIRST: a token
+        # riding in on the input document must never be re-serialised
+        # as if this chokepoint had freshly minted it.
+        data.pop(checklist_frame_mac.FRAME_TOKEN_KEY, None)
+        token = checklist_frame_mac.mint_frame(
+            data, checklist_frame_mac.frame_binding(checklist_path.parent),
+            checklist_frame_mac.FORM_SINGLE)
+    try:
+        if token is not None:
+            data[checklist_frame_mac.FRAME_TOKEN_KEY] = token
+        content = dumps_artifact(data) + "\n"
+    finally:
+        # The token is serialisation-local: the caller's dict must
+        # read back equal to what it saved (readers pop the token),
+        # and the sharded writer below mints its own sharded-form
+        # token over the index instead.
+        if token is not None:
+            data.pop(checklist_frame_mac.FRAME_TOKEN_KEY, None)
     size = len(content.encode("utf-8"))
     # Switch-over point is the reader budget itself: lower would
     # shard artifacts every reader loads fine (more moving parts for
@@ -1055,6 +1121,39 @@ def checklist_exists(output_dir: "str | Path") -> bool:
     return False
 
 
+def _single_file_frame_gate(
+    data: dict[str, Any], checklist_path: "Path", what: str,
+) -> bool:
+    """Frame-authentication gate for a loaded single-file checklist.
+
+    Returns True when the document is readable — verified, or demoted
+    to the legacy tier (unstamped/relocated, warned once) — popping
+    the frame token so both on-disk forms hand consumers the same
+    in-memory shape. Returns False when the frame is TAMPERED (token
+    present but invalid): the caller must refuse the document in its
+    own degrade direction. Logs the loud refusal here so every
+    refusing caller names the file the same way.
+    """
+    from . import checklist_frame_mac
+
+    provenance = checklist_frame_mac.frame_provenance(
+        data, checklist_frame_mac.frame_binding(checklist_path.parent),
+        checklist_frame_mac.FORM_SINGLE)
+    if provenance == checklist_frame_mac.FRAME_TAMPERED:
+        logger.warning(
+            "%s: checklist at %s FAILED frame authentication — its "
+            "integrity token does not match the document (in-place "
+            "edit or forged frame). Refusing the frame; rebuild the "
+            "inventory to restore it.", what, checklist_path,
+        )
+        return False
+    if provenance in (checklist_frame_mac.FRAME_UNSTAMPED,
+                      checklist_frame_mac.FRAME_RELOCATED):
+        checklist_frame_mac.warn_demoted_frame(checklist_path, provenance, what)
+    data.pop(checklist_frame_mac.FRAME_TOKEN_KEY, None)
+    return True
+
+
 def read_checklist(output_dir: "str | Path") -> dict[str, Any]:
     """Read the checklist under the writers' flock + symlink resolution.
 
@@ -1077,8 +1176,10 @@ def read_checklist(output_dir: "str | Path") -> dict[str, Any]:
 
     Returns ``{}`` when the checklist is missing, malformed, not a
     JSON object (a non-dict checklist is corrupt for every consumer
-    that calls ``.get`` on it), or a sharded layout that fails its
-    integrity contract (loud warning).
+    that calls ``.get`` on it), a sharded layout that fails its
+    integrity contract, or a frame in EITHER form that fails its
+    frame authentication (loud warning; see
+    ``core.inventory.checklist_frame_mac``).
     """
     from core.json import load_json
 
@@ -1099,7 +1200,11 @@ def read_checklist(output_dir: "str | Path") -> dict[str, Any]:
                 )
                 return {}
         data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    if not _single_file_frame_gate(data, checklist_path, "read_checklist"):
+        return {}
+    return data
 
 
 def read_checklist_meta(output_dir: "str | Path") -> dict[str, Any]:
@@ -1136,6 +1241,9 @@ def read_checklist_meta(output_dir: "str | Path") -> dict[str, Any]:
         from core.json import load_json
         data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
     if not isinstance(data, dict):
+        return {}
+    if not _single_file_frame_gate(data, checklist_path,
+                                   "read_checklist_meta"):
         return {}
     return {k: v for k, v in data.items() if k != "files"}
 
@@ -1174,6 +1282,11 @@ def _iter_checklist_items_from_dir(
                 )
             return
         data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
+    if isinstance(data, dict) and not _single_file_frame_gate(
+            data, checklist_path, "iter_checklist_items"):
+        # Same degrade direction as the sharded refusal above: the
+        # walk ends having yielded nothing from the refused frame.
+        return
     yield from _iter_items_of(data)
 
 
@@ -1193,8 +1306,11 @@ def update_checklist(
     an existing checklist.
 
     Raises ``ValueError`` when an EXISTING checklist fails to load
-    (malformed, oversize, unreadable, or a sharded layout that fails
-    its integrity contract): proceeding with ``{}`` would hand the
+    (malformed, oversize, unreadable, a sharded layout that fails
+    its integrity contract, or a frame in either form that fails its
+    frame authentication — the refusal also keeps this re-stamping
+    write from laundering a tampered frame): proceeding with ``{}``
+    would hand the
     transform an empty dict and then OVERWRITE the real artifact with
     a fresh provenance-stamped near-empty checklist — corruption must
     surface, never destroy the data needed to diagnose it. A genuinely
@@ -1226,6 +1342,16 @@ def update_checklist(
                     f"{checklist_path} failed to load as a JSON object "
                     f"(malformed, oversize, or unreadable) — writing "
                     f"would replace it with a near-empty checklist"
+                )
+                raise ValueError(msg)
+            if not _single_file_frame_gate(current, checklist_path,
+                                           "update_checklist"):
+                msg = (
+                    f"refusing checklist read-modify-write: "
+                    f"{checklist_path} failed frame authentication "
+                    f"(its integrity token does not match the "
+                    f"document) — re-writing would launder the "
+                    f"tampered frame under a fresh stamp"
                 )
                 raise ValueError(msg)
         if current is None:
