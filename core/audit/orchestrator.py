@@ -447,6 +447,54 @@ def _run_sigterm_flush_hooks() -> None:
             logger.debug("sigterm flush hook failed", exc_info=True)
 
 
+def _register_private_joern_reap_hook(
+    joern_server: Any,
+    *,
+    caller_owns: bool,
+    lifecycle_shared: bool,
+) -> bool:
+    """Arm a forced-exit teardown for a RUN-PRIVATE Joern server.
+
+    The graceful ``finally`` in :func:`run_orchestrator` stops the
+    server, but the FORCED-exit paths (SIGTERM-grace watchdog expiry,
+    second TERM) run only ``_sigterm_flush_hooks`` before
+    ``os._exit`` — without an entry here the netns forwarder detaches
+    to init with its JVM and squats on the heap until its own 8h
+    orphan TTL. Registered ONLY for the run-private class, the one
+    whose server nothing can ever re-acquire:
+
+    * caller-owned servers are the caller's lifecycle;
+    * lifecycle handles — reused (no ``_proc``) or freshly recorded
+      in the state file (``_lifecycle_token`` set) — stay alive on
+      purpose: the state file lets later runs re-acquire them warm,
+      and a concurrent session may hold a reference (killing a shared
+      server is cross-run collateral).
+
+    Returns True when a hook was registered. The hook is
+    exception-guarded and idempotent against the graceful path: the
+    ``finally`` clears the hook registry before its normal stop, and
+    a racing double-stop only re-signals an already-dead corroborated
+    group (``stop_fast`` mutates no instance state).
+    """
+    if joern_server is None or caller_owns or lifecycle_shared:
+        return False
+    if getattr(joern_server, "_lifecycle_token", None) is not None:
+        return False
+    if getattr(joern_server, "_proc", None) is None:
+        return False
+
+    def _reap_private_joern_on_forced_exit() -> None:
+        try:
+            joern_server.stop_fast()
+        except Exception:  # noqa: BLE001 — flush hooks must never raise
+            logger.debug(
+                "forced-exit joern reap failed", exc_info=True,
+            )
+
+    _sigterm_flush_hooks.append(_reap_private_joern_on_forced_exit)
+    return True
+
+
 def _sigterm_watchdog(grace_s: float) -> None:
     time.sleep(grace_s)
     logger.warning(
@@ -2097,6 +2145,15 @@ def run_orchestrator(
             and hasattr(joern_server, "_proc")
             and joern_server._proc is None
         )
+
+    # Forced-exit reap for a run-private server (see the helper): the
+    # graceful finally below stops it, but watchdog-expiry / second-
+    # TERM exits bypass that finally entirely.
+    _register_private_joern_reap_hook(
+        joern_server,
+        caller_owns=_caller_owns_joern,
+        lifecycle_shared=_joern_lifecycle,
+    )
 
     # --- Joern pre-sweep future: submitted at server start ---
     # build_joern_evidence depends only on target/out_dir/server (its

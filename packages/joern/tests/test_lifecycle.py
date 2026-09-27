@@ -632,3 +632,47 @@ class TestSessionNames(unittest.TestCase):
                       lifecycle.shared_joern_session)
         self.assertIsNot(joern_pkg.joern_session,
                          lifecycle.shared_joern_session)
+
+
+class TestSignalServerSentinelRefusal(unittest.TestCase):
+    """pid ≤ 1 is never signalled — and a real leader still is.
+
+    The pid reaches _signal_server from a lifecycle STATE FILE; a
+    corrupt record carrying 1 passes the own-leader check (init leads
+    group 1) and killpg(1, sig) is kill(-1, sig) — a same-uid
+    broadcast. Every kill/killpg below is a recording fake so a
+    regressed guard fails an assertion instead of signalling for real.
+    """
+
+    def test_sentinel_pids_refused_on_both_delivery_paths(self):
+        for pid in (1, 0, -1):
+            sent: list[tuple[str, int, int]] = []
+            with patch.object(
+                lifecycle.os, "killpg",
+                lambda pgid, sig: sent.append(("killpg", pgid, sig)),
+            ), patch.object(
+                lifecycle.os, "kill",
+                lambda p, sig: sent.append(("kill", p, sig)),
+            ):
+                with self.assertRaises(ProcessLookupError):
+                    lifecycle._signal_server(pid, 15)
+            self.assertEqual(
+                sent, [], f"signalled sentinel pid {pid}: {sent}",
+            )
+
+    def test_real_leader_still_group_signalled(self):
+        # Direction two: the guard must not swallow legitimate
+        # group signals to a spawn-recorded leader.
+        pid = 2**22 + 555
+        sent: list[tuple[str, int, int]] = []
+        with patch.object(
+            lifecycle.os, "getpgid", lambda p: p,
+        ), patch.object(
+            lifecycle.os, "killpg",
+            lambda pgid, sig: sent.append(("killpg", pgid, sig)),
+        ), patch.object(
+            lifecycle.os, "kill",
+            lambda p, sig: sent.append(("kill", p, sig)),
+        ):
+            lifecycle._signal_server(pid, 15)
+        self.assertEqual(sent, [("killpg", pid, 15)])

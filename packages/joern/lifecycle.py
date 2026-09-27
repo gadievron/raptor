@@ -545,7 +545,19 @@ def _signal_server(pid: int, sig: int) -> None:
     signalled (``JoernServer.stop()`` does the same). Only ``killpg``
     when the pid leads its own group; anything else means the pid was
     reused and the group is not ours to signal.
+
+    pid ≤ 1 is refused outright (the callers' normal dead-process
+    handling catches the raise): the pid comes from a lifecycle STATE
+    FILE, and a corrupt record carrying 1 would pass the own-leader
+    check (init leads group 1) — ``killpg(1, sig)`` is ``kill(-1,
+    sig)`` at the kernel, a same-uid broadcast; so are the ``kill(0,
+    ·)``/``kill(-1, ·)`` fallbacks for 0/-1. No recorded server can
+    have pid ≤ 1.
     """
+    if pid <= 1:
+        raise ProcessLookupError(
+            f"refusing to signal sentinel pid {pid}",
+        )
     try:
         if os.getpgid(pid) == pid:
             os.killpg(pid, sig)

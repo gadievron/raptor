@@ -261,6 +261,19 @@ _MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 # the recovery it rides on.
 _GROUP_KILL_GRACE_S = 5.0
 
+# Per-phase wait for ``stop_fast``'s TERM → KILL ladder. The caller is
+# a FORCED-exit path (SIGTERM grace already expired, or a second TERM)
+# whose remaining latency budget is small: worst case is two bounded
+# waits (TERM phase + KILL phase), so total added exit latency is
+# ~2×this value. Trade-off, both directions: shorter (<~1s) gives a
+# TERM-honouring JVM no time to run its shutdown hook, so every forced
+# exit pays a SIGKILL (and the kernel-side address-space teardown of a
+# multi-GB heap that follows); longer inflates the forced-exit stall —
+# the operator/supervisor has already waited out the salvage grace,
+# and each extra second here delays the process exit they demanded.
+# 3s keeps the worst case ≈6s, under the ~8s forced-exit budget.
+_FORCED_EXIT_KILL_GRACE_S = 3.0
+
 
 def _pgid_alive(pgid: int | None) -> bool:
     """True while ANY member of *pgid* is actually RUNNING.
@@ -400,7 +413,12 @@ def _ensure_group_dead(
     # proceeds.
     if not isinstance(pgid, int) or isinstance(pgid, bool):
         return True
-    if pgid <= 0:
+    # pgid 1 is refused alongside <= 0: killpg(1, sig) is kill(-1, sig)
+    # at the kernel — a broadcast to every process this uid can signal,
+    # and pid 1 even passes an "is its own group leader" check. A real
+    # spawn-recorded pgid is always > 1 (it is a Popen child's pid), so
+    # nothing legitimate is lost by the wider refusal.
+    if pgid <= 1:
         return True
     try:
         if pgid == os.getpgrp():
@@ -1196,8 +1214,14 @@ class JoernServer:
             # killpg when pid is the leader of its own group: Popen used
             # start_new_session=True, so anything else means the pid was
             # reused (or mocked) and the group is not ours to signal.
+            # pid ≤ 1 is refused up front: pid 1 PASSES the own-leader
+            # check (init leads group 1), and killpg(1, sig) is
+            # kill(-1, sig) at the kernel — a same-uid broadcast. A
+            # real Popen child pid is always > 1, so only a corrupted
+            # or fabricated handle can carry one; route it to the
+            # per-process terminate()/kill() fallback below.
             try:
-                if os.getpgid(pid) != pid:
+                if pid <= 1 or os.getpgid(pid) != pid:
                     raise ProcessLookupError
                 os.killpg(pid, sig)
             except (ProcessLookupError, PermissionError, OSError):
@@ -1285,6 +1309,49 @@ class JoernServer:
         if self._heap_reservation is not None:
             self._heap_reservation.release()
             self._heap_reservation = None
+
+    def stop_fast(
+        self, grace_s: float = _FORCED_EXIT_KILL_GRACE_S,
+    ) -> bool:
+        """Bounded teardown of the server's process group for forced exits.
+
+        ``stop()`` is the orderly path (leader SIGTERM, reap wait,
+        workspace/socket-dir cleanup) and can legitimately block for
+        tens of seconds; a forced-exit hook (SIGTERM grace expiry,
+        second TERM) cannot afford that — the process is about to
+        ``os._exit`` and anything not killed NOW detaches to init with
+        its multi-GB JVM. This entry does only the process teardown,
+        through the existing spawn-corroborated group-kill ladder
+        (:func:`_ensure_group_dead`): TERM the recorded group, bounded
+        wait, KILL, bounded wait — never longer than ~2×*grace_s*, and
+        never signalling a group that fails corroboration (pid-reuse
+        defence). Disk cleanup is deliberately skipped: the boot-time
+        workspace sweep and the forwarder's own socket-dir removal
+        reclaim it, exactly as after a SIGKILL of this process.
+
+        Instance state is NOT mutated, so a concurrently running
+        graceful ``stop()`` keeps its full cleanup; double delivery is
+        harmless — signalling an already-dead corroborated group is a
+        no-op and ``stop()``/``stop_fast()`` both early-return once
+        ``_proc`` is cleared. Returns True when the group is verified
+        dead (or there was nothing of ours to kill). Never raises.
+        """
+        proc = self._proc
+        if proc is None:
+            # Reuse handle or already stopped — never our process to
+            # signal (same contract as stop()).
+            return True
+        try:
+            return _ensure_group_dead(
+                self._pgid or proc.pid,
+                label=f"forced-exit stop of pid {proc.pid}",
+                grace_s=grace_s,
+                member_anchor=(self._member_pid, self._member_starttime),
+                corroborated=proc.poll() is None,
+            )
+        except Exception:  # noqa: BLE001 — forced-exit path must not raise
+            logger.debug("stop_fast failed", exc_info=True)
+            return False
 
     def is_alive(self) -> bool:
         if self._proc is None or self._proc.poll() is not None:
