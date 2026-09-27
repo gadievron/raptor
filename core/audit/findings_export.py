@@ -16,6 +16,7 @@ from typing import Any
 from core.json import save_json
 
 from .evidence_grade import (
+    LLM_CLAIM_PREFIX,
     Confidence,
     EvidenceSource,
     GradedEvidence,
@@ -24,6 +25,7 @@ from .evidence_grade import (
     grade_evidence_record,
     grade_review_result,
     is_tool_evidence,
+    sanitize_llm_evidence_tool,
 )
 from .tree_class import classify_tree_class, is_test_tree_path
 
@@ -257,6 +259,14 @@ def build_graded_finding(
         for part in (evidence_tool or "").split("+"):
             part = part.strip()
             if not part or part in _confirmed_by:
+                continue
+            if part.startswith(LLM_CLAIM_PREFIX):
+                # A sanitized model claim is display text, never a
+                # receipt: sanitize_llm_evidence_tool prefixes the
+                # model's whole raw string, so a claim that happens to
+                # end ":witness" would otherwise ride the witness arm
+                # below into confirmed_by and defeat the no-receipt
+                # tier cap.
                 continue
             # The validate-bridge runtime stamps and witness stamps are
             # confirming receipts in compute_tier's vocabulary but not
@@ -736,9 +746,27 @@ def export_graded_from_journal(out_dir: Path) -> dict[str, Any] | None:
             status=entry.verdict,
             hypothesis=hypothesis,
             review_result=review_result,
+            # Receipt-less rows keep their journaled stamp AS A CLAIM:
+            # each "+"-part is sanitized under llm-claimed: (per PART
+            # within each element — a composite legacy element like
+            # "note+dynamic:sanitizer" must not leak a raw receipt part
+            # to split-on-"+" consumers), so the operator still sees
+            # WHAT the row claimed while is_tool_evidence, confirmed_by
+            # and the confidence grades all read it as unverified.
+            # Silent-drop history: this arm exported "" — the claim
+            # vanished from the record instead of displaying demoted.
             evidence_tool=(
                 "+".join(entry.evidence_tools or [])
-                if receipt_scope else ""
+                if receipt_scope
+                else "+".join(
+                    p
+                    for t in (entry.evidence_tools or [])
+                    for p in (
+                        sanitize_llm_evidence_tool(part.strip())
+                        for part in str(t).split("+")
+                    )
+                    if p
+                )
             ),
             model=entry.model or "",
             receipt_scope=receipt_scope,

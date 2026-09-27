@@ -134,7 +134,11 @@ def test_unstamped_row_exports_without_tool_receipts(tmp_path):
     assert graded["derivation"]["unverified_rows"] == 1
     rec = graded["findings"][0]
     assert rec["discovery"]["confirmed_by"] == []
-    assert rec["discovery"]["evidence_tool"] == "none"
+    # Keep-and-sanitize: the claimed stamp stays visible, demoted to
+    # the llm-claimed: namespace — never silently dropped, never a
+    # receipt.
+    assert rec["discovery"]["evidence_tool"] \
+        == "llm-claimed:codeql+llm-claimed:semgrep"
     assert rec["confidence"] != "high"
 
 
@@ -177,7 +181,7 @@ def test_replayed_row_from_sibling_run_exports_without_receipts(tmp_path):
     assert graded["derivation"]["foreign_run_rows"] == 1
     rec = graded["findings"][0]
     assert rec["discovery"]["confirmed_by"] == []
-    assert rec["discovery"]["evidence_tool"] == "none"
+    assert rec["discovery"]["evidence_tool"] == "llm-claimed:semgrep"
     assert rec["confidence"] != "high"
     # The origin run still exports its own row with full receipts.
     graded_a = export_graded_from_journal(run_a)
@@ -205,7 +209,7 @@ def test_replayed_tampered_row_still_detected(tmp_path):
     assert graded["derivation"]["unverified_rows"] == 1
     assert graded["derivation"]["foreign_run_rows"] == 0
     rec = graded["findings"][0]
-    assert rec["discovery"]["evidence_tool"] == "none"
+    assert rec["discovery"]["evidence_tool"] == "llm-claimed:codeql"
 
 
 def test_relative_out_dir_keeps_same_run_receipts(tmp_path, monkeypatch):
@@ -301,7 +305,8 @@ def test_tampered_sentinel_row_still_demotes_to_unverified(tmp_path):
     graded = export_graded_from_journal(tmp_path)
     assert graded["derivation"]["unverified_rows"] == 1
     assert graded["derivation"]["unscoped_run_rows"] == 0
-    assert graded["findings"][0]["discovery"]["evidence_tool"] == "none"
+    assert graded["findings"][0]["discovery"]["evidence_tool"] \
+        == "llm-claimed:semgrep"
 
 
 def test_sentinel_named_run_dir_never_mints_run_scope(tmp_path):
@@ -329,7 +334,8 @@ def test_sentinel_named_run_dir_never_mints_run_scope(tmp_path):
     rec = by_file["a.c"]
     assert rec["discovery"]["evidence_tool"] == "semgrep"
     assert rec["provenance"]["receipt_scope"] == "install"
-    assert by_file["b.c"]["discovery"]["evidence_tool"] == "none"
+    assert by_file["b.c"]["discovery"]["evidence_tool"] \
+        == "llm-claimed:codeql"
     # Other direction: a normally-named dir's genuine run rows still
     # earn run scope (no marker, no counters).
     other = tmp_path / "runZ"
@@ -358,7 +364,44 @@ def test_sentinel_lookalike_run_id_stays_foreign(tmp_path):
     graded = export_graded_from_journal(tmp_path)
     assert graded["derivation"]["foreign_run_rows"] == 1
     assert graded["derivation"]["unscoped_run_rows"] == 0
-    assert graded["findings"][0]["discovery"]["evidence_tool"] == "none"
+    assert graded["findings"][0]["discovery"]["evidence_tool"] \
+        == "llm-claimed:semgrep"
+
+
+def test_receiptless_witness_claim_never_confirms(tmp_path):
+    # The keep-and-sanitize arm feeds llm-claimed:-prefixed parts into
+    # build_graded_finding — a foreign row whose journaled stamp ends
+    # ":witness" must not ride the witness arm into confirmed_by (the
+    # arm exists for compute_tier's non-namespace confirming stamps,
+    # not for sanitized claims).
+    _journal(tmp_path, [
+        _entry("a.c", "f", "finding", run_id="other-run",
+               line_start=5, body="claims a solver witness",
+               evidence_tools=["smt:check-toctou:witness"]),
+    ])
+    graded = export_graded_from_journal(tmp_path)
+    assert graded["derivation"]["foreign_run_rows"] == 1
+    rec = graded["findings"][0]
+    assert rec["discovery"]["evidence_tool"] \
+        == "llm-claimed:smt:check-toctou:witness"
+    assert rec["discovery"]["confirmed_by"] == []
+    assert rec["confidence"] != "high"
+
+
+def test_receiptless_composite_element_sanitized_per_part(tmp_path):
+    # A composite legacy element ("note+dynamic:sanitizer") must not
+    # leak a raw verification-grade part to split-on-"+" consumers:
+    # every part is sanitized individually, sentinel parts collapse.
+    _journal(tmp_path, [
+        _entry("a.c", "f", "suspicious", run_id="other-run",
+               line_start=5,
+               evidence_tools=["note+dynamic:sanitizer", "none"]),
+    ])
+    graded = export_graded_from_journal(tmp_path)
+    rec = graded["findings"][0]
+    assert rec["discovery"]["evidence_tool"] \
+        == "llm-claimed:note+llm-claimed:dynamic:sanitizer"
+    assert rec["discovery"]["confirmed_by"] == []
 
 
 def _load_record_cli():

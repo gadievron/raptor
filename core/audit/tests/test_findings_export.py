@@ -460,6 +460,36 @@ class TestConfirmedByDiscrimination:
         assert finding["verification_tier"] == "tool_backed"
         assert finding["discovery"]["confirmed_by"] == ["semgrep:rule-1"]
 
+    def test_llm_claimed_witness_part_stays_out_of_confirmed_by(self):
+        # sanitize_llm_evidence_tool prefixes the model's whole raw
+        # string, so a claim ending ":witness" reaches this derivation
+        # (the journal keep-and-sanitize re-export shape). It must not
+        # ride the witness arm into confirmed_by and defeat the
+        # no-receipt tier cap.
+        outcome = FakeOutcome(
+            evidence_tool="llm-claimed:smt:check-toctou:witness",
+            review_result={"hypothesis": "toctou"},
+        )
+        outcome.verification_tier = "tool_backed"
+        finding = build_graded_finding(outcome)
+        assert finding["discovery"]["confirmed_by"] == []
+        assert finding["verification_tier"] == "llm_only"
+        assert finding["confidence"] != "high"
+
+    def test_genuine_witness_stamp_still_confirms(self):
+        # Other direction: an unprefixed pipeline witness receipt (a
+        # concrete solver model discriminates) keeps its confirming
+        # role and the recorded tier.
+        outcome = FakeOutcome(
+            evidence_tool="smt:check-toctou:witness",
+            review_result={"hypothesis": "toctou"},
+        )
+        outcome.verification_tier = "tool_backed"
+        finding = build_graded_finding(outcome)
+        assert finding["discovery"]["confirmed_by"] \
+            == ["smt:check-toctou:witness"]
+        assert finding["verification_tier"] == "tool_backed"
+
 
 class TestConfirmedHistoryReceipt:
     """A reviewed outcome matching a fresh CONFIRMED /validate history

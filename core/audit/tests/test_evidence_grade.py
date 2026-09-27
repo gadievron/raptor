@@ -20,6 +20,7 @@ from core.audit.evidence_grade import (
     grade_evidence_record,
     grade_review_result,
     is_tool_evidence,
+    is_verification_evidence,
     sanitize_llm_evidence_tool,
 )
 
@@ -690,6 +691,80 @@ class TestCompositePolicy:
         assert not is_tool_evidence(
             "consistency:return-check-majority"
             "+consistency:flag-mode-majority",
+        )
+
+
+class TestSanitizedCompositeOrdering:
+    """A model-claimed multi-tool composite stays claim-tier under
+    EVERY sanitize ordering a consumer can apply — and the sanitized
+    form stays displayable (never silently dropped).
+
+    sanitize_llm_evidence_tool is applied whole-string by some
+    consumers and per-"+"-part by others, and downstream code
+    re-splits and re-joins stamps. No ordering of those operations may
+    launder the claim back to verification grade: the prefix-lead
+    rule, the claim-tail break, and the contaminated-composite rule
+    each close one ordering, and these pins hold all three shut.
+    """
+
+    # A claim whose text names a genuine verification receipt plus a
+    # detection variant — raw, the receipt part would qualify.
+    CLAIMED_MIXED = "smt:check-integer-narrowing+consistency:return-check-majority"
+    # A claim shaped exactly like the aggregation-promotion receipt —
+    # raw, two distinct detection namespaces qualify.
+    CLAIMED_AGGREGATION = (
+        "consistency:return-check-majority"
+        "+fail_open:handler-outcome-naming"
+    )
+
+    def test_raw_shapes_would_qualify(self):
+        # Control: the pins below prove sanitization is what demotes
+        # these composites, not that the spellings were worthless.
+        assert is_verification_evidence(self.CLAIMED_MIXED)
+        assert is_verification_evidence(self.CLAIMED_AGGREGATION)
+
+    def test_whole_string_sanitize_never_verifies(self):
+        for raw in (self.CLAIMED_MIXED, self.CLAIMED_AGGREGATION):
+            sanitized = sanitize_llm_evidence_tool(raw)
+            assert not is_verification_evidence(sanitized)
+            assert not is_tool_evidence(sanitized)
+            # Displayable, not dropped: the claim text survives under
+            # the llm-claimed: namespace.
+            assert sanitized == f"llm-claimed:{raw}"
+
+    def test_per_part_sanitize_never_verifies(self):
+        for raw in (self.CLAIMED_MIXED, self.CLAIMED_AGGREGATION):
+            sanitized = "+".join(
+                p for p in (
+                    sanitize_llm_evidence_tool(part.strip())
+                    for part in raw.split("+")
+                ) if p
+            )
+            assert not is_verification_evidence(sanitized)
+            assert not is_tool_evidence(sanitized)
+            assert all(
+                part.startswith("llm-claimed:")
+                for part in sanitized.split("+")
+            )
+
+    def test_resplit_reorder_never_verifies(self):
+        # A consumer that splits a whole-string-sanitized stamp on "+"
+        # and re-joins in any order must not surface an un-prefixed
+        # tail part ahead of the claim marker.
+        for raw in (self.CLAIMED_MIXED, self.CLAIMED_AGGREGATION):
+            parts = sanitize_llm_evidence_tool(raw).split("+")
+            reordered = "+".join(reversed(parts))
+            assert not is_verification_evidence(reordered)
+            # And the individual tail parts earn nothing alone.
+            for part in parts:
+                if not part.startswith("llm-claimed:"):
+                    assert not is_verification_evidence(part)
+
+    def test_genuine_receipt_before_claim_marker_still_verifies(self):
+        # The documented evidence-combine shape stays open: a PIPELINE
+        # receipt joined ahead of a sanitized claim keeps its status.
+        assert is_verification_evidence(
+            "smt:check-integer-narrowing+llm-claimed:smt",
         )
 
 
