@@ -511,6 +511,8 @@ def run_rule(
     subprocess_runner=None,
     allow_scripting: bool = False,
     tree_files: set[str] | None = None,
+    file_set: list[Path] | None = None,
+    jobs: int = 0,
 ) -> SpatchResult:
     """Run a single Coccinelle rule against a target.
 
@@ -545,6 +547,35 @@ def run_rule(
             (see ``_collect_files_examined``). Multi-rule callers pass
             the same set for every rule so the loop-invariant tree walk
             happens once per run instead of once per rule.
+        file_set: Explicit list of source files handed to ONE spatch
+            invocation (one fork, one sandbox) instead of the target
+            path. ``target`` must then be the directory that spatch
+            should resolve relative ``#include`` paths from — it
+            becomes the subprocess cwd, exactly as in ``--dir`` mode —
+            and every entry should be an absolute path so match
+            attribution (``SpatchMatch.file`` echoes the argv
+            spelling) is unambiguous. A parse-broken entry does not
+            poison the batch: spatch 1.3 skips it silently (exit 0,
+            other files' matches intact), which is also why
+            ``files_examined`` for a successful batch is exactly the
+            argv list — verified silence comes from argv membership,
+            never from the match set. Split the combined result per
+            file with :func:`demux_result_by_file`. An empty list is a
+            no-op success (never a whole-tree ``--dir`` fallback).
+        jobs: When > 1 and scanning in ``--dir`` mode, pass
+            ``--jobs N`` so spatch parallelises internally (parmap).
+            Requires ``--tmp-dir`` pointed into the writable scratch:
+            parmap writes per-worker stdout/stderr redirect files into
+            its tmp dir (default: cwd), and under the default sandbox
+            the target tree is a read-only mount view — the workers
+            survive, but the parent's redirect-file read fails and
+            spatch exits 2 despite complete match output. The runner
+            wires the tmp dir automatically. Ignored (with a warning)
+            when ``file_set`` is given or the target is a single file:
+            spatch's parmap only engages in ``--dir`` mode — an
+            explicit file list runs serially regardless of ``--jobs``
+            (measured on spatch 1.3), so silently accepting the flag
+            there would misreport the concurrency actually applied.
 
     Returns:
         SpatchResult with matches parsed from COCCIRESULT lines.
@@ -621,6 +652,64 @@ def run_rule(
             returncode=-1,
         )
 
+    if file_set is not None:
+        if not target.is_dir():
+            # The target is the include-resolution root (subprocess
+            # cwd) in batch mode; a file target here is a caller bug
+            # that would silently resolve headers from the wrong
+            # directory — refuse rather than guess.
+            return SpatchResult(
+                rule=rule_name, rule_path=str(rule),
+                errors=[
+                    "file_set requires a directory target (the "
+                    f"include-resolution root); got: {target}",
+                ],
+                returncode=-1,
+            )
+        if not file_set:
+            # Empty batch is a no-op success. Falling through to the
+            # positional-target branch would rescan the WHOLE tree in
+            # --dir mode — a silent blast-radius surprise for a
+            # caller that filtered its chunk down to nothing.
+            return SpatchResult(
+                rule=rule_name, rule_path=str(rule),
+                returncode=0,
+            )
+        for entry in file_set:
+            # Every entry must be a regular file: a DIRECTORY entry
+            # makes spatch recurse (rc 0) — matches inside it demux
+            # to keys that are not file_set members (dropped) while
+            # the entry itself reads verified-silent, and a missing
+            # entry's rc-255 whole-batch failure is a worse receipt
+            # than a structured refusal naming the bad entry. Same
+            # attribution-corruption rationale as the file-target and
+            # empty-set refusals above.
+            try:
+                entry_is_file = Path(entry).is_file()
+            except OSError:
+                entry_is_file = False
+            if not entry_is_file:
+                return SpatchResult(
+                    rule=rule_name, rule_path=str(rule),
+                    errors=[
+                        "file_set entries must be regular files; "
+                        f"not a regular file: {entry}",
+                    ],
+                    returncode=-1,
+                )
+
+    if jobs and jobs > 1 and (file_set is not None or target.is_file()):
+        # parmap only engages in --dir mode: an explicit file list (or
+        # a single positional file) runs serially no matter what
+        # --jobs says (measured on spatch 1.3 — a 100-file list with
+        # --jobs 16 ran at single-lane speed). Passing the flag anyway
+        # would make the caller believe N-way concurrency was applied.
+        logger.warning(
+            "coccinelle: --jobs ignored (spatch parallelises only in "
+            "--dir mode; explicit file lists run serially)"
+        )
+        jobs = 0
+
     needs_harness = RESULT_PREFIX not in rule_text and "script:python" not in rule_text
 
     # Per-invocation evidence nonce (see _make_nonce): every emit site
@@ -685,10 +774,37 @@ def run_rule(
         sp_file_path = Path(tmp_name)
         cmd = [_spatch_path() or _SPATCH_BIN, "--sp-file", str(sp_file_path)]
 
-        if target.is_dir():
+        if file_set:
+            # Explicit multi-file batch: one spatch invocation, one
+            # sandbox, per-file match attribution via the position
+            # metavariable's file field (spatch echoes the argv
+            # spelling). cwd stays on the directory target below, so
+            # relative-#include resolution matches --dir mode.
+            cmd.extend(str(f) for f in file_set)
+        elif target.is_dir():
             cmd.extend(["--dir", str(target)])
         else:
             cmd.append(str(target))
+
+        if jobs and jobs > 1:
+            # Only reachable in --dir mode (file-list / single-file
+            # jobs was zeroed above). --tmp-dir MUST live in the
+            # writable scratch: parmap writes per-worker stdout/stderr
+            # redirect files into its tmp dir, and the default is the
+            # CWD — the read-only target mount view under the sandbox.
+            # Without it the workers run fine but the parent's
+            # redirect-file read fails and spatch exits 2 despite
+            # complete match output.
+            parmap_tmp = spatch_scratch / "parmap"
+            try:
+                parmap_tmp.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                return SpatchResult(
+                    rule=rule_name, rule_path=str(rule),
+                    errors=[f"failed to create parmap tmp dir: {e}"],
+                    returncode=-1,
+                )
+            cmd.extend(["--jobs", str(jobs), "--tmp-dir", str(parmap_tmp)])
 
         if no_includes:
             cmd.append("--no-includes")
@@ -801,10 +917,19 @@ def run_rule(
         # nothing beyond the actual matches is verified. Partial
         # matches are kept (same stance as the timeout path).
         if proc.returncode == 0:
-            files_examined = _collect_files_examined(
-                target, {m.file for m in matches}, tree_files=tree_files,
-                no_includes=no_includes,
-            )
+            if file_set:
+                # Verified silence in batch mode is exactly the argv
+                # list: spatch emits NOTHING for a match-free file —
+                # including a parse-broken one (exit 0, empty stderr
+                # under --very-quiet, measured on spatch 1.3) — so
+                # examined attribution must come from what we passed
+                # on argv, never from the match set.
+                files_examined = sorted(str(f) for f in file_set)
+            else:
+                files_examined = _collect_files_examined(
+                    target, {m.file for m in matches}, tree_files=tree_files,
+                    no_includes=no_includes,
+                )
         else:
             files_examined = sorted({m.file for m in matches})
 
@@ -1529,3 +1654,124 @@ def _parse_errors(stderr: str) -> list[str]:
         if any(p in low for p in _ERROR_PATTERNS):
             errors.append(line)
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Multi-file batching: caps and per-file demultiplexing
+# ---------------------------------------------------------------------------
+
+# Files handed to one spatch invocation when a caller chunks a file
+# list for batching. Trades fork/sandbox amortisation against blast
+# radius, in both directions:
+#   * Lower and the per-invocation overhead dominates again — at 25
+#     files the sandboxed startup cost (~120-150 ms: namespace +
+#     Landlock setup, rule materialisation, OCaml init) amortises to
+#     ~5-6 ms/file; below ~8 files most of the batching win is gone.
+#   * Higher and one batch failure or timeout throws away more files'
+#     work (a failed batch propagates an error to EVERY member — see
+#     demux_result_by_file), the batch timeout has to stretch further,
+#     and argv length grows on deep trees.
+BATCH_CHUNK_FILES = 25
+
+# Headroom per additional batched file when scaling a single-file
+# timeout to a chunk, and the cap on how far the scaled timeout may
+# stretch. See derive_batch_timeout_s for the two-direction rationale.
+_BATCH_PER_FILE_TIMEOUT_S = 10
+_BATCH_TIMEOUT_CAP_FACTOR = 4
+
+
+def derive_batch_workers(cpu_count: int | None = None) -> int:
+    """Worker-pool width for running batched spatch invocations.
+
+    Each spatch process is single-threaded, so a pool of concurrent
+    batch invocations is what actually fans the sweep across cores.
+    Derived, both directions:
+      * Higher and the pool competes with everything else on the box —
+        the audit orchestrator's LLM worker pool, joern's JVM, and the
+        per-invocation sandbox setup serialise on kernel resources;
+        beyond ~16 lanes the measured speedup on kernel-scale files
+        plateaued while memory (each spatch peaks at ~50-200 MB on
+        large TUs) kept climbing.
+      * Lower and the parallel win evaporates: single-lane spatch on a
+        63k-file tree is a >13 h/rule floor; even 2 lanes halves it.
+    cpu//4 leaves headroom for the orchestrator's own threads and the
+    sandboxed children's supervisor overhead on shared hosts.
+    """
+    if cpu_count is None:
+        cpu_count = os.cpu_count() or 1
+    return min(16, max(2, cpu_count // 4))
+
+
+def derive_batch_timeout_s(base_timeout_s: int, n_files: int) -> int:
+    """Scale a single-file spatch timeout to an *n_files* batch.
+
+    ``base + 10 s x (n - 1)``, capped at ``4 x base``. Both directions:
+      * Longer (uncapped linear x n) and one pathological batch stalls
+        a worker lane for K single-file timeouts — at the leg's 120 s
+        base and K=25 that is 50 minutes of lane time lost to work the
+        serial path would have abandoned per-file.
+      * Shorter (no per-file headroom) and a batch of ordinary files
+        trips the single-file budget purely by being a batch — the
+        typical per-file cost is well under 1 s, but individual
+        kernel-scale TUs measured in the tens of seconds, and a
+        tripped batch timeout discards every member's work (callers
+        degrade to per-file recompute).
+    """
+    if n_files <= 1:
+        return base_timeout_s
+    scaled = base_timeout_s + _BATCH_PER_FILE_TIMEOUT_S * (n_files - 1)
+    return min(scaled, base_timeout_s * _BATCH_TIMEOUT_CAP_FACTOR)
+
+
+def demux_result_by_file(
+    result: SpatchResult,
+    file_set: list[Path],
+    target_root: Path,
+) -> dict[str, SpatchResult]:
+    """Split one multi-file batch result into per-file results.
+
+    Returns ``{relative_path: SpatchResult}`` with an entry for EVERY
+    file in *file_set* (keys are relative to *target_root* when the
+    entry resolves under it, else the argv spelling). Matches
+    attribute by ``SpatchMatch.file`` — spatch echoes the argv path in
+    the position metavariable. A match-free file gets an empty-match
+    result whose ``files_examined`` carries itself: verified silence
+    comes from argv membership, never from the match set (spatch is
+    completely silent about files it examined without matching,
+    parse-broken ones included).
+
+    A failed batch (``not result.ok``) propagates the error to EVERY
+    member with ``files_examined=[]`` so no consumer can read a member
+    of a crashed batch as refuted / examined-clean; callers degrade
+    those files to per-file recompute.
+    """
+    root = Path(target_root).resolve()
+
+    def _rel(spelling: str) -> str:
+        p = Path(spelling)
+        if not p.is_absolute():
+            return spelling
+        try:
+            return str(p.resolve().relative_to(root))
+        except (ValueError, OSError):
+            return spelling
+
+    by_file: dict[str, list[SpatchMatch]] = {}
+    for m in result.matches:
+        by_file.setdefault(_rel(m.file), []).append(m)
+
+    failed = not result.ok
+    out: dict[str, SpatchResult] = {}
+    for f in file_set:
+        rel = _rel(str(f))
+        out[rel] = SpatchResult(
+            rule=result.rule,
+            rule_path=result.rule_path,
+            matches=list(by_file.get(rel, [])),
+            files_examined=[] if failed else [rel],
+            errors=list(result.errors),
+            elapsed_ms=result.elapsed_ms,
+            returncode=result.returncode,
+            forged_markers=result.forged_markers,
+        )
+    return out

@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from packages.coccinelle import runner as runner_mod
 from packages.coccinelle.models import SpatchMatch
 from packages.coccinelle.runner import (
+    BATCH_CHUNK_FILES,
     MIN_SPATCH_VERSION,
     RESULT_PREFIX,
     _collect_files_examined,
@@ -23,6 +24,9 @@ from packages.coccinelle.runner import (
     _parse_errors,
     _parse_results,
     contains_script_block,
+    demux_result_by_file,
+    derive_batch_timeout_s,
+    derive_batch_workers,
     is_available,
     meets_min_version,
     run_rule,
@@ -2945,3 +2949,401 @@ class TestNonceTheftForgeryChainClosed:
             m.file == "src/auth.c" and m.line == 1337
             for m in result.matches
         )
+
+
+class TestFileSetBatching:
+    """Explicit multi-file batches: one spatch invocation carries the
+    file list on argv, verified silence comes from argv membership
+    (spatch is silent about match-free files, parse-broken included),
+    and an empty batch never falls through to a whole-tree --dir scan.
+    """
+
+    def _tree(self, tmp_path):
+        rule = tmp_path / "r.cocci"
+        rule.write_text(PLAIN_RULE)
+        root = tmp_path / "src"
+        root.mkdir()
+        files = []
+        for name in ("a.c", "b.c", "c.c"):
+            f = root / name
+            f.write_text("void f() { malloc(4); }\n")
+            files.append(f)
+        return rule, root, files
+
+    def test_cmd_carries_file_list_not_dir(self, tmp_path):
+        rule, root, files = self._tree(tmp_path)
+        captured = {}
+
+        def _capture(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["cwd"] = kwargs.get("cwd")
+            return _mock_proc()
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            result = run_rule(
+                root, rule, file_set=files, subprocess_runner=_capture,
+            )
+
+        cmd = captured["cmd"]
+        for f in files:
+            assert str(f) in cmd
+        assert "--dir" not in cmd
+        # The directory target rides only as cwd (include resolution),
+        # never as a positional scan argument.
+        assert str(root) == captured["cwd"]
+        assert cmd.count(str(root)) == 0
+        assert result.returncode == 0
+
+    def test_files_examined_is_exactly_argv_on_success(self, tmp_path):
+        rule, root, files = self._tree(tmp_path)
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            result = run_rule(
+                root, rule, file_set=files,
+                subprocess_runner=lambda cmd, **kw: _mock_proc(),
+            )
+        # Match-free run: attribution still covers every argv file —
+        # NOT the (empty) match set, and NOT a tree walk.
+        assert result.files_examined == sorted(str(f) for f in files)
+
+    def test_failed_batch_claims_no_verified_silence(self, tmp_path):
+        rule, root, files = self._tree(tmp_path)
+
+        def _boom(cmd, **kwargs):
+            return MagicMock(stdout="", stderr="Fatal error: oom",
+                             returncode=2)
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            result = run_rule(
+                root, rule, file_set=files, subprocess_runner=_boom,
+            )
+        assert result.returncode == 2
+        assert result.errors
+        # Dead spatch verified nothing beyond actual matches (none).
+        assert result.files_examined == []
+
+    def test_empty_file_set_is_noop_never_whole_tree(self, tmp_path):
+        rule, root, _files = self._tree(tmp_path)
+        spy = MagicMock()
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            result = run_rule(
+                root, rule, file_set=[], subprocess_runner=spy,
+            )
+        spy.assert_not_called()
+        assert result.ok
+        assert result.matches == []
+        assert result.files_examined == []
+
+    def test_file_target_with_file_set_refused(self, tmp_path):
+        rule, root, files = self._tree(tmp_path)
+        spy = MagicMock()
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            result = run_rule(
+                files[0], rule, file_set=files, subprocess_runner=spy,
+            )
+        spy.assert_not_called()
+        assert result.returncode == -1
+        assert any("directory target" in e for e in result.errors)
+
+    def test_directory_entry_in_file_set_refused(self, tmp_path):
+        # spatch RECURSES into a directory argv entry (rc 0): its
+        # inner matches demux to keys that are not file_set members
+        # (silently dropped) while the directory itself would read
+        # verified-silent — so a non-regular-file entry is refused
+        # before any spawn, like the file-target/empty-set caller bugs.
+        rule, root, files = self._tree(tmp_path)
+        sub = root / "sub"
+        sub.mkdir()
+        (sub / "hidden_hit.c").write_text("void g() { malloc(8); }\n")
+        spy = MagicMock()
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            result = run_rule(
+                root, rule, file_set=[files[0], sub],
+                subprocess_runner=spy,
+            )
+        spy.assert_not_called()
+        assert result.returncode == -1
+        assert any("regular file" in e for e in result.errors)
+        assert str(sub) in result.errors[0]
+        # A refused batch verifies nothing.
+        assert result.files_examined == []
+
+    def test_missing_entry_in_file_set_refused(self, tmp_path):
+        rule, root, files = self._tree(tmp_path)
+        spy = MagicMock()
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            result = run_rule(
+                root, rule, file_set=[files[0], root / "gone.c"],
+                subprocess_runner=spy,
+            )
+        spy.assert_not_called()
+        assert result.returncode == -1
+        assert any("regular file" in e for e in result.errors)
+        assert result.files_examined == []
+
+
+class TestJobsLane:
+    """--jobs is the opt-in --dir parallel lane. It MUST ride with
+    --tmp-dir into the writable scratch (parmap's per-worker redirect
+    files land in cwd by default — the read-only mount view under the
+    sandbox — and spatch then exits 2 despite full output), and it is
+    inert outside --dir mode, so the runner refuses to pretend
+    otherwise."""
+
+    def _setup(self, tmp_path):
+        rule = tmp_path / "r.cocci"
+        rule.write_text(PLAIN_RULE)
+        root = tmp_path / "src"
+        root.mkdir()
+        (root / "a.c").write_text("void f() { malloc(4); }\n")
+        return rule, root
+
+    def test_dir_jobs_adds_jobs_and_scratch_tmp_dir(self, tmp_path):
+        rule, root = self._setup(tmp_path)
+        captured = {}
+
+        def _capture(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            i = cmd.index("--tmp-dir")
+            captured["tmp_dir"] = cmd[i + 1]
+            captured["tmp_dir_exists"] = os.path.isdir(cmd[i + 1])
+            return _mock_proc()
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            result = run_rule(
+                root, rule, jobs=8, subprocess_runner=_capture,
+            )
+
+        cmd = captured["cmd"]
+        assert "--dir" in cmd
+        assert cmd[cmd.index("--jobs") + 1] == "8"
+        # tmp-dir lives in the per-invocation scratch (writable inside
+        # the sandbox), never under the target tree, and it exists
+        # before spatch starts.
+        assert captured["tmp_dir_exists"]
+        assert not captured["tmp_dir"].startswith(str(root))
+        assert Path(captured["tmp_dir"]).name == "parmap"
+        assert result.returncode == 0
+
+    def test_jobs_with_file_set_ignored_with_warning(
+        self, tmp_path, caplog,
+    ):
+        rule, root = self._setup(tmp_path)
+        files = [root / "a.c"]
+        captured = {}
+
+        def _capture(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            return _mock_proc()
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True), \
+                caplog.at_level("WARNING", logger="packages.coccinelle.runner"):
+            run_rule(
+                root, rule, file_set=files, jobs=8,
+                subprocess_runner=_capture,
+            )
+        # Direction 1: the flag never reaches spatch (parmap is inert
+        # on explicit file lists — a lie about applied concurrency).
+        assert "--jobs" not in captured["cmd"]
+        assert "--tmp-dir" not in captured["cmd"]
+        assert any("--jobs ignored" in r.message for r in caplog.records)
+
+    def test_jobs_on_single_file_target_ignored(self, tmp_path, caplog):
+        rule, root = self._setup(tmp_path)
+        target = root / "a.c"
+        captured = {}
+
+        def _capture(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            return _mock_proc()
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True), \
+                caplog.at_level("WARNING", logger="packages.coccinelle.runner"):
+            run_rule(target, rule, jobs=8, subprocess_runner=_capture)
+        assert "--jobs" not in captured["cmd"]
+        assert any("--jobs ignored" in r.message for r in caplog.records)
+
+    def test_jobs_default_and_one_add_nothing(self, tmp_path):
+        rule, root = self._setup(tmp_path)
+        for jobs in (0, 1):
+            captured = {}
+
+            def _capture(cmd, **kwargs):
+                captured["cmd"] = list(cmd)
+                return _mock_proc()
+
+            with patch("packages.coccinelle.runner.is_available",
+                       return_value=True):
+                run_rule(root, rule, jobs=jobs, subprocess_runner=_capture)
+            # Direction 2: the serial default stays byte-identical —
+            # no --jobs/--tmp-dir churn on the common path.
+            assert "--jobs" not in captured["cmd"]
+            assert "--tmp-dir" not in captured["cmd"]
+
+
+class TestDerivedBatchCaps:
+    """Two-direction pins for the batching caps. Each bound encodes a
+    failure mode; moving a bound requires re-arguing the OTHER
+    direction, not just the one that motivated the change."""
+
+    def test_workers_floor_keeps_parallel_win(self):
+        # Too low and batching degenerates to the single-lane sweep
+        # (the >13 h/rule floor on 63k-file trees). Even a 1-cpu box
+        # keeps 2 lanes: spatch is I/O-blocked often enough to overlap.
+        assert derive_batch_workers(1) >= 2
+        assert derive_batch_workers(4) >= 2
+
+    def test_workers_ceiling_bounds_contention(self):
+        # Too high and the pool fights the orchestrator's LLM workers
+        # and the sandbox supervisors for memory/kernel resources —
+        # measured speedup plateaued by 16 lanes.
+        assert derive_batch_workers(128) <= 16
+        assert derive_batch_workers(1024) <= 16
+
+    def test_workers_scale_with_cpu_between_bounds(self):
+        assert derive_batch_workers(16) == 4
+        assert derive_batch_workers(32) == 8
+        assert derive_batch_workers(64) == 16
+
+    def test_chunk_floor_amortises_invocation_overhead(self):
+        # Below ~8 files/invocation the sandboxed fork+startup cost
+        # (~120-150 ms) dominates again and the batching win is gone.
+        assert BATCH_CHUNK_FILES >= 8
+
+    def test_chunk_ceiling_bounds_blast_radius(self):
+        # One failed/timed-out batch discards every member's work; a
+        # larger K also stretches the batch timeout further.
+        assert BATCH_CHUNK_FILES <= 64
+
+    def test_timeout_single_file_unchanged(self):
+        assert derive_batch_timeout_s(120, 1) == 120
+        assert derive_batch_timeout_s(120, 0) == 120
+
+    def test_timeout_grows_with_batch_size(self):
+        # Direction 1: no per-file headroom would let an ordinary
+        # batch trip the single-file budget purely by being a batch.
+        assert derive_batch_timeout_s(120, 2) > 120
+        assert (derive_batch_timeout_s(120, 10)
+                >= derive_batch_timeout_s(120, 5))
+
+    def test_timeout_capped_at_four_x_base(self):
+        # Direction 2: uncapped linear-in-K would stall a worker lane
+        # for K single-file timeouts on one pathological batch.
+        assert derive_batch_timeout_s(120, 1000) == 480
+        assert derive_batch_timeout_s(60, 1000) == 240
+
+
+class TestDemuxResultByFile:
+    """Per-file demultiplexing of a batch result: matches attribute by
+    argv-echoed position file; silence attributes by argv membership;
+    a failed batch can never read as refuted for any member."""
+
+    def _batch(self, root, files, **overrides):
+        from packages.coccinelle.models import SpatchResult
+        kw = dict(
+            rule="r", rule_path="/rules/r.cocci",
+            matches=[], files_examined=[str(f) for f in files],
+            errors=[], elapsed_ms=100, returncode=0, forged_markers=0,
+        )
+        kw.update(overrides)
+        return SpatchResult(**kw)
+
+    def test_matches_attribute_per_file(self, tmp_path):
+        root = tmp_path / "src"
+        (root / "sub").mkdir(parents=True)
+        fa = root / "a.c"
+        fb = root / "sub" / "b.c"
+        fa.write_text("x")
+        fb.write_text("x")
+        result = self._batch(root, [fa, fb], matches=[
+            SpatchMatch(file=str(fa), line=3, rule="r"),
+            SpatchMatch(file=str(fb), line=7, rule="r"),
+            SpatchMatch(file=str(fb), line=9, rule="r"),
+        ])
+        out = demux_result_by_file(result, [fa, fb], root)
+        assert set(out) == {"a.c", "sub/b.c"}
+        assert [m.line for m in out["a.c"].matches] == [3]
+        assert [m.line for m in out["sub/b.c"].matches] == [7, 9]
+        assert out["a.c"].files_examined == ["a.c"]
+        assert out["a.c"].returncode == 0
+
+    def test_match_free_file_is_verified_silent(self, tmp_path):
+        root = tmp_path / "src"
+        root.mkdir()
+        fa = root / "a.c"
+        fb = root / "b.c"
+        fa.write_text("x")
+        fb.write_text("x")
+        result = self._batch(root, [fa, fb], matches=[
+            SpatchMatch(file=str(fa), line=1, rule="r"),
+        ])
+        out = demux_result_by_file(result, [fa, fb], root)
+        # b.c produced nothing — its silence is still verified,
+        # carried by argv membership, never by the match set.
+        assert out["b.c"].matches == []
+        assert out["b.c"].files_examined == ["b.c"]
+        assert out["b.c"].ok
+
+    def test_failed_batch_propagates_error_to_every_member(
+        self, tmp_path,
+    ):
+        root = tmp_path / "src"
+        root.mkdir()
+        fa = root / "a.c"
+        fb = root / "b.c"
+        fa.write_text("x")
+        fb.write_text("x")
+        result = self._batch(
+            root, [fa, fb],
+            errors=["spatch exited with code 2: Fatal error"],
+            returncode=2, files_examined=[],
+        )
+        out = demux_result_by_file(result, [fa, fb], root)
+        for rel in ("a.c", "b.c"):
+            assert not out[rel].ok
+            assert out[rel].errors
+            # No member of a crashed batch may claim examined-clean.
+            assert out[rel].files_examined == []
+
+    def test_rc_zero_with_errors_still_counts_as_failed(self, tmp_path):
+        # Mirrors SpatchResult.ok: parser-detected errors on a zero
+        # exit are still engine failure, never verified silence.
+        root = tmp_path / "src"
+        root.mkdir()
+        fa = root / "a.c"
+        fa.write_text("x")
+        result = self._batch(
+            root, [fa], errors=["Fatal error: exception"], returncode=0,
+        )
+        out = demux_result_by_file(result, [fa], root)
+        assert out["a.c"].files_examined == []
+        assert not out["a.c"].ok
+
+    def test_forged_markers_count_propagates(self, tmp_path):
+        root = tmp_path / "src"
+        root.mkdir()
+        fa = root / "a.c"
+        fa.write_text("x")
+        result = self._batch(root, [fa], forged_markers=3)
+        out = demux_result_by_file(result, [fa], root)
+        assert out["a.c"].forged_markers == 3
+
+    def test_file_outside_root_keeps_argv_spelling(self, tmp_path):
+        root = tmp_path / "src"
+        root.mkdir()
+        outside = tmp_path / "elsewhere" / "z.c"
+        outside.parent.mkdir()
+        outside.write_text("x")
+        result = self._batch(root, [outside])
+        out = demux_result_by_file(result, [outside], root)
+        assert str(outside) in out
+        assert out[str(outside)].files_examined == [str(outside)]
