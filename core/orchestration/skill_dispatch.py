@@ -1079,6 +1079,11 @@ def run_skill_dispatch(
                         cc_proxy_creds.bridges if cc_proxy_creds else None
                     ),
                     caller_label=caller_label,
+                    # run_dir is a run-dir root by construction (the
+                    # lifecycle starts it above) and that is this
+                    # lane's contract: the skill pass writes the run's
+                    # own artifacts there.
+                    output_run_root_ok=True,
                 )
         except subprocess.TimeoutExpired as e:
             lifecycle_settled = True

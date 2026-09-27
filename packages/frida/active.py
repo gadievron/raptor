@@ -280,6 +280,20 @@ def observe_paired(
     run_dir = out_dir or _make_run_dir(raptor_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    # The target binary is hostile code: its write grant is a work
+    # subdirectory, never the run dir itself — the run dir carries
+    # parent-attributed state (metadata.json is the success check
+    # below; when out_dir is a lifecycle run dir, .raptor-run.json
+    # and findings live there too) that a hostile child must not be
+    # able to rewrite. The frida lane (trusted tooling) keeps writing
+    # its observation artifacts to the run dir via --out.
+    from core.sandbox.work_dir import hostile_work_subdir
+    try:
+        target_work = hostile_work_subdir(run_dir, "target")
+    except ValueError as exc:
+        log.error("cannot stage target work dir: %s", exc)
+        return None
+
     target_binary = Path(target_cmd[0])
     target_name = target_binary.name[:15]  # TASK_COMM_LEN truncation
 
@@ -308,7 +322,7 @@ def observe_paired(
             # filesystem boundary the coordinator (fail-closed) refuses
             # the spec — network-only isolation is not enough for a
             # hostile child.
-            "output": str(run_dir),
+            "output": str(target_work),
             "restrict_reads": True,
         },
         "exploit": {

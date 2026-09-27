@@ -169,6 +169,10 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
                 readable_paths=readable_paths,
                 proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
                 caller_label="claude-sub-agent",
+                # out_dir is frequently a run-dir root, and that is
+                # this lane's contract: the dispatched agent's job is
+                # to write the run's own analysis artifacts there.
+                output_run_root_ok=True,
             )
     except subprocess.TimeoutExpired:
         return DispatchResult(result={"error": f"timeout after {timeout}s"})
