@@ -666,8 +666,16 @@ class TestPostLoopPassEmission:
             file="src/a.c", function="parse", status="suspicious",
             body="verdict body", model="model-a",
             hypothesis="overflow via len",
-            hypotheses=[{"mechanism": "m1", "confidence": "refuted"},
-                        {"mechanism": "m2", "confidence": "refuted"}],
+            hypotheses=[
+                {"mechanism": "m1", "confidence": "refuted",
+                 "counter": "len is clamped to the buffer size on the "
+                            "line above the copy",
+                 "counter_scope": "local"},
+                {"mechanism": "m2", "confidence": "refuted",
+                 "counter": "the index is bounds-checked inside this "
+                            "function before use",
+                 "counter_scope": "local"},
+            ],
         ))
         result.suspicious = 1
         _demote_self_contradictions(result)
@@ -824,7 +832,10 @@ class TestOrchestratedRunBinding:
             hypothesis="the frobnicator misaligns the quux lattice",
             hypotheses=[
                 {"mechanism": "quux lattice drift",
-                 "confidence": "refuted"},
+                 "confidence": "refuted",
+                 "counter": "the lattice is realigned two lines above "
+                            "within this function",
+                 "counter_scope": "local"},
             ],
             model="test-model",
             review_result={"cwe_class": "CWE-000"},

@@ -28821,14 +28821,34 @@ def _demote_self_contradictions(result: OrchestratorResult) -> None:
     'suspicious' with no tool evidence, the verdict is self-
     contradictory.  Verified safe: all corpus TPs with no evidence
     have at least one unrefuted hypothesis.
+
+    Grounding gate (mirrors the in-review all-refuted block): the
+    demotion fires only when every refutation is grounded in a local,
+    non-delegated counter. Outcomes the review already withheld
+    (``all_refuted_demotion_withheld``) and machine-raised
+    counter-escalations stay suspicious — their refutations are
+    unverified claims routed to the verification lane, and this
+    post-loop net must not silently erase what the in-review gate
+    deliberately kept alive.
     """
     from .evidence_grade import is_tool_evidence
+    from .llm_review import _refutation_grounded
     for i, outcome in enumerate(result.outcomes):
         if outcome.status != "suspicious":
             continue
         # Truthiness let "llm-claimed:X" (the LLM's own assertion)
         # shield the outcome from its own self-contradiction check.
         if is_tool_evidence(outcome.evidence_tool or ""):
+            continue
+        # Counter-escalation evidence floor: a machine-raised
+        # suspicious (the model concluded clean) is un-raised only by
+        # a verification-grade receipt, never by the model's own
+        # refutation record — and nothing reaching this point carries
+        # a receipt (the firewall check above skipped those).
+        if _is_counter_escalated(outcome):
+            continue
+        rr = outcome.review_result or {}
+        if rr.get("all_refuted_demotion_withheld"):
             continue
 
         hypotheses = outcome.hypotheses or []
@@ -28843,6 +28863,8 @@ def _demote_self_contradictions(result: OrchestratorResult) -> None:
             for h in hypotheses
         )
         if not all_refuted:
+            continue
+        if not all(_refutation_grounded(h) for h in hypotheses):
             continue
 
         result.outcomes[i] = ReviewOutcome(

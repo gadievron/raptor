@@ -40,13 +40,15 @@ class _StubClient:
         return _StubResponse(dict(self._result))
 
 
-def _review(result_dict):
+def _review(result_dict, ctx_extra=None):
     client = _StubClient(result_dict)
     review_fn = make_review_fn(client)
     ctx = {
         "file": "a.c", "function": "f", "source": "int f(void){}",
         "line_start": 1, "line_end": 1,
     }
+    if ctx_extra:
+        ctx.update(ctx_extra)
     config = OrchestratorConfig(target_path=Path("."), out_dir=None)
     return review_fn(ctx, config)
 
@@ -79,12 +81,19 @@ class TestBodyAnnotatedOnStatusFlips:
             "status": "suspicious",
             "body": "Possible overflow at line 10.",
             "hypotheses": [
-                {"mechanism": "overflow via n", "confidence": "refuted"},
-                {"mechanism": "underflow via m", "confidence": "refuted"},
+                {"mechanism": "overflow via n", "confidence": "refuted",
+                 "counter": "n is clamped to sizeof(buf) on line 8, "
+                            "inside this function",
+                 "counter_scope": "local"},
+                {"mechanism": "underflow via m", "confidence": "refuted",
+                 "counter": "m is unsigned and checked > 0 before the "
+                            "subtraction on line 12",
+                 "counter_scope": "local"},
             ],
         })
         assert outcome.status == "clean"
         assert outcome.body.startswith("[all-refuted demotion:")
+        assert outcome.review_result["all_refuted_grounding"] == "local"
 
     def test_rationale_consistency_demotion_stamps_body(self):
         outcome = _review({
@@ -111,6 +120,117 @@ class TestBodyAnnotatedOnStatusFlips:
         })
         assert outcome.status == "suspicious"
         assert outcome.body == "Possible overflow at line 10."
+
+
+class TestAllRefutedGrounding:
+    """The all-refuted demotion fires only on GROUNDED refutations.
+
+    A refutation with no counter, a cross_function counter, or a
+    contract-delegating counter is an unverified claim — the verdict
+    stays suspicious (with a visible withhold marker) so verification
+    adjudicates it instead of the model erasing its own suspicion by
+    assertion. The deepen pass is the verification lane: its own
+    all-refuted conclusion demotes with a provenance stamp.
+    """
+
+    def test_missing_counter_withholds_demotion(self):
+        outcome = _review({
+            "status": "suspicious",
+            "body": "Possible overflow at line 10.",
+            "hypotheses": [
+                {"mechanism": "overflow via n", "confidence": "refuted"},
+            ],
+        })
+        assert outcome.status == "suspicious"
+        assert outcome.body.startswith("[withheld all-refuted demotion:")
+        assert outcome.review_result[
+            "all_refuted_demotion_withheld"] == "ungrounded"
+        assert "all_refuted_demotion" not in outcome.review_result
+        # The original prose is preserved below the marker.
+        assert "Possible overflow at line 10." in outcome.body
+
+    def test_cross_function_counter_withholds_demotion(self):
+        outcome = _review({
+            "status": "suspicious",
+            "body": "Possible overflow at line 10.",
+            "hypotheses": [
+                {"mechanism": "overflow via n", "confidence": "refuted",
+                 "counter": "the parse_header caller clamps n before "
+                            "every call site",
+                 "counter_scope": "cross_function"},
+            ],
+        })
+        assert outcome.status == "suspicious"
+        assert outcome.review_result[
+            "all_refuted_demotion_withheld"] == "ungrounded"
+
+    def test_contract_delegation_counter_withholds_demotion(self):
+        outcome = _review({
+            "status": "suspicious",
+            "body": "Possible overflow at line 10.",
+            "hypotheses": [
+                {"mechanism": "overflow via n", "confidence": "refuted",
+                 "counter": "the caller must ensure n <= sizeof(buf) "
+                            "per the function's contract",
+                 "counter_scope": "local"},
+            ],
+        })
+        assert outcome.status == "suspicious"
+        assert outcome.review_result[
+            "all_refuted_demotion_withheld"] == "ungrounded"
+
+    def test_one_ungrounded_among_grounded_withholds(self):
+        outcome = _review({
+            "status": "suspicious",
+            "body": "Two candidate defects.",
+            "hypotheses": [
+                {"mechanism": "overflow via n", "confidence": "refuted",
+                 "counter": "n is clamped to sizeof(buf) on line 8",
+                 "counter_scope": "local"},
+                {"mechanism": "underflow via m", "confidence": "refuted"},
+            ],
+        })
+        assert outcome.status == "suspicious"
+        assert "1 of 2" in outcome.body
+
+    def test_counter_escalated_all_refuted_keeps_floor(self):
+        # Machine-raised suspicious (model said clean, compelling
+        # counter escalated it): the same response's refutation record
+        # may not un-raise it without a verification-grade receipt —
+        # even when every refutation is grounded.
+        outcome = _review({
+            "status": "clean",
+            "body": "All flows are bounds-checked. Verdict: clean.",
+            "counter_hypothesis": COMPELLING_COUNTER,
+            "hypotheses": [
+                {"mechanism": "overflow via n", "confidence": "refuted",
+                 "counter": "n is clamped to sizeof(buf) on line 8",
+                 "counter_scope": "local"},
+            ],
+        })
+        assert outcome.status == "suspicious"
+        assert outcome.review_result[
+            "all_refuted_demotion_withheld"] == "counter-escalation-floor"
+        # The escalation marker stays FIRST (journal-rebuild provenance
+        # reads the body prefix); the withhold marker splices second.
+        assert outcome.body.startswith("[counter-hypothesis escalation:")
+        head, _, tail = outcome.body.partition("\n\n")
+        assert tail.startswith("[withheld all-refuted demotion:")
+
+    def test_deepen_all_refuted_demotes_with_provenance(self):
+        # The deepen pass IS the verification lane — its own
+        # all-refuted conclusion closes the loop and demotes, stamped.
+        outcome = _review({
+            "status": "suspicious",
+            "body": "Possible overflow at line 10.",
+            "hypotheses": [
+                {"mechanism": "overflow via n", "confidence": "refuted"},
+            ],
+        }, ctx_extra={"deepen": True})
+        assert outcome.status == "clean"
+        assert outcome.body.startswith("[all-refuted demotion:")
+        assert outcome.review_result[
+            "all_refuted_grounding"] == "deepen-verified"
 
 
 class TestFixHistorySkipIsLoud:

@@ -3014,8 +3014,14 @@ class TestSelfContradictionDemotion:
             _demote_self_contradictions,
         )
         outcome = self._make_outcome("suspicious", [
-            {"mechanism": "overflow", "confidence": "refuted"},
-            {"mechanism": "oob", "confidence": "refuted"},
+            {"mechanism": "overflow", "confidence": "refuted",
+             "counter": "the length is clamped to sizeof(buf) on the "
+                        "line above the copy",
+             "counter_scope": "local"},
+            {"mechanism": "oob", "confidence": "refuted",
+             "counter": "the index is bounds-checked against len "
+                        "inside this function",
+             "counter_scope": "local"},
         ])
         result = OrchestratorResult()
         result.outcomes = [outcome]
@@ -3025,6 +3031,99 @@ class TestSelfContradictionDemotion:
         assert result.suspicious == 0
         assert result.clean == 1
         assert "[self-contradiction:" in result.outcomes[0].body
+
+    def test_ungrounded_all_refuted_not_demoted(self):
+        # Refutations with no counter (or a non-local / delegated one)
+        # are unverified claims — the post-loop net must not erase the
+        # suspicion the in-review gate deliberately kept alive.
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _demote_self_contradictions,
+        )
+        outcome = self._make_outcome("suspicious", [
+            {"mechanism": "overflow", "confidence": "refuted"},
+            {"mechanism": "oob", "confidence": "refuted"},
+        ])
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+        result.suspicious = 1
+        _demote_self_contradictions(result)
+        assert result.outcomes[0].status == "suspicious"
+        assert result.suspicious == 1
+
+    def test_cross_function_counter_not_demoted(self):
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            _demote_self_contradictions,
+        )
+        outcome = self._make_outcome("suspicious", [
+            {"mechanism": "overflow", "confidence": "refuted",
+             "counter": "every caller clamps the length first",
+             "counter_scope": "cross_function"},
+        ])
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+        result.suspicious = 1
+        _demote_self_contradictions(result)
+        assert result.outcomes[0].status == "suspicious"
+
+    def test_withheld_marker_not_demoted(self):
+        # The review path already adjudicated withholding — the net
+        # respects its decision even when the hypotheses look grounded.
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            ReviewOutcome,
+            _demote_self_contradictions,
+        )
+        outcome = ReviewOutcome(
+            file="test.c", function="func",
+            status="suspicious", body="test body",
+            hypotheses=[
+                {"mechanism": "overflow", "confidence": "refuted",
+                 "counter": "the length is clamped on the line above",
+                 "counter_scope": "local"},
+            ],
+            evidence_tool="",
+            review_result={
+                "all_refuted_demotion_withheld": "counter-escalation-floor",
+            },
+        )
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+        result.suspicious = 1
+        _demote_self_contradictions(result)
+        assert result.outcomes[0].status == "suspicious"
+
+    def test_counter_escalated_not_demoted(self):
+        # Machine-raised suspicious: only a verification-grade receipt
+        # un-raises it, never the model's own refutation record. The
+        # body prefix is the provenance surviving journal rebuilds.
+        from core.audit.orchestrator import (
+            OrchestratorResult,
+            ReviewOutcome,
+            _demote_self_contradictions,
+        )
+        outcome = ReviewOutcome(
+            file="test.c", function="func",
+            status="suspicious",
+            body=(
+                "[counter-hypothesis escalation: the review rationale "
+                "below concludes clean, but a compelling "
+                "counter-hypothesis kept this verdict suspicious — "
+                "overflow via tainted n]\n\nlooks clean"
+            ),
+            hypotheses=[
+                {"mechanism": "overflow", "confidence": "refuted",
+                 "counter": "the length is clamped on the line above",
+                 "counter_scope": "local"},
+            ],
+            evidence_tool="",
+        )
+        result = OrchestratorResult()
+        result.outcomes = [outcome]
+        result.suspicious = 1
+        _demote_self_contradictions(result)
+        assert result.outcomes[0].status == "suspicious"
 
     def test_mixed_confidence_not_demoted(self):
         from core.audit.orchestrator import (
