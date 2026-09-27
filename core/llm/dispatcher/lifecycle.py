@@ -20,7 +20,11 @@ import os
 import threading
 from pathlib import Path
 
-from .auth import CredentialStore, seed_from_config
+from .auth import (
+    CredentialStore,
+    WorldReadableModelsConfigError,
+    seed_from_config,
+)
 from .server import LLMDispatcher
 from typing import TYPE_CHECKING, Any
 
@@ -247,10 +251,33 @@ def ensure_route_for_client(client: Any, label: str) -> None:
     provider/transport errors surface at call time on the LLM call
     itself, and an oddly-shaped client config must not abort a CLI
     that may never route a dispatcher-only model.
+
+    One exception is surfaced rather than swallowed:
+    :class:`WorldReadableModelsConfigError` (credential seeding
+    refused a group/other-readable ``models.json`` with inline keys).
+    Its message carries the operator's one-line remedy (``chmod 600``
+    / the override env) — silently dropping it here left the four
+    standalone CLIs on this seam falling to the direct transport with
+    no hint why. The never-raises contract is kept: the refusal is
+    printed loudly to stderr and the CLI continues exactly as before.
     """
     try:
         configs = [getattr(client.config, "primary_model", None)]
         configs += list(getattr(client.config, "fallback_models", []) or [])
         ensure_route_for_model_configs(configs, label=label)
+    except WorldReadableModelsConfigError as exc:
+        import sys
+        # The message embeds the config path (operator env) — render
+        # it terminal-inert before printing.
+        message = str(exc)
+        try:
+            from core.security.log_sanitisation import sanitise_for_terminal
+            message = sanitise_for_terminal(message, max_len=500)
+        except ImportError:
+            message = message[:500]
+        print(
+            f"{label}: dispatcher credential seeding refused — {message}",
+            file=sys.stderr,
+        )
     except Exception:  # noqa: BLE001 — provider errors surface at call time
         pass

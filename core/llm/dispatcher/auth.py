@@ -120,6 +120,22 @@ class BedrockTransformError(Exception):
         self.message = message
 
 
+class WorldReadableModelsConfigError(RuntimeError):
+    """``models.json`` is group/other-readable AND carries inline API
+    keys — another local UID can read the credentials off disk.
+
+    Raised by :func:`seed_from_config` instead of silently loading the
+    exposed keys. The message carries the exact ``chmod 600`` remedy
+    and the ``RAPTOR_ALLOW_WORLD_READABLE_MODELS_JSON=1`` override so
+    an operator is never bricked without an escape hatch."""
+
+
+# Operator consent env for loading a group/other-readable models.json
+# that carries inline API keys. Value must be exactly "1" — a consent
+# this sharp should never be truthy-parsed.
+_ALLOW_WORLD_READABLE_ENV = "RAPTOR_ALLOW_WORLD_READABLE_MODELS_JSON"
+
+
 @dataclass(frozen=True)
 class ProviderRule:
     """One provider's auth-injection rule.
@@ -1366,11 +1382,22 @@ def seed_from_config(store: CredentialStore) -> None:
     Silent on file-missing, parse-error, or schema-error — same posture
     as the rest of the config-reading path. A misconfigured file looks
     the same as no file at all and surfaces later as the dispatcher's
-    own ``503 provider not configured``. One deliberate exception: a
-    file shaped like ``packages/exploit_feasibility``'s AnalysisConfig
-    JSON (which historically shared ``RAPTOR_CONFIG`` before moving to
-    ``RAPTOR_EF_CONFIG``) warns actionably — that mismatch has a
-    specific cause worth naming.
+    own ``503 provider not configured``. Two deliberate exceptions:
+
+    * A file shaped like ``packages/exploit_feasibility``'s
+      AnalysisConfig JSON (which historically shared ``RAPTOR_CONFIG``
+      before moving to ``RAPTOR_EF_CONFIG``) warns actionably — that
+      mismatch has a specific cause worth naming.
+    * A group/other-readable file that CARRIES inline ``api_key``
+      entries raises :class:`WorldReadableModelsConfigError` instead
+      of loading the exposed credentials (fail-closed; the message
+      names the ``chmod 600`` fix and the
+      ``RAPTOR_ALLOW_WORLD_READABLE_MODELS_JSON=1`` override). A loose
+      file with NO inline keys only warns — there is nothing sensitive
+      in it to protect.
+
+    Raises:
+        WorldReadableModelsConfigError: see above.
     """
     try:
         from core.json import load_json_with_comments
@@ -1383,24 +1410,20 @@ def seed_from_config(store: CredentialStore) -> None:
     else:
         config_path = Path.home() / ".config" / "raptor" / "models.json"
 
-    # Permission posture warning: models.json carries API keys when the
-    # operator uses the inline ``api_key`` field. World-readable mode
-    # (any of ``0o004`` / ``0o040`` / group-readable on a multi-user
-    # box) means another local UID can grep the file. We don't *refuse*
-    # to load — that would be a footgun on systems where umask sets
-    # 0o644 and the operator didn't notice — but log once at WARNING so
-    # the operator can ``chmod 600`` it. Skip on Windows where POSIX
-    # bits don't have the same meaning.
+    # Permission posture: models.json carries API keys when the
+    # operator uses the inline ``api_key`` field. Group/other-readable
+    # mode (any ``0o077`` bit) means another local UID can grep the
+    # file. Record the loose mode here; whether it REFUSES or merely
+    # warns is decided after parsing, once we know if the file
+    # actually carries inline keys (a keyless routing-only file has
+    # nothing to protect). Skip on Windows where POSIX bits don't have
+    # the same meaning.
+    loose_mode: int | None = None
     if sys.platform != "win32":
         try:
             st = config_path.stat()
             if st.st_mode & 0o077:
-                import logging as _logging
-                _logging.getLogger(__name__).warning(
-                    "models.json at %s is mode %04o — contains API keys "
-                    "when populated inline. Consider `chmod 600 %s`.",
-                    config_path, st.st_mode & 0o777, config_path,
-                )
+                loose_mode = st.st_mode & 0o777
         except OSError:
             # Missing file / unreadable: load_json_with_comments below
             # will handle the "missing" case (returns None) and the
@@ -1438,6 +1461,9 @@ def seed_from_config(store: CredentialStore) -> None:
     if not isinstance(entries, list):
         return
 
+    if loose_mode is not None:
+        _refuse_exposed_inline_keys(config_path, loose_mode, entries)
+
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -1451,6 +1477,56 @@ def seed_from_config(store: CredentialStore) -> None:
         # roles, same key) — first match seeds, rest are no-ops.
         if store.get(provider) is None:
             store.set(provider, api_key)
+
+
+def _refuse_exposed_inline_keys(
+    config_path: Path, loose_mode: int, entries: list,
+) -> None:
+    """Fail closed on a group/other-readable models.json that carries
+    inline API keys.
+
+    * No inline keys → hygiene warning only (``chmod 600`` advice);
+      nothing sensitive is in the file, so refusing would be pure
+      friction for routing-only configs.
+    * Inline keys + ``RAPTOR_ALLOW_WORLD_READABLE_MODELS_JSON=1`` →
+      loud acknowledged-override warning, then load. The consent env
+      exists so an operator on a box where the mode is deliberate
+      (single-user container, ACL-managed share) is never bricked.
+    * Inline keys, no consent → :class:`WorldReadableModelsConfigError`
+      with the exact remedy. Key VALUES never appear in the message.
+    """
+    log = logging.getLogger(__name__)
+    carries_keys = any(
+        isinstance(e, dict) and isinstance(e.get("api_key"), str)
+        and e.get("api_key")
+        for e in entries
+    )
+    if not carries_keys:
+        log.warning(
+            "models.json at %s is mode %04o — it carries no inline "
+            "API keys today, but would expose them to other local "
+            "users if added. Consider `chmod 600 %s`.",
+            config_path, loose_mode, config_path,
+        )
+        return
+    if os.environ.get(_ALLOW_WORLD_READABLE_ENV) == "1":
+        log.warning(
+            "models.json at %s is mode %04o and carries inline API "
+            "keys readable by other local users — loading anyway "
+            "because %s=1 is set. `chmod 600 %s` and drop the "
+            "override to close the exposure.",
+            config_path, loose_mode, _ALLOW_WORLD_READABLE_ENV,
+            config_path,
+        )
+        return
+    raise WorldReadableModelsConfigError(
+        f"refusing to load credentials from {config_path}: the file "
+        f"is mode {loose_mode:04o} (group/other-readable) and carries "
+        f"inline API keys — any local user can read them. Fix: "
+        f"`chmod 600 {config_path}`. To accept the exposure "
+        f"deliberately (e.g. single-user container), set "
+        f"{_ALLOW_WORLD_READABLE_ENV}=1."
+    )
 
 
 def _seed_bedrock_override(
