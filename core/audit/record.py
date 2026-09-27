@@ -37,8 +37,6 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 AUDIT_LOG_FILENAME = ".audit-log.jsonl"
-_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
-_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 
 #: PER-SHARD read budgets for the audit event log (see
 #: load_audit_log). Historically these were whole-log budgets and the
@@ -336,7 +334,7 @@ def load_audit_log_disclosed(
             continue
         try:
             probe_fd = os.open(
-                str(p), os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC)
+                str(p), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
         except OSError:
             unreadable.append(p.name)
             continue

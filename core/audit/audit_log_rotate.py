@@ -72,8 +72,6 @@ logger = logging.getLogger(__name__)
 
 _BACKUP_SUFFIX = ".pre-rotate"
 _TMP_PREFIX = ".audit-log-rotate.tmp."
-_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
-_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 #: Streaming read granularity. Trade-off, both directions: LOWER
 #: multiplies syscalls on multi-GiB trails; HIGHER grows the largest
 #: single buffer the rewrite holds (it never materialises a whole
@@ -226,7 +224,7 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
             try:
                 src_fd = os.open(
                     str(src),
-                    os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC,
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 )
             except OSError as exc:
                 raise RotateRefused(
@@ -337,7 +335,7 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
     for i, tmp in enumerate(temps):
         os.rename(tmp, out_dir / _audit_log_shard_name(i + 1))
     try:
-        dir_fd = os.open(out_dir, os.O_RDONLY)
+        dir_fd = os.open(out_dir, os.O_RDONLY)  # raw-open: directory fsync handle — no bytes read; a symlinked out_dir must still fsync (renames above traversed it)
         try:
             os.fsync(dir_fd)
         finally:
