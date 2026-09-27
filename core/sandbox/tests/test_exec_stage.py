@@ -59,6 +59,28 @@ class TestStagesNonExecutable:
             assert _mode(staged.parent) == 0o700
 
 
+class TestScratchPlacement:
+    def test_stages_under_exec_workdir(self, tmp_path, monkeypatch):
+        from core.sandbox import exec_stage
+
+        family = tmp_path / "session"
+        family.mkdir()
+        monkeypatch.setattr(exec_stage, "exec_workdir", lambda: family)
+        artifact = tmp_path / "app"
+        artifact.write_bytes(b"bytes")
+        artifact.chmod(0o444)
+        with executable_stage(artifact) as staged:
+            assert staged.parent.parent == family
+
+    def test_fallback_prefix_is_reaper_registered(self):
+        # exec_workdir() may fall back to the default temp dir; a
+        # SIGKILLed run must never strand a mode-0o500 copy of an
+        # attacker-built binary there.
+        from core.run import tmp_reaper
+
+        assert "raptor-exec-stage-" in tmp_reaper._DIR_PREFIXES
+
+
 class TestPassThrough:
     def test_executable_file_yielded_unchanged(self, tmp_path):
         harness = tmp_path / "harness"

@@ -22,6 +22,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from core.run.workdir import exec_workdir
+
 
 @contextmanager
 def executable_stage(binary_path: str | os.PathLike) -> Iterator[Path]:
@@ -36,12 +38,19 @@ def executable_stage(binary_path: str | os.PathLike) -> Iterator[Path]:
     removed when the context exits. The copy keeps the original
     basename: address-space consumers match ``/proc/<pid>/maps``
     entries by name.
+
+    The staging dir lives under :func:`core.run.workdir.exec_workdir`
+    (executable even when the system tmp is mounted noexec, swept with
+    the session); the ``raptor-exec-stage-`` prefix is additionally
+    reaper-registered so the default-temp-dir fallback cannot strand
+    an executable copy past a SIGKILL.
     """
     p = Path(binary_path)
     if not p.is_file() or os.access(p, os.X_OK):
         yield p
         return
-    with tempfile.TemporaryDirectory(prefix="raptor-exec-stage-") as td:
+    with tempfile.TemporaryDirectory(
+            prefix="raptor-exec-stage-", dir=exec_workdir()) as td:
         staged = Path(td) / p.name
         shutil.copy2(p, staged)
         staged.chmod(0o500)

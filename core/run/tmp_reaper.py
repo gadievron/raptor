@@ -169,6 +169,12 @@ _DIR_PREFIXES = (
     # covers core/env/build.py's raptor-env-build- staging contexts —
     # same always-cleaned contract, context-manager lifetime.
     "raptor-env-",
+    # Consented-exec staging copies of 0444 run-dir artifacts
+    # (core/sandbox/exec_stage.py; context-manager lifetime). Normally
+    # placed under exec_workdir()'s session dir; this entry covers the
+    # default-temp-dir fallback — a SIGKILLed run must never strand a
+    # mode-0o500 copy of an attacker-built binary in the system tmp.
+    "raptor-exec-stage-",
     # cve-env source-checkout work dirs (packages/cve_env
     # tools/source_build.py; cleanup()-scoped). retain() hands
     # ownership to the operator — a retained dir surviving past the
