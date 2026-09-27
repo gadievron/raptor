@@ -490,6 +490,194 @@ class TestCorrectiveStrategyInheritance:
         assert not is_mechanical_echo(entry)
 
 
+class TestStrategySnapshotDegrade:
+    """A failed journal parse must degrade loudly and uniformly (no
+    donations, explicit ``None`` marker) — a silently returned partial
+    snapshot passes off the rows it happened to reach as the run's
+    strategy state, and the failure retries once the journal grows."""
+
+    _LOGGER = "core.audit.collector"
+
+    def _write(self, out_dir: Path, gap: dict, **outcome_over) -> None:
+        from core.audit.collector import append_journal_for_outcome
+        outcome = _FakeOutcome(**outcome_over)
+        append_journal_for_outcome(
+            out_dir=out_dir, target_path=out_dir, run_id="run-1",
+            outcome=outcome, gap=gap,
+        )
+
+    def test_parse_failure_returns_none_and_warns(
+        self, tmp_path: Path, monkeypatch, caplog,
+    ) -> None:
+        from core.audit.collector import _build_strategy_snapshot
+        import core.audit.journal as journal_mod
+
+        def _boom(*a, **kw):
+            raise OSError("journal unreadable")
+
+        monkeypatch.setattr(journal_mod, "load_entries_checked", _boom)
+        with caplog.at_level("WARNING", logger=self._LOGGER):
+            snapshot = _build_strategy_snapshot(tmp_path)
+        assert snapshot is None
+        warnings = [
+            r for r in caplog.records
+            if r.levelname == "WARNING" and r.name == self._LOGGER
+        ]
+        assert len(warnings) == 1
+        assert str(tmp_path) in warnings[0].getMessage()
+
+    def test_empty_journal_is_empty_dict_not_none(
+        self, tmp_path: Path,
+    ) -> None:
+        # {} = parsed fine, nothing eligible — distinct from the
+        # degraded None marker.
+        from core.audit.collector import _build_strategy_snapshot
+        assert _build_strategy_snapshot(tmp_path) == {}
+
+    def test_degraded_snapshot_never_donates_then_recovers(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        # Corrective write during the outage journals [] (the
+        # pre-existing no-donation fallback); once the journal has
+        # grown and the parse works again, inheritance resumes.
+        from core.coverage.journal import load_entries
+        import core.audit.journal as journal_mod
+
+        self._write(
+            tmp_path,
+            {"line_start": 10, "line_end": 30, "strategies": ["auth"]},
+            status="suspicious",
+        )
+        real_load_entries = journal_mod.load_entries_checked
+
+        def _boom(*a, **kw):
+            raise OSError("journal unreadable")
+
+        monkeypatch.setattr(journal_mod, "load_entries_checked", _boom)
+        self._write(tmp_path, {"line_start": 10}, status="clean",
+                    body="[resolution] corrective")
+        assert load_entries(tmp_path)[-1].strategies == []
+
+        monkeypatch.setattr(journal_mod, "load_entries_checked", real_load_entries)
+        # The corrective row above grew the journal, so the next
+        # strategies-less write re-parses and inherits again.
+        self._write(tmp_path, {"line_start": 10}, status="clean",
+                    body="[resolution] corrective again")
+        assert load_entries(tmp_path)[-1].strategies == ["auth"]
+
+    def test_healthy_inheritance_unchanged(self, tmp_path: Path) -> None:
+        from core.coverage.journal import load_entries
+        self._write(
+            tmp_path,
+            {"line_start": 10, "line_end": 30, "strategies": ["auth"]},
+            status="suspicious",
+        )
+        self._write(tmp_path, {"line_start": 10}, status="clean",
+                    body="[resolution] corrective")
+        assert load_entries(tmp_path)[-1].strategies == ["auth"]
+
+    def test_mid_loop_failure_degrades_uniformly(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        # A failure part-way through the eligibility walk must not
+        # pass off the rows reached so far as the run's strategy
+        # state — the degrade is uniform (None), never a partial map.
+        import core.coverage.journal_mac as journal_mac
+
+        from core.audit.collector import _build_strategy_snapshot
+
+        self._write(
+            tmp_path,
+            {"line_start": 10, "line_end": 30, "strategies": ["auth"]},
+            status="suspicious",
+        )
+        self._write(
+            tmp_path,
+            {"line_start": 50, "line_end": 70, "strategies": ["memory"]},
+            status="suspicious", function="login",
+        )
+        real = journal_mac.entry_provenance
+        calls = {"n": 0}
+
+        def _flaky(entry: Any, *a: Any, **kw: Any) -> Any:
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise OSError("mac key unreadable")
+            return real(entry, *a, **kw)
+
+        monkeypatch.setattr(journal_mac, "entry_provenance", _flaky)
+        assert _build_strategy_snapshot(tmp_path) is None
+        assert calls["n"] >= 2
+
+    def test_incomplete_journal_load_degrades(
+        self, tmp_path: Path, monkeypatch, caplog,
+    ) -> None:
+        # An over-budget journal loads as a bounded PARTIAL list
+        # WITHOUT raising — it must take the same uniform degrade as
+        # a parse failure, and the corrective row then donates [].
+        import core.audit.journal as journal_mod
+
+        from core.audit.collector import _build_strategy_snapshot
+        from core.coverage.journal import JournalLoad, load_entries
+
+        self._write(
+            tmp_path,
+            {"line_start": 10, "line_end": 30, "strategies": ["auth"]},
+            status="suspicious",
+        )
+        real = journal_mod.load_entries_checked
+
+        def _partial(out_dir: Path, **kw: Any) -> JournalLoad:
+            loaded = real(out_dir, **kw)
+            return JournalLoad(
+                entries=loaded.entries, complete=False,
+                reason="retained budget exceeded",
+            )
+
+        monkeypatch.setattr(journal_mod, "load_entries_checked", _partial)
+        with caplog.at_level("WARNING", logger=self._LOGGER):
+            assert _build_strategy_snapshot(tmp_path) is None
+        warnings = [
+            r for r in caplog.records
+            if r.levelname == "WARNING" and r.name == self._LOGGER
+        ]
+        assert len(warnings) == 1
+        assert "retained budget exceeded" in warnings[0].getMessage()
+
+        self._write(tmp_path, {"line_start": 10}, status="clean",
+                    body="[resolution] corrective")
+        assert load_entries(tmp_path)[-1].strategies == []
+
+    def test_exception_warning_escaped_and_bounded(
+        self, tmp_path: Path, monkeypatch, caplog,
+    ) -> None:
+        # A hostile exception message (control bytes + flooding
+        # length) must land escaped and truncated in the WARNING;
+        # the traceback is DEBUG-only.
+        import core.audit.journal as journal_mod
+
+        from core.audit.collector import _build_strategy_snapshot
+
+        hostile = "\x1b]0;pwn\x07" + "A" * 100_000
+
+        def _boom(*a: Any, **kw: Any) -> None:
+            raise OSError(hostile)
+
+        monkeypatch.setattr(journal_mod, "load_entries_checked", _boom)
+        with caplog.at_level("WARNING", logger=self._LOGGER):
+            assert _build_strategy_snapshot(tmp_path) is None
+        warnings = [
+            r for r in caplog.records
+            if r.levelname == "WARNING" and r.name == self._LOGGER
+        ]
+        assert len(warnings) == 1
+        msg = warnings[0].getMessage()
+        assert "\x1b" not in msg
+        assert "\\x1b" in msg
+        assert "chars]" in msg  # explicit elision marker
+        assert len(msg) < 1000  # bounded, not the 100 KB flood
+
+
 class TestFlushDurability:
     """flush() is re-usable (post-loop passes submit AFTER the first
     flush), retains entries on write failure, and appends through the

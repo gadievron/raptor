@@ -34,8 +34,12 @@ logger = logging.getLogger(__name__)
 #: writes (see ``_inherited_strategies``). Maps run-dir → (journal
 #: size at snapshot time, site → strategies). Built lazily on the
 #: first strategies-less audit write — the mid-loop review path
-#: always carries gap strategies and never touches this.
-_STRATEGY_SNAPSHOTS: dict[str, tuple[int, dict[tuple, list[str]]]] = {}
+#: always carries gap strategies and never touches this. A ``None``
+#: snapshot records a FAILED build (degraded — retried once the
+#: journal grows past the recorded size, like any lookup miss; the
+#: size is measured BEFORE the parse, so mid-parse growth fails
+#: toward a retry, never toward pinning the degraded marker).
+_STRATEGY_SNAPSHOTS: dict[str, tuple[int, dict[tuple, list[str]] | None]] = {}
 _STRATEGY_SNAPSHOTS_LOCK = threading.Lock()
 
 
@@ -52,7 +56,19 @@ def _journal_size(out_dir: Path) -> int:
     return total
 
 
-def _build_strategy_snapshot(out_dir: Path) -> dict[tuple, list[str]]:
+def _build_strategy_snapshot(out_dir: Path) -> dict[tuple, list[str]] | None:
+    """Parse the run's journal into a site → strategies map.
+
+    Returns ``None`` when the parse FAILED or the journal loaded
+    incompletely (memory-bounded loader stopped early) — an explicit
+    degraded marker, distinct from ``{}`` (parsed fine, nothing
+    eligible). A degraded parse must not pass off the rows it
+    happened to reach as the run's strategy state: a silently
+    returned partial map makes every site past the cutoff journal
+    corrective rows with ``strategies: []``, which cross-run verdict
+    reuse then refuses as ``strategy_changed`` — so the degrade is
+    uniform (no donations) and loud instead.
+    """
     snapshot: dict[tuple, list[str]] = {}
     try:
         from core.coverage import journal_mac
@@ -60,9 +76,23 @@ def _build_strategy_snapshot(out_dir: Path) -> dict[tuple, list[str]]:
         from .journal import (
             is_function_grade,
             is_mechanical_echo,
-            load_entries,
+            load_entries_checked,
         )
-        for e in load_entries(out_dir):
+        loaded = load_entries_checked(out_dir)
+        if not loaded.complete:
+            # An over-budget journal loads as a bounded PARTIAL list
+            # WITHOUT raising — the same silent-partial hazard as a
+            # mid-loop exception, so it takes the same uniform
+            # degrade (the reason string is loader-generated).
+            logger.warning(
+                "strategy-inheritance snapshot degraded for %s — the "
+                "journal loaded incompletely (%s); corrective journal "
+                "rows will record empty strategies until the journal "
+                "grows and a re-parse succeeds",
+                out_dir, loaded.reason,
+            )
+            return None
+        for e in loaded.entries:
             if e.verdict == "error" or not is_function_grade(e):
                 continue
             if getattr(e, "edge_callee", None):
@@ -83,14 +113,25 @@ def _build_strategy_snapshot(out_dir: Path) -> dict[tuple, list[str]]:
             if journal_mac.entry_provenance(e) != journal_mac.ROW_VERIFIED:
                 continue
             site = (e.file, e.function, e.line_start or 0)
-            # load_entries preserves append order; later entries
-            # overwrite so the newest record wins.
+            # Entries arrive in append order; later entries overwrite
+            # so the newest record wins.
             snapshot[site] = list(e.strategies)
-    except Exception:
-        logger.debug(
-            "strategy-inheritance snapshot failed for %s",
-            out_dir, exc_info=True,
+    except Exception as exc:
+        # The exception message can carry journal-derived bytes —
+        # escape and bound it before the operator-facing WARNING; the
+        # full traceback stays at DEBUG.
+        from core.security.log_sanitisation import sanitise_for_terminal
+        logger.warning(
+            "strategy-inheritance snapshot failed for %s — corrective "
+            "journal rows will record empty strategies until the "
+            "journal grows and a re-parse succeeds: %s",
+            out_dir,
+            sanitise_for_terminal(f"{type(exc).__name__}: {exc}"),
         )
+        logger.debug(
+            "strategy-inheritance snapshot detail", exc_info=True,
+        )
+        return None
     return snapshot
 
 
@@ -126,7 +167,14 @@ def _inherited_strategies(
     """
     key_dir = str(out_dir)
 
-    def _lookup(snapshot: dict[tuple, list[str]]) -> list[str] | None:
+    def _lookup(
+        snapshot: dict[tuple, list[str]] | None,
+    ) -> list[str] | None:
+        if snapshot is None:
+            # Degraded build — nothing donates (the caller's []
+            # fallback applies, same as a site the run never
+            # journaled).
+            return None
         found = snapshot.get((file, function, line_start or 0))
         if found is None and line_start:
             found = snapshot.get((file, function, 0))
