@@ -151,3 +151,45 @@ class TestSarifAndStage:
         doc = json.loads(path.read_text())
         assert len(doc["runs"][0]["results"]) == 1
         assert stats["emitted"] == 1
+
+    def test_stage_scans_repo_under_skip_named_parent(self, tmp_path):
+        # Skip names apply BELOW the repo root only: a checkout under
+        # a parent dir named build/ (or target/, ...) must still be
+        # scanned — the absolute-path check silently skipped every
+        # file for such repos.
+        repo = tmp_path / "build" / "checkout"
+        repo.mkdir(parents=True)
+        (repo / "app.properties").write_text("hashAlg=MD5\n")
+        (repo / "H.java").write_text(_src("app.properties", '"hashAlg"'))
+        inner = repo / "target"
+        inner.mkdir()
+        (inner / "Copy.java").write_text(
+            _src("app.properties", '"hashAlg"'))
+        out = tmp_path / "outdir"
+        out.mkdir()
+        path, stats = run_config_resolved_stage(repo, out)
+        doc = json.loads(path.read_text())
+        assert len(doc["runs"][0]["results"]) == 1  # target/ still skipped
+        assert stats["emitted"] == 1
+
+    def test_stage_skip_set_matches_resolver(self, tmp_path):
+        # The walk shares the resolver's _SKIP_DIR_PARTS: a vendored
+        # copy under in-repo out/ or dist/ must be invisible to BOTH
+        # the source walk and locate(), never scanned-as-source with
+        # its properties file unresolvable (the drift the old inline
+        # 4-name tuple allowed).
+        repo = tmp_path / "checkout"
+        repo.mkdir()
+        (repo / "app.properties").write_text("hashAlg=MD5\n")
+        (repo / "H.java").write_text(_src("app.properties", '"hashAlg"'))
+        for name in ("out", "dist"):
+            inner = repo / name
+            inner.mkdir()
+            (inner / "Copy.java").write_text(
+                _src("app.properties", '"hashAlg"'))
+        out = tmp_path / "outdir"
+        out.mkdir()
+        path, stats = run_config_resolved_stage(repo, out)
+        doc = json.loads(path.read_text())
+        assert len(doc["runs"][0]["results"]) == 1
+        assert stats["emitted"] == 1

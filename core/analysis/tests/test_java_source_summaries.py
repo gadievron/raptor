@@ -210,6 +210,27 @@ public class H {
         assert [x.owner for x in summaries] == ["H"]
         assert scanned == 1  # test/ dir skipped
 
+    def test_scan_tree_root_under_skip_named_dir(self, tmp_path):
+        # Skip names apply BELOW the root only: a checkout that lives
+        # under a parent dir named out/ (or build/, test/, ...) must
+        # still be scanned — the absolute-path check silently returned
+        # files_scanned == 0 for any corpus under such a path.
+        repo = tmp_path / "out" / "checkout"
+        good = repo / "src" / "H.java"
+        good.parent.mkdir(parents=True)
+        good.write_text(_PKG + """
+public class H {
+    public String grab(HttpServletRequest req, String p) {
+        return req.getParameter(p);
+    }
+}""", encoding="utf-8")
+        inner_skip = repo / "target" / "T.java"
+        inner_skip.parent.mkdir(parents=True)
+        inner_skip.write_text(good.read_text(), encoding="utf-8")
+        summaries, _refusals, scanned = scan_tree(repo)
+        assert [x.owner for x in summaries] == ["H"]
+        assert scanned == 1  # target/ below the root still skipped
+
     def test_pack_emission_end_to_end(self, tmp_path):
         from core.dataflow.extension_pack import write_extension_pack
         s, _ = _summaries(_PKG + """

@@ -33,6 +33,7 @@ from core.sarif import emit
 
 from core.analysis.config_resolve_java import (
     ConfigResolver,
+    _SKIP_DIR_PARTS,
     _call_arguments,
     _enclosing_method,
     _parser,
@@ -244,8 +245,17 @@ def run_config_resolved_stage(
     try:
         java_files: list[Path] = []
         for p in repo_path.rglob("*.java"):
-            if any(part in (".git", "node_modules", "target", "build")
-                   for part in p.parts):
+            # Relative to the repo root: the checkout's own parent
+            # dirs (a corpus under out/, build/, ...) must not veto
+            # the scan.
+            try:
+                rel_parts = p.relative_to(repo_path).parts
+            except ValueError:
+                rel_parts = p.parts
+            # Same skip set as the resolver's file index: a source
+            # dir this walk visits must not hold properties files the
+            # resolver's locate() cannot see (and vice versa).
+            if any(part in _SKIP_DIR_PARTS for part in rel_parts):
                 continue
             java_files.append(p)
             if len(java_files) >= _FILE_CAP:

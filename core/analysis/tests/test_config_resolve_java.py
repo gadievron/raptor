@@ -148,6 +148,24 @@ class TestResolveCall:
         res = _resolver(tmp_path, src).resolve_call(_get_call(src))
         assert res.resolved and res.value == "SHA-256"
 
+    def test_root_under_skip_named_dir_still_searched(self, tmp_path):
+        # Skip names apply BELOW the search root only: a checkout
+        # under a parent dir named out/ (or build/, dist/, ...) must
+        # still find its own properties files — the absolute-path
+        # check refused every candidate (file_not_found) for such
+        # repos.
+        repo = tmp_path / "out" / "checkout"
+        repo.mkdir(parents=True)
+        (repo / "app.properties").write_text("alg=SHA-256\n")
+        (repo / "target").mkdir()
+        (repo / "target" / "app.properties").write_text("alg=MD5\n")
+        src = _src("app.properties", '"alg"')
+        java = repo / "T.java"
+        java.write_text(src, encoding="utf-8")
+        res = ConfigResolver(src, str(java), str(repo)).resolve_call(
+            _get_call(src))
+        assert res.resolved and res.value == "SHA-256"
+
 
 class TestFoldHook:
     def test_hook_none_for_foreign_calls(self, tmp_path):

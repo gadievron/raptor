@@ -374,9 +374,17 @@ def scan_tree(
     summaries: list[SourceSummary] = []
     refusals: dict[str, int] = {}
     scanned = 0
-    for path in sorted(Path(root).rglob("*.java")):
+    root_path = Path(root)
+    for path in sorted(root_path.rglob("*.java")):
+        # Skip decisions apply to the tree BELOW the root only: the
+        # root's own location (a checkout under a dir named out/,
+        # build/, ...) must not veto the whole scan.
+        try:
+            rel_parts = path.relative_to(root_path).parts
+        except ValueError:
+            rel_parts = path.parts
         if any(part in skip_parts or part.startswith(".")
-               for part in path.parts):
+               for part in rel_parts):
             continue
         if scanned >= max_files:
             refusals["file_cap_hit"] = refusals.get("file_cap_hit", 0) + 1

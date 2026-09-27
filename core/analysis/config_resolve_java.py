@@ -141,7 +141,14 @@ class _FileIndex:
         capped = False
         try:
             for p in self._root.rglob(basename):
-                if any(part in _SKIP_DIR_PARTS for part in p.parts):
+                # Relative to the search root: the root's own parent
+                # dirs (a checkout under out/, build/, ...) must not
+                # hide every candidate file.
+                try:
+                    rel_parts = p.relative_to(self._root).parts
+                except ValueError:
+                    rel_parts = p.parts
+                if any(part in _SKIP_DIR_PARTS for part in rel_parts):
                     continue
                 if not p.is_file():
                     continue
