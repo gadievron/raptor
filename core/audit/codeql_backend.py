@@ -98,24 +98,54 @@ def codeql_pre_sweep(
         logger.warning("codeql_pre_sweep: database not found: %s", db_path)
         return
 
+    # The resolve step parses database content that can live under the
+    # scanned repo, so it runs inside core.sandbox (network denied,
+    # writes confined to a scratch dir) with a sanitised environment.
+    # Sandbox unavailable or refusing means the pre-sweep is skipped —
+    # never a bare subprocess over target-derived paths.
+    import shutil as _shutil
     import subprocess as _sp
     try:
         from core.config import RaptorConfig
-
-        info = _sp.run(
-            ["codeql", "resolve", "database", str(db_path)],
-            capture_output=True, text=True, timeout=30,
-            # Sanitised environment like every other subprocess that
-            # touches scan-derived paths (the database may live under
-            # the scanned repo).
-            env=RaptorConfig.get_safe_env(),
+        from core.run.scratch import scratch_dir
+        from core.sandbox.context import run as _sandbox_run
+        from core.sandbox.errors import SandboxSetupError as _SandboxSetupError
+    except ImportError:
+        logger.warning(
+            "codeql_pre_sweep: sandbox unavailable — refusing to resolve "
+            "the database unsandboxed; skipping pre-sweep",
         )
+        return
+    codeql_bin = _shutil.which("codeql")
+    if not codeql_bin:
+        logger.debug("codeql_pre_sweep: codeql CLI not on PATH; skipping")
+        return
+    codeql_bin = os.path.realpath(codeql_bin)
+    try:
+        with scratch_dir("codeql_resolve_") as workdir:
+            info = _sandbox_run(
+                [codeql_bin, "resolve", "database", str(db_path)],
+                block_network=True,
+                target=str(db_path),
+                output=str(workdir),
+                cwd=str(workdir),
+                env=RaptorConfig.get_safe_env(),
+                env_caller_filtered=True,
+                capture_output=True, text=True, timeout=30, check=False,
+                caller_label="audit-codeql-resolve",
+            )
         language = _detect_db_language(info.stdout or "")
         if not language:
             logger.warning("codeql_pre_sweep: could not detect language")
             return
     except (OSError, _sp.TimeoutExpired) as exc:
         logger.warning("codeql_pre_sweep: resolve database failed: %s", exc)
+        return
+    except _SandboxSetupError as exc:
+        logger.warning(
+            "codeql_pre_sweep: sandbox refused the resolve step (%s) — "
+            "skipping pre-sweep", exc,
+        )
         return
 
     scan_dir = Path(out_dir) / "scan"

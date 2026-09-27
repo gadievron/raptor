@@ -1295,6 +1295,85 @@ class TestDetectDbLanguage:
         assert _detect_db_language('{"languages": []}') is None
 
 
+class TestPreSweepResolveSandboxed:
+    """codeql_backend.codeql_pre_sweep's resolve step parses database
+    content that can live under the scanned repo, so it must route
+    through core.sandbox (network denied, writes confined) and a
+    sandbox refusal must skip the pre-sweep rather than fall back to a
+    bare subprocess."""
+
+    @staticmethod
+    def _arm(tmp_path, monkeypatch, sandbox_run):
+        import shutil
+        from types import SimpleNamespace
+
+        import core.sandbox.context as sbx_context
+        from packages.codeql import query_runner as qr_mod
+
+        db = tmp_path / "db"
+        db.mkdir()
+        cli = tmp_path / "codeql"
+        cli.write_text("#!/bin/sh\n")
+        monkeypatch.setattr(sbx_context, "run", sandbox_run)
+        monkeypatch.setattr(
+            shutil, "which",
+            lambda name, *a, **k: str(cli) if name == "codeql" else None,
+        )
+
+        class _NeverRunner:
+            def __init__(self):
+                raise AssertionError(
+                    "suite runner must not start when resolve is stubbed "
+                    "to fail or return early")
+
+        # Suite phase stubbed out: these fences end at the resolve
+        # step, and QueryRunner would dispatch real codeql.
+        monkeypatch.setattr(qr_mod, "QueryRunner", _NeverRunner)
+        return db, cli, SimpleNamespace
+
+    def test_resolve_routes_through_sandbox(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        from core.audit.codeql_backend import codeql_pre_sweep
+
+        calls: list[dict] = []
+
+        def fake_run(cmd, **kwargs):
+            record = dict(kwargs)
+            record["cmd"] = list(cmd)
+            calls.append(record)
+            # Empty output: language detection fails and the function
+            # returns before the (booby-trapped) suite phase.
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        db, cli, _ = self._arm(tmp_path, monkeypatch, fake_run)
+        codeql_pre_sweep(db, tmp_path / "out", sarif_cache=None)
+
+        [sb] = calls
+        assert sb["cmd"][0] == str(cli)
+        assert sb["cmd"][1:3] == ["resolve", "database"]
+        assert sb["cmd"][3] == str(db)
+        assert sb["block_network"] is True
+        assert sb["target"] == str(db)
+        assert sb["output"]
+        assert sb["cwd"] == sb["output"]
+        assert sb["env_caller_filtered"] is True
+
+    def test_sandbox_refusal_skips_presweep(
+            self, tmp_path, monkeypatch, caplog):
+        from core.audit.codeql_backend import codeql_pre_sweep
+        from core.sandbox.errors import SandboxSetupError
+
+        def refusing_run(cmd, **kwargs):
+            raise SandboxSetupError("floor refused")
+
+        db, _, _ = self._arm(tmp_path, monkeypatch, refusing_run)
+        with caplog.at_level("WARNING", logger="core.audit.codeql_backend"):
+            codeql_pre_sweep(db, tmp_path / "out", sarif_cache=None)
+        assert any(
+            "sandbox refused" in rec.getMessage() for rec in caplog.records)
+
+
 class TestCppNameNormalisation:
     """CodeQL's getName() is unqualified and template-arg-free — a
     qualified/template spelling interpolated verbatim can never match
