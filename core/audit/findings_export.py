@@ -266,8 +266,13 @@ def build_graded_finding(
                 # model's whole raw string, so a claim that happens to
                 # end ":witness" would otherwise ride the witness arm
                 # below into confirmed_by and defeat the no-receipt
-                # tier cap.
-                continue
+                # tier cap. Stop at the marker, don't skip past it: a
+                # '+' inside the claim splits into unprefixed tail
+                # parts that are still the claim's own text (the
+                # is_verification_evidence positional rule — genuine
+                # receipts sit BEFORE the marker in the
+                # evidence-combine shape).
+                break
             # The validate-bridge runtime stamps and witness stamps are
             # confirming receipts in compute_tier's vocabulary but not
             # tool namespaces — count them here so the receipt gate

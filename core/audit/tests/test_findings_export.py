@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.audit.evidence_grade import sanitize_llm_evidence_tool
 from core.audit.findings_export import (
     build_graded_finding,
     export_findings,
@@ -488,6 +489,40 @@ class TestConfirmedByDiscrimination:
         finding = build_graded_finding(outcome)
         assert finding["discovery"]["confirmed_by"] \
             == ["smt:check-toctou:witness"]
+        assert finding["verification_tier"] == "tool_backed"
+
+    def test_part_after_claim_marker_stays_out_of_confirmed_by(self):
+        # sanitize_llm_evidence_tool prefixes the model's WHOLE raw
+        # string, so a '+' inside the claim splits into tail parts that
+        # no longer carry the prefix — every part after the marker is
+        # the claim's own text (the is_verification_evidence positional
+        # rule). A receipt-shaped tail must not land in confirmed_by
+        # and defeat the no-receipt tier cap.
+        stamp = sanitize_llm_evidence_tool(
+            "consistency:cross-check agrees+smt:check-integer-narrowing",
+        )
+        outcome = FakeOutcome(
+            evidence_tool=stamp,
+            review_result={"hypothesis": "integer narrowing"},
+        )
+        outcome.verification_tier = "tool_backed"
+        finding = build_graded_finding(outcome)
+        assert finding["discovery"]["confirmed_by"] == []
+        assert finding["verification_tier"] == "llm_only"
+        assert finding["confidence"] != "high"
+
+    def test_receipt_before_claim_marker_still_confirms(self):
+        # Other direction: the evidence-combine shape puts the genuine
+        # receipt FIRST and the sanitized claim after it — parts before
+        # the marker keep their confirming role and the recorded tier.
+        outcome = FakeOutcome(
+            evidence_tool="smt:check-integer-narrowing+llm-claimed:smt",
+            review_result={"hypothesis": "integer narrowing"},
+        )
+        outcome.verification_tier = "tool_backed"
+        finding = build_graded_finding(outcome)
+        assert finding["discovery"]["confirmed_by"] \
+            == ["smt:check-integer-narrowing"]
         assert finding["verification_tier"] == "tool_backed"
 
 
