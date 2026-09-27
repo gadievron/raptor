@@ -648,27 +648,29 @@ class Collector:
             )
 
     def _flush_audit_log(self) -> None:
-        """Append buffered rows via the hardened JSONL writer.
+        """Append buffered rows via the hardened, shard-rolling writer.
 
-        ``core.json.append_jsonl`` opens with O_APPEND|O_NOFOLLOW — a
-        symlink planted at the trail path in the target-writable run
-        dir is refused instead of followed (the bare ``open(..., "a")``
-        this replaces bypassed that hardening). Each written row is
-        popped immediately so a mid-batch failure retains only the
-        unwritten tail. Rows are stamped at the write boundary with
-        the audit-log integrity token (the buffered
-        ``orchestrator_review`` rows are exactly the class the resume
-        reader grants suppression authority — see
-        ``core.audit.record.stamp_audit_log_row``).
+        Each row goes through ``core.audit.record.append_audit_log``:
+        the O_APPEND|O_NOFOLLOW hardening (a symlink planted at the
+        trail path in the target-writable run dir is refused instead
+        of followed), the audit-log integrity stamp at the write
+        boundary (the buffered ``orchestrator_review`` rows are
+        exactly the class the resume reader grants suppression
+        authority), and per-row shard resolution — a large flush that
+        crosses the roll threshold moves to the next shard mid-batch
+        instead of pushing one shard past the reader's per-shard
+        budget. Written rows leave the buffer even when a mid-batch
+        append fails, so only the unwritten tail is retained for the
+        next flush (same retention contract as the pre-fix per-row
+        ``pop(0)``, without its O(n²) element shifts per flush).
         """
-        from core.json import append_jsonl
+        from .record import append_audit_log
 
-        from .record import stamp_audit_log_row
-
-        log_path = self.out_dir / ".audit-log.jsonl"
-        while self._log_entries:
-            append_jsonl(
-                log_path,
-                stamp_audit_log_row(self._log_entries[0], self.out_dir),
-                compact=True)
-            self._log_entries.pop(0)
+        written = 0
+        try:
+            while written < len(self._log_entries):
+                append_audit_log(
+                    self.out_dir, self._log_entries[written])
+                written += 1
+        finally:
+            del self._log_entries[:written]

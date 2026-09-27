@@ -220,7 +220,7 @@ from .record import (
 )
 from .record import (
     append_audit_log,
-    load_audit_log,
+    load_audit_log_disclosed,
     load_verified_audit_log,
 )
 # Fail-soft by contract: every scorecard_events entry point catches
@@ -1726,7 +1726,21 @@ def get_reviewed_set(out_dir: Path) -> set:
     binding = journal_mac.audit_log_run_binding(out_dir)
     reviewed = set()
     unverified = 0
-    for entry in load_audit_log(out_dir):
+    entries, disclosure = load_audit_log_disclosed(out_dir)
+    if not disclosure.complete:
+        # Partial trail (over-budget shard tail-read / row-cap /
+        # missing interior shard): rows beyond the loaded newest tail
+        # cannot suppress, so their functions re-enter the workqueue
+        # — over-review, the safe-but-paid direction. Loud so a
+        # resumed mega-run's operator knows why segment dedup shrank
+        # and that the audit-log rotate remedy restores it.
+        logger.warning(
+            "resume: audit log loaded incomplete (%s) — the "
+            "review-suppression set covers only the loaded rows; "
+            "functions whose review record was not loaded re-review",
+            disclosure.reason,
+        )
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
         if entry.get("action") in ("record", "orchestrator_review"):

@@ -369,6 +369,9 @@ _AUTHORITY_READERS = {
 _TELEMETRY_READERS = {
     ("core/audit/record.py", "load_verified_audit_log"):
         "the strict loader implementation itself",
+    ("core/audit/record.py", "load_audit_log"):
+        "the tolerant loader delegating to the disclosed"
+        " implementation",
     ("core/audit/binary_honesty.py", "summarize_gate_engagement"):
         "display-only per-gate engagement counters (no verdict or"
         " suppression flows from them)",
@@ -380,8 +383,13 @@ _TELEMETRY_READERS = {
 
 def _call_sites() -> dict[tuple[str, str], list[str]]:
     """{(relpath, enclosing function): [callee names]} for every
-    load_audit_log / load_verified_audit_log call in runtime code."""
-    targets = {"load_audit_log", "load_verified_audit_log"}
+    load_audit_log / load_audit_log_disclosed /
+    load_verified_audit_log call in runtime code."""
+    targets = {
+        "load_audit_log",
+        "load_audit_log_disclosed",
+        "load_verified_audit_log",
+    }
     files: list[Path] = []
     for root in _SCAN_ROOTS:
         for p in (_REPO_ROOT / root).rglob("*.py"):

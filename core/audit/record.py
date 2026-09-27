@@ -27,18 +27,67 @@ What remains here:
 from __future__ import annotations
 
 import logging
-from typing import Any, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pathlib import Path
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-#: Read budgets for the audit event log (see load_audit_log). A
-#: legitimate log is a few MB on the largest runs; the reads-manifest
-#: uses the same 64 MiB ceiling class.
+AUDIT_LOG_FILENAME = ".audit-log.jsonl"
+
+#: PER-SHARD read budgets for the audit event log (see
+#: load_audit_log). Historically these were whole-log budgets and the
+#: comment above them claimed "a legitimate log is a few MB on the
+#: largest runs" — falsified in production: a multi-segment run's
+#: trail crossed the 64 MiB budget on a mid-sized target, and
+#: the loader's refuse-whole arm silently fed [] to every consumer
+#: (resume suppression, fail-open deferral, telemetry) for the rest
+#: of the run. The writer now rolls to numbered sibling shards below
+#: this budget (see _AUDIT_LOG_SHARD_ROLL_BYTES) and the loader reads
+#: the contiguous shard set, so the budget is a per-file hostile-input
+#: bound again, not a ceiling on legitimate trail growth. Trade-off,
+#: both directions: LOWER multiplies shard count (per-shard open/scan
+#: overhead) for the same trail; HIGHER grows the single-allocation
+#: worst case a planted file can force on every loader.
 _AUDIT_LOG_MAX_BYTES = 64 * 1024 * 1024
+#: Real rows are a few hundred bytes to a few KiB (review telemetry
+#: with hypothesis text); 1 MiB keeps ~3 orders of magnitude of
+#: headroom while bounding what one hostile line can make the reader
+#: buffer.
 _AUDIT_LOG_MAX_LINE_BYTES = 1024 * 1024
+
+#: Retained-row COUNT bound per shard. The byte budget alone does not
+#: bound reader memory: parsed-object overhead is per row, so a flood
+#: of minimal rows under the byte budget could retain millions of
+#: objects. Trade-off, both directions: too low and a legitimately
+#: dense shard reads partial (disclosed, over-review direction); too
+#: high and the tiny-row flood OOMs the reader. A production
+#: multi-segment trail measured ~2 KiB/row — a full 64 MiB shard is
+#: ~34k such rows, so 500k is >10x headroom over the densest
+#: plausible legitimate shard.
+_AUDIT_LOG_MAX_ROWS_PER_SHARD = 500_000
+
+#: Roll threshold for the ACTIVE shard (same 3/4 ratio as the review
+#: journal's shards). Trade-off, both directions: LOWER means more
+#: shard files for the same trail; HIGHER pushes a full shard toward
+#: the per-shard read budget, whose overflow arm degrades that shard
+#: to a newest-tail read. 3/4 leaves a full margin for appends that
+#: race the roll decision.
+_AUDIT_LOG_SHARD_ROLL_BYTES = (_AUDIT_LOG_MAX_BYTES * 3) // 4
+
+#: Shard-count bound. Trade-off, both directions: LOWER stops rolling
+#: on a legitimate mega-run (its final shard then grows past the read
+#: budget and degrades to a disclosed newest-tail read — bounded
+#: remedy: ``raptor-audit audit-log rotate``); HIGHER scales a
+#: hostile plant fan-out and the loader's worst-case aggregate work
+#: linearly. 64 shards ≈ 3 GiB of trail — about double the largest
+#: trail projected for the biggest targets (a production
+#: multi-segment run measured ~1.4x ONE read budget on a target
+#: roughly 1/16 that size).
+_AUDIT_LOG_MAX_SHARDS = 64
+
+_AUDIT_LOG_SHARD_RE = re.compile(r"^\.audit-log\.(\d{3,})\.jsonl$")
 
 
 def _resolve_annotations_dir(out_dir: Path) -> Path:
@@ -75,6 +124,200 @@ def _resolve_annotations_dir(out_dir: Path) -> Path:
     return out_dir / "annotations"
 
 
+def _audit_log_shard_name(n: int) -> str:
+    """On-disk name of shard *n* (1-based; shard 1 is the historical
+    single file, so single-shard trails stay byte-identical)."""
+    if n == 1:
+        return AUDIT_LOG_FILENAME
+    return f".audit-log.{n:03d}.jsonl"
+
+
+def audit_log_paths(out_dir: Path) -> list[Path]:
+    """The audit log's contiguous shard set, in append order.
+
+    Mirrors ``core.coverage.journal.journal_shard_paths``: always
+    starts with ``.audit-log.jsonl`` (whether or not it exists yet)
+    and extends through consecutively numbered siblings. Contiguity-
+    by-construction: a planted high-numbered file does not extend the
+    set (the loader discloses non-contiguous leftovers separately).
+    """
+    out_dir = Path(out_dir)
+    paths = [out_dir / AUDIT_LOG_FILENAME]
+    n = 2
+    while n <= _AUDIT_LOG_MAX_SHARDS:
+        p = out_dir / _audit_log_shard_name(n)
+        try:
+            if not p.exists():
+                break
+        except OSError:
+            break
+        paths.append(p)
+        n += 1
+    return paths
+
+
+def _audit_log_orphan_names(out_dir: Path, known: int) -> list[str]:
+    """Numbered shard files BEYOND the contiguous set — evidence that
+    an interior shard was deleted (rows silently invisible), so the
+    load must disclose incompleteness rather than pretend the
+    survivors are the whole trail."""
+    names: list[str] = []
+    try:
+        candidates = sorted(p.name for p in Path(out_dir).iterdir())
+    except OSError:
+        return names
+    for name in candidates:
+        m = _AUDIT_LOG_SHARD_RE.match(name)
+        if m and int(m.group(1)) > known:
+            names.append(name)
+    return names[:8]
+
+
+def audit_log_append_path(out_dir: Path) -> Path:
+    """The shard the next append lands in: the last contiguous shard,
+    or — once it crosses the roll threshold — the next number.
+
+    Cross-process note (same contract as the journal's
+    ``_append_shard_path``): two appenders can both observe the
+    threshold crossing and both open the SAME next shard (O_CREAT
+    without O_EXCL) — they simply share it, each row staying
+    line-atomic via the writer's single O_APPEND write. A shard can
+    exceed the threshold by the appends that raced the roll; the
+    threshold's margin below the read budget absorbs that.
+    """
+    paths = audit_log_paths(out_dir)
+    last = paths[-1]
+    try:
+        size = last.stat().st_size
+    except OSError:
+        size = 0
+    if size < _AUDIT_LOG_SHARD_ROLL_BYTES:
+        return last
+    if len(paths) >= _AUDIT_LOG_MAX_SHARDS:
+        logger.warning(
+            "audit log: shard bound (%d) reached in %s — appending to "
+            "the final shard past its roll threshold; run "
+            "`raptor-audit audit-log rotate %s` after the run stops",
+            _AUDIT_LOG_MAX_SHARDS, out_dir, out_dir,
+        )
+        return last
+    return Path(out_dir) / _audit_log_shard_name(len(paths) + 1)
+
+
+@dataclass(frozen=True)
+class AuditLogDisclosure:
+    """What the loader could NOT give its caller, made visible.
+
+    ``complete`` is True only when every on-disk trail byte was
+    parsed. Consumers that suppress work based on row PRESENCE (the
+    resume workqueue filter) should warn on an incomplete load: the
+    missing rows fail toward re-review (safe, expensive), never
+    toward a wrong verdict.
+    """
+
+    complete: bool = True
+    total_bytes: int = 0
+    shards: int = 0
+    #: Shard names read as a bounded newest tail (over the per-shard
+    #: read budget — the pre-rotation legacy single-file shape).
+    tail_read_shards: tuple[str, ...] = ()
+    #: Shard names whose retained-row count bound bound the read.
+    row_capped_shards: tuple[str, ...] = ()
+    #: Numbered shard files beyond the contiguous set (interior
+    #: shard deleted, or a plant).
+    orphan_shards: tuple[str, ...] = field(default=())
+
+    @property
+    def reason(self) -> str:
+        """Human summary of why the load is incomplete ('' when
+        complete)."""
+        if self.complete:
+            return ""
+        bits: list[str] = []
+        if self.tail_read_shards:
+            bits.append(
+                "over-budget shard(s) read as bounded newest tail: "
+                + ", ".join(self.tail_read_shards))
+        if self.row_capped_shards:
+            bits.append(
+                "row-count bound hit in: "
+                + ", ".join(self.row_capped_shards))
+        if self.orphan_shards:
+            bits.append(
+                "non-contiguous shard file(s) not read: "
+                + ", ".join(self.orphan_shards))
+        return "; ".join(bits)
+
+
+def load_audit_log_disclosed(
+    out_dir: Path,
+) -> tuple[list[dict[str, Any]], AuditLogDisclosure]:
+    """Load the audit event log's contiguous shard set, disclosing
+    anything the budgets kept out.
+
+    NEVER silently returns ``[]`` for an over-budget trail: a shard
+    past the per-shard read budget (the pre-rotation legacy shape —
+    one production multi-segment trail crossed the budget and every
+    consumer read [] for the rest of the run) degrades to a bounded
+    NEWEST-tail read of that shard, loudly, with the loss recorded in
+    the returned :class:`AuditLogDisclosure`. Rows keep append order
+    across shards, so last-row-per-key consumers see the true last
+    row either way.
+    """
+    from core.json import load_jsonl
+    rows: list[dict[str, Any]] = []
+    total_bytes = 0
+    tail_read: list[str] = []
+    row_capped: list[str] = []
+    paths = audit_log_paths(out_dir)
+    shards_read = 0
+    for p in paths:
+        try:
+            size = p.stat().st_size
+        except OSError:
+            continue
+        shards_read += 1
+        total_bytes += size
+        if size > _AUDIT_LOG_MAX_BYTES:
+            tail_read.append(p.name)
+        # Per-shard budgets: the trail is sandbox-writable run-dir
+        # input that carries suppression authority — same intake rule
+        # as the journal's per-shard caps. oversize_tail: an
+        # over-budget shard degrades to its newest tail instead of
+        # [] (nothing suppresses for the unread span — over-review).
+        shard_rows = load_jsonl(
+            p,
+            max_total_bytes=_AUDIT_LOG_MAX_BYTES,
+            max_line_bytes=_AUDIT_LOG_MAX_LINE_BYTES,
+            oversize_tail=True,
+            max_records=_AUDIT_LOG_MAX_ROWS_PER_SHARD,
+        )
+        if len(shard_rows) >= _AUDIT_LOG_MAX_ROWS_PER_SHARD:
+            # At-bound is indistinguishable from over-bound from out
+            # here; flagging the exact-full shard too errs toward
+            # disclosure (over-review direction).
+            row_capped.append(p.name)
+        rows.extend(shard_rows)
+    orphans = _audit_log_orphan_names(out_dir, len(paths))
+    disclosure = AuditLogDisclosure(
+        complete=not (tail_read or row_capped or orphans),
+        total_bytes=total_bytes,
+        shards=shards_read,
+        tail_read_shards=tuple(tail_read),
+        row_capped_shards=tuple(row_capped),
+        orphan_shards=tuple(orphans),
+    )
+    if not disclosure.complete:
+        logger.warning(
+            "audit log at %s loaded INCOMPLETE (%s) — consumers see "
+            "the newest rows only; affected functions/sites re-review. "
+            "Remedy: `raptor-audit audit-log rotate %s` (run must be "
+            "stopped)",
+            out_dir, disclosure.reason, out_dir,
+        )
+    return rows, disclosure
+
+
 def load_audit_log(out_dir: Path) -> list[dict[str, Any]]:
     """Load the audit event log (one JSON record per line).
 
@@ -86,6 +329,15 @@ def load_audit_log(out_dir: Path) -> list[dict[str, Any]]:
     strategy_stats). Authoritative review VERDICTS live in
     ``review-journal.jsonl`` in the same directory (since 2026-07-28).
 
+    The trail is sharded like the review journal: the writer rolls
+    ``.audit-log.jsonl`` to numbered siblings (``.audit-log.002.jsonl``,
+    …) below the per-shard read budget, and this loader returns the
+    contiguous shard set in append order. An over-budget shard (the
+    pre-rotation legacy single-file shape) degrades to a bounded
+    newest-tail read with a loud warning — never a silent ``[]``.
+    Callers that must SEE the degradation use
+    :func:`load_audit_log_disclosed`.
+
     Row contract: rows written by this install carry the per-purpose,
     run-bound ``integrity`` stamp (see :func:`stamp_audit_log_row`)
     and are returned WITH it — consumers read fields and must
@@ -96,17 +348,8 @@ def load_audit_log(out_dir: Path) -> list[dict[str, Any]]:
     this tolerant loader serves the telemetry tier only. The consumer
     census test pins which readers sit on which side.
     """
-    log_path = out_dir / ".audit-log.jsonl"
-    from core.json import load_jsonl
-    # Byte-budgeted: the log is sandbox-writable run-dir input that
-    # now carries suppression authority — same intake rule as the
-    # journal's cap; an over-budget trail loads as [] (nothing
-    # suppresses, telemetry consumers degrade — over-review).
-    return load_jsonl(
-        log_path,
-        max_total_bytes=_AUDIT_LOG_MAX_BYTES,
-        max_line_bytes=_AUDIT_LOG_MAX_LINE_BYTES,
-    )
+    rows, _disclosure = load_audit_log_disclosed(out_dir)
+    return rows
 
 
 def load_verified_audit_log(out_dir: Path) -> list[dict[str, Any]]:
@@ -132,7 +375,21 @@ def load_verified_audit_log(out_dir: Path) -> list[dict[str, Any]]:
     binding = journal_mac.audit_log_run_binding(out_dir)
     verified: list[dict[str, Any]] = []
     dropped = 0
-    for row in load_audit_log(out_dir):
+    rows, disclosure = load_audit_log_disclosed(out_dir)
+    if not disclosure.complete:
+        # Fail-closed stays per-row (unverifiable rows drop below);
+        # incompleteness only SHRINKS the set — every absent row
+        # fails toward NOT suppressing / NOT relaxing, so a partial
+        # trail cannot grant anything. But authority consumers must
+        # hear about it: their decisions now rest on the newest tail
+        # of the trail only.
+        logger.warning(
+            "audit log: authority-bearing read at %s is operating on "
+            "an INCOMPLETE trail (%s) — absent rows grant nothing "
+            "(affected work re-reviews); rotate the trail to restore "
+            "the full record", out_dir, disclosure.reason,
+        )
+    for row in rows:
         if not isinstance(row, dict):
             dropped += 1
             continue
@@ -186,10 +443,17 @@ def append_audit_log(out_dir: Path, entry: dict[str, Any]) -> None:
     integrity token (see :func:`stamp_audit_log_row`) — the row
     lands on disk with the ``integrity`` key appended and otherwise
     byte-identical to *entry* (compact separators).
+
+    The append target is shard-resolved (:func:`audit_log_append_path`):
+    once the active shard crosses the roll threshold, appends move to
+    the next numbered sibling, keeping every shard under the reader's
+    per-shard budget. The integrity stamp is per-row and run-bound —
+    it does not bind the row to a file name — so rows verify
+    unchanged whichever shard they land in.
     """
-    log_path = out_dir / ".audit-log.jsonl"
     from core.json import append_jsonl
-    append_jsonl(log_path, stamp_audit_log_row(entry, out_dir),
+    append_jsonl(audit_log_append_path(out_dir),
+                 stamp_audit_log_row(entry, out_dir),
                  compact=True)
 
 
