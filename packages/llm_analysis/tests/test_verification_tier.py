@@ -303,9 +303,9 @@ class TestMechanicalReceipt:
         }})
         assert mechanical_receipt(f, "exploitable") == ""
 
-    def test_structural_treesitter_named_residual(self):
-        # No enumerated spelling for it today — hint tier until the
-        # registry learns one.
+    def test_structural_treesitter_mints_no_grade_until_enumerated(self):
+        # Fail-closed by construction: a method without enumerated
+        # registry spellings mints no receipt (hint tier).
         f = _finding(analysis={"dataflow_validation": {
             "verdict": "refuted", "method": "structural-treesitter",
         }})

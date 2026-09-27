@@ -194,9 +194,10 @@ def mechanical_receipt(finding: dict[str, Any], verdict: str) -> str:
     LLM-authored-premise dataflow receipt (``codeql-llm:dataflow``)
     is registry-enumerated DETECTION-role — visible provenance that
     corroborates and aggregates but never skips or convicts alone.
-    The ``structural-treesitter`` dataflow method has no enumerated
-    spelling today and deliberately returns ``""`` (named residual —
-    hint tier until the registry learns a spelling for it).
+    The ``structural-treesitter`` dataflow method mints no
+    verification grade until its spellings are enumerated in the
+    registry — fail-closed by construction, so it returns ``""``
+    (hint tier).
     """
     confirming = verdict == "exploitable"
     refuting = verdict in ("false_positive", "not_exploitable")
