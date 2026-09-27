@@ -430,6 +430,13 @@ def assemble_context(
     ctx["strategy_exemplars"] = _load_strategy_exemplars(strategies)
     ctx["strategy_primers"] = _load_strategy_primers(strategies)
     # Always inject security context + bug patterns (independent of primers)
+    # NOTE: the domain-model blocks assembled below (security context,
+    # bug patterns, dynamic primers, and the primer-conditional
+    # domain-knowledge block) are fingerprinted per function by
+    # core.concepts.audit_bridge.domain_slice_hash for the journal's
+    # verdict-reuse staleness gate. Adding, removing, or re-gating a
+    # domain-model block here must be mirrored there, or the
+    # fingerprint stops covering what the prompt actually contains.
     if out_dir:
         # Domain-model blocks are LLM-paraphrased TARGET content (study
         # reads the repo under analysis; SAGE recall is prior-run
@@ -3135,6 +3142,35 @@ def _read_source(
         f"{i + 1:4d}  {line}"
         for i, line in enumerate(lines[start:end], start=start)
     )
+
+
+def domain_slice_hash_for(
+    out_dir: Path,
+    target_path: Path,
+    file_path: str,
+    function_name: str,
+    line_start: int,
+    line_end: int | None,
+) -> str | None:
+    """Per-function domain-model slice fingerprint, prompt-faithful.
+
+    Derives the function source with the SAME reader
+    :func:`build_context` uses for ``ctx["source"]`` — the exact
+    string the bridge selectors score against — and hands it to
+    :func:`core.concepts.audit_bridge.domain_slice_hash`. This is the
+    single entry point for BOTH sides of the compare: the journal
+    writer stamps rows with it at record time, and the gap fold's
+    context-staleness gate recomputes with it at reuse time, so a
+    match means the recompute walked the same selection code over the
+    same source text.
+
+    Returns None when no domain model exists. Propagates renderer
+    errors — callers treat any exception as "no stamp" / "no match"
+    (fail toward re-review, never toward stale reuse).
+    """
+    from core.concepts.audit_bridge import domain_slice_hash
+    source = _read_source(target_path, file_path, line_start, line_end)
+    return domain_slice_hash(out_dir, file_path, function_name, source)
 
 
 def _extract_metadata(
