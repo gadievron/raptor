@@ -1363,3 +1363,173 @@ class TestDriftedModelDegradesPerEntry:
             tmp_path, "net/frame.c", "checksum_verify")
         assert block is not None
         assert "frame_layout" in block
+
+
+class TestDomainSliceHash:
+    """Per-function prompt-slice fingerprint (verdict-reuse key)."""
+
+    _SOURCE = (
+        "int check_pw(const char *pw) {\n"
+        "    return strcmp(pw, stored) == 0;\n"
+        "}\n"
+    )
+
+    @staticmethod
+    def _write(tmp_path, model: dict) -> None:
+        from core.concepts.audit_bridge import _load_cached
+        (tmp_path / "domain-model.json").write_text(
+            json.dumps(model), encoding="utf-8")
+        # The loader caches by resolved path for the process lifetime;
+        # tests that rewrite the same file must drop the cache like a
+        # fresh audit process would.
+        _load_cached.cache_clear()
+
+    def _hash(self, tmp_path) -> str | None:
+        from core.concepts.audit_bridge import domain_slice_hash
+        return domain_slice_hash(
+            tmp_path, "auth.c", "check_pw", self._SOURCE)
+
+    def test_no_model_yields_none(self, tmp_path):
+        from core.concepts.audit_bridge import domain_slice_hash
+        assert domain_slice_hash(tmp_path, "auth.c", "check_pw") is None
+
+    def test_deterministic_full_sha256(self, dm_dir):
+        from core.concepts.audit_bridge import domain_slice_hash
+        h1 = domain_slice_hash(
+            dm_dir, "crypto/algif_aead.c", "_aead_recvmsg", "sg aliasing")
+        h2 = domain_slice_hash(
+            dm_dir, "crypto/algif_aead.c", "_aead_recvmsg", "sg aliasing")
+        assert h1 is not None
+        assert h1 == h2
+        # Full digest, not the whole-model hash's 8-char prefix: the
+        # stamp is compared for byte-identity across model rewrites,
+        # so it gets the full collision margin.
+        assert len(h1) == 64
+        int(h1, 16)
+
+    def test_empty_selection_still_stamps(self, tmp_path):
+        self._write(
+            tmp_path, {"concepts": [], "invariants": [], "contracts": []})
+        h = self._hash(tmp_path)
+        # "Nothing injected for this function" is a real, comparable
+        # prompt state — only a MISSING model refuses to stamp.
+        assert h is not None
+        assert len(h) == 64
+
+    def test_irrelevant_model_growth_keeps_hash(self, tmp_path):
+        self._write(
+            tmp_path, {"concepts": [], "invariants": [], "contracts": []})
+        before = self._hash(tmp_path)
+        self._write(tmp_path, {
+            "concepts": [{
+                "id": "cred_cache_rules",
+                "description": "credential cache invalidation rules",
+                "related_strategies": ["auth"],
+            }],
+            "invariants": [],
+            "contracts": [],
+        })
+        after = self._hash(tmp_path)
+        # The new concept never selects for check_pw (relevance 0), so
+        # the function's injected slice — and its fingerprint — is
+        # unchanged even though the whole model grew.
+        assert before == after
+
+    def test_relevant_model_growth_changes_hash(self, tmp_path):
+        self._write(
+            tmp_path, {"concepts": [], "invariants": [], "contracts": []})
+        before = self._hash(tmp_path)
+        self._write(tmp_path, {
+            "concepts": [{
+                "id": "pw_compare_rules",
+                "description": "check_pw must compare in constant time",
+            }],
+            "invariants": [],
+            "contracts": [],
+        })
+        after = self._hash(tmp_path)
+        assert before != after
+
+    def test_sage_recall_excluded_from_fingerprint(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.concepts.audit_bridge as ab
+        # A concept that selects for check_pw but yields no primer
+        # (no invariants), so the fingerprint includes the
+        # domain-knowledge block — the one place SAGE recall renders.
+        self._write(tmp_path, {
+            "concepts": [{
+                "id": "pw_compare_rules",
+                "description": "check_pw must compare in constant time",
+            }],
+            "invariants": [],
+            "contracts": [],
+        })
+        calls = {"n": 0}
+
+        def _volatile_sage(out_dir, file_path, function_name, **kw):
+            calls["n"] += 1
+            return (
+                "\n### Cross-Session Knowledge (SAGE)\n"
+                f"- [90%] volatile recall #{calls['n']}"
+            )
+
+        monkeypatch.setattr(
+            ab, "_sage_recall_for_context", _volatile_sage)
+        # The prompt block DOES vary with SAGE recall...
+        block = ab.domain_model_context(
+            tmp_path, "auth.c", "check_pw", self._SOURCE)
+        assert block is not None and "volatile recall" in block
+        # ...its include_sage=False rendering does not...
+        bare = ab.domain_model_context(
+            tmp_path, "auth.c", "check_pw", self._SOURCE,
+            include_sage=False)
+        assert bare is not None and "volatile recall" not in bare
+        # ...and the fingerprint is stable call-to-call.
+        assert self._hash(tmp_path) == self._hash(tmp_path)
+
+    def test_primer_presence_mirrors_prompt_assembly(self, tmp_path):
+        # When dynamic primers render, build_context skips the
+        # domain-knowledge block — so a concept visible ONLY through
+        # that block must not move the fingerprint either.
+        contract = {
+            "function": "check_pw",
+            "file": "auth.c",
+            "when": "login",
+            "implication": "reject on mismatch",
+        }
+        self._write(tmp_path, {
+            "concepts": [],
+            "invariants": [],
+            "contracts": [contract],
+        })
+        before = self._hash(tmp_path)
+        self._write(tmp_path, {
+            "concepts": [{
+                "id": "pw_compare_rules",
+                "description": "check_pw must compare in constant time",
+            }],
+            "invariants": [],
+            "contracts": [contract],
+        })
+        after = self._hash(tmp_path)
+        assert before is not None
+        assert before == after
+
+    def test_primer_content_change_changes_hash(self, tmp_path):
+        base = {
+            "function": "check_pw",
+            "file": "auth.c",
+            "when": "login",
+            "implication": "reject on mismatch",
+        }
+        self._write(tmp_path, {
+            "concepts": [], "invariants": [], "contracts": [base],
+        })
+        before = self._hash(tmp_path)
+        changed = dict(base, implication="lock the account on mismatch")
+        self._write(tmp_path, {
+            "concepts": [], "invariants": [], "contracts": [changed],
+        })
+        after = self._hash(tmp_path)
+        assert before != after

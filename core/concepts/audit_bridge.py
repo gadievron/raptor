@@ -698,11 +698,19 @@ def domain_model_context(
     max_concepts: int = 5,
     max_invariants: int = 5,
     max_contracts: int = 3,
+    include_sage: bool = True,
 ) -> str | None:
     """Build a prompt block with relevant domain-model knowledge.
 
     Returns a formatted string ready for injection into the audit LLM
     prompt, or None if no relevant domain knowledge is available.
+
+    ``include_sage=False`` renders the block from the domain model
+    alone, skipping the SAGE cross-session recall section. Used by
+    :func:`domain_slice_hash`, which must fingerprint only the
+    deterministic domain-model-derived content — SAGE recall varies
+    with session history, so hashing it would churn the fingerprint
+    without the model changing.
     """
     model = _find_domain_model(out_dir)
     if not model:
@@ -712,7 +720,10 @@ def domain_model_context(
     invariants = _drifted_entries(model, "invariants")
     contracts = _drifted_entries(model, "contracts")
 
-    sage_block = _sage_recall_for_context(out_dir, file_path, function_name)
+    sage_block = (
+        _sage_recall_for_context(out_dir, file_path, function_name)
+        if include_sage else None
+    )
 
     if not concepts and not invariants and not contracts and not sage_block:
         return None
@@ -852,6 +863,76 @@ def domain_model_context(
         parts.append(sage_block)
 
     return "\n".join(parts)
+
+
+def domain_slice_hash(
+    out_dir: Path,
+    file_path: str,
+    function_name: str,
+    source: str = "",
+) -> str | None:
+    """Content fingerprint of the per-function domain-model prompt slice.
+
+    Hashes exactly the domain-model-derived blocks the audit context
+    assembly (``core.audit.context.build_context``) injects for this
+    function: the security-context block, the bug-pattern block, the
+    dynamic primers, and — only when no primers rendered, mirroring
+    the assembly's fallback — the domain-knowledge block. Composed by
+    calling the SAME public renderers the assembly calls, so the
+    fingerprint tracks what the prompt actually contains rather than
+    a parallel re-derivation that could drift.
+
+    Consumed by the review-journal writer (stamps each row with the
+    slice its verdict was briefed under) and by the gap fold's
+    context-staleness gate: a domain-model regeneration that leaves
+    THIS function's injected slice byte-identical must not re-buy the
+    function's verdict just because the whole-model hash moved.
+
+    Deliberate exclusions — neither is part of the whole-model
+    invalidation key today either, so excluding them adds no reuse
+    the old key would have refused:
+
+    * the SAGE cross-session recall section (``include_sage=False``):
+      session-history-dependent, not domain-model content;
+    * the token-enforcement block: projected per FILE from
+      entry-point sources (not per function), hint-tier steering
+      context, and its renderer has the side effect of materialising
+      the run's token map.
+
+    Returns None when no domain model is discoverable — the caller
+    then persists no stamp and the whole-model behaviour applies.
+    A model that selects NOTHING for this function still hashes:
+    "no block injected" is a comparable prompt state. Raises on
+    renderer failure — callers treat any exception as "no stamp" /
+    "no match" (fail toward re-review).
+    """
+    if _find_domain_model(out_dir) is None:
+        return None
+
+    primers = primers_from_domain_model(
+        out_dir, file_path, function_name, source,
+    )
+    slice_parts: dict[str, Any] = {
+        "security": domain_security_context(out_dir) or "",
+        "bug_patterns": domain_bug_patterns(
+            out_dir, file_path, function_name, source,
+        ) or "",
+        # Order-sensitive on purpose: primer order is prompt content.
+        "primers": list(primers),
+    }
+    if not primers:
+        # Mirror build_context: the domain-knowledge block is only
+        # injected when no dynamic primers rendered.
+        slice_parts["model_context"] = domain_model_context(
+            out_dir, file_path, function_name, source,
+            include_sage=False,
+        ) or ""
+
+    import hashlib
+
+    from core.json.utils import dumps_canonical
+    canonical = dumps_canonical(slice_parts)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _sage_recall_for_context(
