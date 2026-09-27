@@ -117,9 +117,11 @@ RUN mkdir -p /opt/codeql \
 # PYTHON DEPENDENCIES
 # ============================================================================
 
-COPY requirements.txt requirements-dev.txt /tmp/
+COPY pyproject.toml uv.lock /tmp/
 
-RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt
+SHELL ["/bin/bash", "-eo", "pipefail", "-c"]
+RUN uv export --locked --no-hashes --project /tmp \
+    | uv pip install --system --no-cache -r -
 
 # Install Playwright browser + system deps via Playwright's own dep installer.
 # Replaces a hand-rolled apt list that drifted out of sync with upstream Chromium deps.
