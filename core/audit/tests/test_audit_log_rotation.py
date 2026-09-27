@@ -21,6 +21,7 @@ anything the budgets kept out. These tests pin:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -283,6 +284,45 @@ class TestLoaderHonesty:
         assert [r["seq"] for r in rows] == [0]
         assert not disclosure.complete
         assert disclosure.missing_shards == (".audit-log.002.jsonl",)
+
+
+class TestWriterLineCapParity:
+    def test_over_budget_row_warns_and_still_lands(
+        self, tmp_path: Path, monkeypatch, caplog,
+    ):
+        # The reader skips a line over the per-line budget as
+        # malformed — so an over-budget row is invisible to every
+        # consumer from the moment it is written. The writer must
+        # flag that at creation time (the call site is identifiable
+        # there) while still appending: the trail is append-only and
+        # silently dropping audit data would be worse.
+        monkeypatch.setattr(record, "_AUDIT_LOG_MAX_LINE_BYTES", 256)
+        big = {"action": "orchestrator_review", "key": "a.c:f0:1",
+               "hypothesis": "x" * 512}
+        with caplog.at_level(logging.WARNING, logger="core.audit.record"):
+            record.append_audit_log(tmp_path, big)
+        assert any(
+            "per-line budget" in r.message for r in caplog.records)
+        # The bytes are on disk...
+        log = tmp_path / record.AUDIT_LOG_FILENAME
+        assert log.stat().st_size > 512
+        # ...but every reader skips the over-budget line.
+        rows, _ = record.load_audit_log_disclosed(tmp_path)
+        assert rows == []
+
+    def test_under_budget_row_appends_silently(
+        self, tmp_path: Path, monkeypatch, caplog,
+    ):
+        # The other direction: an ordinary row must not trip the
+        # parity warning.
+        monkeypatch.setattr(record, "_AUDIT_LOG_MAX_LINE_BYTES", 256)
+        with caplog.at_level(logging.WARNING, logger="core.audit.record"):
+            record.append_audit_log(tmp_path, _row(0))
+        assert not any(
+            "per-line budget" in r.message for r in caplog.records)
+        rows, disclosure = record.load_audit_log_disclosed(tmp_path)
+        assert [r["seq"] for r in rows] == [0]
+        assert disclosure.complete
 
 
 class TestMacAcrossRotation:

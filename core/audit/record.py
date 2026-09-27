@@ -509,9 +509,29 @@ def append_audit_log(out_dir: Path, entry: dict[str, Any]) -> None:
     it does not bind the row to a file name — so rows verify
     unchanged whichever shard they land in.
     """
+    import json
+
     from core.json import append_jsonl
-    append_jsonl(audit_log_append_path(out_dir),
-                 stamp_audit_log_row(entry, out_dir),
+    stamped = stamp_audit_log_row(entry, out_dir)
+    # Write/read parity for the per-line budget: the reader skips a
+    # line over _AUDIT_LOG_MAX_LINE_BYTES as malformed, so a row that
+    # big is invisible to every consumer from the moment it lands.
+    # The trail is append-only — the row is still written (silently
+    # dropping audit data would be worse) — but the writer flags it
+    # at creation time, where the offending call site is
+    # identifiable, instead of leaving the loss to surface as a
+    # reader-side skip long after.
+    line_bytes = len(json.dumps(
+        stamped, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")) + 1
+    if line_bytes > _AUDIT_LOG_MAX_LINE_BYTES:
+        logger.warning(
+            "audit log append at %s: row is %d bytes — over the "
+            "reader's per-line budget (%d bytes), so every reader "
+            "will skip it. Trim the row's payload at the call site.",
+            out_dir, line_bytes, _AUDIT_LOG_MAX_LINE_BYTES,
+        )
+    append_jsonl(audit_log_append_path(out_dir), stamped,
                  compact=True)
 
 
