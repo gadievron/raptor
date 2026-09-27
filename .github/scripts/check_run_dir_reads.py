@@ -42,6 +42,27 @@ Usage:
 Exit codes: 0 clean (stale-only is clean), 1 new findings, 2 usage
 error. Precision over recall: only artifact-shaped literals join the
 census, and only read-mode primitives fire.
+
+Known blind spots (verified evasions — kept, by design, for
+precision): the detector is a RATCHET against accidental raw reads
+drifting into the tree, not a defense against adversarial in-repo
+code. A contributor deliberately hiding a read defeats it, e.g.:
+
+- ``os.open()`` + ``os.read()``: fd-level primitives are not in the
+  raw-read primitive set (they are also what the HARDENED readers are
+  built from, so matching them would flag the hardening itself).
+- ``getattr(p, "read_text")()``: dynamic attribute dispatch never
+  produces the ``ast.Attribute`` node the classifier matches.
+- Two-hop aliasing: ``a = run_dir / "x.json"; b = a; open(b)`` — the
+  local name map is deliberately ONE-hop (assignment from an
+  expression that carries the literal); each extra hop trades
+  precision for recall and one hop covers the accidental pattern.
+- String concatenation: ``open(d + "/findings" + ".json")`` — only
+  whole string literals (incl. f-string/os.path.join/Path operands)
+  are matched against the artifact shape, not folded concatenations.
+
+Adversarial-code review is the job of the human/LLM review layers;
+this gate keeps the honest paths honest.
 """
 
 from __future__ import annotations
