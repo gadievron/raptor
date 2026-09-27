@@ -60,7 +60,7 @@ jobs:
           uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
           uv pip install -r requirements-dev.txt
-          uv pip install semgrep==1.172.0
+          uv tool install semgrep==1.177.0
 
       - name: Install external tools (radare2 + gcc)
         continue-on-error: true

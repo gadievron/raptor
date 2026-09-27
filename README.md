@@ -74,7 +74,10 @@ git clone https://github.com/gadievron/raptor.git
 cd raptor
 
 # Install Python dependencies
-pip install -r requirements.txt
+uv sync --locked
+
+# Compatibility path during the uv migration
+# pip install -r requirements.txt
 
 # Install Claude Code (if you don't already have it)
 npm install -g @anthropic-ai/claude-code
@@ -620,3 +623,24 @@ MIT -- Copyright (c) 2025-2026 Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halv
 See LICENSE for the full text. Review the licences for all dependencies before commercial use -- CodeQL in particular does not permit it.
 
 **Issues:** https://github.com/gadievron/raptor/issues
+
+
+---
+
+## Python Dependencies
+
+RAPTOR uses `pyproject.toml` and `uv.lock` as the source of truth for
+Python dependencies. The checked-in `requirements.txt` files remain as
+compatibility exports for one transition window.
+
+Useful installs:
+
+```bash
+uv sync --locked                            # core runtime
+uv sync --locked --group dev                # tests + linting
+uv sync --locked --extra web                # /web scanner support
+uv sync --locked --extra "web smt llm sage" # optional stacks
+```
+
+Keeping `/web`, Z3, SAGE and cloud provider SDKs as optional extras avoids
+making the default RAPTOR install heavier and more brittle than it needs to be.
