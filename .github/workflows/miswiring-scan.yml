@@ -254,3 +254,29 @@ jobs:
         # notice arm must never be reachable here.
         run: |
           python3 .github/scripts/check_tracked_file_census.py --require-git
+
+  # Run-dir read census: parent-side readers of run artifacts
+  # (*.json / *.jsonl / *.sarif written under a run's output
+  # directory, where sandboxed children hold the write grant) must
+  # use the bounded core.json / core.source readers. A NEW raw read
+  # fails the job; deliberate exceptions carry an inline
+  # ``# raw-open: <why>`` marker or a key in
+  # .github/scripts/run_dir_reads_baseline.json with a note. Same
+  # baseline semantics as the miswiring job.
+  run-dir-reads:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run run-dir read census against baseline
+        run: |
+          python3 .github/scripts/check_run_dir_reads.py

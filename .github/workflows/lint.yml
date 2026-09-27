@@ -312,3 +312,6 @@ jobs:
         # --require-git: CI runs post-checkout, so the exported-tree
         # notice arm must never be reachable here.
         run: python3 .github/scripts/check_tracked_file_census.py --require-git
+
+      - name: Run run-dir read census against baseline
+        run: python3 .github/scripts/check_run_dir_reads.py
