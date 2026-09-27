@@ -737,33 +737,46 @@ class TestProducerStampClosure:
                 yield node, node.body
 
     @staticmethod
-    def _local_bindings(scope_node):
+    def _scope_local_nodes(scope_node):
+        """Walk scope_node's subtree WITHOUT descending into nested
+        scopes (functions, classes, lambdas): a class-body field
+        default like ``evidence_tool: str = ""`` is a binding in the
+        CLASS namespace, not the module's — letting it leak into the
+        module pass resolves unrelated function-local Names against
+        it and fabricates violations."""
+        import ast as _ast
+
+        _NESTED = (
+            _ast.FunctionDef, _ast.AsyncFunctionDef,
+            _ast.ClassDef, _ast.Lambda,
+        )
+        stack = list(_ast.iter_child_nodes(scope_node))
+        while stack:
+            node = stack.pop()
+            yield node
+            if not isinstance(node, _NESTED):
+                stack.extend(_ast.iter_child_nodes(node))
+
+    @classmethod
+    def _local_bindings(cls, scope_node):
         """name -> set of str constants assigned in this scope, plus
         the list of paired tuple-assign bindings ({name: const|None}).
 
-        Class bodies inside the scope are pruned: a class-level
-        assignment is a field/attribute default (e.g. a dataclass's
-        ``evidence_tool: str = ""``), not a binding of the like-named
-        LOCAL at a producer call site — resolving it minted a phantom
-        empty stamp for a call whose actual argument is a
-        runtime-computed local. Nothing real is lost to the prune: a
-        class attribute used at a call site is an ``Attribute`` node
-        (never a bare ``Name``), and methods still get their own
-        scope pass via ``_scopes``.
+        Nested scopes are pruned via ``_scope_local_nodes``: a
+        class-level assignment is a field/attribute default (e.g. a
+        dataclass's ``evidence_tool: str = ""``), not a binding of
+        the like-named LOCAL at a producer call site — resolving it
+        minted a phantom empty stamp for a call whose actual argument
+        is a runtime-computed local. Nothing real is lost to the
+        prune: a class attribute used at a call site is an
+        ``Attribute`` node (never a bare ``Name``), and nested
+        functions still get their own scope pass via ``_scopes``.
         """
         import ast as _ast
 
-        in_class: set = set()
-        for cls in _ast.walk(scope_node):
-            if isinstance(cls, _ast.ClassDef) and cls is not scope_node:
-                for inner in _ast.walk(cls):
-                    if inner is not cls:
-                        in_class.add(id(inner))
         consts: dict = {}
         pairs: list = []
-        for node in _ast.walk(scope_node):
-            if id(node) in in_class:
-                continue
+        for node in cls._scope_local_nodes(scope_node):
             if isinstance(node, _ast.Assign):
                 for target in node.targets:
                     if (
@@ -917,6 +930,42 @@ class TestProducerStampClosure:
             f"firewall rejects (CRITICAL-alarm + export demotion): "
             f"{violations}"
         )
+
+    def test_class_field_default_does_not_bind_at_module_scope(self):
+        """Regression: the module pass once collected bindings with a
+        full-subtree walk, so a dataclass field default (class-body
+        ``evidence_tool: str = ""``) bound as a module constant and
+        resolved an unrelated function-local ``evidence_tool`` Name to
+        "" — fabricating a receipt-less stamp at a producer whose
+        runtime value is a joined tool list."""
+        import ast as _ast
+        import textwrap
+
+        tree = _ast.parse(textwrap.dedent('''
+            MOD_TOOL = "joern"
+
+            class Outcome:
+                evidence_tool: str = ""
+                other = "llm"
+
+            def producer(entry):
+                evidence_tool = "+".join(entry.tools)
+                emit(status="finding", evidence_tool=evidence_tool)
+
+            def local_producer():
+                local_tool = "semgrep"
+                emit(status="finding", evidence_tool=local_tool)
+        '''))
+        consts, _pairs = self._local_bindings(tree)
+        assert consts.get("MOD_TOOL") == {"joern"}
+        assert "evidence_tool" not in consts
+        assert "other" not in consts
+        funcs = {
+            n.name: n for n in _ast.walk(tree)
+            if isinstance(n, _ast.FunctionDef)
+        }
+        fconsts, _ = self._local_bindings(funcs["local_producer"])
+        assert fconsts.get("local_tool") == {"semgrep"}
 
     def test_attribute_stamp_writers_pass_the_firewall(self):
         """Promotion paths that stamp via ``outcome.evidence_tool = X``
