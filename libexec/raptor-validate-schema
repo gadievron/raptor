@@ -3,7 +3,7 @@
 # (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Validate a RAPTOR JSON output file against its schema.
 
-Usage: raptor-validate-schema <type> <file>
+Usage: raptor-validate-schema [--lint] <type> <file>
 
 Types:
   findings        findings.json
@@ -17,6 +17,7 @@ Types:
   flow-trace      flow-trace-*.json (/understand --trace)
   variants        variants.json (/understand --hunt)
   bug-report      bug-report.json (/crash-analysis fetch stage)
+  part-a..part-f  one stage part from stage-<x>-parts/ (--lint only)
 
 Exit code 0 on success, 1 on validation errors, 3 on usage errors
 (unknown type, missing or unparseable file). 2 is reserved for the
@@ -24,6 +25,21 @@ trust-marker refusal below (cc-trust-check convention).
 
 On success, records file hash in <dir>/.validated so the prep script
 can skip re-validation if the file hasn't changed.
+
+Lint mode (``--lint``):
+  Dry-run with the promoter's exact checks and ZERO side effects — no
+  ``.validated`` record, no ``provenance.schema_validated`` flip, no
+  vuln_type-normalisation writeback, no cache short-circuit. Both
+  modes call the same implementation
+  (packages.exploitability_validation.lint), so lint and promote
+  cannot disagree about schema validity. Same exit codes as above.
+
+  Fragment lint: pass a ``part-<x>`` type (or point --lint at a file
+  inside a ``stage-<x>-parts/`` directory — auto-detected) to lint
+  ONE delegated agent's part before hand-back. Fragment mode checks
+  element shapes and enums for the slice the part carries;
+  set-completeness and cross-part referential integrity are checked
+  at assembly (``raptor-validation-helper parts``), not here.
 
 Provenance policy (docs/security.md invariant I2-(b)):
   These artifacts carry LLM-derived content, so writers stamp them with
@@ -73,34 +89,25 @@ if not (os.environ.get("CLAUDECODE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
-from core.artifacts.provenance import (  # noqa: E402
-    ARTIFACT_TEXT_SCHEMAS,
-    STATUS_INVALID,
-    STATUS_LEGACY,
-    check_free_text_idempotent,
-    check_provenance,
-    mark_schema_validated,
-)
+from core.artifacts.provenance import mark_schema_validated  # noqa: E402
 from core.json import load_json, save_json  # noqa: E402
+from packages.exploitability_validation import lint as _lint  # noqa: E402
 
-VALIDATORS = {
-    "findings": "validate_findings",
-    "checklist": "validate_checklist",
-    "attack-tree": "validate_attack_tree",
-    "attack-paths": "validate_attack_paths",
-    "attack-surface": "validate_attack_surface",
-    "hypotheses": "validate_hypotheses",
-    "disproven": "validate_disproven",
-    "stage": None,       # handled separately
-    "context-map": None,  # lightweight structural validation below
-    "flow-trace": None,
-    "variants": None,
-    "bug-report": None,
-}
+# The check implementation lives in packages.exploitability_validation.lint
+# so the --lint dry-run, this promote path, and in-process callers all
+# consume the SAME schema objects and check functions — a re-declared
+# copy here would be able to disagree with what --lint reported.
+# Existing callers import these names from this module; keep them bound.
+VALIDATORS = _lint.VALIDATORS
+_LIST_TYPES = _lint.LIST_TYPES
+_validate_stage_file = _lint.validate_stage_file
+_require_list_fields = _lint.require_list_fields
+_validate_lightweight = _lint.validate_lightweight
+_free_text_schema = _lint.free_text_schema
+_provenance_checks = _lint.provenance_checks
 
-# Artifact types whose canonical on-disk form is a top-level JSON
-# array (stamped per element).
-_LIST_TYPES = {"attack-paths", "hypotheses"}
+# --lint fragment types: one delegated agent's part of a sharded stage.
+_PART_TYPES = {f"part-{s.lower()}": s for s in _lint.PART_STAGES}
 
 # Filename → type auto-detection (mirrors the stage-file detection).
 _FILENAME_TYPES = {
@@ -158,156 +165,6 @@ def _write_validated(directory, filename, filehash, schema_type=None):
         write_text_atomically(vfile, "\n".join(lines) + "\n")
 
 
-def _validate_stage_file(data, filename):
-    """Validate a stage-X.json file. Returns list of errors (empty = valid)."""
-    errors = []
-
-    if not isinstance(data, dict):
-        return ["stage file must be a JSON object"]
-
-    stage = data.get("stage", "")
-    if not isinstance(stage, str):
-        stage = ""
-    if not stage:
-        errors.append("missing 'stage' field")
-
-    # Stage A: build format — has "findings" array
-    if stage.upper() == "A":
-        if "findings" not in data:
-            errors.append("stage-a.json must have 'findings' array")
-        elif not isinstance(data["findings"], list):
-            errors.append("'findings' must be an array")
-        else:
-            for i, f in enumerate(data["findings"]):
-                if not isinstance(f, dict):
-                    errors.append(f"findings[{i}]: must be an object")
-                elif not f.get("id"):
-                    errors.append(f"findings[{i}]: missing 'id'")
-                elif not f.get("vuln_type"):
-                    errors.append(f"findings[{i}]: missing 'vuln_type'")
-    else:
-        # Stages B-F: update format — has "updates" map
-        if "updates" not in data:
-            errors.append(f"{filename} must have 'updates' map")
-        elif not isinstance(data["updates"], dict):
-            errors.append("'updates' must be an object (finding ID -> fields)")
-        else:
-            for fid, update in data["updates"].items():
-                if not isinstance(update, dict):
-                    errors.append(f"updates.{fid}: must be an object")
-
-    return errors
-
-
-def _require_list_fields(data, fields):
-    """Structural minimum: named fields, when present, must be arrays."""
-    if not isinstance(data, dict):
-        return ["artifact must be a JSON object"]
-    return [
-        f"'{field}' must be an array"
-        for field in fields
-        if field in data and not isinstance(data[field], list)
-    ]
-
-
-def _validate_lightweight(schema_type, data):
-    """Structural validation for /understand artifact types."""
-    if schema_type == "context-map":
-        return _require_list_fields(data, (
-            "sources", "sinks", "trust_boundaries", "entry_points",
-            "sink_details", "boundary_details", "unchecked_flows",
-        ))
-    if schema_type == "flow-trace":
-        return _require_list_fields(data, ("steps", "branches"))
-    if schema_type == "variants":
-        return _require_list_fields(
-            data, ("variants", "root_cause_groups", "recommended_traces"))
-    if schema_type == "bug-report":
-        errors = _require_list_fields(data, (
-            "reproduction_steps", "attachments", "affected_versions",
-        ))
-        if errors and not isinstance(data, dict):
-            return errors
-        source_url = data.get("source_url")
-        if not isinstance(source_url, str) or not source_url.strip():
-            errors.append("'source_url' is required (non-empty string)")
-        for i, item in enumerate(data.get("attachments") or []):
-            if not isinstance(item, dict):
-                errors.append(f"attachments[{i}]: must be an object")
-            elif not isinstance(item.get("url"), str) or not item["url"]:
-                errors.append(f"attachments[{i}].url: required non-empty "
-                              "string")
-        return errors
-    return [f"unknown lightweight type: {schema_type}"]
-
-
-def _free_text_schema(schema_type, data):
-    """Resolve the free-text-marked schema for an artifact type."""
-    if schema_type in ARTIFACT_TEXT_SCHEMAS:
-        return ARTIFACT_TEXT_SCHEMAS[schema_type]
-
-    from packages.exploitability_validation import schemas
-
-    if schema_type == "stage":
-        # stage-a: full findings array; stages B-F: per-finding update
-        # dicts — both walk with the finding schema.
-        if isinstance(data, dict) and isinstance(data.get("updates"), dict):
-            return {"properties": {"updates": {"properties": {
-                fid: schemas.FINDING_SCHEMA
-                for fid in data["updates"]
-            }}}}
-        return {"properties": {"findings": {"items": schemas.FINDING_SCHEMA}}}
-
-    by_type = {
-        "findings": schemas.FINDINGS_SCHEMA,
-        "checklist": schemas.CHECKLIST_SCHEMA,
-        "attack-tree": schemas.ATTACK_TREE_SCHEMA,
-        "attack-surface": schemas.ATTACK_SURFACE_SCHEMA,
-        "disproven": schemas.DISPROVEN_SCHEMA,
-        "attack-paths": {"items": schemas.ATTACK_PATH_SCHEMA},
-        "hypotheses": {"items": schemas.HYPOTHESIS_SCHEMA},
-    }
-    return by_type.get(schema_type, {})
-
-
-def _provenance_checks(schema_type, data):
-    """Run provenance + free-text idempotence checks.
-
-    Returns (errors, warnings, provenance_ok):
-      * errors non-empty  -> caller must fail validation
-      * provenance_ok     -> stamp well-formed; safe to flip
-                             schema_validated on success
-    """
-    errors = []
-    warnings = []
-
-    status, msgs = check_provenance(data)
-    if status == STATUS_INVALID:
-        errors.extend(msgs)
-    elif status == STATUS_LEGACY:
-        warnings.append(
-            "legacy artifact (no provenance stamp) — written by an older "
-            "RAPTOR version; treating content as untrusted and validating "
-            "the rest"
-        )
-    else:
-        warnings.extend(msgs)
-
-    offenders = check_free_text_idempotent(
-        data, _free_text_schema(schema_type, data))
-    if offenders:
-        detail = [
-            f"free-text field not sanitised (sanitiser not idempotent): {p}"
-            for p in offenders
-        ]
-        if status == STATUS_LEGACY:
-            warnings.extend(detail)
-        else:
-            errors.extend(detail)
-
-    return errors, warnings, status not in (STATUS_INVALID, STATUS_LEGACY)
-
-
 def is_already_validated(filepath, schema_type=None):
     """Check if file was already validated and hasn't changed.
 
@@ -355,24 +212,87 @@ def is_already_validated(filepath, schema_type=None):
     return recorded == current
 
 
-def main():
-    if len(sys.argv) < 3 or sys.argv[1] not in VALIDATORS:
-        print(f"Usage: {sys.argv[0]} <type> <file>", file=sys.stderr)
-        print(f"Types: {', '.join(sorted(VALIDATORS.keys()))}", file=sys.stderr)
+def _detect_type(filepath):
+    """Filename → type auto-detection (stage files + well-known names)."""
+    if filepath.name.startswith("stage-") and filepath.name.endswith(".json"):
+        return "stage"
+    if filepath.name.startswith("flow-trace-") and filepath.name.endswith(".json"):
+        return "flow-trace"
+    return _FILENAME_TYPES.get(filepath.name)
+
+
+def _detect_part_stage(filepath):
+    """Return the stage letter when the file sits in stage-<x>-parts/."""
+    import re
+    m = re.fullmatch(r"stage-([a-f])-parts", filepath.parent.name)
+    return m.group(1).upper() if m else None
+
+
+def _run_lint(schema_type, filepath):
+    """--lint mode: promoter checks, zero side effects, no cache."""
+    data = load_json(filepath)
+    if data is None:
+        print(f"✗ cannot parse JSON: {filepath}", file=sys.stderr)
         sys.exit(3)
 
-    schema_type = sys.argv[1]
-    filepath = Path(sys.argv[2])
+    part_stage = _PART_TYPES.get(schema_type)
+    if part_stage is None:
+        detected_stage = _detect_part_stage(filepath)
+        if detected_stage:
+            print(f"NOTE: file is in a stage-{detected_stage.lower()}-parts/ "
+                  f"directory — linting as a stage {detected_stage} part",
+                  file=sys.stderr)
+            part_stage = detected_stage
+
+    if part_stage:
+        result = _lint.lint_fragment(part_stage, data)
+    else:
+        detected = _detect_type(filepath)
+        if detected and detected != schema_type:
+            print(f"NOTE: auto-detected {detected} file — using '{detected}' "
+                  f"validator instead of '{schema_type}'", file=sys.stderr)
+            schema_type = detected
+        result = _lint.lint_artifact(schema_type, data, filepath.name)
+
+    for w in result.warnings:
+        print(f"WARNING: {filepath.name}: {_sft(str(w), max_len=300)}",
+              file=sys.stderr)
+    if result.errors:
+        print(f"ERRORS in {filepath.name}:", file=sys.stderr)
+        for e in result.errors:
+            print(f"  {_sft(str(e), max_len=300)}", file=sys.stderr)
+        sys.exit(1)
+    print(f"LINT OK: {filepath.name} (dry-run; nothing recorded)")
+
+
+def main():
+    args = sys.argv[1:]
+    lint_mode = "--lint" in args
+    args = [a for a in args if a != "--lint"]
+
+    known_type = args and (
+        args[0] in VALIDATORS or (lint_mode and args[0] in _PART_TYPES)
+    )
+    if len(args) < 2 or not known_type:
+        print(f"Usage: {sys.argv[0]} [--lint] <type> <file>", file=sys.stderr)
+        print(f"Types: {', '.join(sorted(VALIDATORS.keys()))}", file=sys.stderr)
+        print(f"Lint-only types: {', '.join(sorted(_PART_TYPES))} "
+              "(one stage part)", file=sys.stderr)
+        sys.exit(3)
+
+    schema_type = args[0]
+    filepath = Path(args[1])
+
+    if lint_mode:
+        if not filepath.exists():
+            print(f"✗ file not found: {filepath}", file=sys.stderr)
+            sys.exit(3)
+        _run_lint(schema_type, filepath)
+        return
 
     # Auto-detect well-known filenames regardless of what type was
     # requested (mirrors the long-standing stage-file detection).
-    detected = None
-    if filepath.name.startswith("stage-") and filepath.name.endswith(".json"):
-        detected = "stage"
-    elif filepath.name.startswith("flow-trace-") and filepath.name.endswith(".json"):
-        detected = "flow-trace"
-    else:
-        detected = _FILENAME_TYPES.get(filepath.name)
+    detected = _detect_type(filepath)
     if detected and detected != schema_type:
         print(f"NOTE: auto-detected {detected} file — using '{detected}' "
               f"validator instead of '{schema_type}'", file=sys.stderr)
@@ -391,48 +311,28 @@ def main():
         print(f"✗ cannot parse JSON: {filepath}", file=sys.stderr)
         sys.exit(3)
 
-    # Normalise vuln_types before validating findings
-    if schema_type == "findings" and isinstance(data, dict):
-        from core.schema_constants import normalise_vuln_type
-        changed = False
-        for f in data.get("findings", []):
-            if not isinstance(f, dict):
-                continue
-            vt = f.get("vuln_type", "")
-            norm = normalise_vuln_type(vt)
-            if norm != vt:
-                f["vuln_type"] = norm
-                changed = True
-        if changed:
-            save_json(filepath, data)
+    # Normalise vuln_types before validating findings (persisted — the
+    # lint applies the same normalisation to a copy, so the two
+    # surfaces judge identical content).
+    if schema_type == "findings" and _lint.normalise_findings_vuln_types(data):
+        save_json(filepath, data)
 
-    # Schema / structural validation
-    if schema_type == "stage":
-        errors = _validate_stage_file(data, filepath.name)
-    elif schema_type in ARTIFACT_TEXT_SCHEMAS:
-        errors = _validate_lightweight(schema_type, data)
-    else:
-        from packages.exploitability_validation import schemas
-        validator = getattr(schemas, VALIDATORS[schema_type])
-        _, errors = validator(data)
-
-    # Provenance stamp + free-text sanitiser-idempotence gate
-    prov_errors, prov_warnings, provenance_ok = _provenance_checks(
-        schema_type, data)
-    errors = list(errors) + prov_errors
-    for w in prov_warnings:
+    # Same checks as --lint, same implementation: schema/structural
+    # validation + provenance stamp + free-text idempotence gate.
+    result = _lint.lint_artifact(schema_type, data, filepath.name)
+    for w in result.warnings:
         print(f"WARNING: {filepath.name}: {_sft(str(w), max_len=300)}", file=sys.stderr)
 
-    if errors:
+    if result.errors:
         print(f"ERRORS in {filepath.name}:", file=sys.stderr)
-        for e in errors:
+        for e in result.errors:
             print(f"  {_sft(str(e), max_len=300)}", file=sys.stderr)
         sys.exit(1)
 
     # Record the successful schema validation in the stamp itself so
     # consumers can distinguish gated artifacts from raw ones. Preserve
     # the on-disk mode (some artifacts are written 0o600).
-    if provenance_ok and mark_schema_validated(data):
+    if result.provenance_ok and mark_schema_validated(data):
         save_json(filepath, data, mode=filepath.stat().st_mode & 0o777)
 
     _write_validated(
