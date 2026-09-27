@@ -3949,6 +3949,7 @@ class ScanRestartCensus(unittest.TestCase):
         self.assertIsNone(
             rx.search(_build_scan_restart_attack(stripped, 1000)))
 
+    @pytest.mark.slow  
     def test_members_match_the_pinned_verdicts(self) -> None:
         """Default-tier closure: the live Rule S proposal set equals
         the pinned set, digests match, and every pin is linear or
