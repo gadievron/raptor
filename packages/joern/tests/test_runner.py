@@ -535,13 +535,48 @@ class TestCleanupCpg:
         cleanup_cpg(cpg)
         assert (victim / "precious.txt").exists()
 
+    def test_removes_stray_query_scratch_dirs(self, tmp_path: Path):
+        """A hard-killed query never reaches run_query's own rmtree —
+        its raptor-query-* scratch (wrapper + workspace copy) must not
+        pin the CPG dir alive forever."""
+        cpg_dir = tmp_path / "cpg_dir"
+        stray = cpg_dir / "raptor-query-abc123"
+        (stray / "workspace").mkdir(parents=True)
+        (stray / "workspace" / "cpg.bin").write_bytes(b"copy")
+        (stray / "query.sc").write_text("cpg.method.l")
+        f = cpg_dir / "cpg.bin"
+        f.write_bytes(b"data")
+        cpg = JoernCPG(path=f, target=tmp_path)
+
+        cleanup_cpg(cpg)
+        assert not stray.exists()
+        assert not cpg_dir.exists()
+
+    def test_stray_query_dir_symlink_not_followed(self, tmp_path: Path):
+        """Same symlink guard as workspace/: a link squatting at a
+        raptor-query-* name is never traversed."""
+        victim = tmp_path / "victim"
+        victim.mkdir()
+        (victim / "precious.txt").write_text("keep")
+        cpg_dir = tmp_path / "cpg_dir"
+        cpg_dir.mkdir()
+        (cpg_dir / "raptor-query-evil").symlink_to(victim)
+        f = cpg_dir / "cpg.bin"
+        f.write_bytes(b"data")
+        cpg = JoernCPG(path=f, target=tmp_path)
+
+        cleanup_cpg(cpg)
+        assert (victim / "precious.txt").exists()
+
 
 class TestRunQueryScratchCwd:
-    def test_fallback_runner_gets_cpg_dir_cwd(self, tmp_path: Path):
+    def test_fallback_runner_gets_per_query_cwd(self, tmp_path: Path):
         """The TypeError fallback (runner without sandbox kwargs) must
-        still pin cwd to the CPG dir — importCpg drops a workspace/
-        copy under the process cwd, which pre-fix was whatever
-        directory the CALLER ran from."""
+        still pin cwd to a per-query scratch dir INSIDE the CPG dir —
+        importCpg drops a workspace/ copy under the process cwd, which
+        pre-fix-one was whatever directory the CALLER ran from, and
+        pre-fix-two was the CPG dir itself, shared with every
+        concurrent query against the same cache slot."""
         f = tmp_path / "cpg.bin"
         f.write_bytes(b"fake")
         cpg = JoernCPG(path=f, target=tmp_path)
@@ -549,14 +584,63 @@ class TestRunQueryScratchCwd:
         seen: dict = {}
 
         def bare_runner(cmd, capture_output, text, timeout, cwd):
-            seen["cwd"] = cwd
+            seen["cwd"] = Path(cwd)
             return SimpleNamespace(stdout="", stderr="", returncode=0)
 
         result = run_query(
             cpg, "cpg.method.l", subprocess_runner=bare_runner,
         )
         assert result.ok
-        assert seen["cwd"] == str(tmp_path)
+        assert seen["cwd"].parent == tmp_path
+        assert seen["cwd"].name.startswith("raptor-query-")
+
+    def test_concurrent_queries_get_distinct_cwds(self, tmp_path: Path):
+        """The collision the scratch dir exists to prevent: two
+        queries against the SAME CPG must never share a cwd, or their
+        importCpg workspace/ copies race."""
+        f = tmp_path / "cpg.bin"
+        f.write_bytes(b"fake")
+        cpg = JoernCPG(path=f, target=tmp_path)
+
+        cwds: list[Path] = []
+
+        def bare_runner(cmd, capture_output, text, timeout, cwd):
+            cwds.append(Path(cwd))
+            # The scratch cwd must exist while the query runs.
+            assert Path(cwd).is_dir()
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+        run_query(cpg, "cpg.method.l", subprocess_runner=bare_runner)
+        run_query(cpg, "cpg.method.l", subprocess_runner=bare_runner)
+        assert len(cwds) == 2
+        assert cwds[0] != cwds[1]
+
+    def test_query_scratch_removed_after_run(self, tmp_path: Path):
+        """The per-query dir (cwd + wrapper script + workspace copy)
+        is reclaimed after every query — success and JVM-error alike —
+        so a long-lived cache slot never accumulates per-query
+        scratch."""
+        f = tmp_path / "cpg.bin"
+        f.write_bytes(b"fake")
+        cpg = JoernCPG(path=f, target=tmp_path)
+
+        def ok_runner(cmd, capture_output, text, timeout, cwd):
+            # Simulate importCpg's workspace copy inside the cwd.
+            (Path(cwd) / "workspace").mkdir()
+            (Path(cwd) / "workspace" / "cpg.bin").write_bytes(b"copy")
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+        def raising_runner(cmd, capture_output, text, timeout, cwd):
+            raise OSError("boom")
+
+        run_query(cpg, "cpg.method.l", subprocess_runner=ok_runner)
+        assert list(tmp_path.glob("raptor-query-*")) == []
+
+        result = run_query(
+            cpg, "cpg.method.l", subprocess_runner=raising_runner,
+        )
+        assert not result.ok
+        assert list(tmp_path.glob("raptor-query-*")) == []
 
     def test_default_tempdir_prefix_is_reaper_registered(
         self, tmp_path: Path, monkeypatch,

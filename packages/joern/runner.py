@@ -974,28 +974,40 @@ def run_query(
         if err:
             return JoernResult(query=query, errors=[err])
 
+    # Per-query scratch dir INSIDE the CPG dir, used as the joern
+    # process cwd: importCpg copies the CPG into a `workspace/` under
+    # the cwd, and the CPG dir is a cache slot SHARED across sessions
+    # (build_cpg_cached) — two JVMs racing on one `<slot>/workspace/`
+    # corrupt each other's imports. A private cwd per query makes the
+    # workspace copy collision-free, and the whole dir is removed
+    # after the run. Kept inside the CPG dir so the sandbox write
+    # grant (`output=` below) covers it.
+    try:
+        query_dir = Path(tempfile.mkdtemp(
+            prefix="raptor-query-", dir=cpg.path.parent,
+        ))
+    except OSError as e:
+        return JoernResult(
+            query=query, errors=[f"cannot create query scratch dir: {e}"])
+
     # joern's CLI flag surface drifts across releases: `--script-content`
     # does not exist in 4.x, and `--import` there means "compile .sc onto
     # the classpath", not "load this CPG".  The stable interface across
     # versions is `--script` plus the importCpg predef, so wrap every
-    # query in a temporary script that loads the CPG itself.  Written
-    # next to the CPG so the sandbox read grant covers it.
+    # query in a temporary script that loads the CPG itself.
     wrapper = (
         f'importCpg("{_escape_scala_string(str(cpg.path))}")\n'
         f"{script_body}\n"
     )
+    wrapper_path = query_dir / "query.sc"
     try:
-        with tempfile.NamedTemporaryFile(
-            "w", dir=cpg.path.parent, suffix=".sc",
-            prefix="raptor-query-", delete=False,
-        ) as f:
-            f.write(wrapper)
-            wrapper_path = Path(f.name)
+        wrapper_path.write_text(wrapper)
     except OSError as e:
+        shutil.rmtree(query_dir, ignore_errors=True)
         return JoernResult(query=query, errors=[f"cannot write query script: {e}"])
 
-    # Point the driver JVM's java.io.tmpdir at the CPG dir (already
-    # the sandbox's writable surface and the caller's to clean).
+    # Point the driver JVM's java.io.tmpdir at the per-query dir (a
+    # writable surface inside the sandbox grant, removed below).
     # This does NOT capture the script-wrapping scratch
     # (scala-repl-pp*/ and wrapped-script*.sc land in /tmp from a
     # nested JVM the argv flag never reaches; only an _JAVA_OPTIONS
@@ -1003,7 +1015,7 @@ def run_query(
     # — those strays are reaped by core.run.tmp_reaper instead.
     cmd = [
         joern,
-        f"-J-Djava.io.tmpdir={cpg.path.parent}",
+        f"-J-Djava.io.tmpdir={query_dir}",
         "--script", str(wrapper_path),
     ]
 
@@ -1012,9 +1024,9 @@ def run_query(
     start = time.monotonic()
     try:
         try:
-            # cwd + output grant point at the CPG dir: importCpg copies
-            # the CPG into a `workspace/` under the process cwd, which
-            # must be writable inside the sandbox.
+            # cwd = the per-query dir; the output grant stays the CPG
+            # dir (its parent) so both the scratch cwd and the CPG
+            # itself are writable inside the sandbox.
             proc = runner(
                 cmd,
                 capture_output=True,
@@ -1022,7 +1034,7 @@ def run_query(
                 timeout=timeout,
                 target=str(cpg.target),
                 output=str(cpg.path.parent),
-                cwd=str(cpg.path.parent),
+                cwd=str(query_dir),
                 block_network=True,
                 tool_paths=joern_tool_paths(),
                 # This single wall covers importCpg + the query solve,
@@ -1044,7 +1056,7 @@ def run_query(
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                cwd=str(cpg.path.parent),
+                cwd=str(query_dir),
             )
     except subprocess.TimeoutExpired:
         return JoernResult(
@@ -1054,10 +1066,7 @@ def run_query(
     except OSError as e:
         return JoernResult(query=query, errors=[str(e)])
     finally:
-        try:
-            wrapper_path.unlink()
-        except OSError:
-            pass
+        shutil.rmtree(query_dir, ignore_errors=True)
 
     elapsed = int((time.monotonic() - start) * 1000)
 
@@ -2095,11 +2104,15 @@ def cleanup_cpg(cpg: JoernCPG) -> None:
     """Remove the CPG binary from disk, plus the ``workspace/`` copy
     ``importCpg`` leaves next to it.
 
-    ``run_query`` executes joern with cwd = the CPG's directory, and
+    ``run_query`` executed joern with cwd = the CPG's directory, and
     importCpg copies the CPG into ``<cwd>/workspace/``. Pre-fix the
     cleanup unlinked only ``cpg.bin`` — the workspace copy survived,
     the ``rmdir`` below always failed on the non-empty dir, and the
-    duplicated CPGs accumulated for the life of the host."""
+    duplicated CPGs accumulated for the life of the host. The bare
+    ``workspace/`` removal stays for that legacy layout; current
+    queries run in per-query ``raptor-query-*`` scratch dirs, which
+    are removed by ``run_query`` itself — the sweep here reclaims
+    only the strays a hard-killed query leaves behind."""
     try:
         cpg.path.unlink(missing_ok=True)
         parent = cpg.path.parent
@@ -2108,6 +2121,9 @@ def cleanup_cpg(cpg: JoernCPG) -> None:
         # follow a symlink planted at that name.
         if workspace.is_dir() and not workspace.is_symlink():
             shutil.rmtree(workspace, ignore_errors=True)
+        for stray in parent.glob("raptor-query-*"):
+            if stray.is_dir() and not stray.is_symlink():
+                shutil.rmtree(stray, ignore_errors=True)
         try:
             parent.rmdir()
         except OSError:
