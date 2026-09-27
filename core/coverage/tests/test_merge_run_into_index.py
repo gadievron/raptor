@@ -149,9 +149,16 @@ class TestMergeCap:
         assert "src/a.c:newest_fn" in idx
         assert any(
             "distinct entry identities" in r.message
-            and "NOT reach the project index" in r.message
+            and "rollup aggregates" in r.message
             for r in caplog.records
         )
+        # The over-cap identity reaches the index as an aggregate.
+        aggregates = journal_mod.load_index_aggregates(project)
+        (record,) = aggregates.values()
+        assert record["identities"] == 1
+        assert sum(
+            row["identities"] for row in record["rollups"]
+        ) == 1
 
 
 def test_flock_refuses_planted_symlink_sidecar(tmp_path, caplog):

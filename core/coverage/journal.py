@@ -20,7 +20,7 @@ import re
 import threading
 import time
 import types
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -267,10 +267,45 @@ _MAX_DOMAIN_MODEL_BYTES = 64 * 1024 * 1024
 # DISTINCT index identities (``merge_into_index`` collapses to the
 # newest row per ``index_key`` first — a lossless step, since the
 # merge is latest-wins per key). Trade-off, both directions: too low
-# and a legitimate mega-run's oldest identities silently never reach
-# the index; too high and the index write refuses over budget
+# and a legitimate mega-run reaches the index mostly as rollup
+# aggregates (full rows carry verdict detail; aggregates carry only
+# tallies); too high and the index write refuses over budget
 # (``IndexWriteOverBudget``), freezing merges for the whole project.
+# Identities beyond the cap are NOT silently dropped: they roll up
+# into the index's bounded ``aggregates`` section (see
+# ``_aggregate_overflow``), so total counts are conserved and the
+# truncation is disclosed machine-readably.
 _MAX_MERGE_ENTRIES = 20_000
+
+# Bounds on the index's overflow-aggregate section — the rollup rows
+# that stand in for identities a mega-run pushed past
+# ``_MAX_MERGE_ENTRIES``. Every bound trades detail for a hard size
+# guarantee; none may be removed, because the aggregates section
+# exists precisely so the OVERFLOW cannot re-inflate the index.
+#
+# Rollup rows per record. Too low and even a modest overflow
+# cascades to directory/total granularity (per-file verdict tallies
+# lost); too high and a hostile run fanning its overflow across
+# many files writes that many rows into the index per merge.
+_MAX_ROLLUP_ROWS = 512
+# Aggregate records kept (one per merged run journal, newest-ts
+# survive). Too low and a long project's older overflow disclosures
+# age out quickly; too high and a hostile actor merging many
+# overflowing run dirs accretes that many records.
+_MAX_AGGREGATE_RECORDS = 64
+# Serialized byte bound on the whole aggregates section, evicting
+# the LARGEST record first (a single hostile giant record dies
+# before it starves the honest ones). Too low and legitimate
+# disclosure records evict each other; too high and the section
+# crowds the entries dict inside the index's own
+# ``_MAX_JOURNAL_BYTES`` write budget.
+_MAX_AGGREGATE_BYTES = 16 * 1024 * 1024
+# Path chars kept per rollup row. Too low and distinct deep paths
+# truncate to one indistinguishable prefix — rollup rows mis-group
+# and the disclosure stops naming where the overflow lives; too high
+# and attacker-influencable file names (paths come from journal
+# rows) smuggle megabytes into the index per row.
+_AGGREGATE_PATH_CHARS = 256
 
 # Per-load cap on detailed row-quarantine warnings. A hostile journal
 # is millions of refused rows; one warning per row is its own flood
@@ -2743,6 +2778,83 @@ def rehome_legacy_keys(index: dict[str, Any]) -> int:
     return rehomed
 
 
+def _verdict_tally(entries: Iterable[ReviewJournalEntry]) -> dict[str, int]:
+    """Verdict counts with a bounded key space: anything outside
+    ``VALID_VERDICTS`` buckets as ``other`` (journal rows arrive via
+    archive import — a hostile run must not mint one tally key per
+    row)."""
+    tally: dict[str, int] = {}
+    for e in entries:
+        v = e.verdict if e.verdict in VALID_VERDICTS else "other"
+        tally[v] = tally.get(v, 0) + 1
+    return tally
+
+
+def _aggregate_overflow(
+    overflow: list[ReviewJournalEntry],
+) -> dict[str, Any]:
+    """Roll the identities a merge could not carry as full rows into
+    one bounded aggregate record.
+
+    Granularity cascades so the record itself can never blow up:
+    per-file rollups first; over ``_MAX_ROLLUP_ROWS`` distinct files,
+    per-top-level-directory; over the cap again, a single total row.
+    Each rollup carries the identity count, a verdict tally, and the
+    ts span — every group PARTITIONS the overflow, so the summed
+    ``identities`` equals the overflow size at any granularity (count
+    conservation, pinned by test).
+    """
+    def rows_for(
+        key_of: Callable[[ReviewJournalEntry], str], scope: str,
+    ) -> list[dict[str, Any]]:
+        groups: dict[str, list[ReviewJournalEntry]] = {}
+        for e in overflow:
+            groups.setdefault(key_of(e), []).append(e)
+        return [
+            {
+                "scope": scope,
+                # Truncation is display-only (grouping used the full
+                # path): journal rows are attacker-influencable and a
+                # megabyte file name must not ride into the index.
+                "path": path[:_AGGREGATE_PATH_CHARS],
+                "identities": len(group),
+                "verdicts": _verdict_tally(group),
+                "oldest_ts": min(e.ts for e in group),
+                "newest_ts": max(e.ts for e in group),
+            }
+            for path, group in sorted(groups.items())
+        ]
+
+    granularity = "file"
+    rows = rows_for(lambda e: e.file, "file")
+    if len(rows) > _MAX_ROLLUP_ROWS:
+        granularity = "dir"
+        rows = rows_for(
+            lambda e: e.file.split("/", 1)[0], "dir")
+    if len(rows) > _MAX_ROLLUP_ROWS:
+        granularity = "total"
+        rows = rows_for(lambda e: "", "total")
+    return {
+        "ts": now_iso(),
+        "identities": len(overflow),
+        "granularity": granularity,
+        "rollups": rows,
+        "reason": (
+            f"run exceeded the {_MAX_MERGE_ENTRIES}-identity merge "
+            "cap; these identities reached the index as aggregates "
+            "only (the run journal keeps every row)"
+        ),
+    }
+
+
+def _aggregate_run_key(run_dir: Path) -> str:
+    """Aggregates-section key for a merged run journal: the run dir's
+    last two path segments (``<run>/autonomous`` subdir merges stay
+    distinct from the run root's)."""
+    run_dir = Path(run_dir)
+    return f"{run_dir.parent.name}/{run_dir.name}"
+
+
 def merge_into_index(project_dir: Path, run_dir: Path) -> int:
     """Merge run journal entries into the project-level index.
 
@@ -2757,7 +2869,14 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
     (see :func:`now_iso`); re-running a merge on the same run dir
     is a genuine no-op.
 
-    Returns the number of entries merged (new or updated).
+    A run whose distinct identities exceed ``_MAX_MERGE_ENTRIES``
+    merges the newest cap-full as full rows; the older identities
+    roll up into the index's bounded ``aggregates`` section
+    (:func:`_aggregate_overflow`) — counts and verdict tallies reach
+    the index, per-identity detail stays in the run journal.
+
+    Returns the number of entries merged (new or updated); rollup
+    aggregates do not count.
     """
     # fresh=True: this merge writes the DURABLE project index that
     # cross-run verdict reuse imports at $0 — durable authority never
@@ -2783,16 +2902,20 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
             if prev is None or e.ts > prev.ts:
                 collapsed[k] = e
         run_entries = list(collapsed.values())
+    overflow: list[ReviewJournalEntry] = []
     if len(run_entries) > _MAX_MERGE_ENTRIES:
+        run_entries = sorted(run_entries, key=lambda e: e.ts)
+        overflow = run_entries[:-_MAX_MERGE_ENTRIES]
+        run_entries = run_entries[-_MAX_MERGE_ENTRIES:]
         logger.warning(
             "journal: run %s carries %d distinct entry identities — "
-            "merging only the newest %d; the OLDEST %d identities' "
-            "verdicts will NOT reach the project index (the run "
-            "journal keeps every row)",
-            run_dir, len(run_entries), _MAX_MERGE_ENTRIES,
-            len(run_entries) - _MAX_MERGE_ENTRIES)
-        run_entries = sorted(run_entries,
-                             key=lambda e: e.ts)[-_MAX_MERGE_ENTRIES:]
+            "merging the newest %d as full rows; the OLDEST %d "
+            "identities reach the project index as rollup aggregates "
+            "only (per-file/per-directory counts and verdict tallies "
+            "in the index's 'aggregates' section; the run journal "
+            "keeps every row)",
+            run_dir, len(run_entries) + len(overflow),
+            _MAX_MERGE_ENTRIES, len(overflow))
 
     index_path = project_dir / INDEX_FILENAME
 
@@ -2817,9 +2940,18 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
                 index[key] = entry.to_dict()
                 merged += 1
 
-        if merged or rehomed:
+        aggregates: dict[str, Any] | None = None
+        if overflow:
+            # Read-modify-write inside the flock; ``None`` (the
+            # no-overflow common case) tells the writer to preserve
+            # whatever aggregates the file already carries.
+            aggregates = _read_aggregates(index_path)
+            aggregates[_aggregate_run_key(run_dir)] = (
+                _aggregate_overflow(overflow))
+
+        if merged or rehomed or overflow:
             try:
-                _write_index(index_path, index)
+                _write_index(index_path, index, aggregates=aggregates)
             except IndexWriteOverBudget as e:
                 # Same loud-refusal convention as IndexUnreadable: the
                 # index on disk stays readable AND writable (compaction
@@ -3004,7 +3136,82 @@ class IndexWriteOverBudget(RuntimeError):
     rows several-fold), so the byte bound must sit at the write."""
 
 
-def _write_index(path: Path, entries: dict[str, dict[str, Any]]) -> None:
+def _read_aggregates(path: Path) -> dict[str, Any]:
+    """The index file's ``aggregates`` section (overflow rollups), or
+    ``{}``. Degrades to empty on ANY failure: aggregates are
+    disclosure metadata, never verdict authority — the fail-closed
+    arms (:class:`IndexUnreadable` before a write,
+    :class:`IndexWriteOverBudget` at it) belong to the entries."""
+    from core.json.utils import load_json
+    if not path.is_file():
+        return {}
+    try:
+        data = load_json(path, strict=True, max_bytes=_MAX_JOURNAL_BYTES)
+    except Exception:  # noqa: BLE001 — metadata containment boundary
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    aggregates = data.get("aggregates", {})
+    return aggregates if isinstance(aggregates, dict) else {}
+
+
+def load_index_aggregates(project_dir: Path) -> dict[str, Any]:
+    """Machine-readable overflow disclosure: one record per merged
+    run journal whose distinct identities exceeded the merge cap
+    (``{run_key: {ts, identities, granularity, rollups, reason}}``).
+    Empty for projects that never overflowed."""
+    return _read_aggregates(Path(project_dir) / INDEX_FILENAME)
+
+
+def _bound_aggregates(aggregates: dict[str, Any]) -> dict[str, Any]:
+    """Sanitation chokepoint for the aggregates section: every write
+    passes through here, so the section is bounded on disk no matter
+    which writer produced it (and no matter what an archive import
+    planted in it).
+
+    Drops malformed records, truncates rollup lists, keeps the
+    newest ``_MAX_AGGREGATE_RECORDS`` records, then evicts LARGEST
+    first until the section serializes under
+    ``_MAX_AGGREGATE_BYTES`` — a single hostile giant record dies
+    before it starves the honest ones. Unserializable records drop
+    (aggregates are disclosure metadata; the entries' round-trip
+    proof is :func:`_validate_serializable`).
+    """
+    from core.json.utils import dumps_artifact
+    bounded: dict[str, Any] = {}
+    for key, record in aggregates.items():
+        if not isinstance(key, str) or not isinstance(record, dict):
+            continue
+        rollups = record.get("rollups")
+        if (isinstance(rollups, list)
+                and len(rollups) > _MAX_ROLLUP_ROWS):
+            record = dict(record)
+            record["rollups"] = rollups[:_MAX_ROLLUP_ROWS]
+            record["rollups_truncated"] = True
+        bounded[key[:_AGGREGATE_PATH_CHARS]] = record
+    if len(bounded) > _MAX_AGGREGATE_RECORDS:
+        newest = sorted(
+            bounded.items(), key=lambda kv: _row_ts(kv[1]),
+        )[-_MAX_AGGREGATE_RECORDS:]
+        bounded = dict(newest)
+    sizes: dict[str, int] = {}
+    for key in list(bounded.keys()):
+        try:
+            sizes[key] = len(dumps_artifact(bounded[key]))
+        except Exception:  # noqa: BLE001 — metadata containment boundary
+            del bounded[key]
+    while bounded and sum(sizes.values()) > _MAX_AGGREGATE_BYTES:
+        largest = max(sizes, key=lambda k: sizes[k])
+        del bounded[largest]
+        del sizes[largest]
+    return bounded
+
+
+def _write_index(
+    path: Path,
+    entries: dict[str, dict[str, Any]],
+    aggregates: dict[str, Any] | None = None,
+) -> None:
     """Atomic write of the index file, bounded by the read budget.
 
     Raises :class:`IndexWriteOverBudget` (file untouched) when the
@@ -3012,15 +3219,28 @@ def _write_index(path: Path, entries: dict[str, dict[str, Any]]) -> None:
     the writer cannot re-read is destroyed history, so it must never
     reach disk. Serialization matches :func:`core.json.save_json`
     (same encoder arms, newline, atomic tempfile + rename).
+
+    *aggregates*: the overflow-rollup section. ``None`` (default)
+    preserves whatever the on-disk file already carries, so writers
+    that never think about aggregates (legacy migration) cannot
+    silently destroy a prior overflow disclosure. Bounded via
+    :func:`_bound_aggregates` either way; an EMPTY section is omitted
+    entirely — the no-overflow document stays byte-identical to the
+    pre-aggregates format.
     """
     from core.atomic_fs import write_text_atomically
     from core.json.utils import dumps_artifact
 
-    index_data = {
+    if aggregates is None:
+        aggregates = _read_aggregates(path)
+    aggregates = _bound_aggregates(aggregates)
+    index_data: dict[str, Any] = {
         "schema_version": INDEX_SCHEMA_VERSION,
         "updated_at": now_iso(),
         "entries": entries,
     }
+    if aggregates:
+        index_data["aggregates"] = aggregates
     content = dumps_artifact(index_data) + "\n"
     size = len(content.encode("utf-8"))
     if size > _MAX_JOURNAL_BYTES:
