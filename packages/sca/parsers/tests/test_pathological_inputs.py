@@ -508,7 +508,7 @@ def _tighten_read_cap(monkeypatch, max_bytes: int) -> None:
 
     orig = _safe_read.read_bounded
 
-    def _capped(path, *, max_bytes=max_bytes, follow_symlinks=True):
+    def _capped(path, *, max_bytes=max_bytes, follow_symlinks=False):
         return orig(
             path, max_bytes=max_bytes, follow_symlinks=follow_symlinks,
         )

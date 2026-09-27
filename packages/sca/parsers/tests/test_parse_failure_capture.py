@@ -313,37 +313,31 @@ def test_capture_captures_symlink_escape_refusal(tmp_path: Path) -> None:
     assert "outside the scan root" in failures[0].reason
 
 
-def test_capture_captures_grew_past_max_refusal(tmp_path: Path) -> None:
-    """The stat-vs-read race arm: size passes the cap but the read
-    returns more bytes. Simulated with a stub path object (the race
-    itself is not reproducible deterministically)."""
+def test_capture_captures_grew_past_max_refusal(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The fstat-vs-read race arm: the size gate passes but the read
+    returns more bytes. Simulated by lying at ``os.fstat`` (the race
+    itself is not reproducible deterministically) — the checks live
+    in ``core.security.capped_read``, which fstats the opened fd."""
     import os
-    import stat as _stat_mod
     from packages.sca.parsers import _safe_read
 
     real = tmp_path / "grown.xml"
     real.write_bytes(b"x" * 64)
+    real_fstat = os.fstat
 
-    class _GrowingPath:
-        def __str__(self) -> str:
-            return str(real)
+    def lying_fstat(fd: int) -> os.stat_result:
+        st = real_fstat(fd)
+        # Lie: report a size under the cap.
+        return os.stat_result(
+            (st.st_mode, st.st_ino, st.st_dev, st.st_nlink,
+             st.st_uid, st.st_gid, 8, st.st_atime, st.st_mtime,
+             st.st_ctime))
 
-        def stat(self):
-            st = os.stat(real)
-            # Lie: report a size under the cap.
-            return os.stat_result(
-                (st.st_mode, st.st_ino, st.st_dev, st.st_nlink,
-                 st.st_uid, st.st_gid, 8, st.st_atime, st.st_mtime,
-                 st.st_ctime))
-
-        def open(self, mode="rb"):
-            return open(real, mode)
-
-    stub = _GrowingPath()
-    assert _stat_mod.S_ISREG(stub.stat().st_mode)
+    monkeypatch.setattr(os, "fstat", lying_fstat)
     with capture_parse_failures() as failures:
-        assert _safe_read.read_bounded(
-            stub, max_bytes=8, follow_symlinks=True) is None
+        assert _safe_read.read_bounded(real, max_bytes=8) is None
     assert len(failures) == 1
     assert "grew past max" in failures[0].reason
 

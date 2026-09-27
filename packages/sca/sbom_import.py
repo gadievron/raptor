@@ -104,7 +104,11 @@ def parse_cyclonedx(path: Path) -> tuple[list[Dependency], list[str]]:
     # Bounded read: an SBOM is target/operator-supplied input, and an
     # unbounded read_text is a memory-exhaustion primitive. The 50 MB
     # package cap comfortably covers legitimate monorepo SBOMs.
-    text = _safe_read.read_bounded(path)
+    # follow_symlinks=True is deliberate: this path is OPERATOR-NAMED
+    # (--sbom-input on the CLI), not discovered in the scanned tree,
+    # and build-emitted SBOMs legitimately sit behind build-dir
+    # symlinks. Tree-discovered manifests keep the hardened default.
+    text = _safe_read.read_bounded(path, follow_symlinks=True)
     if text is None:
         cap = _safe_read._MAX_PARSER_BYTES
         try:

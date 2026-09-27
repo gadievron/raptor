@@ -72,3 +72,39 @@ def test_regular_file_unaffected(tmp_path: Path) -> None:
     assert read_bounded(f, follow_symlinks=False) == "plain"
     with scan_root_context(tmp_path):
         assert read_bounded(f, follow_symlinks=False) == "plain"
+
+
+def test_symlink_refused_by_default(tmp_path: Path) -> None:
+    """The DEFAULT is the chokepoint's stance: a symlinked manifest
+    is refused without an explicit opt-in. The pre-migration default
+    (follow_symlinks=True) silently followed target-planted links —
+    ``composer.lock -> /etc/passwd`` leaked host bytes into the
+    parser. Callers that read operator-named paths opt in with
+    follow_symlinks=True; tree-discovered paths must not."""
+    real = tmp_path / "real.lock"
+    real.write_text("content", encoding="utf-8")
+    link = tmp_path / "composer.lock"
+    link.symlink_to(real)
+    assert read_bounded(link) is None
+
+
+def test_symlink_followed_only_on_explicit_opt_in(tmp_path: Path) -> None:
+    real = tmp_path / "real.lock"
+    real.write_text("content", encoding="utf-8")
+    link = tmp_path / "composer.lock"
+    link.symlink_to(real)
+    assert read_bounded(link, follow_symlinks=True) == "content"
+
+
+def test_default_still_reads_symlink_inside_scan_root(tmp_path: Path) -> None:
+    """The monorepo shared-manifest layout keeps working under the
+    hardened default: with a declared scan root, an in-root symlink
+    is resolved and read."""
+    repo = tmp_path / "repo"
+    (repo / "shared").mkdir(parents=True)
+    real = repo / "shared" / "composer.lock"
+    real.write_text('{"packages": []}', encoding="utf-8")
+    link = repo / "composer.lock"
+    link.symlink_to(real)
+    with scan_root_context(repo):
+        assert read_bounded(link) == '{"packages": []}'
