@@ -956,7 +956,7 @@
     "note": "framework-internal enum/namespace vocabulary (not target API names)"
   },
   "core/audit/sandbox_policy.py::_LLM_PHASES": {
-    "count": 63,
+    "count": 64,
     "kind": "literal"
   },
   "core/audit/sandbox_policy.py::_TOOL_POLICIES": {
