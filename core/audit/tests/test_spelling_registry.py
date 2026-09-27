@@ -240,6 +240,66 @@ class TestCodeqlLlmEntry:
         assert eg.is_verification_evidence("codeql:dataflow")
 
 
+class TestDifferentialEntry:
+    """The LIVE ``differential`` registry entry — the joint migration
+    test. The differential-execution lane enumerates exactly two
+    executed-witness spellings; this class proves (a) both survive
+    into the registry byte-exact with full verification grade, and
+    (b) the fail-closed posture holds: an unknown ``differential:*``
+    spelling is NOT verification-grade, even when the namespace root
+    is separately admitted in ``_TOOL_NAMESPACES`` (the producing
+    lane's own namespace-root entry must not re-open prefix
+    admission when both changes are present)."""
+
+    _SPELLINGS = ("differential:confirmed",
+                  "differential:relation-violation")
+
+    def test_enumerated_spellings_survive_byte_exact(self) -> None:
+        ns = eg._EXACT_SPELLING_REGISTRY["differential"]
+        assert set(ns) == set(self._SPELLINGS)
+        for spelling in self._SPELLINGS:
+            assert eg.registry_owns(spelling)
+            assert eg.registered_spelling_role(spelling) == (
+                eg._ROLE_VERIFICATION
+            )
+            assert eg.is_tool_evidence(spelling)
+            assert eg.is_verification_evidence(spelling)
+            assert _is_verification_evidence(spelling)
+
+    def test_unknown_spelling_not_verification_grade(self) -> None:
+        for stamp in ("differential", "differential:agreement",
+                      "differential:observed",
+                      "differential:confirmed-variant"):
+            assert not eg.is_tool_evidence(stamp), stamp
+            assert not eg.is_verification_evidence(stamp), stamp
+            assert not _is_verification_evidence(stamp), stamp
+
+    def test_fail_closed_survives_namespace_root_admission(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Composition shape: the producing lane also lists the bare
+        # root in _TOOL_NAMESPACES. Registry ownership must keep
+        # overriding — unknown variants stay out of verification
+        # grade, the enumerated pair keeps its grade.
+        monkeypatch.setattr(
+            eg, "_TOOL_NAMESPACES",
+            frozenset(eg._TOOL_NAMESPACES | {"differential"}),
+        )
+        assert not eg.is_tool_evidence("differential")
+        assert not eg.is_tool_evidence("differential:agreement")
+        assert not eg.is_verification_evidence("differential:agreement")
+        for spelling in self._SPELLINGS:
+            assert eg.is_verification_evidence(spelling)
+
+    def test_unknown_spelling_is_non_poisonous(self) -> None:
+        # Quiet alarm: the unknown variant riding next to a known
+        # receipt is ignored, never a rejection.
+        assert eg.is_tool_evidence("semgrep+differential:agreement")
+        assert eg.is_verification_evidence(
+            "differential:confirmed+differential:agreement",
+        )
+
+
 class TestOrchestratorDetectionOnlyConsult:
     """The promotion surface's role table
     (``core.audit.orchestrator._is_detection_only``) consults the

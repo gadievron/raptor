@@ -277,6 +277,25 @@ _EXACT_SPELLING_REGISTRY: dict[str, dict[str, str]] = {
     "codeql-llm": {
         "codeql-llm:dataflow": _ROLE_DETECTION,
     },
+    # Differential family execution receipts. Both spellings are
+    # executed-witness receipts and keep full verification grade: the
+    # deviant accepted an input every executed conforming peer
+    # rejected (directional divergence under an acceptance contract),
+    # or a dual-controlled metamorphic relation was violated on the
+    # executed target. The producing lane mints EXACTLY these two —
+    # a pass mints no stamp at all (family agreement on a handful of
+    # vectors is only a failure to promote, never a refuting
+    # receipt). Registry ownership replaces namespace-root admission
+    # for this family: the bare root and any other ``differential:*``
+    # spelling are not verification-grade (fail-closed), even where
+    # the namespace root is separately listed in
+    # ``_TOOL_NAMESPACES`` — a plausible-looking novel variant
+    # (``differential:agreement``, ``differential:observed``) must
+    # earn its own row here.
+    "differential": {
+        "differential:confirmed": _ROLE_VERIFICATION,
+        "differential:relation-violation": _ROLE_VERIFICATION,
+    },
 }
 
 
