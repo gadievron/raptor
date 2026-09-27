@@ -111,6 +111,7 @@ def emit_finding_journal_entry(
             ReviewJournalEntry,
             append_entry,
             now_iso,
+            resolved_run_id,
         )
         from core.inventory.lookup import lookup_function
 
@@ -145,7 +146,11 @@ def emit_finding_journal_entry(
 
         entry = ReviewJournalEntry(
             ts=now_iso(),
-            run_id=Path(out_dir).name,
+            # Resolved basename, never the raw spelling: a relative
+            # out_dir ("." from inside the run dir) has name == "",
+            # and run_id rides under the row MAC — the row would be
+            # sealed with no attribution (see resolved_run_id).
+            run_id=resolved_run_id(Path(out_dir)),
             file=file_path,
             function=name,
             verdict=verdict,

@@ -13,6 +13,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from core.coverage import journal_mac
 from core.coverage.journal import is_function_grade, load_entries
 from packages.llm_analysis.journal_emit import (
     build_journal_body,
@@ -145,6 +148,56 @@ class TestJournalOrchestratedResults:
         out = tmp_path / "out"
         out.mkdir()
         assert journal_orchestrated_results(out, target, [_result()]) == 0
+
+
+class TestRunAttribution:
+    """Emitted rows stamp the RESOLVED run-dir basename as ``run_id``.
+
+    ``run_id`` is the identity the journal-derived graded export
+    compares rows against, and the row MAC seals it at append time —
+    an unresolved relative spelling ("." from inside the run dir has
+    ``Path(".").name == ""``) writes a receipt-bearing row with NO
+    attribution, so the run's own record can never grade run-scoped.
+    The fallback arms (filesystem root, resolution failure → the
+    no-attribution sentinel) are pinned on the shared resolver's own
+    tests (core/coverage/tests/test_run_attribution.py); this seam
+    routes through it.
+    """
+
+    def test_relative_out_dir_stamps_resolved_run_id(
+            self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Fresh per-test key dir: the receipt assertion below must not
+        # depend on (or touch) the developer's real journal-MAC key.
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        target = _target(tmp_path)
+        out = tmp_path / "agentic_run"
+        out.mkdir()
+        monkeypatch.chdir(out)
+
+        emitted = journal_orchestrated_results(
+            Path("."), target, [_result()], checklist=_checklist(target),
+        )
+
+        assert emitted == 1
+        entries = load_entries(out, fresh=True)
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.run_id == "agentic_run"
+        # Receipt-bearing: the attribution rides under the row MAC, so
+        # whatever run_id lands here is sealed into the durable record.
+        assert journal_mac.entry_provenance(entry) == journal_mac.ROW_VERIFIED
+
+    def test_absolute_out_dir_stamp_is_the_basename(
+            self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Differential pin: lifecycle callers pass absolute run dirs,
+        # and there the stamp stays exactly the pre-existing basename.
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        target = _target(tmp_path)
+        out = tmp_path / "agentic_run"
+        out.mkdir()
+        assert journal_orchestrated_results(
+            out, target, [_result()], checklist=_checklist(target)) == 1
+        assert load_entries(out, fresh=True)[0].run_id == "agentic_run"
 
 
 class TestVerdictAndBodyHelpers:

@@ -364,6 +364,7 @@ def _journal_marks(run_dir, marked, verdict_by_key):
             append_entry,
             merge_into_index,
             now_iso,
+            resolved_run_id,
         )
         from core.inventory import read_checklist
 
@@ -388,8 +389,11 @@ def _journal_marks(run_dir, marked, verdict_by_key):
                 source_hash = _compute_hash(
                     Path(target), file_path, lo, hi,
                 ) or ""
+            # Resolved basename, never the raw spelling: a relative
+            # run_dir ("." from inside the run dir) has name == "" —
+            # the row would carry no attribution (see resolved_run_id).
             append_entry(run_dir, ReviewJournalEntry(
-                ts=now_iso(), run_id=run_dir.name,
+                ts=now_iso(), run_id=resolved_run_id(run_dir),
                 file=file_path, function=func_name,
                 verdict=verdict_by_key.get(
                     (file_path, func_name), "clean"),
@@ -723,6 +727,7 @@ def _neutralise_journaled_marks(run_dir, keys):
             append_entry,
             merge_into_index,
             now_iso,
+            resolved_run_id,
         )
         from core.json import load_json
         index = load_json(project_dir / INDEX_FILENAME,
@@ -741,8 +746,10 @@ def _neutralise_journaled_marks(run_dir, keys):
         for file_path, func_name in keys:
             for line_start in sorted(
                     journaled.get((file_path, func_name), ())):
+                # Same resolved-basename rule as _journal_marks: the
+                # withdrawal row must carry the run's attribution too.
                 append_entry(run_dir, ReviewJournalEntry(
-                    ts=now_iso(), run_id=run_dir.name,
+                    ts=now_iso(), run_id=resolved_run_id(run_dir),
                     file=file_path, function=func_name,
                     verdict="error", source_hash="",
                     line_start=line_start,
