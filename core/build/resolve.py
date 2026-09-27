@@ -116,12 +116,10 @@ def _detect(target: Path | str, lang: str | None) -> tuple[str, str] | None:
         from core.build.build_detector import BuildDetector
 
         detector = BuildDetector(Path(target))
-        # The hinted language first, then the native chain: the
-        # detector's language table is sparse (no "c" key — cpp
-        # covers Makefile/CMake/autotools projects), so a hint must
-        # narrow the ORDER, never the coverage. Only real table keys
-        # ride the default list: a dead "c" candidate warned "no
-        # build system detection" on every resolution.
+        # The hinted language first, then the native chain: a hint
+        # must narrow the ORDER, never the coverage. ("c" is now a
+        # real table key — an alias of cpp — so a C hint scans
+        # directly instead of warning "no build system detection".)
         languages = ["cpp"]
         if lang:
             languages = [lang] + [c for c in languages if c != lang]

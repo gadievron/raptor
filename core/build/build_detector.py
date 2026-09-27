@@ -300,6 +300,14 @@ class BuildDetector:
             },
         },
     }
+    # C shares the cpp table by ALIAS (same dict object — one source
+    # of truth): cmake / autotools / meson / make describe C projects
+    # identically, and callers hint the real source language ("c").
+    # Without the key, detect_build_system warned "No build system
+    # detection for language: c" and bailed before any file scan —
+    # every pure-C target (e.g. GNU screen) fell through to the
+    # synthesised-compile fallback even when configure.ac was present.
+    BUILD_SYSTEMS["c"] = BUILD_SYSTEMS["cpp"]
 
     def __init__(self, repo_path: Path) -> None:
         """
@@ -340,6 +348,37 @@ class BuildDetector:
             if result:
                 detected.append(result)
 
+        # Depth-1 fallback: some checkouts keep the whole build under
+        # one subdirectory (GNU screen's autotools live in src/; the
+        # repo root holds only COPYING + mktar.pl). Root-only scanning
+        # reported "no build system" for them. Scanned only when the
+        # root found NOTHING, shallowest-then-alphabetical, first
+        # subdirectory with any detection wins (deterministic, same
+        # rationale as the .csproj rglob sort). Symlinked and hidden
+        # dirs are skipped — a symlink can point out of the tree, and
+        # .git/.github never hold the build root.
+        if not detected:
+            try:
+                subdirs = sorted(
+                    (d for d in self.repo_path.iterdir()
+                     if d.is_dir() and not d.is_symlink()
+                     and not d.name.startswith(".")),
+                    key=lambda p: p.name,
+                )
+            except OSError:
+                subdirs = []
+            for sub in subdirs:
+                for build_type, config in build_systems.items():
+                    result = self._check_build_system(
+                        language, build_type, config, base=sub)
+                    if result:
+                        detected.append(result)
+                if detected:
+                    logger.info(
+                        "  Build system found in subdirectory: %s",
+                        sub.name)
+                    break
+
         if not detected:
             logger.warning("No build system detected for %s", language)
             return None
@@ -350,7 +389,8 @@ class BuildDetector:
         logger.info("  Command: %s", best.command)
         return best
 
-    def _check_build_system(self, language: str, build_type: str, config: dict) -> BuildSystem | None:
+    def _check_build_system(self, language: str, build_type: str, config: dict,
+                            base: Path | None = None) -> BuildSystem | None:
         """
         Check if a specific build system is present.
 
@@ -358,17 +398,24 @@ class BuildDetector:
             language: Programming language
             build_type: Build system type
             config: Build system configuration
+            base: Directory whose top level is scanned for the exact-name
+                marker files (defaults to the repo root; the depth-1
+                fallback in detect_build_system passes a subdirectory).
+                Extension-pattern markers (".csproj") keep their
+                repo-rooted recursive scan either way.
 
         Returns:
             BuildSystem object or None
         """
         detected_files = []
-        working_dir = self.repo_path
+        if base is None:
+            base = self.repo_path
+        working_dir = base
 
         # Check for build files
         for build_file in config["files"]:
             # Check for exact match
-            if (self.repo_path / build_file).exists():
+            if (base / build_file).exists():
                 detected_files.append(build_file)
 
             # Check for extension match (e.g., *.csproj)
@@ -461,6 +508,19 @@ class BuildDetector:
                     cml,
                 )
                 return None
+
+        # Special handling for autotools: a git checkout ships the
+        # hand-authored configure.ac / Makefile.am but usually NOT the
+        # generated ./configure (a release-tarball artifact), so
+        # "./configure && make" fails on the first command. autoreconf
+        # regenerates it with standard host tooling — preferred over
+        # running a repo-shipped autogen.sh by name.
+        if build_type == "autotools" and not (working_dir / "configure").is_file():
+            command = "autoreconf -fi && " + command
+            logger.debug(
+                "No generated ./configure in %s — prepending autoreconf",
+                working_dir,
+            )
 
         # Special handling for gradle wrapper
         if build_type == "gradle" and "./gradlew" in command:

@@ -66,9 +66,10 @@ class TestDetectorFallback:
         assert command
 
     def test_lang_hint_narrows_order_not_coverage(self, tmp_path):
-        """A 'c' hint (no detector table entry) must still find the
-        Makefile through the cpp chain — regression from the live
-        smoke: the hint previously REPLACED the chain."""
+        """A 'c' hint must still find the Makefile — regression from
+        the live smoke: the hint previously REPLACED the chain (and
+        'c' had no table entry at all; it is now an alias of cpp, so
+        the hint scans directly instead of falling through)."""
         _makefile_target(tmp_path)
         got = resolve_build_command(tmp_path, "c", settings={})
         assert got is not None
