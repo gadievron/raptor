@@ -29369,9 +29369,21 @@ def _resolve_gate_demoted(
     No LLM calls.
     """
     joern_up = bool((available_tools or {}).get("joern"))
+    from .promotion_alarm import is_reuse_exempt
 
     for i, outcome in enumerate(result.outcomes):
         if outcome.status != "suspicious":
+            continue
+        if is_reuse_exempt(outcome):
+            # Cross-run reused verdict: the origin run's already-gated
+            # suspicious, re-asserted at $0 with its evidence
+            # deliberately downgraded to ``journal:recall:<run>``
+            # provenance (verdict_reuse doctrine — the LLM_ONLY tier
+            # cap is the designed penalty, not erasure). Resolving it
+            # here off THIS run's silence would decay every reused
+            # suspicious toward clean/dark on each import — the same
+            # one-way decay the promotion-alarm chokepoints exempt
+            # reuse for, and no lane in this run adjudicated the row.
             continue
         gate_demoted = outcome.body.startswith(_GATE_DEMOTED_PREFIXES)
         if not gate_demoted and _is_machine_raised(outcome):
@@ -30214,7 +30226,12 @@ def _is_verification_evidence_for_gate(outcome: ReviewOutcome) -> bool:
 
     Returns True when the outcome carries evidence strong enough to
     prevent the suspicious→clean demotion.  Delegates to the pipeline's
-    _is_verification_evidence which handles role checks.
+    _is_verification_evidence, which handles role checks AND the
+    composite parse itself (per-``+``-part allowlist scan that stops
+    at the first ``llm-claimed:`` part).  Splitting here and passing
+    parts individually would defeat that boundary: the tail of a
+    sanitized model claim (``llm-claimed:smt+joern`` → ``joern``)
+    arrived as a standalone part and qualified as a receipt.
     """
     ev = outcome.evidence_tool or ""
     if not ev:
@@ -30232,7 +30249,7 @@ def _is_verification_evidence_for_gate(outcome: ReviewOutcome) -> bool:
     if not ev:
         return False
     from .pipeline import _is_verification_evidence
-    return any(_is_verification_evidence(part.strip()) for part in ev.split("+"))
+    return _is_verification_evidence(ev)
 
 
 _COUNTER_ESCALATION_PREFIX = "[counter-hypothesis escalation:"
