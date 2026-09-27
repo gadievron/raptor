@@ -106,6 +106,30 @@ Row shape::
 ``reverse_needed`` entries carry ``derived_from_target: ["name"]`` —
 the linked ``name`` is raw DT_NEEDED/soname bytes and must be escaped
 at render exactly like row fields.
+
+Policy slots (the depth-policy governor's durable state — the ledger
+owns the SCHEMA, the governor owns the SEMANTICS):
+
+- per-row ``policy`` — tier assignment record (tier / bucket / basis
+  / signals / promotion provenance), written through
+  :func:`set_artifact_policy`.
+- per-row ``reservation`` — the budget governor's per-segment
+  pessimistic charge (reserved / reconciled state, consecutive-death
+  counter), written through the same seam.
+- document-level ``policy`` — engagement-scoped policy state
+  (envelope, feasibility verdict, park record, escalations), merged
+  through :func:`update_engagement_policy`.
+- document-level ``policy_amendments`` — the append-only degradation
+  audit trail (S15), via :func:`append_policy_amendment`. A resume
+  reads the AMENDED slots, never a recomputed launch policy.
+
+Every policy write validates against a closed key set and token
+charsets — policy state is steering-grade, so a value that is not
+provably a minted id / fixed-vocabulary token / bounded number is
+refused at the write, never stored. Rebuilds carry row policy slots
+under the same content-hash proof as status (a replaced artifact
+never keeps its tier or its reservation) and carry the document-level
+policy block wholesale (engagement state, not artifact state).
 """
 
 from __future__ import annotations
@@ -202,6 +226,54 @@ _STATUS_DETAIL_MAX = 512
 # policy label, never target bytes).
 _DEPTH_RE = re.compile(r"^[A-Za-z0-9_.:-]{0,32}$")
 _ARTIFACT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,96}$")
+
+# ── Policy-slot validation (schema is C1-owned; semantics live in
+#    core.engagement.governor) ────────────────────────────────────────
+# Token charset for policy values that must be provably non-target
+# bytes: feature names, extractor module paths, basis labels. Wider
+# than _DEPTH_RE (extractor paths carry dots and brackets) but still
+# rejects every escape/control byte and whitespace.
+_POLICY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.\[\]:,-]{1,120}$")
+#: Closed per-row policy key set. Unknown keys are refused so schema
+#: growth is always a deliberate ledger diff, never a caller drift.
+_POLICY_KEYS = frozenset({
+    "tier", "bucket", "basis", "floor", "assigned_at",
+    "low_exposure_verified", "signals", "promoted_by",
+})
+_RESERVATION_KEYS = frozenset({
+    "segment", "reserved_usd", "actual_usd", "state", "deaths",
+    "updated_at", "estimate_source", "shape",
+})
+_RESERVATION_STATES = frozenset({"reserved", "reconciled"})
+# List bounds. Signals: one entry per mechanical exposure feature — a
+# row carries at most a handful; 16 matches MAX_EXPOSURE_NAMES'
+# posture. Promoted-by: consumers of one library at T3; 32 covers a
+# hub library while bounding a hostile-doc replay flood.
+_MAX_POLICY_SIGNALS = 16
+_MAX_PROMOTED_BY = 32
+# Amendment bounds, both directions: too low and a legitimate long
+# engagement's degradation trail truncates (each degrade rung + park
+# is one record); too high and a compromised stage can bloat the
+# document past its own readers. 512 records x 4 KiB = 2 MiB worst
+# case — an over-cap append is REFUSED with a one-time residual, so
+# the on-disk trail is never silently rewritten.
+_MAX_POLICY_AMENDMENTS = 512
+_MAX_AMENDMENT_BYTES = 4096
+# Engagement policy block: envelope + feasibility + park + a bounded
+# escalation list. 64 KiB is orders above the real block while
+# keeping a hostile merge from turning ledger.json into a flood.
+_MAX_ENGAGEMENT_POLICY_BYTES = 64 * 1024
+# API-appended residuals (parks, governor events) share the document
+# residual list with build-time entries; the append seam refuses past
+# this bound so a looping caller cannot balloon the document.
+_MAX_APPENDED_RESIDUALS = 4096
+# Money bounds mirror the resume spend-evidence doctrine: figures are
+# operator/config/estimator-derived (never target bytes), but the
+# document lives inside sandbox write grants — clamp keeps the budget
+# math finite either way.
+_MAX_POLICY_USD = 1e7
+_MAX_SEGMENT = 1_000_000
+_MAX_DEATHS = 1_000
 
 # ── Caps (S14 + walk bounds) — each documented both directions ──────
 # Walk bound: an install dir is operator-chosen but its CONTENT is
@@ -1155,7 +1227,22 @@ def build_ledger(
     with artifact_lock(lp, subject="engagement ledger"):
         previous = load_json(lp)
         if isinstance(previous, dict):
-            carried: dict[str, tuple[dict[str, Any], str | None]] = {}
+            # Engagement-scoped policy state (document-level block +
+            # amendment trail) carries WHOLESALE: it is policy history
+            # about the engagement, not a claim about any artifact's
+            # bytes, and a rebuild that silently dropped it would
+            # violate S15 (resume must load amended policy).
+            prev_block = previous.get("policy")
+            if isinstance(prev_block, dict):
+                doc["policy"] = prev_block
+            prev_trail = previous.get("policy_amendments")
+            if isinstance(prev_trail, list):
+                doc["policy_amendments"] = prev_trail
+            carried: dict[
+                str,
+                tuple[dict[str, Any] | None, dict[str, Any] | None,
+                      dict[str, Any] | None, str | None],
+            ] = {}
             for row in previous.get("rows") or []:
                 # Shape-guard BEFORE any attribute access: a corrupted
                 # prior ledger (non-dict row) must cost the carry, not
@@ -1163,22 +1250,41 @@ def build_ledger(
                 if not isinstance(row, dict):
                     continue
                 status = row.get("status") or {}
-                if status.get("state") in (None, "inventoried"):
+                keep_status: dict[str, Any] | None = (
+                    status
+                    if status.get("state") not in (None, "inventoried")
+                    else None)
+                policy = row.get("policy")
+                keep_policy = policy if isinstance(policy, dict) else None
+                reservation = row.get("reservation")
+                keep_res = (reservation
+                            if isinstance(reservation, dict) else None)
+                if (keep_status is None and keep_policy is None
+                        and keep_res is None):
                     continue
                 prev_ident = row.get("identity")
                 prev_sha = (prev_ident.get("sha256")
                             if isinstance(prev_ident, dict) else None)
-                carried[str(row.get("artifact_id"))] = (status, prev_sha)
+                carried[str(row.get("artifact_id"))] = (
+                    keep_status, keep_policy, keep_res, prev_sha)
             for row in doc["rows"]:
                 kept = carried.get(row["artifact_id"])
                 if not kept:
                     continue
-                status, prev_sha = kept
+                status, policy, reservation, prev_sha = kept
                 cur_sha = (row.get("identity") or {}).get("sha256")
-                if prev_sha is not None and prev_sha == cur_sha:
-                    row["status"] = status
-                elif prev_sha is None and cur_sha is None:
-                    row["status"] = status
+                if ((prev_sha is not None and prev_sha == cur_sha)
+                        or (prev_sha is None and cur_sha is None)):
+                    # Content proof held: status AND policy slots
+                    # carry together — a tier assignment / reservation
+                    # is a claim about these exact bytes just like a
+                    # verdict is.
+                    if status is not None:
+                        row["status"] = status
+                    if policy is not None:
+                        row["policy"] = policy
+                    if reservation is not None:
+                        row["reservation"] = reservation
                 else:
                     row["elevated_interest"] = True
                     row["elevated_interest_reason"] = (
@@ -1189,7 +1295,7 @@ def build_ledger(
                         "message": (
                             "content hash missing or changed under a "
                             "persisted identity — engagement status "
-                            "reset to inventoried"),
+                            "and policy slots reset to inventoried"),
                     })
         save_json(lp, doc)
     return doc
@@ -1245,6 +1351,322 @@ def set_artifact_status(
         if hit:
             save_json(lp, doc)
     return hit
+
+
+# ── Policy slots (schema here; semantics in the governor) ───────────
+
+def is_artifact_id(value: str) -> bool:
+    """True when ``value`` is shaped like a minted artifact id — the
+    same charset gate every path/key seam in this module applies."""
+    return bool(_ARTIFACT_ID_RE.fullmatch(value))
+
+
+def _require_token(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not _POLICY_TOKEN_RE.fullmatch(value):
+        raise ValueError(f"invalid policy token for {field}: {value!r}")
+    return value
+
+
+def _require_usd(value: Any, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"invalid USD figure for {field}: {value!r}")
+    v = float(value)
+    if v != v or v in (float("inf"), float("-inf")):
+        raise ValueError(f"non-finite USD figure for {field}")
+    if not 0.0 <= v <= _MAX_POLICY_USD:
+        raise ValueError(f"USD figure out of bounds for {field}: {v}")
+    return round(v, 6)
+
+
+def _validate_policy(policy: dict[str, Any]) -> dict[str, Any]:
+    unknown = set(policy) - _POLICY_KEYS
+    if unknown:
+        raise ValueError(f"unknown policy key(s): {sorted(unknown)}")
+    out: dict[str, Any] = {}
+    for key in ("tier", "bucket", "basis", "floor"):
+        if key in policy:
+            value = policy[key]
+            if not isinstance(value, str) or not _DEPTH_RE.fullmatch(value):
+                raise ValueError(f"invalid policy label for {key}: {value!r}")
+            out[key] = value
+    if "assigned_at" in policy:
+        out["assigned_at"] = _require_token(
+            policy["assigned_at"], "assigned_at")
+    if "low_exposure_verified" in policy:
+        flag = policy["low_exposure_verified"]
+        if flag is not None and not isinstance(flag, bool):
+            raise ValueError("low_exposure_verified must be bool or None")
+        out["low_exposure_verified"] = flag
+    signals = policy.get("signals")
+    if signals is not None:
+        if (not isinstance(signals, list)
+                or len(signals) > _MAX_POLICY_SIGNALS):
+            raise ValueError("policy signals must be a bounded list")
+        kept: list[dict[str, str]] = []
+        for sig in signals:
+            if not isinstance(sig, dict) or set(sig) - {"feature",
+                                                        "extractor"}:
+                raise ValueError(f"invalid policy signal: {sig!r}")
+            kept.append({
+                "feature": _require_token(sig.get("feature"),
+                                          "signal feature"),
+                "extractor": _require_token(sig.get("extractor"),
+                                            "signal extractor"),
+            })
+        out["signals"] = kept
+    promoted = policy.get("promoted_by")
+    if promoted is not None:
+        if not isinstance(promoted, list) or len(promoted) > _MAX_PROMOTED_BY:
+            raise ValueError("promoted_by must be a bounded list")
+        ids: list[str] = []
+        for pid in promoted:
+            if not isinstance(pid, str) or not is_artifact_id(pid):
+                raise ValueError(f"invalid promoted_by id: {pid!r}")
+            ids.append(pid)
+        out["promoted_by"] = ids
+    return out
+
+
+def _validate_reservation(reservation: dict[str, Any]) -> dict[str, Any]:
+    unknown = set(reservation) - _RESERVATION_KEYS
+    if unknown:
+        raise ValueError(f"unknown reservation key(s): {sorted(unknown)}")
+    out: dict[str, Any] = {}
+    if "segment" in reservation:
+        seg = reservation["segment"]
+        if (isinstance(seg, bool) or not isinstance(seg, int)
+                or not 0 <= seg <= _MAX_SEGMENT):
+            raise ValueError(f"invalid reservation segment: {seg!r}")
+        out["segment"] = seg
+    for key in ("reserved_usd", "actual_usd"):
+        if key in reservation and reservation[key] is not None:
+            out[key] = _require_usd(reservation[key], key)
+    if "state" in reservation:
+        state = reservation["state"]
+        if state not in _RESERVATION_STATES:
+            raise ValueError(f"invalid reservation state: {state!r}")
+        out["state"] = state
+    if "deaths" in reservation:
+        deaths = reservation["deaths"]
+        if (isinstance(deaths, bool) or not isinstance(deaths, int)
+                or not 0 <= deaths <= _MAX_DEATHS):
+            raise ValueError(f"invalid reservation deaths: {deaths!r}")
+        out["deaths"] = deaths
+    for key in ("updated_at", "estimate_source", "shape"):
+        if key in reservation:
+            out[key] = _require_token(reservation[key], key)
+    return out
+
+
+def set_artifact_policy(
+    output_dir: Path | str,
+    artifact_id: str,
+    *,
+    policy: dict[str, Any] | None = None,
+    reservation: dict[str, Any] | None = None,
+) -> bool:
+    """Write the row-level ``policy`` / ``reservation`` slot(s) of
+    every row carrying ``artifact_id``. Read-modify-write under the
+    ledger's flock; each supplied slot REPLACES that slot whole (the
+    governor always writes complete records, so a partial merge could
+    only resurrect stale fields).
+
+    Validation is fail-closed: unknown keys, non-token strings,
+    unbounded lists and non-finite/out-of-range numbers raise
+    ``ValueError`` before the document is touched.
+    """
+    if not is_artifact_id(artifact_id):
+        raise ValueError(f"invalid artifact id: {artifact_id!r}")
+    checked_policy = _validate_policy(policy) if policy is not None else None
+    checked_res = (_validate_reservation(reservation)
+                   if reservation is not None else None)
+    if checked_policy is None and checked_res is None:
+        raise ValueError("nothing to write: pass policy and/or reservation")
+    lp = ledger_path(output_dir)
+    with artifact_lock(lp, subject="engagement ledger"):
+        doc = load_json(lp)
+        if not isinstance(doc, dict):
+            return False
+        hit = False
+        for row in doc.get("rows") or []:
+            if row.get("artifact_id") != artifact_id:
+                continue
+            if checked_policy is not None:
+                row["policy"] = dict(checked_policy)
+            if checked_res is not None:
+                row["reservation"] = dict(checked_res)
+            hit = True
+        if hit:
+            save_json(lp, doc)
+    return hit
+
+
+def set_artifact_policies(
+    output_dir: Path | str,
+    policies: dict[str, dict[str, Any]],
+) -> int:
+    """Bulk form of :func:`set_artifact_policy` for the launch-time
+    assignment pass: every slot validates BEFORE the document is
+    touched, then all rows update under one flock cycle (per-artifact
+    writes would re-read and re-write the whole document N times).
+    Returns the number of rows updated.
+    """
+    checked: dict[str, dict[str, Any]] = {}
+    for artifact_id, policy in policies.items():
+        if not is_artifact_id(artifact_id):
+            raise ValueError(f"invalid artifact id: {artifact_id!r}")
+        checked[artifact_id] = _validate_policy(policy)
+    if not checked:
+        return 0
+    lp = ledger_path(output_dir)
+    hits = 0
+    with artifact_lock(lp, subject="engagement ledger"):
+        doc = load_json(lp)
+        if not isinstance(doc, dict):
+            return 0
+        for row in doc.get("rows") or []:
+            slot = checked.get(str(row.get("artifact_id")))
+            if slot is None:
+                continue
+            row["policy"] = dict(slot)
+            hits += 1
+        if hits:
+            save_json(lp, doc)
+    return hits
+
+
+def append_policy_amendment(
+    output_dir: Path | str,
+    amendment: dict[str, Any],
+) -> int:
+    """Append one S15 amendment record to the document's append-only
+    ``policy_amendments`` trail. Returns the assigned sequence number,
+    or ``-1`` when the trail is at capacity (a one-time
+    ``policy_amendments_truncated`` residual records the refusal —
+    callers must treat ``-1`` as an escalation, never a success).
+
+    ``amendment`` must carry a token ``kind``; the whole record is
+    byte-bounded so the trail cannot bloat the document. ``seq`` and
+    ``at`` are stamped here.
+    """
+    from core.json.utils import dumps_artifact
+    if not isinstance(amendment, dict):
+        raise ValueError("amendment must be a dict")
+    _require_token(amendment.get("kind"), "amendment kind")
+    record = dict(amendment)
+    if len(dumps_artifact(record).encode("utf-8")) > _MAX_AMENDMENT_BYTES:
+        raise ValueError("amendment record over the byte bound")
+    lp = ledger_path(output_dir)
+    with artifact_lock(lp, subject="engagement ledger"):
+        doc = load_json(lp)
+        if not isinstance(doc, dict):
+            return -1
+        trail = doc.get("policy_amendments")
+        if not isinstance(trail, list):
+            trail = []
+            doc["policy_amendments"] = trail
+        if len(trail) >= _MAX_POLICY_AMENDMENTS:
+            residuals = doc.setdefault("residuals", [])
+            if not any(r.get("kind") == "policy_amendments_truncated"
+                       for r in residuals if isinstance(r, dict)):
+                residuals.append({
+                    "kind": "policy_amendments_truncated",
+                    "message": (f"amendment trail at capacity "
+                                f"({_MAX_POLICY_AMENDMENTS}); further "
+                                "amendments refused"),
+                })
+                save_json(lp, doc)
+            return -1
+        record["seq"] = len(trail) + 1
+        record["at"] = _now()
+        trail.append(record)
+        save_json(lp, doc)
+        return int(record["seq"])
+
+
+def load_policy_amendments(output_dir: Path | str) -> list[dict[str, Any]]:
+    """The append-only amendment trail (empty when absent)."""
+    doc = load_ledger(output_dir)
+    trail = (doc or {}).get("policy_amendments")
+    return [a for a in trail if isinstance(a, dict)] \
+        if isinstance(trail, list) else []
+
+
+def update_engagement_policy(
+    output_dir: Path | str,
+    updates: dict[str, Any],
+) -> bool:
+    """Shallow-merge ``updates`` into the document-level ``policy``
+    block (engagement-scoped state: envelope, feasibility verdict,
+    park record, escalations). Keys are token-gated; the merged block
+    is byte-bounded — an over-budget merge raises ``ValueError`` with
+    the document untouched, so the on-disk block always stays small
+    enough to read.
+    """
+    from core.json.utils import dumps_artifact
+    if not isinstance(updates, dict) or not updates:
+        raise ValueError("updates must be a non-empty dict")
+    for key in updates:
+        _require_token(key, "engagement policy key")
+    lp = ledger_path(output_dir)
+    with artifact_lock(lp, subject="engagement ledger"):
+        doc = load_json(lp)
+        if not isinstance(doc, dict):
+            return False
+        block = doc.get("policy")
+        merged = dict(block) if isinstance(block, dict) else {}
+        merged.update(updates)
+        size = len(dumps_artifact(merged).encode("utf-8"))
+        if size > _MAX_ENGAGEMENT_POLICY_BYTES:
+            raise ValueError(
+                f"engagement policy block would be {size} bytes "
+                f"(over the {_MAX_ENGAGEMENT_POLICY_BYTES} bound)")
+        doc["policy"] = merged
+        save_json(lp, doc)
+    return True
+
+
+def load_engagement_policy(output_dir: Path | str) -> dict[str, Any]:
+    """The document-level policy block (empty when absent)."""
+    doc = load_ledger(output_dir)
+    block = (doc or {}).get("policy")
+    return dict(block) if isinstance(block, dict) else {}
+
+
+def append_residual(
+    output_dir: Path | str,
+    kind: str,
+    message: str,
+    *,
+    artifact_id: str | None = None,
+) -> bool:
+    """Append one residual record to the document (the seam parks and
+    governor events use — a park is a ledger STATUS plus a residual,
+    durable by doctrine). ``kind`` is token-gated; ``message`` is
+    machine-authored text, length-capped at store time and escaped at
+    render like every residual. Refuses past the appended-residual
+    bound so a looping caller cannot balloon the document.
+    """
+    _require_token(kind, "residual kind")
+    if artifact_id is not None and not is_artifact_id(artifact_id):
+        raise ValueError(f"invalid artifact id: {artifact_id!r}")
+    lp = ledger_path(output_dir)
+    with artifact_lock(lp, subject="engagement ledger"):
+        doc = load_json(lp)
+        if not isinstance(doc, dict):
+            return False
+        residuals = doc.setdefault("residuals", [])
+        if len(residuals) >= _MAX_APPENDED_RESIDUALS:
+            return False
+        record: dict[str, Any] = {
+            "kind": kind,
+            "message": str(message)[:_STATUS_DETAIL_MAX],
+        }
+        if artifact_id is not None:
+            record["artifact_id"] = artifact_id
+        residuals.append(record)
+        save_json(lp, doc)
+    return True
 
 
 # ── Per-artifact coverage-denominator slots ─────────────────────────
@@ -1426,14 +1848,22 @@ __all__ = [
     "STATUS_STATES",
     "TARGET_DERIVED_FIELD_UNIVERSE",
     "LedgerCaps",
+    "append_policy_amendment",
+    "append_residual",
     "build_ledger",
     "checklist_slot_path",
+    "is_artifact_id",
     "ledger_path",
     "list_artifact_checklists",
+    "load_engagement_policy",
     "load_ledger",
+    "load_policy_amendments",
     "read_artifact_checklist",
     "render_artifact_lines",
     "render_status_lines",
+    "set_artifact_policies",
+    "set_artifact_policy",
     "set_artifact_status",
+    "update_engagement_policy",
     "write_artifact_checklist",
 ]
