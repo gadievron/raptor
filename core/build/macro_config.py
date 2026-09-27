@@ -30,17 +30,14 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import shlex
-import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from core.security.capped_read import read_capped_text
 
-_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
-_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+logger = logging.getLogger(__name__)
 
 # Byte budgets for the target-controlled build artifacts read below.
 # These files live inside the scanned repo, so they are read hardened
@@ -55,38 +52,17 @@ _MAX_KCONFIG_BYTES = 8 * 1024 * 1024
 def _read_bounded(path: Path, max_bytes: int) -> str:
     """Hardened read of a target-controlled config file.
 
-    ``O_NOFOLLOW`` refuses a symlink at the final component (ELOOP →
-    ``OSError``), ``O_NONBLOCK`` keeps a FIFO from blocking ``open``
-    itself (a writer-less FIFO otherwise hangs the unsandboxed parent
-    BEFORE the fstat gate can refuse it), the ``fstat`` gate refuses
-    non-regular files and enforces the byte budget BEFORE any read,
-    and the bounded read re-checks the cap in case the file grew in
-    between. ``O_NONBLOCK`` has no effect on regular-file reads.
-    Raises ``OSError`` or ``ValueError`` on violation — every caller
-    already degrades on those.
+    Delegates the open-flags dance (O_NOFOLLOW refusing a symlink at
+    the final component with ELOOP → ``OSError``; O_NONBLOCK keeping
+    a writer-less FIFO from hanging the unsandboxed parent at
+    ``open``; the fstat gate refusing non-regular files and enforcing
+    the byte budget BEFORE any read; the bounded read re-checking the
+    cap in case the file grew in between) plus the
+    ``errors="replace"`` decode to ``core.security.capped_read``.
+    Raises ``OSError`` or ``ValueError`` (``CappedReadRefused``) on
+    violation — every caller already degrades on those.
     """
-    fd = os.open(
-        str(path),
-        os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC
-        | getattr(os, "O_NONBLOCK", 0),
-    )
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):
-            raise ValueError(f"not a regular file: {path}")
-        if st.st_size > max_bytes:
-            raise ValueError(
-                f"file size {st.st_size} exceeds {max_bytes} byte cap: "
-                f"{path}"
-            )
-    except BaseException:
-        os.close(fd)
-        raise
-    with os.fdopen(fd, "rb") as f:
-        raw = f.read(max_bytes + 1)
-    if len(raw) > max_bytes:
-        raise ValueError(f"file grew past {max_bytes} byte cap: {path}")
-    return raw.decode("utf-8", errors="replace")
+    return read_capped_text(path, max_bytes, raise_on_refusal=True)
 
 
 @dataclass(frozen=True)

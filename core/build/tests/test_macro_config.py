@@ -360,3 +360,38 @@ class TestDefineValueSemantics:
         mc = extract_macro_config(tmp_path)
         assert mc.is_defined("FÖÖ") is None
         assert mc.is_defined("OK") is True
+
+
+class TestReadBoundedErrorContract:
+    """Pin the raising contract _read_bounded's callers degrade on
+    (``except (OSError, ValueError)``) across the delegation to
+    core.security.capped_read: OSError for what the OS refuses,
+    ValueError for what policy refuses."""
+
+    def test_missing_file_raises_oserror(self, tmp_path):
+        from core.build.macro_config import _read_bounded
+        with pytest.raises(OSError):
+            _read_bounded(tmp_path / "absent.json", 1024)
+
+    def test_symlink_raises_oserror(self, tmp_path):
+        from core.build.macro_config import _read_bounded
+        real = tmp_path / "real.json"
+        real.write_text("{}", encoding="utf-8")
+        link = tmp_path / "compile_commands.json"
+        link.symlink_to(real)
+        with pytest.raises(OSError):
+            _read_bounded(link, 1024)
+
+    def test_over_cap_raises_valueerror(self, tmp_path):
+        from core.build.macro_config import _read_bounded
+        big = tmp_path / "big.json"
+        big.write_bytes(b"x" * 32)
+        with pytest.raises(ValueError, match="exceeds 16 byte cap"):
+            _read_bounded(big, 16)
+
+    def test_non_utf8_decodes_with_replacement(self, tmp_path):
+        from core.build.macro_config import _read_bounded
+        f = tmp_path / "cfg"
+        f.write_bytes(b"CONFIG_X=y\xff\xfe\n")
+        text = _read_bounded(f, 1024)
+        assert text.startswith("CONFIG_X=y")
