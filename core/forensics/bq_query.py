@@ -303,7 +303,7 @@ def _load_override() -> list[str] | None:
     if not _OVERRIDE_CONFIG_PATH.exists():
         return None
     try:
-        data = json.loads(_OVERRIDE_CONFIG_PATH.read_text(encoding="utf-8"))
+        data = json.loads(_OVERRIDE_CONFIG_PATH.read_text(encoding="utf-8"))  # raw-open: operator config under the user config dir, not run-dir content
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict):

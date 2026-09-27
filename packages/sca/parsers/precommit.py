@@ -307,7 +307,7 @@ def _load_repo_map() -> dict[str, dict[str, str]]:
     """Load the curated repo→registry map. Per-call rather than
     module-level so a future test injection point stays simple."""
     try:
-        text = _REPO_MAP_PATH.read_text(encoding="utf-8")
+        text = _REPO_MAP_PATH.read_text(encoding="utf-8")  # raw-open: curated data map shipped in the repo, not run-dir content
     except OSError:
         return {}
     try:

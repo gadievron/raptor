@@ -365,7 +365,7 @@ def _load_suppression_records(
         _st = _os.stat(path)
         if not _stat.S_ISREG(_st.st_mode) or _st.st_size > 64 * 1024 * 1024:
             return []
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():  # raw-open: S_ISREG + 64 MiB gate above bounds this read
             line = line.strip()
             if not line:
                 continue
@@ -1342,7 +1342,7 @@ def cmd_live(args) -> None:
     try:
         while True:
             if journal.is_file():
-                with open(journal, encoding="utf-8") as fh:
+                with open(journal, encoding="utf-8") as fh:  # raw-open: stateful tail-follow, bounded per poll below
                     fh.seek(pos)
                     # Bounded per poll: the journal sits in a run dir
                     # whose write grant sandboxed code holds — an

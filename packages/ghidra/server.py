@@ -674,7 +674,7 @@ class GhidraServer:
         # dir. Fresh O_EXCL|O_NOFOLLOW inode after an lstat-honest
         # unlink.
         out_path.unlink(missing_ok=True)
-        with open(worker_out, "rb") as src_fh, os.fdopen(
+        with open(worker_out, "rb") as src_fh, os.fdopen(  # raw-open: streaming chunk copy of the sandboxed worker's own output (memory-bounded)
             open_exclusive_artifact(out_path), "wb",
         ) as dst_fh:
             shutil.copyfileobj(src_fh, dst_fh)
