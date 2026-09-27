@@ -72,13 +72,14 @@ class TestStrictRequiresSeccomp(unittest.TestCase):
             self.assertIn("seccomp", str(cm.exception).lower())
 
     @requires_landlock
-    def test_full_profile_still_degrades_gracefully(self):
+    def test_full_profile_refuses_without_seccomp_on_landlock_fallback(self):
         with patch.object(ctx._seccomp, "check_seccomp_available",
                           return_value=False):
-            # construction must not raise for the degrading profile
-            with ctx.sandbox(profile="full", target=self.tmp.name,
-                             output=self.tmp.name):
-                pass
+            with self.assertRaises(SandboxSetupError) as cm:
+                with ctx.sandbox(profile="full", target=self.tmp.name,
+                                 output=self.tmp.name):
+                    pass
+            self.assertIn("udp", str(cm.exception).lower())
 
     def test_strict_names_seccomp_even_when_mount_ns_also_missing(self):
         """CI-runner condition: with mount-ns ALSO unavailable, the

@@ -48,16 +48,23 @@ def test_construction_fallback_blocks_udp(fallback, ports):
     assert fallback[-1]["seccomp_block_udp"] is True
 
 
-@pytest.mark.parametrize("profile,available", [("full", False), ("network-only", True)])
 @pytest.mark.parametrize("waived", [False, True])
-def test_missing_udp_filter_refuses(fallback, monkeypatch, profile, available, waived):
-    monkeypatch.setattr(context, "check_seccomp_available", lambda: available)
+def test_missing_seccomp_refuses_full_profile(fallback, monkeypatch, waived):
+    monkeypatch.setattr(context, "check_seccomp_available", lambda: False)
     if waived:
         monkeypatch.setenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "1")
     with pytest.raises(SandboxSetupError, match="UDP/DNS block"):
-        with context.sandbox(block_network=True, profile=profile):
+        with context.sandbox(block_network=True, profile="full"):
             pass
-    assert not fallback  # refuses before building any execution path
+    assert not fallback
+
+
+def test_network_only_accepts_without_udp_block(fallback):
+    """network-only has no seccomp — the gate returns early and the
+    Landlock TCP deny engages without a UDP block."""
+    with context.sandbox(block_network=True, profile="network-only"):
+        pass
+    assert fallback[-1]["seccomp_block_udp"] is False
 
 
 def test_explicit_network_optout_keeps_existing_semantics(fallback):

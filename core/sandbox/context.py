@@ -1158,16 +1158,21 @@ def _nproc_eagain_retry_decision(
 
 
 def _require_degraded_udp_filter(seccomp_profile: str | None) -> None:
-    """A TCP-only fallback must not leave a recursive DNS egress path."""
-    if (not seccomp_profile or seccomp_profile == "none"
-            or not check_seccomp_available()):
+    """Refuse a TCP-only Landlock fallback when seccomp cannot block UDP.
+
+    Seccomp-less profiles (network-only, none) accepted the reduced
+    isolation at profile selection \N{em dash} the gate only fires when a
+    seccomp-enabled profile cannot engage its filter.
+    """
+    if not seccomp_profile or seccomp_profile == "none":
+        return
+    if not check_seccomp_available():
         from .errors import SandboxSetupError
         raise SandboxSetupError(
             "Sandbox: network namespace unavailable; Landlock only "
             "restricts TCP, and the required seccomp UDP/DNS block "
-            "cannot engage — refusing network-blocked execution.",
-            "Enable network namespaces, or install working libseccomp "
-            "and select a seccomp-enabled profile (e.g. full). "
+            "cannot engage \N{em dash} refusing network-blocked execution.",
+            "Enable network namespaces, or install working libseccomp. "
             "degraded_net_deny=False explicitly accepts open egress "
             "on this fallback; a containment-floor waiver does not "
             "waive the required UDP/DNS filter.",
@@ -2369,8 +2374,16 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                            and check_landlock_available()
                            and _get_landlock_abi() >= 4)
         if _ll_net_capable:
-            _require_degraded_udp_filter(seccomp_profile)
-            seccomp_block_udp = True
+            if strict_required:
+                # strict defers to its own aggregation gate — the UDP
+                # axis is covered by the seccomp-available check there.
+                seccomp_block_udp = (bool(seccomp_profile)
+                                     and seccomp_profile != "none"
+                                     and check_seccomp_available())
+            else:
+                _require_degraded_udp_filter(seccomp_profile)
+                seccomp_block_udp = (bool(seccomp_profile)
+                                     and seccomp_profile != "none")
         if _ll_net_capable and not allowed_tcp_ports:
             _degraded_tcp_deny = True
             if state.warn_once("_degraded_tcp_deny_warned"):
