@@ -54,6 +54,16 @@ from .substrate import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+# Static import: an ``except`` clause needs the class object at
+# handler-match time, so the lazy-import convention the sandbox call
+# sites use cannot apply here. ``core.sandbox.errors`` is a leaf
+# module (no spawn machinery behind it).
+try:
+    from core.sandbox.errors import SandboxSetupError as _SandboxSetupError
+except ImportError:  # pragma: no cover — core.sandbox ships in-repo
+    class _SandboxSetupError(BaseException):  # type: ignore[no-redef]
+        """Stand-in no code raises; keeps the except clauses valid."""
+
 logger = logging.getLogger(__name__)
 
 _ROLE_RE = _re.compile(r"^//\s*@role:\s*(\w+)", _re.MULTILINE)
@@ -3340,6 +3350,84 @@ def _reset_codeql_memo() -> None:
     _codeql_memo.clear()
 
 
+# Loud-failure channel state. Per-dispatch CodeQL errors are recorded
+# on the SweepResult and surfaced by the orchestrator at DEBUG — the
+# right level for a one-off query fault, but a host-posture problem
+# (sandbox refusal, broken CLI install) errors EVERY dispatch and a
+# debug-only trail loses the whole CodeQL tier with nothing an
+# operator would ever see. These emit one WARNING per process: the
+# warm-up's on its first failure, the dispatch path's on a sandbox
+# setup refusal (host posture — systematic by nature) or once the
+# consecutive-error streak reaches the threshold below. Not
+# per-hypothesis noise in either direction: streaks reset on any
+# successful dispatch, and both flags fire at most once.
+_CODEQL_ERROR_STREAK_WARN = 3
+_codeql_channel_guard = threading.Lock()
+_codeql_channel_warned = False
+_codeql_warmup_warned = False
+_codeql_error_streak = 0
+
+
+def _reset_codeql_channel_state() -> None:
+    """Test hook: re-arm the once-per-process channel warnings."""
+    global _codeql_channel_warned, _codeql_warmup_warned
+    global _codeql_error_streak
+    with _codeql_channel_guard:
+        _codeql_channel_warned = False
+        _codeql_warmup_warned = False
+        _codeql_error_streak = 0
+
+
+def _warn_codeql_channel_down(context: str, cause: str) -> None:
+    """One WARNING per process when the dispatch path fails systemically."""
+    global _codeql_channel_warned
+    with _codeql_channel_guard:
+        if _codeql_channel_warned:
+            return
+        _codeql_channel_warned = True
+    logger.warning(
+        "codeql dispatch failing systematically (%s): %s — every "
+        "hypothesis routed at CodeQL records a tool error until the "
+        "cause is fixed (per-dispatch detail stays at DEBUG)",
+        context, cause,
+    )
+
+
+def _warn_codeql_warmup_failed(cause: str) -> None:
+    """One WARNING per process when the whole-run warm-up fails."""
+    global _codeql_warmup_warned
+    with _codeql_channel_guard:
+        if _codeql_warmup_warned:
+            return
+        _codeql_warmup_warned = True
+    logger.warning(
+        "codeql warm-up analyze failed (%s) — memo stays cold, "
+        "per-hypothesis dispatches each pay a full analyze; if the "
+        "cause is host posture (sandbox refusal, CLI fault) they "
+        "will error the same way",
+        cause,
+    )
+
+
+def _note_codeql_dispatch_error(cause: str) -> None:
+    """Count a dispatch error toward the systematic-failure warning."""
+    global _codeql_error_streak
+    with _codeql_channel_guard:
+        _codeql_error_streak += 1
+        streak = _codeql_error_streak
+    if streak >= _CODEQL_ERROR_STREAK_WARN:
+        _warn_codeql_channel_down(
+            f"{streak} consecutive dispatch errors", cause,
+        )
+
+
+def _note_codeql_dispatch_ok() -> None:
+    """A served result (fresh or memoized) proves the channel works."""
+    global _codeql_error_streak
+    with _codeql_channel_guard:
+        _codeql_error_streak = 0
+
+
 class _UnreadableSarifError(Exception):
     """Analyze produced SARIF the bounded loader refused (oversize /
     unparseable). Carried out of the memoized compute so the caller
@@ -3573,16 +3661,44 @@ def run_codeql_sweep(
                 _waited_value, _found = _memo.peek(memo_key, touch=False)
                 if _found:
                     return _waited_value  # type: ignore[return-value]
+                # Absolute CLI path resolved in the CALLER environment
+                # (the sandbox's env scrub drops home-rooted PATH
+                # entries, so a bare "codeql" from a home install is
+                # unresolvable inside it). When the CLI is missing,
+                # nothing can execute on either path — the bare
+                # analyze() below raises FileNotFoundError exactly as
+                # the sandboxed lane would, so no enforcement is lost.
+                import shutil
+
+                _cli = shutil.which("codeql")
                 with tempfile.TemporaryDirectory(
                     prefix="codeql-sweep-",
                 ) as tmp:
                     sarif_out = Path(tmp) / "sweep.sarif"
-                    result = analyze(
-                        Path(db),
-                        [str(qpath)],
-                        sarif_out,
-                        timeout_seconds=300,
-                    )
+                    if _cli:
+                        codeql_cli = os.path.realpath(_cli)
+                        result = analyze(
+                            Path(db),
+                            [str(qpath)],
+                            sarif_out,
+                            codeql_bin=codeql_cli,
+                            timeout_seconds=300,
+                            runner=_sandboxed_codeql_runner(
+                                [str(Path(codeql_cli).parent)],
+                                database_dir=Path(db),
+                                query_paths=[str(qpath)],
+                                scratch_dir=Path(tmp),
+                                caller_label="audit-codeql-sweep",
+                            ),
+                            extra_args=_codeql_cache_args(Path(db)),
+                        )
+                    else:
+                        result = analyze(
+                            Path(db),
+                            [str(qpath)],
+                            sarif_out,
+                            timeout_seconds=300,
+                        )
                     return _load_whole_db_results(result, sarif_out)
 
         def _load_whole_db_results(
@@ -3623,6 +3739,7 @@ def run_codeql_sweep(
                 ],
                 rule_id=query_path,
             )
+        _note_codeql_dispatch_ok()
 
         in_function = []
         for r in sarif_results:
@@ -3724,7 +3841,14 @@ def run_codeql_sweep(
             outcome="error",
             errors=["core.dataflow.codeql_augmented_run not available"],
         )
+    except _SandboxSetupError as exc:
+        # BaseException by design — never converted to a quiet error
+        # verdict. Host posture is systematic: warn once, keep the
+        # fail-closed propagation.
+        _warn_codeql_channel_down("sandbox setup refusal", str(exc))
+        raise
     except Exception as exc:  # noqa: BLE001
+        _note_codeql_dispatch_error(str(exc))
         return SweepResult(
             tool="codeql",
             file_path=file_path,
@@ -3752,21 +3876,139 @@ def _codeql_query_id(qpath: Path) -> str | None:
     return m.group(1) if m else None
 
 
-def _sandboxed_codeql_runner(tool_paths: list[str]):
-    """Build a subprocess.run-shaped adapter routing a background
-    codeql invocation through ``core.sandbox`` — network deny, safe
-    env, resource limits, and namespace-supervised reaping, the same
-    containment class the query_runner's codeql invocations use. A
-    bare ``subprocess.run`` on the warm-up thread would leave an
-    unsupervised JVM outside every deny/reap layer (orphaned for up
-    to its timeout at interpreter exit).
+# How many directory levels above the query's own directory the pack-
+# manifest search may climb. Real pack layouts keep the manifest close:
+# the deepest standard-library nesting (<pack>/Security/CWE/CWE-NNN/
+# query.ql) puts it 3 levels up, and repo-resident packs sit at 1-2.
+# Too low and a legitimately deep pack loses its manifest (the read
+# grant shrinks to the query dir and the analyze fails loudly under
+# confinement — see the out-of-bound warning below); too high and a
+# stray manifest far up the tree silently WIDENS the read grant to
+# that whole ancestor. 6 covers every observed layout with headroom.
+_PACK_MANIFEST_ASCENT_MAX = 6
 
-    ``tool_paths`` (the resolved codeql install dir) is load-bearing:
-    the sandbox's child-env scrub drops home-rooted PATH entries, so
-    a bare ``codeql`` argv[0] from a home install resolves in the
-    caller environment but NOT inside the sandbox — setup refuses and
-    the warm-up silently no-ops (the query_runner's
-    ``_sandbox_tool_paths`` precedent)."""
+
+def _codeql_pack_root(query_path: Path) -> Path:
+    """Enclosing qlpack root for a resolved on-disk query file.
+
+    ``database analyze`` resolves a query THROUGH its pack: it reads
+    the enclosing ``qlpack.yml`` / ``codeql-pack.yml`` and the pack's
+    sibling files (compiled ``.qlx``, suite metadata), not just the
+    ``.ql`` itself, so the sandbox read grant must cover the pack
+    directory. Falls back to the query's own directory when no pack
+    manifest exists (a bare ``.ql`` compiles standalone).
+
+    The return value becomes a read grant, so the ascent is bounded
+    (``_PACK_MANIFEST_ASCENT_MAX``) and never accepts the user's home
+    directory or the filesystem root as a pack root — a manifest
+    planted there would otherwise convert this lookup into a
+    whole-tree read grant. A manifest that exists only beyond the
+    bound cannot be honoured; the analyze will fail under confinement,
+    so that shape is diagnosed with a loud warning rather than a
+    silent per-hypothesis error."""
+    parent = query_path.resolve().parent
+    home = Path.home()
+    candidates = (parent, *parent.parents)
+    for candidate in candidates[:_PACK_MANIFEST_ASCENT_MAX + 1]:
+        if candidate == home or candidate == candidate.parent:
+            break
+        if ((candidate / "qlpack.yml").is_file()
+                or (candidate / "codeql-pack.yml").is_file()):
+            return candidate
+    for candidate in candidates[_PACK_MANIFEST_ASCENT_MAX + 1:]:
+        if ((candidate / "qlpack.yml").is_file()
+                or (candidate / "codeql-pack.yml").is_file()):
+            logger.warning(
+                "codeql: pack manifest for %s sits at %s — outside "
+                "the bounded read grant this sweep confines the "
+                "analyze to. The query cannot resolve through its "
+                "pack under confinement; re-root the pack closer to "
+                "the query.",
+                query_path, candidate,
+            )
+            break
+    return parent
+
+
+def _codeql_cache_args(database_dir: Path) -> tuple[str, ...]:
+    """Extra ``database analyze`` args redirecting the compilation cache.
+
+    The durable pack trees (installed packs under the CLI's package
+    home, the repo's own packs) are READ-ONLY inside the sandbox — a
+    JVM compromised by hostile database bytes must not be able to
+    rewrite compiled-query caches that every future sweep would
+    execute. The CLI's default cache locations live in exactly those
+    trees, so they are disabled and the cache is redirected into the
+    database directory: already writable (the analyze holds its disk
+    cache and evaluation cache there), scoped to this database's
+    lifetime, and shared across the run's per-hypothesis dispatches
+    so each query compiles at most once per database."""
+    cache_dir = database_dir / "raptor-compile-cache"
+    try:
+        cache_dir.mkdir(exist_ok=True)
+    except OSError:
+        # The analyze itself needs a writable database dir (disk
+        # cache lock); if that premise fails the CLI will surface it.
+        pass
+    return (
+        f"--compilation-cache={cache_dir}",
+        "--no-default-compilation-cache",
+    )
+
+
+def _sandboxed_codeql_runner(
+    tool_paths: list[str],
+    *,
+    database_dir: Path,
+    query_paths: list[str],
+    scratch_dir: Path,
+    caller_label: str = "codeql-warmup",
+) -> Callable[..., Any]:
+    """Build a subprocess.run-shaped adapter routing a codeql
+    invocation through ``core.sandbox`` — network deny, safe env,
+    resource limits, namespace-supervised reaping, and filesystem
+    confinement. A bare ``subprocess.run`` would leave an
+    unsupervised JVM outside every deny/reap layer (orphaned for up
+    to its timeout at interpreter exit), and a sandbox run WITHOUT
+    ``target=``/``output=`` applies no filesystem confinement at all
+    — the JVM parses attacker-shaped bytes (the database is extracted
+    from the scanned repo) with the whole filesystem reachable.
+
+    Filesystem surface, enumerated to what ``database analyze``
+    genuinely touches. ``restrict_reads=True`` is what makes the read
+    side REAL on every lane: without it the Landlock tier leaves
+    reads host-wide and the substrate discards ``readable_paths``
+    outright — the grants below would be decorative.
+
+    * ``output=`` — ``scratch_dir``, the invocation's writable
+      scratch where the SARIF lands.
+    * ``writable_paths`` — the database dir only (analyze holds the
+      exclusive IMB disk-cache lock and writes evaluation cache
+      inside the db tree; the compilation cache is redirected there
+      too — see :func:`_codeql_cache_args`). The durable pack trees
+      are deliberately NOT writable: a JVM compromised by hostile
+      database bytes could otherwise poison compiled-query caches
+      that later sweeps execute.
+    * ``readable_paths`` — each query's enclosing pack root (pack
+      manifest, compiled-query siblings) plus the CLI's package home
+      (``~/.codeql``, read-only) when present, where installed
+      dependency packs (``codeql/cpp-all`` etc.) resolve from.
+    * ``tool_paths`` — the resolved codeql install dir (the bundled
+      standard packs under the distribution resolve through this
+      grant). ALSO load-bearing for name resolution: the sandbox's
+      child-env scrub drops home-rooted PATH entries, so a bare
+      ``codeql`` argv[0] from a home install resolves in the caller
+      environment but NOT inside the sandbox — setup refuses and the
+      caller degrades (the query_runner's ``_sandbox_tool_paths``
+      precedent)."""
+    readable = {
+        str(_codeql_pack_root(Path(q))) for q in query_paths
+    }
+    codeql_home = Path.home() / ".codeql"
+    if codeql_home.is_dir():
+        readable.add(str(codeql_home))
+    readable_list = sorted(readable)
+    writable = [str(database_dir)]
 
     def _runner(cmd: list[str], **kwargs: Any):
         from core.sandbox import run as sandbox_run
@@ -3775,8 +4017,13 @@ def _sandboxed_codeql_runner(tool_paths: list[str]):
         # analyze()'s env would fight its sanitisation.
         kwargs.pop("env", None)
         return sandbox_run(
-            cmd, block_network=True, caller_label="codeql-warmup",
-            tool_paths=tool_paths, **kwargs,
+            cmd, block_network=True, caller_label=caller_label,
+            tool_paths=tool_paths,
+            output=str(scratch_dir),
+            restrict_reads=True,
+            readable_paths=readable_list,
+            writable_paths=writable,
+            **kwargs,
         )
 
     return _runner
@@ -3876,16 +4123,32 @@ def warm_codeql_memo(
         # while this holds the DB waits there instead of dying on the
         # lock, then re-peeks the memo this call is about to fill.
         with _codeql_db_lock_for(db):
-            result = analyze(
-                db,
-                [str(q) for q, _key, _rid in entries],
-                sarif_out,
-                codeql_bin=codeql_cli,
-                timeout_seconds=timeout_seconds,
-                runner=_sandboxed_codeql_runner(
-                    [str(Path(codeql_cli).parent)],
-                ),
-            )
+            try:
+                result = analyze(
+                    db,
+                    [str(q) for q, _key, _rid in entries],
+                    sarif_out,
+                    codeql_bin=codeql_cli,
+                    timeout_seconds=timeout_seconds,
+                    runner=_sandboxed_codeql_runner(
+                        [str(Path(codeql_cli).parent)],
+                        database_dir=db,
+                        query_paths=[str(q) for q, _key, _rid in entries],
+                        scratch_dir=Path(tmp),
+                    ),
+                    extra_args=_codeql_cache_args(db),
+                )
+            except (Exception, _SandboxSetupError) as exc:  # noqa: BLE001
+                # Best-effort by contract (the caller runs this on a
+                # background thread and debug-swallows), so a sandbox
+                # setup refusal MAY be absorbed here — the warm-up
+                # produces no verdict, and the per-hypothesis
+                # dispatches hit the same refusal fail-closed. What
+                # it must not be is silent: warn once with the cause.
+                _warn_codeql_warmup_failed(
+                    f"{type(exc).__name__}: {exc}",
+                )
+                return None
         from core.sarif.parser import load_sarif
         sarif = load_sarif(result.sarif_path)
     if sarif is None:

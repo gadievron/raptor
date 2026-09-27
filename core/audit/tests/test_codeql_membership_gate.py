@@ -18,6 +18,8 @@ import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from core.audit.codeql_dbs import CodeqlDbRouter
 from core.audit.orchestrator import (
     OrchestratorConfig,
@@ -39,8 +41,25 @@ def _make_db(tmp_path: Path, entries: list[str]) -> Path:
     return db
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_codeql_cli(monkeypatch):
+    """The dispatch resolves the codeql CLI in the caller env before
+    handing analyze a sandboxed runner — pin a fake install so these
+    tests never depend on, or vary with, the host's codeql."""
+    import shutil
+
+    monkeypatch.setattr(
+        shutil, "which",
+        lambda name, *a, **k: (
+            "/home/testuser/.local/bin/codeql" if name == "codeql"
+            else None),
+    )
+
+
 def _fake_analyze(results: list[dict]):
-    def analyze(db, queries, sarif_out, timeout_seconds=300):
+    # **kwargs: the real analyze() also takes codeql_bin= and the
+    # sandboxed runner= adapter; the stub must accept the full call.
+    def analyze(db, queries, sarif_out, timeout_seconds=300, **kwargs):
         Path(sarif_out).write_text(
             json.dumps({"runs": [{"results": results}]}), encoding="utf-8",
         )
