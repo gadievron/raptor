@@ -3321,10 +3321,10 @@ def _extract_path_conditions(
 # many MB each on alert-dense targets) held for the memo's lifetime.
 # The floor is set by the warm-up (:func:`warm_codeql_memo`): a
 # multi-database run pre-fills one entry per (db, dispatchable query),
-# and the CWE dispatch menu spans ~19 query IDs across three language
+# and the CWE dispatch menu spans ~27 query IDs across three language
 # packs — a 16-entry cap evicted warm-up entries before their
 # per-hypothesis lookups arrived, re-buying the analyze the warm-up
-# already paid for. 32 = the full menu plus ad-hoc per-run headroom.
+# already paid for. 40 = the full menu plus ad-hoc per-run headroom.
 # Memory shape under warm-up: each database's pass parks its ENTIRE
 # per-rule slice set in the memo at once, so a multi-DB run holds
 # every database's slices simultaneously (bounded by this cap times
@@ -3339,7 +3339,7 @@ def _extract_path_conditions(
 # callers and tests only; a process outliving one run must not reuse
 # it across runs, which the orchestrator wiring guarantees for the
 # audit path.
-_CODEQL_MEMO_MAX_ENTRIES = 32
+_CODEQL_MEMO_MAX_ENTRIES = 40
 _codeql_memo: BoundedMemo[list[dict[str, Any]]] = BoundedMemo(
     _CODEQL_MEMO_MAX_ENTRIES,
 )

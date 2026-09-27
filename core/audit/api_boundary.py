@@ -311,7 +311,10 @@ def is_caller_conditional_hypothesis(text: str) -> bool:
 # caller-obligation shaped: "the consumer must verify origin /
 # signature / integrity before passing the data in" is exactly the
 # asserted-obligation-at-call-sites question this channel answers.
-API_BOUNDARY_CWES = frozenset({"CWE-345"})
+# CWE-573 (improper following of specification by caller) IS the
+# caller-contract violation in class form — dispatched
+# unconditionally like CWE-345.
+API_BOUNDARY_CWES = frozenset({"CWE-345", "CWE-573"})
 
 # CWE families dispatched only when the hypothesis is itself
 # caller-conditional: double free / use-after-free / NULL dereference

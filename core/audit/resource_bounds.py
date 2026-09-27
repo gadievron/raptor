@@ -61,8 +61,13 @@ RULE_UNBOUNDED = "resource_bounds:unbounded-accumulation"
 # alone; participates in channel aggregation).
 DETECTION_VARIANT_SUFFIX = "-naming"
 
-# CWE families the channel joins via the fallback chain.
-RESOURCE_BOUNDS_CWES = frozenset({"CWE-770", "CWE-400", "CWE-772"})
+# CWE families the channel joins via the fallback chain. CWE-789
+# (memory allocation with excessive size value) is the
+# allocation-size shape of the same family — the attacker-influenced
+# size reaching the allocator unbounded is exactly the bound-witness
+# question this channel adjudicates.
+RESOURCE_BOUNDS_CWES = frozenset({"CWE-770", "CWE-400", "CWE-772",
+                                  "CWE-789"})
 
 # Enumerated inconclusive reasons (each a distinct tested string).
 REASON_VOCAB_UNBOUND = "vocab-unbound"

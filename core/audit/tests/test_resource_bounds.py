@@ -159,7 +159,9 @@ class TestClassifier:
         assert resource_bounds_applicable("CWE-400")
         assert resource_bounds_applicable("400")
         assert not resource_bounds_applicable("CWE-120")
-        assert RESOURCE_BOUNDS_CWES == {"CWE-770", "CWE-400", "CWE-772"}
+        assert RESOURCE_BOUNDS_CWES == {
+            "CWE-770", "CWE-400", "CWE-772", "CWE-789",
+        }
 
     def test_detection_rule_id(self):
         assert is_detection_rule_id(

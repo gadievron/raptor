@@ -434,7 +434,7 @@ class TestMemoLifetime:
         fit — and below the warm-up floor it evicts pre-filled entries
         before their per-hypothesis lookups arrive.
         """
-        assert sweep_mod._CODEQL_MEMO_MAX_ENTRIES == 32
+        assert sweep_mod._CODEQL_MEMO_MAX_ENTRIES == 40
 
     def test_cap_accommodates_the_warmup_menu(self):
         """Floor binding: a multi-database warm-up pre-fills one entry

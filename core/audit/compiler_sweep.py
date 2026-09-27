@@ -110,6 +110,22 @@ _OOB_SPEC = FamilySpec(
     reliable=False,
 )
 
+# Loop-bound family: the analyzer's infinite-loop diagnostic
+# (gcc >= 14) and clang's -Wloop-analysis (loop variable not updated /
+# suspicious condition) fire only on locally-provable shapes —
+# confirm-only (silence proves nothing about data-dependent loop
+# bounds). Shared by CWE-835 (unreachable exit condition) and its
+# parent CWE-834 (excessive iteration).
+_LOOP_SPEC = FamilySpec(
+    gcc_ids=("-Wanalyzer-infinite-loop",),
+    gcc_flags=(),
+    clang_engine="warning",
+    clang_ids=("-Wloop-analysis",),
+    clang_flags=("-Wloop-analysis",),
+    clang_message_re="",
+    reliable=False,
+)
+
 COMPILER_CWE_MAP: dict[str, FamilySpec] = {
     "CWE-416": FamilySpec(
         gcc_ids=("-Wanalyzer-use-after-free",),
@@ -179,17 +195,20 @@ COMPILER_CWE_MAP: dict[str, FamilySpec] = {
         clang_message_re="",
         reliable=False,
     ),
-    # Loop with unreachable exit condition: the analyzer's
-    # infinite-loop diagnostic (gcc >= 14) and clang's -Wloop-analysis
-    # (loop variable not updated / suspicious condition) fire only on
-    # locally-provable shapes — confirm-only (silence proves nothing
-    # about data-dependent loop bounds).
-    "CWE-835": FamilySpec(
-        gcc_ids=("-Wanalyzer-infinite-loop",),
-        gcc_flags=(),
+    "CWE-834": _LOOP_SPEC,
+    "CWE-835": _LOOP_SPEC,
+    # Uncontrolled recursion: -Winfinite-recursion (gcc >= 12, clang)
+    # fires only when every path through a function provably calls
+    # itself — confirm-only (silence proves nothing about
+    # data-dependent recursion depth, and an older gcc that rejects
+    # the flag degrades this family to inconclusive, never a wrong
+    # verdict).
+    "CWE-674": FamilySpec(
+        gcc_ids=("-Winfinite-recursion",),
+        gcc_flags=("-Winfinite-recursion",),
         clang_engine="warning",
-        clang_ids=("-Wloop-analysis",),
-        clang_flags=("-Wloop-analysis",),
+        clang_ids=("-Winfinite-recursion",),
+        clang_flags=("-Winfinite-recursion",),
         clang_message_re="",
         reliable=False,
     ),

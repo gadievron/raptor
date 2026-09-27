@@ -233,10 +233,11 @@ class TestSynthesisHarmGate:
             assert "no harm-stating hypothesis" in reason
 
     def test_concrete_unmapped_class_allowed(self):
-        # CWE-269 (privilege management) has no dispatch entry but is a
-        # concrete harm class — the lane stays open for it.
+        # CWE-306 (missing authentication for critical function) has
+        # no dispatch entry but is a concrete harm class — the lane
+        # stays open for it.
         assert ondemand_synthesis_refusal_reason(
-            "CWE-269", _NO_HARM_HYPOTHESIS,
+            "CWE-306", _NO_HARM_HYPOTHESIS,
         ) == ""
 
     def test_harm_mechanism_backs_missing_class(self):
