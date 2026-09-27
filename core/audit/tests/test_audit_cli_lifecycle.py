@@ -49,7 +49,7 @@ def test_explicit_out_goes_through_lifecycle_start(tmp_path, monkeypatch):
     rc = mod.cmd_run(args)
     assert rc == 1                       # stopped at the stubbed step
 
-    start = calls[0]
+    start = _lifecycle_start(calls)
     assert start[0].endswith("raptor-run-lifecycle")
     assert start[1:3] == ["start", "audit"]
     assert "--target" in start and str(target) in start
@@ -77,7 +77,7 @@ def test_no_out_still_resolves_via_lifecycle(tmp_path, monkeypatch):
 
     rc = mod.cmd_run(SimpleNamespace(target=str(target), out=None))
     assert rc == 1
-    assert "--out" not in calls[0]
+    assert "--out" not in _lifecycle_start(calls)
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +120,22 @@ def _project_argv_pair(argv: list[str]) -> str | None:
     return None
 
 
+def _lifecycle_start(calls: list[list[str]]) -> list[str]:
+    """The recorded lifecycle-start argv.
+
+    The spy patches ``subprocess.run`` module-wide, so incidental
+    subprocess calls from machinery cmd_run exercises (the sandbox's
+    user-namespace helper spawn, host-state dependent) can land in
+    ``calls`` BEFORE the lifecycle child — indexing ``calls[0]``
+    asserted on whichever ran first. Select the call under test
+    instead.
+    """
+    for argv in calls:
+        if argv and "raptor-run-lifecycle" in argv[0]:
+            return argv
+    raise AssertionError(f"no lifecycle call recorded: {calls!r}")
+
+
 def test_project_pin_forwarded_to_lifecycle_child(tmp_path, monkeypatch):
     mod = _load_cli()
     target = tmp_path / "target"
@@ -132,7 +148,7 @@ def test_project_pin_forwarded_to_lifecycle_child(tmp_path, monkeypatch):
         target=str(target), out=None, project="myproj"))
     assert rc == 1                       # stopped at the stubbed step
 
-    start = calls[0]
+    start = _lifecycle_start(calls)
     assert start[1:3] == ["start", "audit"]
     assert _project_argv_pair(start) == "myproj"
 
@@ -153,7 +169,7 @@ def test_explicitly_projectless_dash_forwarded_verbatim(
     rc = mod.cmd_run(SimpleNamespace(
         target=str(target), out=None, project="-"))
     assert rc == 1
-    assert _project_argv_pair(calls[0]) == "-"
+    assert _project_argv_pair(_lifecycle_start(calls)) == "-"
 
 
 def test_no_project_flag_forwards_nothing(tmp_path, monkeypatch):
@@ -169,7 +185,7 @@ def test_no_project_flag_forwards_nothing(tmp_path, monkeypatch):
     rc = mod.cmd_run(SimpleNamespace(
         target=str(target), out=None, project=None))
     assert rc == 1
-    assert "--project" not in calls[0]
+    assert "--project" not in _lifecycle_start(calls)
 
 
 def test_project_pin_forwarded_alongside_explicit_out(
@@ -186,7 +202,7 @@ def test_project_pin_forwarded_alongside_explicit_out(
     rc = mod.cmd_run(SimpleNamespace(
         target=str(target), out=str(out_dir), project="myproj"))
     assert rc == 1
-    start = calls[0]
+    start = _lifecycle_start(calls)
     assert _project_argv_pair(start) == "myproj"
     assert "--out" in start and str(out_dir) in start
 

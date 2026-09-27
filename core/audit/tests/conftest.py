@@ -65,7 +65,21 @@ def _hermetic_sigterm_disposition():
     pool-teardown tests SIGKILLing provably responsive workers after
     their full grace. Restore the disposition (production
     uninstall first, belt-and-braces direct restore second) around
-    every audit test."""
+    every audit test.
+
+    The snapshot itself can be the grace handler: a HIGHER-scoped
+    fixture (a module-scoped fixture running run_orchestrator
+    in-process) installs the handler during this test's setup chain,
+    BEFORE this function-scoped guard captures ``prev``. Restoring
+    that snapshot re-installs the leak — and once the orchestrator's
+    bookkeeping is cleared by the uninstall, every later guard
+    faithfully preserves the poisoned disposition for the rest of the
+    session (observed as the sigterm-grace roundtrip test finding the
+    handler pre-installed). The grace handler is therefore never a
+    restore target: if it is still current after the production
+    uninstall, re-install the snapshot when it is a legitimate prior
+    handler (a pytest plugin's SIGTERM handler is the case this
+    protects), else fall back to the interpreter default."""
     import signal
 
     try:
@@ -78,8 +92,23 @@ def _hermetic_sigterm_disposition():
 
     _orch.uninstall_sigterm_grace()
     try:
-        if (prev is not None
-                and signal.getsignal(signal.SIGTERM) is not prev):
+        current = signal.getsignal(signal.SIGTERM)
+        if current is _orch._handle_sigterm:
+            # Uninstall could not restore (its bookkeeping was
+            # cleared by an earlier teardown while the handler stayed
+            # installed). A legitimate snapshot IS the true baseline —
+            # restore it (a pytest plugin's SIGTERM handler must
+            # survive the guard). Only a missing or grace-poisoned
+            # snapshot leaves the baseline unrecoverable; there the
+            # interpreter default beats leaving salvage semantics
+            # leaked into every later fork child.
+            if prev is not None and prev is not _orch._handle_sigterm:
+                signal.signal(signal.SIGTERM, prev)
+            else:
+                signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        elif (prev is not None
+                and prev is not _orch._handle_sigterm
+                and current is not prev):
             # prev None = C-installed prior handler (getsignal cannot
             # represent it and signal.signal cannot re-install it) —
             # leave whatever is current rather than raise TypeError.
