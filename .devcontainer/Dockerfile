@@ -72,6 +72,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # SEMGREP (static-analysis, scan, raptor-scan, agentic commands)
 # ============================================================================
 
+COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /usr/local/bin/uv
 RUN uv tool install semgrep==1.177.0
 
 # ============================================================================

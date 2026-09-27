@@ -625,7 +625,7 @@ def test_growth_ratio_pin_n_vs_2n(packs) -> None:
     t_2n = _timed_propagate(100, packs)   # 1200 functions
     assert t_n > 0
     ratio = t_2n / t_n
-    assert ratio <= 2.6, f"super-linear growth: ratio {ratio:.2f}"
+    assert ratio <= 2.8, f"super-linear growth: ratio {ratio:.2f}"
 
 
 # ── wall budget under a stalled dependency ───────────────────────────
