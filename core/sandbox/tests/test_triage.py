@@ -1192,3 +1192,31 @@ class TestCapEvidenceEscapesStructurally:
     def test_plain_items_untouched(self):
         items = ["socket", "connect"]
         assert triage_mod._cap_evidence(items) == items
+
+
+class TestReadBoundedGrewDuringRead:
+    """A triage input that grows past the cap between the fstat size
+    gate and the read must be REFUSED (None), never returned as a
+    silently-truncated prefix — a racing target-side writer could
+    shape the prefix into a different (cleaner-grading) artifact.
+    Pins the contract _read_bounded inherits from
+    core.security.capped_read; the pre-migration private copy
+    truncated instead."""
+
+    def test_grown_input_refused_not_truncated(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(triage_mod, "_MAX_INPUT_BYTES", 10)
+        f = tmp_path / "input.json"
+        f.write_bytes(b"x" * 20)
+        real_fstat = os.fstat
+
+        def lying_fstat(fd: int) -> os.stat_result:
+            # Simulate the race: fstat sees an in-cap size while the
+            # file already holds more than the cap.
+            st = real_fstat(fd)
+            return os.stat_result(
+                (st.st_mode, st.st_ino, st.st_dev, st.st_nlink,
+                 st.st_uid, st.st_gid, 5, st.st_atime, st.st_mtime,
+                 st.st_ctime))
+
+        monkeypatch.setattr(os, "fstat", lying_fstat)
+        assert triage_mod._read_bounded(f) is None

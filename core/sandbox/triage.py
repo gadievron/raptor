@@ -45,6 +45,7 @@ from core.sandbox.escalation_signatures import (
     is_credential_path,
 )
 from core.sandbox.profiles import host_recon_threshold_for_profile
+from core.security.capped_read import read_capped
 from core.security.log_sanitisation import sanitise_for_terminal
 from core.sandbox.proxy import (
     PROXY_EVENTS_COUNT_FILENAME,
@@ -878,43 +879,21 @@ _MAX_INPUT_BYTES = 64 * 1024 * 1024
 
 
 def _read_bounded(path: Path) -> bytes | None:
-    """Open-and-read a triage input with the same discipline the
-    writers use (see context._persist_proxy_events): the run dir is
+    """Read a triage input with the same discipline the writers use
+    (see context._persist_proxy_events): the run dir is
     target-writable, so a plain ``open()`` here would follow a
     target-planted symlink out of the sandbox boundary, and block the
     LIFECYCLE (complete_run/fail_run run this in-process) forever on
-    a target-planted FIFO with no writer. O_NOFOLLOW + O_NONBLOCK at
-    open, fstat regular-file check on the actually-opened inode,
-    bounded read. Any refusal returns None — absent and unreadable
-    collapse to "no input", matching the writers' fail-quiet stance.
+    a target-planted FIFO with no writer. Delegates the hardened
+    dance (O_NOFOLLOW + O_NONBLOCK + O_CLOEXEC at open, fstat
+    regular-file and size checks on the actually-opened inode,
+    bounded read) to ``core.security.capped_read``. Any refusal
+    returns None — absent and unreadable collapse to "no input",
+    matching the writers' fail-quiet stance. A file that grows past
+    the cap between fstat and read is REFUSED (None), never returned
+    as a silently-truncated prefix a racing writer could shape.
     """
-    try:
-        fd = os.open(
-            str(path),
-            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
-        )
-    except OSError:
-        # ENOENT (common case), ELOOP (planted symlink), and friends.
-        return None
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):
-            return None  # FIFO / device / directory — never read
-        if st.st_size > _MAX_INPUT_BYTES:
-            return None
-        chunks = []
-        remaining = _MAX_INPUT_BYTES
-        while remaining > 0:
-            chunk = os.read(fd, min(remaining, 1 << 20))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        return b"".join(chunks)
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
+    return read_capped(path, _MAX_INPUT_BYTES)
 
 
 def _load_json(path: Path) -> dict | None:
