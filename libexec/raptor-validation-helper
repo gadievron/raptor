@@ -4277,10 +4277,25 @@ def assemble_parts(stage: str, workdir: str | Path) -> bool:
                 print(f"WARNING: updates key {_sft(str(fid), max_len=80)} "
                       "is not in the findings.json inventory",
                       file=sys.stderr)
-        outputs = {
-            f"stage-{stage.lower()}.json":
-                ("stage", {"stage": stage, "updates": updates}),
-        }
+        doc: dict[str, Any] = {"stage": stage, "updates": updates}
+        if stage == "F":
+            # [F-4] top-level review note: the stage merge copies it
+            # into findings.json and the report renders it — dropping
+            # it here silently lost every sharded run's Stage F notes.
+            # Join the surviving parts' notes in sorted-part-filename
+            # order (the `parts` list order), so reassembly stays
+            # deterministic and order-independent.
+            merged = set(merged_names)
+            notes = [
+                data["stage_f_review"].strip()
+                for name, data, _sha, _sanitised in parts
+                if name in merged
+                and isinstance(data.get("stage_f_review"), str)
+                and data["stage_f_review"].strip()
+            ]
+            if notes:
+                doc["stage_f_review"] = "\n\n".join(notes)
+        outputs = {f"stage-{stage.lower()}.json": ("stage", doc)}
 
     if not merged_names:
         print("ERROR: every part was quarantined — nothing to assemble",

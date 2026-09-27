@@ -696,3 +696,101 @@ class TestStageEStatusAliasIngestion:
         # Part files are an immutable audit record: normalisation
         # happens in memory at ingestion, never on the part on disk.
         assert (parts_dir / "all.json").read_bytes() == before
+
+
+# ---------------------------------------------------------------------------
+# Stage F review passthrough. stage-f-review.md [F-4] instructs a
+# top-level stage_f_review field and report.py consumes it from
+# findings.json — the updates{}-only assembly used to DROP it, so a
+# sharded run silently lost its Stage F notes.
+# ---------------------------------------------------------------------------
+
+class TestStageFReviewPassthrough:
+
+    @staticmethod
+    def _f_part(fid: str, note: str) -> dict:
+        return {
+            "updates": {fid: {"stage_f_summary": {
+                "review_notes": "checked",
+            }}},
+            "stage_f_review": note,
+        }
+
+    def test_single_part_review_survives_assembly(self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-f-parts"
+        parts_dir.mkdir()
+        save_json(parts_dir / "all.json",
+                  self._f_part("FIND-001", "No corrections needed."))
+
+        assert helper.assemble_parts("F", tmp_path) is True
+        assembled = load_json(tmp_path / "stage-f.json")
+        assert assembled["stage_f_review"] == "No corrections needed."
+
+    def test_two_part_notes_join_in_filename_order(self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-f-parts"
+        parts_dir.mkdir()
+        # Written in reverse order — the join follows filename sort,
+        # not write order (order-independent reassembly).
+        save_json(parts_dir / "zz.json",
+                  self._f_part("FIND-002", "Second window clean."))
+        save_json(parts_dir / "aa.json",
+                  self._f_part("FIND-001", "Corrected FIND-001 CWE."))
+
+        assert helper.assemble_parts("F", tmp_path) is True
+        assembled = load_json(tmp_path / "stage-f.json")
+        assert assembled["stage_f_review"] == (
+            "Corrected FIND-001 CWE.\n\nSecond window clean.")
+
+    def test_quarantined_part_note_never_joins(self, helper, tmp_path):
+        # The join reads MERGED parts only: a part quarantined at
+        # ingestion (duplicate update key here) must not leak its
+        # review prose into the assembled note.
+        parts_dir = tmp_path / "stage-f-parts"
+        parts_dir.mkdir()
+        save_json(parts_dir / "aa.json",
+                  self._f_part("FIND-001", "Kept: first window clean."))
+        save_json(parts_dir / "bb.json",
+                  self._f_part("FIND-001",
+                               "POISON note from a quarantined part."))
+
+        assert helper.assemble_parts("F", tmp_path) is True
+        assembled = load_json(tmp_path / "stage-f.json")
+        assert assembled["stage_f_review"] == "Kept: first window clean."
+        assert "POISON" not in json.dumps(assembled)
+
+    def test_key_absent_when_no_part_carries_it(self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-f-parts"
+        parts_dir.mkdir()
+        save_json(parts_dir / "all.json",
+                  {"updates": {"FIND-001": {"stage_f_summary": {}}}})
+
+        assert helper.assemble_parts("F", tmp_path) is True
+        assert "stage_f_review" not in load_json(tmp_path / "stage-f.json")
+
+    def test_review_reaches_findings_json_via_stage_merge(
+            self, helper, tmp_path):
+        # End-to-end seam: assembled stage-f.json -> _apply_stage_file
+        # -> findings.json, where report.py reads stage_f_review.
+        parts_dir = tmp_path / "stage-f-parts"
+        parts_dir.mkdir()
+        save_json(parts_dir / "all.json",
+                  self._f_part("FIND-001", "Corrected FIND-001 CWE."))
+        save_json(tmp_path / "findings.json",
+                  {"findings": [_finding("FIND-001")]})
+
+        assert helper.assemble_parts("F", tmp_path) is True
+        assert helper._apply_stage_file(tmp_path, "F") is True
+        merged = load_json(tmp_path / "findings.json")
+        assert merged["stage_f_review"] == "Corrected FIND-001 CWE."
+
+    def test_hostile_review_text_sanitised_at_ingestion(
+            self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-f-parts"
+        parts_dir.mkdir()
+        save_json(parts_dir / "all.json",
+                  self._f_part("FIND-001", "raw \x1b]0;title\x07 note"))
+
+        assert helper.assemble_parts("F", tmp_path) is True
+        note = load_json(tmp_path / "stage-f.json")["stage_f_review"]
+        assert "\x1b" not in note
+        assert "\x07" not in note
