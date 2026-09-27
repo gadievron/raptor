@@ -24,6 +24,7 @@ from packages.joern.runner import (
     build_cpg,
     build_cpg_cached,
     cleanup_cpg,
+    cpg_cache_slot_name,
     load_cached_cpg,
     run_query,
     run_taint_query,
@@ -1147,7 +1148,8 @@ class TestFailedBuildCacheGate:
             subprocess_runner=self._timeout_runner(b"partial-write"),
         )
         assert cpg.build_failed is True
-        assert not (cache / "joern-cpg" / "manifest.json").exists()
+        slot = cpg_cache_slot_name((), target=target)
+        assert not (cache / slot / "manifest.json").exists()
 
     def test_unparseable_method_count_not_manifested(self, tmp_path):
         # A "successful" build whose cpg.bin has no flatgraph tail
@@ -1167,7 +1169,8 @@ class TestFailedBuildCacheGate:
 
         cpg = build_cpg_cached(target, cache, subprocess_runner=runner)
         assert cpg.exists()  # this run may still use the build
-        assert not (cache / "joern-cpg" / "manifest.json").exists()
+        slot = cpg_cache_slot_name((), target=target)
+        assert not (cache / slot / "manifest.json").exists()
 
     def test_valid_build_still_manifested(self, tmp_path):
         # Two-direction: a build whose tail manifest parses is cached.
@@ -1184,7 +1187,8 @@ class TestFailedBuildCacheGate:
 
         cpg = build_cpg_cached(target, cache, subprocess_runner=runner)
         assert cpg.build_failed is False
-        manifest = _read_cpg_manifest(cache / "joern-cpg")
+        slot = cpg_cache_slot_name((), target=target)
+        manifest = _read_cpg_manifest(cache / slot)
         assert manifest is not None
         assert manifest["method_count"] == 3
 

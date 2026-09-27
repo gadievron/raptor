@@ -197,7 +197,8 @@ class TestCachePathEmptyRejection:
             languages={"c"},
             subprocess_runner=_writing_runner(6),
         )
-        manifest = json.loads((cache / "joern-cpg" / "manifest.json").read_text())
+        slot = runner_mod.cpg_cache_slot_name((), target=target)
+        manifest = json.loads((cache / slot / "manifest.json").read_text())
         assert manifest["method_count"] == 6
 
     def test_build_cached_empty_writes_no_manifest(self, tmp_path: Path):
@@ -213,4 +214,5 @@ class TestCachePathEmptyRejection:
             subprocess_runner=_writing_runner(0),
         )
         assert not cpg.exists()
-        assert not (cache / "joern-cpg" / "manifest.json").exists()
+        slot = runner_mod.cpg_cache_slot_name((), target=target)
+        assert not (cache / slot / "manifest.json").exists()

@@ -23,8 +23,14 @@ from packages.joern.runner import (
     _target_content_hash,
     _write_cpg_manifest,
     build_cpg_cached,
+    cpg_cache_slot_name,
     load_cached_cpg,
 )
+
+
+def _slot(cache: Path, target: Path) -> Path:
+    """The unscoped consumer's (target-keyed) slot dir."""
+    return cache / cpg_cache_slot_name((), target=target)
 
 
 def _valid_cpg_bytes(methods: int = 5) -> bytes:
@@ -69,7 +75,7 @@ class TestBuildIsPrivateThenPromoted:
         assert seen["build_dir"].parent == cache
         # Promote is complete: slot holds cpg.bin + manifest, the
         # handle points at the SLOT copy, scratch is gone.
-        slot = cache / _CPG_SLOT_UNSCOPED
+        slot = _slot(cache, target)
         assert result.path == slot / "cpg.bin"
         assert result.path.exists()
         assert (slot / "manifest.json").exists()
@@ -83,7 +89,7 @@ class TestBuildIsPrivateThenPromoted:
         # slot is untouched until a verified build is promoted.
         target = _make_target(tmp_path)
         cache = tmp_path / "cache"
-        slot = cache / _CPG_SLOT_UNSCOPED
+        slot = _slot(cache, target)
         slot.mkdir(parents=True)
         old_bytes = _valid_cpg_bytes(methods=7)
         (slot / "cpg.bin").write_bytes(old_bytes)
@@ -119,7 +125,7 @@ class TestBuildIsPrivateThenPromoted:
         assert not result.build_failed
         assert result.path.exists()
         assert result.path.parent.name.startswith(_CPG_BUILD_DIR_PREFIX)
-        assert not (cache / _CPG_SLOT_UNSCOPED / "manifest.json").exists()
+        assert not (_slot(cache, target) / "manifest.json").exists()
 
 
 class TestSlotLockSerialises:
@@ -160,10 +166,59 @@ class TestSlotLockSerialises:
         t2.join(timeout=60)
         assert len(results) == 2
         assert build_count == 1
-        slot_cpg = cache / _CPG_SLOT_UNSCOPED / "cpg.bin"
+        slot_cpg = _slot(cache, target) / "cpg.bin"
         for r in results:
             assert not r.build_failed
             assert r.path == slot_cpg
+
+
+class TestConcurrentDifferentTargets:
+    def test_parallel_builds_never_swap_payloads(self, tmp_path):
+        # Two unscoped consumers build DIFFERENT targets at the same
+        # time. Target-keyed slots give them independent locks (truly
+        # parallel) and independent promote destinations — neither
+        # handle ever points at the other's graph. Pre-fix both raced
+        # into ONE shared slot.
+        target_a = _make_target(tmp_path, "proj_a")
+        target_b = _make_target(tmp_path, "proj_b")
+        cache = tmp_path / "cache"
+        both_building = threading.Barrier(2)
+
+        def fake_runner(cmd, **kw):
+            out = Path(cmd[cmd.index("--output") + 1])
+            built_for = Path(cmd[cmd.index("--output") + 2])
+            # Both builds must be in flight simultaneously — proves
+            # per-target locks do not serialise unrelated targets.
+            both_building.wait(timeout=30)
+            methods = 3 if built_for.name == "proj_a" else 9
+            out.write_bytes(_valid_cpg_bytes(methods=methods))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        results: dict = {}
+
+        def worker(name, tgt):
+            results[name] = build_cpg_cached(
+                tgt, cache, subprocess_runner=fake_runner)
+
+        t1 = threading.Thread(target=worker, args=("a", target_a))
+        t2 = threading.Thread(target=worker, args=("b", target_b))
+        t1.start()
+        t2.start()
+        t1.join(timeout=60)
+        t2.join(timeout=60)
+
+        slot_a = _slot(cache, target_a)
+        slot_b = _slot(cache, target_b)
+        assert slot_a != slot_b
+        assert results["a"].path == slot_a / "cpg.bin"
+        assert results["b"].path == slot_b / "cpg.bin"
+        manifest_a = json.loads((slot_a / "manifest.json").read_text())
+        manifest_b = json.loads((slot_b / "manifest.json").read_text())
+        assert manifest_a["method_count"] == 3
+        assert manifest_b["method_count"] == 9
+        # And each consumer's next run hits its OWN graph.
+        assert load_cached_cpg(target_a, cache).path == results["a"].path
+        assert load_cached_cpg(target_b, cache).path == results["b"].path
 
 
 class TestReaderTornReadClose:
@@ -175,7 +230,7 @@ class TestReaderTornReadClose:
         # graph validated against the wrong manifest.
         target = _make_target(tmp_path)
         cache = tmp_path / "cache"
-        slot = cache / _CPG_SLOT_UNSCOPED
+        slot = _slot(cache, target)
         slot.mkdir(parents=True)
         (slot / "cpg.bin").write_bytes(_valid_cpg_bytes())
         _write_cpg_manifest(

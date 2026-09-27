@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from packages.joern.runner import (
     _CPG_SCOPED_SLOTS_KEEP,
     _CPG_SLOT_SCOPED_PREFIX,
+    _CPG_SLOT_TARGET_PREFIX,
     _CPG_SLOT_UNSCOPED,
     _prune_scoped_cpg_slots,
     _target_content_hash,
@@ -198,6 +199,74 @@ class TestBuildCpgCachedScoped:
         assert manifest["scope_exclude_dirs"] == [str(skip.resolve())]
 
 
+class TestTargetKeyedUnscopedSlots:
+    def _target(self, tmp_path: Path, name: str) -> Path:
+        t = tmp_path / name
+        t.mkdir()
+        (t / "a.c").write_text(f"int {name}_fn() {{}}")
+        return t
+
+    def test_unscoped_slot_keys_on_target(self, tmp_path):
+        a = self._target(tmp_path, "proj_a")
+        b = self._target(tmp_path, "proj_b")
+        slot_a = cpg_cache_slot_name((), target=a)
+        slot_b = cpg_cache_slot_name((), target=b)
+        assert slot_a != slot_b
+        assert slot_a.startswith(_CPG_SLOT_TARGET_PREFIX)
+        # No target keeps the legacy name (compat callers).
+        assert cpg_cache_slot_name(()) == _CPG_SLOT_UNSCOPED
+        # Scope still wins over target.
+        skip = a / "skip"
+        skip.mkdir()
+        assert cpg_cache_slot_name((str(skip),), target=a).startswith(
+            _CPG_SLOT_SCOPED_PREFIX)
+
+    def test_alternating_targets_do_not_thrash(self, tmp_path):
+        # THE single-slot thrash: pre-fix, unscoped runs on two
+        # projects shared one slot and each run re-bought a full CPG
+        # build. Now the second pass over both targets is all hits.
+        a = self._target(tmp_path, "proj_a")
+        b = self._target(tmp_path, "proj_b")
+        cache = tmp_path / "cache"
+        builds = []
+
+        def fake_runner(cmd, **kw):
+            out = Path(cmd[cmd.index("--output") + 1])
+            builds.append(out)
+            out.write_bytes(_valid_cpg_bytes())
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        for tgt in (a, b, a, b):
+            got = build_cpg_cached(
+                tgt, cache, subprocess_runner=fake_runner)
+            assert got.path.parent.name == cpg_cache_slot_name(
+                (), target=tgt)
+        assert len(builds) == 2
+
+    def test_legacy_slot_serves_only_its_recorded_target(self, tmp_path):
+        # Migration: a pre-fix cache in the shared slot keeps serving
+        # the target it was built for — and never any other.
+        a = self._target(tmp_path, "proj_a")
+        b = self._target(tmp_path, "proj_b")
+        cache = tmp_path / "cache"
+        _seed_slot(cache, _CPG_SLOT_UNSCOPED, a, _target_content_hash(a))
+        assert load_cached_cpg(a, cache) is not None
+        assert load_cached_cpg(b, cache) is None
+
+    def test_new_builds_never_write_the_legacy_slot(self, tmp_path):
+        a = self._target(tmp_path, "proj_a")
+        cache = tmp_path / "cache"
+
+        def fake_runner(cmd, **kw):
+            out = Path(cmd[cmd.index("--output") + 1])
+            out.write_bytes(_valid_cpg_bytes())
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        got = build_cpg_cached(a, cache, subprocess_runner=fake_runner)
+        assert got.path.parent.name.startswith(_CPG_SLOT_TARGET_PREFIX)
+        assert not (cache / _CPG_SLOT_UNSCOPED).exists()
+
+
 class TestScopedSlotPruning:
     def test_keeps_newest_n_and_active_and_unscoped(self, tmp_path):
         cache = tmp_path
@@ -220,6 +289,31 @@ class TestScopedSlotPruning:
         # Newest N all survive.
         for n in names[-_CPG_SCOPED_SLOTS_KEEP:]:
             assert n in remaining
+
+    def test_target_and_scoped_pools_pruned_separately(self, tmp_path):
+        # A burst of scoped runs must not evict every project's
+        # whole-tree graph (and vice versa): each prefix is its own
+        # keep-N pool.
+        cache = tmp_path
+        (cache / _CPG_SLOT_UNSCOPED).mkdir()
+        scoped, targeted = [], []
+        for i in range(_CPG_SCOPED_SLOTS_KEEP + 2):
+            d = cache / f"{_CPG_SLOT_SCOPED_PREFIX}{i:012x}"
+            d.mkdir()
+            os.utime(d, (3000 + i, 3000 + i))
+            scoped.append(d.name)
+            d = cache / f"{_CPG_SLOT_TARGET_PREFIX}{i:012x}"
+            d.mkdir()
+            os.utime(d, (3000 + i, 3000 + i))
+            targeted.append(d.name)
+        _prune_scoped_cpg_slots(cache, active_slot=targeted[-1])
+        remaining = {d.name for d in cache.iterdir()}
+        assert _CPG_SLOT_UNSCOPED in remaining
+        for pool in (scoped, targeted):
+            kept = [n for n in pool if n in remaining]
+            assert len(kept) == _CPG_SCOPED_SLOTS_KEEP
+            # Newest N of EACH pool survive independently.
+            assert kept == pool[-_CPG_SCOPED_SLOTS_KEEP:]
 
     def test_symlink_slot_never_removed_through(self, tmp_path):
         cache = tmp_path / "cache"
