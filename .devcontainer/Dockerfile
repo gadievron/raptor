@@ -119,9 +119,9 @@ RUN mkdir -p /opt/codeql \
 
 COPY pyproject.toml uv.lock /tmp/
 
-SHELL ["/bin/bash", "-eo", "pipefail", "-c"]
-RUN uv export --locked --no-hashes --project /tmp \
-    | uv pip install --system --no-cache -r -
+RUN bash -eo pipefail -c \
+    'uv export --locked --no-hashes --project /tmp --extra web \
+     | uv pip install --system --no-cache -r -'
 
 # Install Playwright browser + system deps via Playwright's own dep installer.
 # Replaces a hand-rolled apt list that drifted out of sync with upstream Chromium deps.
