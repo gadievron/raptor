@@ -2170,6 +2170,7 @@ class TestReconcileDataflowValidation:
                     "verdict": "refuted",
                     "reasoning": "no path",
                     "recommends_downgrade": True,
+                    "method": "codeql-iris",
                 },
             },
         }
@@ -2233,6 +2234,7 @@ class TestReconcileDataflowValidation:
                     "verdict": "refuted",
                     "reasoning": "no path",
                     "recommends_downgrade": True,
+                    "method": "codeql-iris",
                 },
             },
         }
@@ -2259,6 +2261,7 @@ class TestReconcileDataflowValidation:
                     "verdict": "refuted",
                     "reasoning": "no path",
                     "recommends_downgrade": True,
+                    "method": "codeql-iris",
                 },
             },
         }
@@ -2288,6 +2291,7 @@ class TestReconcileDataflowValidation:
                     "verdict": "refuted",
                     "reasoning": "no path",
                     "recommends_downgrade": True,
+                    "method": "codeql-iris",
                 },
             },
         }
@@ -2315,6 +2319,7 @@ class TestReconcileDataflowValidation:
                     "verdict": "refuted",
                     "reasoning": "no path",
                     "recommends_downgrade": True,
+                    "method": "codeql-iris",
                 },
             },
         }
@@ -2340,6 +2345,7 @@ class TestReconcileDataflowValidation:
                     "verdict": "refuted",
                     "reasoning": "no path",
                     "recommends_downgrade": True,
+                    "method": "codeql-iris",
                 },
             },
         }
@@ -2360,6 +2366,7 @@ class TestReconcileDataflowValidation:
                     "verdict": "refuted",
                     "reasoning": "no path",
                     "recommends_downgrade": True,
+                    "method": "codeql-iris",
                 },
             },
         }
@@ -2378,6 +2385,7 @@ class TestReconcileDataflowValidation:
                     "verdict": "refuted",
                     "reasoning": "no path",
                     "recommends_downgrade": True,
+                    "method": "codeql-iris",
                 },
             },
         }
@@ -2396,6 +2404,7 @@ class TestReconcileDataflowValidation:
                     "verdict": "refuted",
                     "reasoning": "no path",
                     "recommends_downgrade": True,
+                    "method": "codeql-iris",
                 },
             },
         }
@@ -2415,6 +2424,7 @@ class TestReconcileDataflowValidation:
                     "verdict": "refuted",
                     "reasoning": "no path",
                     "recommends_downgrade": True,
+                    "method": "codeql-iris",
                 },
             },
         }
@@ -2423,6 +2433,135 @@ class TestReconcileDataflowValidation:
         assert results_by_id["F1"]["confidence"] == "low"
         # No pre_validation marker because we didn't change it
         assert "confidence_pre_validation" not in results_by_id["F1"]
+
+
+class TestReconcilePremiseHonesty:
+    """The HARD flip is reserved for validation verdicts whose query
+    premises were mechanical (dataflow_premises_mechanical — the same
+    predicate that grants tool_backed). An LLM-authored or unstamped
+    refutation keeps its full steering weight as a recorded dispute
+    with lowered confidence; only the terminal is_exploitable flip is
+    withheld."""
+
+    @staticmethod
+    def _finding(dv_extra: dict) -> dict:
+        dv = {
+            "verdict": "refuted",
+            "reasoning": "no path",
+            "recommends_downgrade": True,
+        }
+        dv.update(dv_extra)
+        return {
+            "is_exploitable": True,
+            "confidence": "high",
+            "dataflow_validation": dv,
+        }
+
+    def test_llm_authored_method_withholds_flip(self):
+        results_by_id = {
+            "F1": self._finding({"method": "codeql-iris-llm",
+                                 "tier": "template"}),
+        }
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_hard_downgrades"] == 0
+        assert m["n_soft_downgrades"] == 1
+        f = results_by_id["F1"]
+        # Verdict retained; the downgrade survives as a dispute.
+        assert f["is_exploitable"] is True
+        assert "is_exploitable_pre_validation" not in f
+        assert f["validation_disputed"] is True
+        assert f["validation_downgrade_withheld"] == "llm-authored-premises"
+        assert f["confidence"] == "low"
+        assert f["confidence_pre_validation"] == "high"
+
+    def test_llm_authored_tier_vetoes_miswired_mechanical_stamp(self):
+        """Belt-and-braces mirror of verification_tier: a method that
+        claims codeql-iris over an LLM-authored tier does not launder
+        the premises."""
+        results_by_id = {
+            "F1": self._finding({"method": "codeql-iris",
+                                 "tier": "retry"}),
+        }
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_hard_downgrades"] == 0
+        assert m["n_soft_downgrades"] == 1
+        f = results_by_id["F1"]
+        assert f["is_exploitable"] is True
+        assert f["validation_downgrade_withheld"] == "llm-authored-premises"
+
+    def test_missing_method_fails_closed(self):
+        results_by_id = {"F1": self._finding({})}
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_hard_downgrades"] == 0
+        assert m["n_soft_downgrades"] == 1
+        f = results_by_id["F1"]
+        assert f["is_exploitable"] is True
+        assert f["validation_downgrade_withheld"] == "missing-method"
+
+    def test_unrecognized_method_fails_closed(self):
+        results_by_id = {"F1": self._finding({"method": "future-lane"})}
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_hard_downgrades"] == 0
+        assert m["n_soft_downgrades"] == 1
+        assert results_by_id["F1"]["validation_downgrade_withheld"] == (
+            "unrecognized-method"
+        )
+
+    def test_mechanical_method_flips_byte_identical_otherwise(self):
+        """Preservation direction: the SAME finding with the mechanical
+        method stamp still takes the hard flip."""
+        results_by_id = {
+            "F1": self._finding({"method": "codeql-iris-llm",
+                                 "tier": "template"}),
+            "F2": self._finding({"method": "codeql-iris"}),
+        }
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_hard_downgrades"] == 1
+        assert m["n_soft_downgrades"] == 1
+        assert results_by_id["F1"]["is_exploitable"] is True
+        assert results_by_id["F2"]["is_exploitable"] is False
+        assert results_by_id["F2"]["is_exploitable_pre_validation"] is True
+
+    def test_structural_treesitter_keeps_hard_path(self):
+        results_by_id = {
+            "F1": self._finding({"method": "structural-treesitter"}),
+        }
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_hard_downgrades"] == 1
+        f = results_by_id["F1"]
+        assert f["is_exploitable"] is False
+        assert "Tree-sitter" in f["validation_downgrade_reason"]
+
+    def test_iris_tier1_keeps_hard_path(self):
+        results_by_id = {
+            "F1": self._finding({"method": "codeql-iris",
+                                 "tier": "iris_tier1"}),
+        }
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_hard_downgrades"] == 1
+        assert results_by_id["F1"]["is_exploitable"] is False
+
+    def test_consensus_soft_gate_still_first(self):
+        """An LLM-authored refutation on a consensus-affirmed finding
+        takes the existing consensus soft path (disputed_by recorded),
+        not the withheld annotation."""
+        f = self._finding({"method": "codeql-iris-llm", "tier": "template"})
+        f["consensus"] = "agreed"
+        results_by_id = {"F1": f}
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_soft_downgrades"] == 1
+        assert f["validation_disputed_by"] == ["consensus"]
+        assert "validation_downgrade_withheld" not in f
+
+    def test_withheld_path_never_drops_the_validation_block(self):
+        """Absence-of-authority direction: withholding annotates; it
+        never deletes the refutation record or its reasoning."""
+        results_by_id = {"F1": self._finding({"method": "codeql-iris-llm"})}
+        reconcile_dataflow_validation(results_by_id)
+        dv = results_by_id["F1"]["dataflow_validation"]
+        assert dv["verdict"] == "refuted"
+        assert dv["reasoning"] == "no path"
+        assert dv["recommends_downgrade"] is True
 
 
 # Budget guard ----------------------------------------------------------------
@@ -3165,6 +3304,7 @@ class TestOrchestratorIntegration:
                        "verdict": "refuted",
                        "reasoning": "no path",
                        "recommends_downgrade": True,
+                       "method": "codeql-iris",
                    }},
             # Consensus already flipped to False — reconciliation
             # must NOT double-apply
@@ -3173,6 +3313,7 @@ class TestOrchestratorIntegration:
                        "verdict": "refuted",
                        "reasoning": "no path",
                        "recommends_downgrade": True,
+                       "method": "codeql-iris",
                    }},
             # No validation block at all
             "F3": {"is_exploitable": True},

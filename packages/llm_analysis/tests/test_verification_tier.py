@@ -260,18 +260,48 @@ class TestMechanicalReceipt:
         }})
         assert mechanical_receipt(f, "false_positive") == ""
 
-    def test_dv_llm_authored_mints_nothing(self):
+    def test_dv_llm_authored_mints_detection_role_spelling(self):
         # Premise-laundering boundary: CodeQL executing an LLM-authored
-        # query is not a mechanical receipt.
+        # query is not a mechanical receipt. The verdict keeps honest,
+        # VISIBLE provenance — the registry-enumerated detection-role
+        # spelling — instead of the mechanical codeql:dataflow stamp.
         f = _finding(analysis={"dataflow_validation": {
             "verdict": "refuted", "method": "codeql-iris-llm",
         }})
-        assert mechanical_receipt(f, "false_positive") == ""
+        assert mechanical_receipt(f, "false_positive") == "codeql-llm:dataflow"
         f = _finding(analysis={"dataflow_validation": {
             "verdict": "refuted", "method": "codeql-iris",
             "tier": "template",
         }})
+        # A miswired mechanical method over an LLM-authored tier is
+        # still LLM premises — the honest spelling wins.
+        assert mechanical_receipt(f, "false_positive") == "codeql-llm:dataflow"
+
+    def test_dv_llm_authored_receipt_never_passes_the_recall_gate(self):
+        # The detection-role spelling stores provenance but must not
+        # satisfy the evidence-grade firewall alone: no cross-run skip,
+        # no merge tie-break, no standing suppression.
+        from core.audit.evidence_grade import (
+            is_tool_evidence,
+            is_verification_evidence,
+        )
+        f = _finding(analysis={"dataflow_validation": {
+            "verdict": "refuted", "method": "codeql-iris-llm",
+        }})
+        receipt = mechanical_receipt(f, "false_positive")
+        assert receipt == "codeql-llm:dataflow"
+        assert not is_tool_evidence(receipt)
+        assert not is_verification_evidence(receipt)
+
+    def test_dv_llm_authored_direction_mismatch_mints_nothing(self):
+        f = _finding(analysis={"dataflow_validation": {
+            "verdict": "confirmed", "method": "codeql-iris-llm",
+        }})
         assert mechanical_receipt(f, "false_positive") == ""
+        f = _finding(analysis={"dataflow_validation": {
+            "verdict": "refuted", "method": "codeql-iris-llm",
+        }})
+        assert mechanical_receipt(f, "exploitable") == ""
 
     def test_structural_treesitter_named_residual(self):
         # No enumerated spelling for it today — hint tier until the

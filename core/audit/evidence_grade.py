@@ -260,7 +260,24 @@ def _channel_detection_classifier(namespace: str):
 # root check for their namespace).
 _ROLE_VERIFICATION = "verification"
 _ROLE_DETECTION = "detection"
-_EXACT_SPELLING_REGISTRY: dict[str, dict[str, str]] = {}
+_EXACT_SPELLING_REGISTRY: dict[str, dict[str, str]] = {
+    # CodeQL dataflow-validation verdicts whose query text is
+    # LLM-AUTHORED (``dataflow_validation.method == "codeql-iris-llm"``
+    # — Tier 2 template predicates, Tier 3 compile-retry, the legacy
+    # free-form fallback). CodeQL executing the query is mechanical;
+    # the PREMISES are model text, so the receipt is detection-role:
+    # it corroborates, joins the two-namespace aggregation floor, and
+    # steers confidence, but never satisfies verification grade alone
+    # — it cannot break merge ties, hold a claim against demotion, or
+    # earn a cross-run skip. Kept OUT of the ``codeql`` namespace:
+    # that namespace has an open-ended mechanical-premise producer
+    # (``codeql:<query-stem>`` pack-query stamps) which enumeration
+    # would fail-close, and the split keeps the honest provenance
+    # visible in the spelling itself.
+    "codeql-llm": {
+        "codeql-llm:dataflow": _ROLE_DETECTION,
+    },
+}
 
 
 def registry_owns(part: str) -> bool:

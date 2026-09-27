@@ -89,6 +89,27 @@ _TIER_ORDER = {
 }
 
 
+def dataflow_premises_mechanical(dv: dict[str, Any]) -> bool:
+    """True when a ``dataflow_validation`` block's verdict rests on
+    MECHANICAL query premises.
+
+    The single premise-honesty predicate, shared by the tier
+    derivation below and by the reconciliation step
+    (``dataflow_validation.reconcile_dataflow_validation``): a verdict
+    qualifies only when its ``tier`` is not LLM-authored AND either
+    its ``method`` names a mechanical validator or the tier is the
+    prebuilt ``iris_tier1`` lane. A block carrying neither ``method``
+    nor a recognised tier fails CLOSED — an unstamped verdict cannot
+    prove its premises were mechanical, so it never earns mechanical
+    authority (it keeps its steering/dispute weight downstream).
+    """
+    dv_tier = dv.get("tier")
+    return dv_tier not in LLM_AUTHORED_DV_TIERS and (
+        dv.get("method") in _MECHANICAL_METHODS
+        or dv_tier == "iris_tier1"
+    )
+
+
 def derive_verification_tier(finding: dict[str, Any]) -> str:
     """Derive the evidence tier for one finding dict.
 
@@ -147,11 +168,7 @@ def derive_verification_tier(finding: dict[str, Any]) -> str:
         or {}
     )
     if isinstance(dv, dict) and dv.get("verdict") in ("confirmed", "refuted"):
-        dv_tier = dv.get("tier")
-        if dv_tier not in LLM_AUTHORED_DV_TIERS and (
-            dv.get("method") in _MECHANICAL_METHODS
-            or dv_tier == "iris_tier1"
-        ):
+        if dataflow_premises_mechanical(dv):
             return VerificationTier.TOOL_BACKED.value
 
     return VerificationTier.LLM_ONLY.value
@@ -172,8 +189,12 @@ def mechanical_receipt(finding: dict[str, Any], verdict: str) -> str:
 
     Spellings returned are enumerated members of the evidence-grade
     admission surface (``core.audit.evidence_grade``), so the recall
-    side's ``is_tool_evidence`` gate recognises them. The
-    ``structural-treesitter`` dataflow method has no enumerated
+    side grades them honestly: mechanical-premise receipts satisfy
+    ``is_tool_evidence`` and may earn the cross-run skip, while the
+    LLM-authored-premise dataflow receipt (``codeql-llm:dataflow``)
+    is registry-enumerated DETECTION-role — visible provenance that
+    corroborates and aggregates but never skips or convicts alone.
+    The ``structural-treesitter`` dataflow method has no enumerated
     spelling today and deliberately returns ``""`` (named residual —
     hint tier until the registry learns a spelling for it).
     """
@@ -237,10 +258,21 @@ def mechanical_receipt(finding: dict[str, Any], verdict: str) -> str:
             dv.get("method") == "codeql-iris" or dv_tier == "iris_tier1"
         ):
             # codeql-iris = prebuilt pack-resident query: mechanical
-            # premises. codeql-iris-llm (LLM-authored predicates) and
-            # structural-treesitter (no enumerated spelling) do not
-            # mint a receipt here.
+            # premises. structural-treesitter (no enumerated spelling)
+            # does not mint a receipt here.
             return "codeql:dataflow"
+        if direction_ok and (
+            dv.get("method") == "codeql-iris-llm"
+            or dv_tier in LLM_AUTHORED_DV_TIERS
+        ):
+            # LLM-authored query predicates: CodeQL ran mechanically,
+            # but the premises are model text. The spelling is
+            # enumerated DETECTION-role in the exact-spelling registry
+            # (core.audit.evidence_grade) — the stored verdict keeps
+            # honest provenance and the receipt corroborates or
+            # aggregates downstream, but it never grades as
+            # verification alone and never earns the cross-run skip.
+            return "codeql-llm:dataflow"
 
     return ""
 

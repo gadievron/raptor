@@ -250,8 +250,11 @@ class TestE2EIris:
         # is_exploitable preserved
         assert results_by_id["F-real"]["is_exploitable"] is True
 
-    def test_false_positive_refuted_and_downgraded(self, tmp_path):
-        """The sanitized case: CodeQL refutes via Tier 1 → Tier 2 fallthrough."""
+    def test_false_positive_refuted_flip_withheld(self, tmp_path):
+        """The sanitized case: CodeQL refutes via Tier 1 → Tier 2
+        fallthrough. Tier 2's predicates are LLM-authored, so the
+        refutation disputes and lowers confidence but may not flip the
+        verdict on its own."""
         from packages.hypothesis_validation.adapters.base import ToolEvidence
 
         repo, out_dir, db = _build_target_and_db(tmp_path)
@@ -316,19 +319,32 @@ class TestE2EIris:
         # Validation is non-destructive — is_exploitable still True
         assert results_by_id["F-fp"]["is_exploitable"] is True
         assert results_by_id["F-fp"]["dataflow_validation"]["recommends_downgrade"] is True
+        # The refuting query's predicates were LLM-authored (Tier 2
+        # template) — the honest method stamp records it.
+        assert results_by_id["F-fp"]["dataflow_validation"]["method"] == (
+            "codeql-iris-llm"
+        )
 
-        # Reconciliation applies the hard downgrade (no consensus disagrees)
+        # Reconciliation: the premises are LLM-authored, so the
+        # terminal flip is withheld — the refutation survives as a
+        # recorded dispute with lowered confidence (soft shape).
         recon = reconcile_dataflow_validation(results_by_id)
-        assert recon["n_hard_downgrades"] == 1
-        assert recon["n_soft_downgrades"] == 0
+        assert recon["n_hard_downgrades"] == 0
+        assert recon["n_soft_downgrades"] == 1
 
-        # Final state: downgraded, original preserved
-        assert results_by_id["F-fp"]["is_exploitable"] is False
-        assert results_by_id["F-fp"]["is_exploitable_pre_validation"] is True
-        assert "validation_downgrade_reason" in results_by_id["F-fp"]
+        # Final state: verdict retained, dispute + withheld reason on
+        # the record, confidence lowered.
+        assert results_by_id["F-fp"]["is_exploitable"] is True
+        assert "is_exploitable_pre_validation" not in results_by_id["F-fp"]
+        assert results_by_id["F-fp"]["validation_disputed"] is True
+        assert results_by_id["F-fp"]["validation_downgrade_withheld"] == (
+            "llm-authored-premises"
+        )
+        assert results_by_id["F-fp"]["confidence"] == "low"
 
     def test_mixed_findings_partial_downgrade(self, tmp_path):
-        """Both findings together: real one stays, FP gets downgraded."""
+        """Both findings together: real one stays untouched, the FP's
+        LLM-authored refutation lands as a dispute (flip withheld)."""
         from packages.hypothesis_validation.adapters.base import ToolEvidence
 
         repo, out_dir, db = _build_target_and_db(tmp_path)
@@ -397,13 +413,19 @@ class TestE2EIris:
         assert metrics["n_recommended_downgrades"] == 1
 
         recon = reconcile_dataflow_validation(results_by_id)
-        assert recon["n_hard_downgrades"] == 1
-        assert recon["n_soft_downgrades"] == 0
+        assert recon["n_hard_downgrades"] == 0
+        assert recon["n_soft_downgrades"] == 1
 
-        # Final state: real one preserved, FP downgraded
+        # Final state: real one untouched; the FP's Tier-2 refutation
+        # (LLM-authored predicates) is recorded as a dispute — verdict
+        # retained, flip withheld.
         assert results_by_id["F-real"]["is_exploitable"] is True
-        assert results_by_id["F-fp"]["is_exploitable"] is False
-        assert results_by_id["F-fp"]["is_exploitable_pre_validation"] is True
+        assert "validation_disputed" not in results_by_id["F-real"]
+        assert results_by_id["F-fp"]["is_exploitable"] is True
+        assert results_by_id["F-fp"]["validation_disputed"] is True
+        assert results_by_id["F-fp"]["validation_downgrade_withheld"] == (
+            "llm-authored-premises"
+        )
 
     def test_consensus_disagreement_triggers_soft_downgrade(self, tmp_path):
         """When consensus said agreed but validation refuted, soft path applies."""

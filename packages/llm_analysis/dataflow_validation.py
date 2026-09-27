@@ -46,7 +46,10 @@ from .dataflow_query_builder import (
     infer_cwe_from_rule_id,
     supported_languages_for_template,
 )
-from .verification_tier import LLM_AUTHORED_DV_TIERS
+from .verification_tier import (
+    LLM_AUTHORED_DV_TIERS,
+    dataflow_premises_mechanical,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -3150,6 +3153,19 @@ def reconcile_dataflow_validation(results_by_id: dict[str, dict]) -> dict[str, i
         wrong (e.g. wrong language, missed an indirection) and refutes
         a finding everything else agrees on.
 
+    Premise-honesty gate on the HARD path: the terminal flip is a
+    mechanical verdict overriding an LLM analysis, so it is reserved
+    for validation blocks whose query premises were themselves
+    mechanical (``verification_tier.dataflow_premises_mechanical`` —
+    the same predicate that grants ``tool_backed``). A refutation
+    whose CodeQL predicates were LLM-AUTHORED (``method ==
+    "codeql-iris-llm"``, or an LLM-authored ``tier``, or no method
+    stamp at all — fail-closed) is one model's judgement dressed in
+    query syntax: it takes the SOFT shape instead — the downgrade
+    signal is preserved as ``validation_disputed`` plus a
+    ``validation_downgrade_withheld`` reason and lowered confidence;
+    only the verdict flip is withheld.
+
     Returns dict {n_hard_downgrades, n_soft_downgrades, n_skipped}.
     """
     n_hard = 0
@@ -3191,6 +3207,31 @@ def reconcile_dataflow_validation(results_by_id: dict[str, dict]) -> dict[str, i
                 ) if agreed
             ]
             # Lower confidence to "low" only if it isn't already lower.
+            current_conf = (analysis.get("confidence") or "").lower()
+            if current_conf in ("high", "medium", ""):
+                analysis["confidence_pre_validation"] = analysis.get("confidence")
+                analysis["confidence"] = "low"
+            n_soft += 1
+            continue
+
+        if not dataflow_premises_mechanical(v):
+            # Premise-honesty gate: the validation verdict's own query
+            # premises are LLM-authored (or unstamped — fail-closed).
+            # Symmetric replacement, not a drop: the refutation keeps
+            # its full steering weight as a recorded dispute with
+            # lowered confidence; only the terminal is_exploitable
+            # flip is withheld.
+            analysis["validation_disputed"] = True
+            if (
+                v.get("method") == "codeql-iris-llm"
+                or v.get("tier") in LLM_AUTHORED_DV_TIERS
+            ):
+                withheld_reason = "llm-authored-premises"
+            elif v.get("method") is None:
+                withheld_reason = "missing-method"
+            else:
+                withheld_reason = "unrecognized-method"
+            analysis["validation_downgrade_withheld"] = withheld_reason
             current_conf = (analysis.get("confidence") or "").lower()
             if current_conf in ("high", "medium", ""):
                 analysis["confidence_pre_validation"] = analysis.get("confidence")

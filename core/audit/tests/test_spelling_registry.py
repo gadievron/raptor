@@ -198,6 +198,81 @@ class TestClassifierUnavailableFailClosed:
         assert eg._channel_detection_classifier("smt") is None  # stubbed
 
 
+class TestCodeqlLlmEntry:
+    """The LIVE ``codeql-llm`` registry entry: CodeQL dataflow verdicts
+    whose query predicates were LLM-authored mint
+    ``codeql-llm:dataflow`` (packages.llm_analysis.verification_tier.
+    mechanical_receipt) — enumerated DETECTION role, so the receipt
+    corroborates and aggregates but never convicts, skips, or breaks a
+    merge tie alone. The mechanical ``codeql`` namespace stays
+    UNOWNED: its pack-query producer mints open-ended
+    ``codeql:<query-stem>`` spellings that enumeration would
+    fail-close."""
+
+    def test_spelling_is_detection_role(self) -> None:
+        assert eg.registry_owns("codeql-llm:dataflow")
+        assert eg.registered_spelling_role("codeql-llm:dataflow") == (
+            eg._ROLE_DETECTION
+        )
+        assert not eg.is_tool_evidence("codeql-llm:dataflow")
+        assert not eg.is_verification_evidence("codeql-llm:dataflow")
+
+    def test_spelling_aggregates_with_a_second_namespace(self) -> None:
+        stamp = "codeql-llm:dataflow+joern:live"
+        assert eg.is_tool_evidence(stamp)
+        assert eg.is_verification_evidence(stamp)
+
+    def test_unlisted_spelling_fails_closed_non_poisonous(self) -> None:
+        assert not eg.is_tool_evidence("codeql-llm:novel")
+        assert not eg.is_verification_evidence("codeql-llm:novel")
+        assert not eg.is_tool_evidence("codeql-llm")
+        # Quiet alarm: ignored next to a known receipt.
+        assert eg.is_tool_evidence("semgrep+codeql-llm:novel")
+
+    def test_mechanical_codeql_namespace_stays_unowned(self) -> None:
+        # The open-ended pack-query lane keeps its grade byte-for-byte
+        # — ownership of the mechanical namespace would demote every
+        # codeql:<query-stem> receipt the audit sweep mints.
+        assert not eg.registry_owns("codeql:dataflow")
+        assert eg.is_tool_evidence("codeql")
+        assert eg.is_tool_evidence("codeql:dataflow")
+        assert eg.is_tool_evidence("codeql:some-pack-query-stem")
+        assert eg.is_verification_evidence("codeql:dataflow")
+
+
+class TestOrchestratorDetectionOnlyConsult:
+    """The promotion surface's role table
+    (``core.audit.orchestrator._is_detection_only``) consults the
+    registry: enumerated roles decide, unlisted spellings under an
+    owned namespace fail CLOSED (detection role, no promotion)."""
+
+    def test_live_entry_is_detection_only(self) -> None:
+        from core.audit.orchestrator import (
+            _is_detection_only,
+            _promotion_grade_receipt,
+        )
+        assert _is_detection_only("codeql-llm:dataflow")
+        assert not _promotion_grade_receipt("codeql-llm:dataflow")
+
+    def test_unlisted_spelling_fails_closed(self) -> None:
+        from core.audit.orchestrator import _is_detection_only
+        assert _is_detection_only("codeql-llm:novel")
+        assert _is_detection_only("codeql-llm")
+
+    def test_unowned_namespace_unchanged(self) -> None:
+        from core.audit.orchestrator import _is_detection_only
+        assert not _is_detection_only("codeql:dataflow")
+        assert not _is_detection_only("codeql:some-pack-query-stem")
+
+    def test_registered_verification_spelling_promotes(
+        self, registry: None,
+    ) -> None:
+        from core.audit.orchestrator import _is_detection_only
+        assert not _is_detection_only("regtool:confirmed")
+        assert _is_detection_only("regtool:relation-violation")
+        assert _is_detection_only("regtool:novel-variant")
+
+
 class TestPipelineDelegation:
     """pipeline._is_verification_evidence is a thin delegate — one
     admission authority, no drift."""

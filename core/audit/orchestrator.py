@@ -26836,6 +26836,20 @@ def _is_detection_only(tool_id: str) -> bool:
         from core.audit.protocol_state import is_detection_rule_id
         return is_detection_rule_id(tool_id)
 
+    # Exact-spelling registry namespaces (core.audit.evidence_grade):
+    # the enumerated role decides, and an unlisted spelling under an
+    # owned namespace fails CLOSED (detection role, no promotion) —
+    # ownership means every promotion-grade spelling is listed
+    # explicitly, so an unknown variant may corroborate but never
+    # convict on its own.
+    from core.audit.evidence_grade import (
+        _ROLE_VERIFICATION,
+        registered_spelling_role,
+        registry_owns,
+    )
+    if registry_owns(tool_id):
+        return registered_spelling_role(tool_id) != _ROLE_VERIFICATION
+
     return False
 
 
