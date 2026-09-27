@@ -296,11 +296,13 @@ class TestReaderPreParseContainment:
         index = project / INDEX_FILENAME
         before = index.read_bytes()
         # An UNDER-cap run journal whose merged index would serialize
-        # over the cap.
+        # over the cap. Claim rows: their bodies travel inline (the
+        # write-boundary slim never touches them), so they still
+        # exercise the byte gate.
         rows = b"".join(
             json.dumps({
                 "ts": now_iso(), "run_id": "r", "file": f"g{i}.c",
-                "function": f"gfn{i}", "verdict": "clean",
+                "function": f"gfn{i}", "verdict": "suspicious",
                 "source_hash": "", "schema_version": 1,
                 "body": "x" * 900,
             }).encode() + b"\n"

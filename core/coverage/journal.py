@@ -21,7 +21,7 @@ import threading
 import time
 import types
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any, Union, get_args, get_origin, get_type_hints
@@ -3063,6 +3063,129 @@ def _aggregate_run_key(run_dir: Path) -> str:
     return f"{run_dir.parent.name}/{run_dir.name}"
 
 
+# Minimum serialized payload (bytes across the offloadable fields)
+# before the index write boundary slims a row. Trade-off, both
+# directions: too low and the stub pointer (~250 serialized bytes)
+# exceeds the savings — slimming short-prose rows GROWS the index;
+# too high and mid-sized prose rows keep their fat inline, eroding
+# the bounded-row arithmetic the merge-entry cap rests on (a
+# below-floor eligible row serializes to at most roughly its slim
+# base plus this floor). Half the run-side compactor's floor
+# (``journal_compact._SLIM_MIN_OFFLOAD_BYTES``): the index slim
+# writes no sidecar record, so break-even sits at the pointer size
+# alone.
+_INDEX_SLIM_MIN_BYTES = 512
+
+
+def _slim_index_row(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Slimmed replacement for an index *row*, or ``None`` to keep it.
+
+    The project index is a cross-run VERDICT store, not a prose
+    archive: the producing run journal keeps every row whole, and on
+    a real mega-project index ~90% of the bytes sat in cold prose no
+    index consumer needs inline (``body``, ``hypotheses``, the
+    per-row domain-snapshot lists). Dropping those fields at the
+    write boundary is what keeps a merge-cap-sized index under the
+    write budget; because the merge rewrites the whole document,
+    already-written fat rows slim on their next pass through the
+    same chokepoint.
+
+    Eligibility mirrors the run-side slim tier
+    (``journal_compact._slim_eligible`` — same consumers, one
+    analysis): only settled non-claim verdicts (``clean`` /
+    ``dormant``); no corrections or feedback
+    (``validate_verdict`` / ``lesson``); never provisional; never
+    edge-contract rows (small, and the edge re-review suppressor
+    requires their original token to keep verifying); never
+    mechanical echoes (the body PREFIX is their single
+    counting/coverage rule); never finding-grade producer rows
+    (prior-claims context injection quotes their bodies of EVERY
+    verdict); never spend carriers; never an already-offloaded stub
+    (idempotence). Rows whose offloadable payload is below
+    ``_INDEX_SLIM_MIN_BYTES`` stay whole, and rows the reader's own
+    parse quarantines stay whole (consumers skip them anyway).
+
+    The replacement is a loader-valid stub: fat fields cleared plus
+    a ``body_offload`` pointer in the ``journal_sidecar`` shape with
+    an EMPTY sidecar name — there is no sidecar route from the
+    project dir, and every pointer-resolution failure already
+    degrades to the stub view. Stub-aware consumers therefore treat
+    index stubs through their existing arms: the $0 reuse import
+    renders the offload marker instead of prose, and the
+    context-staleness gate hydrate-fails toward re-review only when
+    the domain-model hash actually changed (a hash-fresh row
+    short-circuits before ever needing the offloaded lists).
+
+    MAC discipline — authenticate-then-re-attest, never upgrade
+    (the run-side slim's contract): a row whose token VERIFIES and
+    whose content round-trips this reader's dataclass exactly is
+    rebuilt through the dataclass and freshly stamped, so the stub
+    keeps verified-tier authority ($0 verdict reuse, edge
+    suppression); anything else keeps its original token field
+    verbatim — unstamped stays unstamped, token-invalid stays
+    tampered — because the merge must never mint over content it
+    could not verify. A mint failure (no usable key) only demotes
+    the stub to the unstamped tier, the safe direction.
+    """
+    from core.coverage import journal_mac
+    from core.coverage.journal_compact import is_spend_carrier
+    from core.coverage.journal_sidecar import OFFLOAD_FIELDS, fields_sha256
+
+    if row.get("body_offload"):
+        return None
+    if row.get("verdict") not in ("clean", "dormant"):
+        return None
+    if (row.get("validate_verdict") or row.get("lesson")
+            or row.get("provisional") or row.get("edge_callee")):
+        return None
+    extracted = {f: row[f] for f in OFFLOAD_FIELDS if row.get(f)}
+    if not extracted:
+        return None
+    payload_len = sum(
+        len(json.dumps(v, separators=(",", ":"), default=str))
+        for v in extracted.values())
+    if payload_len < _INDEX_SLIM_MIN_BYTES:
+        return None
+    try:
+        entry = _entry_from_dict(row)
+    except Exception:  # noqa: BLE001 — quarantined rows never slim
+        return None
+    if (not is_function_grade(entry) or is_mechanical_echo(entry)
+            or is_spend_carrier(entry)):
+        return None
+
+    pointer: dict[str, Any] = {
+        "sidecar": "",
+        "offset": 0,
+        "bytes": 0,
+        "sha256": fields_sha256(extracted),
+        "fields": sorted(extracted),
+    }
+    token = row.get(journal_mac.TOKEN_KEY)
+    roundtrip = entry.to_dict()
+    dataclass_shaped = (
+        {k: v for k, v in row.items() if k != journal_mac.TOKEN_KEY}
+        == {k: v for k, v in roundtrip.items()
+            if k != journal_mac.TOKEN_KEY})
+    if (isinstance(token, str) and token and dataclass_shaped
+            and journal_mac.verify_row(row, token)):
+        cleared: dict[str, Any] = {
+            f: ("" if f == "body" else []) for f in extracted}
+        stub_entry = replace(
+            entry, integrity=None, body_offload=pointer, **cleared)
+        slim = stub_entry.to_dict()
+        slim.pop(journal_mac.TOKEN_KEY, None)
+        fresh = journal_mac.mint_row(slim)
+        if fresh:
+            slim[journal_mac.TOKEN_KEY] = fresh
+        return slim
+    slim = dict(row)
+    for f in extracted:
+        slim[f] = "" if f == "body" else []
+    slim["body_offload"] = pointer
+    return slim
+
+
 def merge_into_index(project_dir: Path, run_dir: Path) -> int:
     """Merge run journal entries into the project-level index.
 
@@ -3082,6 +3205,12 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
     roll up into the index's bounded ``aggregates`` section
     (:func:`_aggregate_overflow`) — counts and verdict tallies reach
     the index, per-identity detail stays in the run journal.
+
+    Rows are slimmed at the write boundary (:func:`_slim_index_row`):
+    eligible settled rows drop their cold prose fields for an offload
+    stub, existing fat rows included — the merge rewrites the whole
+    document, so the on-disk index converges to slim rows without a
+    separate migration.
 
     Returns the number of entries merged (new or updated); rollup
     aggregates do not count.
@@ -3148,6 +3277,24 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
                 index[key] = entry.to_dict()
                 merged += 1
 
+        # Slim at the write boundary — incoming rows AND any fat rows
+        # an earlier writer left behind (the merge rewrites the whole
+        # document, so one pass converges the on-disk index; slimmed
+        # rows re-enter as offload stubs and return None next time).
+        slimmed = 0
+        for key, row in index.items():
+            if not isinstance(row, dict):
+                continue   # planted non-object values stay in place
+            slim = _slim_index_row(row)
+            if slim is not None:
+                index[key] = slim
+                slimmed += 1
+        if slimmed:
+            logger.info(
+                "journal index: slimmed %d row(s) at the write "
+                "boundary (cold prose offloaded from the index; the "
+                "producing run journals keep the full rows)", slimmed)
+
         aggregates: dict[str, Any] | None = None
         if overflow:
             # Read-modify-write inside the flock; ``None`` (the
@@ -3157,7 +3304,7 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
             aggregates[_aggregate_run_key(run_dir)] = (
                 _aggregate_overflow(overflow))
 
-        if merged or rehomed or overflow:
+        if merged or rehomed or overflow or slimmed:
             try:
                 _write_index(index_path, index, aggregates=aggregates)
             except IndexWriteOverBudget as e:
