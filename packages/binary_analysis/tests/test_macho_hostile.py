@@ -385,12 +385,19 @@ class TestGrowthRatio:
 
     @staticmethod
     def _best_parse_time(blob: bytes, repeats: int = 5) -> float:
+        # CPU time, not wall: the ratio below is a complexity pin on
+        # in-process work, and its two legs are sampled at different
+        # moments — runner contention that hits one leg harder than
+        # the other skews a wall ratio on unchanged code (the taint
+        # suites measured 2.80 that way in a nightly; see
+        # core.testing.wallclock). A super-linear regression still
+        # burns CPU; a descheduled worker accumulates none.
         best = float("inf")
         for _ in range(repeats):
             handle = io.BytesIO(blob)
-            start = time.perf_counter()
+            start = time.process_time()
             facts = macho_mod._extract_facts_stream(handle)
-            best = min(best, time.perf_counter() - start)
+            best = min(best, time.process_time() - start)
             assert facts is not None
             assert facts.slices[0].ncmds_walked == len(
                 facts.slices[0].segments)
