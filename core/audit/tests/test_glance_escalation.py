@@ -399,3 +399,51 @@ class TestEscalateHelper:
         assert task.gap["force_review"] is True
         upgraded = shared.triage_results[task.key]
         assert upgraded.bucket == TriageBucket.INVESTIGATE
+
+
+class TestReportSurface:
+    """Two-direction pin on the run-summary render: cap denials in
+    suppressions.jsonl reach audit-report.json and the human summary
+    (the counter is NOT programmatic-only); a run where the cap never
+    bound renders nothing."""
+
+    def test_cap_denials_reach_run_summary(self, tmp_path):
+        import json
+
+        from core.audit.report import _format_summary, _load_glance_cap
+
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        rows = [
+            {"rule_id": "audit:glance-escalation-cap",
+             "verdict": "glance_escalation_capped", "dropped": False},
+            {"rule_id": "audit:glance-escalation-cap",
+             "verdict": "glance_escalation_capped", "dropped": False},
+            # Foreign writer rows must not count.
+            {"rule_id": "audit:vendored-triage", "tier": "glance"},
+            {"rule_id": "audit:hypothesis-triage",
+             "verdict": "binary_oracle_absent"},
+        ]
+        (out_dir / "suppressions.jsonl").write_text(
+            "".join(json.dumps(r) + "\n" for r in rows)
+        )
+        assert _load_glance_cap(out_dir) == 2
+
+        summary = _format_summary(
+            {"stats": {}, "glance_escalation_capped": 2},
+        )
+        assert "Glance-escalation cap: 2 glance-suspicious" in summary
+        assert "suppressions.jsonl" in summary
+
+    def test_absent_when_cap_never_bound(self, tmp_path):
+        from core.audit.report import _format_summary, _load_glance_cap
+
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert _load_glance_cap(out_dir) == 0
+        # Foreign-only file: still zero, still no summary line.
+        (out_dir / "suppressions.jsonl").write_text(
+            '{"rule_id": "audit:vendored-triage", "tier": "skip"}\n'
+        )
+        assert _load_glance_cap(out_dir) == 0
+        assert "Glance-escalation cap" not in _format_summary({"stats": {}})

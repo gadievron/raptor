@@ -205,6 +205,16 @@ def generate_report(
     if vendored_triage:
         report["vendored_triage"] = vendored_triage
 
+    # Glance-escalation cap denials (per-function dropped=False
+    # records in suppressions.jsonl) — glance-suspicious functions
+    # that kept their ~500-token glance verdict because the run's
+    # escalation budget was exhausted. Counted here so the depth
+    # downgrade reaches the run summary, not just the scan-time
+    # warning.
+    glance_capped = _load_glance_cap(out_dir)
+    if glance_capped:
+        report["glance_escalation_capped"] = glance_capped
+
     # Analysis gaps: files a parser abandoned (budget exceeded,
     # escaped parse error). Counted here so a crafted file that
     # defeats a parser is visible in the report, never a silent skip.
@@ -1393,6 +1403,35 @@ def _load_vendored_triage(out_dir: Path) -> dict[str, int]:
     return {"skipped": skipped, "glanced": glanced}
 
 
+def _load_glance_cap(out_dir: Path) -> int:
+    """Count glance-escalation-cap denials from the suppressions.jsonl
+    audit trail (rule_id ``audit:glance-escalation-cap``, written
+    ``dropped=False`` — the glance verdict survives; the record marks
+    the withheld full review). Returns ``0`` when the cap never
+    bound."""
+    path = out_dir / "suppressions.jsonl"
+    if not path.exists():
+        return 0
+    capped = 0
+    try:
+        with Path(path).open(encoding="utf-8") as f:  # raw-open: RAPTOR-written report artifact in the run dir
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                if rec.get("rule_id") == "audit:glance-escalation-cap":
+                    capped += 1
+    except OSError:
+        return 0
+    return capped
+
+
 def _load_findings(out_dir: Path) -> list[dict[str, Any]]:
     path = out_dir / "findings.json"
     if not path.exists():
@@ -1736,6 +1775,14 @@ def _format_summary(report: dict[str, Any]) -> str:
             f"Vendored/generated triage: {vendored.get('skipped', 0)} "
             f"functions skipped, {vendored.get('glanced', 0)} routed to "
             "glance — per-function records in suppressions.jsonl"
+        )
+    glance_capped = report.get("glance_escalation_capped")
+    if glance_capped:
+        lines.append(
+            f"Glance-escalation cap: {glance_capped} glance-suspicious "
+            "function(s) kept their glance verdict without a full "
+            "review (escalation budget exhausted) — per-function "
+            "records in suppressions.jsonl"
         )
 
     findings = report.get("findings", [])

@@ -335,11 +335,12 @@ _CC_MAX_BYTES = 32 * 1024 * 1024
 # so a hostile database must not buy unbounded parse time — the OUTPUT
 # is already bounded by _CC_MAX_DEFINES/_CC_MAX_INCLUDES regardless).
 # LOWERING it misses config flags on ordinary databases. When it
-# binds, the budget is spread EVENLY across the database (stride
-# sampling) rather than taking the first N — cmake emits entries in
-# directory order, so a prefix slice reads one subsystem's flags (a
-# ~25k-TU kernel database would contribute only its first corner) —
-# and the selection ratio is disclosed with a warning.
+# binds, the budget is spread EVENLY across the database — index-based
+# even selection that fills the budget EXACTLY — rather than taking
+# the first N (cmake emits entries in directory order, so a prefix
+# slice reads one subsystem's flags; a ~25k-TU kernel database would
+# contribute only its first corner), and the selection ratio is
+# disclosed with a warning.
 _CC_MAX_ENTRIES = 2000
 _CC_MAX_TOKENS_PER_ENTRY = 512
 _CC_MAX_DEFINES = 64
@@ -468,14 +469,24 @@ def discover_frontend_args(target: Path) -> FrontendArgs:
     if not isinstance(entries, list):
         return _EMPTY_FRONTEND_ARGS
     if len(entries) > _CC_MAX_ENTRIES:
-        stride = -(-len(entries) // _CC_MAX_ENTRIES)  # ceil division
+        n = len(entries)
+        # Index-based even selection: exactly the budget, spread over
+        # the whole database, first entry always included. (NOT a
+        # stride slice — xs[::ceil(n/cap)] under-fills at non-divisible
+        # boundaries: n = cap + 1 selects only ~half the budget. Here
+        # the exact steps are n/cap > 1 apart, so rounding — which
+        # moves each index by < 0.5 — keeps them strictly increasing:
+        # cap distinct indices, always.)
+        entries = [
+            entries[round(i * n / _CC_MAX_ENTRIES)]
+            for i in range(_CC_MAX_ENTRIES)
+        ]
         logger.warning(
             "compile_commands at %s has %d entries; sampling %d evenly "
             "across the database — macro/include config unique to "
             "unsampled TUs is not recovered",
-            db, len(entries), _CC_MAX_ENTRIES,
+            db, n, len(entries),
         )
-        entries = entries[::stride][:_CC_MAX_ENTRIES]
 
     defines: dict = {}
     undefined: set = set()

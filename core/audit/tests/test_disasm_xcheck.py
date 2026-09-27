@@ -2603,3 +2603,47 @@ class TestCompiledFixture:
         )
         assert res2.outcome == "refuted"
         assert "r8" in res2.call_sites[0]["sibling_shared"]
+
+
+class TestBodyPrefixWindow:
+    """Two-direction pin on the _BODY_PREFIX_RE bracket window: the
+    longest real pipeline prefix — an architecture-gate demotion
+    carrying the nested partial-scan marker, ~300 chars — must be
+    stripped WHOLE before the body claim scan (a 200-char window
+    silently stopped stripping it, and a single-`]` close left the
+    outer bracket dangling); a bracketed block past the window is more
+    plausibly quoted body prose and must survive."""
+
+    def _demotion_prefix(self) -> str:
+        # The exact shape _demote_outcome produces for a partial-scan
+        # architecture demotion: the marker nests one bracket level.
+        reason = (
+            "single-threaded target, function target_fn not "
+            "reachable from signal handlers — CWE-362, CWE-364, "
+            "CWE-366 impossible"
+            " [thread-primitive veto scan partial: file budget "
+            "reached before the tree was covered — the "
+            "single_threaded claim was only partially vetted]"
+        )
+        return f"[architecture: {reason}]"
+
+    def test_marker_bearing_demotion_prefix_is_stripped_whole(self):
+        from core.audit.refutation import _disasm_claim_text
+
+        prefix = self._demotion_prefix()
+        assert 250 < len(prefix) <= 400, len(prefix)
+        outcome = _Outcome(
+            hypothesis="", body=prefix + "\n\n" + _DROP_HYP,
+        )
+        claim, source = _disasm_claim_text(outcome)
+        assert source == "body"
+        assert claim == _DROP_HYP
+
+    def test_oversize_bracket_survives_as_body_prose(self):
+        from core.audit.refutation import _disasm_claim_text
+
+        body = "[" + "x" * 450 + "] " + _DROP_HYP
+        outcome = _Outcome(hypothesis="", body=body)
+        claim, source = _disasm_claim_text(outcome)
+        assert source == "body"
+        assert claim == body

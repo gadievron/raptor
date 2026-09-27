@@ -150,8 +150,19 @@ def refute_hypothesis(
 
 # Leading bracketed pipeline markers ("[gate violation: ...]",
 # "[hypothesis-consistency: ...]") stripped before the body-text
-# fallback scans for a claim.
-_BODY_PREFIX_RE = re.compile(r"\A(?:\[[^\]\n]{0,200}\]\s{0,4})+")
+# fallback scans for a claim. Window, both directions: it must cover
+# the LONGEST real pipeline prefix — a demotion prefix
+# "[architecture: <reason>]" carrying the partial-scan marker measures
+# ~300 chars, which a 200-char window silently stopped stripping
+# (the stale prefix then fed the claim scan). WIDER than 400 starts
+# treating arbitrarily large bracketed blocks as pipeline markers when
+# they are more plausibly quoted body prose, and buys backtracking
+# work on hostile bodies. The close is a SHORT RUN (`\]{1,3}`): the
+# partial-scan marker nests one bracket level inside the demotion
+# prefix ("[architecture: ... [veto scan partial: ...]]"), and a
+# single-`]` close left the outer bracket dangling at the head of the
+# claim text; longer runs than 3 have no pipeline producer.
+_BODY_PREFIX_RE = re.compile(r"\A(?:\[[^\]\n]{0,400}\]{1,3}\s{0,4})+")
 
 
 def _disasm_claim_text(outcome) -> tuple[str, str]:
@@ -398,7 +409,7 @@ def _veto_scan_budget(checklist: dict[str, Any] | None) -> int:
 
 
 def _threading_primitives_seen(
-    target_path,
+    target_path: Path | str,
     max_files: int = _VETO_SCAN_FLOOR_FILES,
 ) -> _VetoScan:
     """Bounded scan: does the target visibly spawn threads anywhere?

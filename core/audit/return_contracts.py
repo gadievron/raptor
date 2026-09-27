@@ -169,10 +169,11 @@ _WUR_SCAN_SUFFIXES = (".h", ".hpp", ".hh", ".hxx")
 # count is target-derived, so an unbounded sweep on a hostile or
 # kernel-scale tree is a time sink). LOWERING it drops wur coverage on
 # ordinary trees that fit comfortably today. When it binds, the budget
-# is spread EVENLY across the sorted tree (stride sampling) rather
-# than taking the alphabetical prefix — a kernel tree sorts
-# arch/alpha/... first, so a prefix slice reads one corner of the tree
-# — and the selection ratio is disclosed with a warning.
+# is spread EVENLY across the sorted tree — index-based even selection
+# that fills the budget EXACTLY — rather than taking the alphabetical
+# prefix (a kernel tree sorts arch/alpha/... first, so a prefix slice
+# reads one corner of the tree), and the selection ratio is disclosed
+# with a warning.
 _MAX_WUR_SCAN_FILES = 400
 _MAX_WUR_FILE_BYTES = 400_000
 
@@ -190,16 +191,26 @@ def harvest_wur_from_target(target_path: Path) -> frozenset[str]:
     except OSError:
         return frozenset()
     if len(paths) > _MAX_WUR_SCAN_FILES:
-        stride = -(-len(paths) // _MAX_WUR_SCAN_FILES)  # ceil division
-        sampled = paths[::stride][:_MAX_WUR_SCAN_FILES]
+        n = len(paths)
+        # Index-based even selection: exactly the budget, spread over
+        # the whole sorted list, first file always included. (NOT a
+        # stride slice — xs[::ceil(n/cap)] under-fills at non-divisible
+        # boundaries: n = cap + 1 selects only ~half the budget. Here
+        # the exact steps are n/cap > 1 apart, so rounding — which
+        # moves each index by < 0.5 — keeps them strictly increasing:
+        # cap distinct indices, always.)
+        sampled = [
+            paths[round(i * n / _MAX_WUR_SCAN_FILES)]
+            for i in range(_MAX_WUR_SCAN_FILES)
+        ]
         logger.warning(
             "warn_unused_result harvest capped: scanning %d of %d "
-            "headers (evenly strided across the sorted tree) — wur "
+            "headers (sampled evenly across the sorted tree) — wur "
             "attributes in unsampled headers are not harvested",
-            len(sampled), len(paths),
+            len(sampled), n,
         )
         paths = sampled
-    for p in paths[:_MAX_WUR_SCAN_FILES]:
+    for p in paths:
         resolved = confine(target_path, p)
         if resolved is None:
             continue

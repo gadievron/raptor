@@ -359,3 +359,48 @@ class TestEntryBudgetStride:
                 if "sampling" in r.getMessage()]
         assert len(hits) == 1
         assert "12 entries" in hits[0].getMessage()
+
+    def _discover_n(self, tmp_path, caplog, monkeypatch, n, cap):
+        import logging
+
+        monkeypatch.setattr(runner_mod, "_CC_MAX_ENTRIES", cap)
+        _write_db(tmp_path, [
+            _entry(tmp_path, [f"-DF{i:03d}=1"]) for i in range(n)
+        ])
+        with caplog.at_level(
+            logging.WARNING, logger="packages.joern.runner",
+        ):
+            return discover_frontend_args(tmp_path)
+
+    def test_non_divisible_boundary_fills_budget(
+        self, tmp_path, caplog, monkeypatch,
+    ):
+        # n = cap + 1: a stride slice (stride 2) selects only about
+        # half the budget while the log claims the full cap. The
+        # sampler must fill the budget exactly and the log must report
+        # the actual sample size.
+        fa = self._discover_n(tmp_path, caplog, monkeypatch, 5, 4)
+        assert len(fa.defines) == 4, fa.defines
+        assert "F000=1" in fa.defines, "first entry always included"
+        assert max(fa.defines) >= "F003", "sample must reach the end"
+        hits = [r for r in caplog.records
+                if "sampling" in r.getMessage()]
+        assert len(hits) == 1
+        assert "sampling 4 evenly" in hits[0].getMessage()
+
+    def test_non_divisible_two_bands_fills_budget(
+        self, tmp_path, caplog, monkeypatch,
+    ):
+        # n = 2*cap + 1: the other non-divisible band.
+        fa = self._discover_n(tmp_path, caplog, monkeypatch, 9, 4)
+        assert len(fa.defines) == 4, fa.defines
+        assert "F000=1" in fa.defines
+        assert max(fa.defines) >= "F006", "sample must reach the end"
+
+    def test_exact_multiple_control(self, tmp_path, caplog, monkeypatch):
+        # Exact-multiple control: the divisible case keeps the same
+        # contract (budget filled, ends covered).
+        fa = self._discover_n(tmp_path, caplog, monkeypatch, 8, 4)
+        assert len(fa.defines) == 4, fa.defines
+        assert "F000=1" in fa.defines
+        assert max(fa.defines) >= "F006"

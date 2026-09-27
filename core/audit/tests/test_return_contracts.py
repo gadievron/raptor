@@ -360,8 +360,10 @@ class TestWurHarvestStride:
     """Two-direction pin on the header-count budget: an under-budget
     tree is scanned whole with no warning; an over-budget tree gets
     the budget spread EVENLY across the sorted paths (never the
-    alphabetical prefix — on a kernel tree that reads one corner) and
-    a loud selection-ratio disclosure."""
+    alphabetical prefix — on a kernel tree that reads one corner),
+    the budget filled EXACTLY (a stride slice under-fills at
+    non-divisible boundaries), and a loud selection-ratio
+    disclosure."""
 
     def test_under_budget_scans_all_no_warning(self, tmp_path, caplog):
         import logging
@@ -383,8 +385,8 @@ class TestWurHarvestStride:
     ):
         import logging
 
-        # 12 headers, budget 4 → stride 3: the sample must reach the
-        # END of the sorted tree, not stop in the first third.
+        # 12 headers, budget 4: the sample must reach the END of the
+        # sorted tree, not stop in the first third.
         monkeypatch.setattr(
             "core.audit.return_contracts._MAX_WUR_SCAN_FILES", 4,
         )
@@ -405,3 +407,48 @@ class TestWurHarvestStride:
                 if "harvest capped" in r.getMessage()]
         assert len(hits) == 1
         assert "4 of 12" in hits[0].getMessage()
+
+    def _harvest_n(self, tmp_path, caplog, monkeypatch, n, cap):
+        import logging
+
+        monkeypatch.setattr(
+            "core.audit.return_contracts._MAX_WUR_SCAN_FILES", cap,
+        )
+        for i in range(n):
+            (tmp_path / f"h{i:03d}.h").write_text(
+                "__attribute__((warn_unused_result)) "
+                f"int f{i:03d}(void);\n",
+            )
+        from core.audit.return_contracts import harvest_wur_from_target
+        with caplog.at_level(
+            logging.WARNING, logger="core.audit.return_contracts",
+        ):
+            return harvest_wur_from_target(tmp_path)
+
+    def test_non_divisible_boundary_fills_budget(
+        self, tmp_path, caplog, monkeypatch,
+    ):
+        # n = cap + 1: a stride slice (stride 2) selects only about
+        # half the budget — HALF the coverage the prefix truncation it
+        # replaced had. The sampler must fill the budget exactly.
+        names = self._harvest_n(tmp_path, caplog, monkeypatch, 5, 4)
+        assert len(names) == 4, names
+        assert "f000" in names, "first file always included"
+        assert max(names) >= "f003", "sample must reach the tree's end"
+
+    def test_non_divisible_two_bands_fills_budget(
+        self, tmp_path, caplog, monkeypatch,
+    ):
+        # n = 2*cap + 1: the other non-divisible band.
+        names = self._harvest_n(tmp_path, caplog, monkeypatch, 9, 4)
+        assert len(names) == 4, names
+        assert "f000" in names
+        assert max(names) >= "f006", "sample must reach the last region"
+
+    def test_exact_multiple_control(self, tmp_path, caplog, monkeypatch):
+        # Exact-multiple control: the divisible case keeps the same
+        # contract (budget filled, ends covered).
+        names = self._harvest_n(tmp_path, caplog, monkeypatch, 8, 4)
+        assert len(names) == 4, names
+        assert "f000" in names
+        assert max(names) >= "f006"
