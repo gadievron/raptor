@@ -54,6 +54,38 @@ INDEX_SCHEMA_VERSION = 1
 #: sentinel rows as the run's own record and mint run scope).
 RUN_ID_UNATTRIBUTED = "cli-record"
 
+
+def resolved_run_id(out_dir: Path | None) -> str:
+    """Run-attribution identity for journal rows: the RESOLVED run-dir
+    basename — the exact identity run-scoped consumers compare
+    MAC-covered ``run_id`` stamps against (the journal-derived graded
+    export resolves its own directory before comparing, and the record
+    CLI stamps the same resolved shape). Unresolved, a relative
+    ``out_dir`` spelling ("." from inside the run dir) has
+    ``name == ""``, so the row would carry no attribution and the
+    run's own record could never grade run-scoped. A still-empty
+    resolved name (the filesystem root) or a resolution failure falls
+    back toward the no-attribution sentinel, which run-scoped readers
+    grade like an empty ``run_id`` (the marked install-grandfather
+    tier) — a statement of NO attribution, never an attribution to a
+    foreign run. ``None`` (no run dir at all) keeps the historical
+    empty stamp, the sentinel's other consumer-side spelling.
+
+    Every journal writer that derives ``run_id`` from a run-directory
+    path stamps through this helper (the audit orchestrator via its
+    ``_resolved_run_id`` delegate); the write-site census
+    (core/audit/tests/test_run_id_stamp_census.py) trips on any new
+    direct derivation.
+    """
+    if out_dir is None:
+        return ""
+    run_dir = Path(out_dir)
+    try:
+        name = run_dir.resolve().name
+    except OSError:
+        name = run_dir.name
+    return name or RUN_ID_UNATTRIBUTED
+
 # Byte budget for the journal loader's RETAINED entries and for the
 # index document (which is read whole). Both files can arrive via a
 # /project archive import, so the loader's memory must stay bounded —

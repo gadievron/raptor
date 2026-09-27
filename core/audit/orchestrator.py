@@ -367,34 +367,20 @@ def _pinned_or_parent_project_dir(out_dir):
 
 
 def _resolved_run_id(out_dir: Path | None) -> str:
-    """Run-attribution identity for journal rows: the RESOLVED run-dir
-    basename — the exact identity the graded export compares MAC-covered
-    ``run_id`` stamps against (``export_graded_from_journal`` resolves
-    its own directory before comparing, and the record CLI stamps the
-    same resolved shape). Unresolved, a relative ``out_dir`` spelling
-    ("." from inside the run dir) has ``name == ""``, so the row would
-    carry no attribution and the run's own record could never grade
-    run-scoped. A still-empty resolved name (the filesystem root) or a
-    resolution failure falls back toward the no-attribution sentinel,
-    which the export grades at the marked install-grandfather tier —
-    a statement of NO attribution, never an attribution to a foreign
-    run. ``None`` (no run dir at all) keeps the historical empty
-    stamp, the sentinel's other consumer-side spelling.
+    """Run-attribution identity for journal rows — delegates to the
+    shared resolver (:func:`core.coverage.journal.resolved_run_id`):
+    the RESOLVED run-dir basename, falling back toward the
+    no-attribution sentinel when the name is genuinely unresolvable
+    and keeping the historical empty stamp for ``None``.
 
-    Every orchestrator journal-writer stamps ``run_id`` through this
-    helper; the write-site census
+    Kept as the orchestrator's one importable spelling: every
+    orchestrator journal-writer stamps ``run_id`` through this
+    helper, and the write-site census
     (core/audit/tests/test_run_id_stamp_census.py) trips on any new
     direct derivation from ``out_dir``.
     """
-    if out_dir is None:
-        return ""
-    from core.coverage.journal import RUN_ID_UNATTRIBUTED
-    run_dir = Path(out_dir)
-    try:
-        name = run_dir.resolve().name
-    except OSError:
-        name = run_dir.name
-    return name or RUN_ID_UNATTRIBUTED
+    from core.coverage.journal import resolved_run_id
+    return resolved_run_id(out_dir)
 
 
 # ── Narrowed exception sets for best-effort blocks ──────────────────
