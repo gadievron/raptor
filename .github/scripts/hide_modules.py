@@ -25,20 +25,11 @@ core/llm/http_pool.py) report the module as present; the simulated
 failure then surfaces at the actual import instead.
 
 Named sets:
-  * ``optional-deps`` — every optional dependency whose consumers are
-    written to degrade when it is absent, derived at run time from
-    ``check_optional_dep_imports.optional_modules()`` (the commented
-    requirements pins) so a newly optional dependency is hidden
-    automatically — the same no-second-list rationale as the
-    tree-sitter set below; a hand-typed copy had gone stale in both
-    directions (9 derived optional top-levels never hidden, one
-    required pin still hidden by accident). Grammar wheels stay with
-    the tree-sitter set; dotted namespace modules (google.genai)
-    cannot be shadowed by a top-level stub and are excluded (see
-    Known limits). instructor is a deliberate extra: currently a
-    pinned install, but its production imports are lazy and its tests
-    guard it, so it stays hidden — coverage holds if it ever moves
-    back to the optional set.
+  * ``optional-deps`` — the provider/transport dependencies whose
+    consumers are written to degrade when they are absent. instructor
+    is currently a pinned install, but its production imports are lazy
+    and its tests guard it, so it is hidden too — coverage holds if it
+    ever moves to the optional set.
   * ``tree-sitter`` — tree-sitter core + every grammar wheel, derived
     from ``pyproject.toml`` at run time so a newly pinned
     grammar wheel is hidden automatically (no second list to maintain).
@@ -60,9 +51,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Deliberate extras beyond the derived optional set (rationale in the
-# module docstring's ``optional-deps`` entry).
-_OPTIONAL_EXTRAS = ("instructor",)
+OPTIONAL_DEP_MODULES = ("anthropic", "botocore", "instructor", "h2", "sage_sdk")
 
 # Importable top-level module names only: dots (submodules) and dashes
 # (distribution names) cannot be shadowed by a single stub file.
@@ -95,7 +84,7 @@ def tree_sitter_modules(repo_root: Path = REPO_ROOT) -> tuple[str, ...]:
 
 
 NAMED_SETS = {
-    "optional-deps": optional_dep_modules,
+    "optional-deps": lambda: OPTIONAL_DEP_MODULES,
     "tree-sitter": tree_sitter_modules,
 }
 
