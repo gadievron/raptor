@@ -4605,6 +4605,7 @@ def run_joern_pre_sweep(
     stall_timeout: int = 600,
     query_timeout: int = 300,
     heap_mb: int | None = None,
+    heap_is_derived: bool = False,
     server=None,
     status_out: dict | None = None,
     exclude_dirs: tuple[str, ...] = (),
@@ -4883,6 +4884,7 @@ def run_joern_pre_sweep(
     }
     if heap_mb is not None:
         build_kwargs["heap_mb"] = heap_mb
+        build_kwargs["heap_is_derived"] = heap_is_derived
     if exclude_dirs:
         build_kwargs["exclude_dirs"] = exclude_dirs
     # Pin the joern-parse frontend to the detected dominant language

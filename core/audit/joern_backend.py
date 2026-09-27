@@ -589,6 +589,7 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
         cpg = build_cpg_cached(Path(target_path), cache_dir,
                                timeout=cpg_timeout,
                                heap_mb=heap_mb,
+                               heap_is_derived=heap_is_derived,
                                exclude_dirs=exclude_dirs,
                                scope_exclude_dirs=scope_exclude_dirs)
         if not cpg.exists() or getattr(cpg, "build_failed", False):
@@ -612,6 +613,10 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
                     Path(target_path), cache_dir,
                     timeout=retry_timeout,
                     heap_mb=retry_heap,
+                    # The retry heap is itself derivation-sourced
+                    # unless the first attempt carried an explicit
+                    # operator heap (which the retry keeps verbatim).
+                    heap_is_derived=heap_mb is None or heap_is_derived,
                     exclude_dirs=exclude_dirs,
                     scope_exclude_dirs=scope_exclude_dirs,
                 )
@@ -1527,6 +1532,7 @@ def build_joern_evidence(
         ),
         query_timeout=tunables.query_timeout_s,
         heap_mb=tunables.heap_mb,
+        heap_is_derived=getattr(tunables, "heap_is_derived", False),
         server=joern_server,
         status_out=status,
         deadline_monotonic=deadline_monotonic,

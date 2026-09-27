@@ -41,6 +41,7 @@ except ImportError:
 
 from core.run.tmp_ownership import sweep_dead_owner_dirs, write_owner_marker
 
+from .heap_ledger import HeapReservation, reserve_heap_mb
 from .models import JoernMethodSummary, JoernResult, TaintFlow
 from .prereqs import _joern_path
 from .runner import (
@@ -785,15 +786,25 @@ class JoernServer:
     _member_pid: int | None = None
     _member_starttime: int | None = None
     _member_comm: str | None = None
+    # ... and for the heap admission grant ``stop()`` releases.
+    _heap_reservation: HeapReservation | None = None
 
     def __init__(
         self,
         *,
         heap_mb: int | None = None,
+        heap_is_derived: bool = False,
         boot_timeout_s: int = _BOOT_TIMEOUT_S,
         query_timeout_s: int = _QUERY_TIMEOUT_S,
     ) -> None:
         self._heap_mb = heap_mb
+        self._heap_is_derived = heap_is_derived
+        # Host-global heap admission grant (see
+        # ``packages.joern.heap_ledger``). Held from start() until
+        # stop(); reuse handles (``connect_existing``) never hold one
+        # — the booting process registered the JVM, and the row is
+        # rebound to the JVM member itself so it survives the booter.
+        self._heap_reservation: HeapReservation | None = None
         self._boot_timeout_s = boot_timeout_s
         self._query_timeout_s = query_timeout_s
         self._port: int | None = None
@@ -930,6 +941,23 @@ class JoernServer:
 
         heap_flags: list[str] = []
         if self._heap_mb is not None:
+            # Host-global admission BEFORE exec: N concurrent
+            # sessions each deriving a near-host-sized -Xmx summed
+            # past physical RAM and OOM-killed each other's servers.
+            # The grant — not the derivation — is what this JVM may
+            # claim; explicit operator heaps register but never
+            # reduce (see packages.joern.heap_ledger).
+            self._heap_reservation = reserve_heap_mb(
+                self._heap_mb, derived=self._heap_is_derived,
+            )
+            if self._heap_reservation.granted_mb != self._heap_mb:
+                logger.warning(
+                    "Joern server: derived heap %d MB reduced to "
+                    "%d MB by the host heap ledger (concurrent JVM "
+                    "reservations)",
+                    self._heap_mb, self._heap_reservation.granted_mb,
+                )
+                self._heap_mb = self._heap_reservation.granted_mb
             # Ceiling only — no -Xms pin (measured: no benefit at any
             # scale, boot-fragile at very large heaps).
             heap_flags.append(f"-J-Xmx{self._heap_mb}m")
@@ -958,112 +986,142 @@ class JoernServer:
             )
 
         from core.config import RaptorConfig
-        for attempt, tuning_flags in enumerate(flag_sets):
-            self._port = _find_free_port()
-            self._base_url = f"http://127.0.0.1:{self._port}"
+        try:
+            for attempt, tuning_flags in enumerate(flag_sets):
+                self._port = _find_free_port()
+                self._base_url = f"http://127.0.0.1:{self._port}"
 
-            # Per-boot-attempt state: stop() after a failed attempt
-            # clears the credential and removes the workdir and
-            # socket directory.
-            self._auth_user = _AUTH_USERNAME
-            self._auth_password = secrets.token_urlsafe(32)
-            if self._workdir is None:
-                self._workdir = _new_workspace()
+                # Per-boot-attempt state: stop() after a failed attempt
+                # clears the credential and removes the workdir and
+                # socket directory.
+                self._auth_user = _AUTH_USERNAME
+                self._auth_password = secrets.token_urlsafe(32)
+                if self._workdir is None:
+                    self._workdir = _new_workspace()
 
-            joern_cmd = [binary] + heap_flags + tuning_flags + [
-                # RAPTOR strips ANSI from every response anyway
-                # (_strip_ansi); emitting it just bloats payloads.
-                "--nocolors",
-                "--server",
-                "--server-host", "127.0.0.1",
-                "--server-port", str(self._port),
-                "--server-auth-username", self._auth_user,
-                "--server-auth-password", self._auth_password,
-            ]
-
-            if use_netns:
-                # mkdtemp gives the 0700 parent the forwarder requires;
-                # the forwarder binds the socket (also 0700) BEFORE it
-                # spawns joern, so the permission gate exists before
-                # the server can accept any traffic.
-                self._uds_dir = _make_uds_dir()
-                self._uds_path = os.path.join(self._uds_dir, _UDS_SOCKET_NAME)
-                cmd = [
-                    sys.executable, str(_FORWARDER_SCRIPT),
-                    "--socket", self._uds_path,
-                    "--port", str(self._port),
-                    "--", *joern_cmd,
+                joern_cmd = [binary] + heap_flags + tuning_flags + [
+                    # RAPTOR strips ANSI from every response anyway
+                    # (_strip_ansi); emitting it just bloats payloads.
+                    "--nocolors",
+                    "--server",
+                    "--server-host", "127.0.0.1",
+                    "--server-port", str(self._port),
+                    "--server-auth-username", self._auth_user,
+                    "--server-auth-password", self._auth_password,
                 ]
-                logger.info(
-                    "starting Joern server in a private network namespace "
-                    "(in-ns port %d, unix socket %s)",
-                    self._port, self._uds_path,
+
+                if use_netns:
+                    # mkdtemp gives the 0700 parent the forwarder requires;
+                    # the forwarder binds the socket (also 0700) BEFORE it
+                    # spawns joern, so the permission gate exists before
+                    # the server can accept any traffic.
+                    self._uds_dir = _make_uds_dir()
+                    self._uds_path = os.path.join(self._uds_dir, _UDS_SOCKET_NAME)
+                    cmd = [
+                        sys.executable, str(_FORWARDER_SCRIPT),
+                        "--socket", self._uds_path,
+                        "--port", str(self._port),
+                        "--", *joern_cmd,
+                    ]
+                    logger.info(
+                        "starting Joern server in a private network namespace "
+                        "(in-ns port %d, unix socket %s)",
+                        self._port, self._uds_path,
+                    )
+                else:
+                    cmd = joern_cmd
+                    logger.info("starting Joern server on 127.0.0.1:%d",
+                                self._port)
+
+                # Confine JVM scratch (scala-repl-pp dirs, wrapped-script
+                # launchers) to the disposable workspace: java.io.tmpdir
+                # defaults to a hardcoded /tmp on Linux (TMPDIR is
+                # ignored), the JVM's cleanup is exit-path-only, and a
+                # killed server stranded its scratch there on every boot.
+                # _JAVA_OPTIONS reaches every JVM under the launcher shell,
+                # including nested ones, unlike a launcher argv flag.
+                jvm_tmp = os.path.join(self._workdir, "jvm-tmp")
+                os.makedirs(jvm_tmp, exist_ok=True)
+                env = RaptorConfig.get_safe_env()
+                env["_JAVA_OPTIONS"] = f"-Djava.io.tmpdir={jvm_tmp}"
+
+                # New session so stop() can signal the whole process group:
+                # the joern launcher may be a shell wrapper that spawns the
+                # JVM without exec — terminating just the wrapper orphans it.
+                self._proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                    start_new_session=True,
+                    cwd=self._workdir,
                 )
+                # start_new_session made the child the leader of a fresh
+                # group whose id is its pid; record it while that is
+                # guaranteed true so stop() can address the whole group
+                # later, leader alive or not.
+                self._pgid = self._proc.pid
+
+                if self._wait_for_ready():
+                    break
+
+                died_during_boot = self._proc.poll() is not None
+                # Keep the heap admission across the flag-set retry:
+                # the retry boots the same-sized JVM immediately, and
+                # a release/re-reserve window would let a concurrent
+                # admission double-book the heap this boot still
+                # claims (stop() releases whatever it finds attached).
+                reservation, self._heap_reservation = (
+                    self._heap_reservation, None)
+                self.stop()
+                self._heap_reservation = reservation
+                if died_during_boot and attempt + 1 < len(flag_sets):
+                    logger.warning(
+                        "Joern server died with tuned JVM flags; "
+                        "retrying with launcher defaults"
+                    )
+                    continue
+                msg = f"Joern server failed to start within {self._boot_timeout_s}s"
+                raise RuntimeError(msg)
+
+            logger.info("Joern server ready on port %d (pid %d)",
+                         self._port, self._proc.pid)
+
+            # Derive the JVM member anchor now that the server answered:
+            # the JVM provably exists at this point, so a missing/ambiguous
+            # result means "no anchor" (fail-safe), not "too early".
+            member = _find_jvm_member(self._pgid)
+            if member is not None:
+                (self._member_pid, self._member_starttime,
+                 self._member_comm) = member
             else:
-                cmd = joern_cmd
-                logger.info("starting Joern server on 127.0.0.1:%d",
-                            self._port)
+                self._member_pid = None
+                self._member_starttime = None
+                self._member_comm = None
 
-            # Confine JVM scratch (scala-repl-pp dirs, wrapped-script
-            # launchers) to the disposable workspace: java.io.tmpdir
-            # defaults to a hardcoded /tmp on Linux (TMPDIR is
-            # ignored), the JVM's cleanup is exit-path-only, and a
-            # killed server stranded its scratch there on every boot.
-            # _JAVA_OPTIONS reaches every JVM under the launcher shell,
-            # including nested ones, unlike a launcher argv flag.
-            jvm_tmp = os.path.join(self._workdir, "jvm-tmp")
-            os.makedirs(jvm_tmp, exist_ok=True)
-            env = RaptorConfig.get_safe_env()
-            env["_JAVA_OPTIONS"] = f"-Djava.io.tmpdir={jvm_tmp}"
+            if (self._heap_reservation is not None
+                    and self._member_pid is not None):
+                # Re-key the admission row to the JVM member: the
+                # shared server outlives its spawner (refcounted
+                # state file), so the reservation must live and die
+                # with the JVM itself, not with whichever session
+                # happened to boot it. No anchor → the row stays on
+                # this process (under-counts after this session
+                # exits; eviction still self-heals when the JVM dies).
+                self._heap_reservation.rebind(self._member_pid)
 
-            # New session so stop() can signal the whole process group:
-            # the joern launcher may be a shell wrapper that spawns the
-            # JVM without exec — terminating just the wrapper orphans it.
-            self._proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=env,
-                start_new_session=True,
-                cwd=self._workdir,
-            )
-            # start_new_session made the child the leader of a fresh
-            # group whose id is its pid; record it while that is
-            # guaranteed true so stop() can address the whole group
-            # later, leader alive or not.
-            self._pgid = self._proc.pid
-
-            if self._wait_for_ready():
-                break
-
-            died_during_boot = self._proc.poll() is not None
-            self.stop()
-            if died_during_boot and attempt + 1 < len(flag_sets):
-                logger.warning(
-                    "Joern server died with tuned JVM flags; "
-                    "retrying with launcher defaults"
-                )
-                continue
-            msg = f"Joern server failed to start within {self._boot_timeout_s}s"
-            raise RuntimeError(msg)
-
-        logger.info("Joern server ready on port %d (pid %d)",
-                     self._port, self._proc.pid)
-
-        # Derive the JVM member anchor now that the server answered:
-        # the JVM provably exists at this point, so a missing/ambiguous
-        # result means "no anchor" (fail-safe), not "too early".
-        member = _find_jvm_member(self._pgid)
-        if member is not None:
-            (self._member_pid, self._member_starttime,
-             self._member_comm) = member
-        else:
-            self._member_pid = None
-            self._member_starttime = None
-            self._member_comm = None
-
-        self._warmup_imports()
+            self._warmup_imports()
+        except BaseException:
+            # A boot that never yielded a live server must return
+            # its heap admission: the reservation is keyed to THIS
+            # process until the post-boot rebind, and a phantom row
+            # from a failed boot would clamp sibling sessions for
+            # as long as this session lives. Idempotent with the
+            # release stop() already performed on the graceful
+            # failure path.
+            self._release_heap_reservation()
+            raise
 
     def _wait_for_ready(self) -> bool:
         deadline = time.monotonic() + self._boot_timeout_s
@@ -1215,6 +1273,18 @@ class JoernServer:
         if self._uds_dir is not None:
             shutil.rmtree(self._uds_dir, ignore_errors=True)
             self._uds_dir = None
+
+        # The JVM the group-kill above just verified dead no longer
+        # holds its heap — return the admission. Sessions that never
+        # reach stop() (hard kill, refcount-zero kill by ANOTHER
+        # session via the lifecycle state file) are covered by the
+        # ledger's dead-row eviction instead.
+        self._release_heap_reservation()
+
+    def _release_heap_reservation(self) -> None:
+        if self._heap_reservation is not None:
+            self._heap_reservation.release()
+            self._heap_reservation = None
 
     def is_alive(self) -> bool:
         if self._proc is None or self._proc.poll() is not None:
@@ -2699,6 +2769,7 @@ class JoernServer:
             tunables = JoernTunables()
         return cls(
             heap_mb=tunables.heap_mb,
+            heap_is_derived=tunables.heap_is_derived,
             query_timeout_s=tunables.query_timeout_s,
         )
 

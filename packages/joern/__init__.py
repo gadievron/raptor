@@ -120,6 +120,7 @@ def joern_session(
                 languages=parse_langs,
                 timeout=build_timeout,
                 heap_mb=tunables.heap_mb,
+                heap_is_derived=tunables.heap_is_derived,
                 exclude_dirs=exclude_dirs,
                 scope_exclude_dirs=scope_exclude_dirs,
             )
@@ -129,6 +130,7 @@ def joern_session(
                 languages=parse_langs,
                 timeout=build_timeout,
                 heap_mb=tunables.heap_mb,
+                heap_is_derived=tunables.heap_is_derived,
                 # No cache slot to key on the uncached path — scope
                 # exclusions still shape the graph (analysis parity).
                 exclude_dirs=combined_excludes,

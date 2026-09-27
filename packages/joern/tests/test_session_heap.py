@@ -47,3 +47,26 @@ def test_uncached_build_receives_heap_mb(tmp_path):
     captured = _run_session(
         tmp_path, JoernTunables(heap_mb=4096), use_cache=False)
     assert captured.get("heap_mb") == 4096
+
+
+def test_builds_receive_heap_is_derived():
+    # The ledger clamps only DERIVED heaps — the flag must survive
+    # the trip from tunables to both build paths, or a derived heap
+    # would ride as an operator assertion and never clamp.
+    import tempfile
+
+    tunables = JoernTunables(heap_mb=8192, heap_is_derived=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        for use_cache in (True, False):
+            captured = _run_session(Path(tmp), tunables, use_cache=use_cache)
+            assert captured.get("heap_is_derived") is True
+
+
+def test_from_tunables_carries_heap_is_derived():
+    from packages.joern.server import JoernServer
+
+    srv = JoernServer.from_tunables(
+        JoernTunables(heap_mb=1024, heap_is_derived=True))
+    assert srv._heap_is_derived is True
+    srv = JoernServer.from_tunables(JoernTunables(heap_mb=1024))
+    assert srv._heap_is_derived is False

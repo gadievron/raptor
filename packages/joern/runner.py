@@ -26,6 +26,7 @@ from pathlib import Path
 from core.analysis._joern_lines import parse_marker_line, parse_marker_records
 from core.fs_lock import artifact_lock
 
+from .heap_ledger import heap_admission
 from .models import FlowStep, JoernCPG, JoernMethodSummary, JoernResult, TaintFlow
 from .prereqs import _joern_parse_path, _joern_path, joern_tool_paths
 from .tunables import sandbox_cpu_limits
@@ -596,6 +597,7 @@ def build_cpg(
     subprocess_runner=None,
     on_progress: Callable | None = None,
     heap_mb: int | None = None,
+    heap_is_derived: bool = False,
     frontend_args: FrontendArgs | None = None,
     exclude_dirs=(),
 ) -> JoernCPG:
@@ -605,6 +607,13 @@ def build_cpg(
     (default: tempdir) as a binary file. ``heap_mb`` sets the JVM
     ``-Xms``/``-Xmx`` via the launcher's ``-J`` passthrough, matching
     JoernServer's heap flags; ``None`` keeps the JVM default.
+
+    ``heap_is_derived``: True when ``heap_mb`` came from the tuning
+    derivation rather than an operator. The parse JVM's heap is
+    admitted against the host-global ledger for exactly this call's
+    duration (:mod:`packages.joern.heap_ledger`): a derived heap may
+    be clamped when concurrent sessions have the budget committed;
+    an explicit heap registers but is never reduced.
 
     ``frontend_args``: sanitized c2cpg flags. ``None`` auto-discovers
     from the target's compile_commands.json when the pinned language
@@ -617,6 +626,34 @@ def build_cpg(
     ``--exclude-regex`` so the graph's coverage matches the content
     key's file set exactly (key/analysis parity).
     """
+    with heap_admission(heap_mb, derived=heap_is_derived) as granted_mb:
+        return _build_cpg_admitted(
+            target,
+            languages=languages,
+            output_dir=output_dir,
+            timeout=timeout,
+            subprocess_runner=subprocess_runner,
+            on_progress=on_progress,
+            heap_mb=granted_mb,
+            frontend_args=frontend_args,
+            exclude_dirs=exclude_dirs,
+        )
+
+
+def _build_cpg_admitted(
+    target: Path,
+    *,
+    languages: set[str] | None = None,
+    output_dir: Path | None = None,
+    timeout: int = 600,
+    subprocess_runner=None,
+    on_progress: Callable | None = None,
+    heap_mb: int | None = None,
+    frontend_args: FrontendArgs | None = None,
+    exclude_dirs=(),
+) -> JoernCPG:
+    """:func:`build_cpg`'s body, running under an already-admitted
+    heap grant (``heap_mb`` here is the GRANTED -Xmx)."""
     target = Path(target).resolve()
     if not target.is_dir():
         msg = f"target must be a directory: {target}"
@@ -1902,6 +1939,7 @@ def build_cpg_cached(
     subprocess_runner=None,
     on_progress: Callable | None = None,
     heap_mb: int | None = None,
+    heap_is_derived: bool = False,
     exclude_dirs=(),
     scope_exclude_dirs=(),
 ) -> JoernCPG:
@@ -1993,6 +2031,7 @@ def build_cpg_cached(
                 subprocess_runner=subprocess_runner,
                 on_progress=on_progress,
                 heap_mb=heap_mb,
+                heap_is_derived=heap_is_derived,
                 frontend_args=frontend_args,
                 exclude_dirs=combined_excludes,
             )
