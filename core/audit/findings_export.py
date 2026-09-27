@@ -411,6 +411,15 @@ def build_graded_finding(
     if dampening:
         finding["file_dampening"] = dampening
 
+    # Deepen-adjudication record (see orchestrator
+    # _mark_deepen_unadjudicated): the run announced a deepen
+    # re-review for this verdict and the stop rails stranded it — the
+    # stamp travels with the exported finding so the operator can see
+    # the verdict finished the run without its verification lane.
+    deepen_unadjudicated = review_result.get("deepen_unadjudicated")
+    if deepen_unadjudicated:
+        finding["deepen_unadjudicated"] = deepen_unadjudicated
+
     # Caller-contract demotion receipt (see orchestrator
     # _apply_caller_contract_gate): the per-site receipts travel with
     # the finding, and the confidence clamp is ENFORCED here — a

@@ -23882,6 +23882,55 @@ def _prior_hypotheses_for(outcome: ReviewOutcome) -> list[dict[str, Any]]:
     ]
 
 
+#: Stamp reason for a deepen dispatch that raised a non-budget error.
+#: Reasons on the unadjudicated stamp are always module constants or
+#: the rail values ``_check_budget`` books — never exception text: the
+#: marker embeds the reason in body prose.
+_DEEPEN_DISPATCH_ERROR: str = "dispatch_error"
+
+
+def _mark_deepen_unadjudicated(outcome: ReviewOutcome, reason: str) -> None:
+    """Stamp a deepen target the phase announced but never adjudicated.
+
+    ``reason`` is the stop cause that stranded the re-review (the
+    booked ``result.terminated_by`` when the rails recorded one,
+    ``_DEEPEN_DISPATCH_ERROR`` for a dispatched call that raised a
+    non-budget error, else ``budget_exhausted``). The stamp is the
+    run-output surface for the
+    stranding: the ``review_result`` key rides into the graded
+    findings export, and the body marker names the cause on the
+    verdict itself. The marker is APPENDED, never prepended — body
+    prefixes are load-bearing provenance (counter-escalation and
+    gate-demotion checks read ``startswith``). Idempotent so a resumed
+    run's second deepen pass never stacks duplicate markers.
+    """
+    if outcome.review_result is None:
+        outcome.review_result = {}
+    outcome.review_result["deepen_unadjudicated"] = reason
+    marker = (
+        f"[deepen unadjudicated: {reason} — the announced re-review "
+        "never ran; the verdict stands without deepen adjudication]"
+    )
+    body = outcome.body or ""
+    if marker not in body:
+        outcome.body = f"{body}\n\n{marker}" if body else marker
+
+
+def _deepen_stop_reason(result: OrchestratorResult) -> str:
+    """Name the stop cause that stranded un-run deepen re-reviews.
+
+    ``_check_budget`` books the specific rail on
+    ``result.terminated_by`` (``max_cost_usd``,
+    ``llm_budget_exceeded``, ``max_seconds``, ``sigterm``); when
+    nothing was booked (a client that raised budget-exceeded before
+    the rails polled again), the cause is budget exhaustion.
+    """
+    terminated_by = getattr(result, "terminated_by", "") or ""
+    if terminated_by and terminated_by != "complete":
+        return terminated_by
+    return "budget_exhausted"
+
+
 def _deepen_suspicious(
     result: OrchestratorResult,
     config: OrchestratorConfig,
@@ -24051,6 +24100,13 @@ def _deepen_suspicious(
 
     # --- Process results (always in main thread) ---
     idx_to_prepared = {item[0]: item for item in prepared}
+    # Deepen targets the phase never adjudicated: dispatched calls
+    # that died (budget cap, or any other dispatch error) collect
+    # here in the loop; items that never returned a result at all
+    # (serial pre-dispatch stop, cancelled futures, gate refusals)
+    # join after it. The third field is the stamp reason — ``None``
+    # means "use the phase stop cause", set at stamp time.
+    _unadjudicated: list[tuple[ReviewOutcome, dict[str, Any], str | None]] = []
     for idx, outcome, exc in sorted(raw_results, key=lambda r: r[0]):
         _, prior_outcome, gap, ctx = idx_to_prepared[idx]
 
@@ -24065,12 +24121,20 @@ def _deepen_suspicious(
                     "deepen skipped for %s:%s: LLM budget exhausted",
                     gap["file"], gap["name"],
                 )
+                _unadjudicated.append((prior_outcome, gap, None))
                 continue
             logger.warning(
                 "deepen failed for %s:%s: %s",
                 gap["file"],
                 gap["name"],
                 exc,
+            )
+            # A failed dispatch strands the announced re-review just
+            # like a rail stop does — the prior verdict stands, and
+            # the stamp (a constant, never the exception text) names
+            # it in the run output instead of only in the log.
+            _unadjudicated.append(
+                (prior_outcome, gap, _DEEPEN_DISPATCH_ERROR),
             )
             continue
 
@@ -24230,6 +24294,33 @@ def _deepen_suspicious(
                 prior_outcome.status,
                 outcome.status,
             )
+
+    # Announced re-reviews that returned no result were never
+    # dispatched (budget/SIGTERM rails, cancelled futures, gate
+    # refusals, executor shutdown) — their prior verdicts stand.
+    # Name the stranding in the run's output instead of finishing
+    # silently: withheld all-refuted demotions rely on this pass as
+    # their verification lane, so an exhausted reserve otherwise
+    # leaves the withhold marker un-adjudicated with no trace of why.
+    _returned = {r[0] for r in raw_results}
+    _unadjudicated.extend(
+        (item[1], item[2], None)
+        for idx, item in idx_to_prepared.items()
+        if idx not in _returned
+    )
+    if _unadjudicated:
+        _stop_reason = _deepen_stop_reason(result)
+        for _prior, _gap, _reason in _unadjudicated:
+            _mark_deepen_unadjudicated(_prior, _reason or _stop_reason)
+        _reasons = ", ".join(
+            sorted({_r or _stop_reason for _, _, _r in _unadjudicated}),
+        )
+        logger.warning(
+            "deepen: %d of %d announced re-review(s) unadjudicated "
+            "(%s) — the prior verdicts stand, with any withhold "
+            "markers unresolved",
+            len(_unadjudicated), len(targets), _reasons,
+        )
 
     if _outcomes_to_remove:
         result.outcomes = [
