@@ -20,6 +20,48 @@ logger = logging.getLogger(__name__)
 AUTO_NAMED_WARN_THRESHOLD = 0.80
 
 
+def _stamp_ebpf_capability(db: REDatabase) -> None:
+    """Stamp the eBPF lifter capability tier onto an eBPF database.
+
+    Every REDatabase produced from an eBPF-language Ghidra program
+    carries ``metadata["ebpf_lifter_capability"]`` — the blocking
+    probe-gate verdict from
+    :func:`packages.ghidra.ebpf_capability.ebpf_lifter_capability`.
+    Consumers must honour it: unless ``tier`` is ``trusted`` (probe
+    passed for this exact Ghidra install), Ghidra's eBPF decode is
+    hint-tier steering evidence only and never rides into verdicts.
+    Fail-closed: a failed consult stamps ``downgraded``, never
+    nothing.
+    """
+    language_id = str(db.metadata.get("language_id") or "")
+    architecture = db.architecture or ""
+    if not (language_id.startswith("eBPF")
+            or architecture.startswith("eBPF")):
+        return
+    from .ebpf_capability import (
+        TIER_DOWNGRADED,
+        TIER_TRUSTED,
+        ebpf_lifter_capability,
+    )
+    try:
+        meta = ebpf_lifter_capability().as_metadata()
+    except Exception:  # noqa: BLE001 — stamp fails closed, never open
+        logger.warning("eBPF capability consult failed", exc_info=True)
+        meta = {"tier": TIER_DOWNGRADED,
+                "reason": "capability consult failed"}
+    db.metadata["ebpf_lifter_capability"] = meta
+    if meta.get("tier") != TIER_TRUSTED:
+        # The reason can carry record-derived text (failed feature
+        # names from the on-disk record) — escape at the log seam.
+        from core.security.log_sanitisation import escape_nonprintable
+        logger.warning(
+            "eBPF lifter capability DOWNGRADED for this Ghidra "
+            "install (%s) — Ghidra eBPF decode output is hint-tier "
+            "only and must not ride into verdicts",
+            escape_nonprintable(str(meta.get("reason", ""))),
+        )
+
+
 class GhidraBridge:
     """Orchestrates Ghidra project import, enrichment, and round-trip.
 
@@ -551,8 +593,10 @@ class GhidraBridge:
 
         Stamps the analysed binary's content hash into the metadata so
         cache reuse can verify the database belongs to the binary it
-        is being used for.
+        is being used for, and — for eBPF-language programs — the
+        eBPF lifter capability tier (probe gate).
         """
+        _stamp_ebpf_capability(db)
         doc = db.to_dict()
         try:
             bp = Path(db.binary_path or "")
