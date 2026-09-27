@@ -470,6 +470,38 @@ _DENIAL_EVENT_RESULTS = frozenset({
     "denied_port",
 })
 
+_KNOWN_DOH_PROVIDERS: frozenset[str] = frozenset({
+    "dns.google",
+    "dns.google.com",
+    "cloudflare-dns.com",
+    "1dot1dot1dot1.cloudflare-dns.com",
+    "one.one.one.one",
+    "mozilla.cloudflare-dns.com",
+    "dns.quad9.net",
+    "dns9.quad9.net",
+    "dns10.quad9.net",
+    "dns11.quad9.net",
+    "doh.opendns.com",
+    "dns.adguard.com",
+    "dns.nextdns.io",
+    "doh.cleanbrowsing.org",
+    "dns.mullvad.net",
+})
+
+
+def _warn_doh_hosts(hosts: "set[str] | frozenset[str]") -> None:
+    """Emit a warning if any hosts in the set are known DoH providers."""
+    matched = hosts & _KNOWN_DOH_PROVIDERS
+    if matched:
+        logger.warning(
+            "egress proxy: allowlisted host(s) serve DNS-over-HTTPS: "
+            "%s — a sandboxed child can use them to bypass DNS controls. "
+            "Remove from the allowlist unless the workflow requires them, "
+            "or block at the upstream proxy.",
+            ", ".join(sorted(matched)),
+        )
+
+
 # Live-escalation: default distinct-denied-host threshold before the
 # proxy prints an immediate stderr recon-pattern banner. Shared with
 # triage.py's post-hoc `host_recon_pattern` signal via the leaf
@@ -1459,6 +1491,7 @@ class EgressProxy:
                  audit_enforce: bool = False) -> None:
         self._hosts_lock = threading.Lock()
         self._allowed_hosts: set[str] = {h.lower() for h in allowed_hosts}
+        _warn_doh_hosts(self._allowed_hosts)
         # When True, gate 1 (hostname allowlist) emits a `would_deny_host`
         # event AND a record_denial entry, then falls through to the
         # connect path — operator workflows that hit gate 1 keep working
@@ -1697,7 +1730,9 @@ class EgressProxy:
     def add_hosts(self, hosts: Iterable[str]) -> None:
         """Extend the allowlist. Idempotent. Thread-safe."""
         with self._hosts_lock:
-            self._allowed_hosts.update(h.lower() for h in hosts)
+            new = {h.lower() for h in hosts}
+            self._allowed_hosts.update(new)
+            _warn_doh_hosts(new)
 
     def update_idle_timeout(self, seconds: float) -> None:
         """Raise the idle timeout if *seconds* exceeds the current value.
