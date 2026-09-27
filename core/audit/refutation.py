@@ -37,7 +37,7 @@ from pathlib import Path
 
 from core.source import open_regular
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -312,45 +312,121 @@ _RACE_CWES = frozenset({"CWE-362", "CWE-364", "CWE-366", "CWE-367"})
 # Thread-spawn primitives across the supported languages. Seed set,
 # deliberately small: this drives a one-way VETO (see below) where a
 # miss only means the veto doesn't fire — never new suppression.
+#
+# The kernel-space group keeps the same seed discipline as the
+# userspace one: execution-context CREATION / deferral idioms only
+# (kthreads, workqueues, tasklets, timers, IRQ handlers, softirqs,
+# RCU callbacks, SMP cross-calls). Bare synchronisation primitives
+# (spin_lock, atomic_*, rcu_read_lock) are deliberately EXCLUDED:
+# they mark shared-state discipline rather than concurrent execution,
+# and they appear verbatim in vendored kernel-style headers and
+# lock-shim libraries of genuinely single-threaded userspace projects
+# — matching them would fire false vetoes exactly where the
+# single-threaded demotion is correct. The same rule drops bare
+# ``add_timer``: it is a generic English name userspace event loops
+# define for same-thread callbacks, and kernel timer users are
+# reached through ``timer_setup`` / ``mod_timer`` regardless (the
+# init and canonical arming calls).
 _THREADING_PRIMITIVE_RE = re.compile(
     rb"pthread_create|std::j?thread|std::async"
     rb"|CreateThread|_beginthread"
     rb"|threading\.Thread|multiprocessing\.|concurrent\.futures"
     rb"|\bgo\s+func\b|thread::spawn|tokio::spawn"
     rb"|new\s+Thread\s*\(|ExecutorService"
+    # ── kernel-space concurrency contexts ──
+    rb"|\bkthread_(?:create|run)\b|\bkernel_thread\b"
+    rb"|\bqueue_(?:delayed_)?work\b|\bschedule_(?:delayed_)?work\b"
+    rb"|\bINIT_(?:DELAYED_)?WORK\b|\bDECLARE_(?:DELAYED_)?WORK\b"
+    rb"|\btasklet_(?:init|setup|schedule)\b"
+    rb"|\btimer_setup\b|\bmod_timer\b"
+    rb"|\brequest_(?:threaded_)?irq\b"
+    rb"|\bopen_softirq\b|\bsmp_call_function"
+    rb"|\bcall_rcu\b"
 )
 _SOURCE_EXTS = frozenset({
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp",
     ".py", ".go", ".rs", ".java", ".kt", ".cs",
 })
 _SKIP_DIRS = frozenset({".git", "node_modules", "vendor", "third_party"})
-_VETO_SCAN_MAX_FILES = 2000
+
+# Veto-scan file budget: floor (small/unknown runs — the previous
+# fixed cap), a per-checklist-file multiplier, and an absolute
+# ceiling. The scan walks the WHOLE target tree while the checklist
+# is the scoped subset, so the budget scales at 4x the checklist
+# file count (measured trees run ~3-8x their scoped checklist; a
+# kernel-scale 6,000-file checklist derives 24,000 — most of a ~50k
+# file tree, and any shortfall now degrades loudly instead of
+# silently). Both directions: LOWER re-opens the defect this
+# derivation fixes — thread primitives outside the scanned slice
+# never veto, so a wrong single_threaded claim demotes race findings
+# unvetoed on exactly the most concurrency-rich target class; HIGHER
+# buys wall time — the walk reads up to _VETO_SCAN_MAX_BYTES per file
+# once per (run, target), so the ceiling bounds the worst case at
+# ~7.5 GiB of reads on a degenerately fat tree (typical source files
+# keep it far smaller, and the scan short-circuits on the first
+# primitive hit).
+_VETO_SCAN_FLOOR_FILES = 2000
+_VETO_SCAN_FILES_PER_CHECKLIST_FILE = 4
+_VETO_SCAN_CEILING_FILES = 30_000
 _VETO_SCAN_MAX_BYTES = 256 * 1024
 
-_threading_seen_cache: dict[str, bool] = {}
+
+class _VetoScan(NamedTuple):
+    """Result of one thread-primitive veto scan.
+
+    ``partial`` is True only when the file budget stopped the walk
+    before the tree was covered AND no primitive was found — a
+    decisive hit (``seen=True``) needs no completeness claim.
+    """
+
+    seen: bool
+    partial: bool
 
 
-def _threading_primitives_seen(target_path) -> bool:
+_threading_seen_cache: dict[tuple[str, int], _VetoScan] = {}
+
+
+def _veto_scan_budget(checklist: dict[str, Any] | None) -> int:
+    """File budget for the veto scan, derived from checklist size."""
+    files = (checklist or {}).get("files")
+    n_files = len(files) if isinstance(files, list) else 0
+    return max(
+        _VETO_SCAN_FLOOR_FILES,
+        min(n_files * _VETO_SCAN_FILES_PER_CHECKLIST_FILE,
+            _VETO_SCAN_CEILING_FILES),
+    )
+
+
+def _threading_primitives_seen(
+    target_path,
+    max_files: int = _VETO_SCAN_FLOOR_FILES,
+) -> _VetoScan:
     """Bounded scan: does the target visibly spawn threads anywhere?
 
-    Cached per target path. Read errors and the file/byte caps fail
-    toward False — i.e. toward NOT vetoing — so a partial scan can
-    only under-veto, never over-suppress.
+    Cached per (target path, file budget). Read errors and the
+    file/byte caps fail toward ``seen=False`` — i.e. toward NOT
+    vetoing — so a partial scan can only under-veto, never
+    over-suppress. When the file budget binds without a hit the
+    result is marked ``partial`` and logged loudly (once per cache
+    key): the single_threaded claim was only partially vetted, and
+    demotions made under it must say so.
     """
-    key = str(target_path)
+    key = (str(target_path), max_files)
     cached = _threading_seen_cache.get(key)
     if cached is not None:
         return cached
     import os as _os
     seen = False
+    cap_hit = False
     scanned = 0
-    for root, dirnames, filenames in _os.walk(key):
+    for root, dirnames, filenames in _os.walk(key[0]):
         dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
         for fn in filenames:
             if _os.path.splitext(fn)[1] not in _SOURCE_EXTS:
                 continue
             scanned += 1
-            if scanned > _VETO_SCAN_MAX_FILES:
+            if scanned > max_files:
+                cap_hit = True
                 break
             try:
                 f = open_regular(_os.path.join(root, fn), "rb")
@@ -363,16 +439,26 @@ def _threading_primitives_seen(target_path) -> bool:
                         break
             except OSError:
                 continue
-        if seen or scanned > _VETO_SCAN_MAX_FILES:
+        if seen or cap_hit:
             break
-    _threading_seen_cache[key] = seen
-    return seen
+    result = _VetoScan(seen=seen, partial=(cap_hit and not seen))
+    if result.partial:
+        logger.warning(
+            "architecture gate: thread-primitive veto scan PARTIAL — "
+            "file budget (%d) reached before the tree at %s was "
+            "covered and no primitive was found; single_threaded race "
+            "demotions from this run carry a partial-scan marker",
+            max_files, key[0],
+        )
+    _threading_seen_cache[key] = result
+    return result
 
 
 def _is_single_threaded(
     domain_model: dict[str, Any] | None,
     config,
-) -> bool:
+    checklist: dict[str, Any] | None = None,
+) -> tuple[bool, bool]:
     """Determine if the target is single-threaded.
 
     Only the domain model's ``architecture.threading_model`` field
@@ -388,20 +474,32 @@ def _is_single_threaded(
     spawns threads, the single-threaded claim is provably wrong and
     must not demote race findings. The veto can only prevent wrong
     suppression, never add it.
+
+    Returns ``(single_threaded, veto_scan_partial)``: the second
+    element is True when the claim stood but the veto scan's file
+    budget bound before the tree was covered — the claim was only
+    partially vetted and demotions made under it must carry that.
+    ``checklist`` (when the caller holds it) sizes the scan budget.
     """
     if not domain_model:
-        return False
+        return (False, False)
     arch = domain_model.get("architecture", {})
     if arch.get("threading_model", "") != "single_threaded":
-        return False
+        return (False, False)
     target = getattr(config, "target_path", None) if config else None
-    if target and _threading_primitives_seen(target):
-        logger.info(
-            "architecture gate: single_threaded claim vetoed — thread "
-            "primitives visible in %s; race findings NOT demoted", target,
+    if target:
+        scan = _threading_primitives_seen(
+            target, _veto_scan_budget(checklist),
         )
-        return False
-    return True
+        if scan.seen:
+            logger.info(
+                "architecture gate: single_threaded claim vetoed — "
+                "thread primitives visible in %s; race findings NOT "
+                "demoted", target,
+            )
+            return (False, False)
+        return (True, scan.partial)
+    return (True, False)
 
 
 # Per-checklist memoisation for the call-graph structures the gates
@@ -543,7 +641,10 @@ def _refute_by_architecture(
     if not matched:
         return None
 
-    if not _is_single_threaded(domain_model, config):
+    single_threaded, scan_partial = _is_single_threaded(
+        domain_model, config, checklist,
+    )
+    if not single_threaded:
         return None
 
     # Exception: functions reachable from signal handlers can race.
@@ -563,12 +664,25 @@ def _refute_by_architecture(
     # unverified LLM output derived from the untrusted target. The
     # thread-primitive veto only bounds the failure direction; it
     # cannot make the claim mechanically true.
+    reason = (
+        f"single-threaded target, function {outcome.function} not "
+        f"reachable from signal handlers — {cwe_label} impossible"
+    )
+    if scan_partial:
+        # The veto scan's file budget bound before the tree was
+        # covered: the claim was only partially vetted. The marker
+        # rides the reason text so it lands everywhere the demotion
+        # is recorded (the journal row via _demote_outcome and the
+        # .audit-log.jsonl refutation_gate record) with no reader
+        # changes.
+        reason += (
+            " [thread-primitive veto scan partial: file budget "
+            "reached before the tree was covered — the "
+            "single_threaded claim was only partially vetted]"
+        )
     return RefutationVerdict(
         gate="architecture",
-        reason=(
-            f"single-threaded target, function {outcome.function} not "
-            f"reachable from signal handlers — {cwe_label} impossible"
-        ),
+        reason=reason,
         demote_to="clean",
         refuter_grade="heuristic",
     )

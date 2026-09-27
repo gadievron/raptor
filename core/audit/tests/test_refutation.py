@@ -238,6 +238,188 @@ class TestRefuteByArchitecture:
         assert r is not None
         assert r.demote_to == "clean"
 
+    def test_kernel_primitive_vetoes_claim(self, tmp_path):
+        """Kernel concurrency contexts (kthreads, workqueues, timers)
+        must veto a single_threaded claim exactly like pthread_create
+        — on a kernel tree the userspace-only seed never fired and
+        wrong race demotions stood."""
+        import core.audit.refutation as refutation_mod
+        (tmp_path / "drv.c").write_text(
+            "static int init(void) {\n"
+            "    task = kthread_run(worker, NULL, \"drv\");\n"
+            "    queue_work(wq, &work);\n"
+            "    return 0;\n"
+            "}\n")
+        refutation_mod._threading_seen_cache.clear()
+        outcome = _Outcome(
+            hypothesis="data race on drv state between open and ioctl",
+        )
+        dm = _domain_model(
+            architecture={"threading_model": "single_threaded"},
+        )
+        try:
+            r = _refute_by_architecture(
+                outcome, dm, None, _Config(target_path=tmp_path))
+        finally:
+            refutation_mod._threading_seen_cache.clear()
+        assert r is None
+
+    def test_sync_only_source_does_not_false_veto(self, tmp_path):
+        """Bare synchronisation spellings (spin_lock / atomic_*) in a
+        vendored kernel-style header must NOT veto: they mark
+        shared-state discipline, not concurrent execution — a
+        genuinely single-threaded userspace target keeps its
+        demotion. Same rule for a bare ``add_timer``: userspace event
+        loops define one for same-thread callbacks (kernel timers are
+        still caught via timer_setup / mod_timer)."""
+        import core.audit.refutation as refutation_mod
+        (tmp_path / "shim.h").write_text(
+            "#define spin_lock(l) ((void)(l))\n"
+            "static inline void atomic_inc(int *v) { ++*v; }\n"
+            "void rcu_read_lock(void);\n")
+        (tmp_path / "loop.c").write_text(
+            "int add_timer(int ms, void (*cb)(void)) { return 0; }\n")
+        refutation_mod._threading_seen_cache.clear()
+        outcome = _Outcome(
+            hypothesis="data race in refcount concurrent update",
+        )
+        dm = _domain_model(
+            architecture={"threading_model": "single_threaded"},
+        )
+        try:
+            r = _refute_by_architecture(
+                outcome, dm, None, _Config(target_path=tmp_path))
+        finally:
+            refutation_mod._threading_seen_cache.clear()
+        assert r is not None
+        assert r.gate == "architecture"
+
+    def test_partial_scan_demotion_carries_marker(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        """When the veto scan's file budget binds before the tree is
+        covered, the demotion must not claim full confidence — the
+        reason carries the partial-scan marker and the scan warns."""
+        import logging
+
+        import core.audit.refutation as refutation_mod
+        for i in range(3):
+            (tmp_path / f"f{i}.c").write_text("int main(void){return 0;}\n")
+        monkeypatch.setattr(
+            refutation_mod, "_veto_scan_budget", lambda checklist: 1,
+        )
+        refutation_mod._threading_seen_cache.clear()
+        outcome = _Outcome(
+            hypothesis="data race in newaddress concurrent modification",
+        )
+        dm = _domain_model(
+            architecture={"threading_model": "single_threaded"},
+        )
+        try:
+            with caplog.at_level(
+                logging.WARNING, logger="core.audit.refutation",
+            ):
+                r = _refute_by_architecture(
+                    outcome, dm, None, _Config(target_path=tmp_path))
+        finally:
+            refutation_mod._threading_seen_cache.clear()
+        assert r is not None
+        assert "veto scan partial" in r.reason
+        assert any("veto scan PARTIAL" in rec.getMessage()
+                   for rec in caplog.records)
+
+    def test_full_scan_demotion_carries_no_marker(self, tmp_path):
+        """A scan that covered the tree keeps the unqualified reason."""
+        import core.audit.refutation as refutation_mod
+        (tmp_path / "main.c").write_text("int main(void){return 0;}\n")
+        refutation_mod._threading_seen_cache.clear()
+        outcome = _Outcome(
+            hypothesis="data race in newaddress concurrent modification",
+        )
+        dm = _domain_model(
+            architecture={"threading_model": "single_threaded"},
+        )
+        try:
+            r = _refute_by_architecture(
+                outcome, dm, None, _Config(target_path=tmp_path))
+        finally:
+            refutation_mod._threading_seen_cache.clear()
+        assert r is not None
+        assert "veto scan partial" not in r.reason
+
+    def test_decisive_hit_under_budget_is_not_partial(self, tmp_path):
+        """A primitive hit inside the budget is decisive: the veto
+        fires and no partiality is claimed even though the budget
+        would have bound."""
+        import core.audit.refutation as refutation_mod
+        # The primitive file sits alone in the walk root; the decoys
+        # live in a subdirectory os.walk visits afterwards — the hit
+        # is found on the first (and only budgeted) file regardless
+        # of directory-entry order.
+        (tmp_path / "worker.c").write_text(
+            "void s(void){ pthread_create(&t, 0, run, 0); }\n")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        for i in range(3):
+            (sub / f"z{i}.c").write_text("int f(void){return 0;}\n")
+        refutation_mod._threading_seen_cache.clear()
+        try:
+            scan = refutation_mod._threading_primitives_seen(
+                tmp_path, max_files=1,
+            )
+        finally:
+            refutation_mod._threading_seen_cache.clear()
+        assert scan.seen is True
+        assert scan.partial is False
+
+
+class TestVetoScanBudget:
+    """Two-direction regression tests for the checklist-derived veto
+    scan budget: it must scale UP with checklist size (the fixed 2,000
+    left kernel trees ~96% unscanned) and must stop at the absolute
+    ceiling (the budget is wall-time, paid once per run per target)."""
+
+    def test_floor_without_checklist(self):
+        from core.audit.refutation import (
+            _VETO_SCAN_FLOOR_FILES,
+            _veto_scan_budget,
+        )
+
+        assert _veto_scan_budget(None) == _VETO_SCAN_FLOOR_FILES
+        assert _veto_scan_budget({}) == _VETO_SCAN_FLOOR_FILES
+        assert _veto_scan_budget(
+            {"files": "not-a-list"},
+        ) == _VETO_SCAN_FLOOR_FILES
+
+    def test_floor_on_small_checklist(self):
+        from core.audit.refutation import (
+            _VETO_SCAN_FLOOR_FILES,
+            _veto_scan_budget,
+        )
+
+        small = {"files": [{"path": f"f{i}.c"} for i in range(100)]}
+        assert _veto_scan_budget(small) == _VETO_SCAN_FLOOR_FILES
+
+    def test_budget_scales_with_checklist(self):
+        from core.audit.refutation import (
+            _VETO_SCAN_FILES_PER_CHECKLIST_FILE,
+            _veto_scan_budget,
+        )
+
+        mid = {"files": [{"path": f"f{i}.c"} for i in range(6002)]}
+        assert _veto_scan_budget(mid) == (
+            6002 * _VETO_SCAN_FILES_PER_CHECKLIST_FILE
+        )
+
+    def test_ceiling_binds(self):
+        from core.audit.refutation import (
+            _VETO_SCAN_CEILING_FILES,
+            _veto_scan_budget,
+        )
+
+        huge = {"files": [{"path": f"f{i}.c"} for i in range(50_000)]}
+        assert _veto_scan_budget(huge) == _VETO_SCAN_CEILING_FILES
+
 
 # ===================================================================
 # Gate 2: Lifecycle phase
