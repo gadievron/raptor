@@ -118,8 +118,26 @@ def _resolve_annotations_dir(out_dir: Path) -> Path:
             if project_dir is not None and project_dir != out_dir:
                 return project_dir / "annotations"
             return out_dir / "annotations"
-    except Exception:  # noqa: BLE001 — legacy probe below
-        pass
+    except ImportError:
+        pass  # pin subsystem absent — legacy probe below
+    except Exception as exc:  # noqa: BLE001 — legacy probe below, loudly
+        # Annotations carry operator-authority notes (Reflexion veto,
+        # FP primers): a failed pin resolution silently rerouting
+        # reads/writes to the legacy location would drop them without
+        # a trace, so the downgrade must be operator-visible. The
+        # exception message is duck-typed input — escape and bound it;
+        # the full traceback stays at DEBUG.
+        from core.security.log_sanitisation import sanitise_for_terminal
+        logger.warning(
+            "annotations-dir pin resolution failed for %s — falling "
+            "back to the run-marker probe; project-level annotations "
+            "may not be found: %s",
+            out_dir,
+            sanitise_for_terminal(f"{type(exc).__name__}: {exc}"),
+        )
+        logger.debug(
+            "annotations-dir pin resolution detail", exc_info=True,
+        )
     run_marker = out_dir / ".raptor-run.json"
     if run_marker.exists():
         project_dir = out_dir.parent

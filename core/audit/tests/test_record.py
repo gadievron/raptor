@@ -67,6 +67,80 @@ class TestResolveAnnotationsDir:
         run.mkdir()
         assert _resolve_annotations_dir(run) == run / "annotations"
 
+    def test_pin_failure_degrades_loudly(
+        self, tmp_path: Path, monkeypatch, caplog,
+    ):
+        # Annotations carry operator-authority notes — a pin
+        # resolution failure rerouting reads to the legacy location
+        # must warn, never silently swallow. Behaviour (the legacy
+        # marker+parent probe) is unchanged.
+        import core.run.pin as pin_mod
+
+        def _boom(*a, **kw):
+            raise RuntimeError("pin store unreadable")
+
+        monkeypatch.setattr(pin_mod, "resolve_run_pin", _boom)
+        project = tmp_path / "project"
+        project.mkdir()
+        run = project / "run_20260728"
+        run.mkdir()
+        (run / ".raptor-run.json").write_text("{}")
+        with caplog.at_level("WARNING", logger="core.audit.record"):
+            resolved = _resolve_annotations_dir(run)
+        assert resolved == project / "annotations"
+        warnings = [
+            r for r in caplog.records
+            if r.levelname == "WARNING" and r.name == "core.audit.record"
+        ]
+        assert len(warnings) == 1
+        assert str(run) in warnings[0].getMessage()
+
+    def test_pin_failure_warning_escaped_and_bounded(
+        self, tmp_path: Path, monkeypatch, caplog,
+    ):
+        # A hostile exception message (control bytes + flooding
+        # length — exception text is duck-typed input) must land
+        # escaped and truncated in the WARNING; the traceback is
+        # DEBUG-only.
+        import core.run.pin as pin_mod
+
+        hostile = "\x1b]0;pwn\x07" + "A" * 100_000
+
+        def _boom(*a, **kw):
+            raise RuntimeError(hostile)
+
+        monkeypatch.setattr(pin_mod, "resolve_run_pin", _boom)
+        run = tmp_path / "run_standalone"
+        run.mkdir()
+        with caplog.at_level("WARNING", logger="core.audit.record"):
+            assert _resolve_annotations_dir(run) == run / "annotations"
+        warnings = [
+            r for r in caplog.records
+            if r.levelname == "WARNING" and r.name == "core.audit.record"
+        ]
+        assert len(warnings) == 1
+        msg = warnings[0].getMessage()
+        assert "\x1b" not in msg
+        assert "\\x1b" in msg
+        assert "chars]" in msg  # explicit elision marker
+        assert len(msg) < 1000  # bounded, not the 100 KB flood
+
+    def test_healthy_pin_resolution_does_not_warn(
+        self, tmp_path: Path, caplog,
+    ):
+        project = tmp_path / "project"
+        project.mkdir()
+        run = project / "run_20260728"
+        run.mkdir()
+        (run / ".raptor-run.json").write_text("{}")
+        with caplog.at_level("WARNING", logger="core.audit.record"):
+            _resolve_annotations_dir(run)
+            _resolve_annotations_dir(tmp_path / "no_such_dir")
+        assert [
+            r for r in caplog.records
+            if r.levelname == "WARNING" and r.name == "core.audit.record"
+        ] == []
+
 
 class TestBinaryItemHash:
     _FILE_ENTRY = {"sha256": "a" * 64}
