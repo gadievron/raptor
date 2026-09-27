@@ -29,6 +29,13 @@ every shard under the writer's roll threshold:
   inode (the backup) and silently lose them. The gate fails closed
   on an unreadable run record and stays permissive when no record
   exists (foreign / legacy dirs).
+- Two backstops behind the gate: byte accounting over the snapshot
+  files is reconciled before anything is replaced, and the shard set
+  is re-enumerated immediately before the swap — a shard that
+  appeared (an appender rolling to the next number lands on a name
+  pass 2 would otherwise rename over), vanished, or moved size
+  refuses with nothing replaced. What remains unguarded is the swap
+  itself (see the crash window below).
 
 Crash window: between moving the originals to their backups and
 renaming the new shards into place, the trail lives only in the
@@ -253,6 +260,30 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
             f"(read {total}, wrote {written}) — a shard changed size "
             "mid-rewrite (concurrent appender?). Nothing was "
             "replaced; stop the writer and retry."
+        )
+
+    # ── pre-swap recheck ────────────────────────────────────────────
+    # The reconciliation above accounts only the SNAPSHOT files. A
+    # concurrent appender that ROLLED to a fresh shard (the trail's
+    # last shard is past the roll threshold — that is why rotate is
+    # running — so a racing append resolves to the next number) is
+    # invisible to it, and pass 2's rename onto that same name would
+    # destroy the appended rows with no backup and no warning. Refuse
+    # on ANY drift: a shard appeared, vanished, or moved size.
+    try:
+        recheck = _shard_snapshot(out_dir)
+    except RotateRefused:
+        for tmp in temps:
+            tmp.unlink(missing_ok=True)
+        raise
+    if recheck != sizes:
+        for tmp in temps:
+            tmp.unlink(missing_ok=True)
+        raise RotateRefused(
+            f"rotate at {out_dir}: shard set changed during the "
+            "rewrite (a concurrent appender rolled to a new shard or "
+            "appended). Nothing was replaced; stop the writer and "
+            "retry."
         )
 
     # ── pass 2: swap — originals to backups, temps into place ──────

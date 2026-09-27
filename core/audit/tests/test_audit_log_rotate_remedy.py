@@ -417,3 +417,52 @@ class TestConcurrentAppendDetection:
         assert _trail_bytes(tmp_path) == before
         # Temp files were cleaned up.
         assert not list(tmp_path.glob(".audit-log-rotate.tmp.*"))
+
+    def test_append_rolling_to_new_shard_mid_rotate_refused(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # The clobber shape the byte reconciliation CANNOT catch: the
+        # trail's shard 1 is over the roll threshold (that is why
+        # rotate is running), so a concurrent append resolves to the
+        # NEXT shard name — a file the rotate's snapshot never saw.
+        # Reconciliation accounts snapshot files only and passes;
+        # without the pre-swap recheck, pass 2's rename onto the same
+        # name would destroy the appended row — no backup, no
+        # warning. The recheck must refuse with the row surviving.
+        _shrink_budgets(monkeypatch)
+        log = tmp_path / record.AUDIT_LOG_FILENAME
+        _plant_rows(log, 60)
+        before = log.read_bytes()
+
+        real_fsync = os.fsync
+        fired = {"done": False}
+
+        def _racing_fsync(fd: int) -> None:
+            # The first fsync happens mid-rewrite (closing the first
+            # temp), safely after the snapshot: the racing appender
+            # lands its row now.
+            if not fired["done"]:
+                fired["done"] = True
+                record.append_audit_log(tmp_path, {
+                    "action": "orchestrator_review",
+                    "key": "a.c:racer:1", "status": "clean",
+                    "seq": 999,
+                })
+            real_fsync(fd)
+
+        monkeypatch.setattr(os, "fsync", _racing_fsync)
+        with pytest.raises(RotateRefused, match="changed during"):
+            rotate_audit_log(tmp_path)
+        monkeypatch.undo()
+        assert fired["done"]
+        # The racer's append resolved past the over-threshold shard 1
+        # to shard 2 — and it must still be alive after the refusal.
+        racer = tmp_path / ".audit-log.002.jsonl"
+        assert racer.is_file()
+        rows, _ = record.load_audit_log_disclosed(tmp_path)
+        assert any(r.get("seq") == 999 for r in rows)
+        # Nothing replaced: original shard byte-identical, no
+        # backups, temps cleaned.
+        assert log.read_bytes() == before
+        assert not list(tmp_path.glob("*.pre-rotate*"))
+        assert not list(tmp_path.glob(".audit-log-rotate.tmp.*"))
