@@ -1262,6 +1262,22 @@ def _assemble_and_write_summary(
         summary["total_allowed_reports"] = len(allowed_reports)
         summary["allowed_by_type"] = allowed_by_type
         summary["allowed_reports"] = allowed_reports
+    if denials:
+        triage = _triage_denials(denials)
+        summary["triage"] = triage
+        severity = triage["severity"]
+        total = sum(b["count"] for b in triage.values() if isinstance(b, dict))
+        if severity in ("critical", "elevated"):
+            parts = []
+            for cat in ("escape_primitives", "network_probing",
+                        "udp_egress", "filesystem_escape"):
+                n = triage[cat]["count"]
+                if n:
+                    parts.append(f"{cat}={n}")
+            logger.warning("sandbox triage: %s — %s", severity,
+                           ", ".join(parts))
+        else:
+            logger.info("sandbox triage: %d denial(s), all routine", total)
     # Provenance stamp over the denial payload (content hash) so a
     # target-planted or target-edited sandbox-summary.json fails
     # triage verification: the summariser only writes when denials
@@ -1329,6 +1345,84 @@ def _assemble_and_write_summary(
         with _lock:
             _floor_refusals.pop(str(run_dir.resolve()), None)
     return summary
+
+
+_ESCAPE_PRIMITIVE_KEYWORDS = frozenset({
+    "ptrace", "bpf", "io_uring", "userfaultfd", "keyctl",
+    "process_vm_readv", "process_vm_writev", "kcmp",
+    "perf_event_open", "mount", "pivot_root", "unshare",
+})
+
+_FILESYSTEM_ESCAPE_PREFIXES = (
+    "/etc/", "/proc/", "/sys/", "/dev/", "/root/",
+    "/var/run/", "/run/",
+)
+
+_MAX_TRIAGE_EXAMPLES = 5
+
+
+def _triage_denials(records: list[dict]) -> dict[str, Any]:
+    """Classify denial records into escape-attempt signature categories.
+
+    Returns a dict suitable for embedding in sandbox-summary.json under
+    the ``triage`` key.
+    """
+    buckets: dict[str, list[str]] = {
+        "escape_primitives": [],
+        "network_probing": [],
+        "udp_egress": [],
+        "filesystem_escape": [],
+        "routine": [],
+    }
+
+    for rec in records:
+        dtype = rec.get("type", "")
+        cmd = str(rec.get("cmd", "")).lower()
+        path = str(rec.get("path", ""))
+
+        # Escape primitives: syscall-level denials only (type=seccomp).
+        # Matching against cmd alone — not paths or other detail fields
+        # — avoids false positives from filenames containing keywords
+        # (e.g. /home/user/ptrace_test/output.txt).
+        if dtype == "seccomp" and any(
+            kw in cmd for kw in _ESCAPE_PRIMITIVE_KEYWORDS
+        ):
+            label = next(
+                kw for kw in _ESCAPE_PRIMITIVE_KEYWORDS if kw in cmd)
+            buckets["escape_primitives"].append(label)
+        elif dtype == "udp":
+            buckets["udp_egress"].append(cmd[:80] if cmd else "udp")
+        elif dtype == "write" and path:
+            if (path.startswith(_FILESYSTEM_ESCAPE_PREFIXES)
+                    or path == "/"):
+                buckets["filesystem_escape"].append(path[:120])
+            else:
+                buckets["routine"].append(f"write:{path[:80]}")
+        elif dtype == "network":
+            buckets["network_probing"].append(cmd[:80])
+        else:
+            buckets["routine"].append(f"{dtype}:{cmd[:60]}")
+
+    result: dict[str, Any] = {}
+    for cat, items in buckets.items():
+        result[cat] = {
+            "count": len(items),
+            "examples": sorted(set(items))[:_MAX_TRIAGE_EXAMPLES],
+        }
+
+    escape_count = result["escape_primitives"]["count"]
+    net_count = result["network_probing"]["count"]
+    udp_count = result["udp_egress"]["count"]
+    fs_count = result["filesystem_escape"]["count"]
+
+    if escape_count > 0:
+        result["severity"] = "critical"
+    elif net_count > 5 or udp_count > 0 or fs_count > 0:
+        result["severity"] = "elevated"
+    else:
+        result["severity"] = "routine"
+
+    return result
 
 
 def _cli_main(argv: list | None = None) -> int:
