@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from core.json import load_json, loads
+from core.json.jsonl import append_jsonl
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
@@ -319,10 +320,23 @@ def build_label_records(
 
 
 def append_records(path: Path, records: list[dict[str, Any]]) -> None:
-    """Append records to the JSONL store (append-only, one per line)."""
+    """Append records to the JSONL store (append-only, one per line).
+
+    Routed through ``core.json.jsonl.append_jsonl`` so concurrent
+    writers stay line-atomic: the store is machine-wide
+    (``~/.local/share/raptor/corpus-history.jsonl``) and parallel
+    corpus runs finish whenever they finish — a buffered text-mode
+    append flushes in interleavable chunks, and one torn RUN header
+    silently drops that run from every report (the reader skips
+    malformed lines by contract). O_APPEND + single-write appends
+    also pick up the trail hardening (symlink/FIFO refusal).
+    Raises ``OSError`` like ``append_jsonl``; both callers tolerate
+    it (``record_run`` is a warn-and-return-False wrapper, the CLI
+    ``import`` command fails loudly).
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with Path(path).open("a", encoding="utf-8") as f:
-        f.writelines(json.dumps(rec, sort_keys=True) + "\n" for rec in records)
+    for rec in records:
+        append_jsonl(path, rec, sort_keys=True)
 
 
 def record_run(

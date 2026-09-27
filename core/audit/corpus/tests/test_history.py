@@ -190,6 +190,54 @@ class TestRecordRun:
         assert ok is False
         assert "not recorded" in capsys.readouterr().err
 
+    def test_append_records_refuses_symlinked_store(self, tmp_path):
+        # append_records routes through the hardened trail writer
+        # (O_NOFOLLOW single-write appends): a symlink planted at the
+        # store path is refused instead of followed. A plain buffered
+        # ``open("a")`` would follow it silently.
+        victim = tmp_path / "victim.jsonl"
+        victim.write_text("")
+        store = tmp_path / "store.jsonl"
+        store.symlink_to(victim)
+        with pytest.raises(OSError):
+            history.append_records(store, [{"record": "run", "run_id": "r"}])
+        assert victim.read_text() == ""
+
+    def test_append_records_appends_whole_lines(self, tmp_path):
+        # Direction two: a regular store path keeps today's contract —
+        # existing content preserved, one parseable JSON object per
+        # line, key-stable output.
+        store = tmp_path / "store.jsonl"
+        store.write_text('{"record":"run","run_id":"pre"}\n')
+        history.append_records(
+            store,
+            [{"record": "run", "run_id": "r1"},
+             {"record": "label", "run_id": "r1", "function_id": "a.c:f"}],
+        )
+        lines = store.read_text().splitlines()
+        assert len(lines) == 3
+        parsed = [json.loads(line) for line in lines]
+        assert parsed[0]["run_id"] == "pre"
+        assert [p["record"] for p in parsed[1:]] == ["run", "label"]
+        # sort_keys stability (the store is diffed across runs)
+        assert lines[1] == json.dumps(
+            {"record": "run", "run_id": "r1"}, sort_keys=True)
+
+    def test_record_run_symlinked_store_warns_never_raises(
+            self, tmp_path, capsys):
+        # The raises-OSError change stays inside record_run's
+        # best-effort contract: a symlinked store makes it warn and
+        # return False, exactly like any other store failure.
+        victim = tmp_path / "victim.jsonl"
+        victim.write_text("")
+        store = tmp_path / "store.jsonl"
+        store.symlink_to(victim)
+        out = tmp_path / "results.json"
+        out.write_text("{}")
+        ok = history.record_run([_row()], {}, output_path=out, store=store)
+        assert ok is False
+        assert "not recorded" in capsys.readouterr().err
+
     def test_row_without_function_id_skipped(self, tmp_path, capsys):
         store = tmp_path / "store.jsonl"
         out = tmp_path / "results.json"
