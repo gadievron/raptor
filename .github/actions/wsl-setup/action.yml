@@ -1,0 +1,172 @@
+name: WSL setup
+description: >
+  First-party WSL provisioning: ensure the WSL host layer is present,
+  import a sha256-pinned Ubuntu rootfs under a caller-chosen distro
+  name, optionally create an unprivileged shell user plus packages,
+  and register the `wsl-bash` custom-shell wrapper. Replaces the
+  third-party setup-wsl action; unlike it, the rootfs download is
+  digest-pinned rather than fetched by version label at run time.
+
+inputs:
+  distribution-name:
+    description: >
+      WSL registration name for the imported distro. Charset-safe
+      constant chosen by the calling workflow (used verbatim in
+      wsl.exe -d calls and inside the shell wrapper batch file).
+    required: true
+  wsl-version:
+    description: WSL version for the import ("1" or "2").
+    required: false
+    default: '2'
+  wsl-shell-user:
+    description: >
+      Unprivileged user to create in the distro and run wsl-bash
+      steps as. Empty = no user creation and no shell registration.
+    required: false
+    default: ''
+  set-default:
+    description: Make this distro the wsl.exe default ("true"/"false").
+    required: false
+    default: 'true'
+  additional-packages:
+    description: Space-separated apt packages to install (as root).
+    required: false
+    default: ''
+  rootfs-url:
+    description: Rootfs archive URL (importable by wsl.exe --import).
+    required: false
+    default: 'https://releases.ubuntu.com/24.04.5/ubuntu-24.04.5-wsl-amd64.wsl'
+  rootfs-sha256:
+    description: Required SHA-256 of the rootfs archive.
+    required: false
+    default: 'bb415d824822c4b878125729af451a5d18fb13d1cf5cbed9a7393ad64ac6039e'
+
+runs:
+  using: composite
+  steps:
+    - name: Ensure the WSL host layer is present
+      shell: pwsh
+      env:
+        WSL_TARGET_VERSION: ${{ inputs.wsl-version }}
+      run: |
+        # wsl.exe emits UTF-16 for its own status/error text.
+        [Console]::OutputEncoding = [System.Text.Encoding]::Unicode
+        $status = (& wsl.exe --status 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0 -or $status -match 'is not installed') {
+          Start-Process wsl.exe -ArgumentList '--install', '--no-distribution'
+          $deadline = (Get-Date).AddMinutes(5)
+          do {
+            Start-Sleep -Seconds 10
+            $status = (& wsl.exe --status 2>&1 | Out-String)
+          } until (($LASTEXITCODE -eq 0 -and $status -notmatch 'is not installed') `
+                   -or ((Get-Date) -gt $deadline))
+          if ($LASTEXITCODE -ne 0 -or $status -match 'is not installed') {
+            throw 'WSL host install did not complete within 5 minutes'
+          }
+        }
+        if ($env:WSL_TARGET_VERSION -ne '1') {
+          # The windows-2022 image ships the inbox WSL, which cannot
+          # host WSL2 distros; the store build from --update can. WSL1
+          # keeps the inbox build (parity with the prior setup, which
+          # also skipped the update for version 1).
+          $updated = $false
+          foreach ($attempt in 1..10) {
+            & wsl.exe --update
+            if ($LASTEXITCODE -eq 0) { $updated = $true; break }
+            Start-Sleep -Seconds 15
+          }
+          if (-not $updated) { throw 'wsl --update failed after 10 attempts' }
+          $deadline = (Get-Date).AddMinutes(5)
+          while (((& wsl.exe --status 2>&1 | Out-String) -match 'finishing an upgrade') `
+                 -and ((Get-Date) -lt $deadline)) {
+            Start-Sleep -Seconds 10
+          }
+        }
+
+    - name: Fetch and verify the pinned rootfs
+      shell: bash
+      env:
+        ROOTFS_URL: ${{ inputs.rootfs-url }}
+        ROOTFS_SHA256: ${{ inputs.rootfs-sha256 }}
+      run: |
+        set -euo pipefail
+        temp_dir="$(cygpath -u "$RUNNER_TEMP")"
+        rootfs="${temp_dir}/wsl-rootfs/rootfs.wsl"
+        mkdir -p "${temp_dir}/wsl-rootfs"
+        if [ ! -f "$rootfs" ]; then
+          curl --fail --location --retry 3 --silent --show-error \
+            --output "${rootfs}.part" "$ROOTFS_URL"
+          mv "${rootfs}.part" "$rootfs"
+        fi
+        printf '%s  %s\n' "$ROOTFS_SHA256" "$rootfs" | sha256sum -c -
+
+    - name: Import the distro
+      shell: bash
+      env:
+        DISTRO_NAME: ${{ inputs.distribution-name }}
+        WSL_TARGET_VERSION: ${{ inputs.wsl-version }}
+        SET_DEFAULT: ${{ inputs.set-default }}
+      run: |
+        set -euo pipefail
+        temp_dir="$(cygpath -u "$RUNNER_TEMP")"
+        rootfs="${temp_dir}/wsl-rootfs/rootfs.wsl"
+        install_dir="${temp_dir}/wsl/${DISTRO_NAME}"
+        mkdir -p "$install_dir"
+        wsl.exe --import "$DISTRO_NAME" "$(cygpath -w "$install_dir")" \
+          "$(cygpath -w "$rootfs")" --version "$WSL_TARGET_VERSION"
+        if [ "$SET_DEFAULT" = "true" ]; then
+          wsl.exe --set-default "$DISTRO_NAME"
+        fi
+
+    - name: Provision user and packages
+      shell: bash
+      env:
+        DISTRO_NAME: ${{ inputs.distribution-name }}
+        SHELL_USER: ${{ inputs.wsl-shell-user }}
+        ADDITIONAL_PACKAGES: ${{ inputs.additional-packages }}
+      run: |
+        set -euo pipefail
+        if [ -n "$SHELL_USER" ]; then
+          if ! wsl.exe -d "$DISTRO_NAME" -u root --exec id -u "$SHELL_USER" \
+              >/dev/null 2>&1; then
+            wsl.exe -d "$DISTRO_NAME" -u root --exec \
+              useradd --create-home --shell /bin/bash "$SHELL_USER"
+          fi
+        fi
+        if [ -n "$ADDITIONAL_PACKAGES" ]; then
+          read -r -a packages <<< "$ADDITIONAL_PACKAGES"
+          wsl.exe -d "$DISTRO_NAME" -u root --exec \
+            env DEBIAN_FRONTEND=noninteractive apt-get update --quiet
+          wsl.exe -d "$DISTRO_NAME" -u root --exec \
+            env DEBIAN_FRONTEND=noninteractive \
+            apt-get install --quiet --yes "${packages[@]}"
+        fi
+
+    - name: Register the wsl-bash shell wrapper
+      if: inputs.wsl-shell-user != ''
+      shell: bash
+      env:
+        DISTRO_NAME: ${{ inputs.distribution-name }}
+        SHELL_USER: ${{ inputs.wsl-shell-user }}
+      run: |
+        set -euo pipefail
+        wrapper_dir="$(cygpath -u "$RUNNER_TEMP")/wsl-shell-wrapper"
+        mkdir -p "$wrapper_dir"
+        # The runner resolves `shell: wsl-bash {0}` through PATH and
+        # passes the step's script file as the single argument. The
+        # wrapper translates that Windows path into the distro,
+        # strips CRLF (the runner writes the script with the host
+        # line model), and runs it as the unprivileged shell user.
+        cat > "$wrapper_dir/wsl-bash.bat" <<'WRAPPER'
+        @echo off
+        setlocal enableextensions
+        set "scriptFile=%~1"
+        FOR /F "usebackq delims=" %%A IN (`wsl.exe -d __DISTRO__ -u root --exec wslpath -u "%scriptFile%"`) DO set "wslScriptFile=%%A"
+        wsl.exe -d __DISTRO__ -u root --exec sed -i "s/\r$//" "%wslScriptFile%"
+        wsl.exe -d __DISTRO__ -u __USER__ --exec bash --noprofile --norc -euo pipefail "%wslScriptFile%"
+        exit /b %ERRORLEVEL%
+        WRAPPER
+        sed -i -e "s/__DISTRO__/${DISTRO_NAME}/g" \
+               -e "s/__USER__/${SHELL_USER}/g" \
+               -e 's/$/\r/' "$wrapper_dir/wsl-bash.bat"
+        cygpath -w "$wrapper_dir" >> "$GITHUB_PATH"

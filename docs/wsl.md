@@ -396,8 +396,9 @@ magic on the automount, Landlock availability on the stock kernel,
 flock/rename client-locality, the consent ceremony, the sandbox
 masks, the WSL1 refusal — are exercised nightly by
 [`wsl.yml`](../.github/workflows/wsl.yml) on a `windows-2022` runner
-(WSL2 via the setup-wsl action; a probe job gates the leg and reports
-a detected skip when the runner image cannot host WSL2).
+(WSL2 via the repo-local `.github/actions/wsl-setup` composite —
+first-party, sha256-pinned rootfs; a probe job gates the leg and
+reports a detected skip when the runner image cannot host WSL2).
 
 What the leg verifies:
 

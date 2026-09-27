@@ -21,11 +21,15 @@ name: Nightly (WSL2 live leg)
 # job attempts the setup and the leg reports a detected skip in the
 # job summary when the image cannot host WSL2, instead of failing.
 #
-# In-distro steps run through setup-wsl's `wsl-bash` shell as the
-# non-root `raptor` user (the sandbox suites assume an unprivileged
-# caller); root-needed distro setup goes through `wsl.exe -u root`
-# from the host side. Environment variables do not cross wsl.exe
-# without WSLENV plumbing, so in-distro knobs are exported inline.
+# WSL provisioning is the repo-local .github/actions/wsl-setup
+# composite (first-party, sha256-pinned rootfs — no third-party
+# action in the chain), so every job checks out the repository
+# before its setup step. In-distro steps run through that action's
+# `wsl-bash` shell as the non-root `raptor` user (the sandbox suites
+# assume an unprivileged caller); root-needed distro setup goes
+# through `wsl.exe -u root` from the host side. Environment
+# variables do not cross wsl.exe without WSLENV plumbing, so
+# in-distro knobs are exported inline.
 #
 # Job summaries and logs state environment facts only.
 
@@ -44,8 +48,12 @@ permissions:
   contents: read
 
 env:
+  # Registration names for the imported distros. The second distro is
+  # a second import of the same pinned rootfs under another name — a
+  # distinct 9p client is all the cross-client probes need, and one
+  # pinned image is one supply-chain artifact.
   WSL_DISTRO: Ubuntu-24.04
-  WSL_SECOND_DISTRO: Debian
+  WSL_SECOND_DISTRO: Ubuntu-24.04-second
 
 jobs:
   probe:
@@ -56,12 +64,17 @@ jobs:
     outputs:
       wsl2: ${{ steps.verdict.outputs.wsl2 }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Set up WSL2 (availability probe)
         id: setup
         continue-on-error: true
-        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364  # v7.0.0
+        uses: ./.github/actions/wsl-setup
         with:
-          distribution: Ubuntu-24.04
+          distribution-name: Ubuntu-24.04
           wsl-version: 2
 
       - name: Publish availability verdict
@@ -74,7 +87,11 @@ jobs:
           if [ "${{ steps.setup.outcome }}" = "success" ]; then
             # tr strips everything non-printable-ASCII before the
             # kernel string reaches the public job summary.
-            kernel="$(wsl.exe -d "$WSL_DISTRO" -- uname -r | tr -cd '\40-\176' || true)"
+            # -u root: an imported distro's DEFAULT user is image
+            # metadata (Ubuntu's .wsl points it at the OOBE-created
+            # account, which --import never creates); root always
+            # exists.
+            kernel="$(wsl.exe -d "$WSL_DISTRO" -u root -- uname -r | tr -cd '\40-\176' || true)"
             case "$kernel" in
               *microsoft-standard*) wsl2=true ;;
             esac
@@ -83,7 +100,7 @@ jobs:
           {
             echo "## WSL2 availability probe"
             echo ""
-            echo "* setup-wsl outcome: ${{ steps.setup.outcome }}"
+            echo "* wsl-setup outcome: ${{ steps.setup.outcome }}"
             echo "* distro kernel: \`${kernel:-none}\`"
             echo "* WSL2 available on this runner image: **${wsl2}**"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -115,30 +132,32 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     steps:
-      - name: Set up second distro (cross-client probes)
-        # A second 9p client for the flock-locality and rename-
-        # visibility probes; reached from the primary distro through
-        # wsl.exe interop. Installed FIRST so the primary distro's
-        # setup below is the last action invocation and owns the
-        # wsl-bash shell registration (default distro + shell user).
-        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364  # v7.0.0
-        with:
-          distribution: ${{ env.WSL_SECOND_DISTRO }}
-          wsl-version: 2
-          set-as-default: 'false'
-
-      - name: Set up WSL2 distro
-        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364  # v7.0.0
-        with:
-          distribution: Ubuntu-24.04
-          wsl-version: 2
-          wsl-shell-user: raptor
-          additional-packages: python3 python3-venv python3-pip git util-linux
-
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Set up WSL2 distro
+        id: setup
+        uses: ./.github/actions/wsl-setup
+        with:
+          distribution-name: Ubuntu-24.04
+          wsl-version: 2
+          wsl-shell-user: raptor
+          additional-packages: python3 python3-venv python3-pip git util-linux
+
+      - name: Set up second distro (cross-client probes)
+        # A second 9p client for the flock-locality and rename-
+        # visibility probes; reached from the primary distro through
+        # wsl.exe interop. No shell user: the wsl-bash registration
+        # above stays owned by the primary distro, and the probes
+        # only run coreutils/util-linux binaries already in the base
+        # image.
+        uses: ./.github/actions/wsl-setup
+        with:
+          distribution-name: ${{ env.WSL_SECOND_DISTRO }}
+          wsl-version: 2
+          set-default: 'false'
 
       - name: Clone to the distro filesystem and install deps
         # $PWD inside wsl-bash is the workspace mapped through the
@@ -192,14 +211,6 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 90
     steps:
-      - name: Set up WSL2 distro
-        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364  # v7.0.0
-        with:
-          distribution: Ubuntu-24.04
-          wsl-version: 2
-          wsl-shell-user: raptor
-          additional-packages: python3 python3-venv python3-pip git
-
       - name: Checkout repository
         # From inside the distro this working tree is the drvfs (9p,
         # case-insensitive) view, materialized with whatever line
@@ -209,6 +220,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Set up WSL2 distro
+        uses: ./.github/actions/wsl-setup
+        with:
+          distribution-name: Ubuntu-24.04
+          wsl-version: 2
+          wsl-shell-user: raptor
+          additional-packages: python3 python3-venv python3-pip git
 
       - name: Clone twins to the distro filesystem and install deps
         shell: wsl-bash {0}
@@ -281,10 +300,16 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     steps:
-      - name: Set up WSL2 distro
-        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364  # v7.0.0
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          distribution: Ubuntu-24.04
+          persist-credentials: false
+
+      - name: Set up WSL2 distro
+        id: setup
+        uses: ./.github/actions/wsl-setup
+        with:
+          distribution-name: Ubuntu-24.04
           wsl-version: 2
           wsl-shell-user: raptor
           additional-packages: python3 python3-venv python3-pip git uidmap util-linux
@@ -298,11 +323,6 @@ jobs:
         run: |
           set -euo pipefail
           wsl.exe -d "$WSL_DISTRO" -u root -- sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
 
       - name: Clone to the distro filesystem and install deps
         shell: wsl-bash {0}
@@ -383,12 +403,17 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Set up WSL1 distro
         id: setup
         continue-on-error: true
-        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364  # v7.0.0
+        uses: ./.github/actions/wsl-setup
         with:
-          distribution: Ubuntu-24.04
+          distribution-name: Ubuntu-24.04
           wsl-version: 1
           wsl-shell-user: raptor
           additional-packages: python3 python3-venv python3-pip git
@@ -400,14 +425,8 @@ jobs:
           {
             echo "## WSL1 availability"
             echo ""
-            echo "* setup-wsl (wsl-version 1) outcome: ${{ steps.setup.outcome }}"
+            echo "* wsl-setup (wsl-version 1) outcome: ${{ steps.setup.outcome }}"
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Checkout repository
-        if: steps.setup.outcome == 'success'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
 
       - name: Clone to the distro filesystem and install deps
         if: steps.setup.outcome == 'success'

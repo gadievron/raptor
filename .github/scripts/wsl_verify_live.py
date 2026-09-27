@@ -177,7 +177,10 @@ def _run_in_distro(distro: str, argv: list[str],
                    timeout: int = 60) -> subprocess.CompletedProcess:
     """Run *argv* in another WSL distro through interop."""
     exe = _wsl_exe()
-    return subprocess.run([exe, "-d", distro, "--", *argv],
+    # -u root: an imported distro's DEFAULT user is image metadata
+    # (Ubuntu's .wsl points it at the OOBE-created account, which
+    # --import never creates); root always exists.
+    return subprocess.run([exe, "-d", distro, "-u", "root", "--", *argv],
                           capture_output=True, text=True, timeout=timeout,
                           check=False)
 
