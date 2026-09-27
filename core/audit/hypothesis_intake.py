@@ -31,9 +31,10 @@ the addrmap miss ledger), never errors.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,21 @@ _MAX_FILE_CHARS = 512
 _MAX_FUNCTION_CHARS = 256
 _MAX_REFS_PER_SEED = 4
 
+# Producer-asserted content identity of the module a seed's fid
+# addresses: a full lowercase SHA-256 hex, nothing else. The strict
+# shape mirrors normalise_fid's discipline — junk collapses to absent
+# (counted), never rides into the join.
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+# Identity-join outcomes that refuse the WHOLE join (no name/address
+# fallback): a content-hash contradiction or an ambiguous resolution
+# must stop the seed, not reroute it — fallback after a refused
+# identity would hand a forged anchor exactly the steering the check
+# denied.
+_FID_HARD_REFUSALS = frozenset({
+    "module_content_mismatch", "fid_ambiguous_window", "fid_conflict",
+})
+
 
 @dataclass
 class SeedRecord:
@@ -122,6 +138,13 @@ class SeedRecord:
     function: str = ""
     address: int | None = None
     fid: str | None = None
+    # Full SHA-256 of the module the producer minted the fid against
+    # ("" = not asserted). When BOTH sides know the content hash and
+    # they disagree, the join refuses outright — a matching anchor
+    # over mismatched bytes is exactly the forged/copied build-id
+    # shape, and falling back to a name join would hand the forger
+    # the steering the anchor check just denied.
+    module_sha256: str = ""
     disproof: str = ""
     evidence_tier: str = ""
     evidence: list[dict[str, str]] = field(default_factory=list)
@@ -227,6 +250,22 @@ def _load_one_record(
         if fid is None:
             skips["fid_collapsed"] = skips.get("fid_collapsed", 0) + 1
 
+    # Same collapse discipline for the content-hash assertion: a
+    # malformed value is counted and dropped, the record survives on
+    # its other keys (an over-strict refusal here would let a typo'd
+    # hash silently strip a real seed's join keys too).
+    module_sha256 = ""
+    if raw.get("module_sha256") is not None:
+        candidate = raw.get("module_sha256")
+        if isinstance(candidate, str) and _SHA256_HEX_RE.fullmatch(
+            candidate.strip().lower(),
+        ):
+            module_sha256 = candidate.strip().lower()
+        else:
+            skips["module_sha256_collapsed"] = (
+                skips.get("module_sha256_collapsed", 0) + 1
+            )
+
     evidence: list[dict[str, str]] = []
     refs = raw.get("evidence")
     if isinstance(refs, list):
@@ -261,6 +300,7 @@ def _load_one_record(
         ),
         address=_parse_address(raw.get("address")),
         fid=fid,
+        module_sha256=module_sha256,
         claim=_escape(claim.strip(), _MAX_CLAIM_CHARS),
         disproof=(
             _escape(raw["disproof"].strip(), _MAX_DISPROOF_CHARS)
@@ -410,31 +450,188 @@ def _gap_indexes(
     return by_name, by_addr
 
 
+class _JoinOutcome(NamedTuple):
+    """One seed's resolution: the gap (or None), the miss reason,
+    the join method that won (``fid`` / ``fid_fuzzy`` / ``address``
+    / ``name`` / ``""``), and the fid leg's soft-failure state when
+    the identity join could not run to completion (``""`` when the
+    leg won, hard-refused, or never had a fid to try)."""
+
+    gap: dict | None
+    miss_reason: str
+    method: str
+    fid_state: str
+
+
+def checklist_module_spaces(
+    checklist: dict[str, Any] | None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+    """Identity-join spaces over the checklist's ``module_identity``
+    blocks (stamped by ``core.inventory.binary_builder``).
+
+    Returns ``(modules, file_sha)``:
+
+    * ``modules``: anchor → ``{"file", "base", "sha256"}`` — the
+      resolution table a fid's ``<anchor>:0x<rel>`` joins through.
+      Anchors are normalised via ``module_anchor`` (the one prefix
+      rule) so a fid minted from a full-length identity value joins
+      the checklist's ≤16-hex anchor. Two files claiming the SAME
+      anchor is exactly the copied/forged-identity shape — the anchor
+      is dropped from the table entirely (fail-closed: an ambiguous
+      identity must not steer either way) and the collision logged.
+    * ``file_sha``: file path key → recorded content hash, for the
+      producer-asserted ``module_sha256`` check on name/address joins.
+
+    Checklists without identity blocks (source trees, pre-block
+    binary checklists) yield empty spaces — every fid leg goes inert
+    and behaviour is byte-identical to the name/address-only join.
+    """
+    modules: dict[str, dict[str, Any]] = {}
+    dropped: set[str] = set()
+    file_sha: dict[str, str] = {}
+    if not isinstance(checklist, dict):
+        return modules, file_sha
+    from core.binary.addrmap import image_base, module_anchor
+    for file_info in checklist.get("files", []) or []:
+        if not isinstance(file_info, dict):
+            continue
+        fp = file_info.get("path", "") or ""
+        if not fp:
+            continue
+        sha = file_info.get("sha256")
+        if isinstance(sha, str) and _SHA256_HEX_RE.fullmatch(sha):
+            file_sha.setdefault(fp, sha)
+        block = file_info.get("module_identity")
+        if not isinstance(block, dict):
+            continue
+        anchor = module_anchor(
+            build_id=block.get("anchor")
+            if isinstance(block.get("anchor"), str) else None,
+        )
+        if anchor is None or anchor in dropped:
+            continue
+        existing = modules.get(anchor)
+        if existing is not None and existing["file"] != fp:
+            del modules[anchor]
+            dropped.add(anchor)
+            logger.warning(
+                "hypothesis-seed intake: module anchor collision — "
+                "two checklist files share identity anchor %s; "
+                "fid joins for it refused (fail-closed)", anchor,
+            )
+            continue
+        entry_sha = block.get("value") if block.get("kind") == "sha256" \
+            else file_info.get("sha256")
+        modules.setdefault(anchor, {
+            "file": fp,
+            "base": image_base(block),
+            "sha256": entry_sha if isinstance(entry_sha, str)
+            and _SHA256_HEX_RE.fullmatch(entry_sha) else "",
+        })
+    return modules, file_sha
+
+
+def _fid_leg(
+    seed: SeedRecord,
+    by_addr: dict[tuple[str, int], dict],
+    modules: dict[str, dict[str, Any]],
+) -> tuple[dict | None, str, str, str]:
+    """The identity join: ``(gap, hard_refusal, method, soft_state)``.
+
+    Resolution order mirrors ``core.binary.addrmap.FidIndex``: exact
+    address hit, then a unique candidate inside the exclusive
+    ``FID_FUZZY_WINDOW_BYTES`` window; two in-window candidates are
+    ambiguous and HARD-refuse (``fid_ambiguous_window``). A
+    producer-asserted ``module_sha256`` that contradicts the
+    checklist's recorded content hash for the anchor's file
+    HARD-refuses the whole join (``module_content_mismatch``) —
+    matching anchor over mismatched bytes is the forged-identity
+    shape, and no name fallback may run for it. Soft states
+    (anchor unknown / no recorded base / address unknown) return the
+    leg to the caller for name/address fallback WITH the state
+    recorded.
+    """
+    from core.binary.addrmap import (
+        FID_FUZZY_WINDOW_BYTES,
+        from_fid,
+        module_anchor,
+    )
+    parsed = from_fid(seed.fid)
+    if parsed is None:
+        return None, "", "", ""
+    anchor = module_anchor(build_id=parsed[0])
+    mod = modules.get(anchor) if anchor else None
+    if mod is None:
+        return None, "", "", "fid_anchor_unknown"
+    if (
+        seed.module_sha256 and mod["sha256"]
+        and seed.module_sha256 != mod["sha256"]
+    ):
+        return None, "module_content_mismatch", "", ""
+    if mod["base"] is None:
+        return None, "", "", "fid_no_recorded_base"
+    addr = mod["base"] + parsed[1]
+    exact = by_addr.get((mod["file"], addr))
+    if exact is not None:
+        return exact, "", "fid", ""
+    hits: list[dict] = []
+    hit_ids: set[int] = set()
+    for delta in range(1, FID_FUZZY_WINDOW_BYTES):
+        for cand_addr in (addr - delta, addr + delta):
+            cand = by_addr.get((mod["file"], cand_addr))
+            if cand is not None and id(cand) not in hit_ids:
+                hit_ids.add(id(cand))
+                hits.append(cand)
+    if len(hits) == 1:
+        return hits[0], "", "fid_fuzzy", ""
+    if len(hits) > 1:
+        return None, "fid_ambiguous_window", "", ""
+    return None, "", "", "fid_address_unknown"
+
+
 def _match_gap(
     seed: SeedRecord,
     by_name: dict[tuple[str, str], dict],
     by_addr: dict[tuple[str, int], dict],
-) -> tuple[dict | None, str]:
-    """Resolve one seed against the queue → ``(gap, miss_reason)``.
+    *,
+    modules: dict[str, dict[str, Any]] | None = None,
+    file_sha: dict[str, str] | None = None,
+) -> _JoinOutcome:
+    """Resolve one seed against the queue → :class:`_JoinOutcome`.
 
-    The audit's real binary join is the ``binary:<stem>`` file
-    sentinel plus the function's address (core.inventory.
-    binary_builder — checklist items carry no fid), so address wins,
-    then a non-placeholder name. Both keys are FILE-scoped: the same
-    address in a different binary, or the same function name in a
-    different file, is a miss, never a cross-file join. The seed's
-    fid is identity metadata for producers/miss records; it grew no
-    join key here because the queue side has none to compare against.
+    The IDENTITY join runs first (``modules`` — the checklist's
+    ``module_identity`` anchor space, see :func:`_fid_leg`): a fid
+    that resolves wins outright, may cross the seed's declared
+    ``file`` (the anchor is authoritative; a producer's stale module
+    NAME must not veto a content-identity match), and refuses hard on
+    content-hash mismatch or in-window ambiguity. Then the historical
+    file-scoped keys: address wins, then a non-placeholder name.
+    Name/address keys are FILE-scoped: the same address in a
+    different binary, or the same function name in a different file,
+    is a miss, never a cross-file join.
 
     Miss reasons are differentiated for the producer:
-    ``address_name_conflict`` — the address key and the name key
-    resolve to DIFFERENT gaps (a cross-base address collision would
-    otherwise silently misdirect the claim; refusing keeps the trace
-    visible), ``placeholder_name_refused`` — the only name offered is
-    a tool-synthetic placeholder (actionable producer error: emit a
-    real name or a checklist-space address), ``no_matching_gap`` —
-    genuinely unknown to the queue.
+    ``module_content_mismatch`` — the producer's asserted content
+    hash contradicts the checklist's (fid leg, or a name/address join
+    into a file whose recorded hash disagrees; no fallback runs),
+    ``fid_ambiguous_window`` — two candidates inside the fuzzy
+    window, ``fid_conflict`` — the identity join and the name/address
+    keys resolve to DIFFERENT gaps, ``address_name_conflict`` — the
+    address key and the name key disagree (a cross-base address
+    collision would otherwise silently misdirect the claim),
+    ``placeholder_name_refused`` — the only name offered is a
+    tool-synthetic placeholder, ``no_matching_gap`` — genuinely
+    unknown to the queue.
     """
+    fid_gap = None
+    fid_method = ""
+    fid_state = ""
+    if seed.fid and modules:
+        fid_gap, hard, fid_method, fid_state = _fid_leg(
+            seed, by_addr, modules,
+        )
+        if hard:
+            return _JoinOutcome(None, hard, "", "")
     addr_gap = None
     if seed.address is not None:
         addr_gap = by_addr.get((seed.file, seed.address))
@@ -444,19 +641,32 @@ def _match_gap(
     )
     if seed.function and not name_is_placeholder:
         name_gap = by_name.get((seed.file, seed.function))
+    if fid_gap is not None:
+        for other in (addr_gap, name_gap):
+            if other is not None and other is not fid_gap:
+                return _JoinOutcome(None, "fid_conflict", "", "")
+        return _JoinOutcome(fid_gap, "", fid_method, "")
     if (
         addr_gap is not None
         and name_gap is not None
         and addr_gap is not name_gap
     ):
-        return None, "address_name_conflict"
-    if addr_gap is not None:
-        return addr_gap, ""
-    if name_gap is not None:
-        return name_gap, ""
+        return _JoinOutcome(None, "address_name_conflict", "", fid_state)
+    chosen, method = (
+        (addr_gap, "address") if addr_gap is not None
+        else (name_gap, "name")
+    )
+    if chosen is not None:
+        if seed.module_sha256 and file_sha:
+            have = file_sha.get(seed.file, "")
+            if have and have != seed.module_sha256:
+                return _JoinOutcome(
+                    None, "module_content_mismatch", "", "",
+                )
+        return _JoinOutcome(chosen, "", method, fid_state)
     if name_is_placeholder:
-        return None, "placeholder_name_refused"
-    return None, "no_matching_gap"
+        return _JoinOutcome(None, "placeholder_name_refused", "", fid_state)
+    return _JoinOutcome(None, "no_matching_gap", "", fid_state)
 
 
 def _checklist_indexes(
@@ -590,11 +800,16 @@ def rereview_candidate_keys(
     if not seeds:
         return set()
     by_name, by_addr = _checklist_indexes(checklist)
+    modules, file_sha = checklist_module_spaces(checklist)
     keys: set[str] = set()
     for seed in seeds:
-        entry, _reason = _match_gap(seed, by_name, by_addr)
-        if entry is not None:
-            keys.add(make_function_key(entry["file"], entry["name"]))
+        outcome = _match_gap(
+            seed, by_name, by_addr, modules=modules, file_sha=file_sha,
+        )
+        if outcome.gap is not None:
+            keys.add(
+                make_function_key(outcome.gap["file"], outcome.gap["name"]),
+            )
     if keys:
         keys -= _satisfied_rereview_keys(Path(out_dir))
     return keys
@@ -658,6 +873,15 @@ def apply_hypothesis_seeds(
 
     Without ``checklist`` the intake keeps the plain two-bucket
     accounting and the receipt carries no ``already_covered`` key.
+
+    Identity joins: when the checklist carries ``module_identity``
+    blocks, a seed's fid resolves through them FIRST (see
+    :func:`_match_gap`) — exact, then fuzzy-window, refusing on
+    content-hash mismatch or ambiguity. Seeds whose fid could not
+    resolve still join by name/address (fallback recorded per route:
+    the receipt's ``fid`` block and ``fid_fallback`` ledger rows),
+    so producers minting unknown anchors surface without starving
+    the intake. Fid-less seeds keep the receipt byte-identical.
     """
     paths = discover_seed_paths(out_dir, extra_paths)
     if not paths:
@@ -690,17 +914,36 @@ def apply_hypothesis_seeds(
     # passed the checklist.
     cl_by_name: dict = {}
     cl_by_addr: dict = {}
+    modules: dict[str, dict[str, Any]] = {}
+    file_sha: dict[str, str] = {}
     satisfied_keys: set[str] = set()
     completed_keys: set[str] = set()
     if checklist is not None and seeds:
         cl_by_name, cl_by_addr = _checklist_indexes(checklist)
+        modules, file_sha = checklist_module_spaces(checklist)
         completed_keys = _completed_review_keys(Path(out_dir))
         if rereview:
             satisfied_keys = _satisfied_rereview_keys(Path(out_dir))
+    # Per-route fid accounting: how many seeds carried an identity,
+    # how many the identity join RESOLVED (exact / fuzzy), how many
+    # fell back to the name/address keys (fallback state recorded —
+    # a producer minting anchors the checklist never earns must be
+    # visible), and the per-reason fid misses.
+    fid_seeds = 0
+    fid_exact = 0
+    fid_fuzzy = 0
+    fid_fallback = 0
+    fid_miss_reasons: dict[str, int] = {}
+    fallback_rows: list[dict[str, Any]] = []
     if seeds:
         by_name, by_addr = _gap_indexes(gaps)
         for seed in seeds:
-            gap, miss_reason = _match_gap(seed, by_name, by_addr)
+            if seed.fid:
+                fid_seeds += 1
+            gap, miss_reason, method, fid_state = _match_gap(
+                seed, by_name, by_addr,
+                modules=modules, file_sha=file_sha,
+            )
             if gap is None:
                 if (
                     miss_reason in (
@@ -708,8 +951,9 @@ def apply_hypothesis_seeds(
                     )
                     and (cl_by_name or cl_by_addr)
                 ):
-                    entry, _cl_reason = _match_gap(
+                    entry, _cl_reason, _cl_method, _cl_state = _match_gap(
                         seed, cl_by_name, cl_by_addr,
+                        modules=modules, file_sha=file_sha,
                     )
                     if entry is not None:
                         from core.coverage.journal import (
@@ -750,9 +994,53 @@ def apply_hypothesis_seeds(
                     miss["address"] = f"{seed.address:#x}"
                 if seed.fid:
                     miss["fid"] = seed.fid
+                    fid_key = (
+                        miss_reason
+                        if miss_reason in _FID_HARD_REFUSALS
+                        else (fid_state or "no_module_identity")
+                    )
+                    fid_miss_reasons[fid_key] = (
+                        fid_miss_reasons.get(fid_key, 0) + 1
+                    )
+                if fid_state:
+                    miss["fid_state"] = fid_state
                 misses.append(miss)
                 continue
-            if rereview and gap.get("seed_rereview"):
+            scheduled = bool(rereview and gap.get("seed_rereview"))
+            fallback_state = ""
+            if seed.fid:
+                if method == "fid":
+                    fid_exact += 1
+                elif method == "fid_fuzzy":
+                    fid_fuzzy += 1
+                else:
+                    # The identity leg did not resolve; the historical
+                    # name/address key carried the join. Recorded, not
+                    # refused — until every producer mints checklist-
+                    # known anchors, name fallback keeps seeds flowing
+                    # while the receipt shows the identity gap.
+                    fid_fallback += 1
+                    fallback_state = fid_state or "no_module_identity"
+                    fid_miss_reasons[fallback_state] = (
+                        fid_miss_reasons.get(fallback_state, 0) + 1
+                    )
+                    # Ledger rows only when an identity space EXISTED
+                    # and this fid still failed it — a checklist with
+                    # no module_identity blocks (source trees, legacy
+                    # binary checklists) or a checklist-less intake
+                    # must not flood fid-misses.json for every seed.
+                    # ONE row per seed: a rereview-scheduled seed's
+                    # row (below) carries the state instead.
+                    if modules and not scheduled:
+                        fallback_rows.append({
+                            "seed_id": seed.seed_id,
+                            "file": seed.file,
+                            "reason": "fid_fallback",
+                            "fid_state": fallback_state,
+                            "fid": seed.fid,
+                            "joined_via": method,
+                        })
+            if scheduled:
                 # Seed-forced re-review (--seed-rereview): the gap
                 # exists only because the resolution pass
                 # un-suppressed a covered checklist function. The
@@ -778,6 +1066,8 @@ def apply_hypothesis_seeds(
                     row["address"] = f"{resolved_addr:#x}"
                 if seed.fid:
                     row["fid"] = seed.fid
+                if fallback_state and modules:
+                    row["fid_state"] = fallback_state
                 scheduled_rows.append(row)
             else:
                 matched += 1
@@ -806,6 +1096,17 @@ def apply_hypothesis_seeds(
         # Present only when the caller supplied the resolution space,
         # so checklist-less intakes keep the plain two-bucket receipt.
         summary["already_covered"] = already_covered
+    if fid_seeds:
+        # Per-route identity-join accounting, present only when a
+        # seed actually carried a fid — fid-less intakes keep the
+        # historical receipt shape byte-identical.
+        summary["fid"] = {
+            "seeds": fid_seeds,
+            "joined_exact": fid_exact,
+            "joined_fuzzy": fid_fuzzy,
+            "name_fallback": fid_fallback,
+            "misses": fid_miss_reasons,
+        }
     if rereview:
         # Third and fourth buckets, present only under the consent
         # flag so the flag-off receipt stays byte-identical to the
@@ -814,7 +1115,7 @@ def apply_hypothesis_seeds(
         # segments) — the key is back to normal covered semantics.
         summary["rereview_scheduled"] = rereview_scheduled
         summary["rereview_already_satisfied"] = rereview_satisfied
-    if misses or scheduled_rows:
+    if misses or scheduled_rows or fallback_rows:
         # Pointer for reviewers: the per-miss records live in the
         # addrmap ledger, not in this receipt.
         from core.binary.addrmap import MISSES_FILENAME
@@ -825,20 +1126,21 @@ def apply_hypothesis_seeds(
     except OSError:
         logger.warning("hypothesis-seed intake receipt write failed",
                        exc_info=True)
-    if misses or scheduled_rows:
+    if misses or scheduled_rows or fallback_rows:
         # The addrmap miss ledger is the ONE place cross-tool join
         # residue lands (escape/clip/caps live there). The FULL miss
-        # list goes in: the loader's record cap (MAX_SEED_RECORDS,
-        # 200) keeps misses + scheduled rows under the ledger's own
-        # per-operation cap (500), so the ledger's per-operation
-        # count always equals this receipt's ``missed`` (plus
-        # ``rereview_scheduled`` rows under the flag) — no divergence
-        # under floods.
+        # list goes in: every seed contributes at most ONE row (miss,
+        # scheduled, or fid-fallback — mutually exclusive), so the
+        # loader's record cap (MAX_SEED_RECORDS, 200) keeps the total
+        # under the ledger's per-operation cap (500) — the ledger's
+        # per-operation count always equals this receipt's ``missed``
+        # plus ``rereview_scheduled`` plus fid ``name_fallback``
+        # counts, no divergence under floods.
         try:
             from core.binary.addrmap import record_fid_misses
             record_fid_misses(
                 Path(out_dir), "audit-seed-intake",
-                misses + scheduled_rows,
+                misses + scheduled_rows + fallback_rows,
             )
         except Exception:  # noqa: BLE001 — miss log never fails intake
             logger.warning("hypothesis-seed miss recording failed",
@@ -885,4 +1187,12 @@ def apply_hypothesis_seeds(
                 or "no readable source",
                 matched, len(boosted), len(misses), conflicts, skips or {},
             )
+    if fid_seeds:
+        logger.info(
+            "hypothesis-seed intake: identity joins — %d seed(s) "
+            "carried a fid: %d resolved exact, %d fuzzy, %d joined by "
+            "name/address fallback, fid misses=%s",
+            fid_seeds, fid_exact, fid_fuzzy, fid_fallback,
+            fid_miss_reasons or {},
+        )
     return summary

@@ -973,6 +973,135 @@ def gap_keys(gap: dict[str, Any]) -> set:
     return keys
 
 
+def _fid_pin_gap(
+    pin: str,
+    keys_by_gap: list,
+    checklist: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Resolve a fid-shaped pin (``<anchor>:0x<rel>``) to a gap.
+
+    A fid's colon shears wrongly under the ``file:function``
+    ``rpartition`` parse, so identity-shaped pins resolve here
+    instead: the anchor joins the checklist's ``module_identity``
+    space (:func:`core.audit.hypothesis_intake.checklist_module_spaces`
+    — the ONE resolution table), the recorded image base places the
+    relative address, and the gap list is probed exact-first then
+    inside the exclusive fuzzy window. Ambiguity (two in-window
+    candidates) refuses — ``None``, classified truthfully by
+    :func:`_classify_unmatched_pin`. Fail-closed throughout: no
+    checklist, unknown anchor, or unrecorded base resolve nothing.
+    """
+    from core.binary.addrmap import (
+        FID_FUZZY_WINDOW_BYTES,
+        from_fid,
+        module_anchor,
+    )
+    parsed = from_fid(pin)
+    if parsed is None or not checklist:
+        return None
+    from core.audit.hypothesis_intake import checklist_module_spaces
+    modules, _file_sha = checklist_module_spaces(checklist)
+    anchor = module_anchor(build_id=parsed[0])
+    mod = modules.get(anchor) if anchor else None
+    if mod is None or mod["base"] is None:
+        return None
+    addr = mod["base"] + parsed[1]
+    by_addr: dict[int, dict[str, Any]] = {}
+    for g, _keys in keys_by_gap:
+        if (g.get("file") or "") != mod["file"]:
+            continue
+        meta_addr = (g.get("metadata") or {}).get("address")
+        if isinstance(meta_addr, int) and not isinstance(meta_addr, bool):
+            by_addr.setdefault(meta_addr, g)
+    exact = by_addr.get(addr)
+    if exact is not None:
+        return exact
+    hits: list[dict[str, Any]] = []
+    hit_ids: set[int] = set()
+    for delta in range(1, FID_FUZZY_WINDOW_BYTES):
+        for cand_addr in (addr - delta, addr + delta):
+            cand = by_addr.get(cand_addr)
+            if cand is not None and id(cand) not in hit_ids:
+                hit_ids.add(id(cand))
+                hits.append(cand)
+    if len(hits) == 1:
+        return hits[0]
+    return None
+
+
+def _classify_unmatched_fid_pin(
+    pin: str,
+    checklist: dict[str, Any],
+) -> str:
+    """Truthful cause for a fid-shaped pin that resolved no gap."""
+    from core.binary.addrmap import (
+        FID_FUZZY_WINDOW_BYTES,
+        from_fid,
+        module_anchor,
+    )
+    from core.audit.hypothesis_intake import checklist_module_spaces
+    parsed = from_fid(pin)
+    if parsed is None:  # pragma: no cover - caller pre-checks the shape
+        return "unclassified (not a fid)"
+    modules, _file_sha = checklist_module_spaces(checklist)
+    anchor = module_anchor(build_id=parsed[0])
+    mod = modules.get(anchor) if anchor else None
+    if mod is None:
+        return (
+            "fid anchor matches no checklist module_identity — the "
+            "pin was minted against a different build, or the "
+            "checklist predates identity blocks"
+        )
+    if mod["base"] is None:
+        return (
+            "module has no recorded image base — the fid's relative "
+            "address cannot be placed in this checklist's address "
+            "space (re-import with a base-recording producer)"
+        )
+    addr = mod["base"] + parsed[1]
+    in_window = 0
+    exact = False
+    for file_info in checklist.get("files", []) or []:
+        if file_info.get("path", "") != mod["file"]:
+            continue
+        for item in file_info.get("items", file_info.get("functions", [])):
+            if not isinstance(item, dict):
+                continue
+            meta_addr = (item.get("metadata") or {}).get("address")
+            if meta_addr is None:
+                meta_addr = item.get("address")
+            if not isinstance(meta_addr, int) or isinstance(
+                meta_addr, bool,
+            ):
+                continue
+            if meta_addr == addr:
+                exact = True
+            elif abs(meta_addr - addr) < FID_FUZZY_WINDOW_BYTES:
+                in_window += 1
+    if exact:
+        return (
+            "in the inventory but not in the gap list — already "
+            "reviewed this run, suppressed by coverage, or filtered "
+            "(re-review needs --force)"
+        )
+    if in_window > 1:
+        return (
+            "ambiguous — multiple inventory functions inside the "
+            "fuzzy window at the resolved address (refused rather "
+            "than hoisting an arbitrary neighbour)"
+        )
+    if in_window == 1:
+        return (
+            "nearest inventory function is inside the fuzzy window "
+            "but not in the gap list — already reviewed this run, "
+            "suppressed by coverage, or filtered"
+        )
+    return (
+        "no function at the resolved address in the checklist "
+        "inventory (entry-point drift or a wrong-module fid)"
+    )
+
+
 def _classify_unmatched_pin(
     pin: str,
     checklist: dict[str, Any] | None,
@@ -984,10 +1113,16 @@ def _classify_unmatched_pin(
     (already reviewed / filtered), the item is absent from the
     inventory entirely (label drift, preprocessor-dead code), or the
     receiver qualification matches nothing although the bare method
-    name exists in the file (name mismatch).
+    name exists in the file (name mismatch). fid-shaped pins get
+    their own causes (:func:`_classify_unmatched_fid_pin`) — the
+    ``file:function`` shear below would misread the anchor as a
+    file path and misclassify every one of them.
     """
     if not checklist:
         return "unclassified (no checklist available)"
+    from core.binary.addrmap import from_fid
+    if from_fid(pin) is not None:
+        return _classify_unmatched_fid_pin(pin, checklist)
     file_part, _, name_part = pin.rpartition(":")
     bare = name_part.rsplit(".", 1)[-1]
     exact = False
@@ -1046,7 +1181,10 @@ def hoist_pins(
     whose qualification matches no gap falls back to the bare method
     name ONLY when exactly one gap in that file bears it — an
     ambiguous bare fallback (seven ``Null*.Scan`` methods in one file)
-    must not hoist an arbitrary sibling.
+    must not hoist an arbitrary sibling. A fid-shaped pin
+    (``<anchor>:0x<rel>``) resolves by content identity through the
+    checklist's ``module_identity`` space instead
+    (:func:`_fid_pin_gap`) — requires *checklist*.
 
     Motivating run: a scoped head-to-head where every per-file floor
     slot went to a finding-free sibling while the functions under
@@ -1085,6 +1223,15 @@ def hoist_pins(
         ]
         if len(candidates) == 1:
             _take(candidates[0], pin)
+
+    # fid-shaped pins (``<anchor>:0x<rel>``) resolve through the
+    # checklist's module_identity space — content identity, not the
+    # file:function spelling, so a pin minted by one tool survives
+    # another tool's rendering of the same function.
+    for pin in sorted(pin_set - matched):
+        fid_gap = _fid_pin_gap(pin, keys_by_gap, checklist)
+        if fid_gap is not None:
+            _take(fid_gap, pin)
 
     unmatched = sorted(pin_set - matched)
     if unmatched:
