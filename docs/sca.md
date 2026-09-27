@@ -53,7 +53,7 @@ The default (no subcommand) is `scan` -- the full analyse pipeline.
 | `purl <eco> <name> <ver>` | Build a canonical Package URL. |
 | `render <findings.json>` | Re-render `report.md` / SARIF from an existing findings file. |
 | `clean-cache` | Reclaim disk space from stale cache entries. Removes entries older than `--max-age` days from `~/.raptor/cache/sca/`. |
-| `dt-push` | Upload a CycloneDX SBOM to a Dependency-Track instance. Requires `--url` and `--api-key` (or `$DT_API_KEY`). |
+| `dt-push` | Upload a CycloneDX SBOM to a Dependency-Track instance. Requires `--url` and `$DT_API_KEY` (or the deprecated `--api-key` flag — argv is world-readable via `/proc/*/cmdline`; the env var wins when both are set). |
 | `suppress` | Manage the suppression overlay (`.raptor-sca-suppress.yml`). Sub-actions: `list` (view current suppressions), `check` (validate against fresh findings and surface stale entries). |
 | `bump` | Dependency version bump operations. |
 | `fingerprint` | Compute, save or check-drift on a binary or OCI image fingerprint. Modes: compute+print (default), `--save` (store baseline), `--check` (detect drift from saved baseline). Accepts local file paths or OCI image refs. |

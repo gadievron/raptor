@@ -743,7 +743,7 @@ Find vulnerable dependencies, gate CI, fix and pin.  Alias: `/raptor-sca`.
 /sca purl <ecosystem> <name> <version>
 /sca render <findings.json>
 /sca clean-cache --max-age <days>
-/sca dt-push <sbom> --url <url> --api-key <key>
+/sca dt-push <sbom> --url <url>    # reads $DT_API_KEY (export it in the shell profile / CI secret env, not inline on the command line)
 /sca suppress <list|check> <path>
 /sca bump <path> ...
 /sca fingerprint <path-or-image-ref> [--save|--check]

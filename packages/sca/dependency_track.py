@@ -9,9 +9,19 @@ without copying files around.
 ## CLI
 
   ``raptor-sca dt-push --url https://dt.example.com \
-                       --api-key $DT_API_KEY \
                        --bom out/sbom.cdx.json \
                        --project myapp --version 1.0``
+
+The API key travels in the ``DT_API_KEY`` environment variable, set
+in the launching shell's profile or the CI job's secret environment —
+never on a command line: argv is world-readable via
+``/proc/*/cmdline`` for the whole upload (network round-trip
+included), and an inline ``DT_API_KEY=<key> raptor-sca ...`` prefix
+re-exposes the key the same way wherever the command line itself is
+recorded or re-executed (shell transcripts, ``bash -c`` argv). The
+``--api-key`` flag remains as a deprecated fallback for existing CI
+pipelines and warns about the exposure when used; when both are set
+the env var wins.
 
 ## API surface used
 
@@ -52,6 +62,7 @@ import argparse
 import base64
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -270,9 +281,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--api-key", required=False,
         help=(
-            "DT API key (X-Api-Key header). Falls back to "
-            "$DT_API_KEY env var if not supplied. Required either "
-            "way."
+            "DEPRECATED: DT API key (X-Api-Key header) on the "
+            "command line. Argv is world-readable via "
+            "/proc/*/cmdline — set $DT_API_KEY instead (the primary "
+            "path; it wins when both are set). One of the two is "
+            "required."
         ),
     )
     parser.add_argument(
@@ -300,12 +313,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    import os
-    api_key = args.api_key or os.environ.get("DT_API_KEY")
+    # $DT_API_KEY is the primary path: an argv key is world-readable
+    # via /proc/*/cmdline for the whole upload (network round-trip
+    # included). --api-key stays as a deprecated fallback for
+    # existing pipelines; the env var wins when both are set (the
+    # flag can't fix the exposure — the key already hit argv — but
+    # the warnings steer the operator to rotate the invocation).
+    env_key = os.environ.get("DT_API_KEY")
+    if args.api_key and env_key:
+        print(
+            "raptor-sca dt-push: warning: both --api-key and "
+            "$DT_API_KEY are set — using $DT_API_KEY (the --api-key "
+            "value was exposed on the command line; prefer the env "
+            "var and drop the flag)", file=sys.stderr,
+        )
+    elif args.api_key:
+        print(
+            "raptor-sca dt-push: warning: --api-key is deprecated — "
+            "the key is world-readable via /proc/*/cmdline while "
+            "this process runs. Set $DT_API_KEY instead",
+            file=sys.stderr,
+        )
+    api_key = env_key or args.api_key
     if not api_key:
         print(
-            "raptor-sca dt-push: --api-key not given and $DT_API_KEY "
-            "is unset", file=sys.stderr,
+            "raptor-sca dt-push: $DT_API_KEY is unset and --api-key "
+            "not given", file=sys.stderr,
         )
         return 2
 
