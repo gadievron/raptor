@@ -329,6 +329,11 @@ def _verify_summary(
         floor_refusals_sha256=(
             _denials_sha256(_refusals)
             if isinstance(_refusals, list) and _refusals else ""),
+        # CLI-disable attribution: recompute each half of the pair
+        # from its own on-disk field so stripping or rewriting either
+        # one (flag or consent-source label) breaks verification.
+        cli_sandbox_disabled=bool(summary.get("cli_sandbox_disabled")),
+        disable_consent=str(summary.get("disable_consent") or ""),
     )
     if telemetry_mac.verify(fields, token):
         if writer_flagged:

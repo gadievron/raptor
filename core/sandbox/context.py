@@ -7944,6 +7944,22 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             except Exception:  # noqa: BLE001 — best-effort telemetry posture
                 logger.debug("run posture record failed",
                              exc_info=True)
+        if _posture_dir and state._cli_sandbox_disabled:
+            # Disabled runs never reach record_run_posture above
+            # (nothing was enforced, so there is no posture to merge)
+            # — record the CLI disable itself in parent memory so the
+            # run's sandbox-summary carries the bare-run attribution
+            # (cli_sandbox_disabled + consent source) even with zero
+            # denial records. Keyed per run dir: a sweep of another
+            # run's leftovers must not inherit this process's state.
+            try:
+                from . import summary as _summary_disable
+                _summary_disable.record_cli_disable(
+                    Path(_posture_dir),
+                    state._cli_sandbox_disable_consent or "unrecorded")
+            except Exception:  # noqa: BLE001 — best-effort telemetry posture
+                logger.debug("cli-disable record failed",
+                             exc_info=True)
         if _mount_ns_degraded:
             result.sandbox_info["mount_ns_degraded"] = _mount_ns_degraded
         # restrict_reads is enforced on every engaged path — mount-ns

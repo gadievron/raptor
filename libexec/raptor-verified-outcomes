@@ -65,11 +65,25 @@ def main(argv=None) -> int:
         # escapes C0 but passes C1 controls (single-byte CSI/OSC) raw
         # when ensure_ascii is off (dumps_display is exactly that).
         # ASCII output stays valid JSON for parsing consumers.
+        # Deliberately NO run-context annotation here: the JSON shape
+        # is a stable list of VerifiedOutcome records; run context is
+        # a human-render-only line (below).
         sys.stdout.write(json.dumps([o.to_dict() for o in outcomes],
                                     indent=2, ensure_ascii=True,
                                     default=str))
         sys.stdout.write("\n")
     else:
+        # Run-context line: verified outcomes from a run that executed
+        # with the sandbox disabled carry weaker containment
+        # provenance — say so up front. Display-tier read (escaped +
+        # bounded label; see read_cli_disable_annotation's trust note).
+        from core.sandbox.summary import read_cli_disable_annotation
+        consent = read_cli_disable_annotation(out_dir)
+        if consent is not None:
+            sys.stdout.write(
+                f"run context: sandbox DISABLED for this run "
+                f"(--sandbox none / --no-sandbox; consent: {consent})\n\n"
+            )
         sys.stdout.write(render_outcome_summary(outcomes))
     return 0
 

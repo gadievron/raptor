@@ -329,6 +329,18 @@ extend their already-accepted consent across the spawn boundary
 automatically — consent extension is possible only from a process
 that already holds one, never creatable from nothing.
 
+The attribution persists past the process too: a run executed with an
+accepted disable writes `sandbox-summary.json` even with zero denials
+(nothing was enforced, so there is nothing else to write), carrying
+`cli_sandbox_disabled: true` plus `disable_consent`, both bound into
+the summary's integrity token — stripping or rewriting either field
+reads as tampering on the verifying triage path. Operator CLIs
+surface the record as a run-context line: `raptor-verified-outcomes`
+prefixes its human summary with the disable and its consent source
+(the `--json` output shape is unchanged — the annotation is
+human-render only), and the scorecard `tool-evidence` join notes when
+the validation run it is grading against executed unsandboxed.
+
 The programmatic `sandbox(disabled=True)` keyword is unchanged: it is
 not reachable from argv, and in-process code is already the
 orchestrator.

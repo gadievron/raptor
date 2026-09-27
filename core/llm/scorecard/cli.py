@@ -1186,6 +1186,24 @@ def cmd_tool_evidence(args: argparse.Namespace) -> int:
         f"from {len(records)} joined finding(s).",
         file=sys.stderr,
     )
+    # Run-context annotation: when the validation run whose verdicts
+    # were just graded against executed with the sandbox disabled, the
+    # operator should see that the truth signal came from an
+    # unsandboxed run. Notice only — the recorded events are
+    # unchanged. Display-tier read (escaped + bounded label; see
+    # read_cli_disable_annotation's trust note).
+    try:
+        from core.sandbox.summary import read_cli_disable_annotation
+        _consent = read_cli_disable_annotation(Path(args.validation).parent)
+    except Exception:  # noqa: BLE001 — annotation must never block recording
+        _consent = None
+    if _consent is not None:
+        print(
+            "  run context: the validation run executed with the "
+            f"sandbox DISABLED (consent: {_consent}) — its verdicts "
+            "were produced unsandboxed.",
+            file=sys.stderr,
+        )
     if skipped_no_model:
         print(
             f"  notice: {skipped_no_model} analysis record(s) skipped "

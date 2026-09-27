@@ -565,7 +565,9 @@ def summary_fields(total_denials: int, denials_sha256: str, run: str,
                    planted_object: str = "",
                    posture: "Mapping | None" = None,
                    floor_refusals: int = 0,
-                   floor_refusals_sha256: str = "") -> dict:
+                   floor_refusals_sha256: str = "",
+                   cli_sandbox_disabled: bool = False,
+                   disable_consent: str = "") -> dict:
     """MAC fields for sandbox-summary.json: the denial payload is
     covered by its content hash, so a planted or edited summary fails
     verification even when the headline counters are preserved.
@@ -608,4 +610,15 @@ def summary_fields(total_denials: int, denials_sha256: str, run: str,
     if floor_refusals:
         fields["floor_refusals"] = int(floor_refusals)
         fields["floor_refusals_sha256"] = str(floor_refusals_sha256)
+    # CLI-disable attribution binding (join only when the writer
+    # recorded an accepted disable, so pre-existing tokens keep
+    # verifying — same join posture as the fields above). Both halves
+    # of the pair join together and the verifier recomputes each from
+    # its own on-disk field, so stripping or rewriting EITHER the
+    # cli_sandbox_disabled flag or the consent-source label breaks
+    # the token — the "this run executed unsandboxed, admitted by
+    # this consent source" record is all-or-nothing.
+    if cli_sandbox_disabled or disable_consent:
+        fields["cli_sandbox_disabled"] = bool(cli_sandbox_disabled)
+        fields["disable_consent"] = str(disable_consent)
     return fields

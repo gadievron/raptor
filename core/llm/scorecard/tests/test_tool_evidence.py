@@ -320,6 +320,65 @@ class TestCLIToolEvidence:
         assert "double-records" not in err
         assert "idempotent" in err
 
+    def test_disabled_validation_run_names_itself_in_the_notice(
+            self, tmp_path):
+        """Run-context annotation: when the validation run executed
+        with the sandbox disabled (its run dir's sandbox-summary.json
+        carries the attribution), the operator sees that the truth
+        signal came from an unsandboxed run. Notice only — recording
+        is unchanged, and a hostile consent label never reaches the
+        terminal raw. The analysis and validation artefacts live in
+        SEPARATE run dirs and only the validation dir carries the
+        attribution — the notice must come from the validation run
+        (the truth-signal side), not the analysis dir."""
+        analysis_dir = tmp_path / "analysis-run"
+        validation_dir = tmp_path / "validation-run"
+        analysis_dir.mkdir()
+        validation_dir.mkdir()
+        analysis_path = analysis_dir / "orchestrated.json"
+        validation_path = validation_dir / "validation.json"
+        sc_path = tmp_path / "sc.json"
+        analysis_path.write_text(json.dumps({
+            "results": [
+                {"finding_id": "f1", "rule_id": "py/x",
+                 "analysed_by": "claude-opus", "is_exploitable": True},
+            ],
+        }))
+        validation_path.write_text(json.dumps({
+            "findings": [{"finding_id": "f1", "is_exploitable": True}],
+        }))
+        (validation_dir / "sandbox-summary.json").write_text(json.dumps({
+            "cli_sandbox_disabled": True,
+            "disable_consent": "interactive-tty\x1b]0;evil\x07",
+        }))
+        args = SimpleNamespace(
+            path=sc_path, analysis=analysis_path,
+            validation=validation_path, prefix="agentic",
+        )
+        rc, _, err = _capture(cli_mod.cmd_tool_evidence, args)
+        assert rc == 0
+        assert "run context" in err
+        assert "sandbox DISABLED" in err
+        assert "unsandboxed" in err
+        assert "\x1b" not in err
+        # Recording itself is unchanged by the annotation.
+        sc = ModelScorecard(sc_path)
+        assert _stat(sc, "agentic:py/x", "claude-opus") == (1, 0)
+
+    def test_sandboxed_validation_run_has_no_run_context_notice(
+            self, tmp_path):
+        analysis_path = tmp_path / "orchestrated.json"
+        validation_path = tmp_path / "validation.json"
+        analysis_path.write_text(json.dumps({"results": []}))
+        validation_path.write_text(json.dumps({"findings": []}))
+        args = SimpleNamespace(
+            path=tmp_path / "sc.json", analysis=analysis_path,
+            validation=validation_path, prefix="agentic",
+        )
+        rc, _, err = _capture(cli_mod.cmd_tool_evidence, args)
+        assert rc == 0
+        assert "run context" not in err
+
     def test_isolation_from_cheap_short_circuit(self, tmp_path):
         """tool-evidence events go to TOOL_EVIDENCE slot only;
         cheap-tier counters that drive the auto-policy gate are

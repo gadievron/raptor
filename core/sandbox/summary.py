@@ -172,6 +172,20 @@ def set_active_run_dir(run_dir: Path | None) -> None:
         _evidence_open_failed = False
         _active_run_dir = Path(run_dir) if run_dir is not None else None
         _denial_count = 0
+    if run_dir is not None:
+        # Bare-run attribution anchor: a run activated while the CLI
+        # sandbox disable is in force gets its disable recorded here.
+        # The per-call epilogue in context.py cannot cover this run —
+        # the 'none' profile sheds per-call output= by design ("none
+        # must mean none"), so activation is the one moment the
+        # parent both knows the lifecycle run dir and holds the
+        # disable state. The consent gate runs at argparse time,
+        # before any run starts, so the state is already settled.
+        from . import state as _state
+        if _state._cli_sandbox_disabled:
+            record_cli_disable(
+                Path(run_dir),
+                _state._cli_sandbox_disable_consent or "unrecorded")
 
 
 def _get_evidence_handle_locked(run_dir: Path):
@@ -530,6 +544,86 @@ def get_run_posture(run_dir: Path) -> dict[str, bool] | None:
         return dict(cur) if cur is not None else None
 
 
+# Parent-side memory of runs THIS process executed with the CLI
+# sandbox disable in force, keyed by resolved run-dir path →
+# consent-source label (interactive-tty / nonce / unrecorded). Same
+# trust model as _run_postures: the run dir is target-writable, so
+# the annotation is asserted from parent memory at summary time,
+# never read back from disk. Keyed per run dir (not a process-global
+# read at summary time) so a cross-process sweep finalising ANOTHER
+# run's leftovers never stamps that run with THIS process's posture.
+# Guarded by _lock.
+_cli_disables: dict[str, str] = {}
+
+
+def record_cli_disable(run_dir: Path, consent: str) -> None:
+    """Record that a run under ``run_dir`` executed with the CLI
+    sandbox disable in force, and which consent source admitted it.
+
+    Called from the ``context.run()`` epilogue on disabled runs that
+    have a run/audit directory. First writer wins — the consent
+    source is process-lifetime state, so repeat calls carry the same
+    value. Best-effort — never raises.
+    """
+    try:
+        run_key = str(Path(run_dir).resolve())
+    except OSError:
+        return
+    with _lock:
+        _cli_disables.setdefault(run_key, str(consent))
+
+
+def get_cli_disable(run_dir: Path) -> str | None:
+    """Consent-source label for a run this process executed with the
+    CLI disable in force, or None."""
+    try:
+        run_key = str(Path(run_dir).resolve())
+    except OSError:
+        return None
+    with _lock:
+        return _cli_disables.get(run_key)
+
+
+# Display bound for the consent-source label read back from disk. The
+# legit writer emits one of three short code-controlled labels
+# (interactive-tty / nonce / unrecorded, ≤ 15 chars); 64 chars is
+# ample headroom for those while still cutting an OSC/CSI
+# terminal-injection payload a target planted in the field.
+_DISABLE_CONSENT_DISPLAY_MAX = 64
+
+
+def read_cli_disable_annotation(run_dir: Path) -> str | None:
+    """Display-tier read-back of a run's CLI-disable attribution.
+
+    Returns the consent-source label (escaped + bounded for terminal
+    display) when ``run_dir``'s ``sandbox-summary.json`` records that
+    the run executed with the CLI sandbox disable in force, else
+    None. Best-effort — never raises.
+
+    Trust note: this reads the target-writable run dir WITHOUT MAC
+    verification, which is acceptable for this field only because the
+    annotation condemns the run ("it executed unsandboxed") — a
+    target forging it makes its own run look worse, and a target
+    STRIPPING it is caught by the MAC binding on the verifying triage
+    path. Display consumers (operator CLIs adding run-context lines)
+    may use this; verdict-grade consumers must go through
+    ``core.sandbox.triage``'s verified read instead.
+    """
+    from core.json import load_json
+    from core.security.prompt_output_sanitise import escape_nonprintable
+
+    try:
+        data = load_json(Path(run_dir) / SUMMARY_FILE,
+                         max_bytes=_MARKER_MAX_BYTES)
+    except Exception:  # noqa: BLE001 — best-effort display annotation
+        return None
+    if not isinstance(data, dict) or not data.get("cli_sandbox_disabled"):
+        return None
+    label = str(data.get("disable_consent") or "unrecorded")
+    return escape_nonprintable(
+        redact_secrets(label))[:_DISABLE_CONSENT_DISPLAY_MAX]
+
+
 # Evidence-record type for containment-floor refusals (the sandbox
 # floor contract refusing to execute a payload at all). Split OUT of
 # the denial buckets by summarize_and_write: a refusal is neither a
@@ -859,7 +953,11 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
         with _lock:
             _mem_only = list(_floor_refusals.get(
                 str(run_dir.resolve()), []))
-        if not _mem_only:
+        # A run with the CLI disable in force naturally has NO
+        # denials JSONL (nothing enforced, nothing traced) — the
+        # bare-run annotation must still reach the summary file, so
+        # the no-evidence early return yields to it.
+        if not _mem_only and get_cli_disable(run_dir) is None:
             return None
         return _assemble_and_write_summary(
             run_dir, records=[], refusals=_mem_only,
@@ -1063,9 +1161,11 @@ def _assemble_and_write_summary(
     records = [r for r in records
                if r.get("type") != FLOOR_REFUSAL_TYPE]
 
+    _disable_consent = get_cli_disable(run_dir)
     if (not records and not refusals and not unverified_refusals
             and not corrupt_lines
-            and not inode_mismatch and not planted_object):
+            and not inode_mismatch and not planted_object
+            and _disable_consent is None):
         return None
 
     # Verdict split. macOS audit mode records ALLOWED operations too —
@@ -1120,6 +1220,13 @@ def _assemble_and_write_summary(
     posture = get_run_posture(run_dir)
     if posture is not None:
         summary["posture"] = posture
+    if _disable_consent is not None:
+        # Bare-run attribution (parent memory, same authority rule as
+        # the posture record): the run executed with --sandbox none /
+        # --no-sandbox in force, admitted by the named consent source.
+        # MAC-bound below like every other summary field.
+        summary["cli_sandbox_disabled"] = True
+        summary["disable_consent"] = _disable_consent
     if refusals:
         # Containment-floor refusal surfacing (the verification
         # seam's unverifiable_environment status at run level): one
@@ -1302,7 +1409,9 @@ def _assemble_and_write_summary(
         corrupt_lines=corrupt_lines, inode_mismatch=inode_mismatch,
         planted_object=planted_object, posture=posture,
         floor_refusals=len(refusals),
-        floor_refusals_sha256=_refusals_sha))
+        floor_refusals_sha256=_refusals_sha,
+        cli_sandbox_disabled=_disable_consent is not None,
+        disable_consent=_disable_consent or ""))
     if _token:
         summary["mac"] = _token
 
