@@ -806,6 +806,9 @@ class JoernServer:
     _member_comm: str | None = None
     # ... and for the heap admission grant ``stop()`` releases.
     _heap_reservation: HeapReservation | None = None
+    # ... and for the forwarder orphan-idle override (read on the
+    # start() path; bare instances must not AttributeError there).
+    _orphan_idle_ttl_s: float | None = None
 
     def __init__(
         self,
@@ -814,6 +817,7 @@ class JoernServer:
         heap_is_derived: bool = False,
         boot_timeout_s: int = _BOOT_TIMEOUT_S,
         query_timeout_s: int = _QUERY_TIMEOUT_S,
+        orphan_idle_ttl_s: float | None = None,
     ) -> None:
         self._heap_mb = heap_mb
         self._heap_is_derived = heap_is_derived
@@ -825,6 +829,14 @@ class JoernServer:
         self._heap_reservation: HeapReservation | None = None
         self._boot_timeout_s = boot_timeout_s
         self._query_timeout_s = query_timeout_s
+        # Forwarder orphan-idle horizon override (strong tier only):
+        # None keeps the forwarder's own default, which matches the
+        # lifecycle warm-handoff staleness horizon. A caller whose
+        # server is NOT lifecycle-recorded (run-private: no state
+        # file, never re-acquirable) passes a short value so an
+        # orphaned pair is reaped in minutes, not the warm-handoff
+        # hours.
+        self._orphan_idle_ttl_s = orphan_idle_ttl_s
         self._port: int | None = None
         self._proc: subprocess.Popen | None = None
         # Process-group id recorded at spawn time (Popen used
@@ -1035,12 +1047,7 @@ class JoernServer:
                     # the server can accept any traffic.
                     self._uds_dir = _make_uds_dir()
                     self._uds_path = os.path.join(self._uds_dir, _UDS_SOCKET_NAME)
-                    cmd = [
-                        sys.executable, str(_FORWARDER_SCRIPT),
-                        "--socket", self._uds_path,
-                        "--port", str(self._port),
-                        "--", *joern_cmd,
-                    ]
+                    cmd = self._forwarder_argv(joern_cmd)
                     logger.info(
                         "starting Joern server in a private network namespace "
                         "(in-ns port %d, unix socket %s)",
@@ -1198,6 +1205,24 @@ class JoernServer:
             self._post_sync(warmup, timeout=30)
         except Exception as e:  # noqa: BLE001 — warmup is best-effort
             logger.debug("Joern dataflow warmup failed: %s", e)
+
+    def _forwarder_argv(self, joern_cmd: list[str]) -> list[str]:
+        """Build the netns-forwarder command line for *joern_cmd*.
+
+        Requires ``_uds_path``/``_port`` to be assigned (start() sets
+        both before calling). The orphan-idle override rides as a CLI
+        flag because the horizon is enforced by the FORWARDER process,
+        which outlives this one by design.
+        """
+        argv = [
+            sys.executable, str(_FORWARDER_SCRIPT),
+            "--socket", str(self._uds_path),
+            "--port", str(self._port),
+        ]
+        if self._orphan_idle_ttl_s is not None:
+            argv += ["--orphan-idle-ttl", str(self._orphan_idle_ttl_s)]
+        argv += ["--", *joern_cmd]
+        return argv
 
     def stop(self) -> None:
         """Shut down the Joern server."""
@@ -2843,14 +2868,26 @@ class JoernServer:
         return parse_summary_output(result.raw_output)
 
     @classmethod
-    def from_tunables(cls, tunables: JoernTunables | None = None) -> JoernServer:
-        """Create a server instance from JoernTunables."""
+    def from_tunables(
+        cls,
+        tunables: JoernTunables | None = None,
+        *,
+        orphan_idle_ttl_s: float | None = None,
+    ) -> JoernServer:
+        """Create a server instance from JoernTunables.
+
+        ``orphan_idle_ttl_s`` is a construction-site concern, not a
+        tunable: whether the server is lifecycle-recorded (long
+        default horizon) or run-private (short horizon) is decided by
+        WHO is constructing, so it rides as an explicit kwarg here.
+        """
         if tunables is None:
             tunables = JoernTunables()
         return cls(
             heap_mb=tunables.heap_mb,
             heap_is_derived=tunables.heap_is_derived,
             query_timeout_s=tunables.query_timeout_s,
+            orphan_idle_ttl_s=orphan_idle_ttl_s,
         )
 
     @classmethod

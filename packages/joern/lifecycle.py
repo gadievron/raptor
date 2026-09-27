@@ -528,6 +528,10 @@ joern_session = shared_joern_session
 
 def _start_fresh(tunables: JoernTunables) -> JoernServer | None:
     try:
+        # No orphan_idle_ttl_s override: this server IS lifecycle-
+        # recorded (the caller writes the state file and hands it to
+        # later runs warm), so the forwarder's default orphan horizon
+        # — synced to _STALE_THRESHOLD_S — is the correct one.
         srv = JoernServer.from_tunables(tunables)
         srv.start()
         return srv

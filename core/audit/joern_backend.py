@@ -25,6 +25,19 @@ logger = logging.getLogger(__name__)
 
 _C_EXTENSIONS = frozenset({".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"})
 _JOERN_STALL_FLOOR_S = 30
+# Forwarder orphan-idle horizon for the DIRECT-START (run-private)
+# server below: no lifecycle state file records it, so once this
+# process is gone no later run can ever re-acquire it — an orphaned
+# pair is pure multi-GB squatting from the first idle second. The
+# horizon still is not zero: parent death is observable mid-run (a
+# segment drain re-execs the orchestrator; an operator attaches a
+# debugger to a wedged run and the original parent exits) and a
+# too-short value (<~5 min) would reap a server a still-running
+# analysis is about to query again. Longer buys nothing — nobody can
+# reconnect after the run's process tree is gone — and re-creates the
+# multi-hour JVM squat this value exists to end. 15 min covers the
+# longest observed segment-handoff gaps with margin.
+_RUN_PRIVATE_ORPHAN_TTL_S = 900.0
 
 # Byte budget for .raptor-run.json / pre-sweep status metadata reads.
 _MAX_RUN_META_BYTES = 1024 * 1024
@@ -340,7 +353,12 @@ def start_joern_server(target_path, joern_overrides=None, tunables=None,
         except ImportError:
             return None
         try:
-            srv = JoernServer.from_tunables(tunables)
+            # Run-private server: lifecycle acquire failed, so this
+            # server is never state-file-recorded — pass the short
+            # orphan horizon (see _RUN_PRIVATE_ORPHAN_TTL_S).
+            srv = JoernServer.from_tunables(
+                tunables, orphan_idle_ttl_s=_RUN_PRIVATE_ORPHAN_TTL_S,
+            )
             srv.start()
         except Exception:
             logger.debug("Joern server failed to start; using subprocess fallback",

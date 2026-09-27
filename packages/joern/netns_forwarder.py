@@ -38,6 +38,7 @@ import argparse
 import contextlib
 import errno
 import fcntl
+import math
 import os
 import shutil
 import signal
@@ -317,15 +318,18 @@ class Forwarder:
 #: Orphan-watchdog cadence / SIGTERM→SIGKILL escalation grace.
 _PARENT_POLL_S = 5.0
 _PARENT_KILL_GRACE_S = 10.0
-#: How long an ORPHANED server may sit with no client activity before
-#: the watchdog reaps the pair. Parent death alone is NORMAL here —
-#: the lifecycle layer keeps warm servers alive across RAPTOR runs
-#: precisely so later acquires skip the 30-120s JVM boot — so this
-#: mirrors the acquire-side recycle horizon for unreferenced servers
-#: (packages/joern/lifecycle.py ``_STALE_THRESHOLD_S``; keep in sync):
-#: a warm server the next run would still reuse survives, one nothing
-#: touched for the same horizon is reaped instead of squatting on
-#: multi-GB of RAM forever.
+#: DEFAULT for how long an ORPHANED server may sit with no client
+#: activity before the watchdog reaps the pair. Parent death alone is
+#: NORMAL here — the lifecycle layer keeps warm servers alive across
+#: RAPTOR runs precisely so later acquires skip the 30-120s JVM boot —
+#: so this mirrors the acquire-side recycle horizon for unreferenced
+#: servers (packages/joern/lifecycle.py ``_STALE_THRESHOLD_S``; keep
+#: in sync): a warm server the next run would still reuse survives,
+#: one nothing touched for the same horizon is reaped instead of
+#: squatting on multi-GB of RAM forever. Spawners whose server is NOT
+#: lifecycle-recorded (no state file, so no later run can ever
+#: re-acquire it) pass a much shorter horizon via ``--orphan-idle-ttl``
+#: — for them the full default is pure squatting time.
 _ORPHAN_IDLE_TTL_S = 3600 * 8
 
 
@@ -421,6 +425,22 @@ def self_probe() -> int:
     return 0
 
 
+def _positive_float(text: str) -> float:
+    """argparse type for ``--orphan-idle-ttl``: a finite value > 0.
+
+    0 or a negative would make the watchdog reap the pair the moment
+    the parent dies mid-handoff; NaN would make the ``>=`` comparison
+    always false and disable the watchdog silently. Both are
+    misconfigurations worth a parse-time error, not a runtime surprise.
+    """
+    value = float(text)
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError(
+            f"expected a finite value > 0, got {text!r}",
+        )
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run a command in a private netns behind a unix socket",
@@ -428,6 +448,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--self-probe", action="store_true")
     parser.add_argument("--socket", help="unix socket path to listen on")
     parser.add_argument("--port", type=int, help="in-namespace TCP port")
+    parser.add_argument(
+        "--orphan-idle-ttl", type=_positive_float,
+        default=_ORPHAN_IDLE_TTL_S, metavar="SECONDS",
+        help="orphaned-and-idle horizon before the watchdog reaps the "
+             "supervised group (default matches the lifecycle warm-"
+             "handoff staleness horizon; run-private spawners pass a "
+             "short value)",
+    )
     parser.add_argument("cmd", nargs=argparse.REMAINDER,
                         help="-- command to supervise inside the namespace")
     args = parser.parse_args(argv)
@@ -469,7 +497,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Armed BEFORE the child exists so a parent death inside the spawn
     # window is covered; the closure reads main()'s current binding.
-    _start_orphan_watchdog(lambda: child, forwarder)
+    _start_orphan_watchdog(
+        lambda: child, forwarder, idle_ttl_s=args.orphan_idle_ttl,
+    )
 
     # stdio, env, cwd, and the namespace are inherited: the wrapped
     # server's stderr keeps flowing to the parent's boot-failure pipe.
