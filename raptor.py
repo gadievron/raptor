@@ -917,6 +917,12 @@ _NO_TRUST_REPO_SEEN = False
 
 _active_dispatcher = None
 
+# Why the dispatcher is unavailable, when it is ("TypeName: message").
+# Set by _get_or_start_dispatcher's failure path, consumed by
+# _announce_env_direct_downgrade so the downgrade banner and the run's
+# credential-posture.json record can name the cause.
+_dispatcher_failure_reason: str | None = None
+
 
 def _get_or_start_dispatcher(audit_path=None):
     """Lazy single dispatcher per ``raptor.py`` invocation.
@@ -986,23 +992,16 @@ def _get_or_start_dispatcher(audit_path=None):
         return _active_dispatcher
     except Exception as exc:  # noqa: BLE001
         # Failure to start the dispatcher must not break the run —
-        # fall through to the env-direct path. The credential leak
-        # channel stays open in this case but is no worse than today.
-        # Surface the failure on stderr (in addition to the logger
-        # warning) so operators see it regardless of log-level
-        # config. Once API keys are stripped from ``get_llm_env``,
-        # this fallback produces workers without auth — the symptom
-        # is a confusing "first LLM call fails" 30 seconds later.
-        # Surface it loudly now so operators see it immediately.
+        # fall through to the env-direct path. The fallback itself is
+        # DELIBERATELY kept (dispatcher-down resilience), but it is a
+        # credential-isolation downgrade, so it must never be silent:
+        # record the reason here; the single prominent operator-facing
+        # banner prints at the fallback site
+        # (_announce_env_direct_downgrade), which also drops a
+        # credential-posture.json record into the run's output dir.
         import logging
-        import sys as _sys
-        msg = (
-            f"raptor.py: credential-isolation dispatcher failed to "
-            f"start ({type(exc).__name__}: {exc}). Falling back to "
-            f"env-direct credential propagation."
-        )
-        _sys.stderr.write(msg + "\n")
-        _sys.stderr.flush()
+        global _dispatcher_failure_reason
+        _dispatcher_failure_reason = f"{type(exc).__name__}: {exc}"
         logging.getLogger(__name__).warning(
             "credential-isolation dispatcher failed to start, falling back "
             "to env-direct: %s", exc,
@@ -1039,6 +1038,74 @@ def _cleanup_refused_run_dir(out_dir: Path) -> None:
             src_link.unlink()
     with contextlib.suppress(OSError):
         out_dir.rmdir()
+
+
+def _announce_env_direct_downgrade(
+    script_name: str, out_dir: Path | None,
+) -> None:
+    """One prominent warning + a run-artifact record whenever a run
+    falls back to env-direct credential propagation.
+
+    The fallback stays (dispatcher-down resilience is a live
+    requirement) but it is an isolation DOWNGRADE: the child loses the
+    dispatcher route's per-run scoping, budget enforcement, audit
+    trail, and parent-side revocation. (It is NOT a keyless-vs-keyed
+    flip — ``get_llm_env`` carries provider keys into the child on the
+    dispatcher path too unless ``RAPTOR_LLM_WORKER_KEYLESS=1``, the
+    separate pre-existing opt-in.) The operator must see the downgrade
+    once, loudly, with the reason, and the run's output directory must
+    carry a durable ``credential-posture.json`` record of it.
+    Credential VALUES never appear in either. Best-effort on the
+    record write: a failed write logs and never blocks the run.
+    """
+    reason = _dispatcher_failure_reason or (
+        "dispatcher not started (no failure recorded)"
+    )
+    # The reason quotes exception text; render it terminal-inert
+    # before printing (log_sanitisation contract).
+    try:
+        from core.security.log_sanitisation import sanitise_for_terminal
+        shown_reason = sanitise_for_terminal(reason, max_len=500)
+    except ImportError:
+        shown_reason = reason[:500]
+    rule = "=" * 72
+    sys.stderr.write(
+        f"\n{rule}\n"
+        f"⚠  CREDENTIAL-ISOLATION DOWNGRADE — env-direct fallback\n"
+        f"   The LLM dispatcher is unavailable, so the {script_name} "
+        f"child runs\n"
+        f"   env-direct for this run — without the dispatcher route's "
+        f"per-run\n"
+        f"   scoping, budget enforcement, audit trail, and "
+        f"revocation.\n"
+        f"   Why: {shown_reason}\n"
+        f"{rule}\n\n"
+    )
+    sys.stderr.flush()
+    logging.getLogger(__name__).warning(
+        "credential-isolation downgrade: env-direct fallback for %s "
+        "(dispatcher unavailable: %s)", script_name, reason,
+    )
+    if out_dir is None:
+        return
+    import json as _json
+    from datetime import datetime, timezone
+    record = {
+        "posture": "env_direct_fallback",
+        "credential_isolation": "downgraded",
+        "reason": reason,
+        "script": script_name,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        (Path(out_dir) / "credential-posture.json").write_text(
+            _json.dumps(record, indent=2) + "\n", encoding="utf-8",
+        )
+    except OSError as write_exc:
+        logging.getLogger(__name__).warning(
+            "could not write credential-posture.json to %s: %s",
+            out_dir, write_exc,
+        )
 
 
 def _run_script(script_path: Path, args: list, out_dir: Path | None = None) -> int:
@@ -1108,10 +1175,14 @@ def _run_script(script_path: Path, args: list, out_dir: Path | None = None) -> i
                 env=worker_env,
             )
             return proc.wait()
-        # Fallback: env-direct (no dispatcher available).
+        # Fallback: env-direct (no dispatcher available). Kept on
+        # purpose — but it is a credential-isolation downgrade, so it
+        # is announced prominently and recorded in the run's output
+        # directory (credential-posture.json).
         # Same opt-in as the dispatcher path above — the canonical
         # operator entry point must preserve PYTHONUSERBASE for the
         # spawned ``raptor_<mode>.py`` subprocess.
+        _announce_env_direct_downgrade(script_path.name, out_dir)
         result = subprocess.run(
             cmd,
             env=RaptorConfig.get_llm_env(include_python_user_base=True),
@@ -1272,9 +1343,16 @@ def mode_fuzz(args: list) -> int:
     # Running the full lifecycle for them sealed an empty 'completed'
     # run directory per export with an OUTPUT_DIR sentinel pointing
     # at nothing — phantom runs in /project status. They are
-    # utilities, not runs: spawn the script directly.
+    # utilities, not runs: spawn the script directly. Peek (don't
+    # strip) an operator --out so an env-direct fallback still lands
+    # its credential-posture.json somewhere durable — the child keeps
+    # parsing the flag itself.
     if _is_fuzz_standalone(args):
-        return _run_script(fuzzing_script, args)
+        out_str, _ = _extract_and_strip_out(args)
+        return _run_script(
+            fuzzing_script, args,
+            out_dir=Path(out_str) if out_str else None,
+        )
 
     return _run_with_lifecycle("fuzz", fuzzing_script, args,
                               "Starting binary fuzzing workflow...")
@@ -1468,7 +1546,14 @@ def mode_llm_analysis(args: list) -> int:
         return 2
 
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
-    return _run_script(llm_script, args)
+    # Peek (don't strip) an operator --out so an env-direct fallback
+    # still lands its credential-posture.json somewhere durable — the
+    # child keeps parsing the flag itself.
+    out_str, _ = _extract_and_strip_out(args)
+    return _run_script(
+        llm_script, args,
+        out_dir=Path(out_str) if out_str else None,
+    )
 
 
 def mode_describe(args: list) -> int:

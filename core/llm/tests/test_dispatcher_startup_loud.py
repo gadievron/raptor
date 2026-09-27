@@ -1,11 +1,13 @@
-"""Pin that ``raptor._get_or_start_dispatcher`` surfaces failures
-loudly on stderr.
+"""Pin that ``raptor._get_or_start_dispatcher`` surfaces failures.
 
 The dispatcher's startup failure used to be a silent
 ``logger.warning`` that operators would only see if they had
-log-level configured. Now it also writes a single-line message to
-stderr at the moment of failure, so operators see the failure
-regardless of log config.
+log-level configured. The failure now feeds the env-direct downgrade
+announcement: ``_get_or_start_dispatcher`` records WHY it failed in
+``raptor._dispatcher_failure_reason``, and the single prominent
+operator-facing banner (naming the credential-isolation downgrade +
+that reason) prints at the fallback site in ``_run_script`` — pinned
+in ``core/run/tests/test_env_direct_downgrade_banner.py``.
 """
 
 from __future__ import annotations
@@ -33,48 +35,45 @@ if _REPO_ROOT not in sys.path:
 @pytest.fixture
 def fresh_raptor_module():
     """Re-import ``raptor`` so the module-level ``_active_dispatcher``
-    is None at the start of each test (the prod module is imported
-    at most once per process; tests that share the import would
-    leak state)."""
+    and ``_dispatcher_failure_reason`` are None at the start of each
+    test (the prod module is imported at most once per process; tests
+    that share the import would leak state)."""
     # Clear the cached module if any earlier test imported it.
     sys.modules.pop("raptor", None)
     raptor = importlib.import_module("raptor")
     yield raptor
     # Reset for cleanliness — clear the module-level cache.
     raptor._active_dispatcher = None
+    raptor._dispatcher_failure_reason = None
     sys.modules.pop("raptor", None)
 
 
-def test_dispatcher_startup_failure_writes_loud_stderr_line(
+def test_dispatcher_startup_failure_records_the_reason(
     fresh_raptor_module,
 ):
     """When ``LLMDispatcher`` raises during startup,
-    ``_get_or_start_dispatcher`` must emit a clear single-line
-    message on stderr. Future Phase C activation depends on this
-    failure being visible at the moment it happens, not 30s later
-    when a worker dies."""
+    ``_get_or_start_dispatcher`` must return None AND record the
+    failure shape in ``_dispatcher_failure_reason`` — that string is
+    what the downgrade banner and the run's credential-posture.json
+    surface to the operator."""
     raptor = fresh_raptor_module
 
-    err = io.StringIO()
     with mock.patch(
         "core.llm.dispatcher.server.LLMDispatcher",
         side_effect=RuntimeError("simulated dispatcher crash"),
-    ), redirect_stderr(err):
+    ):
         result = raptor._get_or_start_dispatcher()
 
     assert result is None, "fallback path: function returns None"
-    captured = err.getvalue()
-    assert "credential-isolation dispatcher failed to start" in captured, (
-        f"expected loud failure message on stderr, got: {captured!r}"
-    )
-    assert "RuntimeError" in captured
-    assert "simulated dispatcher crash" in captured
-    assert "env-direct" in captured
+    reason = raptor._dispatcher_failure_reason
+    assert reason is not None
+    assert "RuntimeError" in reason
+    assert "simulated dispatcher crash" in reason
 
 
 def test_dispatcher_startup_success_is_quiet(fresh_raptor_module):
-    """Success path emits nothing on stderr — the loud message is
-    failure-only, not always-on."""
+    """Success path emits nothing on stderr and records no failure
+    reason — the downgrade machinery is failure-only, not always-on."""
     raptor = fresh_raptor_module
 
     fake_dispatcher = mock.Mock()
@@ -86,29 +85,31 @@ def test_dispatcher_startup_success_is_quiet(fresh_raptor_module):
         result = raptor._get_or_start_dispatcher()
 
     assert result is fake_dispatcher
+    assert raptor._dispatcher_failure_reason is None
     assert err.getvalue() == "", (
         f"success path leaked stderr output: {err.getvalue()!r}"
     )
 
 
-def test_loud_message_includes_fallback_hint(
-    fresh_raptor_module,
+def test_failure_reason_feeds_the_downgrade_banner(
+    fresh_raptor_module, capsys,
 ):
-    """The stderr message must explain the consequence so operators
-    don't dismiss it as cosmetic."""
+    """The recorded reason must reach the operator through the
+    prominent downgrade banner — the consequence (raw keys in the
+    child env) is explained so operators don't dismiss it as
+    cosmetic."""
     raptor = fresh_raptor_module
 
-    err = io.StringIO()
     with mock.patch(
         "core.llm.dispatcher.server.LLMDispatcher",
         side_effect=ImportError("dispatcher module missing"),
-    ), redirect_stderr(err):
+    ):
         raptor._get_or_start_dispatcher()
+    raptor._announce_env_direct_downgrade("scanner.py", None)
 
-    captured = err.getvalue()
-    assert "credential-isolation" in captured.lower(), (
-        f"loud message lacks credential-isolation hint: {captured!r}"
-    )
+    captured = capsys.readouterr().err
+    assert "CREDENTIAL-ISOLATION DOWNGRADE" in captured
+    assert "dispatcher module missing" in captured
 
 
 def test_dispatcher_failure_is_idempotent_within_one_process(
