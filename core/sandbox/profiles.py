@@ -180,4 +180,9 @@ _SANDBOX_KWARGS = frozenset({
     # Sandbox-context-level because the bind happens during mount-ns
     # init; per-call override would silently no-op.
     "etc_overlay",
+    # output_run_root_ok — acknowledgement that output= naming a
+    # run-directory root is intended (suppresses the construction-time
+    # seam warning). Sandbox-context-level: the check runs once at
+    # sandbox() setup.
+    "output_run_root_ok",
 })

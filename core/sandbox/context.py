@@ -1256,6 +1256,13 @@ def _require_degraded_udp_filter(seccomp_profile: str | None) -> None:
         )
 
 
+#: Run-root ``output=`` seam warning: fired once per (process,
+#: realpath). Loops that re-enter sandbox() with the same run dir
+#: (retry ladders, per-finding dispatch) must not turn one mis-wired
+#: call site into a warning flood.
+_run_root_output_warned: set[str] = set()
+
+
 @contextmanager
 def sandbox(block_network=_UNSET, target: str | None = None, output: str | None = None,
             map_root: bool = False, limits: dict | None = None,
@@ -1282,7 +1289,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             omit_proc_reads: bool = False,
             omit_etc_reads: bool = False,
             require_proxy_netns: bool = False,
-            rootfs: str | None = None):
+            rootfs: str | None = None,
+            output_run_root_ok: bool = False):
     """Context manager for sandboxed subprocess execution.
 
     Each run() call inside the context runs the target command with the
@@ -1572,6 +1580,20 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                  writes into it host-side; treat it as consumed after
                  the run. target/output binds, readable_paths,
                  audit/observe, and network policy compose unchanged.
+        output_run_root_ok: Acknowledge that `output=` deliberately
+                 names a run-directory ROOT (a directory carrying
+                 `.raptor-run.json`). The run root is parent-attributed
+                 state the parent re-reads after the child exits —
+                 findings, manifests, the run's own recorded outcome —
+                 so granting a sandboxed child write access to it is a
+                 seam worth flagging. Default False: a run-root
+                 `output=` logs a once-per-(process,path) warning.
+                 Trusted-agent lanes whose contract IS "write this
+                 run's artifacts" pass True; hostile lanes should pass
+                 a work subdirectory instead
+                 (core.sandbox.work_dir.hostile_work_subdir).
+                 Detection only — never a refusal, and never consulted
+                 when the sandbox is effectively disabled.
 
     Landlock activation: engaged when any of `target`, `output`, or
     `allowed_tcp_ports` is set. Default filesystem policy is read-
@@ -1763,6 +1785,42 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 "Landlock's read/write scoping).",
                 _profile_for_defaults)
         fake_home = False
+
+    # Run-root output seam. `output=` naming a run-directory ROOT
+    # hands the sandboxed child write access to parent-attributed run
+    # state (.raptor-run.json, findings, manifests — everything the
+    # parent re-reads after the child exits). Hostile lanes should
+    # pass a work subdirectory (core.sandbox.work_dir.
+    # hostile_work_subdir); trusted-agent lanes whose contract IS
+    # "write this run's artifacts" acknowledge with
+    # output_run_root_ok=True. Warning-only (the grant itself is
+    # sometimes the contract), once per (process, realpath), and
+    # skipped when the sandbox is effectively disabled — a disabled
+    # run's child is a bare subprocess, there is no containment seam
+    # to flag.
+    if output and not output_run_root_ok and not _effectively_disabled:
+        from core.sandbox.work_dir import is_run_root as _is_run_root
+        if _is_run_root(output):
+            _rr_real = os.path.realpath(output)
+            if _rr_real not in _run_root_output_warned:
+                _run_root_output_warned.add(_rr_real)
+                # The path is caller-chosen but can embed
+                # target-derived segments (run dirs named after the
+                # analysed repo) — escape before it rides a warning
+                # onto the operator terminal.
+                from core.security.log_sanitisation import (
+                    escape_nonprintable,
+                )
+                logger.warning(
+                    "Sandbox: output= is a run-directory root (%s) — "
+                    "the sandboxed child can rewrite parent-attributed "
+                    "run state (.raptor-run.json, findings, "
+                    "manifests). Hostile call sites should pass a "
+                    "work subdirectory (core.sandbox.work_dir."
+                    "hostile_work_subdir); call sites that "
+                    "intentionally write run artifacts pass "
+                    "output_run_root_ok=True.",
+                    escape_nonprintable(str(output)))
 
     # Fake-HOME setup — create an empty home dir under `output` and
     # stage env overrides for the run() closure. Deferred to run-time
@@ -8541,6 +8599,7 @@ def run(cmd: list[str], block_network: bool = True, target: str | None = None,
         omit_proc_reads: bool = False,
         omit_etc_reads: bool = False,
         rootfs: str | None = None,
+        output_run_root_ok: bool = False,
         **kwargs) -> subprocess.CompletedProcess:
     """Run a single command in a sandbox. Convenience wrapper.
 
@@ -8594,7 +8653,8 @@ def run(cmd: list[str], block_network: bool = True, target: str | None = None,
                 loopback_unix_bridges=loopback_unix_bridges,
                 omit_proc_reads=omit_proc_reads,
                 omit_etc_reads=omit_etc_reads,
-                rootfs=rootfs))
+                rootfs=rootfs,
+                output_run_root_ok=output_run_root_ok))
         except SandboxSetupError as _construction_refusal:
             # Refusal PRIORITY at the one-shot boundary. Context
             # construction refuses on capability grounds (e.g.
@@ -9659,6 +9719,10 @@ def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | No
         # (the fresh-procfs contract refuses the rest).
         "sanitise_host_fingerprint", "require_sanitisation",
         "cpu_count",
+        # Run-root output acknowledgement: warning metadata for the
+        # sandbox() seam check, not an isolation control — the
+        # containment posture is identical either way.
+        "output_run_root_ok",
     })
     rejected = set(kwargs.keys()) - _UNTRUSTED_ALLOWED_KWARGS
     if rejected:
@@ -9869,6 +9933,10 @@ def run_untrusted_networked(
         "audit", "audit_verbose", "audit_run_dir", "audit_required",
         "observe", "exclude_tmp_baseline",
         "tool_paths",
+        # Run-root output acknowledgement: trusted-agent dispatches
+        # write the run's own artifacts by contract, so the seam
+        # warning's ack must be expressible on this helper.
+        "output_run_root_ok",
     })
     rejected = set(kwargs.keys()) - _NETWORKED_ALLOWED_KWARGS
     if rejected:
