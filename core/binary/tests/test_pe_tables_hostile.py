@@ -21,7 +21,7 @@ this file reuses):
     filling its whole section, arrays aimed at headers
   * every hostile name in the rich image held to the render
     contract (``core.security.log_sanitisation``)
-  * a wall-clock bound on the structurally-worst tables shape
+  * a CPU-time bound on the structurally-worst tables shape
     (descriptor cap + thunk budget + u32-max export claims)
 """
 
@@ -29,12 +29,12 @@ from __future__ import annotations
 
 import random
 import struct
-import time
 
 import pytest
 
 from core.binary import pe as pe_mod
 from core.binary.pe import PeFacts, extract_pe_facts
+from core.testing.wallclock import cpu_budget
 from core.security.log_sanitisation import (
     escape_nonprintable,
     has_nonprintable,
@@ -126,8 +126,11 @@ class TestMutationFuzz:
         run replays the identical corpus). Flips are biased
         toward the headers and the table sections (the bytes
         every new walk consumes), mixed with truncations; each
-        parse is individually time-bounded so no mutation can buy
-        a pathological walk."""
+        parse is individually CPU-bounded so no mutation can buy
+        a pathological walk (CPU, not wall: one scheduler stall
+        on a contended nightly runner false-failed the wall form
+        at 1.35s on a parse that burns ~25ms — see
+        core.testing.wallclock)."""
         base = _rich_tables_image()
         p = tmp_path / "mut.exe"
         worst = 0.0
@@ -147,13 +150,12 @@ class TestMutationFuzz:
                         pos = rng.randrange(len(blob))
                     blob[pos] = rng.randrange(256)
                 p.write_bytes(bytes(blob))
-                start = time.perf_counter()
-                facts = extract_pe_facts(p)   # must never raise
-                elapsed = time.perf_counter() - start
-                worst = max(worst, elapsed)
-                assert elapsed < 1.0, (
-                    f"seed {seed:#x} mutation {i} took "
-                    f"{elapsed:.3f}s — pathological walk")
+                with cpu_budget(
+                    1.0,
+                    what=f"seed {seed:#x} mutation {i} parse",
+                ) as sw:
+                    facts = extract_pe_facts(p)   # must never raise
+                worst = max(worst, sw.cpu_s)
                 assert facts is None or isinstance(facts, PeFacts)
         assert worst < 1.0
 
@@ -242,16 +244,18 @@ class TestRealCapBoundaries:
         cap = pe_mod._MAX_EXPORT_FUNCTIONS
         p = tmp_path / "pastcap.dll"
         p.write_bytes(_export_flood_image(cap + 1))
-        start = time.perf_counter()
-        facts = extract_pe_facts(p)
-        elapsed = time.perf_counter() - start
+        # CPU bound, not wall: complexity pin on in-process work
+        # (core.testing.wallclock) — the regression this catches
+        # (an uncapped walk over the u32-scale claim) burns CPU;
+        # a stalled runner does not.
+        with cpu_budget(2.0, what="one-past-cap export walk"):
+            facts = extract_pe_facts(p)
         assert facts is not None
         exp = facts.exports
         assert exp is not None
         assert exp.declared_function_count == cap + 1
         assert exp.walked_function_count == cap
         assert "export_functions_capped" in exp.caps_hit
-        assert elapsed < 2.0
 
     def test_import_thunks_per_dll_at_the_real_cap_boundary(
             self, tmp_path):
@@ -407,15 +411,13 @@ class TestSectionCountReadProduct:
         tell a live stop from a fast inert one."""
         p = tmp_path / "fwdheavy.dll"
         p.write_bytes(self._amp_export_image(0))
-        start = time.perf_counter()
-        facts = extract_pe_facts(p)
-        elapsed = time.perf_counter() - start
+        with cpu_budget(1.0, what="forwarder-heavy export walk"):
+            facts = extract_pe_facts(p)
         assert facts is not None
         exp = facts.exports
         assert exp is not None
         assert exp.walked_name_count == pe_mod._MAX_EXPORT_NAMES
         assert "export_name_budget_exhausted" in exp.caps_hit
-        assert elapsed < 1.0, f"forwarder-heavy took {elapsed:.2f}s"
 
     def test_max_sections_times_max_reads_parses_fast(
             self, tmp_path):
@@ -428,16 +430,14 @@ class TestSectionCountReadProduct:
         p = tmp_path / "amp4k.dll"
         p.write_bytes(self._amp_export_image(
             pe_mod._MAX_SECTIONS - 1))
-        start = time.perf_counter()
-        facts = extract_pe_facts(p)
-        elapsed = time.perf_counter() - start
+        with cpu_budget(3.0, what="sections-x-reads export walk"):
+            facts = extract_pe_facts(p)
         assert facts is not None
         assert len(facts.sections) == pe_mod._MAX_SECTIONS
         exp = facts.exports
         assert exp is not None
         assert exp.walked_function_count == \
             pe_mod._MAX_EXPORT_FUNCTIONS
-        assert elapsed < 3.0, f"amp4k took {elapsed:.2f}s"
         # The retention backstop engaged AT ITS REAL VALUE: the
         # record stopped growing at the budget (within one
         # per-name cap of it), and stays bounded in absolute
@@ -542,17 +542,15 @@ class TestNonTerminatingThunkArray:
                 vsize=len(idata),
                 characteristics=_RDATA_CHARACTERISTICS),
         ], data_dirs={1: (0x3000, 40)})))
-        start = time.perf_counter()
-        facts = extract_pe_facts(p)
-        elapsed = time.perf_counter() - start
+        with cpu_budget(1.0, what="unterminated-thunk import walk"):
+            facts = extract_pe_facts(p)
         assert facts is not None
         dll = facts.imports[0]
         assert dll.thunk_count == n
         assert "import_thunks_unterminated" in dll.caps_hit
-        assert elapsed < 1.0
 
 
-class TestWallClockWorstShape:
+class TestCpuTimeWorstShape:
     def test_maxed_tables_parse_fast(self, tmp_path):
         """The structurally-worst tables shape: hundreds of import
         DLLs each claiming dozens of hint/name thunks (driving the
@@ -581,9 +579,8 @@ class TestWallClockWorstShape:
                 vsize=0x40000,
                 characteristics=_RDATA_CHARACTERISTICS),
         ], data_dirs={0: (0x90000, len(edata)), 1: imp_dir})))
-        start = time.perf_counter()
-        facts = extract_pe_facts(p)
-        elapsed = time.perf_counter() - start
+        with cpu_budget(2.0, what="maxed-tables parse"):
+            facts = extract_pe_facts(p)
         assert facts is not None
         # The budgets engaged: the thunk budget stops the import
         # walk mid-corpus; the export caps stop the u32-max claim.
@@ -593,7 +590,6 @@ class TestWallClockWorstShape:
         exp = facts.exports
         assert exp is not None
         assert "export_functions_capped" in exp.caps_hit
-        assert elapsed < 2.0, f"worst shape took {elapsed:.3f}s"
 
 
 def _export_flood_image(n_slots: int) -> bytes:
