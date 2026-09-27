@@ -3569,6 +3569,12 @@ class EgressProxy:
             _family, _socktype, _proto, _, sockaddr = addrinfo[0]
             resolved_ip = sockaddr[0]
             event["resolved_ip"] = resolved_ip
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "egress proxy: DNS %s -> %s",
+                    host,
+                    ", ".join(sorted({e[4][0] for e in addrinfo})),
+                )
             for _entry in addrinfo:
                 _candidate = _entry[4][0]
                 if _ip_is_blocked(_candidate):
