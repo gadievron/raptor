@@ -3224,11 +3224,10 @@ def _run_witness_execution(workdir, target, data, dynamic=None):
         _floor_errors = ()
     try:
         # run_dir=workdir: witness provenance binds to the directory
-        # holding findings.json. Without it the stage defaulted to the
-        # TARGET tree — records were stamped against the wrong binding
-        # (and the .witness-binding nonce landed in the target), so
-        # Stage F's sanitise pass stripped every witness_execution
-        # record it later verified against the workdir.
+        # holding findings.json — Stage F's sanitise pass verifies
+        # against the workdir, so any other binding gets the records
+        # stripped (a since-removed target default did exactly that,
+        # and dropped the .witness-binding nonce into the target).
         stats = run_witness_stage(data, target, llm_call=_llm_call,
                                   run_dir=workdir)
     except _floor_errors:
