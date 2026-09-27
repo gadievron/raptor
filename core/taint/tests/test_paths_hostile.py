@@ -680,15 +680,15 @@ def test_growth_ratio_pin_n_vs_2n_with_alternatives(packs) -> None:
     # cap would clip the second run and mask growth). 120 is big
     # enough that per-run constant overhead does not swamp a
     # super-linear term in the candidates × hops × alternatives
-    # product. 4.0 keeps linear-with-overhead headroom while
-    # absorbing shared-runner noise (observed 3.67 on GitHub CI);
-    # quadratic growth would consistently exceed 4.0. Trend belt;
-    # the diamond-flood wall above is the absolute rail.
+    # product. 2.6 keeps linear-with-overhead headroom: raising it
+    # hides super-linear blowups, lowering it flakes on interpreter
+    # noise. Trend belt; the diamond-flood wall above is the
+    # absolute rail.
     t_n = _timed_diamonds(120, packs)
     t_2n = _timed_diamonds(240, packs)
     assert t_n > 0
     ratio = t_2n / t_n
-    assert ratio <= 4.0, f"super-linear growth: ratio {ratio:.2f}"
+    assert ratio <= 2.6, f"super-linear growth: ratio {ratio:.2f}"
 
 
 # ── wall budget under stalled excerpt reloads ────────────────────────
