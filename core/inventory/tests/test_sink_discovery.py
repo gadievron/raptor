@@ -767,3 +767,67 @@ class TestIndirectFieldCallLanguageKey:
         ])})
         v = res.unreachable_eligible[("pkg/mod.py", "wrapper")]
         assert v.eligible
+
+
+class TestPerFileCapDisclosure:
+    """Two-direction pin on the per-file byte cap: an under-cap tree
+    walks whole with no warning; an over-cap file is skipped WITH a
+    loud once-per-walk disclosure naming the count and an example —
+    previously a silent skip, so an amalgamation-shaped file (sinks
+    and all) vanished from the context map with no trace. The
+    fingerprint consumer (budget_warning=False) stays silent by
+    design."""
+
+    TAINTED = "import os\n\ndef handler(x):\n    os.system(x)\n"
+
+    def test_under_cap_no_warning(self, tmp_path, caplog):
+        import logging
+
+        import core.inventory.sink_discovery as sd
+        (tmp_path / "a.py").write_text(self.TAINTED)
+        with caplog.at_level(
+            logging.WARNING, logger="core.inventory.sink_discovery",
+        ):
+            rels = [rel for _p, rel, _l in
+                    sd.iter_discovery_source_files(
+                        tmp_path, budget_warning=True)]
+        assert rels == ["a.py"]
+        assert "per-file byte cap" not in caplog.text
+
+    def test_over_cap_skip_warns_once_with_example(
+        self, tmp_path, caplog, monkeypatch,
+    ):
+        import logging
+
+        import core.inventory.sink_discovery as sd
+        monkeypatch.setattr(sd, "_PER_FILE_CAP", 64)
+        (tmp_path / "small.py").write_text(self.TAINTED)
+        (tmp_path / "big1.py").write_text("# " + "x" * 128 + "\n")
+        (tmp_path / "big2.py").write_text("# " + "y" * 128 + "\n")
+        with caplog.at_level(
+            logging.WARNING, logger="core.inventory.sink_discovery",
+        ):
+            rels = [rel for _p, rel, _l in
+                    sd.iter_discovery_source_files(
+                        tmp_path, budget_warning=True)]
+        assert rels == ["small.py"]
+        hits = [r for r in caplog.records
+                if "per-file byte cap" in r.getMessage()]
+        assert len(hits) == 1, "one disclosure per walk, not per file"
+        msg = hits[0].getMessage()
+        assert "2 file(s)" in msg
+        assert "big" in msg
+
+    def test_fingerprint_consumer_stays_silent(
+        self, tmp_path, caplog, monkeypatch,
+    ):
+        import logging
+
+        import core.inventory.sink_discovery as sd
+        monkeypatch.setattr(sd, "_PER_FILE_CAP", 64)
+        (tmp_path / "big.py").write_text("# " + "x" * 128 + "\n")
+        with caplog.at_level(
+            logging.WARNING, logger="core.inventory.sink_discovery",
+        ):
+            list(sd.iter_discovery_source_files(tmp_path))
+        assert "per-file byte cap" not in caplog.text

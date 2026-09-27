@@ -637,3 +637,60 @@ class TestSummaryProseContainment:
         for line in out.splitlines():
             assert not line.startswith("### VERDICT"), line
             assert not line.startswith("## Reviewer instruction"), line
+
+
+class TestCapDisclosure:
+    """Two-direction pin on _MAX_FUNCTIONS: an under-cap candidate set
+    passes whole with no warning; an over-cap set keeps the
+    highest-priority slice AND discloses the selection ratio loudly —
+    previously a silent slice, so a big connected target lost
+    summaries for most functions with no trace. The cap itself is a
+    real spend bound (one LLM call per candidate), so it is disclosed
+    when it binds, not scale-derived."""
+
+    @staticmethod
+    def _ring(n):
+        return [
+            {
+                "file": "a.c", "name": f"f{i}",
+                "callees": [{"name": f"f{(i + 1) % n}", "file": "a.c"}],
+                "priority_score": float(i),
+            }
+            for i in range(n)
+        ]
+
+    def test_under_cap_no_warning(self, caplog):
+        import logging
+
+        with caplog.at_level(
+            logging.WARNING, logger="core.audit.llm_summaries",
+        ):
+            candidates = identify_summary_candidates(
+                self._ring(10), {}, None,
+            )
+        assert len(candidates) == 10
+        assert "summary pass capped" not in caplog.text
+
+    def test_over_cap_warns_with_ratio_and_keeps_top_priority(
+        self, caplog,
+    ):
+        import logging
+
+        from core.audit.llm_summaries import _MAX_FUNCTIONS
+
+        with caplog.at_level(
+            logging.WARNING, logger="core.audit.llm_summaries",
+        ):
+            candidates = identify_summary_candidates(
+                self._ring(200), {}, None,
+            )
+        assert len(candidates) == _MAX_FUNCTIONS
+        # Priority-ordered slice: the highest scores survive.
+        assert min(c["priority_score"] for c in candidates) == float(
+            200 - _MAX_FUNCTIONS,
+        )
+        hits = [r for r in caplog.records
+                if "summary pass capped" in r.getMessage()]
+        assert len(hits) == 1
+        msg = hits[0].getMessage()
+        assert f"{_MAX_FUNCTIONS} of 200" in msg

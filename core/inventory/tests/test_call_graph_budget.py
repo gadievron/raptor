@@ -304,3 +304,41 @@ class TestEstimator:
         deep = _deep_size(cg.CallArgumentFacts())
         est = cg._est_arg_facts(cg.CallArgumentFacts())
         assert deep / 1.5 <= est <= deep * 1.5
+
+
+class TestPerFileGateDisclosure:
+    """Two-direction pin on the per-file input gate
+    (CALL_GRAPH_MAX_FILE_BYTES): under-gate trees parse whole with no
+    warning; an over-gate file is skipped WITH a loud disclosure
+    naming the count and an example — previously a silent continue,
+    so an amalgamation-shaped central file vanished from
+    cross-function context with no trace."""
+
+    def test_under_gate_no_warning(self, tmp_path, caplog):
+        for i in range(3):
+            (tmp_path / f"m{i}.py").write_text(_NORMAL_PY,
+                                               encoding="utf-8")
+        with caplog.at_level(logging.WARNING,
+                             logger="core.inventory.call_graph"):
+            graphs = cg.load_call_graphs(tmp_path)
+        assert len(graphs) == 3
+        assert "per-file size gate" not in caplog.text
+
+    def test_oversize_file_skipped_with_warning(self, tmp_path, caplog):
+        (tmp_path / "small.py").write_text(_NORMAL_PY, encoding="utf-8")
+        # Over the gate via an explicit small max_bytes — writing a
+        # >1.5 MB fixture would just slow the suite for the same pin.
+        (tmp_path / "big.py").write_text(_NORMAL_PY * 40,
+                                         encoding="utf-8")
+        max_bytes = len(_NORMAL_PY.encode()) + 1
+        with caplog.at_level(logging.WARNING,
+                             logger="core.inventory.call_graph"):
+            graphs = cg.load_call_graphs(tmp_path, max_bytes=max_bytes)
+        assert "small.py" in graphs
+        assert "big.py" not in graphs
+        hits = [r for r in caplog.records
+                if "per-file size gate" in r.getMessage()]
+        assert len(hits) == 1, "oversize disclosure warns exactly once"
+        msg = hits[0].getMessage()
+        assert "1 file(s)" in msg
+        assert "big.py" in msg

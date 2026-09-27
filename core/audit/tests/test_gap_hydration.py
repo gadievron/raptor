@@ -415,3 +415,68 @@ class TestReadGapSource:
     def test_no_file_key(self, tmp_path):
         gap = {"line_start": 1, "line_end": 2}
         assert read_gap_source(gap, tmp_path) == ""
+
+
+class TestBudgetExhaustionDisclosure:
+    """Two-direction pin on the total-bytes ceiling: ordinary trees
+    hydrate fully with no warning; a binding ceiling discloses the
+    selection ratio LOUDLY — the cap may bind, but never silently.
+    Exhaustion manifests through _read_spans abandoning spans against
+    the shrunken remaining allowance (total_bytes never reaches the
+    ceiling exactly, because abandoned spans refund), so the signal
+    rides the budget_exhausted out-param, not the byte counter."""
+
+    def test_no_warning_when_budget_does_not_bind(self, tmp_path, caplog):
+        import logging
+
+        _tree(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="core.audit.gaps"):
+            hydrated = hydrate_live_gaps_for_detectors(
+                [_gap(i) for i in range(4)], tmp_path,
+            )
+        assert len(hydrated) == 4
+        assert "hydration budget" not in caplog.text
+
+    def test_warning_with_ratio_when_budget_binds(
+        self, tmp_path, caplog, monkeypatch,
+    ):
+        import logging
+
+        _tree(tmp_path)
+        body_bytes = len(ADHERENT.format(i=0).encode())
+        monkeypatch.setattr(
+            "core.audit.gaps._MAX_HYDRATED_TOTAL_BYTES", body_bytes + 1,
+        )
+        with caplog.at_level(logging.WARNING, logger="core.audit.gaps"):
+            hydrated = hydrate_live_gaps_for_detectors(
+                [_gap(i) for i in range(4)], tmp_path,
+            )
+        # The ceiling admitted the first body and starved the rest.
+        assert 1 <= len(hydrated) < 4
+        hits = [r for r in caplog.records
+                if "hydration budget" in r.getMessage()]
+        assert len(hits) == 1, "exhaustion warns exactly once"
+        msg = hits[0].getMessage()
+        assert "of 4 span-valid" in msg
+
+    def test_read_spans_signals_budget_not_function_cap(self, tmp_path):
+        (tmp_path / "f.py").write_text("x = 1\n" * 100)
+        flag: list[bool] = []
+        got = _read_spans(
+            tmp_path, "f.py", [(1, 50)], budget_bytes=10,
+            budget_exhausted=flag,
+        )
+        assert not got
+        assert flag, "total-budget abandonment must signal"
+        # Per-function-cap abandonment does NOT signal: it would be
+        # dropped under any budget, so it is not ceiling pressure.
+        big = "z" * 2048 + "\n"
+        (tmp_path / "g.py").write_text(big * 200)
+        flag2: list[bool] = []
+        got2 = _read_spans(
+            tmp_path, "g.py", [(1, 200)],
+            budget_bytes=_MAX_HYDRATED_FUNCTION_BYTES * 4,
+            budget_exhausted=flag2,
+        )
+        assert not got2
+        assert not flag2

@@ -164,6 +164,15 @@ def harvest_wur_declarations(
 
 
 _WUR_SCAN_SUFFIXES = (".h", ".hpp", ".hh", ".hxx")
+# Header-count budget, both directions: RAISING it reads more headers
+# per run (each is a capped read + regex sweep — I/O-bound, and header
+# count is target-derived, so an unbounded sweep on a hostile or
+# kernel-scale tree is a time sink). LOWERING it drops wur coverage on
+# ordinary trees that fit comfortably today. When it binds, the budget
+# is spread EVENLY across the sorted tree (stride sampling) rather
+# than taking the alphabetical prefix — a kernel tree sorts
+# arch/alpha/... first, so a prefix slice reads one corner of the tree
+# — and the selection ratio is disclosed with a warning.
 _MAX_WUR_SCAN_FILES = 400
 _MAX_WUR_FILE_BYTES = 400_000
 
@@ -180,6 +189,16 @@ def harvest_wur_from_target(target_path: Path) -> frozenset[str]:
         )
     except OSError:
         return frozenset()
+    if len(paths) > _MAX_WUR_SCAN_FILES:
+        stride = -(-len(paths) // _MAX_WUR_SCAN_FILES)  # ceil division
+        sampled = paths[::stride][:_MAX_WUR_SCAN_FILES]
+        logger.warning(
+            "warn_unused_result harvest capped: scanning %d of %d "
+            "headers (evenly strided across the sorted tree) — wur "
+            "attributes in unsampled headers are not harvested",
+            len(sampled), len(paths),
+        )
+        paths = sampled
     for p in paths[:_MAX_WUR_SCAN_FILES]:
         resolved = confine(target_path, p)
         if resolved is None:

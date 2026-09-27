@@ -112,7 +112,15 @@ def build_summary_prompt(
 # Cap source length to keep LLM cost reasonable per function.
 _MAX_SOURCE_CHARS = 8000
 
-# Cap how many functions get the LLM summary pass.
+# Cap how many functions get the LLM summary pass. Both directions:
+# every candidate is one paid LLM call, so RAISING it buys spend
+# linearly (and candidate count is target-derived — a hostile,
+# densely-connected checklist must not buy an unbounded LLM bill;
+# this is a real spend bound, so it is DISCLOSED when it binds, not
+# scale-derived). LOWERING it starves the taint pass of summaries on
+# ordinary connected targets. Selection is priority-ordered, so the
+# slice keeps the highest-priority functions; when it binds,
+# identify_summary_candidates warns with the selection ratio.
 _MAX_FUNCTIONS = 80
 
 
@@ -207,6 +215,16 @@ def identify_summary_candidates(
     candidates.sort(
         key=lambda g: g.get("priority_score", 0.0), reverse=True,
     )
+    if len(candidates) > _MAX_FUNCTIONS:
+        # Coverage-carrying disclosure: unsummarised functions look
+        # opaque to the taint pass, so the depth downgrade must be
+        # visible, not a silent slice.
+        logger.warning(
+            "LLM summary pass capped: %d of %d connected candidates "
+            "selected (highest priority_score first) — the taint pass "
+            "runs without summaries for the remainder",
+            _MAX_FUNCTIONS, len(candidates),
+        )
     return candidates[:_MAX_FUNCTIONS]
 
 

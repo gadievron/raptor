@@ -45,6 +45,16 @@ logger = logging.getLogger(__name__)
 # walk will ever read so a hostile tree cannot grind discovery — the
 # default context-map enrichment runs this unscoped over the whole
 # target.
+# Per-file cap, both directions: RAISING it admits amalgamations
+# (file size is target-derived — a hostile tree of huge files must
+# not buy unbounded read+extract time, and one 100 MiB file would
+# also eat the aggregate budget alone). LOWERING it drops real,
+# hand-written big files — an sqlite3.c-style amalgamation is over
+# this cap yet is exactly where the sinks live. When it binds, the
+# walk counts the skips and discloses them once with a warning
+# (budget_warning consumers only — the fingerprint consumer stays
+# silent by design), so a skipped monster is visible, not a silent
+# hole in sink/reachability coverage.
 _PER_FILE_CAP = 2_000_000
 _AGGREGATE_CAP = 256 * 1024 * 1024
 
@@ -990,6 +1000,8 @@ def iter_discovery_source_files(
         if scope_dirs else None
     )
     budget_remaining = _AGGREGATE_CAP
+    oversize_skipped = 0
+    oversize_example: str | None = None
 
     for source_file in _iter_source_files(target):
         if scope_prefixes and not str(
@@ -1014,7 +1026,12 @@ def iter_discovery_source_files(
             st = source_file.lstat()
         except OSError:
             continue
-        if not stat.S_ISREG(st.st_mode) or st.st_size > _PER_FILE_CAP:
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        if st.st_size > _PER_FILE_CAP:
+            oversize_skipped += 1
+            if oversize_example is None:
+                oversize_example = rel
             continue
         if st.st_size > budget_remaining:
             if budget_warning:
@@ -1025,6 +1042,16 @@ def iter_discovery_source_files(
             break
         budget_remaining -= st.st_size
         yield source_file, rel, lang
+    if budget_warning and oversize_skipped:
+        # Coverage-carrying disclosure, once per walk: every skipped
+        # file contributes zero sinks and zero reachability, and the
+        # over-cap files are often the central ones (amalgamations).
+        logger.warning(
+            "sink_discovery: %d file(s) over the per-file byte cap "
+            "(%d) skipped unread (e.g. %r) — they contribute no "
+            "sinks or reachability to the context map",
+            oversize_skipped, _PER_FILE_CAP, oversize_example,
+        )
 
 
 def _get_call_graph_extractors():

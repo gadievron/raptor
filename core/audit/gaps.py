@@ -123,6 +123,16 @@ def _resolve_reviewable_kinds(include_kinds: set | None) -> frozenset:
 _MAX_HYDRATED_SLOC = 2000            # per function, lines
 _MAX_HYDRATED_FUNCTION_BYTES = 256 * 1024
 _MAX_HYDRATED_FILE_BYTES = 8 * 1024 * 1024
+# Total-bytes ceiling, both directions: RAISING it lets the mechanical
+# detectors see more of a big tree but holds every hydrated body
+# resident at once for the duration of the detector passes — 64 MiB is
+# already whole-tree for most targets and a deliberate memory bound on
+# kernel-scale ones (file contents are target-derived; a hostile tree
+# must not buy unbounded residency). LOWERING it starves negative-space
+# and sibling-asymmetry of baselines on ordinary targets. When the
+# ceiling binds, hydrate_live_gaps_for_detectors discloses the
+# selection ratio with a warning — the cap may bind, but never
+# silently.
 _MAX_HYDRATED_TOTAL_BYTES = 64 * 1024 * 1024
 
 # context-map.json is RAPTOR-written run output (measured multi-MiB
@@ -1356,21 +1366,27 @@ def hydrate_live_gaps_for_detectors(
 
     hydrated: list[dict[str, Any]] = []
     total_bytes = 0
+    budget_hit = False
 
     for file_path, file_gaps in by_file.items():
         remaining = _MAX_HYDRATED_TOTAL_BYTES - total_bytes
         if remaining <= 0:
-            logger.info(
-                "detector hydration stopped at %d gaps (%d MiB retained)",
-                len(hydrated), _MAX_HYDRATED_TOTAL_BYTES // (1024 * 1024),
-            )
+            budget_hit = True
             break
 
+        exhausted: list[bool] = []
         bodies = _read_spans(
             target_path, file_path,
             [(start, end) for _, start, end in file_gaps],
             budget_bytes=remaining,
+            budget_exhausted=exhausted,
         )
+        if exhausted:
+            # A span that fit the per-function cap was abandoned only
+            # because the remaining global allowance ran out — that is
+            # the ceiling binding, even though total_bytes never
+            # reaches it exactly (abandoned spans refund their bytes).
+            budget_hit = True
         if not bodies:
             continue
 
@@ -1389,6 +1405,7 @@ def hydrate_live_gaps_for_detectors(
             if (start, end) not in charged:
                 size = len(body.encode("utf-8", errors="ignore"))
                 if total_bytes + size > _MAX_HYDRATED_TOTAL_BYTES:
+                    budget_hit = True
                     continue
                 total_bytes += size
                 charged.add((start, end))
@@ -1398,6 +1415,18 @@ def hydrate_live_gaps_for_detectors(
 
         del bodies
 
+    if budget_hit:
+        # Coverage-carrying disclosure: the unhydrated remainder is
+        # invisible to the mechanical detectors, so the exhaustion must
+        # never pass at info/debug level.
+        eligible = sum(len(v) for v in by_file.values())
+        logger.warning(
+            "detector hydration budget (%d MiB) exhausted: hydrated "
+            "%d of %d span-valid live gaps — negative-space and "
+            "sibling-asymmetry detectors never see the remainder",
+            _MAX_HYDRATED_TOTAL_BYTES // (1024 * 1024),
+            len(hydrated), eligible,
+        )
     if hydrated:
         logger.debug(
             "hydrated source for %d/%d live gaps (%d KiB)",
@@ -1440,6 +1469,7 @@ def _read_spans(
     spans: list[tuple],
     *,
     budget_bytes: int = _MAX_HYDRATED_TOTAL_BYTES,
+    budget_exhausted: list[bool] | None = None,
 ) -> dict[tuple, str] | None:
     """Extract the requested 1-indexed inclusive line spans from a file.
 
@@ -1460,6 +1490,14 @@ def _read_spans(
     the global ceiling before the caller gets a chance to enforce it.
     The per-function cap is likewise applied while accumulating, so an
     oversized body is abandoned rather than built and then discarded.
+
+    ``budget_exhausted`` is an optional out-signal (mutable holder —
+    the return shape is shared with callers that must stay unchanged):
+    when a span that fits the per-function cap is abandoned purely
+    because ``budget_bytes`` ran out, ``True`` is appended. Callers
+    metering a global ceiling use it to disclose exhaustion instead of
+    silently hydrating less; spans abandoned by the per-function cap
+    do not signal (they would be dropped under any budget).
 
     Paths come from the checklist, which is derived from the scanned
     tree, so containment is enforced rather than assumed. Oversized files
@@ -1528,6 +1566,9 @@ def _read_spans(
                     over_fn = sizes[span] + cost > _MAX_HYDRATED_FUNCTION_BYTES
                     over_total = spent + cost > budget_bytes
                     if over_fn or over_total:
+                        if (over_total and not over_fn
+                                and budget_exhausted is not None):
+                            budget_exhausted.append(True)
                         # Refund what this span buffered — an abandoned
                         # body retains nothing, so it must not go on
                         # charging the allowance and starving later

@@ -7892,6 +7892,14 @@ def _extractor_for_language(language: str | None,
 #: Default per-file size gate for :func:`load_call_graphs` — larger
 #: sources are skipped, not parsed. Shared with the audit prep cache's
 #: input fingerprint so both sides agree on which bytes can matter.
+#: Both directions: RAISING it admits generated/amalgamated monsters
+#: (a single sqlite3.c-shaped file costs seconds of regex parsing and
+#: can dominate the retained-byte budget alone — file size is
+#: target-derived, so a hostile tree must not buy unbounded parse
+#: time). LOWERING it drops cross-function context for exactly the
+#: big, central files where it matters most. When the gate binds,
+#: :func:`load_call_graphs` counts the oversize skips and discloses
+#: them with a warning — the gate may bind, but never silently.
 CALL_GRAPH_MAX_FILE_BYTES = 1_500_000
 
 #: Default cumulative retained-byte budget for
@@ -8223,6 +8231,8 @@ def load_call_graphs(
     retained_bytes = 0
     budget_exhausted = False
     budget_skipped = 0
+    oversize_skipped = 0
+    oversize_example: str | None = None
     top_offender: tuple[str, int] | None = None
     for rel, path, decl_language in candidates:
         if len(graphs) >= max_files:
@@ -8244,6 +8254,9 @@ def load_call_graphs(
             continue
         try:
             if path.stat().st_size > max_bytes:
+                oversize_skipped += 1
+                if oversize_example is None:
+                    oversize_example = rel
                 continue
             content = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -8303,6 +8316,17 @@ def load_call_graphs(
             if checklist is not None else
             "pass the run checklist to bound extraction to in-scope "
             "files",
+        )
+    if oversize_skipped:
+        # The per-file input gate is a coverage gate too: an oversize
+        # source contributes NO call edges, and the biggest files are
+        # often the most central (amalgamations, generated cores).
+        # Loud like its cap/budget siblings — never a silent continue.
+        logger.warning(
+            "load_call_graphs: %d file(s) over the per-file size gate "
+            "(%d bytes) skipped unparsed (e.g. %r); cross-function "
+            "detectors have no call-graph context for them",
+            oversize_skipped, max_bytes, oversize_example,
         )
     if budget_skipped:
         # Hitting the budget means cross-function context is

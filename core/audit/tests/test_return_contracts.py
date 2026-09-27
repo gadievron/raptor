@@ -354,3 +354,54 @@ class TestAnnotationProvenanceGate:
         })
         assert ev is not None
         assert ev.grade == GRADE_REGISTRY
+
+
+class TestWurHarvestStride:
+    """Two-direction pin on the header-count budget: an under-budget
+    tree is scanned whole with no warning; an over-budget tree gets
+    the budget spread EVENLY across the sorted paths (never the
+    alphabetical prefix — on a kernel tree that reads one corner) and
+    a loud selection-ratio disclosure."""
+
+    def test_under_budget_scans_all_no_warning(self, tmp_path, caplog):
+        import logging
+
+        for i in range(5):
+            (tmp_path / f"h{i}.h").write_text(
+                f"__attribute__((warn_unused_result)) int f{i}(void);\n",
+            )
+        from core.audit.return_contracts import harvest_wur_from_target
+        with caplog.at_level(
+            logging.WARNING, logger="core.audit.return_contracts",
+        ):
+            names = harvest_wur_from_target(tmp_path)
+        assert names == frozenset({f"f{i}" for i in range(5)})
+        assert "harvest capped" not in caplog.text
+
+    def test_over_budget_strides_and_warns(
+        self, tmp_path, caplog, monkeypatch,
+    ):
+        import logging
+
+        # 12 headers, budget 4 → stride 3: the sample must reach the
+        # END of the sorted tree, not stop in the first third.
+        monkeypatch.setattr(
+            "core.audit.return_contracts._MAX_WUR_SCAN_FILES", 4,
+        )
+        for i in range(12):
+            (tmp_path / f"h{i:02d}.h").write_text(
+                f"__attribute__((warn_unused_result)) int f{i:02d}(void);\n",
+            )
+        from core.audit.return_contracts import harvest_wur_from_target
+        with caplog.at_level(
+            logging.WARNING, logger="core.audit.return_contracts",
+        ):
+            names = harvest_wur_from_target(tmp_path)
+        assert len(names) == 4
+        # Strided, not prefix: a name from the tree's last third made
+        # the sample (the prefix slice would stop at f03).
+        assert any(n >= "f06" for n in names), names
+        hits = [r for r in caplog.records
+                if "harvest capped" in r.getMessage()]
+        assert len(hits) == 1
+        assert "4 of 12" in hits[0].getMessage()
