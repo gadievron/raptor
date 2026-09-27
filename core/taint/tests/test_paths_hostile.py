@@ -654,18 +654,26 @@ def test_fuzz_output_stays_serialisable(packs) -> None:
 
 
 def _timed_diamonds(n: int, packs: PackSet) -> float:
+    # CPU time, not wall: the ratio below is a complexity pin on
+    # in-process work, and its two legs are sampled at different
+    # moments — runner contention that hits one leg harder than the
+    # other skews a wall ratio on unchanged code (a nightly measured
+    # 2.80 that way; see core.testing.wallclock). A super-linear
+    # regression still burns CPU; a descheduled worker accumulates
+    # none.
     texts, graph, routes = _diamond_package(n)
     best = float("inf")
     for _ in range(3):
-        start = time.perf_counter()
+        start = time.process_time()
         res = _run(texts, graph, routes, packs)
-        best = min(best, time.perf_counter() - start)
+        best = min(best, time.process_time() - start)
         assert res.candidates and res.candidates[0].alternatives
     return best
 
 
 def test_growth_ratio_pin_n_vs_2n_with_alternatives(packs) -> None:
-    # Host-speed invariant: a RATIO of two timings on the same host.
+    # Host-speed invariant: a RATIO of two CPU timings on the same
+    # host.
     # n=120 diamonds → 120 candidates each rendering steps +
     # excerpts + one alternative (well under the 500 candidate cap,
     # so reconstruction work genuinely doubles with n — at 250+ the

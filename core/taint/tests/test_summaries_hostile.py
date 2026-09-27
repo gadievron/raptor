@@ -510,20 +510,27 @@ def fn_{i}(a, b, c):
 
 
 def _timed_summarize(source: str, specs: SpecIndex) -> float:
+    # CPU time, not wall: the ratio below is a complexity pin on
+    # in-process work, and its two legs are sampled at different
+    # moments — runner contention that hits one leg harder than the
+    # other skews a wall ratio on unchanged code (the paths twin
+    # measured 2.80 that way in a nightly; see
+    # core.testing.wallclock). A super-linear regression still burns
+    # CPU; a descheduled worker accumulates none.
     best = float("inf")
     for _ in range(3):
         idx = index_module_text(source, "gen.py", module_name="gen")
-        start = time.perf_counter()
+        start = time.process_time()
         results = summarize_module(idx, specs)
-        best = min(best, time.perf_counter() - start)
+        best = min(best, time.process_time() - start)
         assert all(not s.opaque for s in results)
     return best
 
 
 @pytest.mark.slow
 def test_growth_ratio_pin_n_vs_2n(specs: SpecIndex) -> None:
-    # Host-speed invariant: the pin is a RATIO of two timings taken
-    # the same way on the same host. 2.7 leaves linear-with-overhead
+    # Host-speed invariant: the pin is a RATIO of two CPU timings
+    # taken the same way on the same host. 2.7 leaves linear-with-overhead
     # headroom; raising it would hide super-linear blowups, lowering
     # it flakes on interpreter noise. n=600: at smaller n the
     # per-function constant overhead swamps a quadratic term and the
@@ -538,7 +545,7 @@ def test_growth_ratio_pin_n_vs_2n(specs: SpecIndex) -> None:
     t_2n = _timed_summarize(_synthetic_module(2 * n), specs)
     assert t_n > 0
     ratio = t_2n / t_n
-    assert ratio <= 2.9, f"super-linear growth: ratio {ratio:.2f}"
+    assert ratio <= 2.7, f"super-linear growth: ratio {ratio:.2f}"
 
 
 # The 74k-function cap-shape file is genuine multi-second work;
