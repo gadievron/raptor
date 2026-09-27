@@ -1082,6 +1082,117 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
         "codeql": None,
         "sinks": [],
     },
+    # ── Synthesis-owned classes ─────────────────────────────────────
+    # Entries below carry ``synthesis_owned``: no stock cocci rule,
+    # curated semgrep rule, CodeQL @id, SMT verb, or fallback channel
+    # states the class's harm mechanism, so the deliberately empty
+    # chain routes suspicious verdicts to on-demand checker synthesis
+    # as the designed verifier (see synthesis_owned() below). The
+    # marker only downgrades the unmapped-class log line — chain
+    # construction and synthesis candidacy are unchanged.
+    #
+    # Canonicalisation / normalisation family: the defect is a
+    # missing or mis-ordered transform relative to the TARGET'S
+    # canonical form (path equivalence, Unicode, case folding,
+    # validate-before-canonicalise) — no fixed pattern or sink
+    # vocabulary states what canonical means for a given target.
+    "CWE-41": {"smt": None, "cocci": None, "joern": False,
+               "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-176": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-178": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-180": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-1289": {"smt": None, "cocci": None, "joern": False,
+                 "codeql": None, "sinks": [], "synthesis_owned": True},
+    # Allow/deny-list correctness: whether a permissive entry or a
+    # missing deny entry is harmful is a list-completeness judgment
+    # against the target's semantics, not a fixed pattern.
+    "CWE-183": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-184": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    # Incorrect regular expression: the claim is that a SPECIFIC
+    # pattern fails to match its intended language — a per-pattern
+    # semantic assertion (the DoS shape has its own entry, CWE-1333).
+    "CWE-185": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    # Information-exposure family remainders: which datum is
+    # sensitive and which channel is attacker-visible are target
+    # semantics; the tool-statable sub-shapes have their own entries
+    # (CWE-312 storage, CWE-532 logs) and CWE-200 is the pillar.
+    # CWE-214/526 (sensitive data in argv / environment) and CWE-522
+    # (insufficiently protected credentials) name protection
+    # judgments whose statable members are covered elsewhere
+    # (CWE-327/312/532).
+    "CWE-200": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-214": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-522": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-526": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    # Interpretation-conflict / comparison-semantics families: the
+    # harm depends on which pair of interpreters, which behaviour
+    # ordering, or which comparison factors the target composes —
+    # no stock pattern generalises across targets.
+    "CWE-349": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-436": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-696": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-697": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-1023": {"smt": None, "cocci": None, "joern": False,
+                 "codeql": None, "sinks": [], "synthesis_owned": True},
+    # Externally accessible lock: whether the lock primitive is
+    # reachable by an external actor is a deployment property, not a
+    # code pattern.
+    "CWE-412": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    # Untrusted search path / uncontrolled search-path element: the
+    # defect is a constant-code property (which directories the
+    # loader consults, in what order) — not a dataflow; adjudication
+    # needs the target's loader configuration.
+    "CWE-426": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-427": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    # Pillar / class-level abstractions naming no single mechanism
+    # (resource exposure, always-incorrect control flow, incorrect
+    # provided functionality, protection-mechanism failure, duplicate
+    # identifiers, incorrectly resolved reference): the concrete
+    # children with statable mechanisms have their own entries.
+    "CWE-668": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-670": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-684": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-693": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-694": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-706": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    # Configuration / content families with no static observable
+    # (missing custom error page, insecure default initialisation,
+    # spreadsheet-formula neutralisation for generated CSV, numeric
+    # precision adequacy, LLM prompt-injection neutralisation): the
+    # asserted defect is target-policy-relative.
+    "CWE-756": {"smt": None, "cocci": None, "joern": False,
+                "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-1188": {"smt": None, "cocci": None, "joern": False,
+                 "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-1236": {"smt": None, "cocci": None, "joern": False,
+                 "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-1339": {"smt": None, "cocci": None, "joern": False,
+                 "codeql": None, "sinks": [], "synthesis_owned": True},
+    "CWE-1427": {"smt": None, "cocci": None, "joern": False,
+                 "codeql": None, "sinks": [], "synthesis_owned": True},
 }
 
 # Classes a deterministic tool CANNOT adjudicate — by policy, not by
@@ -1100,11 +1211,11 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
 #
 # Known gap (next pass): the park is class-exact, so logging-family
 # CWE drift bypasses it — a review emitting the operational-logging
-# neighbours CWE-779 (logging of excessive data) or CWE-223 (omission
-# of security-relevant information) is a concrete class and keeps the
-# synthesis lane open. NOT CWE-117 (log injection), which is
-# taint-verifiable and must never be parked. Extend the family or add
-# drift telemetry when a run shows drift evidence.
+# neighbour CWE-779 (logging of excessive data) is a concrete class
+# and keeps the synthesis lane open. NOT CWE-117 (log injection) or
+# CWE-532 (secret written to log), which are taint-verifiable and
+# carry dispatch entries — they must never be parked. Extend the
+# family or add drift telemetry when a run shows drift evidence.
 CWE_NOT_TOOL_VERIFIABLE: dict[str, str] = {
     # Insufficient logging: "enough logging" is an operational
     # detectability judgment; absence of a log call names no harm
@@ -1143,6 +1254,30 @@ CWE_NOT_TOOL_VERIFIABLE: dict[str, str] = {
         "property — whether a value recurs under the same key at "
         "runtime is outside every static tool's observables; a match "
         "on IV construction asserts a shape, not reuse"
+    ),
+    # Omission of security-relevant log information: like CWE-778 an
+    # operational-detectability judgment — "this log line should have
+    # carried more" names no harm mechanism a tool could test. NOT
+    # CWE-117 (log injection) or CWE-532 (secret written to log),
+    # whose mechanisms are taint-verifiable and carry dispatch
+    # entries.
+    "CWE-223": (
+        "omission of security-relevant log information is an "
+        "operational/detectability property — no deterministic tool "
+        "output can adjudicate what a log line should have carried; "
+        "not an exploitability claim"
+    ),
+    # Insufficiently trustworthy component: component provenance and
+    # maintenance trustworthiness are supply-chain judgments outside
+    # any static observable in the scanned tree — a match on an
+    # import or dependency declaration asserts a shape, never the
+    # trust deficit.
+    "CWE-1357": (
+        "reliance on an insufficiently trustworthy component is a "
+        "supply-chain provenance judgment — no deterministic tool "
+        "output over the scanned tree can adjudicate a component's "
+        "trustworthiness; a dependency match asserts a shape, not "
+        "harm"
     ),
 }
 
@@ -1188,6 +1323,24 @@ def lookup(cwe: str) -> dict[str, Any] | None:
     if not normalized.startswith("CWE-"):
         normalized = f"CWE-{normalized}"
     return CWE_TO_TOOL_DISPATCH.get(normalized)
+
+
+def synthesis_owned(cwe: str) -> bool:
+    """True when checker synthesis is the class's designed verifier.
+
+    Entries carrying ``synthesis_owned`` have no stock-tool chain BY
+    ADJUDICATION: no cocci rule, curated semgrep rule, CodeQL @id,
+    SMT verb, or fallback channel states the class's harm mechanism,
+    so the deliberately empty chain routes suspicious verdicts to
+    on-demand checker synthesis. The marker only selects the info-
+    grade log line over the loud unmapped warning — chain
+    construction and synthesis candidacy are unchanged. Language-
+    gated entries (``semgrep_langs``) never carry the marker: on
+    non-matching targets their empty chain keeps the loud warning,
+    exactly the pre-entry behaviour those entries document.
+    """
+    entry = lookup(cwe)
+    return bool(entry and entry.get("synthesis_owned"))
 
 
 # Every gap and word-suffix run in these rows is BOUNDED: the rows

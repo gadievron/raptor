@@ -730,9 +730,10 @@ def ondemand_synthesis_refusal_reason(
 
     1. Not-tool-verifiable classes
        (``cwe_dispatch.CWE_NOT_TOOL_VERIFIABLE`` — CWE-778, CWE-1164,
-       CWE-316, CWE-323): properties whose adjudicating fact no
-       deterministic tool can observe, so a rule "confirming" the
-       hypothesis is always a shape assertion, never harm evidence.
+       CWE-316, CWE-323, CWE-223, CWE-1357): properties whose
+       adjudicating fact no deterministic tool can observe, so a rule
+       "confirming" the hypothesis is always a shape assertion, never
+       harm evidence.
 
     2. Harm gate: a placeholder or absent class (CWE-NOINFO, CWE-000,
        empty) must be backed by a stated harm — the review's

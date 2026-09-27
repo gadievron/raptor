@@ -19179,7 +19179,10 @@ def _warn_unmapped_cwe(cwe: str) -> None:
     an empty chain and the claim is never mechanically tested.
     Policy-parked classes get their own line: they are unmapped by
     decision, and their suspicious verdicts do NOT become synthesis
-    candidates.
+    candidates. Synthesis-owned classes (dispatch entries carrying the
+    ``synthesis_owned`` marker) also get their own info line: their
+    empty chain is the adjudicated design and the synthesis lane IS
+    the verifier.
     """
     norm = cwe.upper().strip()
     if not norm.startswith("CWE-"):
@@ -19188,11 +19191,13 @@ def _warn_unmapped_cwe(cwe: str) -> None:
         return
     _UNMAPPED_CWES_LOGGED.add(norm)
     try:
-        from .cwe_dispatch import not_tool_verifiable_reason
+        from .cwe_dispatch import not_tool_verifiable_reason, synthesis_owned
     except ImportError:
         policy_reason = ""
+        owned = False
     else:
         policy_reason = not_tool_verifiable_reason(norm)
+        owned = synthesis_owned(norm)
     if policy_reason:
         logger.info(
             "review emitted %s — class is not tool-verifiable by "
@@ -19202,8 +19207,22 @@ def _warn_unmapped_cwe(cwe: str) -> None:
             norm, policy_reason,
         )
         return
+    if owned:
+        # Adjudicated synthesis-owned class (dispatch entry with the
+        # synthesis_owned marker): the empty chain is deliberate — the
+        # per-hypothesis synthesized checker is the designed verifier,
+        # so this is routing information, not a coverage gap.
+        logger.info(
+            "review emitted %s — class is synthesis-owned by "
+            "adjudication (no stock tool states its harm mechanism); "
+            "suspicious verdicts become on-demand checker-synthesis "
+            "candidates in the post-loop sweep",
+            norm,
+        )
+        return
     logger.warning(
-        "review emitted %s but no tool-chain dispatch entry exists — "
+        "review emitted %s but no tool-chain dispatch entry exists, "
+        "or its legs were dropped for this target's language — "
         "CWE-seeded verification will not run for this class "
         "(hypothesis-keyword channels may still fire; suspicious "
         "verdicts in this family become on-demand checker-synthesis "

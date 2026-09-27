@@ -1,33 +1,66 @@
-"""Dispatch adjudication for tool-verifiable empty-dispatch classes.
+"""Dispatch adjudication for the long-tail empty-dispatch classes.
 
 An instrumented audit run warned ``review emitted CWE-<n> but no
-tool-chain dispatch entry exists`` for sixty concrete classes. The
-classes a deterministic tool CAN adjudicate are wired here: a real
-stock-tool chain (cocci / curated semgrep / CodeQL @id / SMT verb /
-joern+sinks) where a tool states the harm mechanism, or a fallback
-channel (fail_open / api_boundary / resource_bounds / compiler)
-where a channel's question matches the class. Hermetic — no LLM, no
-tool subprocesses.
+tool-chain dispatch entry exists`` for sixty concrete classes. Every
+one is now adjudicated into exactly one lane: a real stock-tool chain
+where a deterministic tool states the harm mechanism; a fallback
+channel (fail_open / api_boundary / resource_bounds / compiler) where
+a channel's question matches the class; the policy park where no tool
+output could ever adjudicate (CWE-223 / CWE-1357); or an explicit
+``synthesis_owned`` marker where per-hypothesis checker synthesis IS
+the designed verifier — the unmapped-class log line downgrades to
+info while chain construction and synthesis candidacy stay unchanged.
+Classes outside every lane keep the loud warning. Hermetic — no LLM,
+no tool subprocesses.
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 
 from core.audit.api_boundary import api_boundary_applicable
+from core.audit.checker_synthesis import ondemand_synthesis_refusal_reason
 from core.audit.compiler_sweep import COMPILER_CWE_MAP, compiler_applicable
 from core.audit.cwe_dispatch import (
+    CWE_TO_TOOL_DISPATCH,
     dark_verify_applicable,
     lookup,
+    not_tool_verifiable_reason,
     resolve_cocci_rules_for_cwe,
     resolve_semgrep_rule_for_cwe,
+    sinks_for_cwe,
     smt_verb_for_cwe,
+    synthesis_owned,
 )
 from core.audit.fail_open_verify import fail_open_applicable
 from core.audit.orchestrator import _cwe_fallback_chain
 from core.audit.resource_bounds import resource_bounds_applicable
+
+_ORCH_LOGGER = "core.audit.orchestrator"
+
+# Classes whose deliberate verifier is on-demand checker synthesis:
+# entry present, ``synthesis_owned`` marker set, chain empty.
+_SYNTHESIS_OWNED = (
+    "CWE-41", "CWE-176", "CWE-178", "CWE-180", "CWE-183", "CWE-184",
+    "CWE-185", "CWE-200", "CWE-214", "CWE-349", "CWE-412", "CWE-426",
+    "CWE-427", "CWE-436", "CWE-522", "CWE-526", "CWE-668", "CWE-670",
+    "CWE-684", "CWE-693", "CWE-694", "CWE-696", "CWE-697", "CWE-706",
+    "CWE-756", "CWE-1023", "CWE-1188", "CWE-1236", "CWE-1289",
+    "CWE-1339", "CWE-1427",
+)
+
+
+@pytest.fixture()
+def fresh_warn_log(monkeypatch):
+    """Isolate the once-per-run unmapped-CWE dedup set per test."""
+    import core.audit.orchestrator as _orch
+
+    monkeypatch.setattr(_orch, "_UNMAPPED_CWES_LOGGED", set())
+    return _orch
+
 
 class TestToctouFamily:
     """CWE-59/61 (symlink following) — the CWE-367 mechanism: SMT
@@ -210,3 +243,124 @@ class TestChannelOwnedFamilies:
         assert {e["type"] for e in _cwe_fallback_chain("CWE-789")} == {
             "resource_bounds",
         }
+
+
+class TestPolicyPark:
+    """CWE-223 / CWE-1357 are not-tool-verifiable by policy: no
+    dispatch entry, no synthesized checker, info-grade log line."""
+
+    @pytest.mark.parametrize("cwe", ["CWE-223", "CWE-1357"])
+    def test_parked(self, cwe):
+        assert lookup(cwe) is None
+        assert not_tool_verifiable_reason(cwe) != ""
+        reason = ondemand_synthesis_refusal_reason(
+            cwe, "logs omit the client identity on auth failure",
+        )
+        assert reason.startswith("not tool-verifiable by policy")
+
+    @pytest.mark.parametrize("cwe", ["CWE-223", "CWE-1357"])
+    def test_info_line_not_warning(self, cwe, fresh_warn_log, caplog):
+        with caplog.at_level(logging.INFO, logger=_ORCH_LOGGER):
+            fresh_warn_log._warn_unmapped_cwe(cwe)
+        records = [r for r in caplog.records if cwe in r.getMessage()]
+        assert records and all(
+            r.levelno == logging.INFO for r in records
+        )
+
+    @pytest.mark.parametrize("cwe", ["CWE-117", "CWE-532"])
+    def test_taint_verifiable_log_classes_never_parked(self, cwe):
+        # Log injection and secret-to-log flows have taint-statable
+        # mechanisms — they carry entries and stay out of the park.
+        assert not_tool_verifiable_reason(cwe) == ""
+        assert lookup(cwe) is not None
+
+
+class TestSynthesisOwned:
+    """Marker-carrying entries: empty chain by adjudication, info-
+    grade log line, synthesis lane open."""
+
+    @pytest.mark.parametrize("cwe", _SYNTHESIS_OWNED)
+    def test_entry_and_empty_chain(self, cwe):
+        entry = lookup(cwe)
+        assert entry is not None
+        assert synthesis_owned(cwe) is True
+        assert _cwe_fallback_chain(cwe) == []
+        # Inert everywhere a leg accessor looks.
+        assert sinks_for_cwe(cwe) == []
+        assert smt_verb_for_cwe(cwe) is None
+        assert resolve_cocci_rules_for_cwe(cwe) == []
+        assert entry["codeql"] is None
+
+    @pytest.mark.parametrize("cwe", _SYNTHESIS_OWNED)
+    def test_synthesis_lane_open(self, cwe):
+        # Concrete class: the harm gate passes on the class alone.
+        assert ondemand_synthesis_refusal_reason(
+            cwe, "hypothesis prose without a keyword-table mechanism",
+        ) == ""
+
+    def test_info_line_not_warning(self, fresh_warn_log, caplog):
+        with caplog.at_level(logging.INFO, logger=_ORCH_LOGGER):
+            fresh_warn_log._warn_unmapped_cwe("CWE-41")
+        records = [
+            r for r in caplog.records if "CWE-41" in r.getMessage()
+        ]
+        assert records and all(
+            r.levelno == logging.INFO for r in records
+        )
+        assert any("synthesis-owned" in r.getMessage() for r in records)
+
+    def test_marker_never_on_language_gated_entries(self):
+        # Language-gated entries document loud pre-entry behaviour on
+        # non-matching targets — the marker would silence it.
+        for cwe, entry in CWE_TO_TOOL_DISPATCH.items():
+            if entry.get("semgrep_langs") or entry.get("semgrep_by_lang"):
+                assert not entry.get("synthesis_owned"), cwe
+
+    def test_marker_only_on_leg_free_entries(self):
+        for cwe, entry in CWE_TO_TOOL_DISPATCH.items():
+            if not entry.get("synthesis_owned"):
+                continue
+            assert entry["smt"] is None, cwe
+            assert entry["cocci"] is None, cwe
+            assert entry["joern"] is False, cwe
+            assert entry["codeql"] is None, cwe
+            assert entry["sinks"] == [], cwe
+
+
+class TestLoudWarningPreserved:
+    """The two shapes that must keep the WARNING level: classes
+    outside every lane, and language-gated entries on non-matching
+    targets."""
+
+    def test_unmapped_tail_still_warns(self, fresh_warn_log, caplog):
+        with caplog.at_level(logging.INFO, logger=_ORCH_LOGGER):
+            fresh_warn_log._warn_unmapped_cwe("CWE-1104")
+        records = [
+            r for r in caplog.records if "CWE-1104" in r.getMessage()
+        ]
+        assert records and all(
+            r.levelno == logging.WARNING for r in records
+        )
+
+    def test_language_gated_entry_warns_on_other_target(
+        self, fresh_warn_log, caplog,
+    ):
+        # CWE-923's only leg is the curated rule; on a C target the
+        # chain is empty and — with no synthesis_owned marker — the
+        # loud warning fires (the php-entry precedent).
+        with caplog.at_level(logging.INFO, logger=_ORCH_LOGGER):
+            chain = _cwe_fallback_chain("CWE-923", "", "main.c")
+        assert chain == []
+        records = [
+            r for r in caplog.records if "CWE-923" in r.getMessage()
+        ]
+        assert records and all(
+            r.levelno == logging.WARNING for r in records
+        )
+        # The message must not claim "no entry exists" unqualified:
+        # for this shape an entry DOES exist — the language gate
+        # dropped its legs — and the text names that possibility.
+        assert all(
+            "dropped for this target's language" in r.getMessage()
+            for r in records
+        )
