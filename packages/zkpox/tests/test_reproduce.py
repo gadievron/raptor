@@ -260,7 +260,10 @@ def test_replay_uses_run_untrusted_with_hardened_defaults(
     assert result.attempted is True
     assert len(calls) == 2
     for cmd, kwargs in calls:
-        assert cmd == [str(fake_bin)]
+        # Consented-exec staging: the replayed path is a private
+        # executable copy that keeps the basename — never the
+        # run-dir file itself when that file is non-executable.
+        assert Path(cmd[0]).name == fake_bin.name
         # The helper's hardened defaults (restrict_reads=True,
         # fake_home=True, forced block_network / strict_env) must not
         # be overridden by the caller.
@@ -268,8 +271,8 @@ def test_replay_uses_run_untrusted_with_hardened_defaults(
         assert "fake_home" not in kwargs
         assert "block_network" not in kwargs
         assert "strict_env" not in kwargs
-        assert kwargs["target"] == str(fake_bin.parent)
-        assert kwargs["output"] == str(fake_bin.parent)
+        assert kwargs["target"] == str(Path(cmd[0]).parent)
+        assert kwargs["output"] == str(Path(cmd[0]).parent)
         assert kwargs["input"] == data
     # Only outcome values are persisted — never stdout.
     assert result.observed_outcomes == ["no_obvious_effect"] * 2

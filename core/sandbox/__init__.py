@@ -706,6 +706,7 @@ from .errors import (
     SandboxFloorError,
     SandboxSetupError,
 )
+from .exec_stage import executable_stage
 from .landlock import _get_landlock_abi, check_landlock_available
 from .mount import _build_mount_script
 from .observe import _BLOCKED_PATTERNS, _check_blocked, _interpret_result, _path_within
@@ -799,6 +800,8 @@ __all__ = [
     "check_seccomp_available",
     "check_unshare_engages",
     "disable_from_cli",
+    # Consented-exec staging for 0444 run-dir artifacts
+    "executable_stage",
     "parse_observe_log",
     "python_runtime_tool_paths",
     "run",

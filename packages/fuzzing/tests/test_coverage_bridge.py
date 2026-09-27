@@ -9,6 +9,7 @@ document satisfies BOTH existing consumer schemas.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -435,7 +436,9 @@ class TestEmit:
             stdout = _GCOV_OUTPUT
 
         def runner(cmd, *, cwd=None, stdin_bytes=None, timeout=0):
-            if cmd[0] == str(binary):
+            # Staged replay copy keeps the basename (0444
+            # run-dir artifacts exec via executable_stage).
+            if Path(cmd[0]).name == binary.name:
                 # Target replay drops a .gcda like gcov builds do.
                 (build / "parse.gcda").write_bytes(b"")
                 gcda_written["done"] = True
@@ -521,7 +524,9 @@ class TestEmit:
             stdout = _GCOV_OUTPUT
 
         def runner(cmd, *, cwd=None, stdin_bytes=None, timeout=0):
-            if cmd[0] == str(binary):
+            # Staged replay copy keeps the basename (0444
+            # run-dir artifacts exec via executable_stage).
+            if Path(cmd[0]).name == binary.name:
                 (build / "parse.gcda").write_bytes(b"fresh")
                 return None
             assert cmd[0] == "gcov"
@@ -731,3 +736,55 @@ class TestGcovCaptureBounded:
         proc = cb._default_runner([str(gcov)], cwd=tmp_path)
         assert isinstance(proc.stdout, bytes)
         assert len(proc.stdout) <= cb._MAX_CAPTURE_BYTES
+
+
+class TestReplayCorpusExecutableStaging:
+    """Env-built instrumented binaries sit 0444 in the run dir; the
+    corpus replay must hand the runner a staged 0o500 copy, staged
+    once for the whole corpus."""
+
+    def test_replay_stages_0444_binary_once(self, tmp_path):
+        import os
+
+        from packages.fuzzing.coverage_bridge import replay_corpus
+
+        artifact = tmp_path / "fuzz_target"
+        artifact.write_bytes(b"\x7fELF")
+        artifact.chmod(0o444)
+        inputs = []
+        for i in range(2):
+            p = tmp_path / f"input-{i}"
+            p.write_bytes(b"corpus")
+            inputs.append(p)
+        calls = []
+
+        def runner(cmd, **kwargs):
+            calls.append((list(cmd), os.access(cmd[0], os.X_OK)))
+
+        n = replay_corpus(artifact, inputs, input_mode="file",
+                          runner=runner)
+
+        assert n == 2
+        staged_paths = {c[0][0] for c in calls}
+        assert len(staged_paths) == 1  # staged once for the corpus
+        staged = Path(staged_paths.pop())
+        assert staged != artifact
+        assert all(exec_ok for _, exec_ok in calls)
+        assert not os.access(artifact, os.X_OK)
+        assert not staged.exists()
+
+    def test_replay_runs_executable_binary_in_place(self, tmp_path):
+        from packages.fuzzing.coverage_bridge import replay_corpus
+
+        binary = tmp_path / "fuzz_target"
+        binary.write_bytes(b"#!/bin/sh\n")
+        binary.chmod(0o755)
+        inp = tmp_path / "input-0"
+        inp.write_bytes(b"corpus")
+        calls = []
+
+        def runner(cmd, **kwargs):
+            calls.append(list(cmd))
+
+        replay_corpus(binary, [inp], input_mode="file", runner=runner)
+        assert calls == [[str(binary), str(inp)]]

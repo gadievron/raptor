@@ -574,6 +574,7 @@ def _reproduce_replay(
 
     try:
         from core.config import RaptorConfig
+        from core.sandbox import executable_stage as _executable_stage
         from core.sandbox import run_untrusted as sandbox_run_untrusted
         from core.witness import outcome_from_sandbox_info
     except ImportError as e:
@@ -595,16 +596,21 @@ def _reproduce_replay(
                 # (restrict_reads) with a credential-free fake $HOME —
                 # a compromised target can't read ~/.ssh or ~/.aws.
                 # block_network + strict_env are forced by the helper.
-                result = sandbox_run_untrusted(
-                    [str(binary_path)],
-                    target=str(binary_path.parent),
-                    output=str(binary_path.parent),
-                    capture_output=True,
-                    text=False,
-                    input=witness_bytes,
-                    timeout=sandbox_timeout,
-                    env=RaptorConfig.get_safe_env(),
-                )
+                # Consented-exec staging: an env-built binary_path
+                # is 0444 in the run dir (core/env/build.py); replay a
+                # private 0o500 copy. Per-attempt staging keeps the
+                # diff minimal — n is small here.
+                with _executable_stage(binary_path) as _staged:
+                    result = sandbox_run_untrusted(
+                        [str(_staged)],
+                        target=str(_staged.parent),
+                        output=str(_staged.parent),
+                        capture_output=True,
+                        text=False,
+                        input=witness_bytes,
+                        timeout=sandbox_timeout,
+                        env=RaptorConfig.get_safe_env(),
+                    )
             except SandboxSetupError as e:
                 # setup_category "X" = every isolation layer engaged
                 # and the TARGET's own exec failed inside the sandbox

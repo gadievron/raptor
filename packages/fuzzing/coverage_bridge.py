@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from core.json import save_json
-from core.sandbox import SandboxSetupError
+from core.sandbox import SandboxSetupError, executable_stage
 from core.security.log_sanitisation import sanitise_for_terminal
 from core.source import read_bytes_capped
 
@@ -250,48 +250,52 @@ def replay_corpus(
     """
     binary = Path(binary)
     replayed = 0
-    for inp in inputs:
-        try:
-            if input_mode == "file":
-                runner(
-                    [str(binary), str(inp)],
-                    cwd=build_dir,
-                    timeout=_REPLAY_TIMEOUT_S,
-                )
-            else:
-                # Host-side read of a target-writable file: capped and
-                # fd-honest (O_NOFOLLOW + fstat(S_ISREG) under the
-                # hood). An unbounded by-name read_bytes() would
-                # materialise a target-planted multi-GB file in host
-                # RAM and follow a symlink at HOST (not sandbox)
-                # privilege straight into the attacker binary's stdin.
-                read = read_bytes_capped(inp, _MAX_STDIN_INPUT_BYTES)
-                if read is None or read[1]:
-                    logger.warning(
-                        "corpus replay: skipping %s (non-regular, "
-                        "unreadable, or over %d bytes)",
-                        sanitise_for_terminal(str(inp)),
-                        _MAX_STDIN_INPUT_BYTES,
+    # Consented-exec staging: an env-built instrumented binary is
+    # 0444 in the run dir (core/env/build.py); replay a private
+    # 0o500 copy, staged once for the whole corpus.
+    with executable_stage(binary) as staged:
+        for inp in inputs:
+            try:
+                if input_mode == "file":
+                    runner(
+                        [str(staged), str(inp)],
+                        cwd=build_dir,
+                        timeout=_REPLAY_TIMEOUT_S,
                     )
-                    continue
-                runner(
-                    [str(binary)],
-                    cwd=build_dir,
-                    stdin_bytes=read[0],
-                    timeout=_REPLAY_TIMEOUT_S,
-                )
-            replayed += 1
-        except (subprocess.TimeoutExpired, OSError):
-            continue
-        except SandboxSetupError:
-            # Sandbox isolation could not engage — fail loud rather
-            # than silently skipping every input (mirrors the
-            # afl-showmap sibling; the orchestrator surfaces this as
-            # a bridge failure and no unsandboxed replay happens).
-            raise
-        except Exception:
-            logger.debug("replay failed for %s", inp, exc_info=True)
-            continue
+                else:
+                    # Host-side read of a target-writable file: capped and
+                    # fd-honest (O_NOFOLLOW + fstat(S_ISREG) under the
+                    # hood). An unbounded by-name read_bytes() would
+                    # materialise a target-planted multi-GB file in host
+                    # RAM and follow a symlink at HOST (not sandbox)
+                    # privilege straight into the attacker binary's stdin.
+                    read = read_bytes_capped(inp, _MAX_STDIN_INPUT_BYTES)
+                    if read is None or read[1]:
+                        logger.warning(
+                            "corpus replay: skipping %s (non-regular, "
+                            "unreadable, or over %d bytes)",
+                            sanitise_for_terminal(str(inp)),
+                            _MAX_STDIN_INPUT_BYTES,
+                        )
+                        continue
+                    runner(
+                        [str(staged)],
+                        cwd=build_dir,
+                        stdin_bytes=read[0],
+                        timeout=_REPLAY_TIMEOUT_S,
+                    )
+                replayed += 1
+            except (subprocess.TimeoutExpired, OSError):
+                continue
+            except SandboxSetupError:
+                # Sandbox isolation could not engage — fail loud rather
+                # than silently skipping every input (mirrors the
+                # afl-showmap sibling; the orchestrator surfaces this as
+                # a bridge failure and no unsandboxed replay happens).
+                raise
+            except Exception:
+                logger.debug("replay failed for %s", inp, exc_info=True)
+                continue
     return replayed
 
 
