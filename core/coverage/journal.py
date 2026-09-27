@@ -266,16 +266,32 @@ _MAX_DOMAIN_MODEL_BYTES = 64 * 1024 * 1024
 # and the next merge destroyed all accumulated history. Applied to
 # DISTINCT index identities (``merge_into_index`` collapses to the
 # newest row per ``index_key`` first — a lossless step, since the
-# merge is latest-wins per key). Trade-off, both directions: too low
-# and a legitimate mega-run reaches the index mostly as rollup
-# aggregates (full rows carry verdict detail; aggregates carry only
-# tallies); too high and the index write refuses over budget
-# (``IndexWriteOverBudget``), freezing merges for the whole project.
-# Identities beyond the cap are NOT silently dropped: they roll up
-# into the index's bounded ``aggregates`` section (see
+# merge is latest-wins per key). Sized from the write-boundary slim
+# (``_slim_index_row``), honestly: a real post-slim index MIXES slim
+# rows (~1.4 KiB median indent-2) with the protected fat rows the
+# slim never touches (claims, findings, edges, echoes), and the
+# measured MIXED mean is ~1,885 B/row (real 24k-identity mega-audit
+# index). At that mix the merge write ceiling (the read budget minus
+# the aggregates reserve, ~239 MiB) binds around ~130k rows: a
+# cap-full 150k mixed run serializes to ~283 MB and byte-evicts its
+# oldest identities — loudly, counts conserved — so above ~130k the
+# BYTE ceiling, not this count cap, is the operative bound. The
+# motivating shapes both fit as full rows (22.7k self-audit ≈ 43 MB;
+# ~107k kernel scope ≈ 188 MB). Trade-off, both directions: too low
+# and a legitimate mega-run (a 22k-identity self-audit, a
+# ~10^5-function kernel-scope audit) reaches the index mostly as
+# rollup aggregates (full rows carry verdict detail; aggregates
+# carry only tallies); too high and the merge holds that many parsed
+# entries in memory (~1 KiB object overhead each — the reader-side
+# precedent is ``_MAX_RETAINED_ENTRIES = 300_000``, which this cap
+# must stay under) while byte eviction, not this cap, ends up
+# bounding every merge — the count cap must remain the COMMON bound
+# so identities normally arrive as full rows and eviction stays the
+# exception. Identities beyond the cap are NOT silently dropped:
+# they roll up into the index's bounded ``aggregates`` section (see
 # ``_aggregate_overflow``), so total counts are conserved and the
 # truncation is disclosed machine-readably.
-_MAX_MERGE_ENTRIES = 20_000
+_MAX_MERGE_ENTRIES = 150_000
 
 # Bounds on the index's overflow-aggregate section — the rollup rows
 # that stand in for identities a mega-run pushed past
@@ -3204,7 +3220,19 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
     merges the newest cap-full as full rows; the older identities
     roll up into the index's bounded ``aggregates`` section
     (:func:`_aggregate_overflow`) — counts and verdict tallies reach
-    the index, per-identity detail stays in the run journal.
+    the index, per-identity detail stays in the run journal. The
+    same degradation guards BYTES: a merge whose document would
+    exceed the merge write ceiling (the read budget minus an
+    aggregates reserve) sheds its oldest incoming identities to the
+    aggregates section — restoring any prior rows they displaced —
+    until the write fits, so a fat run degrades to disclosure
+    instead of freezing the index for the whole project. Unlike the
+    deterministic count cap, byte eviction depends on the index's
+    current headroom, so a merge that writes with NO overflow drops
+    this run's own prior disclosure record (refreshing it when the
+    eviction arm fires again) — re-merging a run dir converges the
+    disclosure to the index as written instead of preserving a
+    stale "aggregates only" claim about rows that since landed.
 
     Rows are slimmed at the write boundary (:func:`_slim_index_row`):
     eligible settled rows drop their cold prose fields for an offload
@@ -3270,10 +3298,24 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
                 "journal index: re-homed %d legacy-format key(s)", rehomed,
             )
 
+        # Each merged key remembers the PRE-RUN value it displaced so
+        # the byte-eviction arm below can RESTORE it: an evicted
+        # incoming identity reaches the index as an aggregate, and the
+        # prior on-disk history for that key stays a full row. One
+        # slot per key ([newest entry, pre-run prior, rows counted])
+        # — a run that merges several rows for the same key must
+        # restore the value from BEFORE the run, not an intermediate.
+        merged_rows: dict[str, list[Any]] = {}
         for entry in run_entries:
             key = entry.index_key
             existing = index.get(key)
             if existing is None or entry.ts > _row_ts(existing):
+                slot = merged_rows.get(key)
+                if slot is None:
+                    merged_rows[key] = [entry, existing, 1]
+                else:
+                    slot[0] = entry
+                    slot[2] += 1
                 index[key] = entry.to_dict()
                 merged += 1
 
@@ -3303,19 +3345,109 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
             aggregates = _read_aggregates(index_path)
             aggregates[_aggregate_run_key(run_dir)] = (
                 _aggregate_overflow(overflow))
+        elif merged or rehomed or slimmed:
+            # Byte eviction is STATE-dependent (the count cap is
+            # deterministic, its record idempotently overwritten
+            # above): a re-merge of the same run dir at more headroom
+            # lands the previously-evicted identities as full rows,
+            # and preserving the old disclosure would keep claiming
+            # they "reached the index as aggregates only". A merge of
+            # this run that writes with no count-cap overflow drops
+            # the run's OWN prior record — other runs' records stay
+            # untouched — and if the byte-eviction arm below fires
+            # after all, it re-adds the key with the NEW counts, so
+            # the disclosure always describes the index as written.
+            prior_aggregates = _read_aggregates(index_path)
+            if _aggregate_run_key(run_dir) in prior_aggregates:
+                del prior_aggregates[_aggregate_run_key(run_dir)]
+                aggregates = prior_aggregates
 
         if merged or rehomed or overflow or slimmed:
-            try:
-                _write_index(index_path, index, aggregates=aggregates)
-            except IndexWriteOverBudget as e:
-                # Same loud-refusal convention as IndexUnreadable: the
-                # index on disk stays readable AND writable (compaction
-                # included), and the run journal keeps every row — a
-                # refused merge loses nothing durable.
-                logger.error(
-                    "journal: %s — run %s NOT merged (the run journal "
-                    "keeps its rows)", e, run_dir)
-                return 0
+            # Merge write ceiling: the read budget minus a reserve for
+            # the aggregates section (its own byte bound plus envelope
+            # slack), floored at half the budget so scaled-down test
+            # budgets keep a usable ceiling. A merge that fills the
+            # index right up to the read budget would leave no room
+            # for a FUTURE merge to even record its overflow
+            # disclosure; under this ceiling, an aggregates-only
+            # follow-up merge always fits — hostile floods can degrade
+            # one run's rows to aggregates but can never freeze the
+            # index. Module globals read at call time so tests can
+            # scale them.
+            ceiling = max(
+                _MAX_JOURNAL_BYTES // 2,
+                _MAX_JOURNAL_BYTES - _MAX_AGGREGATE_BYTES - (1 << 20),
+            )
+            pending = sorted(
+                merged_rows.items(), key=lambda kv: kv[1][0].ts)
+            evicted_total = 0
+            attempts = 0
+            while True:
+                try:
+                    _write_index(index_path, index,
+                                 aggregates=aggregates, budget=ceiling)
+                    break
+                except IndexWriteOverBudget as e:
+                    attempts += 1
+                    if not pending:
+                        # Nothing left to shed — the on-disk document
+                        # was already over the ceiling before this run
+                        # merged anything (or this merge added no
+                        # rows). Same loud-refusal convention as
+                        # IndexUnreadable: the index on disk stays
+                        # readable AND writable (compaction included),
+                        # and the run journal keeps every row — a
+                        # refused merge loses nothing durable.
+                        logger.error(
+                            "journal: %s — run %s NOT merged (the run "
+                            "journal keeps its rows)", e, run_dir)
+                        return 0
+                    # Shed the OLDEST incoming identities until the
+                    # estimated savings cover the overshoot (25%
+                    # proportional slack for envelope drift — a fixed
+                    # slack would over-shed at scaled-down test
+                    # budgets), restoring each displaced prior row.
+                    # Bounded retries: the terminal attempt sheds
+                    # everything this run merged.
+                    need = int(max(e.size - ceiling, 1) * 1.25) + 512
+                    if attempts >= 8:
+                        need = e.size
+                    freed = 0
+                    evicted: list[ReviewJournalEntry] = []
+                    while pending and freed < need:
+                        key, (entry, prior, counted) = pending.pop(0)
+                        try:
+                            freed += len(json.dumps(
+                                index.get(key), indent=2, default=str))
+                        except Exception:  # noqa: BLE001 — size estimate only
+                            pass
+                        if prior is None:
+                            index.pop(key, None)
+                        else:
+                            if isinstance(prior, dict):
+                                prior = _slim_index_row(prior) or prior
+                            index[key] = prior
+                            try:
+                                freed -= len(json.dumps(
+                                    prior, indent=2, default=str))
+                            except Exception:  # noqa: BLE001 — size estimate only
+                                pass
+                        evicted.append(entry)
+                        merged -= counted
+                    evicted_total += len(evicted)
+                    if aggregates is None:
+                        aggregates = _read_aggregates(index_path)
+                    overflow = overflow + evicted
+                    aggregates[_aggregate_run_key(run_dir)] = (
+                        _aggregate_overflow(overflow))
+            if evicted_total:
+                logger.warning(
+                    "journal: index write for run %s exceeded the merge "
+                    "byte ceiling (%d bytes) — the OLDEST %d merged "
+                    "identities reach the project index as rollup "
+                    "aggregates only (%d remain as full rows; the run "
+                    "journal keeps every row)",
+                    run_dir, ceiling, evicted_total, merged)
 
     return merged
 
@@ -3481,14 +3613,20 @@ def _load_index(path: Path, for_write: bool = False
 
 
 class IndexWriteOverBudget(RuntimeError):
-    """The serialized index would exceed the read budget — the write
+    """The serialized index would exceed the write ceiling — the write
     refuses so the ON-DISK index always stays readable. Writing past
-    the cap manufactured a permanently frozen index: every later read
-    degraded to empty (accumulated history invisible) and every
-    writer — including compaction, the in-band remedy — refused via
-    :class:`IndexUnreadable`. The per-run merge-entry cap bounds row
-    COUNT, not bytes (indent-2 re-serialization inflates list-heavy
-    rows several-fold), so the byte bound must sit at the write."""
+    the read budget manufactured a permanently frozen index: every
+    later read degraded to empty (accumulated history invisible) and
+    every writer — including compaction, the in-band remedy — refused
+    via :class:`IndexUnreadable`. The per-run merge-entry cap bounds
+    row COUNT, not bytes (indent-2 re-serialization inflates
+    list-heavy rows several-fold), so the byte bound must sit at the
+    write. ``size`` carries the serialized document's byte count so
+    the merge's eviction arm can size its response."""
+
+    def __init__(self, message: str, size: int = 0) -> None:
+        super().__init__(message)
+        self.size = size
 
 
 def _read_aggregates(path: Path) -> dict[str, Any]:
@@ -3566,14 +3704,19 @@ def _write_index(
     path: Path,
     entries: dict[str, dict[str, Any]],
     aggregates: dict[str, Any] | None = None,
+    budget: int | None = None,
 ) -> None:
     """Atomic write of the index file, bounded by the read budget.
 
     Raises :class:`IndexWriteOverBudget` (file untouched) when the
-    serialized document would exceed ``_MAX_JOURNAL_BYTES`` — an index
-    the writer cannot re-read is destroyed history, so it must never
-    reach disk. Serialization matches :func:`core.json.save_json`
-    (same encoder arms, newline, atomic tempfile + rename).
+    serialized document would exceed *budget* (default
+    ``_MAX_JOURNAL_BYTES``, the read budget) — an index the writer
+    cannot re-read is destroyed history, so it must never reach disk.
+    The merge passes a LOWER ceiling that reserves aggregates
+    headroom (see :func:`merge_into_index`); direct callers keep the
+    hard read-budget backstop. Serialization matches
+    :func:`core.json.save_json` (same encoder arms, newline, atomic
+    tempfile + rename).
 
     *aggregates*: the overflow-rollup section. ``None`` (default)
     preserves whatever the on-disk file already carries, so writers
@@ -3598,11 +3741,14 @@ def _write_index(
         index_data["aggregates"] = aggregates
     content = dumps_artifact(index_data) + "\n"
     size = len(content.encode("utf-8"))
-    if size > _MAX_JOURNAL_BYTES:
+    limit = _MAX_JOURNAL_BYTES if budget is None else budget
+    if size > limit:
         raise IndexWriteOverBudget(
             f"journal index at {path} would serialize to {size} bytes "
-            f"(over the {_MAX_JOURNAL_BYTES} byte read budget) — "
-            "refusing to write an index its own reader must refuse"
+            f"(over the {limit} byte write ceiling; read budget "
+            f"{_MAX_JOURNAL_BYTES}) — refusing to write an index past "
+            "its own reader's budget",
+            size=size,
         )
     write_text_atomically(path, content, tmp_prefix=".~savejson-")
 

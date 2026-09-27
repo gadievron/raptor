@@ -278,11 +278,15 @@ class TestReaderPreParseContainment:
         under-cap run journal could push the index past the cap in
         one merge — after which every reader degraded to empty and
         every writer (compaction included) refused: a permanently
-        frozen index. The write gate refuses the MERGE instead; the
-        index stays readable/writable and the run journal keeps its
-        rows."""
+        frozen index. The merge DEGRADES instead of freezing: it
+        sheds its oldest incoming identities to the aggregates
+        section until the document fits under the merge write
+        ceiling. The index stays under the read budget, readable and
+        writable; accumulated history survives; the run journal
+        keeps its rows."""
         import core.coverage.journal as journal_mod
-        # Scaled cap: 8 KiB budget stands in for the 256 MiB default.
+        # Scaled cap: 8 KiB budget stands in for the 256 MiB default
+        # (merge ceiling floors at half the budget: 4 KiB).
         monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_BYTES", 8 * 1024)
         project = tmp_path / "project"
         run = tmp_path / "run"
@@ -294,11 +298,10 @@ class TestReaderPreParseContainment:
         (run2 / JOURNAL_FILENAME).write_bytes(_valid_line(0))
         assert merge_run_into_index(project, run2) == 1
         index = project / INDEX_FILENAME
-        before = index.read_bytes()
         # An UNDER-cap run journal whose merged index would serialize
         # over the cap. Claim rows: their bodies travel inline (the
         # write-boundary slim never touches them), so they still
-        # exercise the byte gate.
+        # exercise the byte bound.
         rows = b"".join(
             json.dumps({
                 "ts": now_iso(), "run_id": "r", "file": f"g{i}.c",
@@ -310,13 +313,23 @@ class TestReaderPreParseContainment:
         )
         assert len(rows) < 8 * 1024
         (run / JOURNAL_FILENAME).write_bytes(rows)
-        assert merge_into_index(project, run) == 0
-        # Index untouched; readers see the history; writers still work.
-        assert index.read_bytes() == before
-        assert set(load_index(project)) == {"src/f0.c:fn0"}
+        merged = merge_into_index(project, run)
+        # The written document honours the read budget — never frozen.
+        assert index.stat().st_size <= 8 * 1024
+        # Readers see the pre-existing history AND every un-shed row;
+        # shed identities are disclosed in the aggregates section with
+        # counts conserved.
+        assert "src/f0.c:fn0" in set(load_index(project))
+        from core.coverage.journal import load_index_aggregates
+        (record,) = load_index_aggregates(project).values()
+        assert merged + record["identities"] == 6
+        assert record["identities"] >= 1
+        # Writers still work: a later merge succeeds and the shed-run
+        # disclosure survives it.
         (run2 / JOURNAL_FILENAME).write_bytes(_valid_line(1))
         assert merge_run_into_index(project, run2) == 1
-        assert set(load_index(project)) == {"src/f0.c:fn0", "src/f1.c:fn1"}
+        assert "src/f1.c:fn1" in set(load_index(project))
+        assert load_index_aggregates(project)
 
     def test_rehome_quarantines_rows_outside_the_legacy_tuple(self):
         """Rows whose validation raises classes the old enumerated

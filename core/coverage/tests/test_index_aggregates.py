@@ -7,6 +7,12 @@ verdict tallies, ts spans). Two directions under test: a hostile
 flood stays bounded (record count, rollup rows, section bytes), and
 a legitimate mega-run's counts are conserved — every identity is
 accounted for either as a full row or inside an aggregate.
+
+These tests scale the cap DOWN (monkeypatch) to exercise the lane
+cheaply; the at-the-real-cap magnitudes — a 22k-identity run merging
+as full rows, the beyond-cap lane one identity past the real cap, and
+the merge byte ceiling that bounds what the count cap no longer does
+— live in ``test_merge_cap_scale.py``.
 """
 
 from __future__ import annotations
@@ -58,7 +64,8 @@ class TestConservation:
     ) -> None:
         # The legitimate direction: a run over the cap reaches the
         # index as cap-many full rows PLUS truthful aggregates —
-        # nothing silently vanishes.
+        # nothing silently vanishes. Scaled cap; the same lane at the
+        # real cap value is pinned by test_merge_cap_scale.py.
         monkeypatch.setattr(journal_mod, "_MAX_MERGE_ENTRIES", 5)
         project = tmp_path / "project"
         run = _mk_run(project, "run1", 20)
@@ -201,6 +208,9 @@ class TestSectionBounds:
     ) -> None:
         # The hostile direction: many overflowing run dirs accrete at
         # most _MAX_AGGREGATE_RECORDS records, newest-ts surviving.
+        # (Byte-level hostility — fat rows the raised count cap now
+        # admits — is bounded by the merge write ceiling, pinned in
+        # test_merge_cap_scale.py.)
         monkeypatch.setattr(journal_mod, "_MAX_MERGE_ENTRIES", 2)
         monkeypatch.setattr(journal_mod, "_MAX_AGGREGATE_RECORDS", 3)
         project = tmp_path / "project"
