@@ -187,6 +187,20 @@ def _build_parser() -> argparse.ArgumentParser:
              "loudly)",
     )
     parser.add_argument(
+        "--expose-api-key-to-child",
+        action="store_true",
+        # Deliberately flag-only (no env twin): credential-exposure
+        # consent is an operator argv decision, never something the
+        # environment around a scan of an untrusted repo can seed.
+        help="Consent to inject the raw Anthropic API key into the "
+             "network-enabled OpenAnt child's environment (direct "
+             "mode). Default posture routes the child's LLM calls "
+             "through the credential-isolating dispatcher gateway "
+             "(scoped, budget-capped, revocable token) whenever a "
+             "dispatcher route exists; a direct-credential run with "
+             "no dispatcher route refuses without this flag",
+    )
+    parser.add_argument(
         "--timeout-seconds",
         type=timeout_seconds_arg,
         metavar="N",
@@ -260,7 +274,10 @@ def _forecast_for_scan_dir(
         enhance_sizes=[sizes[u] for u in sorted(enhance_ids)],
         analyze_sizes=[sizes[u] for u in sorted(analyze_ids)],
         verify=args.verify,
-        model_id=effective_model_id(args.model),
+        model_id=effective_model_id(
+            args.model,
+            direct_consent=args.expose_api_key_to_child,
+        ),
     )
 
 
@@ -528,6 +545,7 @@ def _main_body(parser: argparse.ArgumentParser, args: argparse.Namespace,
         oa_config.language = args.language
         oa_config.workers = args.workers
         oa_config.gateway_budget_usd = args.gateway_budget
+        oa_config.direct_credential_consent = args.expose_api_key_to_child
         if args.timeout_seconds is not None:
             oa_config.timeout_seconds = args.timeout_seconds
         ctx["oa_config"] = oa_config
@@ -651,7 +669,8 @@ def _main_body(parser: argparse.ArgumentParser, args: argparse.Namespace,
         print("=" * 70)
         print(f"\n  Output:    {out_dir}")
         return 0
-    if resume_prior is not None or will_mint_gateway():
+    if resume_prior is not None or will_mint_gateway(
+            direct_consent=args.expose_api_key_to_child):
         try:
             if resume_prior is not None:
                 forecast = _forecast_for_scan_dir(oa_out, args,

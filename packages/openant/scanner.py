@@ -83,19 +83,21 @@ _OPENANT_LLM_PHASES = (
 _XDG_STAGE_DIRNAME = "openant-xdg"
 
 # ---------------------------------------------------------------------------
-# Dispatcher gateway (keyless hosts)
+# Dispatcher gateway (default credential posture)
 # ---------------------------------------------------------------------------
-# When the operator has NO direct Anthropic credential to hand the
-# child (no $ANTHROPIC_API_KEY, no key-bearing anthropic provider in
-# their OpenAnt config.json) but this process runs under the RAPTOR
-# LLM dispatcher (RAPTOR_LLM_SOCKET), the scan routes the child
-# through the dispatcher's loopback TCP plane instead of failing at
-# the child's startup probe: a scoped child token is minted for the
-# run and staged as a RAPTOR-owned provider entry the raptor-<model>
-# profile binds. Precedence: the DIRECT credential posture always
-# wins — the gateway is the fallback for hosts where the child would
-# otherwise have nothing, never a replacement for an operator-
-# configured key or custom provider.
+# When this process runs under the RAPTOR LLM dispatcher
+# (RAPTOR_LLM_SOCKET), the scan routes the child through the
+# dispatcher's loopback TCP plane: a scoped child token is minted for
+# the run and staged as a RAPTOR-owned provider entry the
+# raptor-<model> profile binds. This is the DEFAULT posture whenever
+# a dispatcher route exists — the child executes external code over
+# an untrusted repository with network access, so it never sees the
+# operator's raw credential unless the operator explicitly consents
+# (config.direct_credential_consent, the --expose-api-key-to-child
+# flag). Direct-credential hosts WITHOUT a dispatcher route refuse
+# rather than silently injecting the raw key; keyless hosts without a
+# dispatcher keep the pre-gateway behavior (the child's own startup
+# probe reports the missing credential).
 
 # RAPTOR-owned provider-entry key in the staged config. Like the
 # raptor-<model> profile key, this name is reserved: an operator
@@ -808,21 +810,26 @@ def _spawn_recheck_failure(core_path: Path) -> str | None:
     return None
 
 
-def will_mint_gateway() -> bool:
+def will_mint_gateway(direct_consent: bool = False) -> bool:
     """Whether a scan run in THIS process would route the child through
-    the dispatcher gateway (keyless posture + a dispatcher route).
-    Mirrors the mint predicate in :func:`_run_subprocess` — the
-    forecast line's "before minting" placement keys on it."""
-    return (not _operator_has_direct_credential()
-            and bool(os.environ.get("RAPTOR_LLM_SOCKET")))
+    the dispatcher gateway (a dispatcher route, and no operator consent
+    to direct-mode raw-key injection). Mirrors the mint predicate in
+    :func:`_run_subprocess` — the forecast line's "before minting"
+    placement keys on it. ``direct_consent`` is the run's
+    ``direct_credential_consent`` value (the
+    ``--expose-api-key-to-child`` flag)."""
+    if not os.environ.get("RAPTOR_LLM_SOCKET"):
+        return False
+    return not (direct_consent and _operator_has_direct_credential())
 
 
-def effective_model_id(model: str) -> str:
+def effective_model_id(model: str, direct_consent: bool = False) -> str:
     """The concrete model id this run's LLM calls will bill — the
-    gateway-routed id on keyless-with-dispatcher hosts (the install's
+    gateway-routed id on dispatcher-routed hosts (the install's
     Bedrock pin on that front), the pinned catalog id otherwise. This
-    is the id the cost forecast prices."""
-    if will_mint_gateway():
+    is the id the cost forecast prices. ``direct_consent`` as in
+    :func:`will_mint_gateway`."""
+    if will_mint_gateway(direct_consent):
         return _gateway_route(model)[1]
     return _OPENANT_MODEL_IDS[_normalized_model(model)]
 
@@ -928,12 +935,21 @@ def _run_subprocess(
     root — which also contains a `core/` package and would otherwise shadow it.
     """
     # Credential posture, decided ONCE and threaded through env build
-    # and staging: direct wins; the gateway serves the keyless-with-
-    # dispatcher shape; keyless WITHOUT a dispatcher keeps the
-    # pre-gateway behavior (the child's own startup probe reports the
-    # missing credential).
+    # and staging: the credential-isolating dispatcher gateway is the
+    # DEFAULT whenever a dispatcher route exists — the child scans an
+    # untrusted repository with network access, so it gets a scoped,
+    # budget-capped, revocable child token, never the operator's raw
+    # key. Direct mode (raw ANTHROPIC_API_KEY in the child env) runs
+    # only under explicit per-run consent
+    # (config.direct_credential_consent, the
+    # --expose-api-key-to-child flag). A direct credential with NO
+    # dispatcher route and NO consent refuses — silently injecting
+    # the raw key is the exposure this gate closes. Keyless WITHOUT a
+    # dispatcher keeps the pre-gateway behavior (the child's own
+    # startup probe reports the missing credential).
     gateway: dict[str, Any] | None = None
-    if not _operator_has_direct_credential():
+    direct = _operator_has_direct_credential()
+    if not (direct and config.direct_credential_consent):
         try:
             gateway = _mint_gateway_credentials(config)
         except RuntimeError as e:
@@ -945,6 +961,30 @@ def _run_subprocess(
                 f"OpenAnt dispatcher gateway unavailable: {e}",
                 hard_error=True,
             )
+        if gateway is None and direct:
+            return _empty_result(
+                "a direct Anthropic credential is configured but no "
+                "dispatcher route exists to isolate it "
+                "(RAPTOR_LLM_SOCKET unset) — refusing to inject the "
+                "raw API key into the network-enabled OpenAnt child. "
+                "Run through the RAPTOR launcher (the dispatcher "
+                "gateway hands the child a scoped token instead), or "
+                "consent to the exposure explicitly with "
+                "--expose-api-key-to-child (/agentic: "
+                "--openant-expose-api-key-to-child)",
+                hard_error=True,
+            )
+    if gateway is None and direct:
+        # Only reachable under explicit consent (the unconsented
+        # direct-without-dispatcher case refused above; consented runs
+        # skip the mint entirely) — say loudly that the raw key rides
+        # into the child for this run.
+        logger.warning(
+            "openant: --expose-api-key-to-child consent — injecting "
+            "the raw Anthropic API key into the network-enabled "
+            "OpenAnt child's environment (direct mode; the "
+            "dispatcher-gateway credential isolation is bypassed for "
+            "this run)")
     if config.gateway_budget_usd is not None and gateway is None:
         # The operator asked for a raised gateway cap but this run
         # never mints: loud, so a raise typed on a direct-credential
@@ -1256,9 +1296,12 @@ def _mint_gateway_credentials(config: OpenAntConfig) -> dict[str, Any] | None:
     (``RAPTOR_LLM_SOCKET`` unset — direct ``raptor_openant.py``
     invocations, or the launcher's env-direct fallback). Raises
     ``RuntimeError`` when the dispatcher is present but the loopback
-    enable or the mint is refused: with no direct credential the
-    child is doomed anyway, and the dispatcher's own error beats the
-    misleading auth failure the child would report.
+    enable or the mint is refused: the gateway is the default
+    credential posture, so a failed mint is a hard error at the
+    posture site — falling back to injecting the raw operator key
+    would silently convert a dispatcher hiccup into a credential
+    exposure, and on keyless hosts the dispatcher's own error beats
+    the misleading auth failure the child would report.
 
     The token is scoped to THIS scan: model allowlist pinned to the
     run's model id, TTL sized to the subprocess timeout plus slack,
@@ -1312,9 +1355,9 @@ def _mint_gateway_credentials(config: OpenAntConfig) -> dict[str, Any] | None:
         label="openant",
     )
     logger.info(
-        "openant: no direct Anthropic credential — routing the child "
-        "through the dispatcher gateway (token %s, budget $%.2f, "
-        "route %s, model %s)",
+        "openant: routing the child through the dispatcher gateway — "
+        "the raw operator credential stays out of the child env "
+        "(token %s, budget $%.2f, route %s, model %s)",
         minted["token_id"], float(minted.get("budget_usd") or 0.0),
         route, model_id,
     )
@@ -1461,8 +1504,12 @@ def _stage_llm_config(
     child token and its base_url the dispatcher's loopback plane
     (with the ``/anthropic`` provider prefix on the path — the SDK
     appends ``/v1/messages`` under it), so the profile binds
-    ``raptor-gateway`` instead. The staged copy may carry
-    operator-authored provider api_keys and/or the scoped token, so
+    ``raptor-gateway`` instead — and operator-authored provider
+    api_keys merged from the real config are NULLED in the staged
+    copy (non-credential fields kept), because the gateway posture's
+    whole point is that the child never sees an operator credential.
+    The staged copy may carry operator-authored provider api_keys
+    (direct posture) and/or the scoped token (gateway posture), so
     the directory is created 0700 and the file written 0600 — and the
     whole stage is scrubbed the moment the child exits
     (:func:`_scrub_stage`), with the token ALSO revoked server-side
@@ -1508,6 +1555,28 @@ def _stage_llm_config(
         if not isinstance(providers, dict):
             providers = {}
             raw["llm_providers"] = providers
+        # Gateway posture is the credential-ISOLATING posture: the
+        # child's only credential is the scoped token, so operator-
+        # authored api_keys merged from the real config.json must not
+        # ride into the child-readable staged copy (the child executes
+        # external code over an untrusted repo — a key in its config
+        # file is as exposed as one in its env). Provider entries keep
+        # their non-credential fields (base_url, thinking policy);
+        # only the key values are nulled, and only in the run-local
+        # copy — the operator's file is untouched.
+        _scrubbed = 0
+        if raw.pop("api_key", None):  # legacy top-level credential
+            _scrubbed += 1
+        for _entry in providers.values():
+            if isinstance(_entry, dict) and _entry.get("api_key"):
+                _entry["api_key"] = None
+                _scrubbed += 1
+        if _scrubbed:
+            logger.info(
+                "openant: removed %d operator credential(s) from the "
+                "run-local staged config — the gateway child's only "
+                "credential is its scoped dispatcher token",
+                _scrubbed)
         if _GATEWAY_PROVIDER_NAME in providers:
             # RAPTOR-owned namespace, like the raptor-<model> profile
             # key — replaced in the run-local copy only.

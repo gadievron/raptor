@@ -203,6 +203,20 @@ class OpenAntConfig:
     # direct-credential and dispatcher-less runs ignore it with a
     # loud note (the operator's own key and its limits apply there).
     gateway_budget_usd: Optional[float] = None
+    # Operator consent to inject the RAW Anthropic API key into the
+    # network-enabled OpenAnt child's environment (direct mode). The
+    # child executes external code over an untrusted repository with
+    # network access, so the default posture routes its LLM calls
+    # through the credential-isolating dispatcher gateway (a scoped,
+    # budget-capped, revocable child token) whenever a dispatcher
+    # route exists — even when a direct credential is configured.
+    # Without a dispatcher route, a direct-credential run REFUSES
+    # rather than silently exposing the key; this flag
+    # (--expose-api-key-to-child / --openant-expose-api-key-to-child)
+    # is the explicit per-run escape hatch. Argv-only by design: no
+    # env twin (credential-exposure consent must never be steerable
+    # from the environment around a scan of an untrusted repo).
+    direct_credential_consent: bool = False
 
     def validate(self) -> None:
         marker = self.core_path / _CORE_MARKER

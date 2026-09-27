@@ -2364,6 +2364,22 @@ Examples:
                              "tokens carry a finite budget by "
                              "contract. No effect on direct-credential "
                              "runs (noted loudly)")
+    parser.add_argument("--openant-expose-api-key-to-child",
+                        action="store_true",
+                        # Flag-only like /openant's
+                        # --expose-api-key-to-child: credential-
+                        # exposure consent is an operator argv
+                        # decision, never env-seeded.
+                        help="Consent to inject the raw Anthropic API "
+                             "key into the network-enabled OpenAnt "
+                             "child's environment (direct mode). "
+                             "Default posture routes the child's LLM "
+                             "calls through the credential-isolating "
+                             "dispatcher gateway (scoped, budget-"
+                             "capped, revocable token) whenever a "
+                             "dispatcher route exists; a direct-"
+                             "credential run with no dispatcher route "
+                             "refuses without this flag")
     parser.add_argument("--openant-timeout-seconds",
                         type=timeout_seconds_arg, metavar="N",
                         default=None,
@@ -3939,6 +3955,8 @@ def main() -> int:
             oa_config.level = getattr(args, "openant_level", "reachable")
             oa_config.gateway_budget_usd = getattr(
                 args, "openant_gateway_budget", None)
+            oa_config.direct_credential_consent = bool(getattr(
+                args, "openant_expose_api_key_to_child", False))
             _oa_timeout = getattr(args, "openant_timeout_seconds", None)
             if _oa_timeout is not None:
                 oa_config.timeout_seconds = _oa_timeout

@@ -1,11 +1,14 @@
-"""Dispatcher-gateway posture for the OpenAnt child (keyless hosts).
+"""Dispatcher-gateway posture for the OpenAnt child.
 
-Contract under test: when the operator has NO direct Anthropic
-credential to hand the child AND this process runs under the RAPTOR
-LLM dispatcher, the scan stages a RAPTOR-owned ``raptor-gateway``
+Contract under test: whenever this process runs under the RAPTOR LLM
+dispatcher, the scan stages a RAPTOR-owned ``raptor-gateway``
 provider entry (scoped child token as api_key, the dispatcher's
 loopback plane as base_url) and binds the ``raptor-<model>`` profile
-to it; the direct-credential posture keeps the pre-gateway behavior
+to it — the DEFAULT posture, direct credential configured or not.
+Direct mode (raw key in the child env) runs only under the explicit
+``direct_credential_consent`` flag; a direct credential with no
+dispatcher route refuses instead of silently injecting the key;
+keyless-without-dispatcher keeps the pre-gateway behavior
 byte-for-byte. Token lifecycle: minted scoped to the scan, present
 ONLY inside the staged config (which the scrub removes), revoked
 server-side on every exit path, and never logged or reported.
@@ -138,14 +141,18 @@ class _GatewayHarness(unittest.TestCase):
 
 
 class TestPostureSelection(_GatewayHarness):
-    """Direct wins; gateway is the keyless-with-dispatcher fallback;
+    """The gateway is the DEFAULT whenever a dispatcher route exists —
+    direct credential configured or not; direct mode runs only under
+    explicit consent; direct-without-dispatcher refuses without it;
     keyless-without-dispatcher keeps the pre-gateway behavior."""
 
     @staticmethod
     def _exit2(cmd, **kwargs):
         return subprocess.CompletedProcess(cmd, 2, stdout="", stderr="e")
 
-    def test_env_key_is_direct_even_with_dispatcher(self):
+    def test_env_key_with_dispatcher_mints_gateway_by_default(self):
+        """A configured direct credential no longer wins: without
+        consent the child rides the gateway and never sees the key."""
         captured = {}
 
         def fake_run(cmd, **kwargs):
@@ -157,6 +164,29 @@ class TestPostureSelection(_GatewayHarness):
             "ANTHROPIC_API_KEY": "sk-direct",
             "RAPTOR_LLM_SOCKET": "/nonexistent/llm.sock",
         })
+        self.assertEqual(len(self.mint_calls), 1)
+        profile = captured["staged"]["llm_configs"]["raptor-sonnet"]
+        for phase in _OPENANT_LLM_PHASES:
+            self.assertEqual(profile[phase]["provider"],
+                             _GATEWAY_PROVIDER_NAME)
+        self.assertNotIn("ANTHROPIC_API_KEY", captured["env"])
+
+    def test_env_key_with_dispatcher_and_consent_is_direct(self):
+        """--expose-api-key-to-child restores the pre-gate direct
+        posture byte-for-byte, and says so loudly."""
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            captured["staged"] = _staged_config(self.out)
+            return self._exit2(cmd)
+
+        self.config.direct_credential_consent = True
+        with self.assertLogs("raptor", level="WARNING") as logs:
+            self._run(fake_run, env_extra={
+                "ANTHROPIC_API_KEY": "sk-direct",
+                "RAPTOR_LLM_SOCKET": "/nonexistent/llm.sock",
+            })
         self.assertEqual(self.mint_calls, [])
         self.assertEqual(self.loopback_calls, [])
         profile = captured["staged"]["llm_configs"]["raptor-sonnet"]
@@ -165,8 +195,42 @@ class TestPostureSelection(_GatewayHarness):
         self.assertNotIn("llm_providers", captured["staged"])
         self.assertEqual(captured["env"].get("ANTHROPIC_API_KEY"),
                          "sk-direct")
+        self.assertTrue(any("expose-api-key-to-child" in line
+                            for line in logs.output))
 
-    def test_operator_config_key_is_direct(self):
+    def test_direct_without_dispatcher_refuses_without_consent(self):
+        """The exposure this gate closes: direct credential, no
+        dispatcher route — the raw key must not be silently injected
+        into the network-enabled child."""
+        def never_run(cmd, **kwargs):
+            self.fail("child spawned despite the refusal")
+
+        result = self._run(never_run, env_extra={
+            "ANTHROPIC_API_KEY": "sk-direct",
+        })
+        self.assertTrue(result["hard_error"])
+        self.assertIn("refusing to inject", result["error"])
+        self.assertIn("--expose-api-key-to-child", result["error"])
+        self.assertIn("--openant-expose-api-key-to-child",
+                      result["error"])
+        self.assertEqual(self.mint_calls, [])
+
+    def test_direct_without_dispatcher_runs_under_consent(self):
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return self._exit2(cmd)
+
+        self.config.direct_credential_consent = True
+        self._run(fake_run, env_extra={
+            "ANTHROPIC_API_KEY": "sk-direct",
+        })
+        self.assertEqual(self.mint_calls, [])
+        self.assertEqual(captured["env"].get("ANTHROPIC_API_KEY"),
+                         "sk-direct")
+
+    def test_operator_config_key_mints_gateway_by_default(self):
         xdg = self.base / "xdg"
         cfg = xdg / "openant" / "config.json"
         cfg.parent.mkdir(parents=True)
@@ -177,6 +241,36 @@ class TestPostureSelection(_GatewayHarness):
         }))
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}):
             self.assertTrue(_operator_has_direct_credential())
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["staged"] = _staged_config(self.out)
+            return self._exit2(cmd)
+
+        self._run(fake_run, env_extra={
+            "XDG_CONFIG_HOME": str(xdg),
+            "RAPTOR_LLM_SOCKET": "/nonexistent/llm.sock",
+        })
+        self.assertEqual(len(self.mint_calls), 1)
+        # The operator's config key must not ride into the
+        # child-readable staged copy on the gateway posture — the
+        # entry survives (non-credential fields) but the key is
+        # nulled; the operator file is untouched.
+        staged_anthropic = captured["staged"]["llm_providers"]["anthropic"]
+        self.assertIsNone(staged_anthropic["api_key"])
+        self.assertNotIn("sk-op-key", json.dumps(captured["staged"]))
+        self.assertIn("sk-op-key", cfg.read_text())
+
+    def test_operator_config_key_is_direct_under_consent(self):
+        xdg = self.base / "xdg"
+        cfg = xdg / "openant" / "config.json"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text(json.dumps({
+            "$schema_version": 2,
+            "llm_providers": {"anthropic": {
+                "type": "anthropic", "api_key": "sk-op-key"}},
+        }))
+        self.config.direct_credential_consent = True
         self._run(self._exit2, env_extra={
             "XDG_CONFIG_HOME": str(xdg),
             "RAPTOR_LLM_SOCKET": "/nonexistent/llm.sock",
@@ -433,6 +527,9 @@ class TestGatewayBudgetOverride(_GatewayHarness):
 
     def test_direct_posture_ignores_the_override_loudly(self):
         self.config.gateway_budget_usd = 100.0
+        # Direct posture needs the explicit consent flag now — the
+        # gateway is the default whenever a dispatcher route exists.
+        self.config.direct_credential_consent = True
         with self.assertLogs("raptor", level="WARNING") as logs:
             self._run(self._exit2, env_extra={
                 "ANTHROPIC_API_KEY": "sk-direct",
@@ -516,6 +613,64 @@ class TestGatewayBudgetArgValidation(unittest.TestCase):
                 parser.parse_args(
                     ["--repo", "/x", "--openant-gateway-budget", "nan"])
         self.assertEqual(ctx.exception.code, 2)
+
+
+class TestDirectConsentFlagBinding(unittest.TestCase):
+    """Both CLI surfaces bind the consent flag, default-off, and the
+    posture predicates honour it."""
+
+    def test_openant_cli_binds_the_flag_default_off(self):
+        import raptor_openant
+        parser = raptor_openant._build_parser()
+        self.assertFalse(parser.parse_args([]).expose_api_key_to_child)
+        ns = parser.parse_args(["--expose-api-key-to-child"])
+        self.assertTrue(ns.expose_api_key_to_child)
+
+    def test_agentic_cli_binds_the_flag_default_off(self):
+        import raptor_agentic
+        parser = raptor_agentic.build_parser()
+        ns = parser.parse_args(["--repo", "/x"])
+        self.assertFalse(ns.openant_expose_api_key_to_child)
+        ns = parser.parse_args(
+            ["--repo", "/x", "--openant-expose-api-key-to-child"])
+        self.assertTrue(ns.openant_expose_api_key_to_child)
+
+    def test_will_mint_gateway_honours_consent(self):
+        from packages.openant.scanner import will_mint_gateway
+        with patch.dict(os.environ, {
+            "RAPTOR_LLM_SOCKET": "/nonexistent/llm.sock",
+            "ANTHROPIC_API_KEY": "sk-direct",
+        }):
+            self.assertTrue(will_mint_gateway())
+            self.assertFalse(will_mint_gateway(direct_consent=True))
+        # No dispatcher route: never mints, consent or not.
+        self.assertFalse(will_mint_gateway())
+        self.assertFalse(will_mint_gateway(direct_consent=True))
+
+    def test_consent_without_a_credential_still_mints(self):
+        """The flag consents to exposing a credential that exists; a
+        keyless dispatcher host keeps the gateway."""
+        from packages.openant.scanner import will_mint_gateway
+        with patch.dict(os.environ, {
+            "RAPTOR_LLM_SOCKET": "/nonexistent/llm.sock",
+        }):
+            self.assertTrue(will_mint_gateway(direct_consent=True))
+
+    def test_effective_model_id_follows_the_posture(self):
+        from packages.openant.scanner import effective_model_id
+        with patch.dict(os.environ, {
+            "RAPTOR_LLM_SOCKET": "/nonexistent/llm.sock",
+            "ANTHROPIC_API_KEY": "sk-direct",
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "ANTHROPIC_MODEL": "anthropic.claude-fable-5",
+        }):
+            # Gateway (default): the route-resolved id.
+            self.assertEqual(effective_model_id("sonnet"),
+                             "anthropic.claude-fable-5")
+            # Consented direct: the pinned catalog id.
+            self.assertEqual(
+                effective_model_id("sonnet", direct_consent=True),
+                _OPENANT_MODEL_IDS["sonnet"])
 
 
 class TestTimeoutOverride(_GatewayHarness):

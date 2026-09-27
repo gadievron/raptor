@@ -96,6 +96,7 @@ operator's behalf.
 | `--workers <n>` | `4` | Parallel analysis workers |
 | `--gateway-budget <usd>` | `$25` | Per-run raise of the dispatcher-gateway spend cap on gateway-minted runs (any positive finite USD; the anti-runaway request cap scales with it, never below 10k). No uncapped spelling — dispatcher child tokens carry a finite budget by contract. Argv-only (no env twin); no effect on direct-credential runs (noted loudly) |
 | `--timeout-seconds <n>` | `1800` | Wall-clock deadline for the OpenAnt child (hard-killed at it, every credential posture). Positive integer, no ceiling; on gateway-minted runs the token TTL follows it (timeout + 600s slack), so raising it never strands a live child on an expired token |
+| `--expose-api-key-to-child` | off | Consent to inject the raw Anthropic API key into the network-enabled OpenAnt child's env (direct mode). The default posture routes the child through the credential-isolating dispatcher gateway whenever a dispatcher route exists; a direct-credential run with NO dispatcher route refuses without this flag. Argv-only (no env twin). `/agentic` spelling: `--openant-expose-api-key-to-child` |
 | `--max-findings <n>` | `50` | Cap findings rendered in the markdown report (severity-first, truncation stated; must be >= 1). `openant_findings.json` is never capped |
 | `--resume <run-dir>` | off | Complete a truncated prior run, paying only for the remainder (see § Resume) |
 | `--forecast` | off | Free phases only (parse + unit census): print a pre-spend cost forecast and exit with $0 LLM spend (report `outcome=forecast_only` — not a scan, no findings artifact). Combines with `--resume` to price completing a truncated run |
@@ -217,16 +218,21 @@ Zig) are auto-detected but cannot be forced — an out-of-set
 
 ## Credentials
 
-No setup is needed beyond RAPTOR's own: with a direct credential
-(`ANTHROPIC_API_KEY` in env, or a key-bearing `anthropic` provider in
-the operator's OpenAnt `config.json`) the child calls the Anthropic
-API itself; on a keyless host running under the RAPTOR LLM dispatcher
-the scan automatically routes the child through a dispatcher child
-token on the loopback gateway — spend-capped ($25 default; raise per
-run with `--gateway-budget`), model-pinned, TTL'd to the scan, revoked
-at exit. Direct always wins; the gateway is the fallback. Keyless *and* dispatcher-less runs fail honestly at the
-child's startup credential probe. See docs/environment.md § OpenAnt
-integration for the full posture rules.
+No setup is needed beyond RAPTOR's own: under the RAPTOR LLM
+dispatcher the scan routes the child through a dispatcher child token
+on the loopback gateway — spend-capped ($25 default; raise per run
+with `--gateway-budget`), model-pinned, TTL'd to the scan, revoked at
+exit. The gateway is the DEFAULT whenever a dispatcher route exists —
+even with a direct credential (`ANTHROPIC_API_KEY` in env, or a
+key-bearing `anthropic` provider in the operator's OpenAnt
+`config.json`) configured, because the child executes external code
+over an untrusted repository with network access. Direct mode (the
+raw key forwarded, the child calling the Anthropic API itself) runs
+only under the explicit `--expose-api-key-to-child` consent flag; a
+direct-credential run with NO dispatcher route refuses instead of
+silently injecting the key. Keyless *and* dispatcher-less runs fail
+honestly at the child's startup credential probe. See
+docs/environment.md § OpenAnt integration for the full posture rules.
 
 ---
 
