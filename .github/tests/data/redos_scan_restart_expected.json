@@ -2171,7 +2171,7 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/security/report_writer_audit.py\u001f_ALLOWLIST[404]": {
+  "core/security/report_writer_audit.py\u001f_ALLOWLIST[409]": {
    "digests": [
     "c315f8693625"
    ],

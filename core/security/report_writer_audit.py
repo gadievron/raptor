@@ -814,6 +814,24 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
         ),
     ),
     AllowlistEntry(
+        file="core/engagement/router.py",
+        func_name="route_hypotheses",
+        kind="unsanitised_llm_value",
+        detail="coll",
+        audit_note=(
+            "the fired flow is miss_rows.extend(coll.miss_rows) "
+            "feeding record_fid_misses (the addrmap miss ledger, an "
+            "atomic save_json write): each row is minted in-module "
+            "from constant reason/producer strings plus fields the "
+            "intake loader already escaped and charset-validated "
+            "(seed_id/file/fid) or _esc()-capped at mint (function "
+            "names). coll reads as taint because it also aggregates "
+            "candidate seeds derived from target bytes; the terminal "
+            "seam (libexec/raptor-engage-route) still routes every "
+            "record-derived string through sanitise_for_terminal"
+        ),
+    ),
+    AllowlistEntry(
         file="libexec/raptor-audit",
         func_name="cmd_rules",
         kind="unsanitised_llm_value",

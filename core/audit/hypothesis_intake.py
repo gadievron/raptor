@@ -314,12 +314,21 @@ def _load_one_record(
 
 def load_seed_files(
     paths: list[Path],
+    *,
+    max_records: int = MAX_SEED_RECORDS,
 ) -> tuple[list[SeedRecord], dict[str, int], list[dict[str, str]]]:
     """Load and validate seed files.
 
     Returns ``(seeds, skip_counts, sources)``. Every failure mode is
     a counted skip, never an exception: the intake is an enrichment
     and a hostile or truncated file must cost only its own records.
+
+    ``max_records`` bounds the validated pool per CALL, first-come
+    (the residue is the ``over_cap`` skip). The default is the
+    intake's own acceptance cap; a caller that ranks BEFORE capping
+    (the engagement router) raises it so first-come truncation cannot
+    evict ranked signal records — it stays a flood guard, never a
+    quality claim.
 
     Each ``sources`` entry content-binds the receipt to what was
     actually read: ``{"id", "path", "sha256"}``, where ``id`` is
@@ -388,7 +397,7 @@ def load_seed_files(
             "sha256": file_sha,
         })
         for index, raw in enumerate(records):
-            if len(seeds) >= MAX_SEED_RECORDS:
+            if len(seeds) >= max_records:
                 skips["over_cap"] = (
                     skips.get("over_cap", 0) + len(records) - index
                 )
