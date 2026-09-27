@@ -577,6 +577,17 @@ class ReviewJournalEntry:
     # reuse refuses provisional rows — the verdict is not settled.
     # Additive; absent on non-provisional rows.
     provisional: bool | None = None
+    # ``domain_slice_hash``: fingerprint of the per-function
+    # domain-model prompt slice this review was briefed with
+    # (core.audit.context.domain_slice_hash_for — the security
+    # context, bug patterns, dynamic primers, and primer-conditional
+    # domain-knowledge block build_context injected). Lets the gap
+    # fold's context-staleness gate keep a verdict reuse-eligible
+    # across a whole-model regeneration when THIS function's injected
+    # slice is byte-identical; a missing or mismatching stamp keeps
+    # the whole-model-hash behaviour (fail toward re-review).
+    # Additive; absent on pre-field rows and model-less runs.
+    domain_slice_hash: str | None = None
     # ``integrity``: HMAC provenance token over the row's canonical
     # JSON (this field excluded), stamped by append_entry. The gap
     # fold verifies before granting verdict-reuse authority; see
@@ -2638,6 +2649,7 @@ def _entry_from_dict(raw: dict[str, Any]) -> ReviewJournalEntry:
         seed_provenance=raw.get("seed_provenance"),
         seed_rereview=raw.get("seed_rereview"),
         provisional=raw.get("provisional"),
+        domain_slice_hash=raw.get("domain_slice_hash"),
         integrity=raw.get("integrity"),
         body_offload=raw.get("body_offload"),
         schema_version=version,

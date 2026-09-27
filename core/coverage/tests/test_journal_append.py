@@ -919,3 +919,56 @@ class TestNonFiniteWriteParity:
         loaded = load_entries(tmp_path)
         assert len(loaded) == 1
         assert loaded[0].confidence == 0.75
+
+
+class TestDomainSliceHashField:
+    """``domain_slice_hash`` round-trips like every additive field."""
+
+    def test_round_trips_and_stays_mac_verified(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.coverage.journal_mac import ROW_VERIFIED, entry_provenance
+        entry = _entry(1)
+        entry.domain_slice_hash = "ab" * 32
+        append_entry(tmp_path, entry)
+        loaded = load_entries(tmp_path)
+        assert len(loaded) == 1
+        assert loaded[0].domain_slice_hash == "ab" * 32
+        # The stamp is MAC-covered row content: a verified row's slice
+        # stamp is as authentic as its verdict.
+        assert entry_provenance(loaded[0]) == ROW_VERIFIED
+
+    def test_absent_on_legacy_rows(self, tmp_path: Path) -> None:
+        append_entry(tmp_path, _entry(2))
+        loaded = load_entries(tmp_path)
+        assert loaded[0].domain_slice_hash is None
+        assert "domain_slice_hash" not in loaded[0].to_dict()
+
+    def test_survives_index_merge(self, tmp_path: Path) -> None:
+        from core.coverage.journal import load_index_full, merge_into_index
+        project = tmp_path / "project"
+        run_dir = project / "run-1"
+        run_dir.mkdir(parents=True)
+        entry = _entry(3)
+        entry.domain_slice_hash = "cd" * 32
+        append_entry(run_dir, entry)
+        merge_into_index(project, run_dir)
+        merged = list(load_index_full(project).values())
+        assert len(merged) == 1
+        assert merged[0].domain_slice_hash == "cd" * 32
+
+    def test_tampered_stamp_demotes_row(self, tmp_path: Path) -> None:
+        # Editing the stamp on a stamped row must break the MAC —
+        # the reuse gate only ever sees verified rows, so a rewritten
+        # slice stamp cannot buy reuse authority.
+        from core.coverage.journal_mac import ROW_TAMPERED, entry_provenance
+        entry = _entry(4)
+        entry.domain_slice_hash = "ef" * 32
+        append_entry(tmp_path, entry)
+        journal = tmp_path / "review-journal.jsonl"
+        text = journal.read_text(encoding="utf-8")
+        journal.write_text(
+            text.replace("ef" * 32, "00" * 32), encoding="utf-8")
+        loaded = load_entries(tmp_path)
+        assert loaded[0].domain_slice_hash == "00" * 32
+        assert entry_provenance(loaded[0]) == ROW_TAMPERED
