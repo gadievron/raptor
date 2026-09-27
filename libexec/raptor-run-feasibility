@@ -295,6 +295,13 @@ def main():
                             for p in (assessment.exploitation_paths or [])
                         ],
                     }
+                    # A prior binary-less pass leaves skipped-era
+                    # advice ("Binary not found ... Provide --binary")
+                    # that contradicts status=analyzed once the merge
+                    # above keeps it — drop what this analysis
+                    # supersedes.
+                    for stale in ("note", "guidance"):
+                        finding["feasibility"].pop(stale, None)
                     # Mechanical-provenance stamp: consumers (prepare_F,
                     # the report chokepoint) verify this before mapping
                     # the verdict into final_status — an unstamped
