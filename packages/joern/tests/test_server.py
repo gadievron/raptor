@@ -10,6 +10,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from packages.joern.server import (
+    _LEASE_MISMATCH,
+    _LEASE_VAL,
+    _LEASE_CONFLICT_ERROR,
     JoernServer,
     _find_free_port,
     _repl_bridge_path,
@@ -1205,3 +1208,160 @@ class TestTaintExistsErrorsChannel:
             assert srv.run_taint_exists_query(
                 "src_fn", "sink_fn", errors_out=errors) is True
         assert errors == []
+
+
+class TestGraphIdentityLease:
+    """Shared-server graph-swap defence: every import declares a
+    per-import lease val in the same compilation unit, every query
+    prepends a require on this handle's nonce, and a detected swap
+    pays one bounded re-import instead of returning evidence about a
+    sibling session's graph."""
+
+    def _cpg_file(self, tmp_path):
+        p = tmp_path / "cpg.bin"
+        p.write_bytes(b"stub")
+        return p
+
+    def _recording_post(self, responses):
+        posted = []
+
+        def fake(self_srv, query_str, *, timeout=30):
+            posted.append(query_str)
+            return responses.pop(0)
+
+        return posted, fake
+
+    # import_cpg consumes exactly three posts: the import+lease
+    # compilation unit, the cpg-binding probe, and the dataflow
+    # warmup (the second warmup in TestJoernServerImportCpg's
+    # fixtures belongs to start()'s _warmup_imports, never reached
+    # through import_cpg).
+    _IMPORT_OK = [
+        {"success": True, "stdout": "workspace..."},   # import unit
+        {"success": True, "stdout": 'val res0: String = "42"'},
+        {"success": True, "stdout": "warmup"},
+    ]
+
+    def test_import_declares_lease_in_import_unit(self, tmp_path):
+        srv = JoernServer()
+        srv._base_url = "http://127.0.0.1:9999"
+        posted, fake = self._recording_post(list(self._IMPORT_OK))
+        with patch.object(JoernServer, "_post_sync", fake):
+            assert srv.import_cpg(self._cpg_file(tmp_path)) is True
+        assert 'importCpg("' in posted[0]
+        assert f'val {_LEASE_VAL} = "' in posted[0]
+        assert srv._graph_lease is not None
+        # The nonce the handle remembers is the one the unit declared.
+        assert f'val {_LEASE_VAL} = "{srv._graph_lease}"' in posted[0]
+
+    def test_query_prepends_guard_and_keeps_original_query(self):
+        srv = JoernServer()
+        srv._base_url = "http://127.0.0.1:9999"
+        srv._cpg_loaded = True
+        srv._graph_lease = "aa" * 16
+        posted, fake = self._recording_post(
+            [{"success": True, "stdout": "val res0: Int = 1"}])
+        with patch.object(JoernServer, "_post_sync", fake):
+            result = srv.query("cpg.method.name.l")
+        assert posted[0].startswith(
+            f'require({_LEASE_VAL} == "{"aa" * 16}", "{_LEASE_MISMATCH}")\n')
+        assert posted[0].endswith("cpg.method.name.l")
+        assert result.query == "cpg.method.name.l"
+        assert not result.errors
+
+    def test_query_without_lease_runs_unguarded(self):
+        # Pre-lease compatibility (direction two): a handle that never
+        # imported (or a lifecycle-reused server loaded by an old
+        # RAPTOR) posts the query verbatim, exactly as before.
+        srv = JoernServer()
+        srv._base_url = "http://127.0.0.1:9999"
+        srv._cpg_loaded = True
+        posted, fake = self._recording_post(
+            [{"success": True, "stdout": "val res0: Int = 1"}])
+        with patch.object(JoernServer, "_post_sync", fake):
+            srv.query("cpg.method.name.l")
+        assert posted[0] == "cpg.method.name.l"
+
+    def test_swap_classifier_matches_thrown_forms_only(self):
+        thrown = ("java.lang.IllegalArgumentException: requirement "
+                  f"failed: {_LEASE_MISMATCH}")
+        assert JoernServer._lease_swapped(thrown, "") is True
+        assert JoernServer._lease_swapped("", thrown) is True
+        # A sibling running a pre-lease RAPTOR imported without
+        # declaring the val at all.
+        assert JoernServer._lease_swapped(
+            f"-- [E006] Not Found Error: Not found: {_LEASE_VAL}", "",
+        ) is True
+        # An ordinary compile error can ECHO the guard line; the bare
+        # marker must not classify as a swap or every such error pays
+        # a re-import.
+        echo = (f'require({_LEASE_VAL} == "ab", "{_LEASE_MISMATCH}")\n'
+                "-- [E006] Not Found Error: Not found: cpgg")
+        assert JoernServer._lease_swapped(echo, "") is False
+        assert JoernServer._lease_swapped("val res0: Int = 1", "") is False
+
+    def test_swap_recovers_reimports_and_retries_once(self, tmp_path):
+        srv = JoernServer()
+        srv._base_url = "http://127.0.0.1:9999"
+        posted, fake = self._recording_post(list(self._IMPORT_OK) + [
+            # attempt 0: sibling swapped the graph — guard fired
+            {"success": False,
+             "stderr": ("java.lang.IllegalArgumentException: "
+                        f"requirement failed: {_LEASE_MISMATCH}")},
+        ] + list(self._IMPORT_OK) + [
+            # attempt 1 under the fresh lease
+            {"success": True, "stdout": "val res0: Int = 7"},
+        ])
+        with patch.object(JoernServer, "_post_sync", fake):
+            assert srv.import_cpg(self._cpg_file(tmp_path)) is True
+            first_lease = srv._graph_lease
+            result = srv.query("cpg.method.name.l")
+        assert not result.errors
+        assert srv._lease_reimports == 1
+        assert srv._graph_lease != first_lease
+        # The retry was guarded with the NEW nonce.
+        assert posted[-1].startswith(
+            f'require({_LEASE_VAL} == "{srv._graph_lease}"')
+
+    def test_reimport_cap_degrades_loudly_then_fails_fast(self, tmp_path):
+        from packages.joern.server import _LEASE_REIMPORT_CAP
+
+        srv = JoernServer()
+        srv._base_url = "http://127.0.0.1:9999"
+        posted, fake = self._recording_post(list(self._IMPORT_OK) + [
+            {"success": False,
+             "stderr": ("java.lang.IllegalArgumentException: "
+                        f"requirement failed: {_LEASE_MISMATCH}")},
+        ])
+        with patch.object(JoernServer, "_post_sync", fake):
+            assert srv.import_cpg(self._cpg_file(tmp_path)) is True
+            srv._lease_reimports = _LEASE_REIMPORT_CAP  # cap consumed
+            result = srv.query("cpg.method.name.l")
+            n_posted = len(posted)
+            # Degraded: later queries fail fast without posting.
+            result2 = srv.query("cpg.method.name.l")
+        assert result.errors == [_LEASE_CONFLICT_ERROR]
+        assert srv._lease_exhausted is True
+        assert result2.errors == [_LEASE_CONFLICT_ERROR]
+        assert len(posted) == n_posted
+
+    def test_ordinary_failure_does_not_reimport(self, tmp_path):
+        srv = JoernServer()
+        srv._base_url = "http://127.0.0.1:9999"
+        posted, fake = self._recording_post(list(self._IMPORT_OK) + [
+            {"success": False, "stderr": "value foo is not a member"},
+        ])
+        with patch.object(JoernServer, "_post_sync", fake):
+            assert srv.import_cpg(self._cpg_file(tmp_path)) is True
+            result = srv.query("cpg.method.foo.l")
+        assert result.errors
+        assert srv._lease_reimports == 0
+
+    def test_close_workspace_clears_lease(self):
+        srv = JoernServer()
+        srv._cpg_loaded = True
+        srv._graph_lease = "bb" * 16
+        with patch.object(JoernServer, "_post_sync",
+                          return_value={"success": True}):
+            srv.close_workspace()
+        assert srv._graph_lease is None

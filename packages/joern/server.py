@@ -155,6 +155,44 @@ _RESTARTING_ERROR = (
     "(no Joern evidence for this claim)"
 )
 
+# Graph-identity lease (shared-server graph-swap defence). The Joern
+# server holds ONE ``cpg`` binding per REPL session, and the lifecycle
+# layer shares one server across concurrent RAPTOR sessions: a
+# sibling's importCpg silently replaces the graph THIS handle's
+# queries run against — evidence-grade taint answers then describe the
+# WRONG CODEBASE with no error anywhere (observed live: a raptor-repo
+# CPG swapped under a kernel audit's queries). The lease pins graph
+# identity: every import declares ``val raptorGraphLease = "<nonce>"``
+# in the SAME compilation unit as the import (the REPL is
+# single-threaded, so the unit is atomic — no window where the new
+# graph carries the old lease), and every query() prepends a
+# ``require`` on this handle's nonce. A sibling's import re-declares
+# the val, the require fails with the marker below, and the handle
+# re-imports its own CPG instead of returning wrong-graph evidence.
+_LEASE_MISMATCH = "raptor-graph-lease-mismatch"
+_LEASE_VAL = "raptorGraphLease"
+
+# Per-handle cap on lease-triggered re-imports. Two sessions actively
+# querying different graphs through one server would otherwise
+# re-import forever, each swap-in costing a full CPG deserialise
+# (minutes at kernel scale) — an import ping-pong livelock that burns
+# the run's whole wall clock making no progress. At the cap the handle
+# degrades LOUDLY (every later query fails with the conflict error)
+# rather than silently: the operator sees the contention instead of
+# paying for it. Higher tolerates more transient overlap (a sibling's
+# one-off import) at more re-import cost; lower turns a single benign
+# overlap into a dead Joern tier for the run. 3 covers the observed
+# benign case (one sibling swapping once, plus margin) without funding
+# a livelock.
+_LEASE_REIMPORT_CAP = 3
+
+_LEASE_CONFLICT_ERROR = (
+    "graph-lease conflict: a concurrent session keeps replacing the "
+    "shared Joern server's graph (re-import cap reached) — failing "
+    "fast (no Joern evidence for this claim); re-run when the sibling "
+    "finishes, or give this run a private server"
+)
+
 # Poll interval for taint-layer waiters riding out a restart window
 # (see ``_retry_once_after_restart``). Pure polling on existing state —
 # no lock a restart could wedge. Smaller burns CPU re-checking a
@@ -834,6 +872,22 @@ class JoernServer:
         # across the recovery and silently remove its lane for the
         # rest of the run.
         self._cpg_load_epoch: int = 0
+        # Graph-identity lease nonce for the graph THIS handle
+        # imported (see the _LEASE_* constants). None until the first
+        # successful import — pre-lease servers (a lifecycle-reused
+        # server whose graph an OLD RAPTOR imported) run unguarded,
+        # exactly today's behaviour.
+        self._graph_lease: str | None = None
+        # Lease-triggered re-imports consumed (cap:
+        # _LEASE_REIMPORT_CAP) and the exhausted marker that fails
+        # every later query fast instead of funding an import
+        # ping-pong against a live sibling.
+        self._lease_reimports: int = 0
+        self._lease_exhausted = False
+        # Serialises lease recovery across this process's sweep
+        # threads: N threads observing the same swap must pay ONE
+        # re-import, not N.
+        self._lease_recover_lock = threading.Lock()
 
     def start(self) -> None:
         """Boot the Joern server and wait for readiness."""
@@ -1149,6 +1203,7 @@ class JoernServer:
         self._port = None
         self._base_url = None
         self._cpg_loaded = False
+        self._graph_lease = None
         # Per-boot credential — a fresh one is generated on start().
         self._auth_user = None
         self._auth_password = None
@@ -1452,7 +1507,16 @@ class JoernServer:
             return False
 
         safe_path = _escape_scala_string(str(cpg_path))
-        query = f'importCpg("{safe_path}")'
+        # Import and lease declaration in ONE compilation unit: the
+        # REPL executes units atomically, so there is no window where
+        # the new graph is bound while the val still carries a
+        # sibling's nonce (or vice versa). A separate follow-up post
+        # would leave exactly that window.
+        lease = secrets.token_hex(16)
+        query = (
+            f'importCpg("{safe_path}")\n'
+            f'val {_LEASE_VAL} = "{lease}"'
+        )
 
         logger.info("loading CPG: %s", cpg_path)
         t0 = time.monotonic()
@@ -1481,6 +1545,7 @@ class JoernServer:
         logger.info("CPG imported into Joern server in %.1fs", elapsed)
         self._cpg_loaded = True
         self._cpg_load_epoch += 1
+        self._graph_lease = lease
         self._cpg_path = cpg_path
         # The session now holds this file's graph, not any earlier
         # importCode tree — restart() must re-import from cpg_path.
@@ -1525,6 +1590,12 @@ class JoernServer:
                 (self._last_post_error or probe_out or "no response")[:300],
             )
             self._cpg_loaded = False
+            # The failed import's compilation unit may still have
+            # re-declared the lease val server-side; this handle's
+            # remembered nonce no longer describes anything. Cleared
+            # so the (already-gated) handle doesn't later misread the
+            # situation as a sibling swap.
+            self._graph_lease = None
             return False
         return True
 
@@ -1543,7 +1614,13 @@ class JoernServer:
             return False
 
         safe_path = _escape_scala_string(str(target_path))
-        query = f'importCode("{safe_path}")'
+        # One compilation unit with the lease declaration — see
+        # import_cpg for the atomicity argument.
+        lease = secrets.token_hex(16)
+        query = (
+            f'importCode("{safe_path}")\n'
+            f'val {_LEASE_VAL} = "{lease}"'
+        )
 
         logger.info("importing code: %s", target_path)
         t0 = time.monotonic()
@@ -1570,6 +1647,7 @@ class JoernServer:
         logger.info("code imported in %.1fs", elapsed)
         self._cpg_loaded = True
         self._cpg_load_epoch += 1
+        self._graph_lease = lease
         self._code_path = target_path
         self._cpg_path = None
         self._last_import_timeout = timeout
@@ -1623,51 +1701,75 @@ class JoernServer:
                 errors=["no CPG loaded (call import_cpg first)"],
             )
 
+        if self._lease_exhausted:
+            return JoernResult(query=cpgql, errors=[_LEASE_CONFLICT_ERROR])
+
         if validate:
             err = _validate_query(cpgql, check_length=check_length)
             if err:
                 return JoernResult(query=cpgql, errors=[err])
 
-        t0 = time.monotonic()
-        resp = self._post_sync(cpgql, timeout=timeout)
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        # Two attempts at most: attempt 0 runs against the current
+        # lease; a detected swap pays ONE bounded recovery re-import
+        # and attempt 1 re-runs under the fresh lease. A swap on
+        # attempt 1 falls through to the ordinary failure path — a
+        # sibling that actively keeps importing gets an error result,
+        # never wrong-graph evidence and never an unbounded loop here.
+        seen_epoch = self._cpg_load_epoch
+        for attempt in (0, 1):
+            t0 = time.monotonic()
+            resp = self._post_sync(
+                self._lease_guard_prefix() + cpgql, timeout=timeout,
+            )
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
 
-        if resp is None:
-            detail = self._last_post_error or "server did not respond"
-            # A timeout means the single-threaded REPL is stuck on this
-            # query (or a prior one).  Restart so subsequent queries
-            # don't queue behind the stuck one indefinitely.
-            if "timed out" in detail and not no_restart:
-                self.restart()
+            if resp is None:
+                detail = self._last_post_error or "server did not respond"
+                # A timeout means the single-threaded REPL is stuck on
+                # this query (or a prior one).  Restart so subsequent
+                # queries don't queue behind the stuck one indefinitely.
+                if "timed out" in detail and not no_restart:
+                    self.restart()
+                return JoernResult(
+                    query=cpgql,
+                    errors=[detail],
+                    elapsed_ms=elapsed_ms,
+                )
+
+            stdout = resp.get("stdout", "")
+            stderr = resp.get("stderr", "")
+            success = resp.get("success", True)
+
+            if attempt == 0 and self._lease_swapped(stdout, stderr):
+                if not self._recover_graph_lease(seen_epoch):
+                    return JoernResult(
+                        query=cpgql,
+                        errors=[_LEASE_CONFLICT_ERROR],
+                        elapsed_ms=elapsed_ms,
+                    )
+                seen_epoch = self._cpg_load_epoch
+                continue
+
+            errors: list[str] = []
+            if not success:
+                detail = stderr[:500] or stdout[:500]
+                errors.append(f"query failed: {detail}")
+            elif _has_scala_error(stdout):
+                errors.append(f"query failed: {_strip_ansi(stdout)[:500]}")
+
+            flows, parse_errors = _parse_output(stdout)
+            errors.extend(parse_errors)
+            dark = _parse_dark_methods(stdout)
+
             return JoernResult(
                 query=cpgql,
-                errors=[detail],
+                flows=flows,
+                raw_output=stdout,
+                errors=errors,
                 elapsed_ms=elapsed_ms,
+                dark_methods=dark,
             )
-
-        stdout = resp.get("stdout", "")
-        stderr = resp.get("stderr", "")
-        success = resp.get("success", True)
-
-        errors: list[str] = []
-        if not success:
-            detail = stderr[:500] or stdout[:500]
-            errors.append(f"query failed: {detail}")
-        elif _has_scala_error(stdout):
-            errors.append(f"query failed: {_strip_ansi(stdout)[:500]}")
-
-        flows, parse_errors = _parse_output(stdout)
-        errors.extend(parse_errors)
-        dark = _parse_dark_methods(stdout)
-
-        return JoernResult(
-            query=cpgql,
-            flows=flows,
-            raw_output=stdout,
-            errors=errors,
-            elapsed_ms=elapsed_ms,
-            dark_methods=dark,
-        )
+        raise AssertionError("unreachable: query attempt loop")
 
     def query_script(
         self,
@@ -1701,6 +1803,96 @@ class JoernServer:
                 validate=True, check_length=False,
             )
         return self.query(content, timeout=timeout, validate=True, check_length=False)
+
+    def _lease_guard_prefix(self) -> str:
+        """The ``require`` line pinning this handle's graph identity.
+
+        Empty when no lease is held (nothing imported through this
+        handle yet, or a pre-lease server) — those queries run
+        unguarded, exactly the pre-lease behaviour.
+        """
+        if self._graph_lease is None:
+            return ""
+        return (
+            f'require({_LEASE_VAL} == "{self._graph_lease}", '
+            f'"{_LEASE_MISMATCH}")\n'
+        )
+
+    @staticmethod
+    def _lease_swapped(stdout: str, stderr: str) -> bool:
+        """True when a response shows the lease guard fired.
+
+        Matches the THROWN forms only — ``requirement failed: <marker>``
+        (the guard's IllegalArgumentException) and ``Not found:
+        raptorGraphLease`` (a sibling running a pre-lease RAPTOR
+        imported without declaring the val). The bare marker is NOT
+        matched: compile errors in the guarded query can echo the
+        require line itself, and matching the echo would misclassify
+        every such error as a swap and pay a re-import for it.
+        """
+        text = f"{stdout}\n{stderr}"
+        return (
+            f"requirement failed: {_LEASE_MISMATCH}" in text
+            or f"Not found: {_LEASE_VAL}" in text
+        )
+
+    def _recover_graph_lease(self, seen_epoch: int) -> bool:
+        """Re-import this handle's graph after a detected swap.
+
+        Returns True when the handle's graph is loaded again (by this
+        thread's re-import, or by a sibling thread that recovered
+        first — detected via the load epoch). False when the re-import
+        cap is exhausted or the re-import itself failed; the caller
+        returns an error result, never wrong-graph evidence.
+        """
+        with self._lease_recover_lock:
+            if self._lease_exhausted:
+                return False
+            if self._cpg_load_epoch != seen_epoch:
+                # A sibling thread of THIS process already recovered
+                # (or a fresh import happened) — don't pay a second
+                # deserialise for the same swap.
+                return True
+            if self._lease_reimports >= _LEASE_REIMPORT_CAP:
+                self._lease_exhausted = True
+                logger.error(
+                    "graph-lease conflict: the shared Joern server's "
+                    "graph was replaced by a concurrent session %d "
+                    "times — degrading this handle (every later query "
+                    "fails fast). Re-run when the sibling finishes, "
+                    "or give this run a private server.",
+                    _LEASE_REIMPORT_CAP,
+                )
+                return False
+            self._lease_reimports += 1
+            logger.warning(
+                "graph-lease mismatch: a concurrent session replaced "
+                "the shared Joern server's graph — re-importing this "
+                "handle's CPG (recovery %d/%d)",
+                self._lease_reimports, _LEASE_REIMPORT_CAP,
+            )
+            if self._cpg_path is not None:
+                cpg_path = self._cpg_path
+                if self._last_import_timeout is not None:
+                    ok = self.import_cpg(
+                        cpg_path, timeout=self._last_import_timeout)
+                else:
+                    ok = self.import_cpg(cpg_path)
+            elif self._code_path is not None:
+                code_path = self._code_path
+                if self._last_import_timeout is not None:
+                    ok = self.import_code(
+                        code_path, timeout=self._last_import_timeout)
+                else:
+                    ok = self.import_code(code_path)
+            else:
+                ok = False
+            if not ok:
+                logger.error(
+                    "graph-lease recovery re-import failed — Joern "
+                    "evidence unavailable for this claim",
+                )
+            return ok
 
     @property
     def _last_post_error(self) -> str:
@@ -1975,12 +2167,17 @@ class JoernServer:
                 query=cpgql,
                 errors=["no CPG loaded (call import_cpg first)"],
             )
+
+        if self._lease_exhausted:
+            return JoernResult(query=cpgql, errors=[_LEASE_CONFLICT_ERROR])
+
         if validate:
             err = _validate_query(cpgql, check_length=check_length)
             if err:
                 return JoernResult(query=cpgql, errors=[err])
 
-        uuid = self._post_async(cpgql)
+        seen_epoch = self._cpg_load_epoch
+        uuid = self._post_async(self._lease_guard_prefix() + cpgql)
         if uuid is None:
             return self.query(cpgql, timeout=timeout, validate=False,
                               check_length=False)
@@ -2012,6 +2209,23 @@ class JoernServer:
                         validate=False, check_length=False,
                     )
 
+                if self._lease_swapped(stdout, stderr):
+                    # A sibling session swapped the graph mid-poll.
+                    # One bounded recovery, then retry on the SYNC
+                    # path (query() carries its own single-retry
+                    # bound) with the remaining budget.
+                    if not self._recover_graph_lease(seen_epoch):
+                        return JoernResult(
+                            query=cpgql,
+                            errors=[_LEASE_CONFLICT_ERROR],
+                            elapsed_ms=elapsed_ms,
+                        )
+                    return self.query(
+                        cpgql,
+                        timeout=max(
+                            1, timeout - int(time.monotonic() - t0)),
+                        validate=False, check_length=False,
+                    )
                 errors: list[str] = []
                 if not success:
                     detail = stderr[:500] or stdout[:500]
@@ -2067,6 +2281,7 @@ class JoernServer:
         """Close the active CPG and free memory."""
         resp = self._post_sync("workspace.reset", timeout=30)
         self._cpg_loaded = False
+        self._graph_lease = None
         if resp and not resp.get("success", True):
             logger.warning("workspace.reset failed: %s",
                            resp.get("stderr", "")[:200])
