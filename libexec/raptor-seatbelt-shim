@@ -551,13 +551,19 @@ def main() -> int:
         # RAPTOR" fingerprints no target legitimately consumes) never
         # reach target code. The keep-trust dispatch arm keeps the
         # markers and credential by design so RAPTOR's own dispatched
-        # children can drive libexec helpers.
+        # children can drive libexec helpers — but the sandbox-disable
+        # consent nonce strips on BOTH arms: trust markers and consent
+        # nonces are different authorities, and a dispatched child must
+        # not inherit a live disable-consent it could replay on a
+        # composed RAPTOR invocation.
         _strip = (
-            ("_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD") if keep_trust_markers
+            ("_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD",
+             "RAPTOR_NO_SANDBOX_NONCE") if keep_trust_markers
             else ("_RAPTOR_STATUS_FD", "_RAPTOR_DEATH_FD",
                   "_RAPTOR_TRUSTED", "CLAUDECODE",
                   "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
                   "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
+                  "RAPTOR_NO_SANDBOX_NONCE",
                   "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND",
                   "RAPTOR_SCORECARD_PATH", "RAPTOR_LLM_TRANSCRIPT",
                   "RAPTOR_SANITIZER_CUT", "RAPTOR_SANITIZER_CUT_NO_LEXICAL",

@@ -37,6 +37,9 @@ from core.json import load_json, save_json
 from core.logging import CONSOLE_LOG_LEVELS, configure_run_logging, get_logger
 from core.run.safe_io import safe_run_mkdir
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError, set_pdeathsig
+from core.sandbox.disable_consent import (
+    export_disable_consent as _export_disable_consent,
+)
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 # Module-level on purpose: main()'s error/degrade handlers relay
@@ -3518,6 +3521,13 @@ def main() -> int:
         # Our pid as the value lets the scanner detect a parent lost
         # inside the spawn window.
         scanner_env["RAPTOR_PARENT_WATCHDOG"] = str(os.getpid())
+        # Disable-consent extension: the scanner child re-runs the
+        # sandbox CLI gate on the forwarded flags with PIPE stdio and
+        # a scrubbed env, so a disable THIS process already holds an
+        # accepted consent for must ride along as a backed nonce or
+        # the child refuses. No-op unless this process is in the
+        # accepted-disable state (it can never create a grant).
+        _export_disable_consent(scanner_env)
         semgrep_proc = subprocess.Popen(
             semgrep_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             bufsize=1,  # Line-buffered, see main-Popen comment.
@@ -3594,6 +3604,9 @@ def main() -> int:
         codeql_env = RaptorConfig.get_safe_env(preserve_proxy=True)
         # Orphan opt-in — same contract as the scanner spawn above.
         codeql_env["RAPTOR_PARENT_WATCHDOG"] = str(os.getpid())
+        # Disable-consent extension — same contract as the scanner
+        # spawn above.
+        _export_disable_consent(codeql_env)
         codeql_proc = subprocess.Popen(
             codeql_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             bufsize=1,  # Line-buffered, see main-Popen comment.

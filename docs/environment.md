@@ -164,6 +164,20 @@ Distinct from `RAPTOR_ALLOW_UNSANDBOXED_TOOLS`, which waives a
 waives a missing *namespace tier* inside an otherwise-working
 sandbox. Neither implies the other.
 
+### `RAPTOR_NO_SANDBOX_NONCE`
+
+The non-interactive consent carrier for the CLI sandbox disable
+(`--no-sandbox` / `--sandbox none` — the flags refuse without a
+consent; see [sandbox.md](sandbox.md#disabling-the-sandbox)). Not a
+boolean: the value is a nonce minted by
+`core/sandbox/scripts/mint-no-sandbox-nonce`, valid only while a
+fresh (600 s), mode-0600, uid-owned consent file backs it — setting
+the variable to anything else grants nothing. Deliberately absent
+from the safe-env allowlist and stripped from every target-bound
+environment: RAPTOR's own pipeline parents forward it explicitly to
+the specific workers that re-run the disable gate, and nothing else
+inherits it.
+
 ### `RAPTOR_MATRIX_RESULTS` and `RAPTOR_MATRIX_APT_MIRROR`
 
 Knobs for the sandbox feature-matrix harness

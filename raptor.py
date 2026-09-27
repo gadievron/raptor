@@ -1143,6 +1143,7 @@ def _run_script(script_path: Path, args: list, out_dir: Path | None = None) -> i
 
     try:
         from core.config import RaptorConfig
+        from core.sandbox.disable_consent import passthrough_nonce_env
         audit_path = None
         if out_dir is not None:
             from core.llm.dispatcher.lifecycle import audit_path_for_run_dir
@@ -1168,6 +1169,14 @@ def _run_script(script_path: Path, args: list, out_dir: Path | None = None) -> i
                 worker_env = RaptorConfig.get_llm_env(
                     include_python_user_base=True,
                 )
+            # This process forwards argv to raptor_<mode>.py without
+            # parsing the sandbox flags itself, so an inherited
+            # RAPTOR_NO_SANDBOX_NONCE must ride to the child that DOES
+            # run the disable-consent gate — the safe-env scrub would
+            # otherwise drop a CI-minted consent before it could be
+            # validated. Forwarding grants nothing by itself: the child
+            # validates against the uid-owned consent file.
+            passthrough_nonce_env(worker_env)
             proc = spawn_worker(
                 dispatcher,
                 cmd=cmd,
@@ -1183,9 +1192,12 @@ def _run_script(script_path: Path, args: list, out_dir: Path | None = None) -> i
         # operator entry point must preserve PYTHONUSERBASE for the
         # spawned ``raptor_<mode>.py`` subprocess.
         _announce_env_direct_downgrade(script_path.name, out_dir)
+        fallback_env = RaptorConfig.get_llm_env(include_python_user_base=True)
+        # Same nonce forwarding as the dispatcher path above.
+        passthrough_nonce_env(fallback_env)
         result = subprocess.run(
             cmd,
-            env=RaptorConfig.get_llm_env(include_python_user_base=True),
+            env=fallback_env,
             check=False,
         )
         return result.returncode

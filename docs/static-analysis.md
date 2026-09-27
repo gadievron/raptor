@@ -61,7 +61,7 @@ Semgrep pass (`--expanded-semgrep`).
 | `--extra-config <path>` | none | Additional Semgrep rule source path (repeatable) |
 | `--show-suppressed` | off | Include `nosemgrep`-suppressed findings in output summary |
 | `--sandbox <profile>` | full | [Sandbox](sandbox.md) profile (`full` / `strict` / `debug` / `target_run` / `frida` / `network-only` / `none`) |
-| `--no-sandbox` | off | Alias for `--sandbox none` |
+| `--no-sandbox` | off | Alias for `--sandbox none` (consent-gated — see [Sandbox](sandbox.md#disabling-the-sandbox)) |
 | `--audit` | off | Engage [sandbox](sandbox.md) audit mode |
 | `--audit-verbose` | off | Log every traced syscall (requires `--audit`) |
 | `--audit-budget <n>` | 10000 | Override audit-record cap |

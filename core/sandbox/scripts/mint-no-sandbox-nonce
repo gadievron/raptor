@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Mint a consent nonce for the CLI sandbox disable.
+
+The `--no-sandbox` / `--sandbox none` gate refuses non-interactive
+invocations unless RAPTOR_NO_SANDBOX_NONCE carries a nonce backed by a
+fresh, mode-0600, uid-owned consent file (see
+core.sandbox.disable_consent). This script is the operator/CI mint
+path: it writes the consent file and prints the nonce on stdout.
+
+Usage:
+    RAPTOR_NO_SANDBOX_NONCE=$(core/sandbox/scripts/mint-no-sandbox-nonce) \
+        python3 raptor.py scan --repo <path> --no-sandbox
+
+The consent is per-invocation by design: it expires after a short TTL
+and grants nothing without the flag on a RAPTOR command line. Minting
+is a deliberate, attributable act — the file is created under the
+invoking user's own home, owned by them, readable only by them.
+
+This is a dev/operator tool, not part of the runtime dispatch surface:
+the only runtime mint is consent EXTENSION from a process that already
+holds an accepted disable (export_disable_consent).
+"""
+
+import sys
+from pathlib import Path
+
+# Dev tool: runs from a bare shell / CI step outside the launcher, so
+# locate the repo relative to this file rather than requiring
+# RAPTOR_DIR (subsystem scripts-dir exemption).
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from core.sandbox import disable_consent as _dc  # noqa: E402
+
+
+def main() -> int:
+    if len(sys.argv) > 1:
+        sys.stderr.write(
+            "usage: mint-no-sandbox-nonce\n"
+            "Mints a no-sandbox consent nonce (prints it on stdout; "
+            f"valid {int(_dc.NONCE_FILE_TTL_S)}s).\n"
+        )
+        return 2
+    nonce = _dc._mint_nonce()
+    sys.stderr.write(
+        f"Minted no-sandbox consent (valid {int(_dc.NONCE_FILE_TTL_S)}s). "
+        f"Export it as {_dc.NONCE_ENV_VAR} for the RAPTOR invocation "
+        "that passes --no-sandbox / --sandbox none.\n"
+    )
+    print(nonce)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -335,7 +335,8 @@ can engage and there is nothing to degrade to. Upgrade the distro
 (`wsl --set-version <distro> 2` from Windows, then
 `wsl --shutdown`). The operator-explicit global disable
 (`--sandbox none` / `--no-sandbox`) remains authoritative for runs
-that genuinely want no sandbox. Kernels whose identity matches WSL
+that genuinely want no sandbox (subject to its own consent gate —
+see [sandbox.md](sandbox.md#disabling-the-sandbox)). Kernels whose identity matches WSL
 but not the WSL2 release token are treated as WSL1 — the refusal
 direction — rather than assumed to be real kernels.
 

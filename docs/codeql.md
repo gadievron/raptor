@@ -61,7 +61,7 @@ autonomous analysis pipeline.
 | `--threat-models <csv>` | `local` | Threat models enabled on the standard suite (`--threat-model=<name>` per entry) |
 | `--no-threat-models` | off | Pass no `--threat-model` flag (stock remote-only source models) |
 | `--sandbox <profile>` | full | [Sandbox](sandbox.md) profile (`full` / `strict` / `debug` / `target_run` / `frida` / `network-only` / `none`) |
-| `--no-sandbox` | off | Alias for `--sandbox none` |
+| `--no-sandbox` | off | Alias for `--sandbox none` (consent-gated — see [Sandbox](sandbox.md#disabling-the-sandbox)) |
 | `--audit` | off | Engage [sandbox](sandbox.md) audit mode |
 | `--audit-verbose` | off | Log every traced syscall (requires `--audit`) |
 | `--audit-budget <n>` | 10000 | Override audit-record cap |
@@ -400,4 +400,6 @@ Rust extractor get a clear skip.
   `OPENAI_API_KEY` must be set. Not needed for `--scan-only`.
 
 All subprocess invocations run inside the RAPTOR [sandbox](sandbox.md)
-by default. Pass `--no-sandbox` to disable.
+by default. Pass `--no-sandbox` to disable (consent-gated: an
+interactive terminal or a minted nonce — see
+[Sandbox](sandbox.md#disabling-the-sandbox)).

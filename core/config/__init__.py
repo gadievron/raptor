@@ -653,6 +653,14 @@ class RaptorConfig:
         "CLAUDECODE", "_RAPTOR_TRUSTED",
         "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
         "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
+        # Sandbox-disable consent nonce. Deliberately NOT in
+        # SAFE_ENV_ALLOWLIST (a pinning test holds that direction):
+        # propagation along RAPTOR's own worker spine is site-specific
+        # and explicit (core.sandbox.disable_consent), never ambient.
+        # Stripped here so code executed on behalf of a TARGET can
+        # never observe or replay a live consent against a child
+        # RAPTOR invocation.
+        "RAPTOR_NO_SANDBOX_NONCE",
         # Framework-identity values: each one names RAPTOR (or its
         # checkout / output layout) to any target that runs `env`,
         # defeating the anti-fingerprint posture in one getenv. No

@@ -4499,9 +4499,17 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # it no longer carries authority.
         _keep_for_dispatch = keep_trust_markers_for_dispatch
         if _keep_for_dispatch:
+            # Keep-trust keeps the trust markers and session
+            # credential ONLY. The sandbox-disable consent nonce is a
+            # different authority and strips here too: a dispatched
+            # child that can drive libexec helpers must still not
+            # inherit a live disable-consent it could replay on a
+            # composed RAPTOR invocation (same contract as the
+            # seatbelt shim's keep arm).
             _env_for_target = {
                 k: v for k, v in kwargs["env"].items()
-                if k != "_RAPTOR_KEEP_TRUST_MARKERS"
+                if k not in ("_RAPTOR_KEEP_TRUST_MARKERS",
+                             "RAPTOR_NO_SANDBOX_NONCE")
             }
         elif _untrusted_workload:
             from core.config import RaptorConfig as _RC

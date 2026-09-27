@@ -547,6 +547,112 @@ class TestExportDisableConsent:
         assert mode == 0o600
 
 
+class TestEnvPolicy:
+    """The nonce var's env-policy posture, both directions pinned.
+
+    Never allowlisted (ambient inheritance would hand consent to every
+    scrub-spawned child, including target-adjacent tool children);
+    always target-stripped (code executed on behalf of a scanned
+    target must not observe or replay a live consent). Propagation
+    along RAPTOR's own worker spine is site-specific instead — those
+    sites are pinned below so a refactor can't silently drop them.
+    """
+
+    def test_nonce_var_never_in_safe_env_allowlist(self):
+        from core.config import RaptorConfig
+        assert dc.NONCE_ENV_VAR not in RaptorConfig.SAFE_ENV_ALLOWLIST
+
+    def test_nonce_var_in_target_strip_set(self):
+        from core.config import RaptorConfig
+        assert dc.NONCE_ENV_VAR in RaptorConfig.TARGET_ENV_STRIP_SET
+
+    def test_get_safe_env_drops_ambient_nonce(self, monkeypatch):
+        from core.config import RaptorConfig
+        monkeypatch.setenv(dc.NONCE_ENV_VAR, "ab" * 16)
+        assert dc.NONCE_ENV_VAR not in RaptorConfig.get_safe_env()
+
+    def test_seatbelt_shim_keep_arm_strips_nonce(self) -> None:
+        """Trust markers and disable-consent nonces are different
+        authorities: the shim's keep-trust dispatch arm keeps the
+        markers by design, but a live consent nonce must never ride
+        that lane into a dispatched child. Pin the KEEP arm tuple."""
+        shim = (REPO_ROOT / "libexec" / "raptor-seatbelt-shim"
+                ).read_text(encoding="utf-8")
+        start = shim.index("_strip = (")
+        keep_arm = shim[start:shim.index("if keep_trust_markers", start)]
+        assert f'"{dc.NONCE_ENV_VAR}"' in keep_arm, (
+            "the seatbelt shim keep-trust arm no longer strips the "
+            "disable-consent nonce"
+        )
+
+    def test_seatbelt_shim_else_arm_strips_nonce(self) -> None:
+        """Arm-scoped twin of the strip-set sync test: with the nonce
+        now in BOTH arms of the shim's conditional strip tuple, a
+        whole-file needle match would keep passing after the default
+        (else) arm lost its copy — so pin the else-arm slice
+        itself."""
+        shim = (REPO_ROOT / "libexec" / "raptor-seatbelt-shim"
+                ).read_text(encoding="utf-8")
+        start = shim.index("_strip = (")
+        start = shim.index("else (", start)
+        else_arm = shim[start:shim.index("\n        )", start)]
+        assert f'"{dc.NONCE_ENV_VAR}"' in else_arm, (
+            "the seatbelt shim default (else) strip arm no longer "
+            "strips the disable-consent nonce"
+        )
+
+    def test_context_keep_dispatch_arm_strips_nonce(self) -> None:
+        """The Linux twin of the shim keep arm: context.run()'s
+        keep-trust dispatch env filter must drop the nonce even
+        though it keeps the trust markers."""
+        src = (REPO_ROOT / "core" / "sandbox" / "context.py"
+               ).read_text(encoding="utf-8")
+        start = src.index("if _keep_for_dispatch:")
+        arm = src[start:src.index("elif _untrusted_workload:", start)]
+        assert f'"{dc.NONCE_ENV_VAR}"' in arm, (
+            "context.run()'s keep-trust dispatch arm no longer strips "
+            "the disable-consent nonce"
+        )
+
+    def test_spine_propagation_sites_present(self):
+        """The two spine parents forward consent explicitly: raptor.py
+        (argv forwarder, verbatim pass-through) and raptor_agentic.py
+        (consent holder, guarded export at both gate-hitting spawns).
+        Source pin — the wiring lives inside main() spawn plumbing
+        that has no seam for in-process invocation."""
+        entry = (REPO_ROOT / "raptor.py").read_text(encoding="utf-8")
+        assert "passthrough_nonce_env(worker_env)" in entry
+        assert "passthrough_nonce_env(fallback_env)" in entry
+        agentic = (REPO_ROOT / "raptor_agentic.py").read_text(
+            encoding="utf-8")
+        assert "_export_disable_consent(scanner_env)" in agentic
+        assert "_export_disable_consent(codeql_env)" in agentic
+
+    def test_mint_script_exists_and_mints_valid_consent(
+            self, monkeypatch, tmp_path):
+        """The operator/CI mint path named in the operator docs (the
+        refusal deliberately points at the docs anchor, never at this
+        runnable path) must exist and produce a nonce the real
+        validator accepts."""
+        script = REPO_ROOT / "core" / "sandbox" / "scripts" / (
+            "mint-no-sandbox-nonce")
+        assert script.is_file()
+        assert os.access(script, os.X_OK)
+        proc = subprocess.run(
+            [sys.executable, str(script)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, timeout=60,
+        )
+        assert proc.returncode == 0, proc.stderr
+        nonce = proc.stdout.strip()
+        try:
+            assert dc._nonce_format_ok(nonce)
+            assert dc._presented_nonce_valid(nonce)
+        finally:
+            # The script mints into the REAL per-uid consents dir.
+            (dc._consents_dir() / dc._nonce_filename(nonce)).unlink()
+
+
 class TestPassthroughNonceEnv:
     def test_copies_when_present(self, monkeypatch):
         monkeypatch.setenv(dc.NONCE_ENV_VAR, "ab" * 16)

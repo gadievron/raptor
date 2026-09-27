@@ -133,7 +133,9 @@ contract) floors at `mount-ns` on Linux and `seatbelt` on macOS by
 default; the consent chain below can move it; trusted calls have no
 floor (`none`) and keep their existing enforceability refusals; the
 operator's explicit `--sandbox none` / `--no-sandbox` /
-`disabled=True` remains globally authoritative (floor `none`).
+`disabled=True` remains globally authoritative (floor `none`) — and
+the CLI spelling of that disable is itself consent-gated (see
+[Disabling the sandbox](#disabling-the-sandbox)).
 Nothing consents untrusted work to a bare run implicitly.
 
 ### Consent surfaces
@@ -273,6 +275,63 @@ structured `floor_refusals` records, and a `floor_refusal_line`
 rendered in the same wording as the per-finding summary line — so a
 run whose payload executions were refused is distinguishable from a
 run that simply recorded nothing, even after the fact.
+
+### Disabling the sandbox
+
+`--no-sandbox` / `--sandbox none` is a **request** for tier `none`,
+honoured only when the invocation carries a consent of matching
+authority. Anything that can compose a command line reaches these
+flags — including an LLM session assembling a `python3 raptor.py ...`
+invocation from injected text — so the flag alone is not evidence an
+operator chose a bare run. Two consent sources exist, in precedence
+order:
+
+1. **Interactive terminal** — the process's stdin AND stderr are
+   interactive TTYs, so the flag was plausibly operator-typed. A
+   piped/captured invocation (the shape of every tool-composed child)
+   fails this probe by construction; probe errors resolve
+   non-interactive (fail closed).
+2. **Minted nonce** — `RAPTOR_NO_SANDBOX_NONCE` carries a nonce minted
+   by `core/sandbox/scripts/mint-no-sandbox-nonce`, backed by a fresh
+   (600 s), mode-0600, uid-owned consent file under the invoking
+   user's home. The env var alone grants nothing (it is plain
+   composable data); the file alone grants nothing (it stores only the
+   nonce's digest). Minting is a deliberate, attributable act for
+   non-interactive lanes (CI jobs, scripted runs). A live nonce is
+   multi-use within its window by design — one exported consent covers
+   the spine children that re-validate it independently — bounded by
+   the TTL and the uid-owned mode-0600 file checks. The refusal
+   message points at this section rather than quoting the runnable
+   mint path: a refusal that hands the refused composer a
+   copy-pasteable mint command would be a bypass recipe.
+
+Without a consent the run **refuses** — a single-line argparse error
+(exit 2) naming the flag, the reason, and both escape hatches: the
+mint route, and `--audit` for debugging enforcement without going
+bare. The disable is never silently re-enabled or downgraded; refusal
+preserves the operator's ability to decide.
+
+There is deliberately **no standing consent**: no project setting can
+disable the sandbox (`/project set sandbox-floor` refuses `none`),
+trust markers grant nothing here, and the nonce var is never part of
+the safe-env allowlist — target-bound environments strip it, so
+scanned code can neither observe nor replay a live consent. The strip
+holds even on the keep-trust dispatch lane that keeps RAPTOR's own
+markers: trust markers and disable-consent are different authorities,
+and a dispatched child never inherits a live nonce.
+
+An accepted disable is attributable after the fact:
+`sandbox_info["disable_consent"]` on every run result names the
+consent source (`interactive-tty` or `nonce`), and the acceptance is
+logged at WARNING with the same label. RAPTOR's own pipeline parents
+that forward the flag to workers (the `/agentic` sandbox passthrough)
+extend their already-accepted consent across the spawn boundary
+automatically — consent extension is possible only from a process
+that already holds one, never creatable from nothing.
+
+The programmatic `sandbox(disabled=True)` keyword is unchanged: it is
+not reachable from argv, and in-process code is already the
+orchestrator.
 
 ---
 

@@ -45,7 +45,7 @@ modes do not accept them and reject them with an
 ```
 --sandbox {debug,frida,full,network-only,none,strict,target_run}
                                            Force a sandbox profile (default: full)
---no-sandbox                               Alias for --sandbox none
+--no-sandbox                               Alias for --sandbox none (consent-gated: interactive TTY or minted nonce)
 --audit                                    Log what enforcement would have blocked
 --audit-verbose                            With --audit, log every traced syscall
 --audit-budget N                           With --audit, override the record cap (default 10000)

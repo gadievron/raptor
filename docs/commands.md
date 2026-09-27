@@ -46,7 +46,7 @@ Static analysis scan using Semgrep (and optionally CodeQL and Coccinelle).
 | `--exclude-dir <glob>` | Exclude directories matching glob (repeatable) |
 | `--extra-config <path>` | Additional Semgrep config file (repeatable) |
 | `--show-suppressed` | Include suppressed findings in output |
-| `--sandbox` / `--no-sandbox` | Enable or disable [sandbox](sandbox.md) isolation |
+| `--sandbox` / `--no-sandbox` | Enable or disable [sandbox](sandbox.md) isolation (disable is [consent-gated](sandbox.md#disabling-the-sandbox)) |
 | `--audit` | Enable sandbox audit mode (log would-be-blocked syscalls) |
 | `--audit-verbose` | Verbose audit output (strace-style) |
 | `--audit-budget <n>` | Maximum audit event budget |
@@ -198,7 +198,7 @@ patches.
 | Flag | Description |
 |------|-------------|
 | `--sandbox <mode>` | Sandbox mode: `debug`, `frida`, `full`, `network-only`, `none`, `strict`, `target_run` |
-| `--no-sandbox` | Disable sandbox entirely |
+| `--no-sandbox` | Disable sandbox entirely ([consent-gated](sandbox.md#disabling-the-sandbox)) |
 
 **Audit layer** (sandbox syscall audit)
 
@@ -242,7 +242,7 @@ Deep static analysis with CodeQL dataflow validation.
 | `--no-visualizations` | Skip diagram generation |
 | `--trust-repo` | Trust the repository |
 | `--phase-timeout <secs>` | Per-phase timeout in seconds |
-| `--sandbox` / `--no-sandbox` | Enable or disable [sandbox](sandbox.md) |
+| `--sandbox` / `--no-sandbox` | Enable or disable [sandbox](sandbox.md) (disable is [consent-gated](sandbox.md#disabling-the-sandbox)) |
 | `--audit` | Enable audit layer |
 | `--audit-verbose` | Verbose audit output |
 | `--audit-budget <n>` | Audit budget |
@@ -326,7 +326,7 @@ Coverage-guided fuzzing with automatic harness generation.
 
 | Flag | Description |
 |------|-------------|
-| `--sandbox` / `--no-sandbox` | Enable or disable [sandbox](sandbox.md) |
+| `--sandbox` / `--no-sandbox` | Enable or disable [sandbox](sandbox.md) (disable is [consent-gated](sandbox.md#disabling-the-sandbox)) |
 | `--audit` | Enable audit layer |
 | `--audit-verbose` | Verbose audit output |
 | `--audit-budget <n>` | Audit budget |
