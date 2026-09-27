@@ -45,6 +45,7 @@ from typing import Any, Dict, Optional
 
 from core.atomic_fs import open_exclusive_artifact
 from core.sandbox import check_child_unix_sockets_available
+from core.source import open_regular
 
 from .detect import pyghidra_available
 from .headless import _install_read_paths
@@ -662,22 +663,30 @@ class GhidraServer:
         resp = self._request({
             "op": "export", "out": str(worker_out),
         })
-        if worker_out.is_symlink() or not worker_out.is_file():
+        # Atomic source gate: open_regular refuses symlinks
+        # (O_NOFOLLOW), FIFOs, and devices on the OPENED fd. The
+        # previous by-name is_symlink()/is_file() pre-check followed
+        # by a separate open() raced a swap — the worker holds the
+        # write grant on its work dir and could replace export.json
+        # with a symlink between the check and the open, laundering a
+        # same-user file read into the run artifact.
+        src_fh = open_regular(worker_out, "rb")
+        if src_fh is None:
             raise GhidraServerError(
                 "worker did not produce a regular export file"
             )
-        out_path = Path(out_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        # Exclusive-create copy: follow_symlinks=False only covers
-        # the SOURCE side of copy2 — the destination open is O_TRUNC
-        # and follows whatever occupies out_path in the reused run
-        # dir. Fresh O_EXCL|O_NOFOLLOW inode after an lstat-honest
-        # unlink.
-        out_path.unlink(missing_ok=True)
-        with open(worker_out, "rb") as src_fh, os.fdopen(  # raw-open: streaming chunk copy of the sandboxed worker's own output (memory-bounded)
-            open_exclusive_artifact(out_path), "wb",
-        ) as dst_fh:
-            shutil.copyfileobj(src_fh, dst_fh)
+        with src_fh:
+            out_path = Path(out_path)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            # Exclusive-create copy: the destination open would follow
+            # whatever occupies out_path in the reused run dir. Fresh
+            # O_EXCL|O_NOFOLLOW inode after an lstat-honest unlink.
+            # The copy streams chunk-by-chunk — memory-bounded.
+            out_path.unlink(missing_ok=True)
+            with os.fdopen(
+                open_exclusive_artifact(out_path), "wb",
+            ) as dst_fh:
+                shutil.copyfileobj(src_fh, dst_fh)
         return resp["functions"]
 
     @property
