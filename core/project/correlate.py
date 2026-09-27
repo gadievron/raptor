@@ -70,6 +70,145 @@ def get_finding_status(finding: dict) -> str:
 
 # --- Main entry point ---
 
+
+def correlate_sandbox_triage(
+    run_dirs: list[Path],
+) -> dict[str, Any] | None:
+    """Campaign-level aggregation of sandbox denial triage across runs.
+
+    Groups runs by target path and clusters ``(category, example)``
+    signatures, computing persistence (fraction of triage-bearing runs
+    where each signature appeared) and trend (new/stable/resolved).
+
+    Returns ``None`` when no runs carry triage data.
+    """
+    from core.sandbox.summary import SUMMARY_FILE
+
+    _MAX_HISTORY = 50
+    _MAX_EXAMPLES = 10
+    _TRIAGE_CATEGORIES = (
+        "escape_primitives", "network_probing", "udp_egress",
+        "filesystem_escape", "routine",
+    )
+
+    per_target: dict[str, list[dict]] = defaultdict(list)
+    for d in run_dirs:
+        summary = load_json(d / SUMMARY_FILE)
+        if not isinstance(summary, dict):
+            continue
+        triage = summary.get("triage")
+        if not isinstance(triage, dict):
+            continue
+        meta = load_run_metadata(d)
+        target = (meta or {}).get("target_path", "unknown")
+        ts = (meta or {}).get("started_at", "")
+        per_target[target].append({
+            "run": d.name,
+            "triage": triage,
+            "ts": ts,
+        })
+
+    if not per_target:
+        return None
+
+    targets: dict[str, Any] = {}
+    all_severities: list[str] = []
+
+    for target, entries in sorted(per_target.items()):
+        entries.sort(key=lambda e: e["ts"])
+        n = len(entries)
+
+        sigs: dict[str, dict[str, Any]] = {}
+        for cat in _TRIAGE_CATEGORIES:
+            runs_with_cat = []
+            all_examples: set[str] = set()
+            total = 0
+            for e in entries:
+                bucket = e["triage"].get(cat) or {}
+                count = bucket.get("count", 0)
+                if count > 0:
+                    runs_with_cat.append(e)
+                    total += count
+                    all_examples.update(bucket.get("examples", []))
+
+            runs_seen = len(runs_with_cat)
+            persistence = runs_seen / n if n else 0.0
+
+            # Trend detection (adaptive window)
+            if n == 0:
+                trend = "stable"
+            elif n == 1:
+                trend = "new" if runs_seen else "stable"
+            else:
+                window = min(3, n - 1)
+                recent = entries[-window:]
+                earlier = entries[:-window]
+                in_recent = any(
+                    (e["triage"].get(cat) or {}).get("count", 0) > 0
+                    for e in recent
+                )
+                in_earlier = any(
+                    (e["triage"].get(cat) or {}).get("count", 0) > 0
+                    for e in earlier
+                )
+                if in_recent and not in_earlier:
+                    trend = "new"
+                elif in_earlier and not in_recent:
+                    trend = "resolved"
+                else:
+                    trend = "stable"
+
+            sigs[cat] = {
+                "total_occurrences": total,
+                "runs_seen": runs_seen,
+                "persistence": round(persistence, 3),
+                "examples": sorted(all_examples)[:_MAX_EXAMPLES],
+                "trend": trend,
+            }
+            if runs_with_cat:
+                sigs[cat]["first_seen"] = runs_with_cat[0]["ts"]
+                sigs[cat]["last_seen"] = runs_with_cat[-1]["ts"]
+
+        sev_history = [
+            {"run": e["run"], "severity": e["triage"].get("severity", "routine"),
+             "ts": e["ts"]}
+            for e in entries
+        ][-_MAX_HISTORY:]
+
+        per_run_sevs = [e["triage"].get("severity", "routine") for e in entries]
+        sev_rank = {"critical": 2, "elevated": 1, "routine": 0}
+        worst = max(per_run_sevs, key=lambda s: sev_rank.get(s, 0))
+
+        # Persistence upgrade: only with enough data points
+        campaign_sev = worst
+        if n >= 4:
+            persistent_elevated = any(
+                sigs[cat]["persistence"] > 0.5
+                for cat in _TRIAGE_CATEGORIES if cat != "routine"
+                and sigs[cat]["total_occurrences"] > 0
+            )
+            if persistent_elevated and worst == "routine":
+                campaign_sev = "elevated"
+            elif persistent_elevated and worst == "elevated":
+                campaign_sev = "critical"
+
+        all_severities.append(campaign_sev)
+        targets[target] = {
+            "runs_with_triage": n,
+            "campaign_severity": campaign_sev,
+            "signatures": sigs,
+            "severity_history": sev_history,
+        }
+
+    return {
+        "campaign_severity": max(
+            all_severities,
+            key=lambda s: {"critical": 2, "elevated": 1, "routine": 0}.get(s, 0),
+        ),
+        "targets": targets,
+    }
+
+
 def correlate_project(project) -> dict[str, Any]:
     """Correlate findings and coverage across all runs in a project.
 
@@ -114,7 +253,9 @@ def correlate_project(project) -> dict[str, Any]:
     n_persistent = len(persistent)
     n_total_unique = join.site_count()
 
-    return {
+    sandbox_campaign = correlate_sandbox_triage(run_dirs)
+
+    result = {
         "actions": actions,
         "join": _join_summary(join),
         "disagreements": disagreements,
@@ -136,6 +277,12 @@ def correlate_project(project) -> dict[str, Any]:
             "token_enforcement_drift": len(token_drift),
         },
     }
+    if sandbox_campaign is not None:
+        result["sandbox_campaign"] = sandbox_campaign
+        result["summary"]["sandbox_campaign_severity"] = (
+            sandbox_campaign["campaign_severity"]
+        )
+    return result
 
 
 def _join_summary(join: AnchorJoin) -> dict[str, Any]:

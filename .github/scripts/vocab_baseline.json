@@ -1570,10 +1570,10 @@
     "kind": "literal",
     "note": "correlate result-shape section keys (empty-project twin of correlate_project's return dict), not a name vocabulary"
   },
-  "core/project/correlate.py::correlate_project": {
+  "core/project/correlate.py::result": {
     "count": 11,
     "kind": "literal",
-    "note": "correlate result-shape section keys (actions/join/disagreements/... view sections), not a name vocabulary"
+    "note": "correlate result-shape section keys (actions/join/disagreements/... view sections), not a name vocabulary; sandbox_campaign added conditionally after the literal"
   },
   "core/project/merge.py::_STATUS_RANK": {
     "count": 14,
