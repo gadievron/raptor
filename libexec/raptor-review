@@ -164,7 +164,7 @@ if _env_hazards:
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
-from core.json import load_json, loads  # noqa: E402
+from core.json import load_json, load_jsonl, loads  # noqa: E402
 from core.security.prompt_output_sanitise import sanitise_string  # noqa: E402
 
 # Byte budgets for run artifacts this CLI renders: context maps /
@@ -351,35 +351,23 @@ def _load_suppression_records(
     """
     if not out_dir:
         return []
-    path = out_dir / "suppressions.jsonl"
-    if not path.is_file():
-        return []
-    records = []
-    try:
-        # Bounded + regular-file-gated: the file sits inside a run
-        # dir whose rw grant sandboxed code holds — attacker bytes.
-        # An unbounded read_text() was an OOM lever and a FIFO there
-        # a plantable hang.
-        import os as _os
-        import stat as _stat
-        _st = _os.stat(path)
-        if not _stat.S_ISREG(_st.st_mode) or _st.st_size > 64 * 1024 * 1024:
-            return []
-        for line in path.read_text(encoding="utf-8").splitlines():  # raw-open: S_ISREG + 64 MiB gate above bounds this read
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = loads(line)
-            except ValueError:
-                continue
-            if not isinstance(rec, dict):
-                continue
-            if rec.get("file_path") == file and rec.get("function") == function:
-                records.append(rec)
-    except OSError:
-        return []
-    return records
+    # Bounded line-oriented load: the file sits inside a run dir
+    # whose rw grant sandboxed code holds — attacker bytes. load_jsonl
+    # refuses symlinks/FIFOs/devices on the OPENED fd (no
+    # stat-then-read window a swap can race, no plantable open hang)
+    # and enforces the per-line and total byte budgets; malformed and
+    # oversize lines are skipped, a missing or refused file loads as
+    # no records.
+    return [
+        rec for rec in load_jsonl(
+            out_dir / "suppressions.jsonl",
+            max_line_bytes=1024 * 1024,
+            max_total_bytes=64 * 1024 * 1024,
+        )
+        if isinstance(rec, dict)
+        and rec.get("file_path") == file
+        and rec.get("function") == function
+    ]
 
 
 def _load_readjudication_records(

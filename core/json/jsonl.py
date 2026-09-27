@@ -133,8 +133,11 @@ def load_jsonl(
 ) -> list[Any]:
     """Read back a JSONL trail as a list of parsed records.
 
-    Best-effort: a missing, unreadable, or symlinked file loads as
-    ``[]`` (logged at debug); blank and malformed lines are skipped so
+    Best-effort: a missing, unreadable, symlinked, or non-regular file
+    (FIFO/device — refused on the OPENED fd, with ``O_NONBLOCK`` so a
+    reader-less FIFO cannot block the open; same discipline as
+    ``append_jsonl``) loads as ``[]``; blank and malformed lines are
+    skipped so
     a truncated final line (writer killed mid-append) doesn't lose the
     well-formed records before it. Invalid UTF-8 counts as malformed
     at LINE granularity: the file is read as bytes and each line is
@@ -208,7 +211,11 @@ def load_jsonl(
     # allocation-identical to the historical one.
     records: list[Any] | deque[Any]
     records = deque(maxlen=max_records) if max_records is not None else []
-    flags = os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC
+    # O_NONBLOCK: trail paths live inside run dirs a sandboxed child
+    # can write — without it, the open of a planted reader-less FIFO
+    # blocks forever. No-op on the regular files the fstat gate below
+    # then requires (mirrors append_jsonl's open discipline).
+    flags = os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK
     try:
         fd = os.open(str(path), flags)
     except OSError:
@@ -216,13 +223,24 @@ def load_jsonl(
         # "nothing trustworthy to read".
         logger.debug("load_jsonl: cannot open %s", path, exc_info=True)
         return []
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        st = None
+    if st is None or not _stat.S_ISREG(st.st_mode):
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        logger.warning(
+            "load_jsonl: refusing non-regular trail %s "
+            "(planted FIFO/device at the trail path?)", path,
+        )
+        return []
     discard_first_partial_line = False
     if max_total_bytes is not None:
-        try:
-            size = os.fstat(fd).st_size
-        except OSError:
-            size = None
-        if size is not None and size > max_total_bytes:
+        size = st.st_size
+        if size > max_total_bytes:
             if not oversize_tail:
                 try:
                     os.close(fd)
