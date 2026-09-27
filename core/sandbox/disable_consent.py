@@ -10,21 +10,29 @@ authority exists. Without one the request is refused loudly (never
 silently re-enabled, never downgraded — a refusal, so the operator's
 intent is never quietly inverted).
 
-Consent sources, in precedence order:
+The ONLY consent source is the **minted nonce (per-invocation)**:
+``RAPTOR_NO_SANDBOX_NONCE`` carries a 128-bit hex nonce that must
+match a mode-0600, uid-owned consent file under the invoking user's
+home. A boolean env var would be attacker-typable data (any argv/env
+composition could set it); the nonce is only valid when a matching
+file exists on disk. Returns ``"nonce"``.
 
-1. **Operator at a terminal (per-run).** Process stdin AND stderr are
-   interactive TTYs → the flag was plausibly typed by the operator.
-   Returns ``"interactive-tty"``. A Bash-tool-composed child inside an
-   LLM session gets PIPE fds and fails this probe by construction.
-   Probe errors are treated as non-interactive (fail closed).
-2. **Launcher/CI-minted nonce (per-invocation).** ``RAPTOR_NO_SANDBOX_NONCE``
-   carries a 128-bit hex nonce that must match a mode-0600, uid-owned
-   consent file under the invoking user's home. A boolean env var would
-   be attacker-typable data (any argv/env composition could set it);
-   the nonce is only valid when a matching file exists on disk, so
-   forgery requires a home-directory file write with knowledge of the
-   nonce — something argv/env composition alone cannot provide.
-   Returns ``"nonce"``.
+There is deliberately NO interactive-TTY consent arm. Terminal
+presence on the process fds carries no authority: a pseudo-terminal
+wrapper (``script -qec …``, ``pty.spawn``) gives any composed child
+real TTYs on stdin/stderr with no operator present, and the
+"pre-existing controlling terminal" signals that might distinguish a
+laundered pty from an operator's terminal (session leadership, ctty
+coherence, pty age, master-holder ancestry) are all either
+manufacturable by the same composer or invalid on real terminal
+topologies (terminal multiplexers and sshd hold the pty master from
+an ancestor position exactly like a wrapper does). Requiring the
+mint instead converts the cheapest bypass from an innocuous-looking
+wrapper into an explicit, self-describing, artifact-leaving action.
+The gate's honest claim is guardrail-plus-attribution — the
+programmatic ``sandbox(disabled=True)`` kwarg is deliberately
+ungated, so this was never a boundary against same-uid arbitrary
+code execution.
 
 There is deliberately NO standing project consent ("off" is a debug
 posture, not a host condition — the project `sandbox-floor` registry
@@ -108,8 +116,8 @@ NONCE_FILE_TTL_S = 600.0
 # higher serves no legitimate content.
 NONCE_FILE_MAX_BYTES = 4096
 
-# Consent-source labels stamped into state / sandbox_info.
-CONSENT_INTERACTIVE = "interactive-tty"
+# Consent-source label stamped into state / sandbox_info. The nonce
+# is the only source; an accepted disable always stamps "nonce".
 CONSENT_NONCE = "nonce"
 
 # Single-line refusal: names the flags, why they are gated, and both
@@ -124,12 +132,12 @@ CONSENT_NONCE = "nonce"
 # path must not reappear here.)
 REFUSAL_MESSAGE = (
     "--no-sandbox / --sandbox none refused: disabling the sandbox runs "
-    "untrusted target code bare, so it needs matching-authority consent "
-    "— an interactive terminal on stdin+stderr, or a minted "
-    "RAPTOR_NO_SANDBOX_NONCE (mint procedure: docs/sandbox.md, "
-    "\"Disabling the sandbox\") — and this invocation has neither. To "
-    "debug enforcement without going bare, keep the sandbox and pass "
-    "--audit (logs what enforcement would have blocked)."
+    "untrusted target code bare, so it needs an explicit minted "
+    "consent — RAPTOR_NO_SANDBOX_NONCE (mint procedure: "
+    "docs/sandbox.md, \"Disabling the sandbox\") — and this invocation "
+    "carries none. To debug enforcement without going bare, keep the "
+    "sandbox and pass --audit (logs what enforcement would have "
+    "blocked)."
 )
 
 _HEX_DIGITS = frozenset("0123456789abcdef")
@@ -229,16 +237,13 @@ def _presented_nonce_valid(nonce: str) -> bool:
 def resolve_disable_consent() -> str | None:
     """Resolve the consent source for a CLI sandbox disable.
 
-    Returns ``"interactive-tty"``, ``"nonce"``, or ``None`` (refuse).
-    Precedence mirrors ``resolve_untrusted_floor``: the operator at a
-    terminal outranks the minted nonce. Every probe failure resolves
-    toward None — non-interactive, fail closed.
+    Returns ``"nonce"`` or ``None`` (refuse). The minted nonce is the
+    ONLY consent source — the process fds are never probed, because
+    real TTYs on stdin/stderr are one pty wrapper away for any
+    composer and therefore carry no authority (see the module
+    docstring). Every validation failure resolves toward None — fail
+    closed.
     """
-    try:
-        if os.isatty(0) and os.isatty(2):
-            return CONSENT_INTERACTIVE
-    except Exception:  # noqa: BLE001 — TTY probe errors are non-interactive
-        pass
     nonce = os.environ.get(NONCE_ENV_VAR)
     if nonce is not None and _presented_nonce_valid(nonce):
         return CONSENT_NONCE
@@ -296,16 +301,17 @@ def export_disable_consent(env: MutableMapping[str, str]) -> None:
     RAPTOR pipeline parents (e.g. the agentic orchestrator) spawn
     scanner workers with ``stdout/stderr=PIPE`` and a
     ``get_safe_env()``-scrubbed environment, forwarding the sandbox
-    flags on the worker command line. The worker's own gate then sees
-    neither a TTY nor the parent's nonce — so a parent that already
+    flags on the worker command line. The scrub would drop the
+    parent's nonce, so the worker's own gate would refuse — a parent
+    that already
     holds an accepted consent injects a valid nonce into the specific
     child env here. This is consent PROPAGATION, not creation: when
     the current process is not in the accepted-disable state, this
     function does nothing (it can never mint a grant from nothing).
 
     Reuses the parent's own env nonce when it is still valid (the
-    CI lane), otherwise mints a fresh file (the interactive-TTY lane,
-    and the CI lane after the parent's nonce aged out mid-run).
+    common lane), otherwise mints a fresh file (the lane where the
+    parent's nonce aged out mid-run).
     """
     if not (state._cli_sandbox_disabled
             and state._cli_sandbox_disable_consent):

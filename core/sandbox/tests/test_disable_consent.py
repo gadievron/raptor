@@ -1,23 +1,26 @@
 """The CLI sandbox-disable consent gate.
 
 `--no-sandbox` / `--sandbox none` is a request for tier NONE, honoured
-only with a consent of matching authority: an interactive TTY on the
-process's stdin+stderr, or a validated launcher/CI-minted nonce
+only with a consent of matching authority: a validated minted nonce
 (RAPTOR_NO_SANDBOX_NONCE backed by a mode-0600 uid-owned consent
 file). Everything else refuses — fail closed, never a silent
 re-enable, never a downgrade.
 
-The invocation-shape battery at the top is the pinned regression: a
+The nonce is the ONLY consent source. Terminal presence grants
+nothing: a pty wrapper (`script -qec …`, `pty.spawn`) hands any
+composed child real TTYs on stdin/stderr with no operator present, so
+TTY-derived authority is manufacturable — the laundering battery
+below pins that real-pty invocations REFUSE without a nonce, wrapper
+or not. The invocation-shape battery pins the base regression: a
 Bash-tool-composed invocation (piped, non-TTY stdin/stderr, no nonce)
-passing `--no-sandbox` REFUSES. The `!`-passthrough lane in an
-interactive session presents a real TTY on the process fds and is
-accepted by construction (operator-typed) — the pty test below proves
-that acceptance without faking TTYs on this process.
+passing `--no-sandbox` REFUSES.
 """
 
 import os
 import pty
 import secrets
+import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -49,6 +52,36 @@ add_cli_args(p)
 args = p.parse_args(sys.argv[2:])
 apply_cli_args(args, parser=p)
 print("DISABLED consent=%s" % state._cli_sandbox_disable_consent)
+"""
+
+
+# Pty-laundering wrapper for the launder battery: pty.fork gives the
+# wrapped child a real controlling terminal on fds 0/1/2 with no
+# operator anywhere — the exact consent-laundering shape the gate must
+# refuse. Argv-driven like _GATE_PROG (the wrapped command rides
+# sys.argv); the wrapper relays the child's pty output and exits with
+# the child's own exit status.
+_PTY_WRAP_PROG = """\
+import os
+import pty
+import sys
+
+pid, master = pty.fork()
+if pid == 0:
+    os.execv(sys.argv[1], sys.argv[1:])
+chunks = []
+while True:
+    try:
+        data = os.read(master, 4096)
+    except OSError:
+        break
+    if not data:
+        break
+    chunks.append(data)
+os.close(master)
+_, status = os.waitpid(pid, 0)
+sys.stdout.write(b"".join(chunks).decode("utf-8", "replace"))
+sys.exit(os.waitstatus_to_exitcode(status))
 """
 
 
@@ -133,10 +166,12 @@ class TestInvocationShapes:
 
     @pytest.mark.skipif(sys.platform != "linux",
                         reason="pty semantics exercised on Linux")
-    def test_interactive_tty_accepts(self):
-        """Operator-at-a-terminal lane: stdin+stderr on a real pty
-        consents with source interactive-tty. This is a REAL pty given
-        to a child process — not a faked isatty on this process."""
+    def test_tty_without_nonce_refuses(self) -> None:
+        """A REAL pty on stdin+stderr grants nothing without a nonce.
+        Terminal presence is manufacturable (any composer is one pty
+        wrapper away from this exact fd shape), so it carries no
+        authority — the operator-at-a-terminal lane goes through the
+        mint, same as CI."""
         parent_fd, child_fd = pty.openpty()
         try:
             proc = subprocess.Popen(
@@ -155,8 +190,8 @@ class TestInvocationShapes:
             if child_fd >= 0:
                 os.close(child_fd)
             os.close(parent_fd)
-        assert proc.returncode == 0, out
-        assert "DISABLED consent=interactive-tty" in out
+        assert proc.returncode == 2, out
+        assert "DISABLED" not in out
 
     @pytest.mark.skipif(sys.platform != "linux",
                         reason="pty semantics exercised on Linux")
@@ -215,16 +250,65 @@ class TestInvocationShapes:
         assert proc.returncode == 2
         assert "DISABLED" not in out
 
+    @pytest.mark.skipif(sys.platform != "linux",
+                        reason="pty semantics exercised on Linux")
+    @pytest.mark.skipif(shutil.which("script") is None,
+                        reason="util-linux script(1) not on PATH")
+    def test_script_pty_wrap_refuses(self, tmp_path: Path) -> None:
+        """The consent-laundering pin, stock-tooling form: `script
+        -qec <gate>` runs the gate on a real controlling terminal with
+        no operator present. Without a nonce this must REFUSE — a pty
+        wrapper is not a consent. (script(1) merges the child's pty
+        output — stdout and stderr — into its own stdout, so the
+        refusal text is asserted there; `-e` propagates the child's
+        exit code.)"""
+        prog = tmp_path / "gate_prog.py"
+        prog.write_text(_GATE_PROG, encoding="utf-8")
+        inner = " ".join(shlex.quote(p) for p in [
+            sys.executable, str(prog), str(REPO_ROOT), "--no-sandbox"])
+        proc = subprocess.run(
+            ["script", "-qec", inner, "/dev/null"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=_child_env(),
+            text=True,
+            timeout=60,
+        )
+        assert proc.returncode == 2, proc.stdout
+        assert "DISABLED" not in proc.stdout
+        assert "refused" in proc.stdout
+
+    @pytest.mark.skipif(sys.platform != "linux",
+                        reason="pty semantics exercised on Linux")
+    def test_pty_fork_wrap_refuses(self, tmp_path: Path) -> None:
+        """The consent-laundering pin, three-lines-of-python form: a
+        pty.fork wrapper gives the gate a controlling terminal on all
+        three fds. Same verdict as the script(1) form — REFUSE without
+        a nonce."""
+        prog = tmp_path / "gate_prog.py"
+        prog.write_text(_GATE_PROG, encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, "-c", _PTY_WRAP_PROG,
+             sys.executable, str(prog), str(REPO_ROOT), "--no-sandbox"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=_child_env(),
+            text=True,
+            timeout=60,
+        )
+        assert proc.returncode == 2, proc.stdout
+        assert "DISABLED" not in proc.stdout
+        assert "refused" in proc.stdout
+
 
 class TestGateInProcess:
     """Library-caller semantics: the exception type, its lineage, and
-    state integrity after a refusal. TTY is neutralised by pointing
-    the probe at closed-fd behaviour via monkeypatch — these tests
-    exercise the nonce/refusal arms, not the TTY grant."""
-
-    @pytest.fixture(autouse=True)
-    def _no_tty(self, monkeypatch):
-        monkeypatch.setattr(os, "isatty", lambda fd: False)
+    state integrity after a refusal. No fd conditioning is needed —
+    the gate never probes the process fds, so these run identically
+    under a terminal and under CI capture (the conftest env guard
+    strips any ambient nonce)."""
 
     def test_disable_from_cli_refuses(self):
         from core.sandbox import disable_from_cli
@@ -281,12 +365,13 @@ class TestGateInProcess:
         with pytest.raises(SandboxDisableRefusedError):
             apply_cli_args(args)
 
-    def test_tty_probe_error_fails_closed(self, monkeypatch):
-        """A TTY probe that ERRORS is non-interactive (fail closed),
-        not a grant."""
-        def _boom(fd):
-            raise OSError("probe failure")
-        monkeypatch.setattr(os, "isatty", _boom)
+    def test_tty_presence_grants_nothing(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The no-TTY-arm pin, resolver form: even with every fd
+        reporting as a terminal, resolution without a nonce is None.
+        The resolver must never consult the fds — a reintroduced
+        isatty grant turns this red."""
+        monkeypatch.setattr(os, "isatty", lambda fd: True)
         assert dc.resolve_disable_consent() is None
 
     def test_nonce_lane_accepts_in_process(self, no_sandbox_consent):
@@ -306,10 +391,6 @@ class TestGateInProcess:
 
 class TestNonceFileValidation:
     """Fail-closed file checks, each exercised in isolation."""
-
-    @pytest.fixture(autouse=True)
-    def _no_tty(self, monkeypatch):
-        monkeypatch.setattr(os, "isatty", lambda fd: False)
 
     @pytest.fixture
     def consents(self, monkeypatch, tmp_path):
@@ -468,18 +549,20 @@ class TestConstantsPinned:
     def test_refusal_message_single_line(self):
         assert "\n" not in dc.REFUSAL_MESSAGE
 
-    def test_consent_labels(self):
-        assert dc.CONSENT_INTERACTIVE == "interactive-tty"
+    def test_consent_labels(self) -> None:
         assert dc.CONSENT_NONCE == "nonce"
+
+    def test_no_interactive_consent_label(self) -> None:
+        """The interactive-TTY consent arm is deliberately gone (pty
+        wrappers manufacture the signal). Its label must not
+        reappear — a resurrected CONSENT_INTERACTIVE constant is the
+        first visible symptom of the arm coming back."""
+        assert not hasattr(dc, "CONSENT_INTERACTIVE")
 
 
 class TestExportDisableConsent:
     """Runtime propagation is extension-only: it can carry an accepted
     consent across a spawn boundary, never create one."""
-
-    @pytest.fixture(autouse=True)
-    def _no_tty(self, monkeypatch):
-        monkeypatch.setattr(os, "isatty", lambda fd: False)
 
     def test_no_accepted_consent_never_mints(self, monkeypatch, tmp_path):
         d = tmp_path / "consents.d"
@@ -502,8 +585,9 @@ class TestExportDisableConsent:
 
     def test_accepted_consent_mints_valid_child_nonce(
             self, no_sandbox_consent, monkeypatch):
-        """TTY-lane shape: accepted consent, but the parent's own env
-        nonce is absent — the export mints a fresh, valid nonce."""
+        """Aged-out-lane shape: accepted consent, but the parent's own
+        env nonce is gone (e.g. its file expired mid-run) — the export
+        mints a fresh, valid nonce."""
         from core.sandbox import set_cli_profile
         set_cli_profile("none")
         monkeypatch.delenv(dc.NONCE_ENV_VAR)

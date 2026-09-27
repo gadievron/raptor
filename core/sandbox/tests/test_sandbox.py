@@ -2100,8 +2100,7 @@ def test_set_cli_profile_none_also_disables(no_sandbox_consent):
     set_cli_profile("none")
     assert mod_state._cli_sandbox_profile == "none"
     assert mod_state._cli_sandbox_disabled
-    assert mod_state._cli_sandbox_disable_consent in (
-        "interactive-tty", "nonce")
+    assert mod_state._cli_sandbox_disable_consent == "nonce"
 
 
 def test_set_cli_profile_switches_coherently(no_sandbox_consent):

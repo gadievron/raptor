@@ -132,9 +132,10 @@ def no_sandbox_consent(monkeypatch, tmp_path):
 
     THE migration path for tests that legitimately drive
     ``set_cli_profile("none")`` / ``disable_from_cli()`` /
-    ``--no-sandbox`` in-process: under pytest the process has no
-    interactive TTY on stdin+stderr, so the disable gate refuses
-    unless a valid nonce consent exists. This fixture goes through
+    ``--no-sandbox`` in-process: the gate's only consent source is a
+    minted nonce backed by a uid-owned consent file — terminal
+    presence grants nothing — so without one the disable refuses
+    regardless of the test process's fd shape. This fixture goes through
     the REAL validation path — a digest-content consent file, mode
     0600, in a consents directory redirected to tmp_path — rather
     than stubbing the gate, so migrated tests still exercise the

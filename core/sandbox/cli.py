@@ -37,8 +37,9 @@ def _set_cli_state(profile: str) -> None:
     ``profile == "none"`` is the consent chokepoint: the disable is a
     REQUEST for tier NONE, honoured only when
     ``disable_consent.resolve_disable_consent`` finds a consent of
-    matching authority (interactive TTY on stdin+stderr, or a
-    validated launcher/CI-minted nonce). Without one the request
+    matching authority (a validated minted nonce — the sole consent
+    source; terminal presence on the process fds carries no
+    authority). Without one the request
     raises :class:`~core.sandbox.errors.SandboxDisableRefusedError` —
     a refusal that stops the run, never a silent re-enable and never
     a downgrade. Gating here (state-set time) covers every
