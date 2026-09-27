@@ -7,6 +7,8 @@ from the gap-folding tests; the import side drives
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from core.audit.gaps import compute_gaps
@@ -1133,3 +1135,708 @@ class TestCounterLockAccessor:
         from core.audit import verdict_reuse
         src = inspect.getsource(verdict_reuse)
         assert "._lock" not in src
+
+
+_SELECTED_CONCEPT = {
+    # Selects into check_pw's prompt slice (direct name match) AND
+    # intersects its current strategies — both the slice fingerprint
+    # and the relevance diff see it.
+    "id": "pw_compare_rules",
+    "description": "check_pw comparison must run in constant time",
+    "related_strategies": ["auth"],
+}
+
+
+class TestSliceStampReuse:
+    """Per-function slice stamp on the AR-7 staleness gate.
+
+    A whole-model regeneration re-bought every stamped verdict whose
+    strategies the new concepts touched, even when the per-function
+    prompt slice — what the review would actually be briefed with —
+    was byte-identical. Entries stamped with ``domain_slice_hash``
+    short-circuit fresh when the recompute reproduces the stamp;
+    every failure mode (no stamp, mismatch, recompute error) falls
+    back to the relevance diff, so the stamp only ever ADDS reuse.
+    """
+
+    def _gaps(self, target, project, sink):
+        return compute_gaps(
+            _checklist(target), [], project_dir=project,
+            out_dir=project / "run2",
+            reuse_sink=sink, current_model="model-a",
+        )
+
+    @staticmethod
+    def _clear_model_cache():
+        from core.concepts.audit_bridge import _load_cached
+        _load_cached.cache_clear()
+
+    def _stamp(self, project, target):
+        """Record-time stamp — the same code path the fold recomputes
+        through (core.audit.context.domain_slice_hash_for)."""
+        from core.audit.context import domain_slice_hash_for
+        self._clear_model_cache()
+        return domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw", 1, 5)
+
+    def _regenerate_model(self, project, concepts):
+        _write_domain_model(project, concepts=concepts)
+        self._clear_model_cache()
+
+    def test_unchanged_slice_survives_model_regeneration(self, tmp_path):
+        target = _write_target(tmp_path)
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[])
+        stamp = self._stamp(project, target)
+        assert stamp is not None
+        _project_with(tmp_path, _entry(
+            target, domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        ))
+        # Regenerated engine output: the whole-model hash moves and
+        # the new concept is strategy-relevant to check_pw — but it
+        # never SELECTS into check_pw's slice, so the briefing this
+        # function's review would receive is unchanged.
+        self._regenerate_model(project, [_AUTH_CONCEPT])
+        sink: dict = {}
+        gaps = self._gaps(target, project, sink)
+        assert "auth.c:check_pw" in sink
+        assert "auth.c:check_pw" not in _gap_keys(gaps)
+
+    def test_changed_slice_resurfaces(self, tmp_path):
+        target = _write_target(tmp_path)
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[])
+        stamp = self._stamp(project, target)
+        _project_with(tmp_path, _entry(
+            target, domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        ))
+        # The regenerated model now selects a concept INTO check_pw's
+        # slice: the stamp mismatches and the relevance diff sees a
+        # relevant new concept — re-review.
+        self._regenerate_model(project, [_SELECTED_CONCEPT])
+        sink: dict = {}
+        gaps = self._gaps(target, project, sink)
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+
+    def test_missing_stamp_keeps_whole_model_behaviour(self, tmp_path):
+        target = _write_target(tmp_path)
+        project = _project_with(
+            tmp_path, _entry(target, domain_model_hash="00000000"))
+        _write_domain_model(project, concepts=[_AUTH_CONCEPT])
+        self._clear_model_cache()
+        sink: dict = {}
+        gaps = self._gaps(target, project, sink)
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+
+    def test_mismatching_stamp_never_blocks_diff_granted_reuse(
+        self, tmp_path,
+    ):
+        # Monotone pin: a stamp the recompute cannot reproduce (model
+        # prose reworded, stamp truncated, foreign hash) falls back to
+        # the relevance diff — it must never turn reuse the diff
+        # grants into a refusal.
+        target = _write_target(tmp_path)
+        project = _project_with(tmp_path, _entry(
+            target, domain_model_hash="00000000",
+            domain_slice_hash="deadbeef" * 8,
+        ))
+        _write_domain_model(project, concepts=[{
+            "id": "sg_page_ownership",
+            "description": "scatterlist page ownership",
+            "related_strategies": ["aliasing"],
+        }])
+        self._clear_model_cache()
+        sink: dict = {}
+        gaps = self._gaps(target, project, sink)
+        assert "auth.c:check_pw" in sink
+        assert "auth.c:check_pw" not in _gap_keys(gaps)
+
+    # Selects into check_pw's slice ONLY via source tokens (three
+    # id parts — stored/strcmp/return — appear in the function BODY;
+    # the description never names check_pw): scored against the pad
+    # lines a stale recorded-span recompute reads, it selects
+    # nothing, so only a recompute at the function's real location
+    # sees it. related_strategies intersects check_pw's current
+    # strategies, so the relevance diff also flags it.
+    _SOURCE_ONLY_CONCEPT = {
+        "id": "stored_strcmp_return",
+        "description": "comparisons of secrets must be constant time",
+        "related_strategies": ["auth"],
+    }
+
+    @staticmethod
+    def _moved_checklist(target):
+        # check_pw moved down 10 lines: the checklist sees it at its
+        # CURRENT span while journal rows recorded 1-5.
+        item = dict(_ITEM, line_start=11, line_end=15)
+        return {
+            "target_path": str(target),
+            "files": [{
+                "path": "auth.c",
+                "language": "c",
+                "items": [item],
+            }],
+        }
+
+    @staticmethod
+    def _move_function_down(target):
+        pad = "".join(f"/* pad {i} */\n" for i in range(1, 11))
+        (target / "auth.c").write_text(pad + _SOURCE, encoding="utf-8")
+
+    def _moved_gaps(self, target, project, sink):
+        return compute_gaps(
+            self._moved_checklist(target), [], project_dir=project,
+            out_dir=project / "run2",
+            reuse_sink=sink, current_model="model-a",
+        )
+
+    def test_moved_function_recomputes_slice_at_verified_span(
+        self, tmp_path,
+    ):
+        """Span drift: check_pw moved down 10 lines, body unchanged,
+        so the source hash verifies at the checklist's CURRENT span.
+        The regenerated model gains a concept that selects into
+        check_pw's slice at its real location. Recomputing the slice
+        at the stale RECORDED span would read the inserted pad lines,
+        select nothing, reproduce the empty-selection stamp
+        byte-for-byte and falsely certify the slice "provably
+        unchanged" — reusing a verdict whose re-review prompt would
+        carry the new concept. The recompute must run at the span
+        where source verification succeeded: the slice differs there,
+        the relevance diff sees a relevant new concept, re-review."""
+        target = _write_target(tmp_path)
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[])
+        stamp = self._stamp(project, target)
+        assert stamp is not None
+        _project_with(tmp_path, _entry(
+            target, domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        ))
+        self._move_function_down(target)
+        self._regenerate_model(project, [self._SOURCE_ONLY_CONCEPT])
+        sink: dict = {}
+        gaps = self._moved_gaps(target, project, sink)
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+
+    def test_moved_function_with_unchanged_slice_still_reuses(
+        self, tmp_path,
+    ):
+        """The reuse-preserving half of the verified-span semantics:
+        a moved-but-unchanged function whose slice recomputed at its
+        CURRENT span is still byte-identical (the new concept is
+        strategy-relevant but never SELECTS into check_pw's slice)
+        keeps its $0 reuse — the span fix must not turn every moved
+        function into a re-review."""
+        target = _write_target(tmp_path)
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[])
+        stamp = self._stamp(project, target)
+        assert stamp is not None
+        _project_with(tmp_path, _entry(
+            target, domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        ))
+        self._move_function_down(target)
+        self._regenerate_model(project, [_AUTH_CONCEPT])
+        sink: dict = {}
+        gaps = self._moved_gaps(target, project, sink)
+        assert "auth.c:check_pw" in sink
+        assert "auth.c:check_pw" not in _gap_keys(gaps)
+
+    @staticmethod
+    def _none_end_item(line_start: int) -> dict:
+        # A checklist item the inventory never measured an end line
+        # for: line_end is absent, and every consumer normalises it
+        # differently — the source hash to a single line, the slice
+        # stamp (and the review prompt) to the fallback read window.
+        item = dict(_ITEM, line_start=line_start)
+        del item["line_end"]
+        return item
+
+    @classmethod
+    def _none_end_checklist(cls, target: Path, line_start: int) -> dict:
+        return {
+            "target_path": str(target),
+            "files": [{
+                "path": "auth.c",
+                "language": "c",
+                "items": [cls._none_end_item(line_start)],
+            }],
+        }
+
+    def _none_end_gaps(
+        self, target: Path, project: Path, sink: dict, line_start: int,
+    ) -> list:
+        return compute_gaps(
+            self._none_end_checklist(target, line_start), [],
+            project_dir=project, out_dir=project / "run2",
+            reuse_sink=sink, current_model="model-a",
+        )
+
+    def _none_end_stamp(
+        self, project: Path, target: Path, line_start: int,
+    ) -> str | None:
+        from core.audit.context import domain_slice_hash_for
+        self._clear_model_cache()
+        return domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw",
+            line_start, None)
+
+    def test_unmoved_row_without_line_end_keeps_reuse_via_raw_window(
+        self, tmp_path,
+    ):
+        """Reuse-preserving half of the raw-window semantics: a row
+        whose checklist item carries no line_end was stamped over the
+        fallback read window (the raw None the writer hands the
+        renderer), while its source hash covers the single normalised
+        header line. When the function has NOT moved and the model
+        gained nothing that selects into that window, the recompute
+        must read the SAME fallback window — recomputing over the
+        single normalised line would select nothing where the stamp's
+        window selected the body-matching concept, mismatch the
+        stamp, and re-buy a verdict whose briefing is unchanged."""
+        target = _write_target(tmp_path)
+        project = tmp_path / "project"
+        # The concept selects into check_pw's slice via BODY tokens
+        # only, and is present at BOTH stamp time and fold time: the
+        # stamp encodes a non-empty selection, so it is only
+        # reproducible by a recompute over the same read window.
+        _write_domain_model(project, concepts=[self._SOURCE_ONLY_CONCEPT])
+        stamp = self._none_end_stamp(project, target, 1)
+        assert stamp is not None
+        # Window-sensitivity precondition: the single normalised line
+        # yields a DIFFERENT fingerprint (no body tokens on line 1),
+        # so this test discriminates the raw window from the
+        # normalised one rather than passing under either.
+        from core.audit.context import domain_slice_hash_for
+        assert domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw", 1, 1,
+        ) != stamp
+        item = self._none_end_item(1)
+        _project_with(tmp_path, _entry(
+            target,
+            source_hash=hash_span(target / "auth.c", 1, 1),
+            line_end=None,
+            strategies=sorted(strategies_from_item(dict(item), "auth.c")),
+            domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        ))
+        self._clear_model_cache()
+        sink: dict = {}
+        gaps = self._none_end_gaps(target, project, sink, 1)
+        assert "auth.c:check_pw" in sink
+        assert "auth.c:check_pw" not in _gap_keys(gaps)
+
+    def test_moved_function_without_line_end_recomputes_full_window(
+        self, tmp_path,
+    ):
+        """A row without a line_end whose function MOVED: the source
+        hash covers one header line, so it verifies at the
+        checklist's current span even though the body now sits on
+        different lines. The recompute must read the fallback window
+        at the function's real location — the raw missing line_end,
+        exactly what the re-review prompt reads there. Recomputing
+        over the single normalised current line selects nothing and
+        reproduces the empty-selection stamp byte-for-byte, falsely
+        certifying "provably unchanged" while the prompt window would
+        carry the newly selecting concept: stale verdict reused."""
+        target = _write_target(tmp_path)
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[])
+        stamp = self._none_end_stamp(project, target, 1)
+        assert stamp is not None
+        item = self._none_end_item(11)
+        _project_with(tmp_path, _entry(
+            target,
+            source_hash=hash_span(target / "auth.c", 1, 1),
+            line_end=None,
+            strategies=sorted(strategies_from_item(dict(item), "auth.c")),
+            domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        ))
+        self._move_function_down(target)
+        # The regenerated model gains a concept selecting via BODY
+        # tokens at the function's new location — visible to the
+        # fallback window there, invisible to its single header line.
+        self._regenerate_model(project, [self._SOURCE_ONLY_CONCEPT])
+        sink: dict = {}
+        gaps = self._none_end_gaps(target, project, sink, 11)
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+
+    def test_sibling_row_without_line_end_keeps_reuse_at_recorded_site(
+        self, tmp_path,
+    ):
+        """Same-named items (macro redefinitions, C++ overloads,
+        prototype + definition) share one file:function key but live
+        at different sites, and only the FIRST occurrence owns the
+        key's current-span slot. A row for a LATER site verifies at
+        its own recorded span, so the raw read window must come from
+        the ENTRY (its line_end, None included), not from the
+        first occurrence's slot: normalising the recorded span to a
+        single line would select nothing where the stamp's fallback
+        window selected the body-matching concept, mismatch the
+        stamp, and re-buy an unchanged review."""
+        target = _write_target(tmp_path)
+        pad = "".join(f"/* pad {i} */\n" for i in range(1, 6))
+        # Two same-named definitions: lines 1-5 and lines 11-15.
+        (target / "auth.c").write_text(
+            _SOURCE + pad + _SOURCE, encoding="utf-8")
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[self._SOURCE_ONLY_CONCEPT])
+        stamp = self._none_end_stamp(project, target, 11)
+        assert stamp is not None
+        from core.audit.context import domain_slice_hash_for
+        assert domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw", 11, 11,
+        ) != stamp
+        sibling = self._none_end_item(11)
+        _project_with(tmp_path, _entry(
+            target,
+            source_hash=hash_span(target / "auth.c", 11, 11),
+            line_start=11,
+            line_end=None,
+            strategies=sorted(
+                strategies_from_item(dict(sibling), "auth.c")),
+            domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        ))
+        self._clear_model_cache()
+        checklist = {
+            "target_path": str(target),
+            "files": [{
+                "path": "auth.c",
+                "language": "c",
+                # First occurrence (measured span) owns the key's
+                # current-span slot; the reviewed sibling carries no
+                # line_end.
+                "items": [dict(_ITEM), sibling],
+            }],
+        }
+        sink: dict = {}
+        gaps = compute_gaps(
+            checklist, [], project_dir=project,
+            out_dir=project / "run2",
+            reuse_sink=sink, current_model="model-a",
+        )
+        assert "auth.c:check_pw" in sink
+        # The never-reviewed FIRST site surfaces as a gap (correct —
+        # one row reviews one site); the reviewed sibling must not.
+        assert 11 not in {g["line_start"] for g in gaps}
+
+    # Selects ONLY via tokens on the neighbour lines directly after
+    # check_pw's measured span (throttle/lockout/bruteforce, lines
+    # 6-8 of _NEIGHBOUR_SOURCE): scored against any window ending at
+    # line 5 it selects nothing, so only a recompute over the widened
+    # fallback window sees it. related_strategies intersects
+    # check_pw's current strategies, so the relevance diff also
+    # flags it.
+    _NEIGHBOUR_CONCEPT = {
+        "id": "throttle_lockout_bruteforce",
+        "description": "repeated failures must delay retries",
+        "related_strategies": ["auth"],
+    }
+
+    @staticmethod
+    def _neighbour_target(tmp_path: Path) -> Path:
+        # check_pw (lines 1-5) followed by neighbour declarations
+        # (lines 6-8): inside the fallback read window a missing
+        # line_end produces, outside any window ending at line 5.
+        target = tmp_path / "target"
+        target.mkdir(exist_ok=True)
+        (target / "auth.c").write_text(_SOURCE + (
+            "static int throttle_ms = 200;\n"
+            "/* lockout counter guards bruteforce attempts */\n"
+            "static int lockout_after = 5;\n"
+        ), encoding="utf-8")
+        return target
+
+    def test_stamped_line_dropped_from_checklist_resurfaces(
+        self, tmp_path,
+    ):
+        """A row stamped with a measured line_end whose CURRENT
+        checklist item dropped it: the source hash verifies at the
+        entry's own recorded span, but a re-review prompt at that
+        site now reads the fallback window (raw missing line_end),
+        not the stamped line. Recomputing over the stamped single
+        line is blind to a regenerated model whose new concept
+        selects only inside the widened window — it reproduces the
+        stamp byte-for-byte and falsely certifies the briefing
+        unchanged while the prompt would carry the new concept. The
+        recompute may only certify the stamp window when it IS the
+        window the prompt reads at that site; here they differ, so
+        the relevance diff decides — re-review."""
+        target = _write_target(tmp_path)
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[])
+        from core.audit.context import domain_slice_hash_for
+        self._clear_model_cache()
+        stamp = domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw", 1, 1)
+        assert stamp is not None
+        item = self._none_end_item(1)
+        _project_with(tmp_path, _entry(
+            target,
+            source_hash=hash_span(target / "auth.c", 1, 1),
+            line_end=1,
+            strategies=sorted(strategies_from_item(dict(item), "auth.c")),
+            domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        ))
+        self._regenerate_model(project, [self._SOURCE_ONLY_CONCEPT])
+        # Window-sensitivity preconditions: the new concept selects
+        # via BODY tokens — invisible to the stamped single line,
+        # visible to the fallback window the prompt reads — so this
+        # test discriminates the two windows rather than passing
+        # under either.
+        assert domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw", 1, 1,
+        ) == stamp
+        assert domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw", 1, None,
+        ) != stamp
+        sink: dict = {}
+        gaps = self._none_end_gaps(target, project, sink, 1)
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+
+    def test_measured_stamp_blind_to_widened_prompt_window_resurfaces(
+        self, tmp_path,
+    ):
+        """Non-degenerate window drift: the row was stamped over an
+        honestly measured window (lines 1-5) and the source hash
+        verifies there, but the current checklist item dropped
+        line_end, so a re-review prompt reads the fallback window —
+        which also covers the neighbour lines after the function. A
+        regenerated model gains a concept selecting only on that
+        neighbour content: a recompute over the stamped window
+        reproduces the stamp exactly and would reuse a verdict whose
+        briefing the prompt no longer matches. Window mismatch →
+        relevance diff → re-review."""
+        target = self._neighbour_target(tmp_path)
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[])
+        stamp = self._stamp(project, target)
+        assert stamp is not None
+        item = self._none_end_item(1)
+        _project_with(tmp_path, _entry(
+            target,
+            strategies=sorted(strategies_from_item(dict(item), "auth.c")),
+            domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        ))
+        self._regenerate_model(project, [self._NEIGHBOUR_CONCEPT])
+        from core.audit.context import domain_slice_hash_for
+        assert domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw", 1, 5,
+        ) == stamp
+        assert domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw", 1, None,
+        ) != stamp
+        sink: dict = {}
+        gaps = self._none_end_gaps(target, project, sink, 1)
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+
+    def test_row_without_line_end_on_measured_item_still_re_reviews(
+        self, tmp_path,
+    ):
+        """The other direction of the window rule: the row was
+        stamped over the fallback read window (raw line_end None)
+        while the current checklist item carries a measured
+        line_end. The stamp window covered the neighbour lines the
+        measured window excludes, and the regenerated model's new
+        concept selects on that neighbour content — so no recompute
+        may certify the CURRENT (narrower) window against the stamp:
+        both select nothing there, reproducing the stamp for a
+        window it never fingerprinted. The windows differ, so the
+        relevance diff decides — re-review."""
+        target = self._neighbour_target(tmp_path)
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[])
+        stamp = self._none_end_stamp(project, target, 1)
+        assert stamp is not None
+        _project_with(tmp_path, _entry(
+            target,
+            source_hash=hash_span(target / "auth.c", 1, 1),
+            line_end=None,
+            domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        ))
+        self._regenerate_model(project, [self._NEIGHBOUR_CONCEPT])
+        from core.audit.context import domain_slice_hash_for
+        # A recompute pointed at the measured current window would
+        # reproduce the stamp (both select nothing at lines 1-5);
+        # only the stamp's own fallback window sees the new concept.
+        assert domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw", 1, 5,
+        ) == stamp
+        assert domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw", 1, None,
+        ) != stamp
+        sink: dict = {}
+        gaps = self._gaps(target, project, sink)
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+
+    def test_first_listed_same_named_item_never_speaks_for_the_site(
+        self, tmp_path,
+    ):
+        """Per-site window comparison: the raw line_end a recorded
+        site is checked against must come from the checklist item AT
+        that site, never from the same-named occurrence that owns
+        the key's first-occurrence slots. Here a measured same-named
+        definition is listed FIRST while the reviewed site carries
+        no line_end — comparing the entry's raw None against the
+        decoy's measured end would refuse the short-circuit and
+        re-buy an unchanged review that the per-site comparison
+        keeps at $0."""
+        target = tmp_path / "target"
+        target.mkdir(exist_ok=True)
+        pad = "".join(f"/* pad {i} */\n" for i in range(1, 6))
+        # Two same-named definitions: lines 1-5 and lines 11-15.
+        (target / "auth.c").write_text(
+            _SOURCE + pad + _SOURCE, encoding="utf-8")
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[self._SOURCE_ONLY_CONCEPT])
+        stamp = self._none_end_stamp(project, target, 1)
+        assert stamp is not None
+        from core.audit.context import domain_slice_hash_for
+        # Window-sensitivity precondition: the single normalised
+        # line yields a different fingerprint, so only the raw
+        # fallback window reproduces the stamp.
+        assert domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw", 1, 1,
+        ) != stamp
+        reviewed = self._none_end_item(1)
+        decoy = dict(_ITEM, line_start=11, line_end=15)
+        _project_with(tmp_path, _entry(
+            target,
+            source_hash=hash_span(target / "auth.c", 1, 1),
+            line_end=None,
+            strategies=sorted(
+                strategies_from_item(dict(reviewed), "auth.c")),
+            domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        ))
+        self._clear_model_cache()
+        checklist = {
+            "target_path": str(target),
+            "files": [{
+                "path": "auth.c",
+                "language": "c",
+                # The measured decoy is listed FIRST and owns the
+                # key's first-occurrence slots; the reviewed site
+                # carries no line_end.
+                "items": [decoy, reviewed],
+            }],
+        }
+        sink: dict = {}
+        gaps = compute_gaps(
+            checklist, [], project_dir=project,
+            out_dir=project / "run2",
+            reuse_sink=sink, current_model="model-a",
+        )
+        assert "auth.c:check_pw" in sink
+        assert 1 not in {g["line_start"] for g in gaps}
+
+    def test_truncated_stamp_prefix_never_short_circuits(self, tmp_path):
+        """Full-string equality pin: a stamp that is a strict PREFIX
+        of the recomputed slice hash must not short-circuit fresh.
+        The whole-model hash deliberately uses a bidirectional prefix
+        compare; the slice stamp deliberately does NOT — a prefix-
+        tolerant compare here would accept a truncated (or attacker-
+        chosen 1-char) stamp against the full recompute and grant
+        reuse. Full equality mismatches, the relevance diff sees a
+        relevant new concept, re-review."""
+        target = _write_target(tmp_path)
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[])
+        full = self._stamp(project, target)
+        assert full is not None
+        _project_with(tmp_path, _entry(
+            target, domain_model_hash="00000000",
+            domain_slice_hash=full[:8],
+        ))
+        # Same regeneration as
+        # test_unchanged_slice_survives_model_regeneration: the
+        # recompute reproduces the FULL hash, of which the stored
+        # stamp is a strict prefix.
+        self._regenerate_model(project, [_AUTH_CONCEPT])
+        sink: dict = {}
+        gaps = self._gaps(target, project, sink)
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+
+    def test_no_matched_span_skips_the_short_circuit(self):
+        """Fail-closed default: a caller that cannot name the span
+        where source verification succeeded gets no slice
+        short-circuit at all — the recompute never runs and the
+        relevance diff decides."""
+        from core.audit.gaps import _context_staleness
+
+        stamp = "cafe" * 16
+        calls: list = []
+
+        def _slice_fn(entry, span=None):
+            # Reproduces the stamp on purpose: a regression that
+            # calls the recompute WITHOUT a verified span would
+            # short-circuit fresh here and hide from this test.
+            calls.append(span)
+            return stamp
+
+        entry = ReviewJournalEntry(
+            ts=now_iso(), run_id="r1", file="auth.c",
+            function="check_pw", verdict="clean", source_hash="",
+            line_start=1, line_end=5, strategies=["auth"],
+            model="model-a", body="prior review body",
+            domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        )
+        ctx = {
+            "hash": "11111111",
+            "canonical": True,
+            "concepts": {"cred_cache_rules": ["auth"]},
+            "invariant_concept": {},
+            "slice_hash_fn": _slice_fn,
+        }
+        stale = _context_staleness(
+            entry, "auth.c:check_pw", ctx,
+            lambda key, line_start: ["auth"],
+        )
+        assert calls == []
+        assert stale is not None
+        assert "cred_cache_rules" in stale
+
+    def test_recompute_error_falls_back_to_re_review(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.audit.context as context_mod
+        target = _write_target(tmp_path)
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[])
+        stamp = self._stamp(project, target)
+        _project_with(tmp_path, _entry(
+            target, domain_model_hash="00000000",
+            domain_slice_hash=stamp,
+        ))
+        self._regenerate_model(project, [_AUTH_CONCEPT])
+
+        def _boom(*a, **kw):
+            raise RuntimeError("slice recompute failure")
+
+        monkeypatch.setattr(context_mod, "domain_slice_hash_for", _boom)
+        # Identical setup reuses in
+        # test_unchanged_slice_survives_model_regeneration — with the
+        # recompute erroring, the slice cannot be PROVEN unchanged, so
+        # the relevance diff decides and re-reviews.
+        sink: dict = {}
+        gaps = self._gaps(target, project, sink)
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)

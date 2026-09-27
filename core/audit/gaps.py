@@ -45,6 +45,12 @@ PRIORITY_DEAD_CODE = 4
 _TRIVIAL_SLOC = 5
 _SMALL_ENTRY_SLOC = 20
 _LARGE_SLOC = 200
+
+# Sentinel for a checklist site whose raw line_end is unknown or not
+# comparable (site absent from the current checklist, or a
+# non-int/non-None value). Never equal to any recorded raw line_end,
+# so the recorded-site slice short-circuit stays off for it.
+_RAW_END_UNKNOWN: Any = object()
 _REVIEWABLE_KINDS = frozenset({"function", "method", ""})
 # Included by DEFAULT: import-time module code (module-level yaml.load,
 # eval on env, subprocess at import), C/C++ macros (an unsafe macro
@@ -323,6 +329,15 @@ def compute_gaps(
             crypto_by_key.setdefault(
                 make_function_key(_sf, _sfn), []).append(_site)
     current_spans: dict[str, tuple] = {}
+    # Companion to current_spans, populated in lockstep (same
+    # first-occurrence-wins rule): the checklist item's RAW line_end —
+    # None when the checklist never measured one. current_spans
+    # normalises a missing line_end to line_start because its other
+    # consumers (source-hash verification, span comparison) need int
+    # spans, but the slice recompute must mirror the writer's stamp
+    # call, and the writer stamps with the raw value: a missing
+    # line_end means the fallback read window, not a single line.
+    current_raw_ends: dict[str, int | None] = {}
     binary_hashes: dict[str, str] = {}
     # key → {line_start: (item, fp)}: same-named items (function +
     # prototype pairs, macro redefinitions, C++ overloads) share one
@@ -331,6 +346,16 @@ def compute_gaps(
     # eligibility screen compare a journal entry against the item it
     # actually reviewed rather than the first same-named occurrence.
     items_by_key: dict[str, dict[int, tuple]] = {}
+    # (key, line_start) → the checklist item's RAW line_end AT THAT
+    # SITE (None = the fallback read window). Per-site companion to
+    # current_raw_ends for the recorded-site slice window rule: a
+    # journal entry that verified at its own recorded span must have
+    # its raw line_end compared against the item at THAT site — the
+    # first same-named occurrence's slot can belong to a different
+    # site with a different window. Non-int/non-None values map to
+    # the unknown sentinel: an incomparable window never certifies a
+    # stamp.
+    site_raw_ends: dict[str, dict[int, int | None | object]] = {}
     for file_info in checklist.get("files", []):
         fp = file_info.get("path", "")
         if not fp:
@@ -344,16 +369,35 @@ def compute_gaps(
                 and not isinstance(ls, bool)
                 and ls > 0
             ):
-                le = item.get("line_end")
+                raw_le = item.get("line_end")
+                le = raw_le
                 if not isinstance(le, int) or isinstance(le, bool):
                     le = ls
+                fn_key = make_function_key(fp, name)
                 # First occurrence wins for same-named items — matches
                 # _consume_covered_key's one-suppression-per-key rule.
-                current_spans.setdefault(
-                    make_function_key(fp, name), (ls, le))
-                items_by_key.setdefault(
-                    make_function_key(fp, name), {}).setdefault(
+                # The raw-end companion is written under the SAME
+                # claim so the two dicts never disagree about which
+                # occurrence owns the key.
+                if fn_key not in current_spans:
+                    current_spans[fn_key] = (ls, le)
+                    current_raw_ends[fn_key] = (
+                        raw_le
+                        if isinstance(raw_le, int)
+                        and not isinstance(raw_le, bool)
+                        else None)
+                items_by_key.setdefault(fn_key, {}).setdefault(
                     ls, (item, fp))
+                # Same first-wins claim as items_by_key, so the two
+                # per-site structures never disagree about which
+                # item owns a site.
+                site_raw_ends.setdefault(fn_key, {}).setdefault(
+                    ls,
+                    raw_le
+                    if raw_le is None
+                    or (isinstance(raw_le, int)
+                        and not isinstance(raw_le, bool))
+                    else _RAW_END_UNKNOWN)
             elif name and item.get("address") is not None:
                 # Binary items have no line spans; their staleness
                 # anchor is the binary's content hash + the function's
@@ -407,6 +451,47 @@ def compute_gaps(
             domain_ctx = domain_model_context(Path(out_dir))
         except Exception:
             logger.debug("domain-model context load failed", exc_info=True)
+    if domain_ctx is not None and target_path_str:
+        # Per-function slice recompute for the staleness gate's
+        # slice-stamp short-circuit: recomputes the entry's
+        # domain-model prompt slice through the SAME code path the
+        # prompt assembly and the journal writer use
+        # (core.audit.context.domain_slice_hash_for), at the span the
+        # fold hands over — the span where the entry's source hash
+        # actually VERIFIED. For a function that moved but is
+        # unchanged, that is the checklist's CURRENT span, never the
+        # recorded one: recomputing at the recorded span would read
+        # whatever code now occupies the OLD lines, and an
+        # empty-selection slice there reproduces an empty-selection
+        # stamp byte-for-byte — falsely certifying "provably
+        # unchanged" while the re-review prompt at the function's
+        # real location would carry new model content. A
+        # moved/edited function whose slice differs at the verified
+        # span (or errors) falls back to the relevance diff — the
+        # fail-toward-re-review direction.
+        _slice_out_dir = Path(out_dir)
+        _slice_target = Path(target_path_str)
+
+        def _current_slice_hash(
+            entry: Any,
+            span: tuple[int, int | None] | None = None,
+        ) -> str | None:
+            from .context import domain_slice_hash_for
+            if span is not None:
+                line_start, line_end = span
+            else:
+                line_start = getattr(entry, "line_start", 0) or 0
+                line_end = getattr(entry, "line_end", None)
+            return domain_slice_hash_for(
+                _slice_out_dir,
+                _slice_target,
+                entry.file,
+                entry.function,
+                line_start or 0,
+                line_end,
+            )
+
+        domain_ctx["slice_hash_fn"] = _current_slice_hash
 
     _fold_journal_into_covered(
         covered_functions,
@@ -414,6 +499,8 @@ def compute_gaps(
         project_dir,
         target_path=Path(target_path_str) if target_path_str else None,
         current_spans=current_spans,
+        current_raw_ends=current_raw_ends,
+        site_raw_ends=site_raw_ends,
         binary_hashes=binary_hashes,
         reuse_sink=reuse_sink,
         credits=covered_credits,
@@ -2091,6 +2178,8 @@ def _fold_journal_into_covered(
     *,
     target_path: Path | None = None,
     current_spans: dict[str, tuple] | None = None,
+    current_raw_ends: dict[str, int | None] | None = None,
+    site_raw_ends: dict[str, dict[int, int | None | object]] | None = None,
     binary_hashes: dict[str, str] | None = None,
     reuse_sink: dict | None = None,
     credits: dict | None = None,
@@ -2167,6 +2256,8 @@ def _fold_journal_into_covered(
                     _latest_review_rows_per_site(own_entries),
                     target_path=target_path,
                     current_spans=current_spans or {},
+                    current_raw_ends=current_raw_ends or {},
+                    site_raw_ends=site_raw_ends or {},
                     binary_hashes=binary_hashes or {},
                     reuse_sink=reuse_sink,
                     credits=credits,
@@ -2214,6 +2305,8 @@ def _fold_journal_into_covered(
                         load_entries(out_dir, fresh=True)),
                     target_path=target_path,
                     current_spans=current_spans or {},
+                    current_raw_ends=current_raw_ends or {},
+                    site_raw_ends=site_raw_ends or {},
                     binary_hashes=binary_hashes or {},
                     reuse_sink=None,
                     credits=credits,
@@ -2247,6 +2340,8 @@ def _fold_journal_into_covered(
                 covered, project_dir,
                 target_path=target_path,
                 current_spans=current_spans or {},
+                current_raw_ends=current_raw_ends or {},
+                site_raw_ends=site_raw_ends or {},
                 binary_hashes=binary_hashes or {},
                 reuse_sink=reuse_sink,
                 credits=credits,
@@ -2269,6 +2364,7 @@ def _context_staleness(
     domain_ctx: dict,
     current_strategies_fn,
     hydrate_fn=None,
+    matched_span: tuple[int, int | None] | None = None,
 ) -> str | None:
     """AR-7 context-staleness: has the domain model gained knowledge
     this review lacked AND that is relevant to this function?
@@ -2283,6 +2379,31 @@ def _context_staleness(
       unchanged, not stale. A per-run (non-canonical) model's hash
       has no cross-run semantics (amendment §3), so hash equality
       against it never counts as fresh and the relevance diff runs.
+    * per-function slice stamp — the whole model changed, but when
+      the entry carries a ``domain_slice_hash`` stamp and recomputing
+      the SAME per-function prompt slice
+      (``domain_ctx["slice_hash_fn"]``, backed by
+      ``core.audit.context.domain_slice_hash_for`` — the code path
+      the prompt assembly and the journal writer share) reproduces
+      it byte-identically, a re-review would be briefed with exactly
+      the domain context the prior verdict already saw — not stale.
+      The recompute runs at *matched_span* — the span where the
+      fold's source-hash verification actually succeeded, which for
+      an unchanged function that merely moved is the checklist's
+      CURRENT span. Recomputing at the entry's recorded span after
+      a move fingerprints whatever code now sits on the OLD lines;
+      an empty selection there reproduces an empty-selection stamp
+      byte-for-byte and falsely certifies the slice unchanged while
+      the real re-review prompt would select new model content.
+      Callers that cannot name the verified span pass None and the
+      short-circuit is skipped entirely. Strictly reuse-ADDING and
+      fail-closed: no stamp, no matched span, a mismatching
+      recompute, or a recompute error all fall through to the
+      relevance diff below, the exact pre-stamp behaviour. A
+      mismatch never blocks reuse by itself — the relevance diff
+      still decides, so a model whose prose was merely reworded
+      (slice changed, nothing relevant gained) keeps reusing exactly
+      as it does today.
     * relevance diff — concepts absent from the entry's
       ``domain_concepts_available`` (and invariants absent from
       ``invariants_available``, via their parent concept) whose
@@ -2311,6 +2432,26 @@ def _context_staleness(
     if domain_ctx["canonical"] and (
             cur_hash[:len(entry_hash)] == entry_hash[:len(cur_hash)]):
         return None
+    slice_stamp = getattr(entry, "domain_slice_hash", None)
+    slice_fn = domain_ctx.get("slice_hash_fn")
+    if slice_stamp and callable(slice_fn) and matched_span is not None:
+        current_slice: str | None = None
+        try:
+            current_slice = slice_fn(entry, matched_span)
+        except Exception:
+            # Fail toward re-review: an unresolvable source span, a
+            # renderer error, or a broken model all mean the slice
+            # cannot be PROVEN unchanged — fall through to the
+            # relevance diff, the pre-stamp behaviour.
+            logger.debug(
+                "domain slice recompute failed for %s", key,
+                exc_info=True,
+            )
+        # Full-string equality, deliberately not the prefix compare
+        # the whole-model hash uses: a truncated or foreign-length
+        # stamp must mismatch, never prefix-match its way to reuse.
+        if current_slice is not None and current_slice == slice_stamp:
+            return None
     current = (
         current_strategies_fn(key, getattr(entry, "line_start", 0) or 0)
         if current_strategies_fn is not None
@@ -2361,6 +2502,7 @@ def _reuse_ineligibility(
     domain_ctx: dict | None = None,
     recorded_strategies: list | None = None,
     hydrate_fn=None,
+    matched_span: tuple[int, int | None] | None = None,
 ) -> str | None:
     """Why a hash-verified prior entry may NOT be imported as a
     reused verdict. ``None`` when it is eligible.
@@ -2396,6 +2538,15 @@ def _reuse_ineligibility(
       review AND gained concepts/invariants relevant to this
       function's current strategies (:func:`_context_staleness`),
       the review lacked knowledge that could overturn its verdict.
+      Entries stamped with a ``domain_slice_hash`` whose recomputed
+      per-function prompt slice is byte-identical short-circuit
+      fresh — a whole-model change that never touched what THIS
+      function's review prompt contains does not re-buy its verdict.
+      The recompute runs at *matched_span* — the span where the
+      fold's source-hash verification succeeded — so a moved-but-
+      unchanged function is fingerprinted at its CURRENT location,
+      never at the stale recorded lines (see
+      :func:`_context_staleness`). ``None`` skips the short-circuit.
     """
     if getattr(entry, "context_reduced", None):
         return "context_reduced verdict"
@@ -2437,7 +2588,7 @@ def _reuse_ineligibility(
     if domain_ctx is not None:
         stale = _context_staleness(
             entry, key, domain_ctx, current_strategies_fn,
-            hydrate_fn=hydrate_fn)
+            hydrate_fn=hydrate_fn, matched_span=matched_span)
         if stale is not None:
             return stale
     return None
@@ -2538,6 +2689,8 @@ def _fold_project_index(
     *,
     target_path: Path | None,
     current_spans: dict[str, tuple],
+    current_raw_ends: dict[str, int | None] | None = None,
+    site_raw_ends: dict[str, dict[int, int | None | object]] | None = None,
     binary_hashes: dict[str, str] | None = None,
     reuse_sink: dict | None = None,
     credits: dict | None = None,
@@ -2641,6 +2794,8 @@ def _fold_project_index(
         list(latest_function_grade_collapse(full_entries).values()),
         target_path=target_path,
         current_spans=current_spans,
+        current_raw_ends=current_raw_ends,
+        site_raw_ends=site_raw_ends,
         binary_hashes=binary_hashes,
         reuse_sink=reuse_sink,
         credits=credits,
@@ -2692,6 +2847,8 @@ def _verify_entries_fold(
     *,
     target_path: Path | None,
     current_spans: dict[str, tuple],
+    current_raw_ends: dict[str, int | None] | None = None,
+    site_raw_ends: dict[str, dict[int, int | None | object]] | None = None,
     binary_hashes: dict[str, str] | None = None,
     reuse_sink: dict | None,
     credits: dict | None = None,
@@ -3124,6 +3281,62 @@ def _verify_entries_fold(
                 if not (entry.strategies or []) and (
                         strategy_backfill is not None):
                     recorded_strategies = strategy_backfill(entry)
+                # The slice recompute must run at the span where the
+                # source hash actually VERIFIED: for an unchanged
+                # function that merely moved, that is the checklist's
+                # current span — recomputing at the recorded span
+                # would fingerprint whatever code now occupies the
+                # old lines and could reproduce the stamp
+                # byte-for-byte (an empty selection matches an
+                # empty-selection stamp), falsely certifying the
+                # slice unchanged. Whichever candidate verified, hand
+                # back the RAW line_end (possibly None) so the
+                # recompute mirrors the writer's stamp call — both
+                # candidate lists normalise a missing line_end to
+                # line_start, which would truncate the fallback read
+                # window the stamp was computed over. Recorded-site
+                # match: the entry's own raw line_end — but only when
+                # it equals the checklist's CURRENT raw line_end at
+                # THAT SITE (per site via site_raw_ends: the
+                # same-named occurrence owning the key's
+                # first-occurrence slot never speaks for the reviewed
+                # site). When the two differ — a row stamped over a
+                # measured line_end whose current item dropped it, or
+                # the reverse — the recompute would certify the stamp
+                # window while the re-review prompt reads a different
+                # one: a model gaining a concept that selects only in
+                # the widened region reproduces the stamp
+                # byte-for-byte and reuses a stale verdict. No window
+                # agreement (including a site absent from the current
+                # checklist or a non-int raw on either side) skips
+                # the short-circuit entirely — the relevance diff
+                # decides, the pre-stamp behaviour. Current-span
+                # match (the moved function): the CHECKLIST's raw
+                # line_end via current_raw_ends — recomputing over a
+                # single normalised line at the new location selects
+                # nothing and reproduces an empty-selection stamp,
+                # while the re-review prompt there reads the fallback
+                # window over the function's real body.
+                verified_span: tuple[int, int | None] | None = matched_span
+                if getattr(entry, "line_start", None) and (
+                        matched_span == (
+                            entry.line_start,
+                            entry.line_end or entry.line_start)):
+                    entry_raw_end = entry.line_end
+                    raw_comparable = entry_raw_end is None or (
+                        isinstance(entry_raw_end, int)
+                        and not isinstance(entry_raw_end, bool))
+                    site_raw_end = (site_raw_ends or {}).get(
+                        key, {}).get(entry.line_start, _RAW_END_UNKNOWN)
+                    if raw_comparable and site_raw_end == entry_raw_end:
+                        verified_span = (entry.line_start, entry.line_end)
+                    else:
+                        verified_span = None
+                elif matched_span == current_spans.get(key):
+                    verified_span = (
+                        matched_span[0],
+                        (current_raw_ends or {}).get(
+                            key, matched_span[1]))
                 reason = _reuse_ineligibility(
                     entry, key,
                     current_strategies_fn=current_strategies_fn,
@@ -3131,6 +3344,7 @@ def _verify_entries_fold(
                     domain_ctx=domain_ctx,
                     recorded_strategies=recorded_strategies,
                     hydrate_fn=hydrate_fn,
+                    matched_span=verified_span,
                 )
                 if reason is not None:
                     cls = _reuse_block_class(reason)
