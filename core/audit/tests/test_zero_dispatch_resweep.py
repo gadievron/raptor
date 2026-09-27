@@ -248,6 +248,152 @@ class TestScopeExclusions:
         assert calls == []
 
 
+class TestParallelDispatch:
+    def _capture_workers(self, monkeypatch) -> dict:
+        import core.llm.concurrency as conc
+
+        seen: dict = {}
+
+        def fake_run_parallel(
+            items, fn, *, max_workers=None, label="", on_error=None,
+            **kw,
+        ):
+            seen["max_workers"] = max_workers
+            seen["label"] = label
+            return [fn(item) for item in items]
+
+        monkeypatch.setattr(conc, "run_parallel", fake_run_parallel)
+        return seen
+
+    def test_parallel_pass_sweeps_everything_with_records(
+        self, tmp_path, monkeypatch,
+    ):
+        # Real thread fan-out: every candidate gets its chain, its
+        # own receipt slots, and its own audit-log record; verdicts
+        # stay untouched.
+        calls: list[str] = []
+        _patch_mechanical(monkeypatch, confirm={"fn0"}, calls=calls)
+        result = _result([_outcome(f"fn{i}") for i in range(4)])
+        config = _config(tmp_path)
+        _resweep_zero_dispatch_suspicious(result, config, max_workers=4)
+        assert sorted(calls) == [f"fn{i}" for i in range(4)]
+        records = _resweep_records(config.out_dir)
+        assert len(records) == 4
+        for o in result.outcomes:
+            assert o.tools_dispatched == {"smt"}
+            assert o.status == "suspicious"
+
+    def test_sigterm_stops_parallel_pass(self, tmp_path, monkeypatch):
+        calls: list[str] = []
+        _patch_mechanical(monkeypatch, confirm=set(), calls=calls)
+        monkeypatch.setattr(orch, "is_sigterm_requested", lambda: True)
+        result = _result([_outcome(f"fn{i}") for i in range(4)])
+        _resweep_zero_dispatch_suspicious(
+            result, _config(tmp_path), max_workers=4,
+        )
+        assert calls == []
+
+    def test_worker_ceiling_binds_above_the_cap(
+        self, tmp_path, monkeypatch,
+    ):
+        _patch_mechanical(monkeypatch, confirm=set())
+        seen = self._capture_workers(monkeypatch)
+        result = _result([_outcome(f"fn{i}") for i in range(8)])
+        _resweep_zero_dispatch_suspicious(
+            result, _config(tmp_path), max_workers=32,
+        )
+        assert seen["max_workers"] == orch._RESWEEP_SUBPROCESS_MAX_WORKERS
+
+    def test_worker_count_below_the_cap_passes_through(
+        self, tmp_path, monkeypatch,
+    ):
+        _patch_mechanical(monkeypatch, confirm=set())
+        seen = self._capture_workers(monkeypatch)
+        result = _result([_outcome(f"fn{i}") for i in range(8)])
+        _resweep_zero_dispatch_suspicious(
+            result, _config(tmp_path), max_workers=3,
+        )
+        assert seen["max_workers"] == 3
+
+    def test_joern_server_clamps_to_the_joern_pass_cap(
+        self, tmp_path, monkeypatch,
+    ):
+        _patch_mechanical(monkeypatch, confirm=set())
+        seen = self._capture_workers(monkeypatch)
+        result = _result([_outcome(f"fn{i}") for i in range(8)])
+        _resweep_zero_dispatch_suspicious(
+            result, _config(tmp_path), max_workers=32,
+            joern_server=object(),
+        )
+        assert seen["max_workers"] == orch._JOERN_PASS_MAX_WORKERS
+
+    def test_joern_server_below_cap_passes_through(
+        self, tmp_path, monkeypatch,
+    ):
+        # Requested workers already below the joern-pass cap: the
+        # clamp passes the value through unchanged — effective
+        # workers == requested (1), which is the serial path, so the
+        # fan-out must never be entered.
+        import core.llm.concurrency as conc
+
+        calls: list[str] = []
+        _patch_mechanical(monkeypatch, confirm=set(), calls=calls)
+        monkeypatch.setattr(
+            conc, "run_parallel",
+            lambda *a, **kw: pytest.fail("serial path must not fan out"),
+        )
+        result = _result([_outcome(f"fn{i}") for i in range(4)])
+        _resweep_zero_dispatch_suspicious(
+            result, _config(tmp_path), max_workers=1,
+            joern_server=object(),
+        )
+        assert calls == [f"fn{i}" for i in range(4)]
+
+    def test_ceiling_value_is_pinned(self):
+        """Value pin (churn-prone-limits doctrine): the clamp
+        assertions above follow the constant, so only an explicit pin
+        makes a cap change a deliberate, test-visible act. Raising it
+        multiplies concurrent sandboxed scanner subprocesses and
+        widens wall-bound overshoot (in-flight items finish after the
+        bound trips); lowering it serialises the pass so fewer
+        outcomes earn receipts inside the wall budget."""
+        assert orch._RESWEEP_SUBPROCESS_MAX_WORKERS == 4
+
+    def test_single_worker_stays_on_the_serial_path(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.llm.concurrency as conc
+
+        calls: list[str] = []
+        _patch_mechanical(monkeypatch, confirm=set(), calls=calls)
+        monkeypatch.setattr(
+            conc, "run_parallel",
+            lambda *a, **kw: pytest.fail("serial path must not fan out"),
+        )
+        result = _result([_outcome(f"fn{i}") for i in range(4)])
+        _resweep_zero_dispatch_suspicious(
+            result, _config(tmp_path), max_workers=1,
+        )
+        assert calls == [f"fn{i}" for i in range(4)]
+
+    def test_single_candidate_stays_on_the_serial_path(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.llm.concurrency as conc
+
+        calls: list[str] = []
+        _patch_mechanical(monkeypatch, confirm=set(), calls=calls)
+        monkeypatch.setattr(
+            conc, "run_parallel",
+            lambda *a, **kw: pytest.fail("serial path must not fan out"),
+        )
+        result = _result([_outcome("fn0")])
+        _resweep_zero_dispatch_suspicious(
+            result, _config(tmp_path), max_workers=4,
+        )
+        assert calls == ["fn0"]
+
+
 class TestNoPhantomCoverage:
     def test_resweep_then_gate_resolution_never_cleans_gated_joern(
         self, tmp_path, monkeypatch,

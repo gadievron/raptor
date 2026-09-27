@@ -9667,6 +9667,7 @@ def _run_audit_body(
                 sarif_cache=sarif_cache,
                 checklist=checklist,
                 joern_server=joern_server,
+                max_workers=resolved_workers,
             )
         except Exception:
             logger.debug("zero-dispatch re-sweep failed", exc_info=True)
@@ -25684,6 +25685,18 @@ _GATE_DEMOTION_BODY_PREFIXES = (
 )
 
 
+# Concurrency ceiling for the zero-dispatch re-sweep's per-item
+# tool-chain fan-out. The pass is subprocess-bound (sandboxed spatch /
+# semgrep children), not LLM-bound, so the caller's LLM worker count
+# is only an upper input. Raising the cap multiplies concurrent
+# sandboxed scanner processes (fork + memory pressure on large files)
+# and widens wall-bound overshoot — the bound is checked between
+# items, so every in-flight item still runs to completion after it
+# trips. Lowering it serialises the pass, so fewer outcomes earn
+# receipts before the wall bound stops it.
+_RESWEEP_SUBPROCESS_MAX_WORKERS = 4
+
+
 def _resweep_zero_dispatch_suspicious(
     result: OrchestratorResult,
     config: OrchestratorConfig,
@@ -25691,6 +25704,7 @@ def _resweep_zero_dispatch_suspicious(
     sarif_cache: SarifCache | None = None,
     checklist: dict[str, Any] | None = None,
     joern_server=None,
+    max_workers: int = 1,
 ) -> None:
     """Receipt supply for the zero-dispatch suspicious pile.
 
@@ -25707,20 +25721,29 @@ def _resweep_zero_dispatch_suspicious(
     re-derives the same chain steps and flips status only through its
     own gates; refutations keep flowing through the refutation
     lattice. The re-derivation is memo-cheap for the memoizable step
-    types (semgrep/codeql/smt/compiler, and coccinelle only when no
-    domain vocabulary is in play) and an accepted double-run for the
-    rest (coccinelle-with-vocab, flow/cross-file legs, joern) — the
-    wall bound prices that honestly. Tier counters are NOT fed from
-    this pass: the promotion pass's re-derivation counts them, so
-    feeding both would double-book every channel receipt in
-    tier-diagnostics; this pass's per-outcome audit-log records carry
-    its results instead. Outcomes the promotion pass will never sweep
+    types (semgrep/codeql/smt/compiler, and coccinelle — memoized at
+    file scope, vocab-rendered rules included) and an accepted
+    double-run for the rest (flow/cross-file legs, joern) — the wall
+    bound prices that honestly. Tier counters are NOT fed from this
+    pass: the promotion pass's re-derivation counts them, so feeding
+    both would double-book every channel receipt in tier-diagnostics;
+    this pass's per-outcome audit-log records carry its results
+    instead. Outcomes the promotion pass will never sweep
     (authoritative gate demotions, counter-fenced hypotheses) are
     excluded up front — their chains would burn wall budget on
     receipts nothing consumes. Joern participation inherits the
     channel-health gate and budget clamps inside ``_run_tool_chain``.
     Wall-time bounded by ``config.zero_dispatch_resweep_seconds``;
     SIGTERM and a concluded environment guard stop it between items.
+
+    Items are independent — each writes only its own outcome's
+    receipt slots, tier counters stay unfed, and the audit log is
+    append-atomic — so with ``max_workers > 1`` the subprocess-bound
+    tool chains fan out across threads (clamped to
+    ``_RESWEEP_SUBPROCESS_MAX_WORKERS``, and to
+    ``_JOERN_PASS_MAX_WORKERS`` when a joern server is attached).
+    The wall/SIGTERM/guard stops stay between-item: a tripped stop
+    lets in-flight items finish and starts no new ones.
     """
     budget_s = float(
         getattr(config, "zero_dispatch_resweep_seconds", 0.0) or 0.0,
@@ -25740,19 +25763,30 @@ def _resweep_zero_dispatch_suspicious(
     )
     pass_start = time.monotonic()
     swept = 0
-    for _i, outcome in candidates:
+    swept_lock = _threading.Lock()
+    stop = _threading.Event()
+
+    def _sweep_one(item: tuple[int, ReviewOutcome]) -> None:
+        nonlocal swept
+        _i, outcome = item
+        if stop.is_set():
+            return
         if time.monotonic() - pass_start >= budget_s:
-            logger.info(
-                "zero-dispatch re-sweep stopped at its %.0fs wall "
-                "bound — %d/%d outcome(s) swept",
-                budget_s, swept, len(candidates),
-            )
-            break
+            if not stop.is_set():
+                stop.set()
+                logger.info(
+                    "zero-dispatch re-sweep stopped at its %.0fs wall "
+                    "bound — %d/%d outcome(s) swept",
+                    budget_s, swept, len(candidates),
+                )
+            return
         if is_sigterm_requested():
-            break
+            stop.set()
+            return
         _guard = getattr(config, "environment_guard_state", None)
         if _guard is not None and _guard.concluded:
-            break
+            stop.set()
+            return
         review = outcome.review_result or {}
         hypothesis = review.get("hypothesis") or outcome.hypothesis or ""
         record: dict[str, Any] = {
@@ -25767,16 +25801,16 @@ def _resweep_zero_dispatch_suspicious(
         try:
             if not hypothesis:
                 record["skip_reason"] = "no-hypothesis"
-                continue
+                return
             if outcome.body.startswith(_GATE_DEMOTION_BODY_PREFIXES):
                 record["skip_reason"] = "mechanical-gate-demotion"
-                continue
+                return
             if _has_refuting_counter(outcome):
                 # The promotion pass diverts counter-fenced outcomes
                 # to synthesis and never consumes chain receipts for
                 # them — receipt supply here would be pure burn.
                 record["skip_reason"] = "counter-fenced"
-                continue
+                return
             cwe = _effective_cwe(outcome, result.tier_counters)
             chain = _hypothesis_to_tool_chain(
                 hypothesis, outcome.file, cwe=cwe,
@@ -25784,7 +25818,7 @@ def _resweep_zero_dispatch_suspicious(
             )
             if not chain:
                 record["skip_reason"] = "no-mechanical-chain"
-                continue
+                return
             gap = _find_gap_in_checklist(
                 checklist or {}, outcome.file, outcome.function,
             )
@@ -25836,7 +25870,8 @@ def _resweep_zero_dispatch_suspicious(
                 outcome.tools_skipped = (
                     (outcome.tools_skipped or set()) | skipped
                 )
-            swept += 1
+            with swept_lock:
+                swept += 1
             record["duration_s"] = round(time.monotonic() - step_start, 3)
             record["tools_dispatched"] = sorted(
                 str(t) for t in dispatched
@@ -25855,7 +25890,39 @@ def _resweep_zero_dispatch_suspicious(
             )
         finally:
             if config.out_dir:
+                # O_APPEND line-atomic — safe from worker threads.
                 append_audit_log(config.out_dir, record)
+
+    workers = min(
+        max(1, int(max_workers or 1)), _RESWEEP_SUBPROCESS_MAX_WORKERS,
+    )
+    if joern_server is not None:
+        workers = min(workers, _JOERN_PASS_MAX_WORKERS)
+
+    if workers <= 1 or len(candidates) <= 1:
+        for entry in candidates:
+            if stop.is_set():
+                break
+            _sweep_one(entry)
+    else:
+        from core.llm.concurrency import run_parallel
+
+        def _on_error(
+            item: tuple[int, ReviewOutcome], exc: Exception,
+        ) -> None:
+            # Best-effort pass by contract: a failed item loses only
+            # its own receipts.
+            logger.debug(
+                "zero-dispatch re-sweep item failed for %s:%s: %s",
+                item[1].file, item[1].function, exc, exc_info=True,
+            )
+
+        run_parallel(
+            candidates, _sweep_one,
+            max_workers=workers,
+            label="zero-dispatch-resweep",
+            on_error=_on_error,
+        )
     if swept:
         logger.info(
             "zero-dispatch re-sweep: %d/%d outcome(s) received "
