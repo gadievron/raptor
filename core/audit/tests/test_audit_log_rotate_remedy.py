@@ -135,6 +135,25 @@ class TestRotateSplits:
         assert disclosure.complete
         assert [r["seq"] for r in rows] == list(range(65))
 
+    def test_stale_temp_refused_with_actionable_error(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # A leftover temp from an interrupted rotate hits the O_EXCL
+        # open. Fail-safe either way (originals untouched), but the
+        # operator must get an actionable refusal naming the stale
+        # file — not a raw FileExistsError traceback — and the stale
+        # file is left in place for inspection.
+        _shrink_budgets(monkeypatch)
+        _plant_rows(tmp_path / record.AUDIT_LOG_FILENAME, 60)
+        stale = tmp_path / ".audit-log-rotate.tmp.001"
+        stale.write_text("partial rewrite\n")
+        before = _trail_bytes(tmp_path)
+        with pytest.raises(RotateRefused, match="stale temp"):
+            rotate_audit_log(tmp_path)
+        assert _trail_bytes(tmp_path) == before
+        assert stale.read_text() == "partial rewrite\n"
+        assert not list(tmp_path.glob("*.pre-rotate*"))
+
     def test_orphan_shard_untouched_and_reported(
         self, tmp_path: Path, monkeypatch,
     ):
@@ -230,8 +249,12 @@ class TestRefuseLive:
             "timestamp": "2026-09-20T00:00:00+00:00",
         }))
         before = _trail_bytes(tmp_path)
-        with pytest.raises(RotateRefused, match="in flight"):
+        with pytest.raises(RotateRefused, match="in flight") as excinfo:
             rotate_audit_log(tmp_path)
+        # The refusal is re-framed for this remedy — no journal-
+        # compaction phrasing in an audit-log rotate error.
+        assert "compact" not in str(excinfo.value)
+        assert "rotate a live run's audit log" in str(excinfo.value)
         assert _trail_bytes(tmp_path) == before
         assert not (
             tmp_path / (record.AUDIT_LOG_FILENAME + ".pre-rotate")

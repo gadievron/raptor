@@ -4,8 +4,12 @@ Pre-rotation installs appended ``.audit-log.jsonl`` unbounded; a
 trail past the per-shard read budget degrades to a bounded
 newest-tail read (see :func:`core.audit.record.load_audit_log_disclosed`).
 :func:`rotate_audit_log` restores full readability by re-splitting
-the trail's existing bytes VERBATIM into a contiguous shard set with
-every shard under the writer's roll threshold:
+the trail's existing bytes VERBATIM into a contiguous shard set.
+Each shard ends at most one line past the writer's roll threshold
+(the roll check runs at line starts), so the per-shard read budget
+holds whenever no single line exceeds the budget's margin over the
+threshold — shards still over the budget are reported, not silently
+accepted:
 
 - Rows are never rewritten, reordered, or dropped — the
   concatenation of the shards after rotation is byte-identical to
@@ -144,9 +148,12 @@ def _shard_snapshot(out_dir: Path) -> dict[Path, int]:
 
 
 def rotate_audit_log(out_dir: Path) -> RotateStats:
-    """Re-split the audit-log trail at *out_dir* so every shard is
-    under the writer's roll threshold. No-op (``rotated=False``) when
-    no shard exceeds the per-shard read budget.
+    """Re-split the audit-log trail at *out_dir* so every shard ends
+    at most one line past the writer's roll threshold — under the
+    per-shard read budget with the threshold's margin, unless a
+    single line exceeds that margin (reported via
+    ``over_budget_shards``). No-op (``rotated=False``) when no shard
+    exceeds the per-shard read budget.
 
     Raises :class:`RotateRefused` when the run is still in flight,
     when its run record is unreadable, or when the rewrite's byte
@@ -157,7 +164,15 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
     try:
         refuse_live_run(out_dir)
     except CompactRefused as exc:
-        raise RotateRefused(str(exc)) from exc
+        # The liveness gate's messages are written for its home
+        # caller (journal compaction) — re-frame them for this
+        # remedy so the operator is not told about compacting a
+        # journal by an audit-log rotate error.
+        detail = str(exc).replace(
+            "refusing to compact a live run's journal",
+            "refusing to rotate a live run's audit log",
+        ).replace("refusing to compact", "refusing to rotate")
+        raise RotateRefused(detail) from exc
 
     all_paths = audit_log_paths(out_dir)
     sizes = _shard_snapshot(out_dir)
@@ -244,6 +259,22 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
         os.fsync(current.fileno())
         current.close()
         current = None
+    except FileExistsError as exc:
+        # The O_EXCL open hit a stale temp from an interrupted
+        # rotate. Fail-safe by construction (originals untouched),
+        # but surface an actionable refusal instead of a raw
+        # traceback; the stale file is left for inspection — it must
+        # never be silently absorbed or deleted.
+        if current is not None:
+            current.close()
+        for tmp in temps:
+            tmp.unlink(missing_ok=True)
+        raise RotateRefused(
+            f"rotate at {out_dir}: a stale temp file from an "
+            f"interrupted rotate is in the way ({exc.filename}). "
+            "Originals are untouched; inspect and remove the stale "
+            f"{_TMP_PREFIX}* file(s), then retry."
+        ) from exc
     except BaseException:
         if current is not None:
             current.close()
