@@ -149,7 +149,9 @@ jobs:
           git -c core.autocrlf=false clone --quiet "$PWD" "$HOME/raptor"
           python3 -m venv "$HOME/venv"
           . "$HOME/venv/bin/activate"
-          python -m pip install --quiet -r "$HOME/raptor/requirements-dev.txt"
+          python -m pip install --quiet uv
+          uv export --locked --no-hashes --project "$HOME/raptor" \
+            | uv pip install -r -
           python --version
 
       - name: Run the verify-live checklist (facts)
@@ -216,7 +218,9 @@ jobs:
           git -c core.autocrlf=true clone --quiet "$PWD" "$HOME/raptor-crlf"
           python3 -m venv "$HOME/venv"
           . "$HOME/venv/bin/activate"
-          python -m pip install --quiet -r "$HOME/raptor/requirements-dev.txt"
+          python -m pip install --quiet uv
+          uv export --locked --no-hashes --project "$HOME/raptor" \
+            | uv pip install -r -
 
       - name: Run the wsl-marked tests (ext4 clone)
         shell: wsl-bash {0}
@@ -307,7 +311,9 @@ jobs:
           git -c core.autocrlf=false clone --quiet "$PWD" "$HOME/raptor"
           python3 -m venv "$HOME/venv"
           . "$HOME/venv/bin/activate"
-          python -m pip install --quiet -r "$HOME/raptor/requirements-dev.txt"
+          python -m pip install --quiet uv
+          uv export --locked --no-hashes --project "$HOME/raptor" \
+            | uv pip install -r -
 
       - name: Live WSL sandbox test slices
         # The WSL-shape suites with the real kernel underneath: the
@@ -411,7 +417,9 @@ jobs:
           git -c core.autocrlf=false clone --quiet "$PWD" "$HOME/raptor"
           python3 -m venv "$HOME/venv"
           . "$HOME/venv/bin/activate"
-          python -m pip install --quiet -r "$HOME/raptor/requirements-dev.txt"
+          python -m pip install --quiet uv
+          uv export --locked --no-hashes --project "$HOME/raptor" \
+            | uv pip install -r -
 
       - name: Run the verify-live checklist (wsl1)
         if: steps.setup.outcome == 'success'
