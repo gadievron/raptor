@@ -1302,9 +1302,18 @@ def _stage_fake_home_intake(
     stage_files: dict[str, bytes] = {}
     stage_dirs: list[str] = [_TMP_FAKE_HOME]
     total = 0
+
+    def _raise(err: OSError) -> None:
+        # os.walk swallows listdir errors by default: an unreadable
+        # SUBDIR would be staged as an empty directory — contents
+        # silently dropped — while an unreadable FILE refuses the
+        # whole stage. Re-raise so both shapes take the same
+        # refuse-and-fall-back path (the except below).
+        raise err
+
     try:
         for dirpath, dirnames, filenames in os.walk(
-                fake_home_path, followlinks=False):
+                fake_home_path, onerror=_raise, followlinks=False):
             rel = os.path.relpath(dirpath, fake_home_path)
             in_sbx_dir = (_TMP_FAKE_HOME if rel == "."
                           else os.path.join(_TMP_FAKE_HOME, rel))

@@ -159,6 +159,26 @@ class TestStageFakeHomeIntake:
         finally:
             locked.chmod(0o600)
 
+    def test_unlistable_subdir_refuses(self, tmp_path: Path) -> None:
+        """os.walk swallows listdir errors by default, so an unreadable
+        SUBDIR used to stage as an empty directory — its contents
+        silently dropped with no warning — while an unreadable FILE
+        refused the whole stage. Both shapes must refuse (None →
+        caller falls back to the attributable intake with a warning)."""
+        if os.geteuid() == 0:
+            pytest.skip("root ignores directory modes")
+        intake = tmp_path / ".home"
+        intake.mkdir()
+        (intake / "visible").write_bytes(b"x")
+        sealed = intake / ".config"
+        sealed.mkdir()
+        (sealed / "secret.txt").write_bytes(b"y")
+        sealed.chmod(0o000)
+        try:
+            assert _stage_fake_home_intake(str(intake)) is None
+        finally:
+            sealed.chmod(0o700)
+
 
 # ---------------------------------------------------------------------------
 # Live lanes
