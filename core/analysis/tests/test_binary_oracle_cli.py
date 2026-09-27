@@ -286,6 +286,82 @@ class TestGitTrackedProvenanceGate:
         assert repo_committed == []
 
 
+class TestProvenanceGateSandboxed:
+    """The provenance probe parses hostile repo state — git on an
+    untrusted clone can execute repo-controlled code via hooks /
+    fsmonitor / per-repo config — so it must route through
+    ``core.sandbox`` with the strict read-only argv posture, and a
+    sandbox refusal must land on the conservative split."""
+
+    def test_git_routes_through_sandbox(self, tmp_path, monkeypatch):
+        import core.sandbox.context as sbx_context
+
+        calls: list[dict] = []
+
+        def fake_run(cmd, **kwargs):
+            record = dict(kwargs)
+            record["cmd"] = list(cmd)
+            calls.append(record)
+            return SimpleNamespace(
+                returncode=0,
+                stdout=b"100644 " + b"a" * 40 + b" 0\tprebuilt\0",
+                stderr=b"",
+            )
+
+        monkeypatch.setattr(sbx_context, "run", fake_run)
+        monkeypatch.setattr(
+            shutil, "which",
+            lambda name, *a, **k: (
+                "/usr/bin/git" if name == "git" else None),
+        )
+        committed = tmp_path / "prebuilt"
+        committed.write_bytes(b"\x7fELF")
+        fresh = tmp_path / "fresh"
+        fresh.write_bytes(b"\x7fELF")
+
+        locally_built, repo_committed = _filter_locally_built(
+            tmp_path, [committed, fresh],
+        )
+
+        assert repo_committed == [committed]
+        assert locally_built == [fresh]
+        [sb] = calls
+        assert sb["cmd"][0] == "/usr/bin/git"
+        assert "ls-files" in sb["cmd"]
+        # Strict read-only posture rides on the argv.
+        assert any("protocol.allow=never" in part for part in sb["cmd"])
+        assert sb["block_network"] is True
+        assert sb["target"] == str(tmp_path)
+        assert sb["output"]
+        assert sb["env"]["LC_ALL"] == "C"
+        assert sb["env_caller_filtered"] is True
+
+    def test_sandbox_refusal_is_conservative(self, tmp_path, monkeypatch):
+        """Refusal (BaseException by design) maps to the same
+        all-candidates-unverified split as not-a-repo — never a bare
+        run, never an abort."""
+        import subprocess
+
+        import core.sandbox.context as sbx_context
+        from core.sandbox.errors import SandboxSetupError
+
+        if not shutil.which("git"):
+            pytest.skip("git not available")
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        binary = tmp_path / "build-out"
+        binary.write_bytes(b"\x7fELF")
+
+        def refusing_run(cmd, **kwargs):
+            raise SandboxSetupError("floor refused")
+
+        monkeypatch.setattr(sbx_context, "run", refusing_run)
+        locally_built, repo_committed = _filter_locally_built(
+            tmp_path, [binary],
+        )
+        assert locally_built == []
+        assert repo_committed == [binary]
+
+
 class TestAutodetectIntegratesGate:
     """End-to-end: _autodetect_binaries returns only locally-built
     binaries even when detect_binaries finds repo-committed ones."""

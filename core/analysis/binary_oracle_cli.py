@@ -156,25 +156,71 @@ def _filter_locally_built(
     (fail-safe: the parent repo pinned that content). ``LC_ALL=C`` is
     pinned regardless — classification must never depend on
     translated output.
+
+    The invocation runs under ``core.sandbox`` (network deny, target
+    read view, scratch output) with the strict read-only git argv
+    posture: git on a hostile clone can execute repo-controlled code
+    via hooks / fsmonitor / per-repo config, so it never runs bare
+    against the scanned tree. Sandbox unavailable or refusing maps to
+    the same conservative ``([], candidates)`` split as not-a-repo.
     """
     if not candidates:
         return [], []
+    import shutil
     import subprocess
     try:
-        from core.config import RaptorConfig
-        from core.git import safe_git_command
-        from core.sandbox.preexec import set_pdeathsig
-        env = dict(RaptorConfig.get_safe_env())
-        env["LC_ALL"] = "C"
+        git = shutil.which("git")
+        if not git:
+            return [], candidates
         try:
-            proc = subprocess.run(
-                safe_git_command("-C", str(repo), "ls-files",
-                                 "-z", "--stage"),
-                capture_output=True, check=False,
-                timeout=30, env=env,
-                preexec_fn=set_pdeathsig(),
-            )
+            from core.sandbox.context import run as sandbox_run
+            from core.sandbox.errors import SandboxSetupError
+        except ImportError:
+            # git parses hostile repo state (per-repo config, index,
+            # fsmonitor hooks) — never run it on an untrusted repo
+            # without isolation; provenance stays unverifiable and
+            # the conservative split fires.
+            return [], candidates
+        from core.git import get_safe_git_env
+        from core.git.clone import safe_git_readonly_command
+        from core.run.scratch import scratch_dir
+        env = dict(get_safe_git_env())
+        env["LC_ALL"] = "C"
+        # Shared strict read-only git posture (hooks / fsmonitor /
+        # pager / transport neutralised); argv[0] swapped for the
+        # resolved absolute git path — the sandbox's env scrub drops
+        # home-rooted PATH entries, so a bare "git" may not resolve
+        # inside it.
+        cmd = safe_git_readonly_command(
+            "-C", str(repo), "ls-files", "-z", "--stage")
+        cmd[0] = git
+        try:
+            with scratch_dir("binoracle_prov_") as workdir:
+                proc = sandbox_run(
+                    cmd,
+                    block_network=True,
+                    target=str(repo),
+                    output=str(workdir),
+                    cwd=str(workdir),
+                    # env is the sanitised git allowlist env already —
+                    # assert that to the sandbox instead of drawing
+                    # the custom-env warning.
+                    env=env,
+                    env_caller_filtered=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=30,
+                    caller_label="binary-oracle-provenance",
+                )
         except subprocess.TimeoutExpired:
+            return [], candidates
+        except SandboxSetupError:
+            # Host posture refusal (BaseException by design). For
+            # this consumer the conservative split IS the fail-closed
+            # direction — every candidate is dropped from suppression
+            # authority, same as the not-a-repo arm — so the refusal
+            # maps there instead of aborting the run for an
+            # enrichment-tier feature.
             return [], candidates
         if proc.returncode != 0:
             # Not a git repo, or git errored — provenance
