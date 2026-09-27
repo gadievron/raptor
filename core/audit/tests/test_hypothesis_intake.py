@@ -127,6 +127,25 @@ class TestLoader:
         assert len(seeds) == MAX_SEED_RECORDS
         assert skips["over_cap"] == 7
 
+    def test_raised_record_bound_for_rank_before_cap_callers(
+        self, tmp_path,
+    ):
+        """Callers that rank BEFORE capping (the engagement router)
+        may raise the per-call bound — first-come truncation at the
+        acceptance cap would evict ranked signal records. The residue
+        beyond the raised bound is still a counted skip, and the
+        default stays the intake's own cap."""
+        f = _write_seeds(
+            tmp_path / "s.json",
+            [_seed(claim=f"claim {i}")
+             for i in range(MAX_SEED_RECORDS + 7)],
+        )
+        seeds, skips, _ = load_seed_files(
+            [f], max_records=MAX_SEED_RECORDS + 5,
+        )
+        assert len(seeds) == MAX_SEED_RECORDS + 5
+        assert skips["over_cap"] == 2
+
     def test_cap_spans_multiple_sources(self, tmp_path):
         f1 = _write_seeds(
             tmp_path / "a.json",
@@ -1789,3 +1808,232 @@ class TestRereviewJournalMarker:
             (tmp_path / "review-journal.jsonl").read_text().strip(),
         )
         assert "seed_rereview" not in raw
+
+
+class TestIdentityJoins:
+    """Fid seeds resolve through the checklist's ``module_identity``
+    space: exact first, then a unique in-window candidate; content
+    contradictions and ambiguity refuse the WHOLE join (no name
+    fallback); soft identity failures fall back with the state
+    recorded per route."""
+
+    _ANCHOR = "a" * 16
+    _SHA = "f0" * 32
+    _BASE = 0x160000
+
+    def _checklist(self, **over):
+        block = {
+            "kind": "elf_build_id", "value": self._ANCHOR,
+            "anchor": self._ANCHOR, "image_base": self._BASE,
+        }
+        block.update(over.pop("block", {}))
+        for key in over.pop("drop", []):
+            block.pop(key, None)
+        entry = {
+            "path": "binary:acmed", "language": "binary",
+            "sha256": self._SHA, "module_identity": block,
+            "items": [],
+        }
+        entry.update(over)
+        return {"files": [entry]}
+
+    def _gaps(self):
+        return [
+            {
+                "file": "binary:acmed", "name": "parse_channel",
+                "priority": 1, "priority_score": 5,
+                "metadata": {"address": 0x161DA0},
+            },
+            {
+                "file": "binary:acmed", "name": "validate_sig",
+                "priority": 1,
+                "metadata": {"address": 0x162000},
+            },
+        ]
+
+    def _apply(self, tmp_path, seeds, gaps=None, checklist=None):
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        _write_seeds(tmp_path / SEEDS_FILENAME, seeds)
+        gaps = self._gaps() if gaps is None else gaps
+        checklist = self._checklist() if checklist is None else checklist
+        summary = apply_hypothesis_seeds(
+            gaps, tmp_path, checklist=checklist,
+        )
+        return summary, gaps
+
+    def test_module_spaces_parsed_from_checklist(self):
+        from core.audit.hypothesis_intake import checklist_module_spaces
+        modules, file_sha = checklist_module_spaces(self._checklist())
+        assert modules == {
+            self._ANCHOR: {
+                "file": "binary:acmed", "base": self._BASE,
+                "sha256": self._SHA,
+            },
+        }
+        assert file_sha == {"binary:acmed": self._SHA}
+
+    def test_anchor_collision_drops_the_anchor_fail_closed(self):
+        from core.audit.hypothesis_intake import checklist_module_spaces
+        doc = self._checklist()
+        twin = dict(doc["files"][0])
+        twin["path"] = "binary:imposter"
+        doc["files"].append(twin)
+        modules, _file_sha = checklist_module_spaces(doc)
+        assert modules == {}
+
+    def test_exact_fid_join_crosses_a_stale_file_name(self, tmp_path):
+        """The anchor is authoritative: a producer's stale module
+        NAME must not veto a content-identity match."""
+        summary, gaps = self._apply(tmp_path, [
+            _seed(file="binary:renamed", function="", address=None,
+                  module_sha256=self._SHA),
+        ])
+        assert summary["matched"] == 1
+        assert summary["fid"] == {
+            "seeds": 1, "joined_exact": 1, "joined_fuzzy": 0,
+            "name_fallback": 0, "misses": {},
+        }
+        assert gaps[0]["seed_hypotheses"]
+
+    def test_fuzzy_window_unique_candidate_joins(self, tmp_path):
+        fid = self._ANCHOR + ":0x1da8"  # 8 bytes past the entry
+        summary, gaps = self._apply(tmp_path, [
+            _seed(fid=fid, file="binary:renamed", function="",
+                  address=None),
+        ])
+        assert summary["matched"] == 1
+        assert summary["fid"]["joined_fuzzy"] == 1
+        assert gaps[0]["seed_hypotheses"]
+
+    def test_fuzzy_window_boundary_is_exclusive(self, tmp_path):
+        """The window is EXCLUSIVE: a unique candidate at distance
+        W-1 joins, at exactly W it does not. Widening to <= W binds
+        one byte beyond the contract; narrowing below W-1 sheds joins
+        the contract promises. No name/address key rides along, so
+        only the fid leg can resolve."""
+        from core.binary.addrmap import FID_FUZZY_WINDOW_BYTES as W
+        fid_in = self._ANCHOR + f":0x{0x1DA0 + W - 1:x}"
+        summary, gaps = self._apply(tmp_path, [
+            _seed(fid=fid_in, file="binary:renamed", function="",
+                  address=None),
+        ])
+        assert summary["matched"] == 1
+        assert summary["fid"]["joined_fuzzy"] == 1
+        assert gaps[0]["seed_hypotheses"]
+
+        fid_out = self._ANCHOR + f":0x{0x1DA0 + W:x}"
+        summary, gaps = self._apply(tmp_path, [
+            _seed(fid=fid_out, file="binary:renamed", function="",
+                  address=None),
+        ])
+        assert summary["matched"] == 0
+        assert summary["missed"] == 1
+        assert summary["fid"]["joined_fuzzy"] == 0
+        assert summary["fid"]["misses"] == {"fid_address_unknown": 1}
+        assert "seed_hypotheses" not in gaps[0]
+
+    def test_ambiguous_window_refuses_even_with_a_name_key(
+        self, tmp_path,
+    ):
+        gaps = self._gaps()
+        gaps[1]["metadata"]["address"] = 0x161DA4  # 2nd in-window gap
+        fid = self._ANCHOR + ":0x1da2"  # between the two, no exact
+        summary, gaps = self._apply(tmp_path, [
+            _seed(fid=fid, address=None),  # name would match gap 0
+        ], gaps=gaps)
+        assert summary["matched"] == 0
+        assert summary["missed"] == 1
+        assert summary["fid"]["misses"] == {"fid_ambiguous_window": 1}
+        assert "seed_hypotheses" not in gaps[0]
+
+    def test_content_mismatch_refuses_whole_join(self, tmp_path):
+        """Matching anchor over mismatched bytes is the forged
+        identity shape — no name/address fallback runs."""
+        summary, gaps = self._apply(tmp_path, [
+            _seed(module_sha256="9" * 64),  # name+address also match
+        ])
+        assert summary["matched"] == 0
+        assert summary["missed"] == 1
+        assert summary["fid"]["misses"] == {
+            "module_content_mismatch": 1,
+        }
+        assert "seed_hypotheses" not in gaps[0]
+
+    def test_name_join_checked_against_recorded_file_hash(
+        self, tmp_path,
+    ):
+        """Even without a fid, a producer-asserted module_sha256 that
+        contradicts the checklist's recorded hash refuses."""
+        summary, gaps = self._apply(tmp_path, [
+            _seed(fid=None, address=None, module_sha256="9" * 64),
+        ])
+        assert summary["matched"] == 0
+        assert summary["missed"] == 1
+        misses_doc = json.loads(
+            (tmp_path / "fid-misses.json").read_text(),
+        )
+        (op,) = misses_doc["operations"]
+        (miss,) = op["misses"]
+        assert miss["reason"] == "module_content_mismatch"
+
+    def test_fid_conflict_with_name_key_refuses(self, tmp_path):
+        """Identity and name/address resolving DIFFERENT gaps is a
+        producer contradiction — joining either would misdirect."""
+        summary, gaps = self._apply(tmp_path, [
+            _seed(function="validate_sig", address=0x162000,
+                  module_sha256=self._SHA),  # fid says parse_channel
+        ])
+        assert summary["matched"] == 0
+        assert summary["fid"]["misses"] == {"fid_conflict": 1}
+        assert "seed_hypotheses" not in gaps[0]
+        assert "seed_hypotheses" not in gaps[1]
+
+    def test_unknown_anchor_falls_back_by_name_with_recorded_miss(
+        self, tmp_path,
+    ):
+        summary, gaps = self._apply(tmp_path, [
+            _seed(fid="b" * 16 + ":0x1da0"),
+        ])
+        assert summary["matched"] == 1
+        assert gaps[0]["seed_hypotheses"]
+        assert summary["fid"] == {
+            "seeds": 1, "joined_exact": 0, "joined_fuzzy": 0,
+            "name_fallback": 1, "misses": {"fid_anchor_unknown": 1},
+        }
+        misses_doc = json.loads(
+            (tmp_path / "fid-misses.json").read_text(),
+        )
+        (op,) = misses_doc["operations"]
+        (row,) = op["misses"]
+        assert row["reason"] == "fid_fallback"
+        assert row["fid_state"] == "fid_anchor_unknown"
+        assert row["joined_via"] == "address"
+
+    def test_no_recorded_base_falls_back_softly(self, tmp_path):
+        summary, gaps = self._apply(
+            tmp_path, [_seed()],
+            checklist=self._checklist(drop=["image_base"]),
+        )
+        assert summary["matched"] == 1
+        assert summary["fid"]["misses"] == {"fid_no_recorded_base": 1}
+
+    def test_checklist_less_intake_records_no_ledger_rows(
+        self, tmp_path,
+    ):
+        """No identity space existed — the receipt still counts the
+        fallback (visibility) but fid-misses.json is not flooded."""
+        from core.audit.hypothesis_intake import apply_hypothesis_seeds
+        _write_seeds(tmp_path / SEEDS_FILENAME, [_seed()])
+        gaps = self._gaps()
+        summary = apply_hypothesis_seeds(gaps, tmp_path)
+        assert summary["matched"] == 1
+        assert summary["fid"]["name_fallback"] == 1
+        assert summary["fid"]["misses"] == {"no_module_identity": 1}
+        assert "misses_ledger" not in summary
+        assert not (tmp_path / "fid-misses.json").exists()
+
+    def test_fidless_seeds_keep_receipt_shape(self, tmp_path):
+        summary, _gaps = self._apply(tmp_path, [
+            _seed(fid=None),
+        ])
+        assert "fid" not in summary

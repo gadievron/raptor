@@ -170,3 +170,61 @@ class TestDuplicateNameDisambiguation:
         checklist = build_binary_checklist(db, include_auto_named=True)
         names = sorted(i["name"] for i in _items(checklist))
         assert names == ["local_init", "local_init@0x2000"]
+
+
+class TestModuleIdentity:
+    """The file entry's ``module_identity`` block: the identity join
+    space fid consumers (hypothesis-seed intake, ``--pin``) resolve
+    ``<anchor>:0x<rel>`` through."""
+
+    def _fn(self):
+        return REFunction(name="main", address=0x1000, size=64,
+                          source_tool="r2", name_provenance="dwarf")
+
+    def test_unreadable_binary_omits_the_block(self):
+        checklist = build_binary_checklist(_db([self._fn()]))
+        assert "module_identity" not in checklist["files"][0]
+
+    def test_readable_binary_stamps_identity_and_base(self, tmp_path):
+        from core.hash import sha256_file
+        binary = tmp_path / "demo"
+        binary.write_bytes(b"not-an-elf" * 8)
+        db = _db([self._fn()], binary_path=str(binary))
+        db.metadata["image_base"] = 0x400000
+        checklist = build_binary_checklist(db)
+        block = checklist["files"][0]["module_identity"]
+        sha = sha256_file(binary)
+        # Non-ELF bytes identify by content hash (the front door's
+        # worst case) — anchor is the hash prefix, base as recorded.
+        assert block == {
+            "kind": "sha256", "value": sha,
+            "anchor": sha[:16], "image_base": 0x400000,
+        }
+        assert checklist["files"][0]["sha256"] == sha
+
+    def test_no_recorded_base_omits_the_key_never_zero(self, tmp_path):
+        binary = tmp_path / "demo"
+        binary.write_bytes(b"not-an-elf" * 8)
+        db = _db([self._fn()], binary_path=str(binary))
+        checklist = build_binary_checklist(db)
+        block = checklist["files"][0]["module_identity"]
+        assert "image_base" not in block
+        assert block["kind"] == "sha256"
+
+    def test_block_joins_the_intake_resolution_table(self, tmp_path):
+        """End-to-end: the builder's block parses into the intake's
+        module space with the same anchor a producer-side fid mint
+        would use."""
+        from core.audit.hypothesis_intake import checklist_module_spaces
+        binary = tmp_path / "demo"
+        binary.write_bytes(b"not-an-elf" * 8)
+        db = _db([self._fn()], binary_path=str(binary))
+        db.metadata["image_base"] = 0x400000
+        checklist = build_binary_checklist(db)
+        modules, file_sha = checklist_module_spaces(checklist)
+        block = checklist["files"][0]["module_identity"]
+        assert modules[block["anchor"]] == {
+            "file": "binary:demo", "base": 0x400000,
+            "sha256": block["value"],
+        }
+        assert file_sha["binary:demo"] == block["value"]
