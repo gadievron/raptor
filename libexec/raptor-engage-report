@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Engagement report + coverage synthesis over an engagement ledger.
+
+Thin launcher for ``core.engagement.report`` — the pure-synthesis
+layer that renders the M8 verdict table (policy depth | reached depth
+| degradation reason | format-capability tier at run time), the
+earned-coverage synthesis (journal verdict rows; read-coverage as a
+labeled advisory stratum only), the survivor list, and the residual
+map from the artifacts the ledger, chain, and coverage layers already
+wrote. No analysis runs here; tool output is the verdict.
+
+Usage:
+    raptor-engage-report <ledger-dir>            write both artifacts
+    raptor-engage-report <ledger-dir> --json     print the JSON report
+    raptor-engage-report <ledger-dir> --stdout   print the markdown
+
+Writes ``engagement-report.json`` + ``engagement-report.md`` into the
+ledger directory (atomic, locked). Exit codes: 0 written/printed,
+2 usage (missing directory / no ledger).
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
+
+import argparse  # noqa: E402
+import json  # noqa: E402
+
+from core.engagement.report import (  # noqa: E402
+    build_report,
+    render_markdown,
+    render_summary_lines,
+    write_report,
+)
+
+RC_OK = 0
+RC_USAGE = 2
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="raptor-engage-report",
+        description="Render the engagement report + coverage "
+                    "synthesis over an engagement ledger.",
+    )
+    ap.add_argument("ledger_dir", type=Path,
+                    help="Engagement output directory (holds "
+                         "ledger.json).")
+    how = ap.add_mutually_exclusive_group()
+    how.add_argument("--json", action="store_true",
+                     help="Print the report JSON to stdout instead "
+                          "of writing files.")
+    how.add_argument("--stdout", action="store_true",
+                     help="Print the markdown report to stdout "
+                          "instead of writing files.")
+    parsed = ap.parse_args()
+
+    if not parsed.ledger_dir.is_dir():
+        # Operator-typed, but tab-completed hostile names are still
+        # hostile bytes on a terminal — escape the echoed path.
+        print(f"error: not a directory: "
+              f"{_sft(str(parsed.ledger_dir), max_len=300)}",
+              file=sys.stderr)
+        return RC_USAGE
+
+    try:
+        if parsed.json:
+            report = build_report(parsed.ledger_dir)
+            # The blessed terminal-JSON shape: ensure_ascii bounds
+            # every target-derived byte to an escape sequence.
+            print(json.dumps(report, indent=2, ensure_ascii=True))
+            return RC_OK
+        if parsed.stdout:
+            report = build_report(parsed.ledger_dir)
+            # render_markdown escapes every foreign value (md_inline
+            # strips control/BIDI bytes), so the stream is
+            # terminal-safe by construction.
+            print(render_markdown(report))
+            return RC_OK
+        report = build_report(parsed.ledger_dir)
+        json_path, md_path = write_report(parsed.ledger_dir, report)
+        for line in render_summary_lines(report):
+            print(line)
+        print(f"wrote {_sft(str(json_path), max_len=300)}")
+        print(f"wrote {_sft(str(md_path), max_len=300)}")
+        return RC_OK
+    except FileNotFoundError:
+        print(f"error: no engagement ledger under "
+              f"{_sft(str(parsed.ledger_dir), max_len=300)}",
+              file=sys.stderr)
+        return RC_USAGE
+
+
+if __name__ == "__main__":
+    sys.exit(main())
