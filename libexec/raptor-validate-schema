@@ -311,11 +311,19 @@ def main():
         print(f"✗ cannot parse JSON: {filepath}", file=sys.stderr)
         sys.exit(3)
 
-    # Normalise vuln_types before validating findings (persisted — the
-    # lint applies the same normalisation to a copy, so the two
-    # surfaces judge identical content).
-    if schema_type == "findings" and _lint.normalise_findings_vuln_types(data):
-        save_json(filepath, data)
+    # Normalise vuln_type and feasibility-status aliases before
+    # validating findings and stage files (persisted — the lint
+    # applies the same normalisation to a copy, so the two surfaces
+    # judge identical content). Rewriting the file in place must not
+    # be silent: a one-line notice carries the count only (never the
+    # values — file content is target-derived).
+    if schema_type in ("findings", "stage"):
+        n_normalised = (_lint.normalise_findings_vuln_types(data)
+                        + _lint.normalise_feasibility_fields(data))
+        if n_normalised:
+            save_json(filepath, data)
+            print(f"NOTE: normalised {n_normalised} field(s) to canonical "
+                  "form — file rewritten in place", file=sys.stderr)
 
     # Same checks as --lint, same implementation: schema/structural
     # validation + provenance stamp + free-text idempotence gate.

@@ -3954,13 +3954,20 @@ def _normalise_part(stage: str, data: Any) -> Any:
     * Stage B: a node's leads_to given as a LIST of ids becomes the
       canonical comma-separated string (see ATTACK_TREE_SCHEMA — the
       string form is settled).
+    * Every stage: feasibility slices are normalised (status alias
+      spellings such as "binary_not_found" -> "skipped", null
+      binary_path dropped) so the assembled artifact carries the
+      canonical values — again matching the promote path.
     """
     if stage == "A":
         if isinstance(data, list):
             data = {"findings": data}
         if isinstance(data, dict):
             _lint.normalise_findings_vuln_types(data)
+            _lint.normalise_feasibility_fields(data)
         return data
+    if isinstance(data, dict):
+        _lint.normalise_feasibility_fields(data)
     if stage == "B" and isinstance(data, dict):
         for node in data.get("attack_tree_nodes") or []:
             if isinstance(node, dict) and isinstance(node.get("leads_to"),

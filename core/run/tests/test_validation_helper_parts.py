@@ -301,6 +301,28 @@ class TestStageA:
         assert (parts_dir / "quarantine"
                 / "bad.json.reason.json").is_file()
 
+    def test_a_part_feasibility_alias_assembles_canonical(
+            self, helper, tmp_path, capsys):
+        # An A-part finding row carrying the alias feasibility status
+        # (plus the null binary_path the same producer writes) must
+        # assemble cleanly with the CANONICAL values in stage-a.json —
+        # ingestion normalises the row, never false-quarantines it.
+        parts_dir = tmp_path / "stage-a-parts"
+        parts_dir.mkdir()
+        save_json(parts_dir / "scan.json", [dict(
+            _finding("FIND-001"),
+            feasibility={"status": "binary_not_found",
+                         "binary_path": None},
+        )])
+
+        assert helper.assemble_parts("A", tmp_path) is True
+        assert "QUARANTINED" not in capsys.readouterr().err
+
+        assembled = load_json(tmp_path / "stage-a.json")
+        feas = assembled["findings"][0]["feasibility"]
+        assert feas["status"] == "skipped"
+        assert "binary_path" not in feas
+
 
 # ---------------------------------------------------------------------------
 # Stage B hybrid merge
@@ -586,3 +608,91 @@ class TestSinglePartAndCli:
             capture_output=True, text=True, env=env, cwd=REPO_ROOT,
         )
         assert gate.returncode == 0, gate.stderr
+
+
+# ---------------------------------------------------------------------------
+# Real Stage E producer shape: E-5 verdict vocabulary in the status
+# channel + null binary_path (copied from a real quarantined part,
+# run-specific paths stripped). Ingestion normalises instead of
+# quarantining — a single-part E stage no longer aborts on it.
+# ---------------------------------------------------------------------------
+
+class TestStageEStatusAliasIngestion:
+
+    @staticmethod
+    def _binary_not_found_part() -> dict:
+        return {"updates": {"FIND-004": {
+            "final_status": "confirmed_unverified",
+            "feasibility": {
+                "status": "binary_not_found",
+                "binary_path": None,
+                "note": "Binary not found - feasibility analysis skipped",
+                "guidance": "Build the target, then re-run with "
+                            "--binary <path>",
+            },
+            "stage_e_summary": {
+                "verdict": "binary_not_found",
+                "binary_path": None,
+                "impact": "code_execution",
+            },
+        }}}
+
+    def test_unhashable_status_part_quarantined_merge_proceeds(self, tmp_path):
+        # A part whose feasibility.status is a JSON array (unhashable)
+        # must be QUARANTINED with the merge proceeding over the healthy
+        # part — never a crash that aborts assembly and loses good parts.
+        parts_dir = tmp_path / "stage-e-parts"
+        parts_dir.mkdir()
+        save_json(parts_dir / "bad.json", {"updates": {"FIND-001": {
+            "feasibility": {"status": ["binary_not_found"]},
+        }}})
+        save_json(parts_dir / "good.json", {"updates": {"FIND-002": {
+            "feasibility": {"status": "skipped"},
+        }}})
+
+        proc = _run_cli("parts", "E", tmp_path)
+
+        assert proc.returncode == 0, proc.stderr
+        assert "Traceback" not in proc.stderr
+        assembled = load_json(tmp_path / "stage-e.json")
+        assert list(assembled["updates"]) == ["FIND-002"]
+        assert "QUARANTINED" in proc.stderr
+        assert "feasibility.status" in proc.stderr
+
+    def test_non_array_findings_key_on_e_part_not_a_crash(self, tmp_path):
+        # A stray non-array "findings" key on a B–F part must not crash
+        # the normalisation walk — the shape is the schema's to refuse.
+        parts_dir = tmp_path / "stage-e-parts"
+        parts_dir.mkdir()
+        save_json(parts_dir / "odd.json", {
+            "updates": {"FIND-001": {"feasibility": {"status": "skipped"}}},
+            "findings": 5,
+        })
+
+        proc = _run_cli("parts", "E", tmp_path)
+
+        assert proc.returncode == 0, proc.stderr
+        assert "Traceback" not in proc.stderr
+        assembled = load_json(tmp_path / "stage-e.json")
+        assert "FIND-001" in assembled["updates"]
+
+    def test_real_shape_assembles_with_canonical_values(self, tmp_path):
+        parts_dir = tmp_path / "stage-e-parts"
+        parts_dir.mkdir()
+        save_json(parts_dir / "all.json", self._binary_not_found_part())
+        before = (parts_dir / "all.json").read_bytes()
+
+        proc = _run_cli("parts", "E", tmp_path)
+
+        assert proc.returncode == 0, proc.stderr
+        assert "QUARANTINED" not in proc.stderr
+        assembled = load_json(tmp_path / "stage-e.json")
+        feas = assembled["updates"]["FIND-004"]["feasibility"]
+        assert feas["status"] == "skipped"
+        assert "binary_path" not in feas
+        # Verdict-channel fields pass through untouched.
+        summary = assembled["updates"]["FIND-004"]["stage_e_summary"]
+        assert summary["verdict"] == "binary_not_found"
+        # Part files are an immutable audit record: normalisation
+        # happens in memory at ingestion, never on the part on disk.
+        assert (parts_dir / "all.json").read_bytes() == before
