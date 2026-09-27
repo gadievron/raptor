@@ -3896,6 +3896,15 @@ def review_one_function(
         except ImportError:
             pass
 
+    # ── Screen-receipt restoration ────────────────────────────────────
+    # The pre-loop screen's confirming receipt reaches the model only
+    # as prompt context; the model's restatement of the tool lands
+    # (correctly) under llm-claimed:. Re-stamp the run's own receipt
+    # so the row's provenance is the tool run, not the restatement.
+    outcome = _restore_screen_receipt(
+        outcome, gap.get("_smt_pre_evidence", ""),
+    )
+
     # ── Provenance annotation ────────────────────────────────────────
     if provenance_map and gap_key_mech in provenance_map:
         prov_entries = provenance_map[gap_key_mech]
@@ -23869,6 +23878,25 @@ def _deepen_suspicious(
                             f"[gate violation: {'; '.join(gate_violations)}]",
                         )
 
+            # A genuine receipt on the prior row survives the replace:
+            # the deepen re-review is an LLM pass whose (sanitised)
+            # restated evidence would otherwise erase mechanical
+            # provenance the run already earned for this same
+            # still-standing verdict. A deepen outcome that earned its
+            # own tool stamp (e.g. sweep-validated finding) keeps it.
+            if (
+                outcome.status in ("finding", "suspicious")
+                and prior_outcome.status in ("finding", "suspicious")
+                and prior_outcome.evidence_tool
+                and _is_tool_confirmed(prior_outcome.evidence_tool)
+                and not _is_tool_confirmed(outcome.evidence_tool or "")
+            ):
+                outcome.tools_dispatched = (
+                    set(outcome.tools_dispatched or set())
+                    | set(prior_outcome.tools_dispatched or set())
+                )
+                _stamp_evidence(outcome, prior_outcome.evidence_tool)
+
             _untally_outcome(result, prior_outcome)
             _outcomes_to_remove.add(id(prior_outcome))
 
@@ -30335,6 +30363,113 @@ def _stamp_evidence(outcome: ReviewOutcome, tool: str) -> ReviewOutcome:
     outcome.evidence_tool = tool
     if outcome.review_result:
         outcome.review_result["evidence_tool"] = tool
+    return outcome
+
+
+# The pre-loop screen's confirming receipt kinds — the exact verbs
+# whose hits `_pre_loop_smt_screen` injects as `_smt_pre_evidence`
+# (`smt:<verb>`, optionally `:witness`-suffixed). Restoration is
+# allowlist-gated in BOTH directions: a receipt kind this table does
+# not name is NEVER re-stamped over a model restatement (a
+# non-confirming or unknown receipt granting tool provenance would be
+# the inverse of the laundering this helper exists to stop — the
+# screen's own `smt:dead-path` infeasibility observation is the
+# standing example), and a new screen check that mints a new receipt
+# verb must be added here or its receipt stays prompt-only (the
+# unknown-verb regression test pins that direction). A stale entry
+# for a removed check is harmless: no producer mints the receipt.
+_SCREEN_CONFIRMING_VERBS = frozenset({
+    "check-auth-bypass",
+    "check-lock-discipline",
+    "check-resource-leak",
+    "check-null-propagation",
+    "check-integer-narrowing",
+    "check-parsed-int-contract",
+    "check-early-release",
+    "check-callback-lifetime",
+    "check-toctou",
+    # check-lock-domain runs in inject-mode only (_run_mechanical_
+    # detectors context, "too noisy for hard-classify") — the screen
+    # never mints its receipt today, so this entry is dormant until a
+    # screen check is (re-)added for the verb.
+    "check-lock-domain",
+})
+
+
+def _screen_receipt_confirms(receipt: str) -> bool:
+    """True only for a receipt shape the screen mints as a confirming
+    hit: ``smt:<allowlisted verb>`` with an optional ``:witness``
+    suffix. Anything else — ``smt:dead-path``, an unknown future verb,
+    a non-smt namespace, extra segments — fails closed (no restore)."""
+    low = receipt.lower()
+    if not low.startswith("smt:"):
+        return False
+    rest = low[len("smt:"):]
+    if rest.endswith(":witness"):
+        rest = rest[: -len(":witness")]
+    return rest in _SCREEN_CONFIRMING_VERBS
+
+
+def _restore_screen_receipt(
+    outcome: ReviewOutcome,
+    pre_evidence: str,
+) -> ReviewOutcome:
+    """Re-stamp the pre-loop screen's confirming receipt over a
+    model restatement of the same tool.
+
+    The screen runs its checks mechanically and injects a confirming
+    receipt into the review prompt as context. The model then restates
+    the tool in its evidence_tool answer, and sanitisation (correctly)
+    namespaces that restatement to ``llm-claimed:*`` — but nothing
+    wrote the run's own receipt back onto the non-clean outcome (the
+    clean rescue path is the only pre_evidence consumer), so the row
+    travelled tool-less and lost the verification-evidence exemptions
+    downstream. Restore the receipt when ALL of:
+
+    - the outcome is finding/suspicious (clean outcomes have their own
+      pre_evidence consumer: ``rescue_self_refuted``);
+    - the screen receipt is an allowlisted confirming kind
+      (``_screen_receipt_confirms`` — ``smt:dead-path``, unknown
+      future receipt kinds, and malformed shapes all fail closed);
+    - the current evidence is not already a genuine tool stamp; and
+    - the model's evidence restates the receipt's tool family. The
+      family grammar matches ``_probe_backed_suspicious``'s parse
+      (``claimed.split(":", 1)[0]``), but the comparison here is
+      STRICTER: exact equality with the receipt's family, where the
+      dispatch-witness check accepts a ``startswith`` match against
+      the dispatch record.
+
+    A claim with no matching receipt in the run's own records stays
+    under ``llm-claimed:``: this never grants tool-evidence status to
+    a tool the run did not actually run.
+    """
+    if outcome.status not in ("finding", "suspicious"):
+        return outcome
+    receipt = (pre_evidence or "").strip()
+    if not receipt or not _screen_receipt_confirms(receipt):
+        return outcome
+    ev = outcome.evidence_tool or ""
+    if _is_tool_confirmed(ev):
+        return outcome
+
+    from .evidence_grade import LLM_CLAIM_PREFIX
+
+    receipt_family = receipt.lower().split(":", 1)[0].strip()
+    for part in (p.strip() for p in ev.split("+")):
+        if not part.lower().startswith(LLM_CLAIM_PREFIX):
+            continue
+        claimed = part[len(LLM_CLAIM_PREFIX):].strip().lower()
+        fam = claimed.split(":", 1)[0].strip()
+        if fam and fam == receipt_family:
+            outcome.tools_dispatched = (
+                set(outcome.tools_dispatched or set()) | {receipt_family}
+            )
+            logger.info(
+                "screen-receipt restore %s:%s — %r was restated as %r; "
+                "stamping the run's own receipt",
+                outcome.file, outcome.function, receipt, part,
+            )
+            return _stamp_evidence(outcome, receipt)
     return outcome
 
 
