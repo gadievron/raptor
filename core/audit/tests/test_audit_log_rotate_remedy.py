@@ -309,6 +309,71 @@ class TestCliSubcommand:
         assert "usage" in capsys.readouterr().err
 
 
+class TestHostileShardSet:
+    def test_symlink_shard_refused_nothing_read(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # A regular-file symlink planted at a contiguous shard name
+        # would otherwise be streamed through the rewrite — laundering
+        # arbitrary operator-readable file content INTO the trail,
+        # bypassing the O_NOFOLLOW discipline the appender and loader
+        # both enforce on exactly these paths. Rotation must refuse
+        # with nothing modified.
+        _shrink_budgets(monkeypatch)
+        log = tmp_path / record.AUDIT_LOG_FILENAME
+        _plant_rows(log, 60)
+        before = log.read_bytes()
+        victim_dir = tmp_path / "outside"
+        victim_dir.mkdir()
+        victim = victim_dir / "secret.txt"
+        victim.write_text('{"laundered": "content"}\n')
+        (tmp_path / ".audit-log.002.jsonl").symlink_to(victim)
+
+        with pytest.raises(RotateRefused, match="not a regular file"):
+            rotate_audit_log(tmp_path)
+        # Nothing replaced, no temps, no backups; the link target's
+        # content never entered the trail.
+        assert log.read_bytes() == before
+        assert not list(tmp_path.glob(".audit-log-rotate.tmp.*"))
+        assert not list(tmp_path.glob("*.pre-rotate*"))
+        assert b"laundered" not in log.read_bytes()
+
+    def test_symlink_swapped_in_after_snapshot_refused(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # TOCTOU arm: the set passes the lstat check, then a shard is
+        # swapped for a symlink before its open. O_NOFOLLOW must fail
+        # the open (ELOOP → refusal), never follow the link.
+        _shrink_budgets(monkeypatch)
+        log = tmp_path / record.AUDIT_LOG_FILENAME
+        _plant_rows(log, 60)
+        shard2 = tmp_path / ".audit-log.002.jsonl"
+        _plant_rows(shard2, 5, start=60)
+        victim = tmp_path / "outside-secret.txt"
+        victim.write_text('{"laundered": "content"}\n')
+
+        real_lstat = os.lstat
+        swapped = {"done": False}
+
+        def _swapping_lstat(path, *a, **kw):
+            res = real_lstat(path, *a, **kw)
+            if (
+                not swapped["done"]
+                and Path(path).name == shard2.name
+            ):
+                swapped["done"] = True
+                shard2.unlink()
+                shard2.symlink_to(victim)
+            return res
+
+        monkeypatch.setattr(os, "lstat", _swapping_lstat)
+        with pytest.raises(RotateRefused, match="without following"):
+            rotate_audit_log(tmp_path)
+        monkeypatch.undo()
+        assert not list(tmp_path.glob(".audit-log-rotate.tmp.*"))
+        assert not list(tmp_path.glob("*.pre-rotate*"))
+
+
 class TestConcurrentAppendDetection:
     def test_size_change_mid_rewrite_refuses(
         self, tmp_path: Path, monkeypatch,
@@ -322,11 +387,11 @@ class TestConcurrentAppendDetection:
         _plant_rows(log, 60)
         before = _trail_bytes(tmp_path)
 
-        real_stat = Path.stat
+        real_lstat = os.lstat
 
         class _InflatedStat:
             """Passes every field through except st_size (+1) — so
-            is_file()/exists() keep working on the patched Path."""
+            the regularity check keeps working on the wrapped result."""
 
             def __init__(self, real):
                 self._real = real
@@ -338,14 +403,14 @@ class TestConcurrentAppendDetection:
             def st_size(self):
                 return self._real.st_size + 1
 
-        def _lying_stat(self, **kw):
-            res = real_stat(self, **kw)
-            if self.name == record.AUDIT_LOG_FILENAME:
+        def _lying_lstat(path, *a, **kw):
+            res = real_lstat(path, *a, **kw)
+            if Path(path).name == record.AUDIT_LOG_FILENAME:
                 # Report one byte more than the stream will deliver.
                 return _InflatedStat(res)
             return res
 
-        monkeypatch.setattr(Path, "stat", _lying_stat)
+        monkeypatch.setattr(os, "lstat", _lying_lstat)
         with pytest.raises(RotateRefused, match="accounting"):
             rotate_audit_log(tmp_path)
         monkeypatch.undo()

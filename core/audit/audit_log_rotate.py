@@ -18,6 +18,11 @@ every shard under the writer's roll threshold:
   tolerant reader already handles it.
 - Originals are preserved as ``<name>.pre-rotate`` backups
   (first-free naming — an existing backup is never overwritten).
+- Shard sources must be regular files: an ``lstat`` check over the
+  set plus ``O_NOFOLLOW`` on every source open (the same read
+  discipline ``core.json.load_jsonl`` applies to these paths)
+  refuses a symlink or special file planted at a shard name, so the
+  rewrite can never launder foreign file content into the trail.
 - LIVE runs are refused via the journal-compaction gate
   (:func:`core.coverage.journal_compact.refuse_live_run`): a
   concurrent appender racing the swap could land rows on a pre-swap
@@ -38,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import os
+import stat as _stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
@@ -55,6 +61,8 @@ logger = logging.getLogger(__name__)
 
 _BACKUP_SUFFIX = ".pre-rotate"
 _TMP_PREFIX = ".audit-log-rotate.tmp."
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 #: Streaming read granularity. Trade-off, both directions: LOWER
 #: multiplies syscalls on multi-GiB trails; HIGHER grows the largest
 #: single buffer the rewrite holds (it never materialises a whole
@@ -97,6 +105,33 @@ def _backup_path(shard_path: Path) -> Path:
         n += 1
 
 
+def _shard_snapshot(out_dir: Path) -> dict[Path, int]:
+    """Sizes of the contiguous shard set's on-disk entries.
+
+    ``lstat``-based: the writer only ever creates regular files at
+    shard names, so anything else there (a symlink pointed at a file
+    outside the run dir, a FIFO) is a plant aimed at laundering
+    foreign content into the trail through the rewrite — refused
+    loudly, never followed. Raises :class:`RotateRefused`; entries
+    that do not exist are simply absent from the snapshot.
+    """
+    snapshot: dict[Path, int] = {}
+    for p in audit_log_paths(out_dir):
+        try:
+            st = os.lstat(p)
+        except OSError:
+            continue
+        if not _stat.S_ISREG(st.st_mode):
+            raise RotateRefused(
+                f"rotate at {out_dir}: shard {p.name} is not a "
+                "regular file (symlink or special file planted at a "
+                "trail name?) — nothing was modified. Remove it and "
+                "retry."
+            )
+        snapshot[p] = st.st_size
+    return snapshot
+
+
 def rotate_audit_log(out_dir: Path) -> RotateStats:
     """Re-split the audit-log trail at *out_dir* so every shard is
     under the writer's roll threshold. No-op (``rotated=False``) when
@@ -114,9 +149,9 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
         raise RotateRefused(str(exc)) from exc
 
     all_paths = audit_log_paths(out_dir)
-    existing = [p for p in all_paths if p.is_file()]
+    sizes = _shard_snapshot(out_dir)
+    existing = list(sizes)
     orphans = tuple(_audit_log_orphan_names(out_dir, len(all_paths)))
-    sizes = {p: p.stat().st_size for p in existing}
     total = sum(sizes.values())
     if not existing or not any(
         s > _AUDIT_LOG_MAX_BYTES for s in sizes.values()
@@ -157,7 +192,23 @@ def rotate_audit_log(out_dir: Path) -> RotateStats:
     try:
         _open_next()
         for src in existing:
-            with src.open("rb") as fh:
+            # O_NOFOLLOW: belt-and-braces with the snapshot's lstat
+            # regularity check — a symlink swapped in between the
+            # two must fail the open (ELOOP), not feed foreign file
+            # content into the rewrite. Same read discipline as
+            # core.json.load_jsonl on these exact paths.
+            try:
+                src_fd = os.open(
+                    str(src),
+                    os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC,
+                )
+            except OSError as exc:
+                raise RotateRefused(
+                    f"rotate at {out_dir}: cannot open shard "
+                    f"{src.name} without following links ({exc}) — "
+                    "nothing was replaced."
+                ) from exc
+            with os.fdopen(src_fd, "rb") as fh:
                 while True:
                     chunk = fh.readline(_CHUNK_BYTES)
                     if not chunk:
