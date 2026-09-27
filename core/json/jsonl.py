@@ -178,6 +178,10 @@ def load_jsonl(
       cannot see. Newest-wins (not stop-early) so last-row-per-key
       consumers keep seeing the true last row.
 
+    A negative budget raises ``ValueError`` before the file is
+    opened: budgets are caller-supplied constants, not trail data,
+    so the best-effort contract does not swallow them.
+
     Lines parse through the shared ``core.json`` backend (orjson when
     installed — trail loops are its best-measured win). Non-finite
     constants (``NaN``/``Infinity``) make a line malformed on BOTH
@@ -187,6 +191,23 @@ def load_jsonl(
     (``append_jsonl`` refuses to emit them — ``allow_nan=False`` —
     so only a foreign writer can put one in a trail.)
     """
+    # Budgets are caller-supplied constants, not trail data — a
+    # negative one is a bug at the call site, raised loudly (the
+    # best-effort contract covers what is ON DISK, not nonsense
+    # parameters) and BEFORE the open so no fd is ever leaked to the
+    # ValueError path. deque(maxlen=...) enforces the same rule for
+    # ``max_records`` below, likewise before the open.
+    if max_total_bytes is not None and max_total_bytes < 0:
+        raise ValueError(
+            f"max_total_bytes must be >= 0, got {max_total_bytes}")
+    if max_line_bytes is not None and max_line_bytes < 0:
+        raise ValueError(
+            f"max_line_bytes must be >= 0, got {max_line_bytes}")
+    # deque(maxlen): newest-wins retention for the ``max_records``
+    # bound — the list/deque split keeps the unbounded path
+    # allocation-identical to the historical one.
+    records: list[Any] | deque[Any]
+    records = deque(maxlen=max_records) if max_records is not None else []
     flags = os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC
     try:
         fd = os.open(str(path), flags)
@@ -233,12 +254,7 @@ def load_jsonl(
                 "only; older records are NOT loaded",
                 path, size, max_total_bytes, max_total_bytes,
             )
-    # deque(maxlen): newest-wins retention for the ``max_records``
-    # bound — the list/deque split keeps the unbounded path
-    # allocation-identical to the historical one.
-    records: list[Any] | deque[Any]
     appended_total = 0
-    records = deque(maxlen=max_records) if max_records is not None else []
     try:
         f = os.fdopen(fd, "rb")
     except OSError:

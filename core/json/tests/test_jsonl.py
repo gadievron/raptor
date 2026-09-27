@@ -461,6 +461,40 @@ class TestLoadJsonlMaxRecords:
         assert type(load_jsonl(p, max_records=2)) is list
 
 
+class TestNegativeBudgetsRejected:
+    """Budgets are caller constants, not trail data: negative values
+    raise ``ValueError`` BEFORE the file is opened (no fd to leak),
+    instead of arithmetic like ``seek(size - (-5))`` or a warning
+    rendering 'newest -5 bytes'."""
+
+    def _trail(self, tmp_path: Path) -> Path:
+        p = tmp_path / "trail.jsonl"
+        append_jsonl(p, {"i": 1}, compact=True)
+        return p
+
+    def test_negative_max_records_raises(self, tmp_path: Path):
+        p = self._trail(tmp_path)
+        with pytest.raises(ValueError):
+            load_jsonl(p, max_records=-1)
+
+    def test_negative_max_total_bytes_raises(self, tmp_path: Path):
+        p = self._trail(tmp_path)
+        with pytest.raises(ValueError, match="max_total_bytes"):
+            load_jsonl(p, max_total_bytes=-5)
+
+    def test_negative_max_line_bytes_raises(self, tmp_path: Path):
+        p = self._trail(tmp_path)
+        with pytest.raises(ValueError, match="max_line_bytes"):
+            load_jsonl(p, max_line_bytes=-1)
+
+    def test_zero_budgets_still_valid(self, tmp_path: Path):
+        # The boundary stays where it was: zero is a meaningful
+        # bound (retain/read nothing), only negatives are nonsense.
+        p = self._trail(tmp_path)
+        assert load_jsonl(p, max_records=0) == []
+        assert load_jsonl(p, max_total_bytes=0) == []
+
+
 def test_o_nofollow_available():
     # The hardening this module exists for requires O_NOFOLLOW on the
     # platforms RAPTOR supports (Linux/macOS).
