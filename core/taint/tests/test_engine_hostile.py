@@ -623,12 +623,13 @@ def _cpu_timed_run(
 def _measured_growth_ratio(
     packs: PackSet, run: Callable[..., Any] = _run,
 ) -> float:
-    """THE measurement path for the growth-ratio rail: n=600 vs
+    """ONE measurement attempt for the growth-ratio rail: n=600 vs
     n=1200 packages, CPU time (``time.process_time``), best-of-3
     with the two sizes INTERLEAVED. The pin test and both rail
-    regression tests below all measure through here, so a change to
-    HOW the ratio is taken cannot silently detach the rail from its
-    two-direction regression proofs."""
+    regression tests below all measure through here — via
+    ``_rail_verdict`` — so a change to HOW the ratio is taken cannot
+    silently detach the rail from its two-direction regression
+    proofs."""
     small = _chain_package(50, 12, 6)     # 600 functions
     large = _chain_package(100, 12, 6)    # 1200 functions
     t_n = float("inf")
@@ -650,6 +651,42 @@ def _measured_growth_ratio(
 #: at these sizes), lowering it flakes on interpreter noise.
 _GROWTH_RAIL: float = 2.8
 
+#: Independent measurement attempts behind ONE rail verdict
+#: (``_rail_verdict``). One best-of-3 interleaved attempt still has
+#: a far noise tail on loaded shared CI runners: a green engine
+#: (byte-identical across trees, ~2.0 median everywhere) measured
+#: 3.05 on a CI shard. Retrying turns a per-attempt tail p into
+#: p**3 for the pin, while a REAL super-linear engine crosses on
+#: every attempt (a quadratic measures ~4.0 against the 2.8 rail),
+#: so retries cannot wave a genuine regression through — the trip
+#: test below proves that through this same verdict path. Raising
+#: this count further dulls the pin near the rail (marginal ~2.9
+#: growth passes whenever one attempt dips under); lowering it back
+#: to 1 restores the CI noise-tail flake.
+_RAIL_ATTEMPTS: int = 3
+
+
+def _rail_verdict(
+    packs: PackSet, run: Callable[..., Any] = _run,
+) -> tuple[bool, list[float]]:
+    """THE verdict path for the growth rail, shared by the pin test
+    and BOTH rail regression tests: up to ``_RAIL_ATTEMPTS``
+    independent ``_measured_growth_ratio`` attempts, within-rail on
+    the first attempt at or under ``_GROWTH_RAIL``. Returns the
+    verdict plus every attempted ratio (for assert messages).
+    Retry is what discriminates noise from growth: scheduler /
+    frequency noise tails are independent per attempt, real
+    super-linear growth crosses deterministically on every attempt.
+    The rail VALUE and its both-directions rationale stay with
+    ``_GROWTH_RAIL`` above, untouched by the retry."""
+    ratios: list[float] = []
+    for _ in range(_RAIL_ATTEMPTS):
+        ratio = _measured_growth_ratio(packs, run=run)
+        ratios.append(ratio)
+        if ratio <= _GROWTH_RAIL:
+            return True, ratios
+    return False, ratios
+
 
 def test_growth_ratio_pin_n_vs_2n(packs) -> None:
     # Host-speed invariant: a RATIO of two timings taken the same
@@ -663,22 +700,28 @@ def test_growth_ratio_pin_n_vs_2n(packs) -> None:
     # clock, not this process's CPU seconds. Best-of-3 with the two
     # sizes INTERLEAVED (A,B,A,B) so residual per-round noise
     # (frequency ramps, GC) lands on both sizes instead of skewing
-    # one side of the ratio. The rail value and its both-directions
-    # rationale live with _GROWTH_RAIL above. Trend belt; the
-    # absolute worst-shape wall above is the load-bearing rail
-    # against large regressions.
-    ratio = _measured_growth_ratio(packs)
-    assert ratio <= _GROWTH_RAIL, (
-        f"super-linear growth: ratio {ratio:.2f}")
+    # one side of the ratio. Up to _RAIL_ATTEMPTS independent
+    # attempts (rationale with the constant above): red requires
+    # EVERY attempt above the rail, which real super-linear growth
+    # produces and a loaded-runner noise tail does not. The rail
+    # value and its both-directions rationale live with _GROWTH_RAIL
+    # above. Trend belt; the absolute worst-shape wall above is the
+    # load-bearing rail against large regressions.
+    ok, ratios = _rail_verdict(packs)
+    assert ok, (
+        f"super-linear growth: all {_RAIL_ATTEMPTS} attempts above "
+        "the rail: " + ", ".join(f"{r:.2f}" for r in ratios))
 
 
 # ── two-direction rail regression (churn-prone limit) ────────────────
 #
 # The rail (_GROWTH_RAIL) is churn-prone: raised, it stops catching
 # quadratic regressions; lowered, it flakes on interpreter noise.
-# Both directions are pinned as TESTS through the same measurement
-# path (_measured_growth_ratio) and the same shared constant, so the
-# rail cannot drift silently either way.
+# Both directions are pinned as TESTS through the same verdict path
+# (_rail_verdict, and _measured_growth_ratio under it) and the same
+# shared constant, so neither the rail nor the retry policy can
+# drift silently: the trip test also fences _RAIL_ATTEMPTS — a
+# retry policy loose enough to pass a quadratic engine turns it red.
 
 
 _BURN_BASE_S = 0.05
@@ -699,11 +742,13 @@ def _synthetic_result() -> SimpleNamespace:
 
 
 def test_growth_ratio_rail_trips_on_quadratic_engine(packs) -> None:
-    # Trip direction: a quadratic engine MUST fail the rail. CPU
-    # burn scales with (n/600)**2, so the measured ratio sits at
-    # ~4.0. This fences rail widening ONLY because the assert below
-    # reads the same _GROWTH_RAIL constant the pin test asserts
-    # against: widening the shared constant past ~4.0 turns this
+    # Trip direction: a quadratic engine MUST fail the rail — every
+    # retry attempt included. CPU burn scales with (n/600)**2, so
+    # the measured ratio sits at ~4.0 on each attempt. This fences
+    # rail widening AND retry loosening ONLY because the assert
+    # below goes through the same _rail_verdict the pin test uses:
+    # widening the shared constant past ~4.0, or any retry policy
+    # that lets one attempt wave a quadratic through, turns this
     # test red. A separately hardcoded literal would fence nothing.
     def quadratic(
         texts: dict[str, str], graph: PackageCallGraph,
@@ -712,9 +757,10 @@ def test_growth_ratio_rail_trips_on_quadratic_engine(packs) -> None:
         _burn_cpu(_BURN_BASE_S * (len(graph.nodes) / 600) ** 2)
         return _synthetic_result()
 
-    ratio = _measured_growth_ratio(packs, run=quadratic)
-    assert ratio > _GROWTH_RAIL, (
-        f"quadratic engine did not trip the rail: ratio {ratio:.2f}")
+    ok, ratios = _rail_verdict(packs, run=quadratic)
+    assert not ok, (
+        "quadratic engine did not trip the rail: ratios "
+        + ", ".join(f"{r:.2f}" for r in ratios))
 
 
 def test_growth_ratio_rail_immune_to_wall_stalls(packs) -> None:
@@ -732,9 +778,10 @@ def test_growth_ratio_rail_immune_to_wall_stalls(packs) -> None:
         time.sleep(0.05 * (n / 600) ** 2)
         return _synthetic_result()
 
-    ratio = _measured_growth_ratio(packs, run=stalled)
-    assert ratio <= _GROWTH_RAIL, (
-        f"wall stall leaked into the CPU ratio: {ratio:.2f}")
+    ok, ratios = _rail_verdict(packs, run=stalled)
+    assert ok, (
+        "wall stall leaked into the CPU ratio: "
+        + ", ".join(f"{r:.2f}" for r in ratios))
 
 
 # ── wall budget under a stalled dependency ───────────────────────────
