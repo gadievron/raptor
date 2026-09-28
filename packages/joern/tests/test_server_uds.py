@@ -18,6 +18,7 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from typing import Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -71,37 +72,20 @@ class _StubHandler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def stub_uds():
+def stub_uds(
+    uds_dir: str,
+) -> Iterator[tuple[str, list[dict[str, str | None]]]]:
     """(socket_path, seen-requests list) for a running stub server."""
-    with tempfile.TemporaryDirectory(prefix="raptor-joern-uds-test-") as d:
-        path = os.path.join(d, "joern.sock")
-        handler = type("Handler", (_StubHandler,), {"seen": []})
-        srv = _UnixHTTPServer(path, handler)
-        t = threading.Thread(target=srv.serve_forever, daemon=True)
-        t.start()
-        try:
-            yield path, handler.seen
-        finally:
-            srv.shutdown()
-            srv.server_close()
-
-
-@pytest.fixture
-def short_socket_dir():
-    """A tempdir whose paths fit AF_UNIX's sun_path limit.
-
-    pytest's ``tmp_path`` nests deeply under TMPDIR
-    (pytest-of-<user>/pytest-N/<long-test-name>N/...), and on hosts
-    with a session-scoped TMPDIR the socket path exceeds the ~107-byte
-    limit — ``bind()`` errors before the behaviour under test runs.
-    ``tempfile.TemporaryDirectory`` (the stub fixture's own idiom)
-    stays shallow; when even that is too long the test skips instead
-    of erroring on the harness's environment.
-    """
-    with tempfile.TemporaryDirectory(prefix="raptor-uds-") as d:
-        if len(os.path.join(d, "stall.sock")) > 100:
-            pytest.skip("TMPDIR too long for an AF_UNIX socket path")
-        yield d
+    path = os.path.join(uds_dir, "joern.sock")
+    handler = type("Handler", (_StubHandler,), {"seen": []})
+    srv = _UnixHTTPServer(path, handler)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        yield path, handler.seen
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 def _uds_server(path: str) -> JoernServer:
@@ -158,20 +142,20 @@ class TestUdsClientShim:
         assert seen[-1]["path"] == "/query-sync"
 
     def test_missing_socket_classified_as_connection_failure(
-        self, short_socket_dir,
+        self, uds_dir: str,
     ):
-        srv = _uds_server(os.path.join(short_socket_dir, "gone.sock"))
+        srv = _uds_server(os.path.join(uds_dir, "gone.sock"))
         assert srv._post_sync("1+1", timeout=5) is None
         assert srv._last_post_error.startswith("connection failed:")
 
     def test_unresponsive_socket_classified_as_timeout(
-        self, short_socket_dir,
+        self, uds_dir: str,
     ):
         """query() keys its stuck-REPL restart on "timed out" — the
         socket tier must classify a stalled read the same way."""
         import socket as socket_mod
 
-        path = os.path.join(short_socket_dir, "stall.sock")
+        path = os.path.join(uds_dir, "stall.sock")
         listener = socket_mod.socket(socket_mod.AF_UNIX,
                                      socket_mod.SOCK_STREAM)
         listener.bind(path)

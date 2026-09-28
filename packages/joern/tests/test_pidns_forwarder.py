@@ -38,7 +38,6 @@ import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -407,12 +406,6 @@ class H(BaseHTTPRequestHandler):
 
 HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 """
-
-
-@pytest.fixture
-def uds_dir():
-    with tempfile.TemporaryDirectory(prefix="raptor-joern-uds-test-") as d:
-        yield d
 
 
 def _kids(pid: int) -> list[int]:

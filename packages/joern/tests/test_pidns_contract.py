@@ -301,20 +301,18 @@ def test_supervisor_never_forwards_to_a_reaped_pid(
 
 
 def test_group_boot_reports_group_tier(
-    monkeypatch, tmp_path, restore_signal_handlers,
+    monkeypatch, uds_dir: str, restore_signal_handlers,
 ):
     """The achieved-tier report on a boot without --pidns must be the
     group tier — a forwarder-side misstamp would make the server skip
     the kill ladder with no namespace behind it."""
     monkeypatch.setattr(nf, "enter_private_netns", lambda **kw: None)
     monkeypatch.setattr(nf, "bring_loopback_up", lambda: None)
-    sockdir = tmp_path / "uds"
-    sockdir.mkdir(mode=0o700)
     ready_r, ready_w = os.pipe()
     try:
         rc = nf.main([
             "--ready-fd", str(ready_w),
-            "--socket", str(sockdir / "j.sock"),
+            "--socket", os.path.join(uds_dir, "j.sock"),
             "--port", "47101", "--", "true",
         ])
         assert rc == 0
@@ -356,7 +354,7 @@ def test_pidns_unshare_is_a_single_combined_call(monkeypatch):
 
 
 @needs_pidns
-def test_ready_fd_not_held_below_supervisor(tmp_path):
+def test_ready_fd_not_held_below_supervisor(tmp_path, uds_dir: str):
     """Only P may hold the achieved-tier report channel; a write end
     surviving into B/C keeps the parent's EOF fallback from firing
     and widens the stamp surface."""
@@ -370,7 +368,7 @@ def test_ready_fd_not_held_below_supervisor(tmp_path):
     proc = subprocess.Popen(
         [sys.executable, str(_SCRIPT), "--pidns",
          "--ready-fd", str(w),
-         "--socket", str(tmp_path / "j.sock"), "--port", "47103",
+         "--socket", os.path.join(uds_dir, "j.sock"), "--port", "47103",
          "--", sys.executable, "-c", body],
         pass_fds=(w,),
     )
@@ -406,7 +404,9 @@ def test_ready_fd_not_held_below_supervisor(tmp_path):
 
 
 @needs_pidns
-def test_pidns_orphan_watchdog_reaps_after_raptor_death(tmp_path):
+def test_pidns_orphan_watchdog_reaps_after_raptor_death(
+    tmp_path, uds_dir: str,
+):
     """On the pidns tier the in-namespace watchdog cannot see RAPTOR
     die via getppid(); the supervisor must signal it down the gone
     pipe, or an orphaned idle JVM squats forever — the exact
@@ -426,7 +426,7 @@ def test_pidns_orphan_watchdog_reaps_after_raptor_death(tmp_path):
         [sys.executable, "-c", shim,
          sys.executable, str(_SCRIPT), "--pidns",
          "--orphan-idle-ttl", "1",
-         "--socket", str(tmp_path / "j.sock"), "--port", "47102",
+         "--socket", os.path.join(uds_dir, "j.sock"), "--port", "47102",
          "--", sys.executable, "-c", body],
         stdout=subprocess.PIPE, text=True,
     )
