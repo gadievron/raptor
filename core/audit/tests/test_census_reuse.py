@@ -159,15 +159,29 @@ def _built_config(tmp_path_factory):
 
 class TestPrepOrderPin:
     def test_census_is_stashed_before_the_battery_runs(
-        self, tmp_path_factory,
+        self, tmp_path_factory, monkeypatch,
     ):
         """The reuse seam is DEAD CODE if the battery runs before the
         prepass stashes the census (the original review blocker: the
         helper worked, its input never existed at consult time). The
         battery stub asserts the stash — with its reuse-guard facts —
         is populated at invocation."""
+        import core.audit.capabilities as caps_mod
         import core.audit.orchestrator as orch
         from core.audit.orchestrator import _compute_audit_prep
+
+        # Hermeticity: _compute_audit_prep probes capabilities, and the
+        # angr leg performs a real in-process `import angr`, whose
+        # pypcode_native C++ module init has been observed to abort()
+        # the xdist worker when the import first fires in a process
+        # already loaded with many extension modules (worker-state and
+        # scheduling dependent — an uncatchable SIGABRT, not an
+        # ImportError the probe could swallow). This test pins prep
+        # ORDER, not capability detection (test_capabilities.py and
+        # core/symbolic/tests/test_availability.py exercise the real
+        # probes), so stub only the angr leg and keep the rest of the
+        # probe real.
+        monkeypatch.setattr(caps_mod, "_angr_available", lambda: False)
 
         _, _, config = _built_config(tmp_path_factory)
         seen: dict[str, object] = {}
