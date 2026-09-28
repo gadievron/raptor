@@ -1502,12 +1502,38 @@ class TestStallKillAddressesTheGroup:
 
     @staticmethod
     def _gone(pid: int) -> bool:
-        import os
+        """True once *pid* has been KILLED — a zombie counts as gone.
+
+        The waits below poll the condition the stall monitor CONTROLS:
+        the group SIGKILL landing on the grandchild. A kill victim is
+        observable the instant it dies — it disappears outright or
+        turns zombie awaiting its reaper — but WHEN the zombie is
+        reaped belongs to whoever inherited it, not to the monitor. On
+        an idle host init adopts the orphaned grandchild and reaps
+        near-instantly, so kill-0 aliveness happens to work; under
+        load the reap lags, and inside a nested pid namespace (the
+        mandated runner for kill-exercising tests) the orphan
+        reparents to ns-init — the pytest process itself — which never
+        waits on strangers, so the zombie persists for the life of the
+        run and the kill-0 deadline times out. Counting a zombie as
+        gone cannot mask a missed kill in the other direction: a
+        grandchild the monitor failed to signal stays in state R/S,
+        which still reads as not-gone. Same semantics as the sibling
+        escalation tests' ``_pid_gone`` and the production
+        ``_pgid_alive`` zombie confirmation; without procfs the coarse
+        kill-0 answer stands (there the platform reaper owns orphans).
+        """
         try:
             os.kill(pid, 0)
-            return False
         except ProcessLookupError:
             return True
+        except OSError:
+            pass  # EPERM-class: somebody is there — check its state below.
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            return False  # no procfs — accept the coarse kill-0 answer
+        return stat.rsplit(")", 1)[-1].split()[0] == "Z"
 
     def test_stall_kill_reaps_wrapper_spawned_grandchild(self):
         import os
