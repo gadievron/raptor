@@ -104,6 +104,7 @@ class TestStage0ConsentRecord:
         rec = load_consent(out)
         assert rec is not None
         assert (rec.dynamic, rec.build) == (False, True)
+        assert rec.provenance == "record"
 
     def test_no_flags_run_removes_stale_record(self, tmp_path,
                                                monkeypatch):
@@ -117,6 +118,13 @@ class TestStage0ConsentRecord:
         result, out = _run_stage0(tmp_path)
         assert result.returncode == 0, result.stderr
         assert not (out / "trust-consent.json").exists()
+        # The out-of-band mint state must be cleared WITH the record:
+        # a leftover state file would read as deletion-of-denial and
+        # deny the run's dynamic channels fail-closed.
+        from packages.exploitability_validation.trust_consent import (
+            load_consent as load_consent_after,
+        )
+        assert load_consent_after(out) is None
 
 
 class TestWitnessExecutionGate:

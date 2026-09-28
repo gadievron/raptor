@@ -3173,10 +3173,13 @@ def _effective_stage_consent(
     the channels the invocation left at ``None``, then ``None``
     stands (project markers decide at the gates). Returns
     ``(dynamic, build, dynamic_source)`` where *dynamic_source* is
-    ``"flag"`` / ``"stage-0"`` / ``None`` for refusal-message
-    provenance. An unusable record already warned inside
-    ``load_consent`` and carries no authority — grants AND denials
-    both need the verified stamp."""
+    ``"flag"`` / ``"stage-0"`` / ``"tamper"`` / ``None`` for
+    refusal-message provenance. A tamper-suspect consent substrate
+    (``load_consent``'s fail-closed verdict: record without mint
+    state, state without record, unverifiable record) DENIES the
+    channels this invocation left open — grants AND denials both need
+    the verified stamp, and a broken substrate must not silently
+    resurrect marker grants."""
     dynamic_source = "flag" if dynamic is not None else None
     if dynamic is not None and build is not None:
         return dynamic, build, dynamic_source
@@ -3188,6 +3191,24 @@ def _effective_stage_consent(
         return dynamic, build, dynamic_source
     rec = load_consent(Path(workdir))
     if rec is None:
+        return dynamic, build, dynamic_source
+    if getattr(rec, "provenance", "record") == "fail-closed":
+        denied = []
+        if dynamic is None:
+            dynamic = False
+            dynamic_source = "tamper"
+            denied.append("dynamic")
+        if build is None:
+            build = False
+            denied.append("build")
+        if denied:
+            # The loud tamper diagnosis already logged inside
+            # load_consent; this line names the consequence for THIS
+            # invocation's channels.
+            print(f"  Stage-0 consent substrate tamper-suspect: "
+                  f"{', '.join(denied)} denied fail-closed (project "
+                  "markers do not apply; re-run stage 0 with explicit "
+                  "consent flags to re-mint)")
         return dynamic, build, dynamic_source
     applied = []
     if dynamic is None and rec.dynamic is not None:
@@ -3223,6 +3244,9 @@ def _dynamic_refusal_detail(
     if res.source == "explicit":
         if dynamic_source == "stage-0":
             return "denied by the stage-0 persisted --no-dynamic"
+        if dynamic_source == "tamper":
+            return ("denied fail-closed: the stage-0 consent record or "
+                    "its mint state is tamper-suspect")
         return "denied by explicit flag"
     name = _sft(str(res.project), max_len=120) if res.project else None
     if res.source == "marker-target-mismatch":
