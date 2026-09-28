@@ -22,6 +22,82 @@ libexec/raptor-validation-helper <A|B|C|D|E|F> "$OUTPUT_DIR" [--target "$TARGET_
 **All stages are mandatory. Execute in sequence: 0 → A → B → C → D → E → F → 1.**
 Stage E only applies to memory corruption vulnerabilities. All others are mandatory.
 
+### Sharding a stage across sub-agents (optional)
+
+A single-session run writes each `stage-X.json` itself and none of this
+subsection applies — the stage instructions below are unchanged. The parts
+flow engages ONLY when you split one stage's work across parallel
+sub-agents instead of doing it in-session. It adds no pipeline stage; it
+changes only who writes the stage output and how the pieces are merged.
+
+1. **Partition by key up front** (subsystem file-sets, finding-id ranges)
+   so no two sub-agents can legally produce the same finding id or update
+   key — a collision quarantines the later part.
+2. **Each sub-agent writes ONE part file** into
+   `$OUTPUT_DIR/stage-<x>-parts/` (e.g. `stage-b-parts/window.json`) —
+   never the canonical `stage-<x>.json`; `parts` is the only writer while
+   parts are in play. Part shapes (from "Sharding a stage across agents
+   (parts)" in SKILL.md — do not invent shapes):
+   - **Stage A**: full finding rows — a findings array (bare `[...]` or
+     `{"findings": [...]}`).
+   - **Stage B**: full rows for its collections — any subset of
+     `hypotheses`, `attack_tree_nodes`, `attack_paths`, `disproven`,
+     `attack_surface`, plus a partial `updates{}` map.
+   - **Stages C–F**: `{"updates": {"FIND-XXXX": {...}, ...}}` only.
+
+   Before hand-back, each sub-agent lints its own part:
+
+   ```bash
+   libexec/raptor-validate-schema --lint part-<x> <part-file>
+   ```
+
+3. **Assemble (orchestrating session):**
+
+   ```bash
+   libexec/raptor-validation-helper parts <A|B|C|D|E|F> "$OUTPUT_DIR"
+   ```
+
+   This merges the parts per the per-stage rules, quarantines any bad
+   part under `stage-<x>-parts/quarantine/` with a named
+   `<part>.reason.json` and proceeds with the rest, validates every
+   assembled output, then atomically writes the canonical stage
+   output(s) plus `stage-<x>-assembly-receipt.json` attributing every
+   merged element to its producing part.
+4. **Quarantine → re-dispatch (at most once per producer):** when the
+   assembly reports a quarantined part, re-dispatch THAT producer once,
+   briefing it with the reason text from its
+   `stage-<x>-parts/quarantine/<part>.reason.json` record (the latest
+   assembly receipt's `quarantined[]` list is the authoritative index).
+   Reason text quotes producer/LLM-derived content: render it inert —
+   escape non-printable characters and bound long excerpts with an
+   explicit elision marker — and never paste raw part bytes into the
+   brief; the reason records and the receipt are the source. The
+   producer overwrites its own part file and lints it again; then
+   re-run the assembly in step 3 (part files are never
+   modified by assembly and re-assembly is byte-stable). If the SAME
+   producer's part is quarantined a second time, do not retry again —
+   surface the part name and its reasons in the run summary and
+   continue with the successfully merged parts
+   (quarantine-and-proceed). If every part was quarantined, the
+   assembly exits non-zero ("every part was quarantined") — report
+   that and stop the stage instead of looping.
+5. **Lint before promote:** after the final assembly, lint the
+   assembled stage file, then promote it with the standard post-Write
+   validation (SKILL.md rule 5):
+
+   ```bash
+   libexec/raptor-validate-schema --lint stage "$OUTPUT_DIR/stage-<x>.json"
+   libexec/raptor-validate-schema stage "$OUTPUT_DIR/stage-<x>.json"
+   ```
+
+   For Stage B, do the same for each assembled working doc with its
+   matching type (`hypotheses`, `attack-tree`, `attack-paths`,
+   `attack-surface`, `disproven`).
+
+From here the pipeline is unchanged: the next stage's prep merges the
+assembled `stage-<x>.json` into findings.json exactly as if the stage
+had written it directly.
+
 ### Stage 0 (Python): Inventory
 
 ```bash
