@@ -2246,7 +2246,11 @@ def _finalize_run(
     console summary, lifecycle transition, exit code."""
     import subprocess
 
-    from core.audit.report import generate_report, write_report
+    from core.audit.report import (
+        format_residue_lines,
+        generate_report,
+        write_report,
+    )
 
     # Startup refusal: the orchestrator found a checklist with ZERO
     # reviewable items and never entered the review loop. Do NOT print
@@ -2349,6 +2353,14 @@ def _finalize_run(
         print(f"Vendored/generated triage: {vend_skipped} skipped, "
               f"{vend_glanced} glanced (records in suppressions.jsonl)",
               flush=True)
+    # Unverified residue: everything the run examined but could not
+    # fully verify, with the artifact + browse command per class.
+    # The counters above can honestly read "0 findings" while
+    # suspicious/dark/errored items sit in the persisted artifacts —
+    # these lines say where the rest went. Silent only when every
+    # class is zero (single render seam with the report summary).
+    for residue_line in format_residue_lines(report):
+        print(residue_line, flush=True)
     from core.audit.cost_tracker import format_cost_summary
     cost_line = format_cost_summary(result)
     if cost_line:

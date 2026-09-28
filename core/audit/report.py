@@ -411,6 +411,18 @@ def generate_report(
     if decomp_sweep:
         report["decomp_sweep"] = decomp_sweep
 
+    # Unverified residue — the per-class index of everything this run
+    # examined but could not fully verify. Counts derive from the
+    # SAME sources as the headline stats (the journal-derived stats
+    # block, the graded export, the dark list) — never a parallel
+    # count that can drift. Always present in the JSON report (zero
+    # counts included) so consumers need no absent-key logic; the
+    # console/summary section renders only when a class is nonzero.
+    report["unverified_residue"] = _build_unverified_residue(
+        stats, audit_data, len(dark_findings),
+        _load_graded_stats(out_dir),
+    )
+
     report["summary"] = _format_summary(report)
     return report
 
@@ -1262,6 +1274,139 @@ def _load_segments(out_dir: Path) -> dict[str, Any] | None:
     }
 
 
+def _load_graded_stats(out_dir: Path) -> dict[str, Any]:
+    """The ``stats`` block of ``findings-graded.json`` — {} when the
+    export, or the block, is absent or malformed."""
+    path = out_dir / "findings-graded.json"
+    if not path.exists():
+        return {}
+    data = load_json(path, max_bytes=_MAX_FINDINGS_BYTES)
+    stats = data.get("stats") if isinstance(data, dict) else None
+    return stats if isinstance(stats, dict) else {}
+
+
+def _residue_count(value: Any) -> int:
+    """``value`` as a non-negative residue count; 0 when unusable."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, value)
+
+
+# One browse command per residue class: the per-item query surface an
+# operator runs against the run dir. Generic ``<run-dir>`` placeholder
+# by design — the report must not embed operator filesystem paths.
+_RESIDUE_BROWSE_FINDINGS = "raptor-review findings --out <run-dir>"
+_RESIDUE_BROWSE_HISTORY = (
+    "raptor-review history <file> <function> --out <run-dir>"
+)
+
+
+def _build_unverified_residue(
+    stats: dict[str, int],
+    audit_data: dict[str, Any],
+    dark_count: int,
+    graded_stats: dict[str, Any],
+) -> dict[str, Any]:
+    """Structured per-class index of the run's unverified residue.
+
+    Classes are VIEWS over the run's artifacts, not a partition — a
+    low-confidence suspicious item counts under both
+    ``llm_suspicious`` and ``graded_low_confidence``. Each class
+    names the artifact holding its per-item records (``detail``) and
+    the query command (``browse``) so a count is never a dead end.
+    Counts reuse the sources the headline stats already derive from
+    (``_compute_stats`` output, ``functions_analysed`` records, the
+    dark list, the graded export's own stats block); this function
+    adds no parallel counting that could drift.
+    """
+    mech_suspicious = sum(
+        1 for rec in audit_data.get("functions_analysed", [])
+        if rec.get("mechanical") and rec.get("status") == "suspicious"
+    )
+    return {
+        "llm_suspicious": {
+            "count": _residue_count(stats.get("suspicious")),
+            "detail": "per-item records in findings-graded.json; "
+                      "journal rows in review-journal.jsonl",
+            "browse": _RESIDUE_BROWSE_FINDINGS,
+        },
+        "mechanical_suspicious": {
+            "count": mech_suspicious,
+            "detail": "[mechanical] rows in review-journal.jsonl; "
+                      "raw pattern matches in decomp-sweep.json",
+            "browse": _RESIDUE_BROWSE_FINDINGS,
+        },
+        "dark": {
+            "count": _residue_count(dark_count),
+            "detail": "status=dark items in findings-graded.json "
+                      "(needs_validation: true — run /validate)",
+            "browse": _RESIDUE_BROWSE_FINDINGS,
+        },
+        "graded_low_confidence": {
+            "count": _residue_count(graded_stats.get("low_confidence")),
+            "detail": "per-item confidence fields in "
+                      "findings-graded.json (stats.low_confidence)",
+            "browse": _RESIDUE_BROWSE_FINDINGS,
+        },
+        "errored": {
+            "count": _residue_count(stats.get("error")),
+            "detail": "verdict=error rows (with error_class) in "
+                      "review-journal.jsonl; surrounding events in "
+                      ".audit-log.jsonl",
+            "browse": _RESIDUE_BROWSE_HISTORY,
+        },
+    }
+
+
+# Render order + operator-facing labels for the residue classes.
+# Insertion order here IS the render order.
+_RESIDUE_LABELS = {
+    "llm_suspicious": "LLM suspicious",
+    "mechanical_suspicious": "Mechanical-sweep suspicious",
+    "dark": "Dark (tool-blind)",
+    "graded_low_confidence": "Graded low-confidence",
+    "errored": "Errored reviews",
+}
+
+
+def format_residue_lines(report: dict[str, Any]) -> list[str]:
+    """Console/summary lines for the unverified-residue block.
+
+    THE single render seam for the residue section — the report
+    summary and the end-of-run console both print exactly these
+    lines. Empty when every class is zero (an all-verified run stays
+    silent); otherwise a heading plus one line per nonzero class
+    naming the count, the artifact holding the per-item records, and
+    the browse command. The values are operator-authored constants +
+    integer counts, but they ride through a report dict a consumer
+    may have rebuilt from disk — so they pass the same one-line
+    sanitise seam as every other rendered report value.
+    """
+    residue = report.get("unverified_residue")
+    if not isinstance(residue, dict):
+        return []
+    lines: list[str] = []
+    for key, label in _RESIDUE_LABELS.items():
+        rec = residue.get(key)
+        if not isinstance(rec, dict):
+            continue
+        count = _residue_count(rec.get("count"))
+        if count <= 0:
+            continue
+        lines.append(
+            f"  - {label}: {count} — "
+            f"{_line(rec.get('detail', ''), max_chars=200)} "
+            f"(browse: {_line(rec.get('browse', ''), max_chars=120)})"
+        )
+    if not lines:
+        return []
+    return [
+        "Unverified residue — examined but not fully verified "
+        "(not all-clear):",
+        *lines,
+    ]
+
+
 def _load_dark_findings(out_dir: Path) -> list[dict[str, Any]]:
     """Load status=dark entries from findings-graded.json."""
     path = out_dir / "findings-graded.json"
@@ -1771,6 +1916,15 @@ def _format_summary(report: dict[str, Any]) -> str:
         f"Tool-confirmed findings: {report.get('findings_count', 0)}",
         f"Gaps remaining: {report.get('gaps_remaining', 0)}",
     ]
+
+    # Unverified residue — right under the headline counts, before
+    # any per-class detail section: a zero-findings run with residue
+    # must never read as all-clear. Single render seam shared with
+    # the end-of-run console (format_residue_lines).
+    residue_lines = format_residue_lines(report)
+    if residue_lines:
+        lines.append("")
+        lines.extend(residue_lines)
 
     dark_findings = report.get("dark_findings", [])
     if dark_findings:
