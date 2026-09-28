@@ -65,6 +65,7 @@ import math
 import os
 import re
 import secrets
+import select
 import socket
 import socketserver
 import struct
@@ -233,7 +234,13 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
 
 
 def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
-    """Float twin of :func:`_env_int` — same silent-fallback contract."""
+    """Float twin of :func:`_env_int` — same silent-fallback contract.
+
+    Unlike the int twin (where ``int("nan")`` already raises),
+    ``float()`` happily parses nan/inf, so finiteness is checked
+    explicitly — non-finite values fall back like any other invalid
+    value instead of bypassing the ``minimum`` floor.
+    """
     raw = os.environ.get(name)
     if not raw:
         return default
@@ -241,6 +248,18 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
         value = float(raw)
     except ValueError:
         _logger.debug("llm-dispatcher: ignoring non-float %s=%r", name, raw)
+        return default
+    if not math.isfinite(value):
+        # nan defeats the floor below (``nan < minimum`` is False, like
+        # every nan comparison) and inf passes it outright — both would
+        # ride into consumers as-is. The failure shapes are concrete:
+        # ``Event.wait(nan)`` returns immediately, so a nan poll
+        # interval busy-spins its watcher thread at 100% CPU, and an
+        # inf interval never polls at all. Non-finite is invalid, same
+        # fallback as the other invalid shapes.
+        _logger.debug(
+            "llm-dispatcher: ignoring non-finite %s=%r", name, raw,
+        )
         return default
     if value < minimum:
         _logger.debug(
@@ -331,6 +350,44 @@ class RelayLimitExceeded(OSError):
     ``request.error`` audit row records the class name, and the
     connection is torn down.
     """
+
+
+class WorkerDisconnected(OSError):
+    """The worker-side connection died while the relay was blocked on
+    the upstream — there is nobody left to receive the response.
+
+    Raised by the relay thread at its liveness checkpoints once the
+    orphan watcher has flagged the worker gone. An ``OSError``
+    subclass for the same reason as :class:`RelayLimitExceeded`: the
+    existing abort path books partial usage, writes the
+    ``request.error`` row (naming this class), and tears down.
+    """
+
+
+# Worker-liveness poll cadence while a relay thread is blocked on the
+# upstream (head dwell or an SSE inter-chunk gap). Both directions of
+# this value: TOO LOW busy-polls — each tick is a select() + MSG_PEEK
+# recv() per in-flight relay, and worker abandonment is a
+# ~100-seconds-scale event (the worker SDK's client timeout), so
+# sub-second sampling burns CPU for zero detection value; the ≥1s
+# floor exists so no configuration can busy-poll. TOO HIGH erodes the
+# point of the watcher — the orphaned upstream call keeps generating
+# (and billing) for the whole interval after the worker left, and a
+# value approaching the worker's own timeout would mean most orphans
+# are only noticed at write time again (the pre-fix behaviour).
+_ORPHAN_POLL_INTERVAL_DEFAULT_S = 2.0
+_ORPHAN_POLL_INTERVAL_FLOOR_S = 1.0
+
+
+def _orphan_poll_interval_s() -> float:
+    """Env-tunable per relay (one lookup), same knob pattern as the
+    upstream timeout. Values below the busy-poll floor fall back to
+    the default (the ``_env_float`` contract)."""
+    return _env_float(
+        "RAPTOR_LLM_DISPATCHER_ORPHAN_POLL_S",
+        _ORPHAN_POLL_INTERVAL_DEFAULT_S,
+        minimum=_ORPHAN_POLL_INTERVAL_FLOOR_S,
+    )
 
 
 # Per-request budget reservation for scoped child tokens. The budget
@@ -612,6 +669,177 @@ def _upstream_stream_with_stale_retry(
     finally:
         if oneshot is not None:
             oneshot.close()
+
+
+def _worker_socket_dead(sock: socket.socket) -> bool:
+    """Non-consuming liveness probe of the worker-side connection.
+
+    During the upstream leg the worker has sent its full request and
+    owes the relay nothing, so its socket polls unreadable while the
+    worker lives. Readable therefore means one of:
+
+    * a successful zero-byte peek — EOF, the worker closed (client
+      timeout/abandon): DEAD.
+    * peeked data — bytes after the request body are a protocol
+      violation, but a live-and-misbehaving worker must never be
+      cancelled on suspicion: treat as ALIVE and let the existing
+      write-time failure own it.
+    * a socket error on the probe — the connection is unusable: DEAD.
+
+    MSG_PEEK never consumes, so the probe cannot race the handler's
+    own reads (none are pending during the relay anyway).
+
+    ``select.poll`` rather than ``select.select``: select() raises
+    ValueError for any fd >= FD_SETSIZE (1024), which a loaded
+    ThreadingMixIn server reaches — and this probe must never call a
+    HEALTHY worker dead on a probe artifact.
+    """
+    try:
+        poller = select.poll()
+        poller.register(
+            sock, select.POLLIN | select.POLLERR | select.POLLHUP,
+        )
+        events = poller.poll(0)
+    except (OSError, ValueError):
+        return True   # fd closed/invalid — the worker leg is gone
+    if not events:
+        return False
+    try:
+        data = sock.recv(
+            1, socket.MSG_PEEK | getattr(socket, "MSG_DONTWAIT", 0),
+        )
+    except (BlockingIOError, InterruptedError):
+        return False
+    except OSError:
+        return True
+    return not data
+
+
+class _OrphanWatcher:
+    """Abandon the upstream call promptly when the worker is gone.
+
+    Pre-fix, a worker that timed out client-side abandoned its
+    dispatcher connection while the relay thread stayed blocked in the
+    upstream dwell — the death only surfaced at the next write, often
+    minutes later, and the abandoned upstream generation kept running
+    (billed) with nobody to receive it.
+
+    One watcher per relayed request, alive only for the upstream leg.
+    It polls the worker-side socket every ``poll_interval_s`` (see
+    ``_ORPHAN_POLL_INTERVAL_DEFAULT_S`` for the cadence rationale) and
+    on death:
+
+    * sets :attr:`worker_gone` — the relay thread checks it at its
+      seams (after the response head arrives, and between streamed
+      chunks) and raises :class:`WorkerDisconnected` into the
+      existing abort path;
+    * calls ``on_worker_gone(cancel)`` exactly once (the relay leg
+      audits the abandonment from it);
+    * when a response is attached and its connection is
+      request-exclusive (HTTP/1.x), tears the upstream socket down
+      with ``shutdown(SHUT_RDWR)`` — the one cross-thread action that
+      reliably wakes a thread blocked in a socket read (closing the
+      httpx response from another thread provably does NOT: the
+      blocked read keeps running against the freed fd). The woken
+      read surfaces as ``httpx.RemoteProtocolError``/``ReadError`` in
+      the relay thread, which the existing handler books and audits.
+
+    What it deliberately does NOT cancel:
+
+    * the head dwell (no response object yet): the pooled connection
+      serving the send cannot be identified from outside httpx, so
+      the flag is set and the relay aborts the moment the head
+      arrives. Long non-streaming dwells therefore still orphan
+      until the head or the upstream timeout — an honest residual.
+    * HTTP/2 responses: the socket is shared with multiplexed sibling
+      streams; shutting it down would abort every relay on it.
+      Flag-only, detected at the next chunk/write seam.
+
+    Pool safety: :meth:`stop` and the cancel action are mutually
+    excluded by the lock — once the relay declares the stream drained
+    (calling ``stop()`` before the response leaves scope), a
+    concurrent detection can no longer shut down a socket that may
+    already be back in the shared connection pool.
+    """
+
+    def __init__(
+        self,
+        worker_sock: socket.socket,
+        poll_interval_s: float,
+        on_worker_gone: Callable[[str], None],
+    ) -> None:
+        self._sock = worker_sock
+        self._interval = poll_interval_s
+        self._on_worker_gone = on_worker_gone
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self.worker_gone = threading.Event()
+        self._response: httpx.Response | None = None
+        self._thread = threading.Thread(
+            target=self._run,
+            name="llm-dispatcher-orphan-watch",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def attach_response(self, up: httpx.Response) -> None:
+        """Register the opened upstream response so a later detection
+        can tear its connection down (HTTP/1.x only, see class doc)."""
+        with self._lock:
+            self._response = up
+
+    def stop(self) -> None:
+        """Idempotent; taken under the lock so no cancel can fire
+        after the relay declared the stream drained."""
+        with self._lock:
+            self._stop.set()
+
+    def join(self) -> None:
+        """Bounded: the poll loop wakes within one interval of
+        ``stop()`` (Event.wait returns immediately once set); the
+        timeout is belt-and-braces on top of the daemon flag."""
+        self._thread.join(timeout=self._interval + 1.0)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            if not _worker_socket_dead(self._sock):
+                continue
+            with self._lock:
+                if self._stop.is_set():
+                    return
+                self.worker_gone.set()
+                cancel = self._cancel_upstream_locked()
+            try:
+                self._on_worker_gone(cancel)
+            except Exception:  # noqa: BLE001 — observability only
+                _logger.debug(
+                    "llm-dispatcher: orphan-cancel audit failed",
+                    exc_info=True,
+                )
+            return
+
+    def _cancel_upstream_locked(self) -> str:
+        """Best-effort upstream teardown; returns the action taken
+        (``upstream_shutdown`` or ``flag_only``) for the audit row."""
+        up = self._response
+        if up is None:
+            # Head dwell — nothing safely cancellable (class doc).
+            return "flag_only"
+        try:
+            if not (up.http_version or "").upper().startswith("HTTP/1"):
+                # h2: socket shared with sibling streams (class doc).
+                return "flag_only"
+            stream = up.extensions.get("network_stream")
+            sock = (
+                stream.get_extra_info("socket")
+                if stream is not None else None
+            )
+            if sock is None:
+                return "flag_only"
+            sock.shutdown(socket.SHUT_RDWR)
+            return "upstream_shutdown"
+        except Exception:  # noqa: BLE001 — cancel is best-effort
+            return "flag_only"
 
 
 # Upstream attempt-state stamp toward the worker. The worker's retry
@@ -2688,6 +2916,43 @@ def _make_request_handler(
                     },
                 ))
 
+            def _note_worker_gone(cancel: str) -> None:
+                # Audit trail for the abandonment itself, distinct
+                # from the request.error row the aborting relay
+                # thread writes next: this row records WHEN the
+                # worker was noticed gone and WHAT was done about the
+                # upstream call (``cancel``: upstream_shutdown /
+                # flag_only / pre-upstream). ``response_started`` /
+                # ``elapsed_s`` are read at call time, so the row
+                # carries the relay's state at detection.
+                dispatcher._audit(AuditEvent(
+                    ts=time.time(), event="request.orphan_cancel",
+                    peer_pid=None, peer_uid=None,
+                    token_id=(rec.token_id or _short(rec.value)),
+                    worker_label=rec.worker_label,
+                    status="ok",
+                    reason=f"worker connection closed ({cancel})",
+                    extra={
+                        "response_started": response_started,
+                        "elapsed_s": round(
+                            time.monotonic() - upstream_sent_at, 3,
+                        ),
+                        "cancel": cancel,
+                    },
+                ))
+
+            # A worker that died while the request was being read,
+            # authorized, or signed must not launch an upstream call
+            # at all — the cheapest orphan is the one never opened.
+            if _worker_socket_dead(self.connection):
+                _note_worker_gone("pre-upstream")
+                self.close_connection = True
+                return
+            watcher = _OrphanWatcher(
+                self.connection, _orphan_poll_interval_s(),
+                _note_worker_gone,
+            )
+
             try:
                 with _upstream_stream_with_stale_retry(
                     dispatcher._upstream_client(),
@@ -2696,6 +2961,20 @@ def _make_request_handler(
                     timeout=_upstream_timeout(),
                     on_retry=_note_stale_retry,
                 ) as up:
+                    watcher.attach_response(up)
+                    if watcher.worker_gone.is_set():
+                        # The worker left during the head dwell. The
+                        # watcher could not interrupt the blocked
+                        # open (no response object existed yet — see
+                        # _OrphanWatcher), but nothing has gone on
+                        # the worker wire, so abandon before relaying
+                        # a byte. OSError subclass → the ordinary
+                        # abort path below books any scanned usage
+                        # and writes the request.error row.
+                        raise WorkerDisconnected(
+                            "worker connection closed during "
+                            "upstream head dwell"
+                        )
                     try:
                         from core.llm.http_pool import (
                             _normalize_http_version,
@@ -2766,6 +3045,18 @@ def _make_request_handler(
                     )
                     _prev_chunk: bytes | None = None
                     for chunk in up.iter_raw():
+                        if watcher.worker_gone.is_set():
+                            # Detection seam for the cases the
+                            # watcher cannot interrupt (h2 shared
+                            # socket, failed shutdown): abandon at
+                            # the next chunk instead of writing to a
+                            # dead worker. When the watcher DID shut
+                            # the upstream socket down, iter_raw
+                            # raises before this line and the same
+                            # abort path runs.
+                            raise WorkerDisconnected(
+                                "worker connection closed mid-relay"
+                            )
                         relayed_bytes += len(chunk)
                         if relayed_bytes > max_relay_bytes:
                             _logger.warning(
@@ -2809,6 +3100,15 @@ def _make_request_handler(
                         if _prev_chunk is not None:
                             self.wfile.write(_prev_chunk)
                         _prev_chunk = chunk
+                    # Stream drained: stop the watcher BEFORE the
+                    # response leaves scope. A worker that closes the
+                    # instant it has the full body is a HEALTHY close
+                    # — past this line a detection could otherwise
+                    # shut down an upstream socket already returned
+                    # to the shared pool (stop() and the cancel
+                    # action exclude each other under the watcher's
+                    # lock).
+                    watcher.stop()
                     if scanner is not None:
                         dispatcher._book_child_usage(
                             rec, scanner, aborted=False,
@@ -2861,6 +3161,13 @@ def _make_request_handler(
                         "elapsed_s": round(
                             time.monotonic() - upstream_sent_at, 3,
                         ),
+                        # Ties the error row to the orphan_cancel row
+                        # when the abort was watcher-induced: a
+                        # shutdown-woken read surfaces as a plain
+                        # httpx error whose class name alone cannot
+                        # say the worker was already gone.
+                        "worker_disconnected":
+                            watcher.worker_gone.is_set(),
                     },
                 ))
                 if not response_started:
@@ -2926,6 +3233,13 @@ def _make_request_handler(
                     except OSError:
                         pass
                 self.close_connection = True
+            finally:
+                # Every exit — normal drain (already stopped above,
+                # idempotent), abort, and the pre-response 502 return
+                # — retires the watcher: bounded thread lifetime, no
+                # polling of a connection the handler is done with.
+                watcher.stop()
+                watcher.join()
 
         def _child_admin(self, rec: _TokenRecord) -> None:
             """Handle /_child/{mint,revoke,spend} for a validated
