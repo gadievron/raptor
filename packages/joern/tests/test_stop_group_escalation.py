@@ -160,6 +160,17 @@ class TestEnsureGroupDead:
         assert not _pgid_alive(proc.pid)
 
     def test_never_signals_own_group(self, monkeypatch):
+        """The own-group refusal returns False (nothing verifiable
+        was killed — the caller IS the group) and never signals.
+
+        Two pins. In-process: killpg is recorded and asserted
+        untouched, re-anchoring on a mapped stand-in when this
+        process's own pgid is unmapped (getpgrp() reports 0 inside
+        a pid namespace whose group leader lives outside it). Child
+        probe: a subprocess that made itself a process-group leader
+        exercises the real own-group branch on any runner — a
+        setpgrp() child's pgid is its own in-namespace pid (> 1)
+        everywhere, so the branch runs without any stand-in."""
         signalled: list[tuple] = []
         monkeypatch.setattr(
             server_mod.os, "killpg",
@@ -177,6 +188,23 @@ class TestEnsureGroupDead:
             monkeypatch.setattr(server_mod.os, "getpgrp", lambda: own)
         assert _ensure_group_dead(own, label="test") is False
         assert signalled == []
+        code = (
+            "import os, sys\n"
+            "os.setpgrp()\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from packages.joern.server import _ensure_group_dead\n"
+            "assert os.getpgrp() > 1, os.getpgrp()\n"
+            "assert _ensure_group_dead(os.getpgrp(), label='test') "
+            "is False\n"
+        )
+        repo_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", ".."),
+        )
+        res = subprocess.run(
+            [sys.executable, "-c", code, repo_root],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert res.returncode == 0, res.stderr
 
     def test_empty_and_absent_groups_are_trivially_dead(self):
         assert _ensure_group_dead(None, label="test")
