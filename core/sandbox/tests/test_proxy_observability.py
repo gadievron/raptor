@@ -394,14 +394,14 @@ class TestHeadlinePartition:
     def test_event_results_partition_into_headline_groups(self):
         """Every record-time result string lands in exactly one
         headline bucket: denied, failed, or the documented-neither
-        set (allowed / would_deny_host / timed_out / buffer_overflow —
-        each excluded from the headlines for a reason stated at the
-        grouping constants). A result string added to
+        set (allowed / would_deny_host / timed_out / buffer_overflow /
+        parser_jail_degraded — each excluded from the headlines for a
+        reason stated at the grouping constants). A result string added to
         _PROXY_EVENT_RESULTS without a grouping decision fails here
         instead of silently dropping out of every headline number
         while remaining visible only in the per-result census."""
         neither = {"allowed", "would_deny_host", "timed_out",
-                   "buffer_overflow"}
+                   "buffer_overflow", "parser_jail_degraded"}
         denied = proxy_mod._STATS_DENIED_RESULTS
         failed = proxy_mod._STATS_FAILED_RESULTS
         assert (denied | failed | neither

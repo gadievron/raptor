@@ -26,6 +26,18 @@ Architecture:
   fully synchronous — callers just see `get_proxy().port` as an int.
 - HTTP CONNECT method only. Proxy tunnels raw TLS bytes between child
   and backend; it does NOT terminate TLS (no MITM, no cert forging).
+- Confined request-line parsing: the raw CONNECT request-line bytes —
+  the one place hostile bytes from the sandboxed client are
+  interpreted — are parsed in a separate, self-confined worker process
+  (see parser_jail.py: Landlock read-only-on-own-code, no network,
+  rlimits, sanitised environment), never in this process. The worker's
+  verdict is re-validated field-by-field before use. If the worker
+  cannot be spawned and confined, EgressProxy construction raises and
+  mid-life unavailability answers 503 — there is no inline-parse
+  fallback. On kernels without Landlock the worker runs on a degraded
+  floor (rlimits + fd hygiene + process isolation only); that is made
+  loud via a startup warning and a `parser_jail_degraded` audit marker
+  in every registration's event buffer.
 - Hostname allowlist is UNION across all callers: if cc_dispatch asks
   for {api.anthropic.com} and a later caller asks for {ghcr.io}, both
   hosts are allowed globally. Trust model: RAPTOR's own code is the
@@ -81,6 +93,8 @@ Error responses:
                             the absolute deadline
     429 Too Many Tunnels  — aggregate tunnel-slot cap reached
     502 Bad Gateway       — backend refused / unreachable
+    503 Service Unavailable — confined request-line parser worker
+                            unavailable (respawn failing/backing off)
     504 Gateway Timeout   — backend didn't respond within timeout
 """
 
@@ -101,14 +115,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Optional
 
-# Module-top so the import doesn't run on every CONNECT — the proxy
-# tunnel handler used to do `from core.security.log_sanitisation
-# import has_nonprintable` inline on the hot path. Cached after the
-# first call but still a dict lookup + module attribute access per
-# request.
-from core.security.log_sanitisation import has_nonprintable, sanitise_for_terminal
+from core.security.log_sanitisation import sanitise_for_terminal
 
-from . import audit_budget, escalation_signatures
+from . import audit_budget, escalation_signatures, parser_jail
+from ._request_head import CENSUS_CONNECT, CENSUS_NON_CONNECT, ParseRefusal
 
 # Process-unique lane ids. Labels are NOT unique (two concurrent
 # contexts may share caller_label="sandbox"), so event->buffer
@@ -441,6 +451,17 @@ _PROXY_EVENT_RESULTS = frozenset({
     # counters so consumers of the persisted event list can see the
     # truncation — a capped buffer is never silent.
     "buffer_overflow",
+    # Confined request-line parser worker unavailable (respawn
+    # failing/backing off) — the CONNECT was refused with 503. Fail
+    # closed: hostile request-line bytes are NEVER parsed in-process
+    # as a fallback (see parser_jail.py).
+    "parser_unavailable",
+    # Control-plane marker, one per registration made while the
+    # parser worker runs WITHOUT Landlock confinement (kernel lacks
+    # Landlock): the degraded floor (rlimits + fd hygiene + process
+    # isolation only) must be visible in every run's audit trail,
+    # not only the process log. Appended by register_sandbox.
+    "parser_jail_degraded",
 })
 
 # Per-registration event-buffer bounds. The per-sandbox buffers exist
@@ -514,6 +535,15 @@ def _warn_doh_hosts(hosts: "set[str] | frozenset[str]") -> None:
 #     CLOSE-TIME reclassification of an event recorded as `allowed`
 #     (it never passes through _record); the scalar
 #     `tunnels_timed_out` counter carries it instead.
+#     `parser_unavailable` is failed, not denied: the confined
+#     request-line parser worker could not serve (respawn failing or
+#     backing off), so the CONNECT was refused 503 without any policy
+#     gate seeing it.
+#   * `parser_jail_degraded` is documented-neither: a per-registration
+#     control-plane marker (the parser worker runs without Landlock),
+#     never a CONNECT verdict — it is appended directly by
+#     register_sandbox, counted into the event census there (the
+#     buffer_overflow precedent), and has no connection to headline.
 _STATS_DENIED_RESULTS = frozenset({
     "denied_host",
     "denied_resolved_ip",
@@ -526,6 +556,7 @@ _STATS_FAILED_RESULTS = frozenset({
     "bad_request",
     "handler_error",
     "refused_capacity",
+    "parser_unavailable",
 })
 
 # Cadence of the proxy's structured stats heartbeat line (INFO; see
@@ -1737,7 +1768,13 @@ class EgressProxy:
             # Handshake parse outcomes: well-formed CONNECT request
             # lines vs request lines whose method is not CONNECT
             # (malformed-but-CONNECT lines are neither — they show up
-            # as bad_request in _stats_events).
+            # as bad_request in _stats_events). The classification is
+            # computed by the confined parser worker and rides the
+            # verdict's census field (see _request_head.CENSUS_*):
+            # this process never splits the hostile bytes itself.
+            # Requests the jail could not classify stay uncounted —
+            # parser_unavailable refusals (nothing parsed the bytes)
+            # and worker-crash refusals (census defaults to neither).
             "requests_connect": 0,
             "requests_non_connect": 0,
             # Established tunnels that reached close, and the subset
@@ -1801,6 +1838,15 @@ class EgressProxy:
         self._unix_tasks: set = set()
         self._client_tasks: set = set()
         self._stopping = False
+
+        # Request-line parsing is delegated to the confined parser
+        # worker — this process never interprets raw CONNECT
+        # request-line bytes (see parser_jail.py for the trust model).
+        # Eager, BEFORE the listener thread starts: if the worker
+        # cannot be spawned and confined, this raises and no proxy
+        # comes up at all (fail-closed — there is no inline-parse
+        # fallback anywhere in this module).
+        self._parser_jail: parser_jail.ParserJail = parser_jail.get_parser_jail()
 
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -2285,6 +2331,36 @@ class EgressProxy:
             self._next_token += 1
             token = self._next_token
             self._sandbox_buffers[token] = []
+            if self._parser_jail.landlocked is False:
+                # Degraded-floor audit marker: the parser worker runs
+                # WITHOUT Landlock confinement (kernel lacks Landlock).
+                # One marker per registration so every run's audit
+                # trail states its floor. Appended directly (not via
+                # _record): the marker is registration-scoped, not a
+                # tunnel event, and _record's lane fan-out would not
+                # deliver a lane_id=None marker to lane-subscribed
+                # buffers — exactly the registrations that must see it.
+                self._sandbox_buffers[token].append({
+                    "proxy_seq": next(self._event_seq),
+                    "t": time.monotonic(),
+                    "host": None, "port": None,
+                    "result": "parser_jail_degraded",
+                    "reason": (
+                        "request-line parser worker is running "
+                        "without Landlock confinement (kernel lacks "
+                        "Landlock) — degraded floor: rlimits, fd "
+                        "hygiene, sanitised environment, and process "
+                        "isolation only"),
+                    "resolved_ip": None,
+                    "lane": None, "lane_id": None,
+                    "bytes_c2u": 0, "bytes_u2c": 0, "duration": 0.0,
+                })
+                # Marker events bypass _record (appended directly, one
+                # per degraded registration) — fold them into the
+                # per-result event census here, under the same
+                # _buffer_lock, exactly like the buffer_overflow
+                # marker in _append_bounded_locked.
+                self._stats_events["parser_jail_degraded"] += 1
             self._sandbox_labels[token] = caller_label
             self._sandbox_lane_subs[token] = lane_sub
             self._sandbox_buffers_snapshot = tuple(
@@ -3497,81 +3573,69 @@ class EgressProxy:
         # below gets only the remaining slice of the deadline, not a
         # fresh full timeout.
         handshake_deadline = t_start + _PROXY_HANDSHAKE_DEADLINE_S
-        request_line = await _read_line(
+        raw_line = await _read_raw_line(
             reader, max_len=4096,
             timeout=max(0.0, handshake_deadline - time.monotonic()))
-        if request_line is None:
+        if raw_line is None:
             event.update(result="bad_request", reason="empty/overlong CONNECT line",
                          duration=time.monotonic() - t_start)
             self._record(event)
             await self._write_error(writer, 400, "Bad Request")
             return
 
-        parts = request_line.split()
-        if len(parts) != 3 or parts[0] != "CONNECT" or not parts[2].startswith("HTTP/"):
-            # Method census: a request line whose method is not
-            # CONNECT (a plain HTTP client pointed at the proxy) is
-            # worth distinguishing from a garbled CONNECT — both are
-            # refused identically below (bad_request).
-            if parts and parts[0] != "CONNECT":
-                self._stats["requests_non_connect"] += 1
-            event.update(result="bad_request", reason=f"malformed: {request_line[:80]!r}",
-                         duration=time.monotonic() - t_start)
-            self._record(event)
-            await self._write_error(writer, 400, "Bad Request")
-            return
-
-        self._stats["requests_connect"] += 1
-        target = parts[1]
-        # Reject non-printable characters in the CONNECT target. A
-        # sandboxed client that includes ESC (0x1b) / CR / NUL / C1
-        # controls / Unicode line separators in the host field would
-        # otherwise have those bytes echoed verbatim into the proxy's
-        # log output — terminal escape injection (change colours, set
-        # window title, overwrite prior lines to spoof "all clear"
-        # entries). JSON logging (proxy-events.jsonl) is safe because
-        # json.dumps escapes control chars, but the logger.warning/info
-        # calls below interpolate the host into human-readable messages
-        # that may reach a live terminal. See
-        # core.security.log_sanitisation.has_nonprintable. Imported at
-        # module top to avoid a per-CONNECT dict-lookup + module-attr
-        # access on the hot path.
-        if has_nonprintable(target):
-            event.update(result="bad_request",
-                         reason="non-printable characters in CONNECT target",
-                         duration=time.monotonic() - t_start)
-            self._record(event)
-            await self._write_error(writer, 400, "Bad Request")
-            return
-        if ":" not in target:
-            event.update(result="bad_request", reason="no port in target",
-                         duration=time.monotonic() - t_start)
-            self._record(event)
-            await self._write_error(writer, 400, "Bad Request")
-            return
-        host, _, port_str = target.rpartition(":")
-        # Strip IPv6 brackets if present: [::1]:443.
-        # `str.strip("[]")` strips ANY leading/trailing `[` or `]`
-        # regardless of pairing, so `]example.com[` would also collapse
-        # to `example.com` — which doesn't match the IPv6-bracket
-        # intent. Only strip when both bookends are present together.
-        if host.startswith("[") and host.endswith("]"):
-            host = host[1:-1]
+        # Interpretation of the hostile request-line bytes happens in
+        # the confined parser worker, never in this process: the raw
+        # bytes go to the jail, a re-validated verdict comes back (see
+        # parser_jail.py for the trust model; _request_head.py for the
+        # parse itself — the former inline parse, extracted verbatim,
+        # so refusal reasons and per-case host/port attribution on the
+        # events below are unchanged). asyncio.to_thread because the
+        # round-trip is blocking (mutex-serialised) — the event loop
+        # stays free for other tunnels.
         try:
-            port = int(port_str)
-        except ValueError:
-            event.update(host=host, result="bad_request", reason="non-numeric port",
+            verdict = await asyncio.to_thread(
+                self._parser_jail.parse, raw_line)
+        except parser_jail.ParserJailUnavailable as exc:
+            # No confined worker and respawn is failing / backing off.
+            # Fail closed: refuse the request — hostile bytes are NEVER
+            # parsed in-process as a fallback. No method census either:
+            # nothing parsed the bytes, so neither counter can honestly
+            # move (the parser_unavailable event census carries the
+            # incident instead).
+            event.update(result="parser_unavailable", reason=str(exc),
+                         duration=time.monotonic() - t_start)
+            self._record(event)
+            await self._write_error(writer, 503, "Service Unavailable")
+            return
+        # Method census (see the _stats comment in __init__): the
+        # classification rides the verdict — only the confined parser
+        # sees the split method, and re-splitting here would move
+        # hostile-byte interpretation back in-process. Same conditions
+        # and counters as the former inline counting; increments run on
+        # the event-loop thread (this coroutine resumed after the
+        # await), per the _stats thread contract.
+        if isinstance(verdict, ParseRefusal):
+            if verdict.census == CENSUS_CONNECT:
+                self._stats["requests_connect"] += 1
+            elif verdict.census == CENSUS_NON_CONNECT:
+                self._stats["requests_non_connect"] += 1
+            # Worker death on this input surfaces as a refusal too
+            # (its reason string says so): poison input costs the
+            # client its request and the jail one respawn — nothing
+            # else. Attribution fields are per-refusal-class, set only
+            # when the parser stamped them.
+            if verdict.host is not None:
+                event["host"] = verdict.host
+            if verdict.port is not None:
+                event["port"] = verdict.port
+            event.update(result="bad_request", reason=verdict.reason,
                          duration=time.monotonic() - t_start)
             self._record(event)
             await self._write_error(writer, 400, "Bad Request")
             return
-        if not (0 < port < 65536):
-            event.update(host=host, port=port, result="bad_request",
-                         reason="port out of range",
-                         duration=time.monotonic() - t_start)
-            self._record(event)
-            await self._write_error(writer, 400, "Bad Request")
-            return
+        self._stats["requests_connect"] += 1
+        host = verdict.host
+        port = verdict.port
         event["host"] = host
         event["port"] = port
 
@@ -4412,9 +4476,15 @@ def _consume_abandoned_relay(fut: asyncio.Future) -> None:
         fut.exception()
 
 
-async def _read_line(reader: asyncio.StreamReader, max_len: int,
-                     timeout: float | None = None) -> str | None:
-    """Read one CRLF-terminated line, max_len bytes. None on error/EOF.
+async def _read_raw_line(reader: asyncio.StreamReader, max_len: int,
+                         timeout: float | None = None) -> bytes | None:
+    """Read one CRLF-terminated line, max_len bytes (counting the
+    CRLF); return the raw bytes WITHOUT the CRLF. None on
+    error/EOF/overlong.
+
+    The request-line caller ships these bytes to the confined parser
+    worker UNDECODED — this process's handling of them is the CRLF
+    delimiter and the length cap, nothing more.
 
     *timeout* is the read budget for THIS line; handshake callers pass
     the remaining slice of their absolute deadline so successive lines
@@ -4430,7 +4500,22 @@ async def _read_line(reader: asyncio.StreamReader, max_len: int,
         return None
     if len(data) > max_len:
         return None
-    return data[:-2].decode("latin-1")  # latin-1 never fails on bytes
+    return data[:-2]
+
+
+async def _read_line(reader: asyncio.StreamReader, max_len: int,
+                     timeout: float | None = None) -> str | None:
+    """Read one CRLF-terminated line, decoded. None on error/EOF.
+
+    Header-drain variant of _read_raw_line: the drain loop only counts
+    ``len(line)`` and checks for the empty terminator line — the
+    decoded content is never otherwise interpreted (latin-1 is a
+    byte-length-preserving bijection, so the count is the byte count).
+    """
+    raw = await _read_raw_line(reader, max_len, timeout)
+    if raw is None:
+        return None
+    return raw.decode("latin-1")  # latin-1 never fails on bytes
 
 
 # ----- module-level singleton API -----

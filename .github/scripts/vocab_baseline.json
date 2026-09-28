@@ -1714,7 +1714,7 @@
     "note": "static set of known DNS-over-HTTPS provider hostnames; the egress proxy warns when any appear in the allowlist since a sandboxed child can bypass DNS controls via HTTPS"
   },
   "core/sandbox/proxy.py::_PROXY_EVENT_RESULTS": {
-    "count": 13,
+    "count": 15,
     "kind": "literal",
     "note": "pinned proxy event-result enum, drift-pinned by the structural test in test_audit_filter.py \u2014 a fixed taxonomy, not learnable vocabulary"
   },
@@ -1731,6 +1731,11 @@
     "count": 16,
     "kind": "literal",
     "note": "proxy event-record field names (schema keys), not a name vocabulary"
+  },
+  "core/sandbox/proxy.py::register_sandbox": {
+    "count": 12,
+    "kind": "literal",
+    "note": "parser_jail_degraded marker record keys (the standard proxy event-record schema, same shape family as ::marker and ::event), not a name vocabulary"
   },
   "core/sandbox/scripts/feature-matrix/bin/report.py::main": {
     "count": 11,

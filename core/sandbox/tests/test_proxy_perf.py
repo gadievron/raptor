@@ -2,7 +2,8 @@
 
   A. TTL'd DNS cache (skip getaddrinfo on repeat host).
   B. Happy-eyeballs dialer (race v6 + v4 instead of serial walk).
-  C. Module-top has_nonprintable import + lazy log formatting (smoke).
+  C. Non-printable scan lives with the confined parser + lazy log
+     formatting (smoke).
   D. Snapshot-based buffer fan-out (lock-free hot path; concurrent
      register/unregister/_record exercise).
 
@@ -507,20 +508,23 @@ class TestBufferSnapshot:
 
 
 # ---------------------------------------------------------------------------
-# C — module-top import + lazy log formatting (smoke)
+# C — parser-owned non-printable scan + lazy log formatting (smoke)
 # ---------------------------------------------------------------------------
 
 
 class TestImportAndLogging:
 
-    def test_has_nonprintable_imported_at_module_top(self):
-        """The hot-path inline import is gone — the symbol resolves
-        from the proxy module's own namespace."""
-        # Direct module attribute lookup; if the inline import was
-        # still in _serve_tunnel and the module-top one was removed,
-        # this would AttributeError.
-        assert hasattr(proxy_mod, "has_nonprintable")
+    def test_has_nonprintable_lives_in_the_request_head_parser(self):
+        """The non-printable CONNECT-target scan moved with the parse
+        into _request_head (run inside the confined parser worker);
+        the module-top import invariant — no per-CONNECT inline
+        import — is pinned there now. proxy.py no longer references
+        the symbol at all."""
+        from core.sandbox import _request_head
         from core.security.log_sanitisation import (
             has_nonprintable as canonical,
         )
-        assert proxy_mod.has_nonprintable is canonical
+        assert _request_head.has_nonprintable is canonical
+        assert not hasattr(proxy_mod, "has_nonprintable")
+        import inspect
+        assert "has_nonprintable" not in inspect.getsource(proxy_mod)
