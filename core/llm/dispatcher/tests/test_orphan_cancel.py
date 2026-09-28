@@ -578,3 +578,58 @@ class TestOrphanCancel:
         finally:
             upstream.shutdown()
             d.shutdown()
+
+
+class TestAcquireFailureRetiresWatcher:
+    """The watcher thread starts before the shard acquire; an acquire
+    that raises (the pool is closed in a shutdown race) exits the
+    relay before its finally is armed. That path must stop the
+    watcher — a leaked watcher reads the handler's own connection
+    close as a worker abandonment and audits an orphan cancel for a
+    relay that never opened an upstream."""
+
+    @staticmethod
+    def _live_watchers() -> list[threading.Thread]:
+        return [
+            t for t in threading.enumerate()
+            if t.name == "llm-dispatcher-orphan-watch" and t.is_alive()
+        ]
+
+    def test_acquire_raise_stops_watcher_and_writes_no_orphan_row(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setenv("RAPTOR_LLM_DISPATCHER_ORPHAN_POLL_S", "1")
+        upstream = _CaptiveUpstream("json_quick")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token = _worker_token(d)
+            # Close the pool out from under the relay: the cached
+            # shards object survives (same proxy env), so the relay's
+            # acquire raises RuntimeError — the shutdown-race shape.
+            d._upstream_client_shards().close()
+            baseline = len(self._live_watchers())
+
+            s = _raw_worker_request(d, token)
+            # The relay dies before any upstream open; the handler
+            # drops the connection without writing a response.
+            assert _recv_until(s, b"HTTP/", timeout=3.0) == b""
+            s.close()
+
+            # The watcher must be retired on the failure path
+            # (stopped + joined), not left to self-terminate.
+            deadline = time.monotonic() + 5.0
+            while (
+                len(self._live_watchers()) > baseline
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.05)
+            assert len(self._live_watchers()) <= baseline
+
+            # Give a leaked watcher's poll every chance to misfire —
+            # two poll intervals on a connection the handler has
+            # already closed — before asserting audit silence.
+            time.sleep(2.5)
+            assert not _audit_events(d, "request.orphan_cancel")
+        finally:
+            upstream.shutdown()
+            d.shutdown()

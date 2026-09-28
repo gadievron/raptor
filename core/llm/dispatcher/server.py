@@ -3100,8 +3100,23 @@ def _make_request_handler(
             # that retires the watcher. Under HTTP/2 this spreads
             # concurrent relays across independent connections so one
             # connection loss cannot abort every in-flight stream.
-            shards = dispatcher._upstream_client_shards()
-            shard_client, shard_index = shards.acquire()
+            try:
+                shards = dispatcher._upstream_client_shards()
+                shard_client, shard_index = shards.acquire()
+            except BaseException:
+                # The watcher thread is already polling, but the
+                # relay's finally below is not armed yet — without
+                # this stop a failed acquire (pool closed in a
+                # shutdown race) leaks the watcher, which then reads
+                # the handler's own connection close as a worker
+                # abandonment and audits a spurious orphan cancel
+                # for a relay that never opened an upstream. stop()
+                # makes that row impossible rather than unlikely:
+                # stop and the cancel action exclude each other
+                # under the watcher's lock.
+                watcher.stop()
+                watcher.join()
+                raise
             try:
                 with _upstream_stream_with_stale_retry(
                     shard_client,
