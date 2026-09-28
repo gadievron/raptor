@@ -1,16 +1,28 @@
-"""Stall watchdog for streaming relays.
+"""Stall watchdog for streaming relays — two-phase.
 
 A silently wedged upstream tunnel (no FIN/RST — reads simply never
 complete) used to hold a streaming relay for the FULL upstream read
-timeout (600s default) before anything noticed. httpx's read timeout
-bounds each individual read operation, so on an SSE relay it is the
-inter-chunk gap detector: streaming requests now ride a much tighter
-per-read window (``RAPTOR_LLM_DISPATCHER_STREAM_STALL_S``, default
-120s) while non-streaming requests keep the full timeout — their one
-body read legitimately spans the whole generation. A trip surfaces
-as ``httpx.ReadTimeout`` on the existing abort paths and is
-deliberately NOT eligible for the transparent stale-reuse retry (the
-request may be mid-generation upstream; re-sending double-bills).
+timeout (600s default) before anything noticed. Streaming requests
+ride two budgets instead:
+
+* Pre-first-event (request send → first upstream body byte, response
+  head included): the request's native per-read timeout is set to the
+  generous ``RAPTOR_LLM_DISPATCHER_STREAM_FIRST_EVENT_S`` (default
+  300s), because a stream may legitimately idle before its first
+  byte — reasoning dwell, big-prompt prefill — with nothing on the
+  wire. A trip surfaces as ``httpx.ReadTimeout`` on the existing
+  abort paths and is deliberately NOT eligible for the transparent
+  stale-reuse retry (the request may be mid-generation upstream;
+  re-sending double-bills).
+* Post-first-event: the per-relay watcher's stall arm enforces the
+  tighter inter-chunk window (``RAPTOR_LLM_DISPATCHER_STREAM_STALL_S``,
+  default 120s) by tearing the upstream socket down (HTTP/1.x) — the
+  native per-read timeout cannot be tightened after the request is
+  sent. The abort carries a ``stall_abort`` flag on its
+  ``request.error`` row.
+
+Non-streaming requests keep the full timeout — their one body read
+legitimately spans the whole generation.
 
 Hermetic — captive loopback upstream, no LLM, no network.
 """
@@ -31,6 +43,8 @@ from core.llm.dispatcher import server as dispatcher_server
 from core.llm.dispatcher.auth import CredentialStore, ProviderRule
 from core.llm.dispatcher.server import (
     _STALE_REUSE_ERRORS,
+    _STREAM_FIRST_EVENT_DEFAULT_S,
+    _STREAM_FIRST_EVENT_FLOOR_S,
     _STREAM_STALL_DEFAULT_S,
     _STREAM_STALL_FLOOR_S,
     _TOKEN_HEADER,
@@ -39,12 +53,15 @@ from core.llm.dispatcher.server import (
     LLMDispatcher,
     _OrphanWatcher,
     _request_wants_stream,
+    _stream_first_event_s,
     _stream_stall_s,
     _upstream_timeout_for,
 )
 
 _STALL_ENV = "RAPTOR_LLM_DISPATCHER_STREAM_STALL_S"
+_FIRST_EVENT_ENV = "RAPTOR_LLM_DISPATCHER_STREAM_FIRST_EVENT_S"
 _SSE_CHUNK_ONE = b"data: one\n\n"
+_SSE_CHUNK_TWO = b"data: two\n\n"
 
 
 def _chunked(payload: bytes) -> bytes:
@@ -52,15 +69,22 @@ def _chunked(payload: bytes) -> bytes:
 
 
 class _WedgedUpstream:
-    """Captive upstream that accepts, reads the request, then wedges:
-    either before the response head (``head_wedge``) or after the SSE
-    head + one event (``sse_wedge``). Never sends FIN — the exact
-    silent-tunnel shape the watchdog exists to detect. Counts
-    connections so retry exclusion is provable."""
+    """Captive upstream that accepts, reads the request, then either
+    wedges — before the response head (``head_wedge``) or after the
+    SSE head + one event (``sse_wedge``), never sending FIN: the
+    exact silent-tunnel shape the watchdog exists to detect — or
+    slow-starts: silent for ``quiet_s`` and then a COMPLETE response
+    (``slow_start``: head withheld too; ``slow_body``: head flushed
+    immediately, body delayed), the healthy shape the first-event
+    budget exists to admit. Counts connections so retry exclusion is
+    provable."""
 
-    def __init__(self, mode: str, wedge_s: float = 30.0) -> None:
+    def __init__(
+        self, mode: str, wedge_s: float = 30.0, quiet_s: float = 8.0,
+    ) -> None:
         self.mode = mode
         self.wedge_s = wedge_s
+        self.quiet_s = quiet_s
         self.connections = 0
         self._lock = threading.Lock()
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -105,13 +129,25 @@ class _WedgedUpstream:
                 if not chunk:
                     return
                 rest += chunk
-            if self.mode == "sse_wedge":
+            sse_head = (
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/event-stream\r\n"
+                b"Transfer-Encoding: chunked\r\n\r\n"
+            )
+            if self.mode in ("slow_start", "slow_body"):
+                if self.mode == "slow_body":
+                    conn.sendall(sse_head)  # head flushes immediately
+                time.sleep(self.quiet_s)    # silent slow start
+                if self.mode == "slow_start":
+                    conn.sendall(sse_head)  # head withheld too
                 conn.sendall(
-                    b"HTTP/1.1 200 OK\r\n"
-                    b"Content-Type: text/event-stream\r\n"
-                    b"Transfer-Encoding: chunked\r\n\r\n"
-                    + _chunked(_SSE_CHUNK_ONE),
+                    _chunked(_SSE_CHUNK_ONE)
+                    + _chunked(_SSE_CHUNK_TWO)
+                    + b"0\r\n\r\n",          # complete chunked body
                 )
+                return
+            if self.mode == "sse_wedge":
+                conn.sendall(sse_head + _chunked(_SSE_CHUNK_ONE))
             # Wedge: hold the connection open, send nothing more.
             time.sleep(self.wedge_s)
         except OSError:
@@ -124,10 +160,12 @@ class _WedgedUpstream:
 @pytest.fixture(autouse=True)
 def _default_timeout_env(monkeypatch):
     # Hermetic: the surrounding environment may tune the upstream
-    # timeout; these tests pin behaviour against the defaults.
+    # timeout or the first-event budget; these tests pin behaviour
+    # against the defaults (individual tests set their own knobs).
     monkeypatch.delenv(
         "RAPTOR_LLM_DISPATCHER_UPSTREAM_TIMEOUT_S", raising=False,
     )
+    monkeypatch.delenv(_FIRST_EVENT_ENV, raising=False)
 
 
 @pytest.fixture
@@ -233,6 +271,61 @@ class TestStallKnob:
         assert _STREAM_STALL_FLOOR_S >= 1.0
 
 
+class TestFirstEventKnob:
+    """The pre-first-event budget: the silent span a streaming relay
+    is allowed between request send and the first upstream body byte
+    (response head dwell included)."""
+
+    def test_default_and_override(self, monkeypatch):
+        monkeypatch.delenv(_STALL_ENV, raising=False)
+        assert _stream_first_event_s() == _STREAM_FIRST_EVENT_DEFAULT_S
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "450")
+        assert _stream_first_event_s() == 450.0
+
+    def test_below_floor_falls_back(self, monkeypatch):
+        monkeypatch.delenv(_STALL_ENV, raising=False)
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "0.5")
+        assert _stream_first_event_s() == _STREAM_FIRST_EVENT_DEFAULT_S
+
+    def test_garbage_falls_back(self, monkeypatch):
+        monkeypatch.delenv(_STALL_ENV, raising=False)
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "eventually")
+        assert _stream_first_event_s() == _STREAM_FIRST_EVENT_DEFAULT_S
+
+    @pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+    def test_non_finite_falls_back(self, monkeypatch, bad):
+        # Same failure shapes as the stall knob: nan defeats the floor
+        # comparison and rides into httpx.Timeout(read=nan); inf
+        # silently disables the pre-first-event bound.
+        monkeypatch.delenv(_STALL_ENV, raising=False)
+        monkeypatch.setenv(_FIRST_EVENT_ENV, bad)
+        assert _stream_first_event_s() == _STREAM_FIRST_EVENT_DEFAULT_S
+
+    def test_default_bounds_both_directions(self):
+        # Direction 1: a first-event default below the steady-state
+        # stall window would police the stream OPEN more strictly
+        # than mid-stream generation — the slow-start exposure this
+        # knob exists to remove.
+        assert _STREAM_FIRST_EVENT_DEFAULT_S >= _STREAM_STALL_DEFAULT_S
+        # Direction 2: a stream that is dead before its first byte
+        # must still be detected well before the full upstream read
+        # ceiling, or the budget detects nothing.
+        assert (
+            _STREAM_FIRST_EVENT_DEFAULT_S
+            <= _UPSTREAM_DEFAULT_TIMEOUT_S / 2
+        )
+        assert _STREAM_FIRST_EVENT_FLOOR_S >= 1.0
+
+    def test_stall_window_is_the_floor(self, monkeypatch):
+        # An operator value below the (raised) stall window clamps up
+        # to it: the open must never be policed more strictly than
+        # the stream's own steady state. Tightening the open means
+        # tightening the stall window itself.
+        monkeypatch.setenv(_STALL_ENV, "200")
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "50")
+        assert _stream_first_event_s() == 200.0
+
+
 class TestRetryExclusionIsByClass:
     """A stall trip must stay out of the transparent stale-reuse
     retry by CLASS MEMBERSHIP, not merely because the default retry
@@ -329,33 +422,43 @@ class TestUrlMethodStreamDetection:
     def test_body_detection_still_wins_on_plain_paths(self):
         assert _request_wants_stream(_STREAMING_BODY, "/v1/messages") is True
 
-    def test_url_streaming_request_gets_stall_window(self, monkeypatch):
-        monkeypatch.setenv(_STALL_ENV, "45")
+    def test_url_streaming_request_gets_first_event_budget(
+        self, monkeypatch,
+    ):
+        monkeypatch.setenv(_STALL_ENV, "5")
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "45")
         timeout = _upstream_timeout_for(_PLAIN_BODY, _GEMINI_STREAM_PATH)
         assert timeout.read == 45.0
 
 
 class TestTimeoutSelection:
 
-    def test_streaming_request_gets_stall_window(self, monkeypatch):
-        monkeypatch.setenv(_STALL_ENV, "45")
+    def test_streaming_request_rides_first_event_budget(self, monkeypatch):
+        # The httpx read timeout carries the PRE-first-event phase
+        # only (the h1 body generator re-arms per read, so every
+        # later chunk resets it anyway); the tight stall window is
+        # the watcher stall arm's job once bytes flow.
+        monkeypatch.setenv(_STALL_ENV, "5")
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "45")
         timeout = _upstream_timeout_for(_STREAMING_BODY)
         assert timeout.read == 45.0
         assert timeout.connect == _UPSTREAM_CONNECT_TIMEOUT_S
 
     def test_plain_request_keeps_full_timeout(self, monkeypatch):
         monkeypatch.setenv(_STALL_ENV, "45")
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "45")
         timeout = _upstream_timeout_for(_PLAIN_BODY)
         assert timeout.read == float(_UPSTREAM_DEFAULT_TIMEOUT_S)
 
     def test_watchdog_only_tightens_never_widens(self, monkeypatch):
-        # An operator-set upstream timeout stricter than the stall
-        # window must stand — the watchdog is a detector, not a
-        # timeout extension.
+        # An operator-set upstream timeout stricter than the
+        # first-event budget must stand — the watchdog is a
+        # detector, not a timeout extension.
         monkeypatch.setenv(
             "RAPTOR_LLM_DISPATCHER_UPSTREAM_TIMEOUT_S", "60",
         )
-        monkeypatch.setenv(_STALL_ENV, "120")
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "120")
+        monkeypatch.setenv(_STALL_ENV, "5")
         timeout = _upstream_timeout_for(_STREAMING_BODY)
         assert timeout.read == 60.0
 
@@ -399,10 +502,11 @@ class TestRelayWiring:
         finally:
             d.shutdown()
 
-    def test_streaming_relay_rides_the_stall_window(
+    def test_streaming_relay_rides_the_first_event_budget(
         self, fake_creds, tmp_path, monkeypatch,
     ):
-        monkeypatch.setenv(_STALL_ENV, "33")
+        monkeypatch.setenv(_STALL_ENV, "5")
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "33")
         timeout = self._recorded_timeout(fake_creds, tmp_path, _STREAMING_BODY)
         assert timeout is not None
         assert timeout.read == 33.0
@@ -411,18 +515,20 @@ class TestRelayWiring:
         self, fake_creds, tmp_path, monkeypatch,
     ):
         monkeypatch.setenv(_STALL_ENV, "33")
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "33")
         timeout = self._recorded_timeout(fake_creds, tmp_path, _PLAIN_BODY)
         assert timeout is not None
         assert timeout.read == float(_UPSTREAM_DEFAULT_TIMEOUT_S)
 
-    def test_url_method_streaming_relay_rides_the_stall_window(
+    def test_url_method_streaming_relay_rides_the_first_event_budget(
         self, fake_creds, tmp_path, monkeypatch,
     ):
         # Pins the call-site pass-through: the relay must hand the
         # request PATH to the timeout selector, so a Gemini-shaped
-        # streaming URL with a plain body rides the stall window
-        # end-to-end.
-        monkeypatch.setenv(_STALL_ENV, "33")
+        # streaming URL with a plain body rides the first-event
+        # budget end-to-end.
+        monkeypatch.setenv(_STALL_ENV, "5")
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "33")
         timeout = self._recorded_timeout(
             fake_creds, tmp_path, _PLAIN_BODY,
             path="/anthropic/v1/models/m:streamGenerateContent",
@@ -516,12 +622,13 @@ class TestWatchdogTrips:
     def test_mid_stream_wedge_trips_within_the_window(
         self, fake_creds, tmp_path, monkeypatch,
     ):
-        """SSE head + one event, then a silent wedge: the relay must
-        abort on ReadTimeout in roughly the stall window — nowhere
-        near the full upstream timeout — and must NOT transparently
-        retry (one upstream connection total: re-sending a
-        mid-generation request double-bills)."""
+        """SSE head + one event, then a silent wedge: the watcher's
+        stall arm must cancel the upstream in roughly the stall
+        window — nowhere near the generous first-event budget — and
+        must NOT transparently retry (one upstream connection total:
+        re-sending a mid-generation request double-bills)."""
         monkeypatch.setenv(_STALL_ENV, "5")
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "30")
         upstream = _WedgedUpstream("sse_wedge", wedge_s=30.0)
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
@@ -540,14 +647,18 @@ class TestWatchdogTrips:
                             received += chunk
             elapsed = time.monotonic() - start
             assert _SSE_CHUNK_ONE in received  # head + first event relayed
-            assert elapsed < 15.0  # window ~5s, not the 30s wedge
+            assert elapsed < 15.0  # stall 5s + poll slack, not 30s
             errors = _wait_audit(d, "request.error")
             assert errors
-            assert errors[0]["reason"] == "ReadTimeout"
+            # Stall-arm socket teardown, not a native per-read trip:
+            # the read timeout now rides the 30s first-event budget,
+            # so only the watcher can end this stream at ~5s.
+            assert errors[0]["reason"] in ("ReadError", "RemoteProtocolError")
             assert errors[0]["response_started"] is True
-            # Native per-read trip, not a watcher stall cancel: the
-            # provenance flag must say so.
-            assert errors[0]["stall_abort"] is False
+            assert errors[0]["stall_abort"] is True
+            # The downstream got the terminal SSE error frame with
+            # the stall phrasing (sentence case, never ALL-CAPS).
+            assert b"stream stall" in received
             assert upstream.connections == 1  # no transparent retry
         finally:
             upstream.shutdown()
@@ -556,10 +667,12 @@ class TestWatchdogTrips:
     def test_head_wedge_trips_and_is_not_retried(
         self, fake_creds, tmp_path, monkeypatch,
     ):
-        """A wedge before the response head trips the same window on
-        the stream OPEN. Timeouts stay excluded from the stale-reuse
+        """A wedge before the response head trips the FIRST-EVENT
+        budget on the stream open (pinned tight here so the test
+        stays fast). Timeouts stay excluded from the stale-reuse
         retry — the request may already be generating upstream."""
         monkeypatch.setenv(_STALL_ENV, "5")
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "5")
         upstream = _WedgedUpstream("head_wedge", wedge_s=30.0)
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
@@ -585,6 +698,76 @@ class TestWatchdogTrips:
             assert errors[0]["stall_abort"] is False
             assert upstream.connections == 1  # retry-excluded
             assert not _audit_events(d, "request.retry")
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_slow_start_stream_survives_past_stall_window(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        """THE slow-start exposure: an upstream that legitimately
+        idles past the stall window before sending ANYTHING (head
+        included) must complete cleanly under the first-event
+        budget — no trip, no error row, no retry."""
+        monkeypatch.setenv(_STALL_ENV, "5")
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "30")
+        upstream = _WedgedUpstream("slow_start", quiet_s=8.0)
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token = _worker_token(d)
+            transport = httpx.HTTPTransport(uds=str(d.socket_path))
+            received = b""
+            with httpx.Client(transport=transport, timeout=30.0) as c:
+                with c.stream(
+                    "POST", "http://_/anthropic/v1/messages",
+                    headers={_TOKEN_HEADER: token},
+                    content=_STREAMING_BODY,
+                ) as resp:
+                    assert resp.status_code == 200
+                    for chunk in resp.iter_raw():
+                        received += chunk
+            assert _SSE_CHUNK_ONE in received
+            assert _SSE_CHUNK_TWO in received
+            assert b"stream stall" not in received
+            time.sleep(1.0)  # outlast audit write + watcher poll
+            assert not _audit_events(d, "request.error")
+            assert upstream.connections == 1
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_slow_head_start_survives_past_stall_window(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        """Sub-phase B of the slow start: the response HEAD arrives
+        promptly but the first body byte idles past the stall
+        window. The h1 body generator captures its read timeout at
+        creation, so the first-event budget must cover this span
+        too — and the stall arm must not be armed by the head
+        alone."""
+        monkeypatch.setenv(_STALL_ENV, "5")
+        monkeypatch.setenv(_FIRST_EVENT_ENV, "30")
+        upstream = _WedgedUpstream("slow_body", quiet_s=8.0)
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token = _worker_token(d)
+            transport = httpx.HTTPTransport(uds=str(d.socket_path))
+            received = b""
+            with httpx.Client(transport=transport, timeout=30.0) as c:
+                with c.stream(
+                    "POST", "http://_/anthropic/v1/messages",
+                    headers={_TOKEN_HEADER: token},
+                    content=_STREAMING_BODY,
+                ) as resp:
+                    assert resp.status_code == 200
+                    for chunk in resp.iter_raw():
+                        received += chunk
+            assert _SSE_CHUNK_ONE in received
+            assert _SSE_CHUNK_TWO in received
+            assert b"stream stall" not in received
+            time.sleep(1.0)  # outlast audit write + watcher poll
+            assert not _audit_events(d, "request.error")
+            assert upstream.connections == 1
         finally:
             upstream.shutdown()
             d.shutdown()

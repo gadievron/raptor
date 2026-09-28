@@ -537,27 +537,57 @@ def _upstream_timeout() -> httpx.Timeout:
     return httpx.Timeout(float(read_s), connect=_UPSTREAM_CONNECT_TIMEOUT_S)
 
 
-# Stall watchdog for STREAMING relays. httpx's read timeout bounds
-# each individual read operation, so on an SSE response it IS the
-# inter-chunk gap detector: a silently wedged tunnel (no FIN/RST —
-# the reads just never complete) trips it instead of burning the full
-# upstream read timeout per stream. Non-streaming requests are left
-# on the full timeout: their single body read legitimately spans the
-# whole generation. Both directions of the default: TOO LOW and
-# genuine generation pauses between SSE events (extended thinking,
-# long tool deliberation) abort healthy streams mid-generation —
-# unrecoverable, since a stream cannot be resumed mid-generation and
-# timeouts are deliberately excluded from the transparent retry
-# (double-billing); TOO HIGH and a wedged tunnel holds the relay,
-# its worker, and the upstream slot toward the full read-timeout
-# ceiling before anything notices. 120s sits well above observed
-# healthy inter-event pauses while detecting a wedge five times
-# faster than the 600s default ceiling.
+# Stall watchdog for STREAMING relays — two-phase. A silently wedged
+# tunnel (no FIN/RST — the reads just never complete) must trip well
+# before the full upstream read timeout, but a stream's silence means
+# different things before and after its first body byte:
+#
+# * PRE-first-event (request send → first upstream body byte,
+#   response head included): nothing on the wire is NORMAL — reasoning
+#   dwell and big-prompt prefill legitimately idle here far past any
+#   sane inter-chunk window. This phase rides the request's native
+#   per-read timeout, set to the generous first-event budget below.
+#   (h1 pins this shape: httpcore captures the response-body read
+#   timeout ONCE when the body generator is created, so the budget
+#   must cover the head-to-first-byte span too — it cannot be
+#   re-tightened after the request is sent.)
+# * POST-first-event: healthy token-delta cadence keeps inter-chunk
+#   gaps small, so the tight stall window below applies — enforced by
+#   the per-relay _OrphanWatcher's stall arm (socket teardown on
+#   HTTP/1.x), precisely because the native timeout can no longer be
+#   tightened at that point.
+#
+# Non-streaming requests are left on the full timeout: their single
+# body read legitimately spans the whole generation. Both directions
+# of the stall default: TOO LOW and genuine generation pauses between
+# SSE events (extended thinking, long tool deliberation) abort
+# healthy streams mid-generation — unrecoverable, since a stream
+# cannot be resumed mid-generation and timeouts are deliberately
+# excluded from the transparent retry (double-billing); TOO HIGH and
+# a wedged tunnel holds the relay, its worker, and the upstream slot
+# toward the full read-timeout ceiling before anything notices. 120s
+# sits well above observed healthy inter-event pauses while detecting
+# a wedge five times faster than the 600s default ceiling.
 _STREAM_STALL_DEFAULT_S = 120.0
 # Values below the floor fall back to the DEFAULT (the _env_float
 # contract): a sub-floor stall window is indistinguishable from
 # normal event pacing and would abort every stream it watches.
 _STREAM_STALL_FLOOR_S = 5.0
+
+# Pre-first-event budget default, both directions: TOO LOW and a
+# healthy stream that legitimately idles before its first byte
+# (reasoning dwell, prefill on a large prompt) is aborted at the
+# open and — timeouts being retry-excluded — the whole request
+# fails; TOO HIGH and a stream that is dead BEFORE its first byte
+# (wedged tunnel at the open) holds the relay toward the full
+# read-timeout ceiling before anything notices. 300s admits the
+# longest plausible pre-first-token dwell while still detecting a
+# dead open at half the 600s ceiling.
+_STREAM_FIRST_EVENT_DEFAULT_S = 300.0
+# Same _env_float floor contract as the stall knob: a sub-floor
+# first-event budget would abort every stream at the open before a
+# provider could plausibly answer.
+_STREAM_FIRST_EVENT_FLOOR_S = 5.0
 
 
 def _stream_stall_s() -> float:
@@ -565,6 +595,26 @@ def _stream_stall_s() -> float:
         "RAPTOR_LLM_DISPATCHER_STREAM_STALL_S",
         _STREAM_STALL_DEFAULT_S,
         minimum=_STREAM_STALL_FLOOR_S,
+    )
+
+
+def _stream_first_event_s() -> float:
+    """The pre-first-event budget, clamped to at least the stall
+    window. Both directions of the clamp: WITHOUT it, an operator
+    value below the (possibly raised) stall window would police the
+    stream OPEN more strictly than its steady state — recreating the
+    slow-start exposure this knob removes; and the clamp must never
+    LOWER a value above the stall window, or raising the stall knob
+    alone could silently drag a deliberately generous first-event
+    budget down. Tightening the open means tightening the stall
+    window itself."""
+    return max(
+        _env_float(
+            "RAPTOR_LLM_DISPATCHER_STREAM_FIRST_EVENT_S",
+            _STREAM_FIRST_EVENT_DEFAULT_S,
+            minimum=_STREAM_FIRST_EVENT_FLOOR_S,
+        ),
+        _stream_stall_s(),
     )
 
 
@@ -626,19 +676,29 @@ def _request_wants_stream(body: bytes, upstream_path: str = "") -> bool:
 def _upstream_timeout_for(
     body: bytes, upstream_path: str = "",
 ) -> httpx.Timeout:
-    """Per-request forwarding-leg timeout: the stall watchdog window
-    for streaming requests, the full upstream timeout otherwise. The
-    watchdog only ever TIGHTENS the read bound — if the operator set
-    an upstream timeout at or below the stall window, the stricter
-    upstream timeout stands."""
+    """Per-request forwarding-leg timeout: the pre-first-event budget
+    for streaming requests, the full upstream timeout otherwise.
+
+    The read bound set here carries the PRE-first-event phase only.
+    On HTTP/1.x httpcore captures the response-body read timeout once
+    at body-generator creation, so this single value necessarily
+    spans request send → response head → first body byte; after the
+    first byte the watcher's stall arm owns the tighter inter-chunk
+    window. (On HTTP/2 the read timeout is re-fetched per read, so a
+    post-first-event wedge is ALSO bounded by this budget natively —
+    slower than the stall window, never slower than this.)
+
+    The watchdog only ever TIGHTENS the read bound — if the operator
+    set an upstream timeout at or below the first-event budget, the
+    stricter upstream timeout stands."""
     base = _upstream_timeout()
     if not _request_wants_stream(body, upstream_path):
         return base
-    stall = _stream_stall_s()
-    if base.read is not None and stall >= base.read:
+    first_event = _stream_first_event_s()
+    if base.read is not None and first_event >= base.read:
         return base
     return httpx.Timeout(
-        connect=base.connect, read=stall,
+        connect=base.connect, read=first_event,
         write=base.write, pool=base.pool,
     )
 
