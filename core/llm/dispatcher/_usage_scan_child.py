@@ -31,7 +31,12 @@ from pre-queueing a frame to be consumed as a later request's
 verdict. The response echoes the request id; the parent treats a
 mismatch as desync and kills the worker. Frame id ``READY_FRAME_ID``
 (0) is reserved for the one startup ready frame:
-``{"ready": true|false, "landlock": bool, "pid": int[, "error": str]}``.
+``{"ready": true|false, "landlock": bool, "pid": int[, "error": str]
+[, "rlimits_failed": [str, ...]]}`` — ``error`` names the startup
+stage and exception when ready is false (stderr is /dev/null, so the
+frame is the only diagnostic channel); ``rlimits_failed`` lists any
+limits that could not be applied (best-effort per limit; the parent
+warns loudly).
 
 Self-confinement at startup, in order (the same ladder as
 ``core/sandbox/_parser_jail_child.py``, which this worker deliberately
@@ -43,10 +48,11 @@ surfaces and evolve independently):
 2. ``check_landlock_available()`` — probed BEFORE the rlimits because
    its functional self-test forks a probe child and writes a /tmp
    probe file, both of which the rlimits below forbid.
-3. rlimits: CPU (lifetime budget — a runaway scan dies and the parent
-   respawns), AS, NOFILE, FSIZE=0 (this process writes no files;
-   PYTHONDONTWRITEBYTECODE is set by the parent so imports don't
-   try), NPROC=0 (no forks ever again).
+3. rlimits (best-effort per limit; failures ride the ready frame and
+   the parent warns): CPU (lifetime budget — a runaway scan dies and
+   the parent respawns), AS, NOFILE, FSIZE=0 (this process writes no
+   files; PYTHONDONTWRITEBYTECODE is set by the parent so imports
+   don't try), NPROC=0 (no forks ever again).
 4. Landlock (when available): read-only on the code trees this
    interpreter actually runs from, no writes anywhere, EXEC scoped to
    the same trees, CONNECT_TCP handled with zero rules (no network).
@@ -115,6 +121,11 @@ def _close_inherited_fds(keep_fd: int) -> None:
     """Close every fd except stdio and *keep_fd* (the socketpair)."""
     soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     upper = 65536 if soft == resource.RLIM_INFINITY else min(int(soft), 65536)
+    # The socketpair fd can legitimately sit at/above a small soft cap
+    # (fds above the soft limit exist when the limit was lowered after
+    # they were opened) — never let the cap truncate the sweep short
+    # of the one fd this process is built around.
+    upper = max(upper, keep_fd + 1)
     if keep_fd > 3:
         os.closerange(3, keep_fd)
     os.closerange(keep_fd + 1, upper)
@@ -133,18 +144,40 @@ def _set_limit(res: int, value: int) -> None:
     resource.setrlimit(res, (value, value))
 
 
-def _apply_rlimits() -> None:
-    _set_limit(resource.RLIMIT_CPU, _RLIMIT_CPU_S)
-    _set_limit(resource.RLIMIT_AS, _RLIMIT_AS_BYTES)
-    _set_limit(resource.RLIMIT_NOFILE, _RLIMIT_NOFILE)
-    # No file writes, ever: the first byte written to a regular file
-    # raises SIGXFSZ and kills the worker. The socketpair is unaffected
-    # (FSIZE governs regular files only).
-    _set_limit(resource.RLIMIT_FSIZE, 0)
-    # No forks: NPROC 0 makes fork()/clone() fail with EAGAIN. Applied
-    # AFTER check_landlock_available(), whose functional self-test
-    # needs one probe fork.
-    _set_limit(resource.RLIMIT_NPROC, 0)
+def _apply_rlimits() -> "list[str]":
+    """Apply the worker rlimits; best-effort PER LIMIT.
+
+    Returns a description of every limit that could not be applied
+    (empty = all applied), which rides the ready frame so the parent
+    can warn loudly. Best-effort matches the repo's rlimit precedent
+    (core/sandbox/preexec.py logs and continues): platform semantics
+    vary — macOS accepts but does not enforce RLIMIT_AS, counts
+    RLIMIT_NPROC user-wide with a kern.maxprocperuid clamp, and other
+    platforms have their own quirks — and the rlimits are the belt of
+    this worker's floor, not the wall. A partially-applied set with a
+    LOUD parent-side warning beats an unattributed worker death that
+    turns every scoped-token relay into a 503 (capable kernels fail
+    closed) on hosts where one setrlimit misbehaves.
+    """
+    failures: "list[str]" = []
+    for name, res, value in (
+        ("cpu", resource.RLIMIT_CPU, _RLIMIT_CPU_S),
+        ("as", resource.RLIMIT_AS, _RLIMIT_AS_BYTES),
+        ("nofile", resource.RLIMIT_NOFILE, _RLIMIT_NOFILE),
+        # No file writes, ever: the first byte written to a regular
+        # file raises SIGXFSZ and kills the worker. The socketpair is
+        # unaffected (FSIZE governs regular files only).
+        ("fsize", resource.RLIMIT_FSIZE, 0),
+        # No forks: NPROC 0 makes fork()/clone() fail with EAGAIN.
+        # Applied AFTER check_landlock_available(), whose functional
+        # self-test needs one probe fork.
+        ("nproc", resource.RLIMIT_NPROC, 0),
+    ):
+        try:
+            _set_limit(res, value)
+        except (OSError, ValueError) as exc:
+            failures.append(f"{name}: {type(exc).__name__}: {exc}")
+    return failures
 
 
 def _readable_code_paths() -> "list[str]":
@@ -227,48 +260,81 @@ def main(argv: "list[str]") -> int:
     if fd != _SOCK_FD:
         os.dup2(fd, _SOCK_FD)
         os.close(fd)
-    sock = socket.socket(fileno=_SOCK_FD)
+    # Explicit family/type: the fd is always one end of the parent's
+    # AF_UNIX SOCK_STREAM socketpair, so say so instead of relying on
+    # socket.socket(fileno=...) auto-detection — that detection is
+    # platform-variable (no SO_DOMAIN outside Linux) and a failure
+    # here would be an unattributable pre-frame death.
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0,
+                         fileno=_SOCK_FD)
 
-    # Landlock availability probe BEFORE the rlimits (it forks a
-    # self-test child and writes a /tmp probe file). The import also
-    # happens here, before restrict-reads could interfere with module
-    # loading — as does the closure BUILD (grant-path resolution reads
-    # the filesystem).
-    from core.sandbox.landlock import (
-        LandlockInstallError,
-        _make_landlock_preexec,
-        check_landlock_available,
-    )
-
-    landlock_ok = check_landlock_available()
-    apply_landlock = None
-    if landlock_ok:
-        apply_landlock = _make_landlock_preexec(
-            [],  # no writable paths — this worker writes nothing
-            readable_paths=_readable_code_paths(),
-            deny_all_tcp_connect=True,
-            fail_raise=True,
+    # From here the socket is up, so EVERY startup failure must be
+    # ATTRIBUTED: a bare exception would unwind past the ready frame
+    # and the parent would see only an EOF ("closed the socket") with
+    # the traceback lost to the /dev/null stderr — exactly the
+    # undebuggable shape this staging exists to prevent. The
+    # fail-closed LandlockInstallError arm keeps its own frame text
+    # (the parent's capable-kernel refusal contract keys off it; see
+    # usage_scan_jail.py).
+    stage = "landlock probe"
+    try:
+        # Landlock availability probe BEFORE the rlimits (it forks a
+        # self-test child and writes /tmp probe artifacts). The import
+        # also happens here, before restrict-reads could interfere with
+        # module loading — as does the closure BUILD (grant-path
+        # resolution reads the filesystem).
+        from core.sandbox.landlock import (
+            LandlockInstallError,
+            _make_landlock_preexec,
+            check_landlock_available,
         )
 
-    _apply_rlimits()
+        landlock_ok = check_landlock_available()
+        apply_landlock = None
+        if landlock_ok:
+            stage = "landlock closure build"
+            apply_landlock = _make_landlock_preexec(
+                [],  # no writable paths — this worker writes nothing
+                readable_paths=_readable_code_paths(),
+                deny_all_tcp_connect=True,
+                fail_raise=True,
+            )
 
-    if apply_landlock is not None:
+        stage = "rlimits"
+        rlimits_failed = _apply_rlimits()
+
+        if apply_landlock is not None:
+            stage = "landlock install"
+            try:
+                apply_landlock()
+            except LandlockInstallError as exc:
+                # Landlock is available on this kernel but the policy
+                # would not install: fail CLOSED. Report the reason in
+                # the ready frame so the parent can log it, then exit —
+                # the parent refuses in-process scanning on a capable
+                # kernel.
+                _send_frame(sock, READY_FRAME_ID, json.dumps({
+                    "ready": False, "landlock": True, "pid": os.getpid(),
+                    "error": f"landlock install failed: {exc}",
+                }).encode("utf-8"))
+                return 1
+    except Exception as exc:  # noqa: BLE001 — attribution frame: any startup failure must reach the parent, not vanish as EOF
         try:
-            apply_landlock()
-        except LandlockInstallError as exc:
-            # Landlock is available on this kernel but the policy
-            # would not install: fail CLOSED. Report the reason in the
-            # ready frame so the parent can log it, then exit — the
-            # parent refuses in-process scanning on a capable kernel.
             _send_frame(sock, READY_FRAME_ID, json.dumps({
-                "ready": False, "landlock": True, "pid": os.getpid(),
-                "error": f"landlock install failed: {exc}",
+                "ready": False, "landlock": False, "pid": os.getpid(),
+                "error": (f"startup failed at {stage}: "
+                          f"{type(exc).__name__}: {exc}"),
             }).encode("utf-8"))
-            return 1
+        except OSError:
+            pass  # socket already gone — EOF is all we can offer
+        return 1
 
-    _send_frame(sock, READY_FRAME_ID, json.dumps({
+    ready: dict = {
         "ready": True, "landlock": landlock_ok, "pid": os.getpid(),
-    }).encode("utf-8"))
+    }
+    if rlimits_failed:
+        ready["rlimits_failed"] = rlimits_failed
+    _send_frame(sock, READY_FRAME_ID, json.dumps(ready).encode("utf-8"))
 
     return _serve(sock)
 
