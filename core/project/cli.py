@@ -951,16 +951,6 @@ def main() -> None:
                 resolved_path = Path(
                     _caller_relative(args.path)
                     or args.path).expanduser().resolve()
-                if not resolved_path.is_file():
-                    # Reject at add-time so the operator sees the typo
-                    # NOW, not silently weeks later when the scan
-                    # produces no binary-oracle evidence (adversarial
-                    # review P1-D-2).
-                    print(_red(
-                        f"add: path does not exist or is not a file: "
-                        f"{args.path} (resolved to {resolved_path})"
-                    ))
-                    return
                 resolved = str(resolved_path)
                 # Content witness: the add is a trust assertion about
                 # the BYTES at this path right now — persisted-store
@@ -968,14 +958,44 @@ def main() -> None:
                 # every later run, and the path may sit inside a run
                 # dir's write grant (the env-build persist hint points
                 # there). Pin sha256 here; the oracle load seam
-                # re-verifies and refuses a changed file. Hash OUTSIDE
-                # the project-file lock — the lock guards the registry
+                # re-verifies fd-honestly and DEMOTES a changed file
+                # out of suppression authority. Hash OUTSIDE the
+                # project-file lock — the lock guards the registry
                 # write, not the binary, and a multi-GB debug binary
                 # must not hold it.
-                from core.hash import sha256_file
+                #
+                # ONE gated open carries existence check + regularity
+                # check + digest (fstat on the OPENED fd, hash of the
+                # same fd via sha256_fileobj) — a separate is_file()
+                # probe followed by a by-name hash spanned a swap
+                # window in which the checked file and the hashed
+                # file could differ. resolve() above fixes the store
+                # KEY; O_NOFOLLOW on the resolved name means anything
+                # swapped in behind the resolve refuses (ELOOP)
+                # instead of silently minting a witness for a file
+                # the check never saw.
+                from core.hash import sha256_fileobj
+                from core.source import open_regular_gated
                 try:
-                    digest = sha256_file(resolved_path)
+                    with open_regular_gated(
+                            resolved_path,
+                            follow_symlinks=False) as pin:
+                        digest = sha256_fileobj(pin)
+                except (FileNotFoundError, NotADirectoryError,
+                        ValueError):
+                    # Reject at add-time so the operator sees the typo
+                    # NOW, not silently weeks later when the scan
+                    # produces no binary-oracle evidence (adversarial
+                    # review P1-D-2). ValueError = opened but not a
+                    # regular file (directory, FIFO, device).
+                    print(_red(
+                        f"add: path does not exist or is not a file: "
+                        f"{args.path} (resolved to {resolved_path})"
+                    ))
+                    return
                 except OSError as exc:
+                    # Unreadable — or ELOOP from a symlink raced in
+                    # behind the resolve.
                     print(_red(
                         f"add: cannot read {resolved} for content "
                         f"pinning ({exc}) — not added"))
