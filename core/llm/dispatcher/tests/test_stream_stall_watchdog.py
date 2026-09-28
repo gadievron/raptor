@@ -27,6 +27,7 @@ import time
 import httpx
 import pytest
 
+from core.llm.dispatcher import server as dispatcher_server
 from core.llm.dispatcher.auth import CredentialStore, ProviderRule
 from core.llm.dispatcher.server import (
     _STALE_REUSE_ERRORS,
@@ -36,6 +37,7 @@ from core.llm.dispatcher.server import (
     _UPSTREAM_CONNECT_TIMEOUT_S,
     _UPSTREAM_DEFAULT_TIMEOUT_S,
     LLMDispatcher,
+    _OrphanWatcher,
     _request_wants_stream,
     _stream_stall_s,
     _upstream_timeout_for,
@@ -428,6 +430,78 @@ class TestRelayWiring:
         assert timeout is not None
         assert timeout.read == 33.0
 
+    def _recorded_watcher_stall(
+        self, fake_creds, tmp_path, monkeypatch, body: bytes,
+    ) -> float | None:
+        """Capture the ``stream_stall_s`` the relay hands its watcher
+        (same technique as ``_recorded_timeout``: wrap the module
+        global, drive one request, read the recorded kwarg). The
+        upstream rule points at an unreachable port — the request
+        502s, but the watcher is constructed before the connect."""
+        seen: dict = {}
+        real_watcher = dispatcher_server._OrphanWatcher
+
+        def recording_watcher(
+            *args: object, **kwargs: object,
+        ) -> _OrphanWatcher:
+            seen["stream_stall_s"] = kwargs.get("stream_stall_s")
+            return real_watcher(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(
+            dispatcher_server, "_OrphanWatcher", recording_watcher,
+        )
+        d = LLMDispatcher(
+            run_id="stall-arm-wiring", creds=fake_creds,
+            audit_path=tmp_path / "audit.jsonl",
+            token_ttl_s=3600, token_budget=100,
+        )
+        original = d._rules["anthropic"]
+        d._rules["anthropic"] = ProviderRule(
+            name=original.name,
+            upstream_base_url="http://127.0.0.1:1",
+            inject_headers=original.inject_headers,
+            strip_request_headers=original.strip_request_headers,
+        )
+        try:
+            token = _worker_token(d)
+            transport = httpx.HTTPTransport(uds=str(d.socket_path))
+            with httpx.Client(transport=transport, timeout=10.0) as c:
+                c.post(
+                    "http://_/anthropic/v1/messages",
+                    headers={_TOKEN_HEADER: token},
+                    content=body,
+                )
+            return seen["stream_stall_s"]
+        finally:
+            d.shutdown()
+
+    def test_plain_relay_never_arms_the_stall_watcher(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        # Pins the construction-site conditional: a NON-streaming
+        # relay must hand its watcher stream_stall_s=None — its
+        # single body read legitimately spans the whole generation,
+        # and an armed watcher would tear it down at the stall
+        # window. (Removing the conditional — arming every relay
+        # unconditionally — survives every other test in the
+        # battery: only this wiring pin kills it.)
+        monkeypatch.setenv(_STALL_ENV, "77")
+        stall = self._recorded_watcher_stall(
+            fake_creds, tmp_path, monkeypatch, _PLAIN_BODY,
+        )
+        assert stall is None
+
+    def test_streaming_relay_arms_the_stall_watcher(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        # The positive direction of the same pin: a streaming
+        # relay's watcher carries the stall window.
+        monkeypatch.setenv(_STALL_ENV, "77")
+        stall = self._recorded_watcher_stall(
+            fake_creds, tmp_path, monkeypatch, _STREAMING_BODY,
+        )
+        assert stall == 77.0
+
 
 @pytest.mark.upstream_forward
 class TestWatchdogTrips:
@@ -471,6 +545,9 @@ class TestWatchdogTrips:
             assert errors
             assert errors[0]["reason"] == "ReadTimeout"
             assert errors[0]["response_started"] is True
+            # Native per-read trip, not a watcher stall cancel: the
+            # provenance flag must say so.
+            assert errors[0]["stall_abort"] is False
             assert upstream.connections == 1  # no transparent retry
         finally:
             upstream.shutdown()
@@ -502,8 +579,231 @@ class TestWatchdogTrips:
             assert errors
             assert errors[0]["reason"] == "ReadTimeout"
             assert errors[0]["response_started"] is False
+            # The watcher's stall arm never owns the pre-first-event
+            # phase (it arms at the first body chunk): a head-dwell
+            # trip is always the native per-read timeout.
+            assert errors[0]["stall_abort"] is False
             assert upstream.connections == 1  # retry-excluded
             assert not _audit_events(d, "request.retry")
         finally:
             upstream.shutdown()
             d.shutdown()
+
+
+class _FakeNetStream:
+    """Stands in for the httpcore network-stream extension: the only
+    surface the watcher touches is ``get_extra_info("socket")``."""
+
+    def __init__(self, sock: socket.socket) -> None:
+        self._sock = sock
+
+    def get_extra_info(self, name: str) -> socket.socket | None:
+        return self._sock if name == "socket" else None
+
+
+class _FakeResponse:
+    """Duck-typed httpx.Response for the watcher's cancel path: it
+    reads ``http_version`` and ``extensions["network_stream"]`` only."""
+
+    def __init__(
+        self, sock: socket.socket, http_version: str = "HTTP/1.1",
+    ) -> None:
+        self.http_version = http_version
+        self.extensions = {"network_stream": _FakeNetStream(sock)}
+
+
+class TestStallArmUnit:
+    """The watcher's post-first-chunk stall arm, in isolation.
+
+    The arm exists for the phase the native per-read timeout cannot
+    police tightly: after the first upstream body byte, the HTTP/1.1
+    body-read timeout is already captured inside httpcore, so the
+    only way to enforce a tighter inter-chunk window is the watcher's
+    cross-thread socket teardown. These tests pin the arm's contract:
+    armed by the first chunk stamp (never earlier), refreshed by every
+    stamp, one-shot, lock-excluded against ``stop()``, and flag-only
+    on HTTP/2's shared socket.
+    """
+
+    @pytest.fixture
+    def rig(self):
+        """Watcher on live socketpairs; everything torn down at exit."""
+        created: dict = {}
+
+        def build(
+            stall: float | None,
+            poll: float = 0.05,
+            http_version: str = "HTTP/1.1",
+        ) -> tuple[_OrphanWatcher, socket.socket, socket.socket]:
+            worker_a, worker_b = socket.socketpair()
+            up_a, up_b = socket.socketpair()
+            watcher = _OrphanWatcher(
+                worker_a, poll, lambda cancel: None,
+                stream_stall_s=stall,
+            )
+            watcher.attach_response(_FakeResponse(up_a, http_version))
+            created["all"] = (watcher, worker_a, worker_b, up_a, up_b)
+            return watcher, up_a, up_b
+
+        yield build
+        watcher, *socks = created["all"]
+        watcher.stop()
+        watcher.join()
+        for s in socks:
+            with contextlib.suppress(OSError):
+                s.close()
+
+    @staticmethod
+    def _wait_for(event: threading.Event, timeout: float = 3.0) -> bool:
+        return event.wait(timeout)
+
+    def test_never_fires_before_first_chunk(self, rig):
+        # Direction 1 of the phase split: the pre-first-event dwell
+        # belongs to the native request timeout — a watcher that fired
+        # before any chunk would re-create the slow-start kill from
+        # inside the fix.
+        watcher, _up_a, _up_b = rig(stall=0.2)
+        time.sleep(0.7)
+        assert not watcher.stall_fired.is_set()
+
+    def test_chunk_stamp_resets_deadline(self, rig):
+        watcher, _up_a, _up_b = rig(stall=0.3)
+        for _ in range(6):
+            watcher.note_upstream_chunk()
+            time.sleep(0.1)
+        # 0.6s elapsed since the FIRST stamp — twice the window — but
+        # no inter-stamp gap ever exceeded it.
+        assert not watcher.stall_fired.is_set()
+
+    def test_fire_is_oneshot_sets_flag_and_shuts_socket(self, rig):
+        watcher, _up_a, up_b = rig(stall=0.2)
+        watcher.note_upstream_chunk()
+        assert self._wait_for(watcher.stall_fired)
+        # HTTP/1.x cancel: the upstream socket is torn down, which is
+        # what wakes a relay thread blocked in a read.
+        up_b.settimeout(2.0)
+        assert up_b.recv(1) == b""
+        # One-shot: the watcher thread retires after firing (same
+        # contract as the worker-gone arm) and never re-fires.
+        watcher._thread.join(timeout=2.0)
+        assert not watcher._thread.is_alive()
+        # The worker is alive and untouched — a stall is not an orphan.
+        assert not watcher.worker_gone.is_set()
+
+    def test_stop_excludes_late_stall_cancel(self, rig):
+        # Pool safety, same doctrine as the orphan cancel: once the
+        # relay declares the stream drained, a late stall detection
+        # must not shut down a socket that may already be back in the
+        # shared connection pool.
+        watcher, up_a, _up_b = rig(stall=0.2)
+        watcher.note_upstream_chunk()
+        watcher.stop()
+        time.sleep(0.6)
+        assert not watcher.stall_fired.is_set()
+        up_a.sendall(b"x")  # would raise if the socket had been shut
+
+    def test_h2_response_is_flag_only(self, rig):
+        # An HTTP/2 socket is shared with multiplexed sibling relays:
+        # shutting it down would abort every one of them. Flag-only —
+        # detection falls back to the native per-read bound.
+        watcher, up_a, _up_b = rig(stall=0.2, http_version="HTTP/2")
+        watcher.note_upstream_chunk()
+        assert self._wait_for(watcher.stall_fired)
+        up_a.sendall(b"x")  # socket untouched
+
+    def test_none_stall_never_arms(self, rig):
+        # Non-streaming relays construct the watcher with
+        # stream_stall_s=None: their single body read legitimately
+        # spans the whole generation, so chunk stamps must be inert.
+        watcher, _up_a, _up_b = rig(stall=None)
+        watcher.note_upstream_chunk()
+        time.sleep(0.5)
+        assert not watcher.stall_fired.is_set()
+
+    def test_under_lock_recheck_spares_resumed_stream(self, rig):
+        # The poll loop pre-checks the deadline cheaply, then
+        # _fire_stall re-checks under the lock: a chunk landing
+        # between the two checks proves the stream resumed within the
+        # poll tick and is spared. Simulate the race deterministically
+        # by calling the fire path directly with a fresh stamp (poll
+        # interval parked high so the loop itself stays dormant).
+        watcher, _up_a, up_b = rig(stall=0.2, poll=60.0)
+        watcher.note_upstream_chunk()
+        assert watcher._fire_stall() is None    # fresh stamp: spared
+        assert not watcher.stall_fired.is_set()
+        time.sleep(0.4)
+        # Stale stamp: fires, reporting the cancel action taken.
+        assert watcher._fire_stall() == "upstream_shutdown"
+        assert watcher.stall_fired.is_set()
+        up_b.settimeout(2.0)
+        assert up_b.recv(1) == b""
+
+    def test_flag_only_fire_keeps_orphan_duty_alive(self):
+        # An h2 stall fire cannot tear the shared socket down
+        # (flag-only) — the relay thread stays blocked in its read
+        # until the native timeout, and the worker may abandon it
+        # meanwhile. The watcher's PRIMARY duty must therefore keep
+        # polling: a worker death after a flag-only fire still sets
+        # worker_gone and audits the orphan cancel. (Pre-fix the
+        # thread retired on ANY fire, so the abandonment went
+        # unnoticed until write time and was never audited.)
+        worker_a, worker_b = socket.socketpair()
+        up_a, up_b = socket.socketpair()
+        cancels: list[str] = []
+        gone_audited = threading.Event()
+
+        def on_gone(cancel: str) -> None:
+            cancels.append(cancel)
+            gone_audited.set()
+
+        watcher = _OrphanWatcher(
+            worker_a, 0.05, on_gone, stream_stall_s=0.2,
+        )
+        watcher.attach_response(_FakeResponse(up_a, "HTTP/2"))
+        try:
+            watcher.note_upstream_chunk()
+            assert watcher.stall_fired.wait(3.0)
+            up_a.sendall(b"x")  # flag-only: shared socket untouched
+            assert watcher._thread.is_alive()  # duty NOT retired
+            # The worker abandons AFTER the flag-only fire:
+            worker_b.close()
+            assert watcher.worker_gone.wait(3.0)
+            assert gone_audited.wait(3.0)
+            assert cancels == ["flag_only"]
+        finally:
+            watcher.stop()
+            watcher.join()
+            for s in (worker_a, worker_b, up_a, up_b):
+                with contextlib.suppress(OSError):
+                    s.close()
+
+    def test_flag_only_fire_never_fires_or_cancels_again(self):
+        # One-shot survives the fix in the OTHER direction: after a
+        # flag-only fire the deadline stays passed forever (no more
+        # chunks), but the arm must never fire or cancel again — a
+        # re-fire against a later-attached teardown-capable response
+        # would kill a socket the first fire deliberately spared.
+        worker_a, worker_b = socket.socketpair()
+        up_a, up_b = socket.socketpair()
+        up2_a, up2_b = socket.socketpair()
+        watcher = _OrphanWatcher(
+            worker_a, 0.05, lambda cancel: None, stream_stall_s=0.2,
+        )
+        watcher.attach_response(_FakeResponse(up_a, "HTTP/2"))
+        try:
+            watcher.note_upstream_chunk()
+            assert watcher.stall_fired.wait(3.0)
+            # Deadline still passed; a teardown-capable h1 response
+            # is now attached. If the arm could re-fire, the poll
+            # loop would shut this socket down within a few ticks.
+            watcher.attach_response(_FakeResponse(up2_a, "HTTP/1.1"))
+            time.sleep(0.5)
+            up2_a.sendall(b"x")  # untouched: no second cancel
+            assert watcher._fire_stall() is None  # direct probe too
+            assert not watcher.worker_gone.is_set()
+        finally:
+            watcher.stop()
+            watcher.join()
+            for s in (worker_a, worker_b, up_a, up_b, up2_a, up2_b):
+                with contextlib.suppress(OSError):
+                    s.close()

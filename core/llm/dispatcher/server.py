@@ -674,9 +674,14 @@ _STALE_REUSE_ERRORS = (httpx.RemoteProtocolError, httpx.ReadError)
 # transparently RETRIED (deliberately excluding timeouts and connect
 # errors: double-billing / failover-delay), this one decides what
 # counts as evidence the shard's client needs a drain-shaped rebuild.
-# Counting is further gated at the relay: watcher-induced aborts
-# (the dispatcher shut the upstream socket itself) are evidence
-# about the worker, not the shard, so they stay neutral, and a
+# Counting is further gated at the relay: orphan-cancel aborts
+# (the dispatcher shut the upstream socket because the WORKER left)
+# are evidence about the worker, not the shard, so they stay neutral
+# behind the worker_gone gate — while a stall-arm abort (the
+# dispatcher shut the socket because the UPSTREAM went silent
+# mid-stream) is exactly the wedged-tunnel evidence this tuple
+# counts, so its ReadError/RemoteProtocolError deliberately passes
+# the gate and strikes. Also, a
 # relay that took the transparent stale retry strikes exactly once
 # — at the retry (the stale death was the shard's), never again for
 # the one-shot client's own outcome. Worker-side failures
@@ -879,6 +884,32 @@ class _OrphanWatcher:
       read surfaces as ``httpx.RemoteProtocolError``/``ReadError`` in
       the relay thread, which the existing handler books and audits.
 
+    Second duty — the STALL ARM (streaming relays only,
+    ``stream_stall_s`` non-None): after the first upstream body
+    chunk, the relay stamps every chunk via
+    :meth:`note_upstream_chunk`; when no chunk lands within the stall
+    window the watcher sets :attr:`stall_fired` and reuses the same
+    upstream teardown (HTTP/1.x; flag-only on HTTP/2, exactly like
+    the orphan cancel). The arm exists because an inter-chunk window
+    TIGHTER than the request's native read timeout cannot come from
+    httpx itself: the per-read timeout is fixed for the request (on
+    HTTP/1.1, httpcore captures the body-read timeout once, at the
+    first body pull), and once a read has timed out the stream is
+    unrecoverable — grace cannot be granted after the fact, so the
+    tight window must interrupt the blocked read from outside. The
+    arm never owns the pre-first-chunk phase: that dwell (response
+    head included) is bounded by the request's own read timeout (see
+    ``_upstream_timeout_for``) — which is also the only bound the
+    watcher COULD offer there (head-dwell residual below). A stall
+    fire is one-shot — never re-fires, never cancels twice — and a
+    fire that actually tore the socket down retires the thread,
+    mirroring the worker-gone arm. A FLAG-ONLY fire (HTTP/2, or
+    teardown not possible) does NOT retire it: the relay stays
+    blocked in its read until the native timeout, so the primary
+    worker-gone duty keeps polling for an abandonment in that span.
+    The relay's error row carries the fire as the ``stall_abort``
+    flag.
+
     What it deliberately does NOT cancel:
 
     * the head dwell (no response object yet): the pooled connection
@@ -902,6 +933,8 @@ class _OrphanWatcher:
         worker_sock: socket.socket,
         poll_interval_s: float,
         on_worker_gone: Callable[[str], None],
+        *,
+        stream_stall_s: float | None = None,
     ) -> None:
         self._sock = worker_sock
         self._interval = poll_interval_s
@@ -910,6 +943,11 @@ class _OrphanWatcher:
         self._stop = threading.Event()
         self.worker_gone = threading.Event()
         self._response: httpx.Response | None = None
+        # Stall arm (class doc). None = never arms: non-streaming
+        # relays keep their single whole-generation body read.
+        self.stream_stall_s = stream_stall_s
+        self.stall_fired = threading.Event()
+        self._last_chunk_at: float | None = None
         self._thread = threading.Thread(
             target=self._run,
             name="llm-dispatcher-orphan-watch",
@@ -935,8 +973,69 @@ class _OrphanWatcher:
         timeout is belt-and-braces on top of the daemon flag."""
         self._thread.join(timeout=self._interval + 1.0)
 
+    def note_upstream_chunk(self) -> None:
+        """Stamp upstream body progress: the first call arms the stall
+        deadline, every call refreshes it. Lock-free on purpose — the
+        relay loop calls this once per relayed chunk (hot path), and a
+        single float store is atomic under the GIL. The poll thread
+        may read it one tick stale; the under-lock re-check in
+        :meth:`_fire_stall` absorbs that race."""
+        self._last_chunk_at = time.monotonic()
+
+    def _stall_deadline_passed(self) -> bool:
+        """True when the stall arm is armed (streaming relay, first
+        body chunk seen) and no chunk has landed within the window.
+        Never true before the first chunk — the pre-first-event dwell
+        is the native request timeout's phase (class doc)."""
+        stall = self.stream_stall_s
+        stamp = self._last_chunk_at
+        if stall is None or stamp is None:
+            return False
+        return (time.monotonic() - stamp) > stall
+
+    def _fire_stall(self) -> str | None:
+        """One-shot stall cancel; returns the cancel action taken
+        (``upstream_shutdown`` / ``flag_only``) when the watcher
+        fired, None when it did not (stopped, already fired, or the
+        stream resumed). Callers pre-check
+        :meth:`_stall_deadline_passed` cheaply outside the lock; this
+        re-checks under it so a chunk that landed between the two
+        checks — the stream resumed within the poll tick — is spared,
+        shrinking the poll-granularity false-kill window to the lock
+        handoff. ``stop()`` excludes a late fire the same way it
+        excludes a late orphan cancel: never shut down a socket that
+        may already be back in the shared pool."""
+        with self._lock:
+            if self._stop.is_set():
+                return None
+            if self.stall_fired.is_set():
+                # One-shot: a flag-only fire leaves the thread
+                # polling (worker-gone duty), and it must never
+                # cancel again — a re-fire could tear down a
+                # response attached after the first fire.
+                return None
+            if not self._stall_deadline_passed():
+                return None
+            self.stall_fired.set()
+            return self._cancel_upstream_locked()
+
     def _run(self) -> None:
         while not self._stop.wait(self._interval):
+            if (
+                not self.stall_fired.is_set()
+                and self._stall_deadline_passed()
+                and self._fire_stall() == "upstream_shutdown"
+            ):
+                # HTTP/1.x teardown: the relay thread is being woken
+                # by it — this relay is over, retire like the
+                # worker-gone arm below. A FLAG-ONLY fire (HTTP/2
+                # shared socket, teardown not possible) falls
+                # through instead: the relay stays blocked in its
+                # read until the native timeout, and the worker may
+                # abandon it meanwhile — the PRIMARY orphan duty
+                # keeps polling (stall_fired stays set: one-shot,
+                # never re-cancel).
+                return
             if not _worker_socket_dead(self._sock):
                 continue
             with self._lock:
@@ -3056,6 +3155,16 @@ def _make_request_handler(
             watcher = _OrphanWatcher(
                 self.connection, _orphan_poll_interval_s(),
                 _note_worker_gone,
+                # Stall arm: positively-identified streaming relays
+                # only (same classifier as the timeout selection —
+                # fail-safe: ambiguity keeps the arm off). Non-
+                # streaming relays must never arm it: their single
+                # body read legitimately spans the whole generation.
+                stream_stall_s=(
+                    _stream_stall_s()
+                    if _request_wants_stream(body, upstream_path)
+                    else None
+                ),
             )
 
             # Least-loaded shard, held for the relay's full lifetime
@@ -3172,6 +3281,10 @@ def _make_request_handler(
                     )
                     _prev_chunk: bytes | None = None
                     for chunk in up.iter_raw():
+                        # Upstream liveness stamp — the first chunk
+                        # arms the watcher's stall deadline, every
+                        # chunk refreshes it.
+                        watcher.note_upstream_chunk()
                         if watcher.worker_gone.is_set():
                             # Detection seam for the cases the
                             # watcher cannot interrupt (h2 shared
@@ -3315,6 +3428,14 @@ def _make_request_handler(
                         # say the worker was already gone.
                         "worker_disconnected":
                             watcher.worker_gone.is_set(),
+                        # Stall-arm provenance, a FLAG rather than a
+                        # dedicated audit event: unlike an orphan
+                        # cancel — worker-initiated, possibly with no
+                        # request.error row at all — a stall cancel
+                        # always co-occurs with exactly one
+                        # request.error row, so a separate row would
+                        # double-count wedge events in trail tooling.
+                        "stall_abort": watcher.stall_fired.is_set(),
                     },
                 ))
                 if not response_started:
@@ -3354,6 +3475,20 @@ def _make_request_handler(
                         if isinstance(exc, RelayLimitExceeded)
                         else type(exc).__name__
                     )
+                    if (
+                        watcher.stall_fired.is_set()
+                        and watcher.stream_stall_s is not None
+                    ):
+                        # A stall cancel surfaces as the transport
+                        # class the teardown woke (ReadError /
+                        # RemoteProtocolError) — that names the
+                        # watcher's own socket shutdown, not the
+                        # upstream wedge that caused it. Name the
+                        # stall explicitly for SSE consumers.
+                        detail = (
+                            "stream stall: no upstream bytes for "
+                            f"{watcher.stream_stall_s:g}s"
+                        )
                     # Leading blank line closes whatever partial event
                     # (or partial ``data:`` line — iter_raw chunk
                     # boundaries are arbitrary) was already relayed,
