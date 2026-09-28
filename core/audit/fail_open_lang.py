@@ -45,7 +45,10 @@ Phase 4 adds Kotlin (the Java catch-clause outcome family on the
 ``try_expression``/``catch_block`` grammar, with ``@Throws(X::class)``
 as the declared-fallibility witness — Kotlin has no checked
 exceptions, so the Java compilability witness has no counterpart
-here). Same no-regex-fallback rule.
+here) and C# (the same family on the C# grammar: ``when (...)``
+filter clauses un-broaden a catch, a typeless bare ``catch`` is
+broad, and fallibility comes from same-file thrown types only — C#
+too has no checked exceptions). Same no-regex-fallback rule.
 
 Suffix→language mapping is strictly
 ``core.inventory.languages.LANGUAGE_MAP`` — no new extension list
@@ -72,10 +75,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Languages with an analyzer. Phase 3 added JS/TS and Rust; phase 4
-# adds Kotlin.
+# adds Kotlin and C#.
 SUPPORTED_LANGUAGES = frozenset({
     "python", "c", "cpp", "java", "go",
-    "javascript", "typescript", "tsx", "rust", "kotlin",
+    "javascript", "typescript", "tsx", "rust", "kotlin", "csharp",
 })
 
 # The JS analyzer family shares one grammar-node vocabulary; the
@@ -3137,6 +3140,403 @@ def kotlin_method_segment(source: str, function_name: str) -> str:
                 (c for c in cur.children if c.type == "class_body"),
                 None,
             )
+            header_end = (body.start_byte if body is not None
+                          else cur.end_byte)
+            header = src[cur.start_byte:header_end].decode(
+                "utf-8", errors="replace",
+            )
+            segment = header.strip() + "\n" + segment
+        return segment
+    return ""
+
+
+# ── C# leg: catch-clause outcome ────────────────────────────────────
+# The Java catch-clause outcome family on the C# grammar, which is
+# Java-shaped (field names, expression_statement wrappers) with three
+# C#-specific twists: a ``catch_filter_clause`` (``when (...)``)
+# narrows a broad type so the clause is NOT broad; a typeless bare
+# ``catch { }`` catches everything and IS broad; and a bare ``throw;``
+# rethrow is a ``throw_statement`` with no operand. C# has no checked
+# exceptions: fallibility comes from thrown types of same-file
+# callees, and the Java compilability witness has no counterpart (a
+# specific catch compiles regardless of what the try body can throw).
+
+_CSHARP_BROAD_TYPES = frozenset({
+    "Exception", "SystemException", "ApplicationException",
+})
+_CSHARP_LOUD_LOG_RE = re.compile(
+    r"\.(?:LogError|LogCritical|LogWarning|Error|Fatal|Warn)\s*\(",
+)
+_CSHARP_QUIET_LOG_RE = re.compile(
+    r"\.(?:LogDebug|LogTrace|LogInformation|Debug|Trace|Info)\s*\(",
+)
+_CSHARP_ABORT_RE = re.compile(
+    r"\bEnvironment\.(?:Exit|FailFast)\s*\(",
+)
+_CSHARP_PRINT_RE = re.compile(
+    r"\bConsole\.(?:Error|Out|Write(?:Line)?)\b",
+)
+_CSHARP_RESTRICTIVE_RETURNS = frozenset({
+    "false", "null", "0", "-1", '""', "default",
+})
+
+_CSHARP_FUNC_TYPES = (
+    "method_declaration", "constructor_declaration",
+    "local_function_statement",
+)
+_CSHARP_COMMENT_TYPES = ("comment", "{", "}")
+# Subtrees whose throws never execute at handler level (lambdas,
+# anonymous methods, local functions, nested type bodies).
+_CSHARP_BOUNDARY_TYPES = (
+    "lambda_expression", "anonymous_method_expression",
+    "local_function_statement", "declaration_list",
+)
+_CSHARP_LITERAL_TYPES = (
+    "integer_literal", "string_literal", "character_literal",
+    "real_literal",
+)
+
+
+def _csharp_stmts(block) -> list:
+    """Named statement children of a block, comments excluded."""
+    if block is None:
+        return []
+    return [
+        c for c in block.children
+        if c.is_named and c.type not in _CSHARP_COMMENT_TYPES
+    ]
+
+
+def _csharp_catch_types(clause, src: bytes) -> tuple[list[str], bool]:
+    """(caught type names, broad?) from the catch declaration.
+
+    A typeless bare ``catch`` catches everything — ``["<all>"]`` and
+    broad. A ``when (...)`` filter clause narrows the clause, so a
+    filtered catch is never broad.
+    """
+    decl = next(
+        (c for c in clause.children if c.type == "catch_declaration"),
+        None,
+    )
+    filtered = any(
+        c.type == "catch_filter_clause" for c in clause.children
+    )
+    if decl is None:
+        return ["<all>"], not filtered
+    names: list[str] = []
+    type_node = decl.child_by_field_name("type")
+    if type_node is not None:
+        names.append(
+            _ts_node_text(type_node, src).rsplit(".", 1)[-1])
+    broad = (not filtered
+             and any(n in _CSHARP_BROAD_TYPES for n in names))
+    return (names or ["<expr>"]), broad
+
+
+def _csharp_call_index(root, src: bytes) -> list[tuple[int, str]]:
+    """One-pass ``(start_byte, dotted-name)`` index of every
+    invocation / object creation under ``root``, sorted for the
+    shared ``_calls_in_range`` slicing contract."""
+    calls: list[tuple[int, str]] = []
+    stack = list(root.children) if root is not None else []
+    while stack:
+        cur = stack.pop()
+        stack.extend(cur.children)
+        if cur.type == "invocation_expression":
+            fn = cur.child_by_field_name("function")
+            if fn is None:
+                continue
+            if fn.type == "identifier":
+                name = _ts_node_text(fn, src)
+            elif fn.type == "member_access_expression":
+                name_node = fn.child_by_field_name("name")
+                obj = fn.child_by_field_name("expression")
+                name = (_ts_node_text(name_node, src)
+                        if name_node is not None else "")
+                if obj is not None and obj.type in (
+                        "identifier", "member_access_expression"):
+                    name = f"{_ts_node_text(obj, src)}.{name}"
+            else:
+                continue
+        elif cur.type == "object_creation_expression":
+            type_node = cur.child_by_field_name("type")
+            name = (_ts_node_text(type_node, src)
+                    if type_node is not None else "")
+        else:
+            continue
+        if name:
+            calls.append((cur.start_byte, name))
+    calls.sort()
+    return calls
+
+
+def _csharp_throws_at_handler_level(block) -> bool:
+    """A ``throw`` (including the bare ``throw;`` rethrow and
+    ``throw_expression``) that demonstrably terminates THIS catch
+    clause — boundary-aware exactly like the Java walk: throws inside
+    lambdas / anonymous methods / local functions / nested type
+    bodies never execute here, and throws inside a nested ``try``
+    with its own catch clauses may be swallowed locally."""
+    stack: list[tuple[Any, bool]] = [
+        (c, False) for c in (block.children if block is not None else [])
+    ]
+    while stack:
+        cur, swallowable = stack.pop()
+        if cur.type in ("throw_statement", "throw_expression") \
+                and not swallowable:
+            return True
+        if cur.type in _CSHARP_BOUNDARY_TYPES:
+            continue
+        if cur.type == "try_statement" and any(
+            ch.type == "catch_clause" for ch in cur.children
+        ):
+            body = cur.child_by_field_name("body")
+            stack.extend((ch, swallowable or (
+                    body is not None and ch == body)) for ch in cur.children)
+            continue
+        stack.extend((ch, swallowable) for ch in cur.children)
+    return False
+
+
+def _classify_csharp_catch(clause: Node, src: bytes) -> tuple[str, str]:
+    """(outcome_kind, permissive_value) for one catch clause — the
+    census classification vocabulary on the C# grammar.
+
+    Text regexes run over the SANITIZED clause text (comments/string
+    literals blanked), same rationale as the Java leg.
+    """
+    from .source_view import sanitized_view
+    block = clause.child_by_field_name("body")
+    text = sanitized_view(_ts_node_text(clause, src), language="csharp")
+
+    if _csharp_throws_at_handler_level(block):
+        return OUTCOME_FAIL_CLOSED, "re-throws"
+    if _CSHARP_ABORT_RE.search(text):
+        return OUTCOME_FAIL_CLOSED, "aborts"
+
+    stmts = _csharp_stmts(block)
+    if not stmts:
+        return OUTCOME_PASS, ""
+
+    returns = [s for s in stmts if s.type == "return_statement"]
+    if returns and all(s.type == "return_statement" for s in stmts):
+        ret = returns[0]
+        exprs = [c for c in ret.children if c.is_named]
+        value = _ts_node_text(exprs[0], src).strip() if exprs else ""
+        if value == "" or value in _CSHARP_RESTRICTIVE_RETURNS:
+            return OUTCOME_FAIL_CLOSED, f"returns {value or '<void>'}"
+        if value == "true":
+            return OUTCOME_RETURN_PERMISSIVE, value
+        if exprs and exprs[0].type in _CSHARP_LITERAL_TYPES:
+            return OUTCOME_RETURN_PERMISSIVE, value
+        return OUTCOME_FALLBACK_ACTION, value
+
+    if _CSHARP_LOUD_LOG_RE.search(text):
+        return OUTCOME_FALLBACK_ACTION, "loud-log-and-continue"
+    if _CSHARP_PRINT_RE.search(text):
+        return OUTCOME_FALLBACK_ACTION, "prints-and-continues"
+
+    if all(s.type in ("continue_statement", "break_statement")
+           for s in stmts):
+        return OUTCOME_CONTINUE, ""
+    if _CSHARP_QUIET_LOG_RE.search(text) and all(
+        s.type in ("expression_statement", "return_statement")
+        for s in stmts
+    ):
+        non_return = [s for s in stmts if s.type == "expression_statement"]
+        if all(
+            _CSHARP_QUIET_LOG_RE.search(
+                sanitized_view(_ts_node_text(s, src), language="csharp"),
+            )
+            for s in non_return
+        ):
+            return OUTCOME_QUIET_LOG_ONLY, ""
+
+    assigns = [
+        s for s in stmts
+        if s.type == "local_declaration_statement"
+        or (s.type == "expression_statement" and s.children
+            and s.children[0].type == "assignment_expression")
+    ]
+    if assigns and all(
+        s.type in ("expression_statement", "local_declaration_statement")
+        for s in stmts
+    ):
+        calls = [
+            s for s in stmts
+            if s.type == "expression_statement" and s.children
+            and s.children[0].type == "invocation_expression"
+        ]
+        if calls:
+            return OUTCOME_FALLBACK_ACTION, "handler calls fallback code"
+        first = assigns[0]
+        value = ""
+        if first.type == "expression_statement" and first.children:
+            rhs = first.children[0].child_by_field_name("right")
+            value = _ts_node_text(rhs, src) if rhs is not None else ""
+        else:
+            declarator = None
+            decl_stack = list(first.children)
+            while decl_stack:
+                c = decl_stack.pop()
+                if c.type == "variable_declarator":
+                    declarator = c
+                    break
+                decl_stack.extend(c.children)
+            eq_seen = False
+            for c in (declarator.children
+                      if declarator is not None else []):
+                if c.type == "=":
+                    eq_seen = True
+                    continue
+                if eq_seen and c.is_named:
+                    value = _ts_node_text(c, src)
+                    break
+        return OUTCOME_ASSIGN_DEFAULT, value
+    return OUTCOME_FALLBACK_ACTION, "substantial handler body"
+
+
+def csharp_handlers(
+    source: str, file_path: str,
+) -> list[HandlerOutcome] | None:
+    """All classified catch clauses in a C# source file.
+
+    ``None`` when no tree-sitter c-sharp parser is available (the
+    channel reports ``language-unsupported`` — the Java
+    no-regex-fallback rule); empty list when the file has no
+    handlers.
+    """
+    parser = _ts_parser("csharp")
+    if parser is None:
+        return None
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        logger.debug("fail_open_lang: csharp parse failed for %s",
+                     file_path, exc_info=True)
+        return None
+    lines = split_lines(source)
+    call_index = _csharp_call_index(tree.root_node, src)
+    out: list[HandlerOutcome] = []
+    # Enclosing names carried down the walk (never .parent chains —
+    # the Java leg's measured O(depth^2) stall).
+    stack: list[tuple[Any, str]] = [(tree.root_node, "")]
+    while stack:
+        node, enclosing = stack.pop()
+        if node.type in _CSHARP_FUNC_TYPES:
+            name_node = node.child_by_field_name("name")
+            enclosing = _ts_node_text(name_node, src) if name_node else ""
+        stack.extend((c, enclosing) for c in node.children)
+        if node.type != "try_statement":
+            continue
+        body = node.child_by_field_name("body")
+        try_calls = (
+            _calls_in_range(call_index, body.start_byte, body.end_byte)
+            if body is not None else []
+        )
+        try_span = (
+            (body.start_point[0] + 1, body.end_point[0] + 1)
+            if body is not None else (_line_of(node), _line_of(node))
+        )
+        for clause in node.children:
+            if clause.type != "catch_clause":
+                continue
+            outcome_kind, value = _classify_csharp_catch(clause, src)
+            caught, broad = _csharp_catch_types(clause, src)
+            line = _line_of(clause)
+            snippet_end = min(clause.end_point[0] + 1, line + 2)
+            out.append(HandlerOutcome(
+                idiom=f"catch_{outcome_kind}",
+                file=file_path,
+                line=line,
+                caught=caught,
+                broad=broad,
+                outcome_kind=outcome_kind,
+                permissive_value=value,
+                evidence_snippet=" ".join(
+                    ln.strip() for ln in lines[line - 1:snippet_end]
+                ),
+                parser="tree-sitter",
+                enclosing_function=enclosing,
+                try_calls=try_calls,
+                try_span=try_span,
+            ))
+    return out
+
+
+def csharp_function_throws(source: str, function_name: str) -> list[str]:
+    """Exception types a same-file C# method raises (``throw new X``
+    statements or expressions) — leg-2b fallibility evidence. C# has
+    no throws declarations, so raised types are the only same-file
+    witness; their absence is never evidence of infallibility.
+    """
+    parser = _ts_parser("csharp")
+    if parser is None:
+        return []
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return []
+    tail = function_name.rsplit(".", 1)[-1]
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type not in _CSHARP_FUNC_TYPES:
+            continue
+        name_node = node.child_by_field_name("name")
+        if name_node is None or _ts_node_text(name_node, src) != tail:
+            continue
+        thrown: list[str] = []
+        inner = [node]
+        while inner:
+            cur = inner.pop()
+            inner.extend(cur.children)
+            if cur.type not in ("throw_statement", "throw_expression"):
+                continue
+            for c in cur.children:
+                if c.type == "object_creation_expression":
+                    type_node = c.child_by_field_name("type")
+                    if type_node is not None:
+                        thrown.append(_ts_node_text(
+                            type_node, src).rsplit(".", 1)[-1])
+        return list(dict.fromkeys(thrown))
+    return []
+
+
+def csharp_method_segment(source: str, function_name: str) -> str:
+    """Source of a C# method (attributes included — the node span
+    covers its attribute lists) plus the enclosing type declaration
+    header, for Tier-B hook-mechanics matching (interface
+    implementations and attributes live on the type or method)."""
+    parser = _ts_parser("csharp")
+    if parser is None:
+        return ""
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return ""
+    tail = function_name.rsplit(".", 1)[-1]
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type not in _CSHARP_FUNC_TYPES:
+            continue
+        name_node = node.child_by_field_name("name")
+        if name_node is None or _ts_node_text(name_node, src) != tail:
+            continue
+        segment = _ts_node_text(node, src)
+        cur = node.parent
+        while cur is not None and cur.type not in (
+                "class_declaration", "struct_declaration",
+                "interface_declaration", "record_declaration"):
+            cur = cur.parent
+        if cur is not None:
+            body = cur.child_by_field_name("body")
             header_end = (body.start_byte if body is not None
                           else cur.end_byte)
             header = src[cur.start_byte:header_end].decode(

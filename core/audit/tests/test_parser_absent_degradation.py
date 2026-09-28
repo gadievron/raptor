@@ -155,6 +155,17 @@ class TestFailOpenAnalyzersReturnNone:
         )
         assert kotlin_handlers(src, "C.kt") is None
 
+    def test_csharp_handlers_none(self, _no_tree_sitter):
+        from core.audit.fail_open_lang import csharp_handlers
+        src = (
+            "class C {\n"
+            "    void F() {\n"
+            "        try { G(); } catch (Exception e) { }\n"
+            "    }\n"
+            "}\n"
+        )
+        assert csharp_handlers(src, "C.cs") is None
+
 
 class TestFailOpenVerdictIsLanguageUnsupported:
     """The verify channel converts analyzer-None into the enumerated
@@ -200,6 +211,24 @@ class TestFailOpenVerdictIsLanguageUnsupported:
             "}\n",
             "check",
             "the broad catch in check() returns true — fail open",
+        )
+        assert res.outcome == "inconclusive"
+        assert res.reason.startswith(REASON_LANGUAGE_UNSUPPORTED)
+
+    def test_csharp_inconclusive(self, _no_tree_sitter, tmp_path):
+        from core.audit.fail_open_verify import (
+            REASON_LANGUAGE_UNSUPPORTED,
+        )
+        res = self._check(
+            tmp_path, "C.cs",
+            "class C {\n"
+            "    bool Check() {\n"
+            "        try { return Verify(); }\n"
+            "        catch (Exception e) { return true; }\n"
+            "    }\n"
+            "}\n",
+            "Check",
+            "the broad catch in Check() returns true — fail open",
         )
         assert res.outcome == "inconclusive"
         assert res.reason.startswith(REASON_LANGUAGE_UNSUPPORTED)

@@ -20,7 +20,8 @@ telemetry — absence is signal.
 
 Scope: the handler-outcome family only (Python except/suppress, Java
 catch clauses, Go recover()-to-continue, phase-3 JS/TS catch clauses
-+ promise ``.catch`` swallows, and phase-4 Kotlin catch blocks). The ignored-return /
++ promise ``.catch`` swallows, and phase-4 Kotlin + C# catch
+blocks). The ignored-return /
 discarded-error census over ALL callees is the consistency
 programme's (CWE-252 premise split) — its acknowledged-discard
 handoffs already inject fail-open hypotheses for security-role
@@ -52,6 +53,7 @@ from typing import Any
 from .fail_open_lang import (
     JS_LANGUAGES,
     HandlerOutcome,
+    csharp_handlers,
     go_recover_handlers,
     java_handlers,
     js_handlers,
@@ -72,11 +74,12 @@ MAX_LEADS_PER_FILE = 5
 CENSUS_BUDGET_S = 60.0
 
 # Handler-outcome census languages (see module docstring for why the
-# C/Go/Rust ignored-return sweep is deliberately absent). Kotlin's
-# catch blocks are the Java handler-outcome shape, so they join the
-# same sweep.
+# C/Go/Rust ignored-return sweep is deliberately absent). Kotlin and
+# C# catch blocks are the Java handler-outcome shape, so they join
+# the same sweep.
 CENSUS_LANGUAGES = (
-    frozenset({"python", "java", "go", "kotlin"}) | JS_LANGUAGES
+    frozenset({"python", "java", "go", "kotlin", "csharp"})
+    | JS_LANGUAGES
 )
 
 
@@ -89,6 +92,8 @@ def _handlers_for(
         return java_handlers(source, file_path) or []
     if language == "kotlin":
         return kotlin_handlers(source, file_path) or []
+    if language == "csharp":
+        return csharp_handlers(source, file_path) or []
     if language == "go":
         return go_recover_handlers(source, file_path) or []
     if language in JS_LANGUAGES:
