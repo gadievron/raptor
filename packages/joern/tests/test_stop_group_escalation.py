@@ -159,8 +159,24 @@ class TestEnsureGroupDead:
         proc.wait(timeout=10)
         assert not _pgid_alive(proc.pid)
 
-    def test_never_signals_own_group(self):
-        assert _ensure_group_dead(os.getpgrp(), label="test") is False
+    def test_never_signals_own_group(self, monkeypatch):
+        signalled: list[tuple] = []
+        monkeypatch.setattr(
+            server_mod.os, "killpg",
+            lambda *args: signalled.append(args),
+        )
+        own = os.getpgrp()
+        if own <= 1:
+            # Inside a pid namespace the spawn-time process group is
+            # unmapped and getpgrp() reports 0, so the <=1 sentinel
+            # arm would swallow the value before the own-group check
+            # ever ran (also without signalling — pinned by
+            # test_empty_and_absent_groups_are_trivially_dead). Pin
+            # the own-group branch itself on a mapped stand-in.
+            own = 4242
+            monkeypatch.setattr(server_mod.os, "getpgrp", lambda: own)
+        assert _ensure_group_dead(own, label="test") is False
+        assert signalled == []
 
     def test_empty_and_absent_groups_are_trivially_dead(self):
         assert _ensure_group_dead(None, label="test")
