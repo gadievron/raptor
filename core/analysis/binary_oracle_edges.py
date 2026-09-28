@@ -358,12 +358,88 @@ def extract_direct_call_edges(
     consumer treats absence as 'no binary evidence'; never licenses
     additional suppression).
 
+    Identity-pinned binaries (project-store entries whose content
+    witness was verified fd-honestly at load —
+    ``RaptorConfig.BINARY_ORACLE_IDENTITY_PINS``) are re-verified
+    BRACKETING the extraction, the same discipline the classify pass
+    applies: fd-honest open + fstat + hash before anything reads the
+    path (including the content-keyed caches, whose keys are derived
+    by name), fd held across the extraction, held-fd re-hash +
+    by-name inode check after. Any failure — including a load-time
+    ``None`` pin — WITHHOLDS the edges (empty index, the documented
+    'no binary evidence' shape): edges are positive-reachability
+    evidence attributed to the pinned path, and bytes the witness
+    never verified must not steer reachability under its authority.
+    Never a run refusal, and unpinned paths (auto-detect, --binary,
+    env-build) verify nothing. Residual stated honestly: r2 re-opens
+    the path by name inside its sandbox, so a swap-in/swap-back pair
+    completing entirely within the extraction evades both bracket
+    checks.
+
     ``use_cache`` controls the per-build_id cache (under
     ``out/binary-oracle-precision/edge-cache/<build_id>.json``).
     A cache hit returns near-instantly; a miss runs the full r2
     extraction and persists the result. Pass False to force re-extract
     (test scenarios, debugging cache staleness)."""
     binary_path = Path(binary_path)
+    from core.config import RaptorConfig
+    pins = RaptorConfig.BINARY_ORACLE_IDENTITY_PINS
+    key = str(binary_path)
+    if key not in pins:
+        return _extract_direct_call_edges_impl(
+            binary_path, timeout=timeout, use_cache=use_cache)
+    from core.security.log_sanitisation import escape_nonprintable
+    pin = pins[key]
+    if pin is None:
+        # Demoted at load time (witness unverifiable: plant or
+        # content drift) — already warned there; edges from those
+        # bytes carry no witness authority.
+        logger.warning(
+            "binary_oracle_edges: %s was demoted at witness load — "
+            "withholding its call edges (no binary evidence)",
+            escape_nonprintable(key))
+        return BinaryEdgeIndex(binary_path=key)
+    # Same-package bracket helpers as the classify pass (shared so
+    # the two consumers cannot drift on what 'verified' means).
+    from core.analysis.binary_oracle import (
+        _pin_open_verified,
+        _pin_still_holds,
+    )
+    held = _pin_open_verified(binary_path, pin)
+    if held is None:
+        logger.warning(
+            "binary_oracle_edges: identity pin for %s did not verify "
+            "(fd-honest open failed, or content/inode changed since "
+            "the witness read) — withholding its call edges "
+            "(no binary evidence)",
+            escape_nonprintable(key))
+        return BinaryEdgeIndex(binary_path=key)
+    try:
+        idx = _extract_direct_call_edges_impl(
+            binary_path, timeout=timeout, use_cache=use_cache)
+        if not _pin_still_holds(held, binary_path, pin):
+            logger.warning(
+                "binary_oracle_edges: identity pin for %s did not "
+                "hold across the extraction (content/inode changed "
+                "while r2 ran) — withholding its call edges "
+                "(no binary evidence)",
+                escape_nonprintable(key))
+            return BinaryEdgeIndex(binary_path=key)
+        return idx
+    finally:
+        try:
+            held.close()
+        except OSError:
+            pass
+
+
+def _extract_direct_call_edges_impl(
+    binary_path: Path,
+    *,
+    timeout: int,
+    use_cache: bool,
+) -> BinaryEdgeIndex:
+    """The unbracketed extraction body (see the public wrapper)."""
     if use_cache:
         from_graph = _try_graph_store(binary_path)
         if from_graph is not None:
