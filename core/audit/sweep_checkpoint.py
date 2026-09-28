@@ -606,8 +606,12 @@ class SweepCheckpoint:
             },
         }
         try:
+            # sort_keys matches dumps_canonical's failure profile: mixed
+            # int/str dict keys raise TypeError on key comparison there,
+            # so the probe must sort too or the stamp below would raise
+            # on a payload this probe accepted.
             line = json.dumps(
-                rec, separators=(",", ":"), allow_nan=False,
+                rec, separators=(",", ":"), allow_nan=False, sort_keys=True,
             )
         except (TypeError, ValueError):
             # This one result is not round-trippable — skip it alone.

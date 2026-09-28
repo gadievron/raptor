@@ -483,6 +483,22 @@ def test_record_size_bound_two_directions(tmp_path: Path) -> None:
     assert resumed.lookup(_key(rule="big")) is None  # recompute, not skip
 
 
+def test_mixed_key_payload_skips_without_raising(tmp_path: Path) -> None:
+    # Canonical serialisation sorts keys, so a dict mixing int and str
+    # keys raises TypeError on key comparison at mint time. The probe
+    # must sort too: the record is skipped alone, record() never raises,
+    # and the instance keeps working for the next result.
+    cp = SweepCheckpoint(tmp_path)
+    mixed = _result("confirmed", matches=[{1: "int-key", "s": "str-key"}])
+    cp.record(_key(rule="mixed"), mixed)  # must not raise
+    assert cp.recorded == 0
+    cp.record(_key(rule="clean"), _result("confirmed"))
+    assert cp.recorded == 1
+    resumed = SweepCheckpoint(tmp_path)
+    assert resumed.lookup(_key(rule="mixed")) is None
+    assert resumed.lookup(_key(rule="clean")) is not None
+
+
 def test_total_size_bound_two_directions(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
