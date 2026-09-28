@@ -137,6 +137,11 @@ class _CreateRecorder:
         return -1
 
 
+@pytest.mark.skipif(
+    sys.platform != "linux" or not hasattr(os, "O_PATH"),
+    reason="Linux-Landlock-specific: _make_landlock_preexec captures "
+           "os.O_PATH (Linux-only) at closure-build time",
+)
 class TestProbeClosureParity:
     """Header-independent drift pin: the closure's create-time ruleset
     attr must equal the probe's, field for field, per ABI.
@@ -145,11 +150,15 @@ class TestProbeClosureParity:
     with /usr/include/linux/landlock.h installed, and the live seccomp
     regression cannot catch CLOSURE-side drift by construction (under
     the filter the probe answers False, so the closure never runs).
-    This pin needs neither header nor kernel: it records what each
-    side actually passes to landlock_create_ruleset and compares. An
+    This pin needs neither Landlock header nor Landlock kernel: it
+    records what each side actually passes to landlock_create_ruleset
+    and compares. It DOES need Linux — both sides run in this process,
+    and the closure builder captures ``os.O_PATH`` (Linux-only) at
+    build time, before any syscall the recorder could intercept — so
+    it is gated to Linux above, not deselected by the header gate. An
     install-side mask ORed with a bit the probe does not carry — the
     probe/install disagreement re-opened from the install side —
-    fails here on every host.
+    fails here on every Linux host.
     """
 
     @pytest.mark.parametrize("abi", [1, 4, 8])
