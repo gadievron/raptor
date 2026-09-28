@@ -143,17 +143,29 @@ def _env_number(name: str, default: float) -> float:
     return value
 
 
-def _env_count(name: str, default: int) -> int:
+def _env_count(name: str, default: int, *, ceiling: int | None = None) -> int:
     """Parse a connection count (>= 1) from ``name``; fall back on
     anything invalid. A fractional value below 1 (e.g. ``0.5``) passes
     the strictly-positive check but truncates to 0 connections — a
     pool that can never serve a request — so anything that truncates
-    below 1 falls back to the default like the other invalid shapes."""
+    below 1 falls back to the default like the other invalid shapes.
+
+    ``ceiling`` (opt-in per knob) bounds the accepted range from
+    above with the same warn-and-fallback contract: an absurd count
+    (``1e18`` parses cleanly) is a typo or garbage, not a tuning
+    choice, and consumers that do eager per-unit work must never
+    execute it."""
     count = int(_env_number(name, default))
     if count < 1:
         logger.warning(
             "%s=%r truncates below 1 connection — using default %s",
             name, os.environ.get(name), default,
+        )
+        return default
+    if ceiling is not None and count > ceiling:
+        logger.warning(
+            "%s=%r is above the ceiling of %d — using default %s",
+            name, os.environ.get(name), ceiling, default,
         )
         return default
     return count
@@ -277,6 +289,18 @@ _HTTP2_SHARDS_ENV = "RAPTOR_HTTP2_SHARDS"
 # quarter of in-flight streams).
 _DEFAULT_HTTP2_SHARDS = 4
 
+# Ceiling on the shard-count knob. Not lower: 16x the default leaves
+# real experimental headroom (the blast-radius curve plateaus long
+# before this, so nothing plausible is being fenced out) and 64
+# eagerly-built clients still construct in negligible time and
+# memory (httpx.Client construction does no I/O). Not higher:
+# ClientShards builds EVERY client at pool construction on the relay
+# path, so this ceiling is the only bound on that eager work — an
+# unvetted count (1e18 parses cleanly) turns pool build into a
+# hang / memory exhaustion, and past 64 additional shards buy no
+# measurable collateral reduction to justify the risk.
+_HTTP2_SHARDS_CEILING = 64
+
 
 def upstream_shard_count() -> int:
     """Shard count for the dispatcher's forwarding leg.
@@ -286,11 +310,14 @@ def upstream_shard_count() -> int:
     (HTTP/1.1 already uses one connection per concurrent request —
     extra client objects would only duplicate pool bookkeeping).
     ``RAPTOR_HTTP2_SHARDS`` overrides in either mode; invalid values
-    (non-numeric, non-finite, zero/negative, fractional below 1) warn
-    and fall back to the mode's default like every other knob here.
+    (non-numeric, non-finite, zero/negative, fractional below 1,
+    above the ``_HTTP2_SHARDS_CEILING`` sanity ceiling) warn and fall
+    back to the mode's default like every other knob here.
     """
     default = _DEFAULT_HTTP2_SHARDS if http2_enabled() else 1
-    return _env_count(_HTTP2_SHARDS_ENV, default)
+    return _env_count(
+        _HTTP2_SHARDS_ENV, default, ceiling=_HTTP2_SHARDS_CEILING,
+    )
 
 
 _SHARD_FAIL_THRESHOLD_ENV = "RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD"
@@ -305,6 +332,17 @@ _SHARD_MAX_AGE_ENV = "RAPTOR_HTTP2_SHARD_MAX_AGE_S"
 # several times in a row — every extra strike required is another
 # aborted relay before the repair happens.
 _DEFAULT_SHARD_FAIL_THRESHOLD = 3
+
+# Ceiling on the failure-threshold knob. Not lower: a deliberately
+# patient deployment (diagnosing flaky infrastructure without
+# rebuild churn) legitimately sets this an order of magnitude or two
+# above the default, and the threshold does no eager work — a large
+# value costs nothing at parse time. Not higher: each strike
+# required is one more aborted relay before the repair, so by 100
+# consecutive failures the drain mechanism is de-facto disabled —
+# garbage input (1e18 parses cleanly) must fall back rather than
+# silently switch the repair off.
+_SHARD_FAIL_THRESHOLD_CEILING = 100
 
 # Proactive rotation age for HTTP/2 shards, in seconds. Middleboxes
 # impose hard lifetimes on long-lived tunnels under load; when the
@@ -326,10 +364,14 @@ def shard_failure_threshold() -> int:
     Active in both HTTP modes — a repeatedly-failing HTTP/1.1 pool
     benefits from a fresh client exactly like a broken multiplexed
     connection does. ``RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD`` overrides;
-    invalid values (non-numeric, below 1) warn and fall back like the
-    other knobs here.
+    invalid values (non-numeric, below 1, above the
+    ``_SHARD_FAIL_THRESHOLD_CEILING`` sanity ceiling) warn and fall
+    back like the other knobs here.
     """
-    return _env_count(_SHARD_FAIL_THRESHOLD_ENV, _DEFAULT_SHARD_FAIL_THRESHOLD)
+    return _env_count(
+        _SHARD_FAIL_THRESHOLD_ENV, _DEFAULT_SHARD_FAIL_THRESHOLD,
+        ceiling=_SHARD_FAIL_THRESHOLD_CEILING,
+    )
 
 
 def shard_max_age_s() -> float | None:

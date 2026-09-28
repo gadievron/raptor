@@ -345,6 +345,39 @@ class TestUpstreamShardCount:
         self._force_h2(monkeypatch)
         assert http_pool.upstream_shard_count() == 4
 
+    def test_ceiling_value_accepted_verbatim(self, monkeypatch):
+        # The boundary itself is a valid operator choice and must
+        # pass through untouched in either HTTP mode.
+        monkeypatch.setenv(
+            "RAPTOR_HTTP2_SHARDS", str(http_pool._HTTP2_SHARDS_CEILING),
+        )
+        assert (
+            http_pool.upstream_shard_count()
+            == http_pool._HTTP2_SHARDS_CEILING
+        )
+        self._force_h2(monkeypatch)
+        assert (
+            http_pool.upstream_shard_count()
+            == http_pool._HTTP2_SHARDS_CEILING
+        )
+
+    def test_above_ceiling_warns_and_falls_back(self, monkeypatch, caplog):
+        # ClientShards builds every client eagerly at pool
+        # construction, so an absurd count (1e18 parses cleanly) is a
+        # hang / memory exhaustion at pool build — anything above the
+        # ceiling falls back with the knob's usual warning.
+        for bad in (str(http_pool._HTTP2_SHARDS_CEILING + 1), "1e18"):
+            monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", bad)
+            caplog.clear()
+            with caplog.at_level("WARNING", logger="core.llm.http_pool"):
+                assert http_pool.upstream_shard_count() == 1
+            assert any(
+                "RAPTOR_HTTP2_SHARDS" in r.getMessage()
+                for r in caplog.records
+            )
+        self._force_h2(monkeypatch)
+        assert http_pool.upstream_shard_count() == 4
+
     def test_default_bounds_both_directions(self):
         # Direction 1: below 2 shards there is no blast-radius
         # reduction at all — the pool degenerates to the single
@@ -487,6 +520,41 @@ class TestShardLifecycleKnobs:
             http_pool.shard_failure_threshold()
             == http_pool._DEFAULT_SHARD_FAIL_THRESHOLD
         )
+
+    def test_failure_threshold_ceiling_accepted_verbatim(self, monkeypatch):
+        # The boundary itself is a valid (deliberately patient)
+        # operator choice and must pass through untouched.
+        monkeypatch.setenv(
+            "RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD",
+            str(http_pool._SHARD_FAIL_THRESHOLD_CEILING),
+        )
+        assert (
+            http_pool.shard_failure_threshold()
+            == http_pool._SHARD_FAIL_THRESHOLD_CEILING
+        )
+
+    def test_failure_threshold_above_ceiling_warns_and_falls_back(
+        self, monkeypatch, caplog,
+    ):
+        # Past the ceiling the drain mechanism would be de-facto
+        # disabled (each strike required is another aborted relay) —
+        # absurd values (1e18 parses cleanly) fall back with the
+        # knob's usual warning instead of silently switching the
+        # repair off.
+        for bad in (
+            str(http_pool._SHARD_FAIL_THRESHOLD_CEILING + 1), "1e18",
+        ):
+            monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", bad)
+            caplog.clear()
+            with caplog.at_level("WARNING", logger="core.llm.http_pool"):
+                assert (
+                    http_pool.shard_failure_threshold()
+                    == http_pool._DEFAULT_SHARD_FAIL_THRESHOLD
+                )
+            assert any(
+                "RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD" in r.getMessage()
+                for r in caplog.records
+            )
 
     def test_failure_threshold_default_bounds_both_directions(self):
         # Direction 1: at 1, every isolated transport blip (ordinary
