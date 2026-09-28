@@ -282,21 +282,32 @@ def test_untrusted_cannot_read_spawn_chain_credentials(tmp_path):
 @pytest.mark.integration
 @pytest.mark.skipif(sys.platform != "linux", reason="namespace sandbox")
 def test_spawn_chain_environ_image_is_scrubbed(tmp_path):
-    """Mid-run, every beacon-carrying process inside a FOREIGN user
-    namespace (= the class a sandboxed same-userns reader could reach)
-    must show a ZEROED session-token value in its /proc/<pid>/environ.
+    """Mid-run, every beacon-carrying process inside the PAYLOAD'S user
+    namespace (= the class a sandboxed same-userns reader can actually
+    reach) must show a ZEROED session-token value in its
+    /proc/<pid>/environ.
 
-    Carriers still in OUR user namespace are excluded: the driver
-    itself, pre-unshare setup-child snapshots, and transient
-    capability-probe forks are only readable here because this test
-    runs unsandboxed — a sandboxed payload is denied their environ by
-    the kernel's cross-userns ptrace gate, so they are out of scope
-    for the scrub (which runs immediately AFTER unshare, before the
-    process becomes same-userns-readable to any target)."""
+    The payload reports its own userns id through a marker file, and
+    only snapshots recorded in THAT userns are judged. Everything else
+    is out of scope for the scrub: the driver and pre-unshare
+    setup-child snapshots stay in our userns, and the transient
+    capability-probe forks (probes.py's staged-pidns and mount-ns
+    self-tests) unshare CLONE_NEWUSER into SIBLING user namespaces of
+    their own while still carrying the unscrubbed image — a sandboxed
+    payload is denied their environ by the kernel's cross-userns
+    ptrace gate (and they live in the runner's pid namespace,
+    invisible through the target's fresh procfs), so the
+    payload-userns filter excludes them structurally. The scrub
+    itself runs immediately AFTER the spawn child's unshare, before
+    the process becomes same-userns-readable to any target.
+
+    Each watcher sample re-reads ns/user after reading environ and is
+    discarded on mismatch — a pre-unshare (unscrubbed) environ image
+    must never be paired with a post-unshare namespace id."""
     import uuid
     beacon = f"SBX_CHAIN_SCRUB_BEACON_{uuid.uuid4().hex[:8].upper()}"
     decoy = _decoy_value()
-    my_userns = os.readlink("/proc/self/ns/user")
+    ns_marker = tmp_path / "payload-userns"
     seen: dict[str, tuple[str, bytes]] = {}
     stop = threading.Event()
 
@@ -307,38 +318,48 @@ def test_spawn_chain_environ_image_is_scrubbed(tmp_path):
                 if not pid.isdigit() or pid == me:
                     continue
                 try:
+                    ns_before = os.readlink(f"/proc/{pid}/ns/user")
                     with open(f"/proc/{pid}/environ", "rb") as f:
                         img = f.read()
-                    userns = os.readlink(f"/proc/{pid}/ns/user")
+                    ns_after = os.readlink(f"/proc/{pid}/ns/user")
                 except OSError:
+                    continue
+                if ns_before != ns_after:
+                    # The pid unshared between the two reads: this
+                    # environ and this userns id never coexisted.
                     continue
                 if beacon.encode() + b"=1" in img:
                     # Keep the LAST snapshot per pid — the scrub runs
                     # moments after fork+unshare.
-                    seen[pid] = (userns, img)
+                    seen[pid] = (ns_before, img)
             time.sleep(0.005)
 
     t = threading.Thread(target=watcher)
     t.start()
     try:
         r = _drive_run_in_subprocess(
-            tmp_path, beacon, "sleep 1.5", decoy_value=decoy,
-            timeout=150)
+            tmp_path, beacon,
+            f"readlink /proc/self/ns/user > {ns_marker}; sleep 1.5",
+            decoy_value=decoy, timeout=150)
     finally:
         stop.set()
         t.join()
     if "RC=0" not in r.stdout:
         pytest.skip(f"sandbox unavailable: {r.stdout} {r.stderr[-300:]}")
-    foreign = {pid: img for pid, (ns, img) in seen.items()
-               if ns != my_userns}
-    if not foreign:
-        pytest.skip("no foreign-userns chain process observed")
-    leaky = sorted(pid for pid, img in foreign.items()
+    payload_userns = (ns_marker.read_text(encoding="utf-8").strip()
+                      if ns_marker.exists() else "")
+    if not payload_userns:
+        pytest.skip("payload did not report its user namespace")
+    reachable = {pid: img for pid, (ns, img) in seen.items()
+                 if ns == payload_userns}
+    if not reachable:
+        pytest.skip("no target-userns chain process observed")
+    leaky = sorted(pid for pid, img in reachable.items()
                    if b"RAPTOR_SESSION_TOKEN=" + decoy.encode() in img)
     assert not leaky, (
         f"spawn-chain forks readable from inside the sandbox still "
         f"publish the session credential: {leaky}")
-    for img in foreign.values():
+    for img in reachable.values():
         assert b"RAPTOR_SESSION_TOKEN=" in img, (
             "scrub should empty the value, not remove the name")
 
