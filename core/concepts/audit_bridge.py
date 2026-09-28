@@ -15,8 +15,12 @@ Usage in audit context assembly:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
+import threading
+from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -38,7 +42,14 @@ _MAX_MODEL_BYTES = 64 * 1024 * 1024
 # hints, ALL re-derived for EVERY function whose prompt slice is
 # scored — the warm domain-slice fingerprint cost was ~0.27 s/function
 # at a 7 MB model before these caches).
-_PATH_PARTS_CACHE_MAX = 4096
+#
+# The path bound must clear the model's DISTINCT path count, not just
+# be "large": scoring cycles through every item's evidence/contract
+# path per function, and an LRU cycled by a working set even slightly
+# over its bound evicts each entry just before its next use (~0% hit
+# rate — measured: a representative 7 MB model carries ~9.5k distinct
+# paths, and a 4096 bound profiled the same as no cache at all).
+_PATH_PARTS_CACHE_MAX = 16384
 _PATTERN_CACHE_MAX = 2048
 _NAME_VARIANTS_CACHE_MAX = 1024
 
@@ -198,32 +209,85 @@ def _find_domain_model(out_dir: Path) -> dict[str, Any] | None:
     return None
 
 
+# Confidence acts as a tiebreaker, not a promotion — scaled down.
+_CONF_BONUS = {
+    "tested": 0.5, "documented": 0.4, "corroborated": 0.3,
+    "traced": 0.2, "inferred": 0.0,
+}
+
+
+class _ItemStatics:
+    """Function-independent scoring inputs derived from one model item.
+
+    Everything :func:`_relevance_score` computes from the ITEM alone —
+    joined/lowered prose, identifier tokens, the cleaned file field,
+    the confidence bonus. Deriving these per (item × function) pass is
+    what made the per-function slice fingerprint linear in model size;
+    a :class:`_DomainSliceMemo` computes them once per model content.
+    The equivalence suite pins every field against a frozen reference
+    copy of the historical inline derivation, drifted shapes included.
+    """
+
+    __slots__ = ("desc", "item_id", "item_file", "id_parts",
+                 "named_idents", "conf_bonus")
+
+    def __init__(self, item: dict[str, Any]) -> None:
+        # Statement and negation join the text: derived invariants
+        # keep their identifiers in the statement while the
+        # description is a provenance note — description-only scoring
+        # made them invisible.
+        self.desc: str = " ".join(
+            s for s in (
+                item.get("description"), item.get("statement"),
+                item.get("negation"),
+            ) if s
+        ).lower()
+        self.item_id: str = (
+            item.get("id") or item.get("concept")
+            or item.get("name") or ""
+        ).lower()
+        item_file = item.get("file") or item.get("source") or ""
+        self.item_file: str = re.split(r":\d", item_file, maxsplit=1)[0]
+        # ID parts pre-filtered to the scoreable length (>4 chars);
+        # shorter parts never contribute.
+        self.id_parts: tuple[str, ...] = tuple(
+            p for p in re.split(r"[_\-.]", self.item_id) if len(p) > 4
+        )
+        # Code identifiers in the item text, underscore required,
+        # deduplicated exactly like the historical set(findall(...)).
+        self.named_idents: tuple[str, ...] = tuple(
+            tok
+            for tok in set(re.findall(r"[a-z_][a-z0-9_]{5,}", self.desc))
+            if "_" in tok
+        )
+        self.conf_bonus: float = _CONF_BONUS.get(
+            item.get("confidence", "inferred"), 0.0)
+
+
 def _relevance_score(
     item: dict[str, Any],
     file_path: str,
     function_name: str,
     source: str,
+    *,
+    statics: _ItemStatics | None = None,
 ) -> float:
-    """Score how relevant a concept/invariant/contract is to a function."""
+    """Score how relevant a concept/invariant/contract is to a function.
+
+    ``statics`` (optional): the item's precomputed function-independent
+    inputs, passed by memo-backed callers. Omitted, they are derived
+    fresh — same values either way (the derivation is a pure function
+    of the item).
+    """
+    st = statics if statics is not None else _ItemStatics(item)
     score = 0.0
     variants = _name_variants(function_name)
     fn_lowers = tuple(v.lower() for v in variants)
     source_lower = source.lower() if source else ""
 
-    # Statement and negation join the text: derived invariants keep
-    # their identifiers in the statement while the description is a
-    # provenance note — description-only scoring made them invisible.
-    desc = " ".join(
-        s for s in (
-            item.get("description"), item.get("statement"),
-            item.get("negation"),
-        ) if s
-    ).lower()
-    item_id = (item.get("id") or item.get("concept") or item.get("name") or "").lower()
-
     # Direct naming match (case-insensitive, no double-count) —
     # either name form counts, once.
-    if any(v in desc or v in item_id for v in fn_lowers):
+    if any(v in st.desc or v in st.item_id for v in fn_lowers):
         score += 5.0
 
     # Evidence references this file or function.
@@ -243,15 +307,12 @@ def _relevance_score(
     # Contract is FOR this function specifically
     if item.get("function") in variants:
         score += 8.0
-    item_file = item.get("file") or item.get("source") or ""
-    item_file = re.split(r":\d", item_file, maxsplit=1)[0]
-    if item_file and _paths_match(file_path, item_file):
+    if st.item_file and _paths_match(file_path, st.item_file):
         score += 2.0
 
     # Concept ID parts appear in the source body (weak signal)
-    id_parts = re.split(r"[_\-.]", item_id)
-    for part in id_parts:
-        if len(part) > 4 and part in source_lower:
+    for part in st.id_parts:
+        if part in source_lower:
             score += 0.5
 
     # Code identifiers named in the item's text that appear in the
@@ -262,20 +323,13 @@ def _relevance_score(
     # every function whose body calls it. Underscore required so the
     # match means a code identifier, not prose; capped so a laundry
     # list of identifiers cannot outrank an exact-function anchor.
-    if source_lower and desc:
-        named = set(re.findall(r"[a-z_][a-z0-9_]{5,}", desc))
+    if source_lower and st.desc:
         hits = sum(
-            1 for tok in named if "_" in tok and tok in source_lower
+            1 for tok in st.named_idents if tok in source_lower
         )
         score += min(3.0, 1.5 * hits)
 
-    # Confidence acts as a tiebreaker, not a promotion — scale it down
-    conf = item.get("confidence", "inferred")
-    conf_bonus = {
-        "tested": 0.5, "documented": 0.4, "corroborated": 0.3,
-        "traced": 0.2, "inferred": 0.0,
-    }
-    score += conf_bonus.get(conf, 0.0)
+    score += st.conf_bonus
 
     return score
 
@@ -331,17 +385,8 @@ def _security_context_lines(model: dict[str, Any]) -> list[str]:
     return parts
 
 
-def domain_security_context(out_dir: Path) -> str | None:
-    """Standalone security-context prompt block.
-
-    Consumed by ``core.audit.context`` (always-on prompt section,
-    independent of primer relevance) and by the security classifier.
-    Returns None when no domain model exists or it carries no
-    security context.
-    """
-    model = _find_domain_model(out_dir)
-    if not model:
-        return None
+def _render_security_context(model: dict[str, Any]) -> str | None:
+    """The security-context block for *model* (None when it has none)."""
     lines = _security_context_lines(model)
     if not lines:
         return None
@@ -351,6 +396,30 @@ def domain_security_context(out_dir: Path) -> str | None:
             # Keep the guidance sentence last.
             lines.insert(len(lines) - 1, f"- **Trust boundary:** {trust}")
     return "\n".join(lines)
+
+
+def domain_security_context(
+    out_dir: Path,
+    *,
+    _memo: _DomainSliceMemo | None = None,
+) -> str | None:
+    """Standalone security-context prompt block.
+
+    Consumed by ``core.audit.context`` (always-on prompt section,
+    independent of primer relevance) and by the security classifier.
+    Returns None when no domain model exists or it carries no
+    security context.
+
+    ``_memo`` (private): a prebuilt slice memo for the discovered
+    model — the fingerprint path passes it so this model-wide render
+    happens once per model content instead of once per function.
+    """
+    if _memo is not None:
+        return _memo.security_block()
+    model = _find_domain_model(out_dir)
+    if not model:
+        return None
+    return _render_security_context(model)
 
 
 @lru_cache(maxsize=4)
@@ -590,6 +659,8 @@ def domain_bug_patterns(
     file_path: str,
     function_name: str,
     source: str = "",
+    *,
+    _memo: _DomainSliceMemo | None = None,
 ) -> str | None:
     """Bug-pattern prompt block filtered to the function under review.
 
@@ -598,10 +669,15 @@ def domain_bug_patterns(
     same >1.0 threshold the other bridge functions use.  With no
     source text available every pattern is included (nothing to
     filter on).  Returns None when nothing selects.
+
+    ``_memo`` (private): a prebuilt slice memo for the discovered
+    model — the fingerprint path passes it so per-item scoring
+    statics are derived once per model content.
     """
-    model = _find_domain_model(out_dir)
+    model = _memo.model if _memo is not None else _find_domain_model(out_dir)
     if not model:
         return None
+    memo = _memo if _memo is not None else _DomainSliceMemo(model)
     bug_patterns = model.get("bug_patterns") or []
     if not isinstance(bug_patterns, list) or not bug_patterns:
         return None
@@ -624,7 +700,7 @@ def domain_bug_patterns(
             else:
                 hit = pattern.search(source) is not None
         if not hit and source:
-            hit = _relevance_score(bp, file_path, function_name, source) > 1.0
+            hit = memo.score(bp, file_path, function_name, source) > 1.0
         if hit or not source:
             selected.append(bp)
     if not selected:
@@ -758,6 +834,204 @@ def _entry_gap(kind: str, entry: dict[str, Any], missing: str) -> None:
     )
 
 
+_MEMO_UNSET = object()  # security block legitimately memoises to None
+
+
+class _DomainSliceMemo:
+    """Model-wide (function-independent) slice-render precomputation.
+
+    One instance per domain-model CONTENT (:func:`_slice_memo_for`):
+    the drift-filtered section lists, per-item scoring statics, the
+    concept→invariants join, and the security-context render depend
+    only on the model, yet were re-derived for every function whose
+    prompt slice the journal writer or the gap fold fingerprinted —
+    ~0.27 s per function at a 7 MB model, all of it model-side work.
+
+    ``model`` is whatever dict the constructor received. The two
+    construction sites differ deliberately:
+
+    * the renderers' per-call fallback (``_memo`` omitted) wraps the
+      caller's own model dict — single call, no lifetime beyond it;
+    * the shared store (:func:`_slice_memo_for`) constructs the memo
+      over a PRIVATE snapshot it parses itself, so no caller-held
+      object is ever pinned here and later in-place mutation of any
+      caller's model cannot reach a stored memo. Renderers that read
+      ``_memo.model`` directly (bug patterns, security-context lines)
+      therefore read insert-time content on a store hit, never a live
+      object.
+
+    Everything here is lazy: fields are built on first use, so a
+    derivation that raises on a drifted model raises at the same call
+    site as the uncached path (the fingerprint's callers map any
+    exception to "no stamp" / "no match" — fail toward re-review,
+    never toward a fingerprint of content that never rendered).
+    Laziness is sound on the store path because the snapshot never
+    mutates: first-use derivations see the same bytes construction
+    did.
+
+    Concurrency: plain dict/attribute fills — racing fillers can
+    duplicate work but always store equal values, because every
+    derivation is a pure function of the model content.
+    """
+
+    __slots__ = ("model", "_drifted", "_statics", "_invs_by_concept",
+                 "_security_block")
+
+    def __init__(self, model: dict[str, Any]) -> None:
+        self.model = model
+        self._drifted: dict[str, list[dict[str, Any]]] = {}
+        self._statics: dict[int, tuple[dict[str, Any], _ItemStatics]] = {}
+        self._invs_by_concept: (
+            dict[str, list[dict[str, Any]]] | None) = None
+        self._security_block: Any = _MEMO_UNSET
+
+    def drifted(self, key: str) -> list[dict[str, Any]]:
+        """``_drifted_entries(model, key)``, computed once per key.
+
+        Callers treat the returned list as read-only — it is shared
+        by every fingerprint pass over this model content.
+        """
+        entries = self._drifted.get(key)
+        if entries is None:
+            entries = _drifted_entries(self.model, key)
+            self._drifted[key] = entries
+        return entries
+
+    def statics_for(self, item: dict[str, Any]) -> _ItemStatics:
+        """The item's scoring statics, computed once per item.
+
+        Keyed by id(item), made sound BY CONSTRUCTION rather than by
+        reachability reasoning: each entry stores the ``(item,
+        statics)`` PAIR, so the cache itself holds a strong reference
+        to the exact dict it keyed — that object can never be
+        collected while its entry lives, so its id can never be
+        recycled onto a different dict. A hit is served only after
+        the identity check ``stored is item`` confirms the key still
+        names the same object; anything else recomputes and re-pins.
+        (id alone was NOT sufficient: an item reachable only through
+        a live model — never through memo-held structures — could be
+        replaced in place, freed, and its id handed to a new dict.)
+        """
+        entry = self._statics.get(id(item))
+        if entry is not None and entry[0] is item:
+            return entry[1]
+        st = _ItemStatics(item)
+        self._statics[id(item)] = (item, st)
+        return st
+
+    def score(
+        self,
+        item: dict[str, Any],
+        file_path: str,
+        function_name: str,
+        source: str,
+    ) -> float:
+        """:func:`_relevance_score` with memoised statics."""
+        return _relevance_score(
+            item, file_path, function_name, source,
+            statics=self.statics_for(item),
+        )
+
+    def invs_by_concept(self) -> dict[str, list[dict[str, Any]]]:
+        """Top-level invariants joined by concept id, computed once."""
+        joined = self._invs_by_concept
+        if joined is None:
+            joined = {}
+            for inv in self.drifted("invariants"):
+                cid = str(inv.get("concept") or "")
+                if cid:
+                    joined.setdefault(cid, []).append(inv)
+            self._invs_by_concept = joined
+        return joined
+
+    def security_block(self) -> str | None:
+        """:func:`_render_security_context`, computed once."""
+        if self._security_block is _MEMO_UNSET:
+            self._security_block = _render_security_context(self.model)
+        return self._security_block
+
+
+# Memo store: domain-model content digest → memo. Keyed by CONTENT,
+# never object identity: the parsed model dict is not provably
+# immutable (the loader's lru can evict and re-parse, and nothing
+# enforces read-only on consumers), so an id()-keyed store could
+# serve derivations for content the object no longer holds — and a
+# stale slice fingerprint silently reuses review verdicts whose
+# prompt briefing changed. The digest costs one canonical dumps per
+# fingerprint call (~30 ms at a 7 MB model): the price of
+# unconditional byte-fidelity. Keying by object identity would save
+# that, but only under an immutability guarantee no current contract
+# provides.
+#
+# Content keying alone is NOT enough: a stored memo must also never
+# hold the caller's dict. Two content-equal objects can exist at once
+# (the same bytes parsed for two run dirs, or the parse lru evicting
+# and re-parsing a path the memo outlives), and once the FIRST object
+# mutates in place, a later lookup through the OTHER object still
+# digests to the stored key — a memo pinning the first object would
+# then mix its mutated fields into a hit that the key says is the
+# original content. So a miss parses the memo's model back out of the
+# exact canonical bytes the key digests (one loads per NEW content;
+# hits never pay it): the stored memo is a pure function of its key,
+# and a hit renders byte-identically to a cold compute of the
+# looked-up content no matter what any caller-held object did since.
+# (Renderers were verified key-order-insensitive: every model access
+# is by explicit key, so the canonical form renders identically to
+# the loader's parse of the same bytes.)
+#
+# Bound: the number of distinct model CONTENTS plausibly interleaving
+# in one process — not coupled to _load_cached's maxsize (the two
+# evict independently; parse-only consumers such as domain_key_files
+# advance the parse lru without ever touching this store, and since
+# the memo owns a private snapshot, a parse-lru eviction can never
+# invalidate it). Larger holds model-scale snapshots plus derived
+# data (statics roughly mirror the model's text) for contents no
+# longer in play; smaller rebuilds the memo when fingerprint passes
+# alternate across more contents than the bound (correctness
+# unaffected either way — a miss only recomputes). Two-direction
+# regression tests ride the equivalence suite.
+_SLICE_MEMO_MAX = 4
+_slice_memos: OrderedDict[str, _DomainSliceMemo] = OrderedDict()
+_slice_memo_lock = threading.Lock()
+
+
+def _model_content_canonical(model: dict[str, Any]) -> str:
+    """Canonical byte form of a parsed domain model (key material)."""
+    from core.json.utils import dumps_canonical
+    return dumps_canonical(model)
+
+
+def _model_content_digest(model: dict[str, Any]) -> str:
+    """Canonical content identity of a parsed domain model."""
+    return hashlib.sha256(
+        _model_content_canonical(model).encode("utf-8")).hexdigest()
+
+
+def _slice_memo_for(model: dict[str, Any]) -> _DomainSliceMemo:
+    """The shared slice memo for *model*'s current content.
+
+    On a miss the memo is built over ``json.loads`` of the canonical
+    bytes — a private snapshot; the caller's *model* object is never
+    stored (see the store comment above for why). Faithful because
+    *model* is itself parsed JSON here (:func:`_find_domain_model` is
+    the only route in), so the canonical form re-parses to equal
+    content.
+    """
+    # Outside the lock: the dumps+digest is the dominant per-call cost.
+    canonical = _model_content_canonical(model)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    with _slice_memo_lock:
+        memo = _slice_memos.get(digest)
+        if memo is None:
+            memo = _DomainSliceMemo(json.loads(canonical))
+            _slice_memos[digest] = memo
+            while len(_slice_memos) > _SLICE_MEMO_MAX:
+                _slice_memos.popitem(last=False)
+        else:
+            _slice_memos.move_to_end(digest)
+    return memo
+
+
 def domain_model_context(
     out_dir: Path,
     file_path: str,
@@ -768,6 +1042,7 @@ def domain_model_context(
     max_invariants: int = 5,
     max_contracts: int = 3,
     include_sage: bool = True,
+    _memo: _DomainSliceMemo | None = None,
 ) -> str | None:
     """Build a prompt block with relevant domain-model knowledge.
 
@@ -780,14 +1055,19 @@ def domain_model_context(
     deterministic domain-model-derived content — SAGE recall varies
     with session history, so hashing it would churn the fingerprint
     without the model changing.
+
+    ``_memo`` (private): a prebuilt slice memo for the discovered
+    model — the fingerprint path passes it so drift filtering and
+    per-item scoring statics are derived once per model content.
     """
-    model = _find_domain_model(out_dir)
+    model = _memo.model if _memo is not None else _find_domain_model(out_dir)
     if not model:
         return None
+    memo = _memo if _memo is not None else _DomainSliceMemo(model)
 
-    concepts = _drifted_entries(model, "concepts")
-    invariants = _drifted_entries(model, "invariants")
-    contracts = _drifted_entries(model, "contracts")
+    concepts = memo.drifted("concepts")
+    invariants = memo.drifted("invariants")
+    contracts = memo.drifted("contracts")
 
     sage_block = (
         _sage_recall_for_context(out_dir, file_path, function_name)
@@ -798,17 +1078,17 @@ def domain_model_context(
         return None
 
     scored_concepts = sorted(
-        [(c, _relevance_score(c, file_path, function_name, source)) for c in concepts],
+        [(c, memo.score(c, file_path, function_name, source)) for c in concepts],
         key=lambda x: x[1],
         reverse=True,
     )
     scored_invariants = sorted(
-        [(i, _relevance_score(i, file_path, function_name, source)) for i in invariants],
+        [(i, memo.score(i, file_path, function_name, source)) for i in invariants],
         key=lambda x: x[1],
         reverse=True,
     )
     scored_contracts = sorted(
-        [(c, _relevance_score(c, file_path, function_name, source)) for c in contracts],
+        [(c, memo.score(c, file_path, function_name, source)) for c in contracts],
         key=lambda x: x[1],
         reverse=True,
     )
@@ -904,7 +1184,7 @@ def domain_model_context(
             if c.get("implication"):
                 parts.append(f"  - Implication: {c['implication']}")
 
-    bug_patterns = _drifted_entries(model, "bug_patterns")
+    bug_patterns = memo.drifted("bug_patterns")
     if bug_patterns:
         parts.append("\n### Bug Patterns (from study)\n")
         parts.append(
@@ -974,17 +1254,27 @@ def domain_slice_hash(
     "no block injected" is a comparable prompt state. Raises on
     renderer failure — callers treat any exception as "no stamp" /
     "no match" (fail toward re-review).
+
+    Model-wide render work is served from the content-keyed slice
+    memo (:func:`_slice_memo_for`): the journal writer and the gap
+    fold call this once per FUNCTION against the same model, and
+    without the memo every call re-derived the per-model parts from
+    scratch. The memo is passed to the SAME public renderers, so the
+    fingerprint's provenance (prompt content, not a parallel
+    re-derivation) is unchanged.
     """
-    if _find_domain_model(out_dir) is None:
+    model = _find_domain_model(out_dir)
+    if model is None:
         return None
+    memo = _slice_memo_for(model)
 
     primers = primers_from_domain_model(
-        out_dir, file_path, function_name, source,
+        out_dir, file_path, function_name, source, _memo=memo,
     )
     slice_parts: dict[str, Any] = {
-        "security": domain_security_context(out_dir) or "",
+        "security": domain_security_context(out_dir, _memo=memo) or "",
         "bug_patterns": domain_bug_patterns(
-            out_dir, file_path, function_name, source,
+            out_dir, file_path, function_name, source, _memo=memo,
         ) or "",
         # Order-sensitive on purpose: primer order is prompt content.
         "primers": list(primers),
@@ -994,10 +1284,8 @@ def domain_slice_hash(
         # injected when no dynamic primers rendered.
         slice_parts["model_context"] = domain_model_context(
             out_dir, file_path, function_name, source,
-            include_sage=False,
+            include_sage=False, _memo=memo,
         ) or ""
-
-    import hashlib
 
     from core.json.utils import dumps_canonical
     canonical = dumps_canonical(slice_parts)
@@ -1081,6 +1369,8 @@ def primers_from_domain_model(
     file_path: str,
     function_name: str,
     source: str = "",
+    *,
+    _memo: _DomainSliceMemo | None = None,
 ) -> list[str]:
     """Generate dynamic review primers from study output.
 
@@ -1094,11 +1384,17 @@ def primers_from_domain_model(
     source reference), so they are never crowded out by generic concepts.
     The relevance threshold (>1.0) is the only filter; no hard cap.
 
+    ``_memo`` (private): a prebuilt slice memo for the discovered
+    model — the fingerprint path passes it so drift filtering, the
+    concept→invariants join, and per-item scoring statics are derived
+    once per model content.
+
     Returns a list of primer strings (may be empty).
     """
-    model = _find_domain_model(out_dir)
+    model = _memo.model if _memo is not None else _find_domain_model(out_dir)
     if not model:
         return []
+    memo = _memo if _memo is not None else _DomainSliceMemo(model)
 
     candidates: list[tuple[float, str]] = []
 
@@ -1111,18 +1407,14 @@ def primers_from_domain_model(
     #       actually produces (Concept itself carries no invariants
     #       field, so a top-level join is what makes these primers
     #       reachable from real domain-model.json files).
-    invs_by_concept: dict[str, list[dict[str, Any]]] = {}
-    for inv in _drifted_entries(model, "invariants"):
-        cid = str(inv.get("concept") or "")
-        if cid:
-            invs_by_concept.setdefault(cid, []).append(inv)
-    for concept in _drifted_entries(model, "concepts"):
+    invs_by_concept = memo.invs_by_concept()
+    for concept in memo.drifted("concepts"):
         cid = str(concept.get("id") or "")
         inv_list: list[Any] = list(concept.get("invariants") or [])
         inv_list.extend(invs_by_concept.get(cid, []))
         if not inv_list:
             continue
-        score = _relevance_score(concept, file_path, function_name, source)
+        score = memo.score(concept, file_path, function_name, source)
         if score <= 1.0:
             continue
         label = (cid or str(concept.get("name") or "?"))
@@ -1153,7 +1445,7 @@ def primers_from_domain_model(
         candidates.append((score, "\n".join(lines)))
 
     # --- Paired operations → check for unbalanced acquire/release ---
-    paired = _drifted_entries(model, "paired_operations")
+    paired = memo.drifted("paired_operations")
     if paired and source:
         source_lower = source.lower()
         relevant_pairs = []
@@ -1181,11 +1473,11 @@ def primers_from_domain_model(
             candidates.append((score, "\n".join(lines)))
 
     # --- Top-level invariants (rich schema: id/statement/negation) ---
-    top_invariants = _drifted_entries(model, "invariants")
+    top_invariants = memo.drifted("invariants")
     if top_invariants:
         scored = sorted(
             [
-                (inv, _relevance_score(inv, file_path, function_name, source))
+                (inv, memo.score(inv, file_path, function_name, source))
                 for inv in top_invariants
             ],
             key=lambda x: x[1],
@@ -1227,7 +1519,7 @@ def primers_from_domain_model(
             candidates.append((avg_score, "\n".join(lines)))
 
     # --- Contracts (rich schema: function/input_semantics/output_semantics) ---
-    for contract in _drifted_entries(model, "contracts"):
+    for contract in memo.drifted("contracts"):
         cf = (contract.get("function") or "").lower()
         if cf not in tuple(v.lower()
                            for v in _name_variants(function_name)):
