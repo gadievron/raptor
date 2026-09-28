@@ -837,6 +837,27 @@
    ],
    "verdict": "linear"
   },
+  "core/concepts/lang_resolve.py\u001f^[ \\t]*(?:(?:public|private|internal|abs": {
+   "digests": [
+    "ee8edd599724"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
+   ],
+   "verdict": "linear"
+  },
+  "core/concepts/lang_resolve.py\u001f^[ \\t]*(?:(?:public|private|internal|fil": {
+   "digests": [
+    "2f31e2d1d3fc",
+    "4d7bc15fb63e"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
+   ],
+   "verdict": "linear"
+  },
   "core/concepts/lang_resolve.py\u001f^[ \\t]*(?:(?:public|private|protected|ab": {
    "digests": [
     "2900d486af24"
@@ -855,6 +876,17 @@
    "rules": [
     "C",
     "R"
+   ],
+   "verdict": "linear"
+  },
+  "core/concepts/lang_resolve.py\u001f^[ \\t]*(?:(?:public|private|protected|in": {
+   "digests": [
+    "99e44e2f70df",
+    "d9af43a73577"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
    ],
    "verdict": "linear"
   },

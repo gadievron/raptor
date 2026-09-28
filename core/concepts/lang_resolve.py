@@ -4,7 +4,8 @@ The reading-list study loop verifies external-contract assumptions a
 review relied on ("Does ``json.loads`` reject NaN?") against the actual
 source.  The C/C++ path lives in ``libexec/raptor-study-prep``; this
 module is the equivalent resolution machinery for the other first-class
-languages: Python, Go, Java, JavaScript/TypeScript, Rust, and PHP.
+languages: Python, Go, Java, JavaScript/TypeScript, Rust, PHP, Kotlin,
+C#, and Swift.
 
 Two resolution modes, mirroring the C/C++ study-prep shapes:
 
@@ -78,7 +79,7 @@ def _read_capped(path: Path, max_chars: int | None = None) -> str | None:
 #: tree-sitter grammar branch plus an AST/regex fallback.
 STUDY_LANGUAGES: frozenset[str] = frozenset({
     "python", "go", "java", "javascript", "typescript", "tsx", "rust",
-    "php",
+    "php", "kotlin", "csharp", "swift",
 })
 
 #: File suffixes covered by :data:`STUDY_LANGUAGES`.
@@ -407,6 +408,9 @@ _LINE_COMMENT = {
     "rust": ("///", "//!", "//"),
     "python": ("#",),
     "php": ("//", "#"),
+    "kotlin": ("//",),
+    "csharp": ("///", "//"),
+    "swift": ("///", "//"),
 }
 
 # Lines that sit between a doc comment and the definition and should be
@@ -531,6 +535,42 @@ def _const_pattern(language: str, name: str) -> re.Pattern | None:
             rf"\bdefine\s*\(\s*['\"]{esc}['\"]",
             re.MULTILINE,
         )
+    if language == "kotlin":
+        # ``const val`` compile-time constants and top-level/object
+        # ``val`` bindings. Horizontal-only ``[ \t]+`` between the
+        # keywords — same flood-safety/split-across-lines trade-off
+        # as the php arm above.
+        return re.compile(
+            rf"^[ \t]*(?:(?:public|private|protected|internal)[ \t]+)?"
+            rf"(?:const[ \t]+)?val[ \t]+{esc}\b",
+            re.MULTILINE,
+        )
+    if language == "csharp":
+        # ``const`` fields and ``static readonly`` fields — the two
+        # C# constant spellings. Like the Java arm, each branch's
+        # required keyword stays out of its own modifier loop, the
+        # type/name separator is a single ``[ \t]`` after a type
+        # class that itself absorbs blanks, and inter-keyword
+        # whitespace is horizontal-only (interior ``\s+`` under a
+        # MULTILINE ^-anchor is quadratic on keyword floods).
+        # Trade-off: a declaration split across lines won't match —
+        # acceptable for this regex fallback tier.
+        return re.compile(
+            rf"^[ \t]*(?:(?:public|private|protected|internal)[ \t]+)*"
+            rf"const[ \t]+\w[\w<>\[\],. \t]*[ \t]{esc}\s*=|"
+            rf"^[ \t]*(?:(?:public|private|protected|internal|static)[ \t]+)*"
+            rf"readonly[ \t]+\w[\w<>\[\],. \t]*[ \t]{esc}\s*=",
+            re.MULTILINE,
+        )
+    if language == "swift":
+        # ``let`` constants (optionally typed, optionally scoped
+        # ``static``/``class``). Horizontal-only ``[ \t]+`` — same
+        # flood-safety/split-across-lines trade-off as the arms above.
+        return re.compile(
+            rf"^[ \t]*(?:(?:public|private|internal|fileprivate|open"
+            rf"|static|class|final)[ \t]+)*let[ \t]+{esc}\b",
+            re.MULTILINE,
+        )
     return None
 
 
@@ -579,6 +619,38 @@ def _type_pattern(language: str, name: str) -> re.Pattern | None:
         return re.compile(
             rf"^[ \t]*(?:(?:abstract|final|readonly)[ \t]+)*"
             rf"(?:class|interface|trait|enum)[ \t]+{esc}\b",
+            re.MULTILINE,
+        )
+    if language == "kotlin":
+        # ``enum class`` / ``data class`` etc. fall out of the
+        # modifier loop naturally (``enum``/``data`` are modifiers
+        # here). Horizontal-only ``[ \t]+`` — same flood-safety/
+        # split-across-lines trade-off as the const pattern above.
+        return re.compile(
+            rf"^[ \t]*(?:(?:public|private|internal|abstract|final|open"
+            rf"|sealed|data|enum|annotation|inner)[ \t]+)*"
+            rf"(?:class|interface|object)[ \t]+{esc}\b",
+            re.MULTILINE,
+        )
+    if language == "csharp":
+        # Horizontal-only ``[ \t]+`` between keywords — same
+        # flood-safety/split-across-lines trade-off as the const
+        # pattern above.
+        return re.compile(
+            rf"^[ \t]*(?:(?:public|private|protected|internal|abstract"
+            rf"|sealed|static|partial|readonly)[ \t]+)*"
+            rf"(?:class|interface|struct|enum|record)[ \t]+{esc}\b",
+            re.MULTILINE,
+        )
+    if language == "swift":
+        # Horizontal-only ``[ \t]+`` between keywords — same
+        # flood-safety/split-across-lines trade-off as the const
+        # pattern above.
+        return re.compile(
+            rf"^[ \t]*(?:(?:public|private|internal|fileprivate|open"
+            rf"|final|indirect)[ \t]+)*"
+            rf"(?:class|struct|enum|protocol|actor|typealias)"
+            rf"[ \t]+{esc}\b",
             re.MULTILINE,
         )
     return None
@@ -968,7 +1040,12 @@ def resolve_identifiers(
     for bucket in matched.values():
         result.items.extend(bucket)
 
-    # Unresolved: honest reasons, never guesses
+    # Unresolved: honest reasons, never guesses. What lands here is
+    # extractor-shape-dependent, not language-binary: e.g. a C# method
+    # without its grammar resolves in K&R brace style (GenericExtractor
+    # recognises `type name(...) {` on one line) but not in Allman
+    # style (brace on the next line), where it arrives here with the
+    # referenced-but-undefined reason below.
     for orig, tail in candidates:
         if orig in matched:
             continue

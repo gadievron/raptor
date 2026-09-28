@@ -9009,9 +9009,9 @@ def _run_audit_body(
 
     # --- Start incremental study consumer (Thread B) ---
     # The study loop resolves assumptions in C/C++ (via the study-prep
-    # corpus) and in Python/Go/Java/JS-TS/Rust/PHP (via in-process
-    # lang_resolve dispatch); reviews of any of those languages may
-    # emit reading_list items.
+    # corpus) and in Python/Go/Java/JS-TS/Rust/PHP/Kotlin/C#/Swift
+    # (via in-process lang_resolve dispatch); reviews of any of those
+    # languages may emit reading_list items.
     from core.concepts.lang_resolve import is_study_supported_path
     _has_study_files = any(
         is_study_supported_path(g["file"]) for g in workqueue
@@ -14970,8 +14970,9 @@ def _partition_study_batch(
 
     Returns ``(c_reqs, ml_reqs, unsupported)``: C/C++ questions resolve
     against the study-prep corpus, ``ml_reqs`` (Python/Go/Java/JS-TS/
-    Rust/PHP) resolve in-process, and ``unsupported`` languages have no
-    resolver — those items are marked unresolvable, never guessed.
+    Rust/PHP/Kotlin/C#/Swift) resolve in-process, and ``unsupported``
+    languages have no resolver — those items are marked unresolvable,
+    never guessed.
     Requests without a source file stay on the C path (legacy shape).
     """
     from core.concepts.lang_resolve import language_for_path
@@ -16453,9 +16454,10 @@ def _study_consumer_loop(
             continue
 
         # Language dispatch: C/C++ questions resolve against the
-        # study-prep corpus; Python/Go/Java/JS-TS/Rust/PHP resolve
-        # in-process per batch; languages with no resolver are marked
-        # unresolvable up front — never studied, never resolved-clean.
+        # study-prep corpus; Python/Go/Java/JS-TS/Rust/PHP/Kotlin/
+        # C#/Swift resolve in-process per batch; languages with no
+        # resolver are marked unresolvable up front — never studied,
+        # never resolved-clean.
         c_reqs, ml_reqs, unsupported = _partition_study_batch(fresh)
         if unsupported:
             _mark_unsupported_unresolvable(config.out_dir, unsupported)

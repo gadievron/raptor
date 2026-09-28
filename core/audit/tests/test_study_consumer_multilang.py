@@ -90,8 +90,9 @@ class TestPartitionStudyBatch:
         c, ml, un = _partition_study_batch([
             _req("a.py"), _req("b.go"), _req("C.java"),
             _req("d.ts"), _req("e.rs"), _req("f.js"), _req("g.php"),
+            _req("h.kt"), _req("i.cs"), _req("j.swift"),
         ])
-        assert not c and len(ml) == 7 and not un
+        assert not c and len(ml) == 10 and not un
 
     def test_unsupported_language_partitioned_out(self) -> None:
         c, ml, un = _partition_study_batch([_req("a.rb"), _req("b.lua")])
@@ -687,6 +688,104 @@ class TestConsumerMultilangDispatch:
         rl = _load_rl(out)
         assert rl["items"][0]["resolved"]
 
+    def test_kotlin_question_resolves_and_merges(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        target = tmp_path / "src"
+        (target / "app").mkdir(parents=True)
+        (target / "app" / "Auth.kt").write_text(
+            "/** Constant-time comparison of two digests. */\n"
+            "fun compareDigest(a: ByteArray, b: ByteArray): Boolean {\n"
+            "    return MessageDigest.isEqual(a, b)\n"
+            "}\n",
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        _stub_prep(monkeypatch, out)
+        _stub_llm(monkeypatch)
+        _stub_run_study(
+            monkeypatch, out, [{"id": "compareDigest_contract"}],
+        )
+
+        q = "Does `compareDigest` reject digests of unequal length?"
+        _run_loop(config, _queue(StudyRequest(
+            question=q, source_file="app/Auth.kt",
+            source_function="login",
+        )))
+
+        study_list = json.loads((out / "study-list.json").read_text())
+        names = {i["name"] for i in study_list["items"]}
+        assert "compareDigest" in names
+        rl = _load_rl(out)
+        assert rl["items"][0]["resolved"]
+
+    def test_csharp_question_resolves_and_merges(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        target = tmp_path / "src"
+        (target / "App").mkdir(parents=True)
+        (target / "App" / "Auth.cs").write_text(
+            "/// <summary>Constant-time comparison of two digests."
+            "</summary>\n"
+            "static bool CompareDigest(byte[] a, byte[] b)\n"
+            "{\n"
+            "    return CryptographicOperations.FixedTimeEquals(a, b);\n"
+            "}\n",
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        _stub_prep(monkeypatch, out)
+        _stub_llm(monkeypatch)
+        _stub_run_study(
+            monkeypatch, out, [{"id": "CompareDigest_contract"}],
+        )
+
+        q = "Does `CompareDigest` reject digests of unequal length?"
+        _run_loop(config, _queue(StudyRequest(
+            question=q, source_file="App/Auth.cs",
+            source_function="Login",
+        )))
+
+        study_list = json.loads((out / "study-list.json").read_text())
+        names = {i["name"] for i in study_list["items"]}
+        assert "CompareDigest" in names
+        rl = _load_rl(out)
+        assert rl["items"][0]["resolved"]
+
+    def test_swift_question_resolves_and_merges(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        target = tmp_path / "src"
+        (target / "App").mkdir(parents=True)
+        (target / "App" / "Auth.swift").write_text(
+            "/// Constant-time comparison of two digests.\n"
+            "func compareDigest(_ a: [UInt8], _ b: [UInt8]) -> Bool {\n"
+            "    return constantTimeEquals(a, b)\n"
+            "}\n",
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        _stub_prep(monkeypatch, out)
+        _stub_llm(monkeypatch)
+        _stub_run_study(
+            monkeypatch, out, [{"id": "compareDigest_contract"}],
+        )
+
+        q = "Does `compareDigest` reject digests of unequal length?"
+        _run_loop(config, _queue(StudyRequest(
+            question=q, source_file="App/Auth.swift",
+            source_function="login",
+        )))
+
+        study_list = json.loads((out / "study-list.json").read_text())
+        names = {i["name"] for i in study_list["items"]}
+        assert "compareDigest" in names
+        rl = _load_rl(out)
+        assert rl["items"][0]["resolved"]
+
     def test_unresolvable_python_question_marked_with_reason(
         self, monkeypatch, tmp_path,
     ) -> None:
@@ -825,6 +924,7 @@ class TestStudyGateSuffixes:
         ("pkg/app.py", True), ("srv/main.go", True),
         ("App.java", True), ("web/app.ts", True), ("lib.rs", True),
         ("web/index.php", True),
+        ("App.kt", True), ("Prog.cs", True), ("ui/View.swift", True),
         ("script.rb", False), ("conf.lua", False), ("style.css", False),
     ])
     def test_supported_path(self, path, expected) -> None:

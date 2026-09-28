@@ -30,12 +30,12 @@ from core.testing import requires_ts
 class TestLanguageSupport:
     def test_first_class_languages_supported(self) -> None:
         for lang in ("python", "go", "java", "javascript", "typescript",
-                     "rust", "php"):
+                     "rust", "php", "kotlin", "csharp", "swift"):
             assert lang in STUDY_LANGUAGES
 
     def test_suffixes_cover_first_class_languages(self) -> None:
         for suffix in (".py", ".go", ".java", ".js", ".ts", ".tsx", ".rs",
-                       ".php"):
+                       ".php", ".kt", ".kts", ".cs", ".swift"):
             assert suffix in STUDY_SUFFIXES
 
     def test_c_is_not_routed_here(self) -> None:
@@ -602,6 +602,385 @@ class Acc {
         assert "Escapes HTML entities" in res.items[0].doc_comment
 
 
+class TestKotlinResolution:
+    @pytest.fixture()
+    def tree(self, tmp_path: Path) -> Path:
+        _write(tmp_path, "src/Frame.kt", '''\
+/** Upper bound on retries. */
+const val MAX_RETRIES = 3
+
+/** A parsed frame. */
+data class Frame(val len: Int)
+
+/** Hashing contract. */
+interface Hasher {
+    fun digest(s: String): String
+}
+
+/** Persists users. */
+class UserStore {
+    /** Looks up a user by id. */
+    fun findUser(id: Int): User? {
+        return db.fetch(id)
+    }
+}
+
+/**
+ * Decode a frame from the wire.
+ *
+ * Returns null on truncated input.
+ */
+fun decodeFrame(buf: ByteArray): Frame? {
+    return parsePrefix(buf)
+}
+''')
+        return tmp_path
+
+    def test_function_with_kdoc(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["decodeFrame"])
+        assert len(res.items) == 1
+        it = res.items[0]
+        assert it.kind == "function"
+        assert it.file == "src/Frame.kt"
+        assert "Returns null on truncated input" in it.doc_comment
+        assert not res.unresolved
+
+    @requires_ts("kotlin")
+    def test_function_calls_extracted(self, tree: Path) -> None:
+        # Same contract as the Go/Rust/PHP twins: callee extraction
+        # needs the kotlin grammar; the regex fallback still yields
+        # the item, name, and doc comment.
+        res = resolve_identifiers(tree, ["decodeFrame"])
+        assert "parsePrefix" in res.items[0].calls
+
+    @requires_ts("kotlin")
+    def test_method_via_qualified_name(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["UserStore.findUser"])
+        assert [it.name for it in res.items] == ["findUser"]
+        assert res.items[0].doc_comment == "Looks up a user by id."
+        assert res.items[0].related_items == ["UserStore"]
+
+    @requires_ts("kotlin")
+    def test_qualified_mismatch_not_guessed(self, tree: Path) -> None:
+        # OtherStore.findUser does not exist — the UserStore method
+        # must NOT be offered as its definition.
+        res = resolve_identifiers(tree, ["OtherStore.findUser"])
+        assert res.items == []
+        assert len(res.unresolved) == 1
+
+    def test_class_resolution(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["Frame"])
+        assert len(res.items) == 1
+        assert res.items[0].kind == "struct"
+        assert "A parsed frame" in res.items[0].doc_comment
+
+    def test_interface_resolution(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["Hasher"])
+        assert res.items[0].kind == "struct"
+        assert "Hashing contract" in res.items[0].doc_comment
+
+    def test_const_val(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["MAX_RETRIES"])
+        assert len(res.items) == 1
+        assert "MAX_RETRIES = 3" in res.items[0].definition
+
+    def test_missing_identifier_unresolved(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["ghostHelper"])
+        assert res.items == []
+        assert "not found" in res.unresolved[0]["reason"]
+
+    def test_grammar_absence_degrades_to_regex_tier(
+        self, tree: Path, monkeypatch,
+    ) -> None:
+        # Without tree_sitter_kotlin the inventory layer falls back to
+        # its regex extractor (``fun`` is a GenericExtractor shape):
+        # the function still resolves rather than going dark.
+        import core.inventory.extractors as ex
+        monkeypatch.setattr(ex, "_TS_AVAILABLE", False)
+        res = resolve_identifiers(tree, ["decodeFrame"])
+        assert [it.name for it in res.items] == ["decodeFrame"]
+        assert "Returns null on truncated input" in (
+            res.items[0].doc_comment
+        )
+
+    def test_plain_line_comment_doc_harvested(
+        self, tmp_path: Path,
+    ) -> None:
+        # Doc harvesting must accept plain ``//`` line comments, not
+        # only ``/** KDoc */`` blocks — the block path never consults
+        # the per-language line-comment prefix table, so only a
+        # line-comment fixture exercises the kotlin entry.
+        _write(tmp_path, "src/Limits.kt",
+               "// Ceiling on concurrent sessions.\n"
+               "// Raised only by the operator.\n"
+               "const val MAX_SESSIONS = 8\n")
+        res = resolve_identifiers(tmp_path, ["MAX_SESSIONS"])
+        assert len(res.items) == 1
+        assert "Ceiling on concurrent sessions" in (
+            res.items[0].doc_comment
+        )
+        assert "Raised only by the operator" in (
+            res.items[0].doc_comment
+        )
+
+
+# ------------------------------------------------------------------
+# C#
+# ------------------------------------------------------------------
+
+class TestCSharpResolution:
+    # The fixture is deliberately Allman-style (brace on its own
+    # line): that is the shape GenericExtractor's `type name(...) {`
+    # regex cannot see, so the degradation tests below exercise the
+    # true fallback boundary. K&R-style C# methods DO resolve on the
+    # regex tier — the boundary is brace-style, not language.
+    @pytest.fixture()
+    def tree(self, tmp_path: Path) -> Path:
+        _write(tmp_path, "src/Store.cs", '''\
+/// <summary>Persists users.</summary>
+class UserStore
+{
+    /// <summary>Looks up a user by id.</summary>
+    public User FindUser(int id)
+    {
+        return _db.Fetch(id);
+    }
+}
+
+/// <summary>Hashing contract.</summary>
+interface IHasher
+{
+    string Digest(string s);
+}
+
+static class Limits
+{
+    /// <summary>Upper bound on retries.</summary>
+    public const int MaxRetries = 3;
+
+    /// <summary>Default frame size.</summary>
+    public static readonly int FrameSize = 4096;
+}
+
+/// <summary>Decodes frames.</summary>
+class Decoder
+{
+    /// <summary>
+    /// Decode a frame from the wire.
+    /// Returns null on truncated input.
+    /// </summary>
+    public Frame DecodeFrame(byte[] buf)
+    {
+        return ParsePrefix(buf);
+    }
+}
+''')
+        return tmp_path
+
+    @requires_ts("csharp")
+    def test_method_with_doc_comment(self, tree: Path) -> None:
+        # C# methods carry no leading keyword the generic regex
+        # extractor keys on, so an Allman-style method (this fixture)
+        # resolves only on the grammar tier — K&R-style methods still
+        # match GenericExtractor's `type name(...) {` shape (unlike
+        # the Kotlin/Swift twins, which resolve in both styles via
+        # their `fun`/`func` keywords).
+        res = resolve_identifiers(tree, ["DecodeFrame"])
+        assert len(res.items) == 1
+        it = res.items[0]
+        assert it.kind == "function"
+        assert it.file == "src/Store.cs"
+        assert "Returns null on truncated input" in it.doc_comment
+        assert not res.unresolved
+
+    @requires_ts("csharp")
+    def test_method_calls_extracted(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["DecodeFrame"])
+        assert "ParsePrefix" in res.items[0].calls
+
+    @requires_ts("csharp")
+    def test_method_via_qualified_name(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["UserStore.FindUser"])
+        assert [it.name for it in res.items] == ["FindUser"]
+        assert "Looks up a user by id" in res.items[0].doc_comment
+        assert res.items[0].related_items == ["UserStore"]
+
+    @requires_ts("csharp")
+    def test_qualified_mismatch_not_guessed(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["OtherStore.FindUser"])
+        assert res.items == []
+        assert len(res.unresolved) == 1
+
+    def test_class_resolution(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["UserStore"])
+        assert len(res.items) == 1
+        assert res.items[0].kind == "struct"
+        assert "Persists users" in res.items[0].doc_comment
+
+    def test_interface_resolution(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["IHasher"])
+        assert res.items[0].kind == "struct"
+        assert "Hashing contract" in res.items[0].doc_comment
+
+    def test_const_field(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["MaxRetries"])
+        assert len(res.items) == 1
+        assert "const int MaxRetries = 3" in res.items[0].definition
+
+    def test_static_readonly_field(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["FrameSize"])
+        assert len(res.items) == 1
+        assert "readonly int FrameSize = 4096" in (
+            res.items[0].definition
+        )
+
+    def test_missing_identifier_unresolved(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["GhostHelper"])
+        assert res.items == []
+        assert "not found" in res.unresolved[0]["reason"]
+
+    def test_grammar_absence_degrades_honestly(
+        self, tree: Path, monkeypatch,
+    ) -> None:
+        # Without tree_sitter_c_sharp the type/constant regex passes
+        # still resolve, and the Allman-style method comes back
+        # unresolved WITH a reason — never a crash, never a guessed
+        # definition. (A K&R-style method would still resolve via
+        # GenericExtractor; the boundary is brace-style-dependent.)
+        import core.inventory.extractors as ex
+        monkeypatch.setattr(ex, "_TS_AVAILABLE", False)
+        res = resolve_identifiers(
+            tree, ["UserStore", "MaxRetries", "DecodeFrame"],
+        )
+        names = {it.name for it in res.items}
+        assert "UserStore" in names
+        assert "MaxRetries" in names
+        assert "DecodeFrame" not in names
+        assert [u["name"] for u in res.unresolved] == ["DecodeFrame"]
+        assert res.unresolved[0]["reason"]
+
+    def test_grammar_absence_knr_method_still_resolves(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        # The other side of the brace-style boundary: a K&R-style
+        # method (`{` on the signature line) matches GenericExtractor's
+        # `type name(...) {` shape, so it resolves even without the
+        # grammar.
+        import core.inventory.extractors as ex
+        monkeypatch.setattr(ex, "_TS_AVAILABLE", False)
+        _write(tmp_path, "src/Knr.cs",
+               "class Decoder {\n"
+               "    /// <summary>Decodes one frame.</summary>\n"
+               "    public Frame DecodeFrame(byte[] buf) {\n"
+               "        return ParsePrefix(buf);\n"
+               "    }\n"
+               "}\n")
+        res = resolve_identifiers(tmp_path, ["DecodeFrame"])
+        assert [it.name for it in res.items] == ["DecodeFrame"]
+        assert not res.unresolved
+
+
+# ------------------------------------------------------------------
+# Swift
+# ------------------------------------------------------------------
+
+class TestSwiftResolution:
+    @pytest.fixture()
+    def tree(self, tmp_path: Path) -> Path:
+        _write(tmp_path, "src/Frame.swift", '''\
+/// Upper bound on retries.
+let maxRetries = 3
+
+/// A parsed frame.
+struct Frame {
+    let len: Int
+}
+
+/// Hashing contract.
+protocol Hasher {
+    func digest(_ s: String) -> String
+}
+
+/// Persists users.
+class UserStore {
+    /// Looks up a user by id.
+    func findUser(_ id: Int) -> User? {
+        return db.fetch(id)
+    }
+}
+
+/// Decode a frame from the wire.
+///
+/// Returns nil on truncated input.
+func decodeFrame(_ buf: [UInt8]) -> Frame? {
+    return parsePrefix(buf)
+}
+''')
+        return tmp_path
+
+    def test_function_with_doc_comment(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["decodeFrame"])
+        assert len(res.items) == 1
+        it = res.items[0]
+        assert it.kind == "function"
+        assert it.file == "src/Frame.swift"
+        assert "Returns nil on truncated input" in it.doc_comment
+        assert not res.unresolved
+
+    @requires_ts("swift")
+    def test_function_calls_extracted(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["decodeFrame"])
+        assert "parsePrefix" in res.items[0].calls
+
+    @requires_ts("swift")
+    def test_method_via_qualified_name(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["UserStore.findUser"])
+        assert [it.name for it in res.items] == ["findUser"]
+        assert res.items[0].doc_comment == "Looks up a user by id."
+        assert res.items[0].related_items == ["UserStore"]
+
+    @requires_ts("swift")
+    def test_qualified_mismatch_not_guessed(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["OtherStore.findUser"])
+        assert res.items == []
+        assert len(res.unresolved) == 1
+
+    def test_struct_resolution(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["Frame"])
+        assert len(res.items) == 1
+        assert res.items[0].kind == "struct"
+        assert "A parsed frame" in res.items[0].doc_comment
+
+    def test_protocol_resolution(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["Hasher"])
+        assert res.items[0].kind == "struct"
+        assert "Hashing contract" in res.items[0].doc_comment
+
+    def test_let_constant(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["maxRetries"])
+        assert len(res.items) == 1
+        assert "maxRetries = 3" in res.items[0].definition
+
+    def test_missing_identifier_unresolved(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["ghostHelper"])
+        assert res.items == []
+        assert "not found" in res.unresolved[0]["reason"]
+
+    def test_grammar_absence_degrades_to_regex_tier(
+        self, tree: Path, monkeypatch,
+    ) -> None:
+        # Without tree_sitter_swift the inventory layer falls back to
+        # its regex extractor (``func`` is a GenericExtractor shape):
+        # the function still resolves rather than going dark.
+        import core.inventory.extractors as ex
+        monkeypatch.setattr(ex, "_TS_AVAILABLE", False)
+        res = resolve_identifiers(tree, ["decodeFrame"])
+        assert [it.name for it in res.items] == ["decodeFrame"]
+        assert "Returns nil on truncated input" in (
+            res.items[0].doc_comment
+        )
+
+
 class TestPhpPatternFloodPerformance:
     """Keyword floods against the PHP fallback patterns: interior
     ``\\s+`` under the MULTILINE ^-anchors was quadratic on
@@ -732,6 +1111,216 @@ class TestRustPatternFloodPerformance:
         assert tpat is not None
         assert tpat.search("pub(crate) enum Widget {")
         assert tpat.search("pub struct Widget {")
+
+
+class TestKotlinPatternFloodPerformance:
+    """Keyword floods against the Kotlin fallback patterns — the same
+    interior-``\\s+``-under-MULTILINE-anchors trap as the PHP/Java
+    twins; the horizontal-only patterns run in milliseconds and the
+    budget is generous for slow machines."""
+
+    def test_const_pattern_on_keyword_floods(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        pat = _const_pattern("kotlin", "SENTINEL")
+        assert pat is not None
+        for unit in ("public\n", "const\n"):
+            flood = unit * (128 * 1024 // len(unit))
+            start = time.monotonic()
+            assert pat.search(flood) is None
+            assert time.monotonic() - start < 2.0
+
+    def test_const_pattern_still_matches(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        pat = _const_pattern("kotlin", "MAX_N")
+        assert pat is not None
+        assert pat.search("const val MAX_N = 3")
+        assert pat.search("  private val MAX_N = 3")
+        assert pat.search("val MAX_N: Int = 3")
+        # ``var`` is mutable — not a constant.
+        assert pat.search("var MAX_N = 3") is None
+
+    def test_type_pattern_on_keyword_flood(self) -> None:
+        from core.concepts.lang_resolve import _type_pattern
+        pat = _type_pattern("kotlin", "SENTINEL")
+        assert pat is not None
+        flood = "sealed\n" * (128 * 1024 // 7)
+        start = time.monotonic()
+        assert pat.search(flood) is None
+        assert time.monotonic() - start < 2.0
+
+    def test_type_pattern_still_matches(self) -> None:
+        from core.concepts.lang_resolve import _type_pattern
+        pat = _type_pattern("kotlin", "Widget")
+        assert pat is not None
+        assert pat.search("data class Widget(")
+        assert pat.search("object Widget {")
+        assert pat.search("internal sealed interface Widget")
+
+
+class TestCSharpPatternFloodPerformance:
+    """Keyword floods against the C# fallback patterns — includes the
+    Java-twin type/whitespace seam (the type class absorbs blanks, so
+    the separator must be a single ``[ \\t]``)."""
+
+    def test_const_pattern_on_keyword_floods(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        pat = _const_pattern("csharp", "SENTINEL")
+        assert pat is not None
+        for unit in ("public\n", "static\n"):
+            flood = unit * (128 * 1024 // len(unit))
+            start = time.monotonic()
+            assert pat.search(flood) is None
+            assert time.monotonic() - start < 2.0
+
+    def test_const_pattern_on_type_whitespace_flood(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        pat = _const_pattern("csharp", "SENTINEL")
+        assert pat is not None
+        flood = "const int" + " " * (128 * 1024)
+        start = time.monotonic()
+        assert pat.search(flood) is None
+        assert time.monotonic() - start < 2.0
+
+    def test_const_pattern_still_matches(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        pat = _const_pattern("csharp", "MAX_N")
+        assert pat is not None
+        assert pat.search("public const int MAX_N = 3;")
+        assert pat.search("static readonly int MAX_N = 4;")
+        assert pat.search(
+            "readonly Dictionary<string, int> MAX_N = new();",
+        )
+        # Neither const nor readonly: not a constant.
+        assert pat.search("int MAX_N = 3;") is None
+
+    def test_type_pattern_on_keyword_flood(self) -> None:
+        from core.concepts.lang_resolve import _type_pattern
+        pat = _type_pattern("csharp", "SENTINEL")
+        assert pat is not None
+        flood = "abstract\n" * (128 * 1024 // 9)
+        start = time.monotonic()
+        assert pat.search(flood) is None
+        assert time.monotonic() - start < 2.0
+
+    def test_type_pattern_still_matches(self) -> None:
+        from core.concepts.lang_resolve import _type_pattern
+        pat = _type_pattern("csharp", "Widget")
+        assert pat is not None
+        assert pat.search("public sealed class Widget {")
+        assert pat.search("record Widget(int x);")
+        assert pat.search("internal readonly struct Widget")
+        assert pat.search("enum Widget {")
+
+
+class TestSwiftPatternFloodPerformance:
+    """Keyword floods against the Swift fallback patterns — same
+    horizontal-only doctrine as the twins above."""
+
+    def test_const_pattern_on_keyword_flood(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        pat = _const_pattern("swift", "SENTINEL")
+        assert pat is not None
+        flood = "static\n" * (128 * 1024 // 7)
+        start = time.monotonic()
+        assert pat.search(flood) is None
+        assert time.monotonic() - start < 2.0
+
+    def test_const_pattern_still_matches(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        pat = _const_pattern("swift", "maxN")
+        assert pat is not None
+        assert pat.search("static let maxN = 3")
+        assert pat.search("public let maxN: Int = 3")
+        assert pat.search("let maxN = 3")
+        # ``var`` is mutable — not a constant.
+        assert pat.search("var maxN = 3") is None
+
+    def test_type_pattern_on_keyword_flood(self) -> None:
+        from core.concepts.lang_resolve import _type_pattern
+        pat = _type_pattern("swift", "SENTINEL")
+        assert pat is not None
+        flood = "final\n" * (128 * 1024 // 6)
+        start = time.monotonic()
+        assert pat.search(flood) is None
+        assert time.monotonic() - start < 2.0
+
+    def test_type_pattern_still_matches(self) -> None:
+        from core.concepts.lang_resolve import _type_pattern
+        pat = _type_pattern("swift", "Widget")
+        assert pat is not None
+        assert pat.search("public final class Widget {")
+        assert pat.search("protocol Widget {")
+        assert pat.search("struct Widget {")
+        assert pat.search("actor Widget {")
+        assert pat.search("indirect enum Widget")
+
+
+class TestPatternLineAnchoring:
+    """The ``^``-under-MULTILINE anchor on every fallback pattern is
+    load-bearing twice over: de-anchored, a pattern (a) resolves
+    mid-line garbage (any prose containing ``val NAME`` binds NAME as
+    a declaration) and (b) restarts from every position instead of
+    every line, which is quadratic on whitespace floods. The trailing-
+    span ReDoS census cannot pin this shape — these patterns sit
+    outside its rule scope whether anchored or not, so the anchor
+    needs its own functional pin per pattern."""
+
+    def test_kotlin_const_pattern_is_line_anchored(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        # (a) functional: mid-line 'val NAME' is not a declaration.
+        pat = _const_pattern("kotlin", "GRANT_TOKEN")
+        assert pat is not None
+        assert not pat.search(
+            "fun f() { approval GRANT_TOKEN = grant() }\n",
+        )
+        # ... and end-to-end: the identifier stays unresolved.
+        _write(tmp_path, "src/Grant.kt",
+               "fun f() { approval GRANT_TOKEN = grant() }\n")
+        res = resolve_identifiers(tmp_path, ["GRANT_TOKEN"])
+        assert not res.items
+        assert [u["name"] for u in res.unresolved] == ["GRANT_TOKEN"]
+        # (b) performance: linear on a hostile single-line space
+        # flood. Anchored this is ~1 ms; de-anchored it is tens of
+        # seconds — the 2 s bound has orders of magnitude of headroom
+        # in both directions.
+        start = time.monotonic()
+        pat.search(" " * 16384)
+        assert time.monotonic() - start < 2.0, (
+            "kotlin const pattern superlinear on a space flood — "
+            "line anchor lost?"
+        )
+
+    @pytest.mark.parametrize(("language", "kind", "positive", "negative"), [
+        ("kotlin", "const",
+         "const val SENTINEL = 1", "x approval SENTINEL = 1"),
+        ("kotlin", "type",
+         "data class SENTINEL(", "reply as class SENTINEL {"),
+        ("csharp", "const",
+         "public const int SENTINEL = 3;", "x const int SENTINEL = 3;"),
+        ("csharp", "type",
+         "sealed class SENTINEL {", "new class SENTINEL {"),
+        ("swift", "const",
+         "static let SENTINEL = 3", "swap let SENTINEL = 3"),
+        ("swift", "type",
+         "struct SENTINEL {", "like struct SENTINEL {"),
+    ])
+    def test_pattern_only_matches_at_line_start(
+        self, language: str, kind: str, positive: str, negative: str,
+    ) -> None:
+        from core.concepts.lang_resolve import _const_pattern, _type_pattern
+        # Both directions: the canonical declaration matches from the
+        # line anchor; the same declaration preceded by a non-modifier
+        # token on the line does not.
+        mkpat = _const_pattern if kind == "const" else _type_pattern
+        pat = mkpat(language, "SENTINEL")
+        assert pat is not None
+        assert pat.search(positive + "\n")
+        assert not pat.search(negative + "\n")
+        # A mid-file line-start declaration still matches (MULTILINE
+        # anchor, not string-start).
+        assert pat.search("// header\n" + positive + "\n")
 
 
 # ------------------------------------------------------------------
