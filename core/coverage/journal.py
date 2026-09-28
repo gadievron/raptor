@@ -3278,7 +3278,30 @@ def _slim_index_row(row: dict[str, Any]) -> dict[str, Any] | None:
     return slim
 
 
-def merge_into_index(project_dir: Path, run_dir: Path) -> int:
+def _journal_read_problem(out_dir: Path, load: JournalLoad) -> bool:
+    """True when a journal load's emptiness/incompleteness signals a
+    read failure rather than a genuinely empty journal.
+
+    The loader degrades every failure shape to an empty (or partial)
+    entry list plus a log line: a refused open (permissions, journal
+    path is a directory) surfaces as ``complete=False``; fully
+    malformed content surfaces as zero entries from a non-empty file.
+    An absent journal or a zero-byte file is NOT a problem — those
+    are the normal "nothing recorded" shapes.
+    """
+    if not load.complete:
+        return True
+    if load.entries:
+        return False
+    journal_path = out_dir / JOURNAL_FILENAME
+    try:
+        return journal_path.is_file() and journal_path.stat().st_size > 0
+    except OSError:
+        return True
+
+
+def merge_into_index(project_dir: Path, run_dir: Path, *,
+                     stats: dict[str, int] | None = None) -> int:
     """Merge run journal entries into the project-level index.
 
     Storage key: ``(file, function, model, strategy_hash)`` via
@@ -3318,12 +3341,27 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
 
     Returns the number of entries merged (new or updated); rollup
     aggregates do not count.
+
+    ``stats`` (optional out-param) receives the merge's strip/heal
+    disclosures as counts — the same events the log lines report,
+    which the return value alone cannot distinguish (a healed row
+    counts as merged). Accumulated with ``+=`` under the caller's
+    keys (``"stripped"``, ``"healed"``), so one dict threads through
+    many merges (the project-wide reindex sweep aggregates per-run
+    and total counts this way). ``"unreadable"`` counts journal
+    locations whose read failed or yielded no rows despite non-empty
+    content — the loader degrades those to a logged warning and an
+    empty list, which the ``0`` return alone cannot distinguish from
+    a genuinely empty journal.
     """
     # fresh=True: this merge writes the DURABLE project index that
     # cross-run verdict reuse imports at $0 — durable authority never
     # trusts the process-local load cache. One fresh parse per run
     # completion is negligible at this boundary.
-    run_entries = load_entries(run_dir, fresh=True)
+    load = load_entries_checked(run_dir, fresh=True)
+    run_entries = load.entries
+    if stats is not None and _journal_read_problem(run_dir, load):
+        stats["unreadable"] = stats.get("unreadable", 0) + 1
     if not run_entries:
         return 0
     if len(run_entries) > _MAX_MERGE_ENTRIES:
@@ -3470,6 +3508,14 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
                 "failed provenance — replaced by the run journal's "
                 "verifying copy at the same timestamp", healed,
             )
+        if stats is not None:
+            # Caller-visible mirror of the disclosures above, recorded
+            # at the point they are logged. The byte-eviction arm
+            # below sheds ROWS, never the strip/heal events that
+            # already happened on the way in — so these counts always
+            # match the log lines.
+            stats["stripped"] = stats.get("stripped", 0) + stripped
+            stats["healed"] = stats.get("healed", 0) + healed
 
         # Slim at the write boundary — incoming rows AND any fat rows
         # an earlier writer left behind (the merge rewrites the whole
@@ -3632,7 +3678,8 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
     return merged
 
 
-def merge_run_into_index(project_dir: Path, run_dir: Path) -> int:
+def merge_run_into_index(project_dir: Path, run_dir: Path, *,
+                         stats: dict[str, int] | None = None) -> int:
     """Merge a RUN's journals into the project index — root and
     one-level tool subdirs.
 
@@ -3645,10 +3692,11 @@ def merge_run_into_index(project_dir: Path, run_dir: Path) -> int:
     cross-run consumers (prior finding-grade claims, the coverage
     importer's index path) silently saw nothing.
 
-    Returns total entries merged.
+    Returns total entries merged. ``stats`` threads through to every
+    :func:`merge_into_index` call (root and subdirs) — see there.
     """
     run_dir = Path(run_dir)
-    merged = merge_into_index(project_dir, run_dir)
+    merged = merge_into_index(project_dir, run_dir, stats=stats)
     try:
         # No symlinked dirs: the walk otherwise followed a planted
         # link OUT of the run dir and merged a foreign journal into
@@ -3659,7 +3707,7 @@ def merge_run_into_index(project_dir: Path, run_dir: Path) -> int:
         return merged
     for sub in subdirs:
         if (sub / JOURNAL_FILENAME).is_file():
-            merged += merge_into_index(project_dir, sub)
+            merged += merge_into_index(project_dir, sub, stats=stats)
     return merged
 
 
