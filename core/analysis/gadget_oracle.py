@@ -104,10 +104,12 @@ ARTIFACT_NOTE = (
 # CWE family the channel joins via the audit fallback chain.
 GADGET_ORACLE_CWES = frozenset({"CWE-502"})
 
-# Rule-id stamps (all detection-grade — see is_detection_rule_id).
+# Rule-id stamps (see is_detection_rule_id: the confirming stamps are
+# detection-grade; RULE_NO_SURFACE rides only on refuted outcomes).
 RULE_CHAIN = "gadget_oracle:chain"
 RULE_CHAIN_CONDITIONAL = "gadget_oracle:chain-conditional"
 RULE_ABSENCE = "gadget_oracle:no-gadgets"
+RULE_NO_SURFACE = "gadget_oracle:no-gadget-surface"
 
 # Enumerated reasons (each a distinct tested string).
 REASON_GRAMMAR_UNAVAILABLE = "grammar-unavailable"
@@ -115,22 +117,77 @@ REASON_LANGUAGE_UNSUPPORTED = "language-unsupported"
 REASON_TARGET_UNUSABLE = "target-unusable"
 REASON_NO_GADGETS_COMPLETE = "no-gadgets-complete-census"
 REASON_NO_GADGETS_DEGRADED = "no-gadgets-degraded-census"
+REASON_NO_SURFACE_COMPLETE = "no-gadget-surface-complete-census"
 
 #: suppressions.jsonl verdict string for the record-only absence rows.
 ABSENCE_RECORD_VERDICT = "gadget_oracle_no_gadgets"
 
-#: The named follow-up gate: absence stays hint-tier until a measured
-#: corpus earns suppression authority (binary-oracle precedent). This
-#: constant exists so the promotion, when it lands, is a one-line flip
-#: with the corpus citation beside it — and so tests can pin that the
-#: current increment never suppresses.
-ABSENCE_EARNS_SUPPRESSION = False
+#: Corpus-earned promotion (binary-oracle precedent), measured
+#: 2026-09-28 (reproduce with
+#: ``core/analysis/scripts/gadget-oracle-precision --corpus synthetic
+#: --corpus library``): synthetic corpus (97 rows, 87 of them in the
+#: ground-truth-surface denominator — the recorded miss-classes,
+#: every census blocker and degradation, and the live-fired
+#: adversarial false-absence shapes: trait-use alias adaptations,
+#: case-variant and short open tags, out-of-tree parents including
+#: namespace-relative, import-aliased, cross-namespace-aliased,
+#: position-sensitive-aliased, Unicode-casefold-colliding, and
+#: dead-branch-decoy bare names, Serializable bindings the
+#: implements-clause census cannot see (import-aliased,
+#: interface-indirected, out-of-tree interfaces),
+#: ``<?xml``-prefixed open-tag smuggles, walk-skipped dirs, legacy
+#: dynamic definition, the autoload-family registrations that run a
+#: loader on the attacker-chosen class name at unserialize() time —
+#: ``spl_autoload_register``, legacy ``__autoload``, and the
+#: ``unserialize_callback_func`` INI hook via literal and dynamic
+#: ``ini_set``/``ini_alter`` keys — and the dynamic-invocation
+#: spellings of those same registrations: variable functions
+#: (``$f(...)``, including concatenation-assembled names),
+#: parenthesized-literal calls, ``call_user_func`` /
+#: ``call_user_func_array`` with literal targets, ``use function``
+#: import aliases, argument-spread ``ini_set``, and the
+#: forwarded-literal family (the registration name riding as
+#: string-literal DATA that a callable-forwarding builtin —
+#: ``array_map``/``array_walk``/``array_filter``/
+#: ``register_shutdown_function``/``iterator_apply``, dispatch-nested
+#: forwarders, ``ini_set`` forwarded with its key in a data array,
+#: literal-payload variants — invokes at runtime, reaching the
+#: forwarder from every storage position: direct argument, default
+#: parameter value, assignment, returned literal, array default
+#: parameter behind a subscript, adjacent-literal split concat,
+#: flexible indented-closer heredoc/nowdoc bodies that PHP 7.3+
+#: dedents back to the intact name at compile time (whole-name,
+#: split-concat-operand, and bare-CR line-ending forms), the
+#: parse-error-protected b-prefixed binary-string heredoc
+#: spelling, anonymous-class constructor
+#: argument, attribute argument) — exact
+#: tier+chain match 100%) + pinned public-library corpus (9 rows, 7
+#: in the denominator, phpggc-documented chains) — false-absence
+#: rate for ``no_gadget_surface`` 0/94 (rule-of-three 95% upper
+#: bound 3.19%), tier fired on 12/12 true negatives, chain recall
+#: 5/6 on documented chains, and the independent regex census arm
+#: (method defs, Serializable, the declared serialize/unserialize
+#: pair, trait-alias adaptations, autoload-family tokens,
+#: callable-passing builtins, variable-function invocations) found
+#: zero unexplained misses. The upper bound is wider than the binary
+#: oracle's because the consumer here is a confidence clamp on
+#: exported findings — it never changes a status and never drops a
+#: finding pre-LLM, a categorically smaller blast radius than the
+#: binary oracle's pre-LLM hard suppress.
+#:
+#: Authority is gated BY TIER, never by this constant alone: consult
+#: :func:`absence_earns_suppression` — only
+#: :data:`TIER_NO_GADGET_SURFACE` (complete census, zero POP trigger
+#: surface, no autoload-family registration) ever carries suppression
+#: weight; :data:`TIER_NO_CHAINS_FOUND` stays hint-tier forever.
+ABSENCE_EARNS_SUPPRESSION = True
 
 # ── absence tiers ────────────────────────────────────────────────────
 #
 # Two absence claims with DIFFERENT epistemic strength; only the first
-# is a candidate for corpus-earned suppression, and even it stays
-# hint-tier while ABSENCE_EARNS_SUPPRESSION is False.
+# carries corpus-earned suppression authority (see
+# absence_earns_suppression), and only while ABSENCE_EARNS_SUPPRESSION
+# holds.
 
 #: Census complete AND zero POP-relevant trigger surface anywhere in
 #: the tree (no surface magic method, no declared
@@ -2763,6 +2820,18 @@ def absence_tier(report: dict[str, Any]) -> str:
     return TIER_NO_CHAINS_FOUND
 
 
+def absence_earns_suppression(report: dict[str, Any]) -> bool:
+    """Suppression authority for ONE report: the corpus-earned
+    constant AND the earned tier, nothing else. Fail-closed on
+    malformed reports (:func:`absence_tier` already answers
+    :data:`TIER_NONE` for those), and permanently False for
+    :data:`TIER_NO_CHAINS_FOUND` — the depth-limited claim never
+    earns authority regardless of the constant."""
+    return bool(ABSENCE_EARNS_SUPPRESSION) and (
+        absence_tier(report) == TIER_NO_GADGET_SURFACE
+    )
+
+
 # ── artifact I/O ─────────────────────────────────────────────────────
 
 
@@ -3028,7 +3097,14 @@ def is_detection_rule_id(rule_id: str) -> bool:
     """The WHOLE namespace is detection-grade (sanwit precedent): a
     found chain adjudicates gadget existence, not the request-to-
     unserialize taint path, so it may corroborate and exhibit but
-    never promote a finding alone."""
+    never promote a finding alone.
+
+    The corpus-earned refutation stamp (:data:`RULE_NO_SURFACE`) also
+    lives in this namespace and answers True here, harmlessly:
+    detection-grade is a firewall against PROMOTION, and that stamp
+    rides only on ``refuted`` outcomes — it never backs a finding as
+    confirming tool evidence, so the promotion question never
+    arises for it."""
     return rule_id.startswith("gadget_oracle:")
 
 
@@ -3036,7 +3112,7 @@ def is_detection_rule_id(rule_id: str) -> bool:
 class GadgetOracleEvidence:
     """Channel verdict for one CWE-502 hypothesis."""
 
-    outcome: str                 # confirmed | inconclusive | skipped | error
+    outcome: str    # confirmed | refuted | inconclusive | skipped | error
     reason: str
     rule_id: str = RULE_CHAIN
     tool: str = "gadget_oracle"
@@ -3047,8 +3123,10 @@ class GadgetOracleEvidence:
     qualifier: str = ""
     #: Absence tier the scan report supports (``no_gadget_surface`` /
     #: ``no_chains_found`` / ``none``) — surfaced honestly on every
-    #: verdict so consumers see WHICH absence claim rode along. Stays
-    #: informational while :data:`ABSENCE_EARNS_SUPPRESSION` is False.
+    #: verdict so consumers see WHICH absence claim rode along. Only
+    #: the earned ``no_gadget_surface`` tier carries authority (see
+    #: :func:`absence_earns_suppression`); ``no_chains_found`` stays
+    #: informational forever.
     absence_tier: str = TIER_NONE
     # Plain tool stamps and structured receipts both slot in (the
     # fail_open corroboration convention).
@@ -3108,11 +3186,12 @@ def _record_absence_row(
     report: dict[str, Any],
 ) -> None:
     """Record-only suppressions.jsonl row (``dropped: false``): the
-    absence evidence was attached to a finding's adjudication. In this
-    increment NOTHING is dropped on it — the row exists so operators
-    can see exactly what the oracle saw, and so the corpus-earned
-    promotion (named follow-up) has an audit trail to measure
-    against."""
+    absence evidence was attached to a finding's adjudication.
+    NOTHING is dropped on it — the row exists so operators can see
+    exactly what the oracle saw. ``earns_suppression`` reflects the
+    tier truth (:func:`absence_earns_suppression`): True only on the
+    corpus-earned ``no_gadget_surface`` tier, whose downstream
+    consumer is a confidence clamp, never a status change."""
     try:
         from core.analysis.reach_chokepoint import record_suppression
         census = report.get("census") or {}
@@ -3129,7 +3208,7 @@ def _record_absence_row(
                               "incomplete_reasons")
                 },
                 "absence_tier": absence_tier(report),
-                "earns_suppression": ABSENCE_EARNS_SUPPRESSION,
+                "earns_suppression": absence_earns_suppression(report),
             },
         )
     except Exception:  # noqa: BLE001 — best-effort audit trail
@@ -3154,10 +3233,21 @@ def run_gadget_oracle_check(
     * chains found → ``confirmed`` with a detection-grade stamp
       (witness exhibits ride on the receipt; the stamp never promotes
       alone).
-    * no chains → ``inconclusive`` ALWAYS (never ``refuted``): with a
-      complete census the reason is the strong-absence variant, with
-      a degraded census the weak one. A ``dropped: false``
-      suppressions row records what the oracle saw.
+    * corpus-earned absence (:func:`absence_earns_suppression`:
+      complete census AND zero POP trigger surface AND no
+      autoload-family registration, the depth-INDEPENDENT claim) →
+      ``refuted`` with reason
+      :data:`REASON_NO_SURFACE_COMPLETE` and stamp
+      :data:`RULE_NO_SURFACE`. The refutation's only downstream
+      authority is a confidence clamp on export — never a status
+      change, never a drop.
+    * any other absence → ``inconclusive``, byte-identical to the
+      pre-promotion behaviour: with a complete census the reason is
+      the strong-absence variant, with a degraded census the weak
+      one (``no_chains_found`` — surface exists or an autoload
+      mechanism is registered — is permanently in this leg). A
+      ``dropped: false`` suppressions row records what
+      the oracle saw either way.
     * grammar absent / non-PHP file / unusable target → ``skipped``
       (capability-absent recorded, never a silent pass and never a
       clean resolution).
@@ -3223,6 +3313,13 @@ def run_gadget_oracle_check(
     complete = census.get("complete") is True
     ev.reason = (REASON_NO_GADGETS_COMPLETE if complete
                  else REASON_NO_GADGETS_DEGRADED)
+    if absence_earns_suppression(report):
+        # The one earned refutation: complete census, zero POP
+        # trigger surface anywhere in the tree. Every other absence
+        # shape keeps the inconclusive verdict set above unchanged.
+        ev.outcome = "refuted"
+        ev.rule_id = RULE_NO_SURFACE
+        ev.reason = REASON_NO_SURFACE_COMPLETE
     if output_dir is not None:
         _record_absence_row(output_dir, file_path, function_name, report)
     return ev

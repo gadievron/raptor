@@ -1020,6 +1020,14 @@ class OrchestratorConfig:
     # untouched, finding still exported); never touches
     # tool-confirmed outcomes.
     caller_contract_demotion: bool = True
+    # Post-review gadget-absence confidence demotion: an outcome whose
+    # every live hypothesis is gadget-dependent, against a tree the
+    # gadget oracle refuted with its one corpus-earned absence shape
+    # (complete census, zero POP trigger surface), exports at
+    # confidence=low with receipts.  Never suppresses (status
+    # untouched, finding still exported); never touches tool-confirmed
+    # outcomes.
+    gadget_absence_demotion: bool = True
     # Review scheduling with >1 worker: "cost" (default) dispatches
     # predicted-longest reviews first (LPT makespan packing);
     # "priority" keeps the highest-priority-first order (better
@@ -10774,6 +10782,19 @@ def _run_audit_body(
             "caller-contract demotion pass failed", exc_info=True,
         )
 
+    # Gadget-absence confidence demotion: gadget-chain hypotheses
+    # against a tree with zero POP trigger surface (complete census,
+    # corpus-earned tier) export at confidence=low with receipts
+    # (status untouched — never suppression). Same seam as the
+    # caller-contract pass, for the same journal/export/summary
+    # agreement.
+    try:
+        _gadget_absence_demotion_pass(result, config)
+    except Exception:
+        logger.debug(
+            "gadget-absence demotion pass failed", exc_info=True,
+        )
+
     # Pre-export hooks: outcome-level post-processing (e.g. the ensemble
     # pipeline's file-pile-up dampener) runs BEFORE the journal
     # correction pass and the graded export so stats, journal and
@@ -18994,9 +19015,12 @@ def _hypothesis_to_tool_chain(
     # Deserialization-gadget hypotheses ("no magic-method gadgets in
     # tree", "POP chain through __destruct"): the gadget oracle
     # enumerates PHP magic methods and property→sink flows across the
-    # whole tree — both directions land as detection-grade receipts
-    # (a found chain exhibits, absence renders census-qualified; the
-    # channel never refutes). Appended — pre-existing chain order is
+    # whole tree — a found chain exhibits (detection-grade stamp),
+    # ordinary absence renders census-qualified inconclusive, and the
+    # one corpus-earned shape (complete census, zero POP trigger
+    # surface) refutes; the refutation's sole downstream authority is
+    # the post-review confidence clamp (_apply_gadget_absence_gate),
+    # never a status change. Appended — pre-existing chain order is
     # unchanged. Language-gated at BUILD time like sanwit: the leg's
     # existence feeds the empty-dispatch synthesis routing, which
     # must not change for non-PHP files.
@@ -19220,6 +19244,244 @@ def _caller_contract_demotion_pass(
             "caller-contract gate: %d outcome(s) demoted to "
             "confidence=low (all enumerated call sites uphold the "
             "asserted precondition; receipts in suppressions.jsonl)",
+            demoted,
+        )
+
+
+_GADGET_ABSENCE_MARKER = "[gadget-absence:"
+
+#: Distinct suppressions.jsonl verdict for the post-review clamp row —
+#: never shared with the channel's record-only absence rows
+#: (``gadget_oracle_no_gadgets``) or the caller-contract rows.
+_GADGET_ABSENCE_VERDICT = "gadget_absence_refuted"
+
+
+def _recognized_gadget_absence_record(record: Any) -> bool:
+    """A ``gadget_absence`` record this gate itself wrote: the exact
+    rule/outcome/reason stamps plus the demotion clamp. Anything else
+    is unrecognized — ``review_result`` rides back from the model
+    review, so the key can be PLANTED, and the export clamp must
+    never fire without oracle authority. Unrecognized pre-existing
+    records are dropped and re-derived by the gate."""
+    if not isinstance(record, dict):
+        return False
+    from core.analysis.gadget_oracle import (
+        REASON_NO_SURFACE_COMPLETE,
+        RULE_NO_SURFACE,
+    )
+    demotion = record.get("demotion")
+    return (
+        record.get("rule_id") == RULE_NO_SURFACE
+        and record.get("outcome") == "refuted"
+        and record.get("reason") == REASON_NO_SURFACE_COMPLETE
+        and isinstance(demotion, dict)
+        and demotion.get("confidence_clamp") == "low"
+    )
+
+
+def _apply_gadget_absence_gate(
+    outcome: ReviewOutcome,
+    config: OrchestratorConfig,
+) -> bool:
+    """Adjudicate one gadget-dependent outcome against the corpus-
+    earned absence refutation and, when it holds, demote the exported
+    confidence (the ``_apply_caller_contract_gate`` precedent).
+
+    Demotion requires ALL of: status finding/suspicious; no
+    confirming-role tool evidence; a gadget-shaped primary hypothesis
+    with EVERY live sibling hypothesis also gadget-dependent (the
+    exported confidence covers the whole finding); the channel's
+    ``refuted`` verdict (``absence_earns_suppression``: complete
+    census AND zero POP trigger surface — any census gap, any surface
+    method, any ``Serializable`` implementation, any dynamic-
+    definition site, any autoload-family registration declines at
+    the channel); and the persisted
+    artifact passing ``report_matches_target`` against this run's
+    target (one-target rule, fail-closed — no artifact, no demotion).
+
+    On demotion: body gains the ``[gadget-absence: ...]`` prefix,
+    ``review_result`` gains a structured ``gadget_absence`` record
+    (exported next to ``caller_evidence`` and enforced as a
+    confidence clamp by ``findings_export.build_graded_finding``),
+    and a ``dropped: false`` row lands in suppressions.jsonl with the
+    distinct :data:`_GADGET_ABSENCE_VERDICT`. Status is NEVER
+    changed: zero in-tree trigger surface refutes the gadget-chain
+    mechanism against THIS tree — the deserialization-of-untrusted-
+    input observation still ships at confidence=low.
+    """
+    review = outcome.review_result
+    if isinstance(review, dict) and "gadget_absence" in review:
+        if (_recognized_gadget_absence_record(review.get("gadget_absence"))
+                and _GADGET_ABSENCE_MARKER in (outcome.body or "")):
+            # Already gated (resume / replay idempotence): the gate's
+            # own record shape AND its body receipt are both present.
+            return False
+        # Any other pre-existing key was not written by this gate —
+        # review_result rides back from the model review, so the key
+        # can be planted. Drop it and re-derive: the export clamp
+        # must never fire without oracle authority, and a genuinely
+        # earning tree gets a fresh oracle-derived record below. The
+        # pop happens BEFORE every eligibility return on purpose: an
+        # outcome this gate declines to adjudicate (wrong status,
+        # binary path, tool-confirmed evidence) must not ship a
+        # planted record into the export as a cosmetic receipt
+        # either. (A planted record that byte-perfectly forges BOTH
+        # the record shape and the body marker still only
+        # self-demotes — the model already controls its own
+        # confidence field.)
+        review.pop("gadget_absence", None)
+    if outcome.status not in ("finding", "suspicious"):
+        return False
+    if outcome.file.startswith(BINARY_PATH_PREFIX):
+        return False
+    if _is_tool_confirmed(outcome.evidence_tool):
+        return False
+    if review is not None and not isinstance(review, dict):
+        # Exotic review_result shapes cannot carry the gadget_absence
+        # record — decline rather than half-demote (caller-contract
+        # precedent).
+        return False
+    hypothesis = _resolve_hypothesis(outcome)
+    if not hypothesis or _GADGET_ABSENCE_MARKER in (outcome.body or ""):
+        return False
+    from core.analysis.gadget_oracle import (
+        absence_earns_suppression,
+        is_gadget_hypothesis,
+        load_gadget_report,
+        report_matches_target,
+        run_gadget_oracle_check,
+    )
+    if not is_gadget_hypothesis(hypothesis):
+        return False
+    # Multi-hypothesis outcomes: zero gadget surface says nothing
+    # about a live sibling mechanism ("also, the upload path is
+    # traversable") — demote only when every live hypothesis is
+    # gadget-dependent (the all-live-hypotheses discipline of the
+    # caller-contract gate).
+    for h in outcome.hypotheses or []:
+        if not isinstance(h, dict):
+            continue
+        mech = h.get("mechanism") or ""
+        if (h.get("confidence") or "").lower() == "refuted":
+            continue
+        if mech and not is_gadget_hypothesis(mech):
+            return False
+    # One-target rule vehicle: the artifact. Without a run dir there
+    # is no report to hold against the target — fail closed.
+    if not config.out_dir:
+        return False
+    go_res = run_gadget_oracle_check(
+        config.target_path,
+        outcome.file,
+        outcome.function,
+        hypothesis,
+        output_dir=config.out_dir,
+    )
+    _record_channel_receipt(
+        config, "gadget_absence_gate", outcome.file, outcome.function,
+        go_res,
+    )
+    if go_res.outcome != "refuted":
+        return False
+    report = load_gadget_report(config.out_dir)
+    if report is None or not report_matches_target(
+            report, config.target_path):
+        return False
+    if not absence_earns_suppression(report):
+        return False
+
+    prefix = (
+        "[gadget-absence: zero POP trigger surface in tree "
+        "(complete census)]"
+    )
+    outcome.body = f"{prefix}\n\n{outcome.body or ''}"
+    record: dict[str, Any] = {
+        "rule_id": go_res.rule_id,
+        "outcome": go_res.outcome,
+        "reason": go_res.reason,
+        "absence_tier": go_res.absence_tier,
+        "census": dict(go_res.census),
+        "qualifier": go_res.qualifier,
+        "demotion": {
+            "confidence_clamp": "low",
+            "status": outcome.status,  # unchanged — never suppresses
+        },
+    }
+    if isinstance(outcome.review_result, dict):
+        outcome.review_result["gadget_absence"] = record
+    else:
+        # review_result is None here (non-dict shapes declined above).
+        # Slotted or frozen outcome objects reject the attribute — the
+        # export clamp then simply never sees the record (fail-open to
+        # the un-demoted state).
+        with contextlib.suppress(AttributeError):
+            outcome.review_result = {"gadget_absence": record}
+    try:
+        from core.analysis.reach_chokepoint import record_suppression
+
+        record_suppression(
+            Path(config.out_dir),
+            finding={
+                "id": (
+                    f"{outcome.file}:{outcome.function}:"
+                    f"{outcome.line}"
+                ),
+                "rule_id": go_res.rule_id,
+                "file_path": outcome.file,
+                "line": outcome.line,
+                "function": outcome.function,
+            },
+            verdict=_GADGET_ABSENCE_VERDICT,
+            reason=(
+                f"gadget-absence gate: {go_res.reason} — confidence "
+                "clamped to low; finding still exported. The absence "
+                "claim holds against this tree only: a gadget class "
+                "shipped outside the scanned tree is outside it by "
+                "design."
+            ),
+            dropped=False,
+            extra={
+                "absence_tier": go_res.absence_tier,
+                "confidence_clamp": "low",
+            },
+        )
+    except Exception:
+        logger.debug(
+            "gadget-absence suppression row failed", exc_info=True,
+        )
+    logger.info(
+        "gadget-absence gate: %s:%s confidence→low — %s",
+        outcome.file, outcome.function, go_res.reason,
+    )
+    return True
+
+
+def _gadget_absence_demotion_pass(
+    result: Any,
+    config: OrchestratorConfig,
+) -> None:
+    """Post-review gadget-absence confidence demotion over the final
+    outcome list (see ``_apply_gadget_absence_gate`` for the per-
+    outcome contract).  Runs beside the caller-contract pass, before
+    the journal correction pass and the graded export so journal,
+    export, and summary agree."""
+    if not getattr(config, "gadget_absence_demotion", True):
+        return
+    demoted = 0
+    for outcome in result.outcomes:
+        try:
+            if _apply_gadget_absence_gate(outcome, config):
+                demoted += 1
+        except Exception:
+            logger.debug(
+                "gadget-absence gate failed for %s:%s",
+                outcome.file, outcome.function, exc_info=True,
+            )
+    if demoted:
+        logger.info(
+            "gadget-absence gate: %d outcome(s) demoted to "
+            "confidence=low (corpus-earned zero-POP-surface absence; "
+            "receipts in suppressions.jsonl)",
             demoted,
         )
 
@@ -22287,14 +22549,21 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "gadget_oracle", "errors",
                         )
-                elif _go_oc == "refuted" and tier_counters:
-                    # Unreachable by module contract (the oracle
-                    # never refutes — absence is hint-tier until the
-                    # corpus-gated promotion); booked defensively so
-                    # a future variant cannot be miscounted.
-                    _increment_tier_dict(
-                        tier_counters, "gadget_oracle", "refuted",
+                elif _go_oc == "refuted":
+                    # The corpus-earned absence refutation (complete
+                    # census, zero POP trigger surface — see
+                    # gadget_oracle.absence_earns_suppression). Its
+                    # authority is the post-review confidence clamp
+                    # (_apply_gadget_absence_gate); here it only
+                    # books and logs.
+                    logger.info(
+                        "gadget-oracle refuted %s:%s — %s",
+                        file_path, function_name, go_res.reason,
                     )
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "gadget_oracle", "refuted",
+                        )
                 else:
                     # Census-qualified absence lands here: strong
                     # steer-tier evidence, never a clean resolution.

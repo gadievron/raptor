@@ -399,6 +399,61 @@ class TestCallerEvidenceClamp:
         assert finding["confidence"] in ("high", "medium", "low")
 
 
+class TestGadgetAbsenceClamp:
+    _RECORD = {
+        "rule_id": "gadget_oracle:no-gadget-surface",
+        "outcome": "refuted",
+        "reason": "no-gadget-surface-complete-census",
+        "absence_tier": "no_gadget_surface",
+        "census": {"complete": True, "php_files": 4},
+        "qualifier": "census complete",
+        "demotion": {"confidence_clamp": "low", "status": "suspicious"},
+    }
+    _HYP = "object injection gadget chain via unserialize"
+
+    def test_gadget_absence_exported_and_confidence_clamped(self):
+        outcome = FakeOutcome(
+            status="suspicious",
+            review_result={
+                "hypothesis": self._HYP,
+                "gadget_absence": dict(self._RECORD),
+            },
+        )
+        finding = build_graded_finding(outcome)
+        assert finding["gadget_absence"]["outcome"] == "refuted"
+        assert finding["confidence"] == "low"
+        # The clamp demotes confidence only — status is untouched.
+        assert finding["status"] == "suspicious"
+
+    def test_confirming_receipt_blocks_the_clamp(self):
+        # Tool-confirmed findings are never demoted: a confirming-role
+        # receipt outranks the absence refutation.
+        outcome = FakeOutcome(
+            evidence_tool="semgrep:rule-1",
+            review_result={
+                "hypothesis": self._HYP,
+                "gadget_absence": dict(self._RECORD),
+            },
+        )
+        finding = build_graded_finding(outcome)
+        assert finding["gadget_absence"]  # record still travels
+        assert finding["confidence"] != "low"
+
+    def test_record_without_demotion_does_not_clamp(self):
+        record = dict(self._RECORD, demotion=None)
+        outcome = FakeOutcome(
+            evidence_tool="smt:check-null-propagation",
+            review_result={
+                "hypothesis": self._HYP,
+                "gadget_absence": record,
+            },
+        )
+        finding = build_graded_finding(outcome)
+        assert finding["gadget_absence"]
+        # No clamp requested — confidence derives from the chain alone.
+        assert finding["confidence"] in ("high", "medium", "low")
+
+
 class TestConfirmedByDiscrimination:
     """Incident regression (openssh instrumented corpus):
     ``discovery.confirmed_by`` read a never-set outcome attribute and

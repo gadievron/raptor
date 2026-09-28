@@ -205,8 +205,10 @@ _DETECTION_CLASSIFIER_MODULES: dict[str, str] = {
     "sanwit": "core.audit.sanwit",
     # PHP gadget-chain oracle: EVERY stamp is detection-grade (a
     # chain exhibit corroborates the gadget-existence premise; the
-    # absence variant is census-qualified hint evidence), so the
-    # channel classifier answers True for the whole namespace.
+    # absence stamps ride only inconclusive/refuted outcomes — the
+    # earned refutation's authority is a confidence clamp at export,
+    # never confirming tool evidence), so the channel classifier
+    # answers True for the whole namespace.
     "gadget_oracle": "core.analysis.gadget_oracle",
     # Bare joern reachability (joern:live / joern:pre_sweep) is
     # guard-blind and detection-role at the promotion sites — grading
@@ -447,7 +449,9 @@ def _is_detection_variant(part: str) -> bool:
         return True
     if part.startswith("gadget_oracle:"):
         # The whole gadget-oracle namespace is detection-grade
-        # (mirrors core.analysis.gadget_oracle.is_detection_rule_id).
+        # (mirrors core.analysis.gadget_oracle.is_detection_rule_id;
+        # the refutation stamp answering True is harmless — it rides
+        # only refuted outcomes, never backs a finding).
         return True
     if part.startswith("consistency:") and part.endswith("-majority"):
         return True

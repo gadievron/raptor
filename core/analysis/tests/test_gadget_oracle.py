@@ -25,13 +25,16 @@ from core.analysis.gadget_oracle import (
     REASON_LANGUAGE_UNSUPPORTED,
     REASON_NO_GADGETS_COMPLETE,
     REASON_NO_GADGETS_DEGRADED,
+    REASON_NO_SURFACE_COMPLETE,
     REASON_TARGET_UNUSABLE,
     RULE_ABSENCE,
     RULE_CHAIN,
     RULE_CHAIN_CONDITIONAL,
+    RULE_NO_SURFACE,
     TIER_NO_CHAINS_FOUND,
     TIER_NO_GADGET_SURFACE,
     TIER_NONE,
+    absence_earns_suppression,
     absence_tier,
     census_qualifier,
     gadget_facts_for_file,
@@ -467,7 +470,10 @@ class TestChannelVerdicts:
         assert ev.outcome == "confirmed"
         assert ev.rule_id == RULE_CHAIN_CONDITIONAL
 
-    def test_absence_is_inconclusive_never_refuted(self, tmp_path):
+    def test_surfaced_absence_stays_inconclusive(self, tmp_path):
+        # POP surface exists (a __destruct) — the depth-limited
+        # absence claim never refutes, byte-identical to the
+        # pre-promotion verdict.
         root = _tree(tmp_path, {"safe.php": _NO_GADGET})
         ev = run_gadget_oracle_check(
             root, "safe.php", "f", "no gadgets in tree")
@@ -476,6 +482,18 @@ class TestChannelVerdicts:
         assert ev.reason == REASON_NO_GADGETS_COMPLETE
         assert ev.census["complete"] is True
         assert ev.qualifier
+
+    def test_zero_surface_complete_census_refutes(self, tmp_path):
+        # The one earned refutation: complete census, zero POP
+        # trigger surface anywhere in the tree.
+        root = _tree(tmp_path, {"f.php": _PROCEDURAL_ONLY})
+        ev = run_gadget_oracle_check(
+            root, "f.php", "handle", "no gadgets in tree")
+        assert ev.outcome == "refuted"
+        assert ev.rule_id == RULE_NO_SURFACE
+        assert ev.reason == REASON_NO_SURFACE_COMPLETE
+        assert ev.absence_tier == TIER_NO_GADGET_SURFACE
+        assert ev.census["complete"] is True
 
     def test_degraded_absence_reason(self, tmp_path):
         root = _tree(tmp_path, {
@@ -539,8 +557,11 @@ class TestChannelVerdicts:
         run_gadget_oracle_check(root, "logger.php", "g", "gadget")
         assert len(calls) == 1
 
-    def test_never_suppression_grade_in_this_increment(self):
-        assert ABSENCE_EARNS_SUPPRESSION is False
+    def test_absence_promotion_is_corpus_earned(self):
+        # Flipped on the measured corpora (0 false absences for the
+        # zero-surface tier); authority still flows only through
+        # absence_earns_suppression, never this constant alone.
+        assert ABSENCE_EARNS_SUPPRESSION is True
 
 
 class TestDetectionGrade:
@@ -1089,6 +1110,7 @@ class TestAbsenceTierOnScans:
         assert report["census"]["php_files"] == 0
         assert report["census"]["complete"] is True
         assert report["absence_tier"] == TIER_NONE
+        assert absence_earns_suppression(report) is False
 
     def test_empty_tree_no_tier(self, tmp_path):
         root = _tree(tmp_path, {})
@@ -1159,6 +1181,7 @@ class TestAutoloadCensusBlocksTier:
         assert (report["autoload"]["sites"][0]["mechanism"]
                 == "spl_autoload_register")
         assert report["absence_tier"] == TIER_NO_CHAINS_FOUND
+        assert absence_earns_suppression(report) is False
 
     def test_legacy_autoload_function_blocks(self, tmp_path):
         root = _tree(tmp_path, {"entry.php": _LEGACY_AUTOLOAD})
@@ -1265,6 +1288,7 @@ class TestDynamicCalleeFailsClosed:
         assert (report["autoload"]["sites"][0]["mechanism"]
                 == "dynamic-callee")
         assert report["absence_tier"] == TIER_NO_CHAINS_FOUND
+        assert absence_earns_suppression(report) is False
 
     def test_variable_function_fails_closed(self, tmp_path):
         self._assert_fails_closed(self._report(tmp_path, (
@@ -2299,6 +2323,7 @@ class TestFunctionImportAliases:
         assert (report["autoload"]["sites"][0]["mechanism"]
                 == "spl_autoload_register")
         assert report["absence_tier"] == TIER_NO_CHAINS_FOUND
+        assert absence_earns_suppression(report) is False
 
     def test_aliased_ini_set_literal_key_blocks(self, tmp_path):
         report = self._report(tmp_path, (
@@ -2484,13 +2509,83 @@ class TestAbsenceTierPredicate:
         assert absence_tier(missing) == TIER_NONE
 
 
+class TestAbsenceEarnsSuppression:
+    """Hermetic two-direction pins on the suppression-authority
+    helper: constant AND earned tier, nothing else."""
+
+    _report = TestAbsenceTierPredicate._report
+
+    def test_earned_tier_carries_authority(self):
+        assert absence_earns_suppression(self._report()) is True
+
+    def test_no_chains_found_never_earns(self):
+        # The depth-limited claim is permanently hint-tier: any POP
+        # surface (each counter individually) declines.
+        surfaced = self._report()
+        surfaced["pop_surface"]["by_method"] = {"__destruct": 1}
+        assert absence_earns_suppression(surfaced) is False
+        for key in ("serializable_impls", "dynamic_definition_sites",
+                    "anonymous_class_methods"):
+            r = self._report()
+            r["pop_surface"][key] = 1
+            assert absence_earns_suppression(r) is False, key
+
+    def test_autoload_registration_never_earns(self):
+        # Registration alone is enough: the loader runs on the
+        # attacker-chosen class name at unserialize() time.
+        registered = self._report(
+            autoload={"registered": True,
+                      "sites": [{"file": "b.php", "line": 1,
+                                 "mechanism": "__autoload"}]},
+        )
+        assert absence_earns_suppression(registered) is False
+
+    def test_malformed_reports_fail_closed(self):
+        assert absence_earns_suppression("not-a-dict") is False
+        assert absence_earns_suppression({}) is False
+        assert absence_earns_suppression(
+            self._report(census=None)) is False
+        assert absence_earns_suppression(
+            self._report(census={"complete": False})) is False
+        assert absence_earns_suppression(
+            self._report(census={"complete": "yes"})) is False
+        assert absence_earns_suppression(
+            self._report(chains=[{"class": "A"}])) is False
+        assert absence_earns_suppression(
+            self._report(chains_truncated=True)) is False
+        assert absence_earns_suppression(
+            self._report(pop_surface=None)) is False
+        no_autoload = self._report()
+        del no_autoload["autoload"]
+        assert absence_earns_suppression(no_autoload) is False
+        assert absence_earns_suppression(
+            self._report(autoload={"registered": "yes",
+                                   "sites": []})) is False
+        assert absence_earns_suppression(
+            self._report(autoload={
+                "registered": False,
+                "sites": [{"file": "b.php", "line": 1,
+                           "mechanism": "spl_autoload_register"}],
+            })) is False
+        assert absence_earns_suppression(
+            self._report(census={"complete": True,
+                                 "php_files": 0})) is False
+
+    def test_constant_off_disarms_even_the_earned_tier(
+            self, monkeypatch):
+        monkeypatch.setattr(go, "ABSENCE_EARNS_SUPPRESSION", False)
+        report = self._report()
+        assert go.absence_tier(report) == TIER_NO_GADGET_SURFACE
+        assert go.absence_earns_suppression(report) is False
+
+
 @_GRAMMAR
 class TestChannelTierSurfacing:
     def test_absence_evidence_carries_tier(self, tmp_path):
         root = _tree(tmp_path, {"f.php": _PROCEDURAL_ONLY})
         ev = run_gadget_oracle_check(
             root, "f.php", "handle", "no gadgets in tree")
-        assert ev.outcome == "inconclusive"
+        assert ev.outcome == "refuted"
         assert ev.absence_tier == TIER_NO_GADGET_SURFACE
         assert ev.to_dict()["absence_tier"] == TIER_NO_GADGET_SURFACE
 
@@ -2521,8 +2616,129 @@ class TestChannelTierSurfacing:
             (out / "suppressions.jsonl").read_text().splitlines()
         ]
         assert rows[0]["absence_tier"] == TIER_NO_GADGET_SURFACE
-        assert rows[0]["earns_suppression"] is False
+        assert rows[0]["earns_suppression"] is True
         assert rows[0]["dropped"] is False
+
+
+@_GRAMMAR
+class TestChannelPerBlockerDeclines:
+    """Every individual promotion blocker forces the channel back to
+    the inconclusive verdict — the refutation fires ONLY on the
+    zero-surface complete-census shape."""
+
+    HYP = "no gadgets in tree"
+
+    def _check(self, root):
+        return run_gadget_oracle_check(root, "f.php", "f", self.HYP)
+
+    def _assert_inconclusive(self, ev):
+        assert ev.outcome == "inconclusive"
+        assert ev.rule_id == RULE_ABSENCE
+        assert ev.reason in (REASON_NO_GADGETS_COMPLETE,
+                             REASON_NO_GADGETS_DEGRADED)
+
+    @pytest.mark.parametrize("method", sorted(go.POP_SURFACE_METHODS))
+    def test_each_pop_surface_method_blocks(self, tmp_path, method):
+        src = (f"<?php\nclass Carrier {{\n"
+               f"    public function {method}() {{}}\n}}\n")
+        root = _tree(tmp_path, {"f.php": src})
+        ev = self._check(root)
+        self._assert_inconclusive(ev)
+        assert ev.absence_tier == TIER_NO_CHAINS_FOUND
+        assert ev.reason == REASON_NO_GADGETS_COMPLETE
+
+    def test_serializable_impl_blocks(self, tmp_path):
+        root = _tree(tmp_path, {"f.php": _SERIALIZABLE_IMPL})
+        ev = self._check(root)
+        self._assert_inconclusive(ev)
+        assert ev.absence_tier == TIER_NO_CHAINS_FOUND
+
+    def test_eval_site_blocks(self, tmp_path):
+        root = _tree(tmp_path, {"f.php": _EVAL_SITE})
+        ev = self._check(root)
+        self._assert_inconclusive(ev)
+        assert ev.absence_tier == TIER_NO_CHAINS_FOUND
+
+    def test_string_assert_blocks(self, tmp_path):
+        root = _tree(tmp_path, {
+            "f.php": "<?php assert('class Z {} true');\n"})
+        ev = self._check(root)
+        self._assert_inconclusive(ev)
+        assert ev.absence_tier == TIER_NO_CHAINS_FOUND
+
+    def test_anonymous_class_method_blocks(self, tmp_path):
+        root = _tree(tmp_path, {"f.php": _ANON_DESTRUCT})
+        ev = self._check(root)
+        self._assert_inconclusive(ev)
+        assert ev.absence_tier == TIER_NO_CHAINS_FOUND
+
+    def test_autoload_registration_blocks(self, tmp_path):
+        # unserialize() runs the registered loader on the
+        # attacker-chosen class name before any object method — the
+        # channel must never refute a deserialization hypothesis
+        # against a tree that registers one.
+        root = _tree(tmp_path, {"f.php": _SPL_CLOSURE_AUTOLOAD})
+        ev = self._check(root)
+        self._assert_inconclusive(ev)
+        assert ev.absence_tier == TIER_NO_CHAINS_FOUND
+        assert ev.reason == REASON_NO_GADGETS_COMPLETE
+
+    def test_unserialize_callback_ini_blocks(self, tmp_path):
+        root = _tree(tmp_path, {"f.php": (
+            "<?php\n"
+            "ini_set('unserialize_callback_func', 'loader');\n"
+        )})
+        ev = self._check(root)
+        self._assert_inconclusive(ev)
+        assert ev.absence_tier == TIER_NO_CHAINS_FOUND
+
+    def test_parse_error_blocks(self, tmp_path):
+        root = _tree(tmp_path, {
+            "f.php": _PROCEDURAL_ONLY, "b.php": _PARSE_BROKEN})
+        ev = self._check(root)
+        self._assert_inconclusive(ev)
+        assert ev.reason == REASON_NO_GADGETS_DEGRADED
+        assert "parse-errors" in ev.census["incomplete_reasons"]
+
+    def test_php_like_unscanned_blocks(self, tmp_path):
+        root = _tree(tmp_path, {
+            "f.php": _PROCEDURAL_ONLY, "h.inc": _PROCEDURAL_ONLY})
+        ev = self._check(root)
+        self._assert_inconclusive(ev)
+        assert ev.reason == REASON_NO_GADGETS_DEGRADED
+        assert "php-like-unscanned" in ev.census["incomplete_reasons"]
+
+    def test_unresolved_trait_blocks(self, tmp_path):
+        root = _tree(tmp_path, {"f.php": _TRAIT_CROSS_FILE})
+        ev = self._check(root)
+        self._assert_inconclusive(ev)
+        assert "unresolved-traits" in ev.census["incomplete_reasons"]
+
+    def test_oversized_file_blocks(self, tmp_path):
+        import os as _os
+        root = _tree(tmp_path, {
+            "f.php": _PROCEDURAL_ONLY, "big.php": "<?php\n"})
+        _os.truncate(root / "big.php", go.MAX_FILE_BYTES + 1)
+        ev = self._check(root)
+        self._assert_inconclusive(ev)
+        assert ev.reason == REASON_NO_GADGETS_DEGRADED
+        assert "oversized-files" in ev.census["incomplete_reasons"]
+
+    def test_chains_truncated_blocks(self, tmp_path, monkeypatch):
+        # Hermetic: a search that hit its accumulation budget must
+        # never refute, even with zero recorded surface.
+        root = _tree(tmp_path, {"f.php": _PROCEDURAL_ONLY})
+        real = go.scan_tree
+
+        def truncating(target, **kw):
+            report = real(target, **kw)
+            report["chains_truncated"] = True
+            return report
+
+        monkeypatch.setattr(go, "scan_tree", truncating)
+        ev = self._check(root)
+        self._assert_inconclusive(ev)
+        assert ev.reason == REASON_NO_GADGETS_COMPLETE
 
 
 def _sink_burst(n: int) -> str:

@@ -444,6 +444,21 @@ def build_graded_finding(
             confidence = Confidence.LOW
             finding["confidence"] = confidence.value
 
+    # Gadget-absence demotion receipt (see orchestrator
+    # _apply_gadget_absence_gate): the corpus-earned zero-POP-surface
+    # refutation travels with the finding, and the confidence clamp is
+    # ENFORCED here — a gadget-dependent finding refuted by the earned
+    # absence tier may not export above low unless a confirming
+    # receipt exists (tool-confirmed findings are never demoted).
+    # Status is never touched.
+    gadget_abs = review_result.get("gadget_absence")
+    if gadget_abs:
+        finding["gadget_absence"] = gadget_abs
+        clamp = (gadget_abs.get("demotion") or {}).get("confidence_clamp")
+        if clamp == "low" and not _confirmed_by:
+            confidence = Confidence.LOW
+            finding["confidence"] = confidence.value
+
     discovery_sources = []
     if evidence_record is not None:
         if getattr(evidence_record, "joern_flows", None):
