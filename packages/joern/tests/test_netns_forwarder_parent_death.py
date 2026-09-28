@@ -46,13 +46,37 @@ def _wait_for(predicate, timeout_s: float, what: str) -> None:
 
 
 def _pid_alive(pid: int) -> bool:
+    """True while *pid* is actually RUNNING — a zombie reads as dead.
+
+    The reap-direction waits below poll the condition the watchdog
+    CONTROLS: the fatal signal landing. A kill victim is observable
+    the instant it dies — it disappears outright or turns zombie
+    awaiting its reaper — but WHEN the zombie is reaped belongs to
+    whoever inherited it, not to the watchdog. On an idle host init
+    adopts the orphaned tree and reaps near-instantly, so kill-0
+    aliveness happens to work; under load the reap lags, and inside a
+    nested pid namespace (the mandated runner for kill-exercising
+    tests) the orphans reparent to ns-init — the test process itself —
+    which never waits on strangers, so the zombie persists for the
+    life of the run and any reap-based deadline times out. Counting a
+    zombie as dead is equally required by the keep direction: a
+    killed-but-unreaped supervisor must FAIL the warm-reuse assertion,
+    not ride a stale kill-0 probe past it. Same semantics as the
+    sibling escalation tests' ``_pid_gone`` and the production
+    ``_pgid_alive`` zombie confirmation; without procfs the coarse
+    kill-0 answer stands (there the platform reaper owns orphans).
+    """
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except OSError:
-        return True
-    return True
+        pass  # EPERM-class: somebody is there — check its state below.
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return True  # no procfs — accept the coarse kill-0 answer
+    return stat.rsplit(")", 1)[-1].split()[0] != "Z"
 
 
 # ── idle clock mechanics (in-process, stub upstream) ────────────────
