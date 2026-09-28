@@ -1377,7 +1377,16 @@ def _carry_forward_coverage(
             counts[base] = ordinal + 1
             yield (path, *base, ordinal), item
 
-    # Build lookup: keyed item -> checked_by from old inventory
+    from .checklist_mac import TOKEN_MAP_KEY
+
+    # Build lookup: keyed item -> (checked_by, claim tokens) from old
+    # inventory. Tokens are carried VERBATIM, never re-minted: copying
+    # cannot launder a planted row (a forged unstamped label stays
+    # unstamped through every carry), and a genuine token minted over
+    # the old item verifies on the new one exactly when the claim's
+    # covered content (file sha256, name/class/kind, line range) is
+    # unchanged — a since-moved claim demotes at import, the safe
+    # direction.
     old_coverage = {}
     for file_info in old.get('files', []):
         if file_info.get('path') in modified:
@@ -1385,16 +1394,36 @@ def _carry_forward_coverage(
         for key, item in _keyed_items(file_info):
             checked_by = item.get('checked_by', [])
             if checked_by:
-                old_coverage[key] = checked_by
+                mac_map = item.get(TOKEN_MAP_KEY)
+                old_coverage[key] = (
+                    checked_by,
+                    mac_map if isinstance(mac_map, dict) else {},
+                )
 
     # Apply to new inventory
     for file_info in new.get('files', []):
         for key, item in _keyed_items(file_info):
             if key in old_coverage:
+                old_checked, old_macs = old_coverage[key]
                 existing = item.get('checked_by') or []
                 item['checked_by'] = existing + [
-                    run for run in old_coverage[key] if run not in existing
+                    run for run in old_checked if run not in existing
                 ]
+                carried = {
+                    label: token
+                    for label, token in old_macs.items()
+                    if isinstance(label, str) and isinstance(token, str)
+                    and label in item['checked_by']
+                }
+                if carried:
+                    mac_map = item.get(TOKEN_MAP_KEY)
+                    if not isinstance(mac_map, dict):
+                        mac_map = {}
+                    # Existing (newer) tokens win: promotion folds
+                    # OLDER checklists into the newest base, and the
+                    # base's own token was minted against the base's
+                    # own row.
+                    item[TOKEN_MAP_KEY] = {**carried, **mac_map}
 
 
 def _count_source_files(dirpath: Path, extensions: set[str], cap: int = 1000) -> int:
