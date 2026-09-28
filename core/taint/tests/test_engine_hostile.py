@@ -784,6 +784,48 @@ def test_growth_ratio_rail_immune_to_wall_stalls(packs) -> None:
         + ", ".join(f"{r:.2f}" for r in ratios))
 
 
+def test_growth_ratio_rail_retry_budget_is_bounded(packs) -> None:
+    # Raise-direction fence for _RAIL_ATTEMPTS, the churn-prone
+    # retry budget: LOOSENING (a raised count, or a retry-until-
+    # green rewrite) is what silently dulls the pin, because every
+    # extra attempt is one more chance for a within-rail ratio to
+    # wave a marginal regression through — and the quadratic trip
+    # test above cannot see it, since a genuine quadratic crosses on
+    # EVERY attempt no matter how many are granted. The tighten
+    # direction (back toward 1) is inherently statistical — the
+    # noise-tail flake documented on the constant — and deliberately
+    # has no fence. Mechanism: an attempt-indexed engine burns
+    # quadratic-scale CPU for the first three attempts and linear-
+    # scale after. At the pinned budget of three, _rail_verdict
+    # exhausts every attempt inside the quadratic phase and stays
+    # red; ANY inflated budget reaches the linear phase, collects
+    # one within-rail ratio, and flips the verdict green — turning
+    # this test red. The literal 3 below is the fence itself and
+    # must NOT read _RAIL_ATTEMPTS: a stub tracking the constant
+    # would follow any raise and fence nothing. Attempt index
+    # derives from the run-call count — one _measured_growth_ratio
+    # attempt is exactly 3 interleaved rounds x 2 sizes = 6 run
+    # calls.
+    calls: list[int] = [0]
+
+    def phased(
+        texts: dict[str, str], graph: PackageCallGraph,
+        routes: RouteModels, _packs: PackSet,
+    ) -> SimpleNamespace:
+        attempt = calls[0] // 6   # 6 run calls per attempt
+        calls[0] += 1
+        exponent = 2 if attempt < 3 else 1  # fenced budget: 3
+        _burn_cpu(
+            _BURN_BASE_S * (len(graph.nodes) / 600) ** exponent)
+        return _synthetic_result()
+
+    ok, ratios = _rail_verdict(packs, run=phased)
+    assert not ok, (
+        "retry budget ran past the fenced three attempts (a post-"
+        "budget attempt reached the linear phase and went green): "
+        "ratios " + ", ".join(f"{r:.2f}" for r in ratios))
+
+
 # ── wall budget under a stalled dependency ───────────────────────────
 
 
