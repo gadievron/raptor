@@ -16123,12 +16123,18 @@ def _study_prep_timeout_s(checklist: dict | None = None) -> int:
 
 def _announce_study_disabled(reason: str) -> None:
     """ONE operator-visible line when the domain-model subsystem is
-    disabled for the rest of the run. Reviews continue without domain
-    concepts — but the operator must be able to see that the run
-    degraded, not discover it from a silent absence of concepts."""
+    disabled for the rest of the run. Disabling stops NEW learning
+    only — briefing-side concept injection reads domain-model.json
+    from disk and keeps supplying already-extracted concepts — but
+    the operator must be able to see that the run degraded, not
+    discover it from a silent absence of concepts. The line must not
+    claim more than the loss: "reviews continue without domain
+    concepts" was false whenever a model file existed, and steered
+    operators to treat prior verdicts as concept-blind."""
     logger.warning(
         "study-consumer: %s — domain-model subsystem DISABLED for "
-        "this run (reviews continue without domain concepts)",
+        "this run (no NEW concepts will be learned; reviews keep "
+        "reading any already-extracted domain model on disk)",
         reason,
     )
 
@@ -16427,9 +16433,15 @@ def _study_consumer_loop(
                     from core.security.log_sanitisation import (
                         escape_nonprintable,
                     )
-                    _stderr_tail = escape_nonprintable(
-                        (prep_result.stderr or "").strip()[:200],
-                    )
+                    # The TAIL, marked when elided: a Python child's
+                    # diagnosis (the traceback's final frame + error)
+                    # sits at the END of stderr — a head slice keeps
+                    # the banner and drops the one line that names
+                    # the failure.
+                    _stderr = (prep_result.stderr or "").strip()
+                    if len(_stderr) > 200:
+                        _stderr = "[… elided] " + _stderr[-200:]
+                    _stderr_tail = escape_nonprintable(_stderr)
                     _announce_study_disabled(
                         f"study-prep failed "
                         f"(exit {prep_result.returncode}): {_stderr_tail}",

@@ -224,6 +224,75 @@ class TestPrepFailureDisablesLoudly:
         assert "\x07" not in disabled[0]
         assert "\\x1b" in disabled[0]
 
+    def test_stderr_excerpt_keeps_the_tail(self, monkeypatch, tmp_path):
+        # A Python child's diagnosis (the traceback's final frame +
+        # error line) sits at the END of stderr. A head slice keeps
+        # the boilerplate and drops the one line that names the
+        # failure — the disable line then shows 200 chars of
+        # traceback header while the actual error lives past the cut,
+        # and root-causing needs a live re-run.
+        import core.audit.orchestrator as _orch
+
+        tail_line = "TypeError: expected str, bytes or os.PathLike"
+        def fake_run(cmd, **kwargs):
+            return types.SimpleNamespace(
+                returncode=1,
+                stderr=("Traceback (most recent call last):\n"
+                        + '  File "raptor-study-prep", in _multilang\n'
+                        * 20
+                        + tail_line),
+            )
+
+        monkeypatch.setattr(_orch, "_run_study_prep", fake_run)
+        warnings = _capture_warnings(monkeypatch)
+
+        _run_loop(self._config(tmp_path), _queue_with_batches(20))
+
+        disabled = [m for m in warnings if "DISABLED" in m]
+        assert len(disabled) == 1
+        assert tail_line in disabled[0]
+        assert "elided" in disabled[0]
+
+    def test_short_stderr_unmarked_and_whole(self, monkeypatch, tmp_path):
+        import core.audit.orchestrator as _orch
+
+        def fake_run(cmd, **kwargs):
+            return types.SimpleNamespace(returncode=1, stderr="boom")
+
+        monkeypatch.setattr(_orch, "_run_study_prep", fake_run)
+        warnings = _capture_warnings(monkeypatch)
+
+        _run_loop(self._config(tmp_path), _queue_with_batches(20))
+
+        disabled = [m for m in warnings if "DISABLED" in m]
+        assert len(disabled) == 1
+        assert "boom" in disabled[0]
+        assert "elided" not in disabled[0]
+
+    def test_disable_line_claims_only_the_real_loss(
+        self, monkeypatch, tmp_path,
+    ):
+        # Disabling the subsystem stops NEW learning; briefing-side
+        # concept injection reads domain-model.json from disk and
+        # keeps supplying already-extracted concepts. The disable
+        # line must not claim reviews run concept-blind — that
+        # over-claim steered operators to distrust verdicts that in
+        # fact carried the full model.
+        import core.audit.orchestrator as _orch
+
+        def fake_run(cmd, **kwargs):
+            return types.SimpleNamespace(returncode=1, stderr="boom")
+
+        monkeypatch.setattr(_orch, "_run_study_prep", fake_run)
+        warnings = _capture_warnings(monkeypatch)
+
+        _run_loop(self._config(tmp_path), _queue_with_batches(20))
+
+        disabled = [m for m in warnings if "DISABLED" in m]
+        assert len(disabled) == 1
+        assert "without domain concepts" not in disabled[0]
+        assert "NEW concepts" in disabled[0]
+
     def test_missing_study_list_disables_once(self, monkeypatch, tmp_path):
         import core.audit.orchestrator as _orch
 
