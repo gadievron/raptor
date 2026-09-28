@@ -553,6 +553,61 @@ Results: `allowed`, `denied_host`, `denied_resolved_ip`, `dns_failed`,
 
 ---
 
+## LLM dispatcher response-scan jail
+
+The credential-isolation dispatcher books spend-capped ("scoped")
+token usage from the response bytes it relays — bytes sent by a
+remote LLM backend and embedding model-authored text. Interpreting
+them (SSE line splitting, JSON parsing, the truncation-recovery
+scans) is delegated to a dedicated, long-lived worker process, the
+same pattern as the [request-line parser
+jail](#request-line-parser-jail): the dispatcher — the process
+holding every provider API key — sends the bounded head/tail windows
+it retained and consumes only a small structured usage verdict,
+re-validating every field before the spend ledger sees it. A worker
+that deviates from the protocol is killed and respawned; values an
+honest worker could legitimately relay from a hostile upstream are
+sanitised (model strings) or clamped (token counts) rather than
+trusted. The worker self-confines exactly like the parser-jail
+worker: descriptor hygiene, resource limits (CPU, address space,
+zero writes, zero forks), and Landlock (read-only code trees, no
+network) when the kernel supports it. Because scans recur for every
+relayed response, the worker is also proactively recycled between
+scans so its lifetime CPU budget never interrupts an honest run.
+
+Unlike the parser jail, this jail degrades by HOST CAPABILITY —
+never by input — through three tiers, announcing a step-down with
+exactly one warning per process:
+
+1. **Full jail** (`jail_landlock`) — process isolation, descriptor
+   hygiene, sanitised environment, resource limits, Landlock.
+2. **Jail without Landlock** (`jail_no_landlock`) — the kernel lacks
+   Landlock: everything above minus the Landlock policy.
+3. **In-process scan** (`in_process`) — the worker cannot run at all
+   on this host (spawning keeps failing on a Landlock-incapable
+   kernel): the scan runs in the dispatcher process via the same
+   pure scan core, the pre-jail behaviour.
+
+Every `child_token.spend` audit row records the serving tier in
+`usage_scan_tier`.
+
+On a kernel where Landlock IS available, an unspawnable or
+unconfinable worker is a fault, not a degradation — the dispatcher
+fails closed: scoped-token requests are refused `503` before any
+upstream byte is spent, recorded as `usage_scan.unavailable` events
+(relaying a spend-capped token's response unbooked would silently
+disable the cap). Worker-token relays carry no scanner and are
+unaffected, and the next scoped request retries the spawn under
+backoff. The in-process tier is never used on a Landlock-capable
+kernel, and never because a particular response crashed the worker:
+a mid-scan worker death books that response as `scan_failed` — a $0
+booking made loud with a warning and a `scan_failed` flag on the
+spend row, mirroring the `unscanned_response` contract — and the
+next scan is served by a fresh worker. The poison bytes are never
+handed to an in-process parser.
+
+---
+
 ## Audit and observe modes
 
 ### Audit mode
