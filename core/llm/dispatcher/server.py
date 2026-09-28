@@ -90,13 +90,13 @@ from core.run.tmp_ownership import (
 )
 from core.security.log_sanitisation import escape_nonprintable
 
-from ._usage_scan import scan_usage
 from .auth import (
     BedrockTransformError,
     CredentialStore,
     ProviderRule,
     build_rules,
 )
+from .usage_scan_jail import UsageScanJailUnavailable, get_usage_scan_jail
 
 _logger = logging.getLogger(__name__)
 
@@ -1171,10 +1171,14 @@ class _UsageScanner:
     def extract(self) -> dict:
         """Return ``{model, input_tokens, output_tokens,
         cache_read_tokens, cache_creation_tokens}`` (zeros / None when
-        the body carried no usage). All interpretation of the retained
-        bytes lives in ``_usage_scan.scan_usage`` — this class only
-        buffers."""
-        return scan_usage(
+        the body carried no usage), plus ``scan_failed`` and
+        ``usage_scan_tier`` for the booking path. This class only
+        buffers — all interpretation of the retained bytes runs in the
+        confined usage-scan worker (``usage_scan_jail``; the pure core
+        in ``_usage_scan`` serves the in-process degradation tier),
+        never in this credential-holding process while a jail tier is
+        available."""
+        return get_usage_scan_jail().scan(
             bytes(self._head), bytes(self._tail),
             truncated=self.truncated,
             content_type=self._content_type,
@@ -1906,6 +1910,10 @@ class LLMDispatcher:
         provider-ledger contract for failed CC calls).
         """
         usage = scanner.extract()
+        # The jailed scan never raises into the relay: a worker that
+        # died or deviated on these bytes yields the zeros verdict
+        # with scan_failed=true, which books $0 — loudly, below.
+        scan_failed = bool(usage.get("scan_failed"))
         cost, priced = _usage_cost_usd(usage)
         saw_usage = any(
             usage[k] for k in (
@@ -1939,6 +1947,14 @@ class LLMDispatcher:
                 "against the USD budget (unscanned_response)",
                 rec.token_id,
             )
+        if scan_failed:
+            _logger.warning(
+                "llm-dispatcher: usage scan for scoped token %s failed "
+                "(the confined scan worker died or deviated on this "
+                "response) — this call books $0 against the USD budget "
+                "(scan_failed)",
+                rec.token_id,
+            )
         self._audit(AuditEvent(
             ts=time.time(), event="child_token.spend",
             peer_pid=None, peer_uid=None,
@@ -1952,6 +1968,8 @@ class LLMDispatcher:
                 "output_tokens": usage["output_tokens"],
                 "priced": priced,
                 "unscanned_response": unscanned,
+                "scan_failed": scan_failed,
+                "usage_scan_tier": usage.get("usage_scan_tier"),
             },
         ))
 
@@ -2896,6 +2914,36 @@ def _make_request_handler(
             # unsigned headers don't participate in verification.
             scanner: _UsageScanner | None = None
             if rec.kind == "child":
+                # Spend-capped tokens exist to enforce budget, and the
+                # booking scan runs in a confined worker — confirm a
+                # scan path exists BEFORE any upstream byte is spent.
+                # Raises only on the fail-closed arm (Landlock-capable
+                # kernel whose worker cannot spawn+confine): relaying
+                # unbooked would silently disable the cap, so refuse
+                # pre-upstream; the next request retries the spawn
+                # under backoff. Degraded hosts (no Landlock / no
+                # worker at all) never raise — the jail's tier ladder
+                # serves them. Worker-token relays (no scanner) are
+                # unaffected.
+                try:
+                    get_usage_scan_jail().ensure_available()
+                except UsageScanJailUnavailable as exc:
+                    dispatcher._audit(AuditEvent(
+                        ts=time.time(), event="usage_scan.unavailable",
+                        peer_pid=None, peer_uid=None,
+                        token_id=rec.token_id,
+                        worker_label=rec.worker_label,
+                        status="reject", reason=str(exc),
+                    ))
+                    self._send_simple(
+                        503, "usage-scan worker unavailable",
+                        extra_headers={
+                            # No upstream byte was seen — the worker's
+                            # retry policy stays in force.
+                            _UPSTREAM_STATE_HEADER: _UPSTREAM_STATE_PRE,
+                        },
+                    )
+                    return
                 scanner = _UsageScanner()
                 # REPLACE the client's accept-encoding, all case
                 # variants — dict-assigning only the canonical
