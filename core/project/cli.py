@@ -2740,6 +2740,18 @@ def _print_status(project) -> None:
             line = (f"  {shown_names[d]:<{name_col}s}  {cmd:12s}  "
                     f"{findings_str:24s}  {status_str}")
             print(f"{line}  {tag}" if tag else line)
+            # M5 (park is not silence): a run carrying unacknowledged
+            # engagement parks surfaces them right here, not only in
+            # the run dir. Best-effort — a corrupt marker never wedges
+            # /project status; the helper bounds and escapes every
+            # marker-derived field.
+            try:
+                from core.engagement.supervise import parked_run_line
+                parked = parked_run_line(d)
+            except Exception:
+                parked = None
+            if parked:
+                print(f"    ⚠ {parked}")
         # Disk usage — use os.walk(followlinks=False) so we stay inside
         # the run dir even if a stray symlink points outside (or back into
         # the run, creating a loop). Path.rglob follows symlinked dirs on
