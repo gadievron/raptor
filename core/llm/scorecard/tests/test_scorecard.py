@@ -1305,6 +1305,12 @@ def test_short_circuit_uses_own_reads_trust_verdict(tmp_path, monkeypatch):
     import contextlib
     import os
 
+    # This test destroys the resolved key file, and release archives
+    # ship without conftest.py (export-ignore) — the suite-level XDG
+    # pin can be absent when this file runs from an extracted tree.
+    # Pin XDG_DATA_HOME in-test so the key mints under tmp_path.
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+
     sc_path = tmp_path / "sc.json"
     sc = ModelScorecard(sc_path)
     sc.record_event("dc", "m1", "cheap_short_circuit", "correct")
@@ -1314,6 +1320,9 @@ def test_short_circuit_uses_own_reads_trust_verdict(tmp_path, monkeypatch):
     # next read keeps the content but cannot verify it.
     from core.llm.scorecard import integrity
     key_path = integrity._key_path()
+    # Hard stop before the destructive ops: never unlink a key that
+    # resolved outside this test's tmp dir.
+    assert key_path.is_relative_to(tmp_path), key_path
     real = tmp_path / "elsewhere.key"
     real.write_bytes(key_path.read_bytes())
     os.unlink(key_path)
