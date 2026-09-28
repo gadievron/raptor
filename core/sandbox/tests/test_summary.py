@@ -260,6 +260,67 @@ class TestSummarizeAndWrite:
             (tmp_path / summary_mod.SUMMARY_FILE).read_text())
         assert on_disk["corrupt_lines"] == 1
 
+    def test_deeply_nested_line_counts_as_corrupt(self, tmp_path):
+        """A deeply nested line ("["*200k) makes json.loads raise
+        RecursionError, not JSONDecodeError. The line is
+        target-writable content read AFTER the irreversible rename —
+        it must count as corruption and flag the summary, never
+        escape and suppress the drained records."""
+        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl.write_text(
+            json.dumps({"ts": "x", "type": "network", "cmd": "c",
+                        "returncode": 1}) + "\n"
+            + "[" * 200_000 + "\n"
+        )
+        result = summary_mod.summarize_and_write(tmp_path)
+        assert result is not None
+        assert result["total_denials"] == 1
+        assert result["corrupt_lines"] == 1
+        on_disk = json.loads(
+            (tmp_path / summary_mod.SUMMARY_FILE).read_text())
+        assert on_disk["corrupt_lines"] == 1
+
+    def test_read_failure_closes_fd_exactly_once(self, tmp_path,
+                                                 monkeypatch):
+        """A host-I/O failure while draining the renamed JSONL takes
+        the warn-and-return-None path — and the fd it was reading must
+        be closed exactly once (a second close races a concurrent
+        thread's fd reuse)."""
+        jsonl = tmp_path / summary_mod.DENIALS_FILE
+        jsonl.write_text(
+            json.dumps({"ts": "x", "type": "network", "cmd": "c",
+                        "returncode": 1}) + "\n"
+        )
+        tracked_fds: set[int] = set()
+        close_calls: list[int] = []
+        real_open = os.open
+        real_read = os.read
+        real_close = os.close
+
+        def fake_open(path, flags, *args, **kwargs):
+            fd = real_open(path, flags, *args, **kwargs)
+            if ".summarising." in str(path):
+                tracked_fds.add(fd)
+            return fd
+
+        def fake_read(fd, n):
+            if fd in tracked_fds:
+                raise OSError(5, "injected read failure")
+            return real_read(fd, n)
+
+        def fake_close(fd):
+            if fd in tracked_fds:
+                close_calls.append(fd)
+            real_close(fd)
+
+        monkeypatch.setattr(os, "open", fake_open)
+        monkeypatch.setattr(os, "read", fake_read)
+        monkeypatch.setattr(os, "close", fake_close)
+        result = summary_mod.summarize_and_write(tmp_path)
+        assert result is None
+        assert len(tracked_fds) == 1
+        assert len(close_calls) == 1
+
     def test_space_overwritten_record_counts_as_corrupt(self, tmp_path,
                                                         monkeypatch):
         """The in-place-overwrite shape: same inode, same length, one

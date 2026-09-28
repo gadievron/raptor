@@ -1062,15 +1062,14 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
                         break
                 raw = b"".join(chunks)
         except OSError:
-            # See the open() failure branch above.
+            # See the open() failure branch above. The fd is NOT
+            # closed here — the finally below owns the single close;
+            # a second close would race a concurrent thread's fd
+            # reuse.
             logger.warning(
                 "summarize_and_write: failed to read renamed JSONL",
                 exc_info=True,
             )
-            try:
-                os.close(fd)
-            except OSError:
-                pass
             try:
                 tmp.unlink(missing_ok=True)
             except OSError:
@@ -1094,7 +1093,14 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
             continue
         try:
             record = json.loads(line)
-        except json.JSONDecodeError:
+        except (RecursionError, json.JSONDecodeError):
+            # RecursionError: deeply nested input ("["*100k) raises it
+            # out of json.loads instead of JSONDecodeError. The line
+            # is target-writable content read AFTER the irreversible
+            # rename — an escaping exception here would silently
+            # suppress every drained record plus the tamper flags and
+            # orphan the renamed tmp file. Violations flag the
+            # summary, never silence it.
             corrupt_lines += 1
             continue
         if not isinstance(record, dict):
