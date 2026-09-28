@@ -28,6 +28,12 @@
     "core/analysis/config_resolve_java.py::_text::sanitiser_shadow::_text": {
       "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
+    "core/analysis/gadget_oracle_precision.py::LibraryCorpusDriver.prepare::unsanitised_llm_value::notes": {
+      "note": "measurement-harness row assembly, not an output site: spec.notes is an operator-authored constant from the module's own pinned library roster (no LLM/tool text on the path); the detector sees only the foreign 'notes' key read — sanitise + register on next functional touch"
+    },
+    "core/analysis/gadget_oracle_precision.py::main::unsanitised_llm_value::description": {
+      "note": "operator-run measurement tool over self-produced corpora; --list prints driver descriptions that are module-local string literals — same class as the binary_oracle_precision.py::main entry; sanitise + register on next functional touch"
+    },
     "core/analysis/java_array_escape.py::_text::sanitiser_shadow::_text": {
       "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
