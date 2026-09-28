@@ -22,6 +22,7 @@ _KNOB_VARS = (
     "RAPTOR_HTTP_MAX_KEEPALIVE",
     "RAPTOR_HTTP_MAX_CONNECTIONS",
     "RAPTOR_HTTP2",
+    "RAPTOR_HTTP2_SHARDS",
 )
 
 
@@ -51,11 +52,32 @@ class TestPoolLimits:
         assert limits.max_keepalive_connections == 8
         assert limits.max_connections == 16
 
-    @pytest.mark.parametrize("bad", ["", "abc", "0", "-5"])
+    @pytest.mark.parametrize("bad", ["", "abc", "0", "-5", "nan", "inf"])
     def test_invalid_env_falls_back(self, monkeypatch, bad):
+        # nan/inf parse as floats and pass the strictly-positive
+        # check (nan comparisons are all False; inf is positive) —
+        # they must fall back like the unparseable shapes instead of
+        # leaking a non-finite expiry into the pool limits.
         monkeypatch.setenv("RAPTOR_HTTP_KEEPALIVE_S", bad)
         limits = http_pool.pool_limits()
         assert limits.keepalive_expiry == 60.0
+
+    @pytest.mark.parametrize("var", [
+        "RAPTOR_HTTP_MAX_KEEPALIVE",
+        "RAPTOR_HTTP_MAX_CONNECTIONS",
+    ])
+    @pytest.mark.parametrize("bad", ["nan", "inf"])
+    def test_non_finite_count_falls_back_not_crash(
+        self, monkeypatch, var, bad,
+    ):
+        # Pre-guard, these CRASHED: nan/inf passed _env_number's
+        # positivity check and int() then raised ValueError /
+        # OverflowError out of _env_count — an uncaught exception at
+        # every pool build while the variable was set.
+        monkeypatch.setenv(var, bad)
+        limits = http_pool.pool_limits()
+        assert limits.max_keepalive_connections == 20
+        assert limits.max_connections == 100
 
     @pytest.mark.parametrize("var, default", [
         ("RAPTOR_HTTP_MAX_KEEPALIVE", 20),
@@ -261,6 +283,162 @@ class TestGeminiHttpOptions:
             assert isinstance(client, httpx.Client)
         finally:
             client.close()
+
+
+class TestUpstreamShardCount:
+    """The forwarding-leg shard knob: default 4 under HTTP/2 (one
+    multiplexed connection otherwise carries every concurrent call —
+    a single point of failure), 1 with HTTP/2 off (HTTP/1.1 pools
+    per-connection already; extra clients are pure overhead)."""
+
+    def _force_h2(self, monkeypatch):
+        monkeypatch.setenv("RAPTOR_HTTP2", "1")
+        monkeypatch.setattr(
+            http_pool.importlib.util, "find_spec",
+            lambda name: object() if name == "h2" else None,
+        )
+
+    def test_default_one_when_http2_off(self):
+        assert http_pool.upstream_shard_count() == 1
+
+    def test_default_four_under_http2(self, monkeypatch):
+        self._force_h2(monkeypatch)
+        assert http_pool.upstream_shard_count() == 4
+
+    def test_explicit_count_honoured_in_either_mode(self, monkeypatch):
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", "6")
+        assert http_pool.upstream_shard_count() == 6
+        self._force_h2(monkeypatch)
+        assert http_pool.upstream_shard_count() == 6
+
+    def test_garbage_warns_and_falls_back(self, monkeypatch, caplog):
+        self._force_h2(monkeypatch)
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", "lots")
+        with caplog.at_level("WARNING", logger="core.llm.http_pool"):
+            assert http_pool.upstream_shard_count() == 4
+        assert any(
+            "RAPTOR_HTTP2_SHARDS" in r.getMessage() for r in caplog.records
+        )
+
+    @pytest.mark.parametrize("bad", ["0", "-2", "0.5"])
+    def test_floor_at_one_shard(self, monkeypatch, bad):
+        # A zero-shard pool could never carry a request; anything
+        # truncating below 1 falls back to the mode default.
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", bad)
+        assert http_pool.upstream_shard_count() == 1
+        self._force_h2(monkeypatch)
+        assert http_pool.upstream_shard_count() == 4
+
+    @pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+    def test_non_finite_falls_back_not_crash(self, monkeypatch, bad):
+        # nan/inf parse as floats and pass the strictly-positive
+        # check (every nan comparison is False; inf is positive), and
+        # pre-guard int() then raised ValueError/OverflowError out of
+        # the resolver — an uncaught crash on the relay hot path that
+        # failed every forwarded request while the variable was set.
+        # Non-finite must warn + fall back like any other garbage.
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", bad)
+        assert http_pool.upstream_shard_count() == 1
+        self._force_h2(monkeypatch)
+        assert http_pool.upstream_shard_count() == 4
+
+    def test_default_bounds_both_directions(self):
+        # Direction 1: below 2 shards there is no blast-radius
+        # reduction at all — the pool degenerates to the single
+        # multiplexed connection the shards exist to avoid.
+        assert http_pool._DEFAULT_HTTP2_SHARDS >= 2
+        # Direction 2: each shard is an independent connection paying
+        # its own CONNECT chain + TLS handshake; past a handful the
+        # collateral reduction plateaus while the setup overhead
+        # keeps growing.
+        assert http_pool._DEFAULT_HTTP2_SHARDS <= 8
+
+
+class TestClientShards:
+    """Least-in-flight shard selection over independent clients."""
+
+    def _shards(self, count):
+        return http_pool.ClientShards(
+            lambda: httpx.Client(timeout=5.0), count,
+        )
+
+    def test_rejects_zero_shards(self):
+        with pytest.raises(ValueError):
+            self._shards(0)
+
+    def test_builder_called_once_per_shard(self):
+        built = []
+
+        def build():
+            client = httpx.Client(timeout=5.0)
+            built.append(client)
+            return client
+
+        shards = http_pool.ClientShards(build, 3)
+        try:
+            assert len(shards) == 3
+            assert shards.clients == tuple(built)
+            assert len({id(c) for c in built}) == 3
+        finally:
+            shards.close()
+
+    def test_least_loaded_selection(self):
+        shards = self._shards(2)
+        try:
+            _, first = shards.acquire()
+            _, second = shards.acquire()
+            # Two concurrent holds land on different shards.
+            assert {first, second} == {0, 1}
+            assert shards.in_flight == (1, 1)
+            _, third = shards.acquire()
+            assert shards.in_flight in ((2, 1), (1, 2))
+            assert third in (0, 1)
+        finally:
+            shards.close()
+
+    def test_release_rebalances(self):
+        shards = self._shards(2)
+        try:
+            _, a = shards.acquire()
+            _, b = shards.acquire()
+            shards.release(a)
+            assert shards.in_flight[a] == 0
+            _, again = shards.acquire()
+            # The freed shard is the least loaded — it must be reused
+            # before stacking a second hold on the busy one.
+            assert again == a
+            del b
+        finally:
+            shards.close()
+
+    def test_release_never_goes_negative(self):
+        shards = self._shards(1)
+        try:
+            _, index = shards.acquire()
+            shards.release(index)
+            shards.release(index)  # double release: clamp, don't skew
+            assert shards.in_flight == (0,)
+        finally:
+            shards.close()
+
+    def test_single_shard_degenerate(self):
+        shards = self._shards(1)
+        try:
+            client_a, index_a = shards.acquire()
+            client_b, index_b = shards.acquire()
+            assert index_a == index_b == 0
+            assert client_a is client_b
+        finally:
+            shards.close()
+
+    def test_close_is_idempotent_and_closes_all(self):
+        shards = self._shards(2)
+        clients = shards.clients
+        shards.close()
+        shards.close()  # second call is a no-op, not an error
+        assert all(client.is_closed for client in clients)
+        with pytest.raises(RuntimeError):
+            shards.acquire()
 
 
 class TestNegotiatedProtocolTelemetry:

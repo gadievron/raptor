@@ -76,8 +76,12 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from core.llm.http_pool import ClientShards
 
 from core.json.jsonl import append_jsonl
 from core.run.tmp_ownership import (
@@ -1267,16 +1271,21 @@ class LLMDispatcher:
         self._creds = creds or CredentialStore()
         self._rules: dict[str, ProviderRule] = build_rules(self._creds)
 
-        # One pooled client for the forwarding leg, shared by every
+        # Pooled clients for the forwarding leg, shared by every
         # request (httpx.Client is thread-safe). Building a client
         # per request forced a fresh TCP + TLS handshake — and,
         # behind chained proxies, CONNECT negotiation per hop — on
-        # every forwarded LLM call. Built lazily and keyed on the
-        # proxy env (see _upstream_client): httpx snapshots proxy
-        # routes at client construction, and the egress chokepoint
-        # mutates HTTPS_PROXY in-process after the dispatcher may
-        # already exist — a construction-time client would bypass it.
-        self._upstream_http: httpx.Client | None = None
+        # every forwarded LLM call. A small shard pool rather than
+        # one client: under HTTP/2 a single client multiplexes ALL
+        # concurrent relays onto one connection, so one connection
+        # loss aborts every in-flight stream at once (see
+        # core.llm.http_pool.ClientShards). Built lazily and keyed on
+        # the proxy env (see _upstream_client_shards): httpx
+        # snapshots proxy routes at client construction, and the
+        # egress chokepoint mutates HTTPS_PROXY in-process after the
+        # dispatcher may already exist — a construction-time client
+        # would bypass it.
+        self._upstream_shards: ClientShards | None = None
         self._upstream_http_env: tuple | None = None
         self._upstream_http_lock = threading.Lock()
 
@@ -2061,33 +2070,50 @@ class LLMDispatcher:
             ))
             return self._tcp_port
 
-    def _upstream_client(self) -> httpx.Client:
-        """The pooled forwarding-leg client, rebuilt on proxy-env change.
+    def _upstream_client_shards(self) -> ClientShards:
+        """The pooled forwarding-leg clients, rebuilt on proxy-env
+        change.
 
-        httpx resolves proxy routes when the client is CONSTRUCTED,
+        A shard pool rather than one client: under HTTP/2 a single
+        client funnels every concurrent relay onto one multiplexed
+        connection, so one connection loss aborts all in-flight
+        streams at once. Relays acquire the least-loaded shard for
+        their full lifetime (see ``ClientShards``). With HTTP/2 off
+        the pool degenerates to one shard — exactly the previous
+        single-client behaviour.
+
+        httpx resolves proxy routes when a client is CONSTRUCTED,
         not per request. The egress chokepoint
         (``core.llm.egress.enable_llm_egress``) points HTTPS_PROXY at
-        the in-process proxy after startup, so the client is keyed on
+        the in-process proxy after startup, so the pool is keyed on
         a snapshot of the proxy env: same env → full connection
         reuse; env changed → rebuild once and reuse from there. Env
         changes happen at startup, before workers dispatch — closing
-        the superseded client here cannot race an in-flight stream in
-        any real sequence, and a hypothetical racer surfaces as a
+        the superseded clients here cannot race an in-flight stream
+        in any real sequence, and a hypothetical racer surfaces as a
         502 the worker SDK already retries.
         """
         env = tuple(os.environ.get(v) for v in _PROXY_ENV_VARS)
         with self._upstream_http_lock:
-            if self._upstream_http is None or self._upstream_http_env != env:
+            if self._upstream_shards is None or self._upstream_http_env != env:
                 from core.llm.http_pool import (
+                    ClientShards,
                     http2_enabled,
                     pool_limits,
                     response_event_hooks,
+                    upstream_shard_count,
                 )
-                old = self._upstream_http
-                self._upstream_http = httpx.Client(
-                    timeout=_upstream_timeout(), limits=pool_limits(),
-                    http2=http2_enabled(),
-                    event_hooks=response_event_hooks(),
+
+                def _build() -> httpx.Client:
+                    return httpx.Client(
+                        timeout=_upstream_timeout(), limits=pool_limits(),
+                        http2=http2_enabled(),
+                        event_hooks=response_event_hooks(),
+                    )
+
+                old = self._upstream_shards
+                self._upstream_shards = ClientShards(
+                    _build, upstream_shard_count(),
                 )
                 self._upstream_http_env = env
                 if old is not None:
@@ -2098,7 +2124,7 @@ class LLMDispatcher:
                             "llm-dispatcher: superseded upstream client "
                             "close failed", exc_info=True,
                         )
-            return self._upstream_http
+            return self._upstream_shards
 
     def _fresh_upstream_client(self) -> httpx.Client:
         """One-shot forwarding-leg client for the stale-reuse retry —
@@ -2174,8 +2200,8 @@ class LLMDispatcher:
             )
             errors.append("child_shutdown")
         try:
-            if self._upstream_http is not None:
-                self._upstream_http.close()
+            if self._upstream_shards is not None:
+                self._upstream_shards.close()
         except Exception:
             _logger.warning(
                 "llm-dispatcher: upstream client close failed", exc_info=True,
@@ -2953,9 +2979,16 @@ def _make_request_handler(
                 _note_worker_gone,
             )
 
+            # Least-loaded shard, held for the relay's full lifetime
+            # (open through drain) and released in the same finally
+            # that retires the watcher. Under HTTP/2 this spreads
+            # concurrent relays across independent connections so one
+            # connection loss cannot abort every in-flight stream.
+            shards = dispatcher._upstream_client_shards()
+            shard_client, shard_index = shards.acquire()
             try:
                 with _upstream_stream_with_stale_retry(
-                    dispatcher._upstream_client(),
+                    shard_client,
                     dispatcher._fresh_upstream_client,
                     method, url, content=body, headers=forwarded,
                     timeout=_upstream_timeout(),
@@ -3238,6 +3271,9 @@ def _make_request_handler(
                 # idempotent), abort, and the pre-response 502 return
                 # — retires the watcher: bounded thread lifetime, no
                 # polling of a connection the handler is done with.
+                # The shard hold is returned on the same paths so the
+                # least-loaded counter tracks live relays exactly.
+                shards.release(shard_index)
                 watcher.stop()
                 watcher.join()
 
