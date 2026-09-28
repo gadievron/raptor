@@ -96,3 +96,52 @@ def test_dangling_symlink_not_followed_on_create(hook_env, tmp_path):
     proc = _fire(hook_env, hook_env["target"] / "a.py")
     assert proc.returncode == 0, proc.stderr
     assert not victim.exists()
+
+
+def test_symlinked_run_metadata_not_read_through(hook_env, tmp_path):
+    """The run dir is sandbox-writable: a symlink planted at
+    `.raptor-run.json` pointed the unsandboxed hook's parse at
+    arbitrary orchestrator-readable bytes. The candidate must be
+    skipped (no attribution), never read through the link."""
+    victim = tmp_path / "victim.json"
+    victim.write_text(json.dumps({"status": "running"}))
+    meta = hook_env["run_dir"] / ".raptor-run.json"
+    meta.unlink()
+    meta.symlink_to(victim)
+
+    proc = _fire(hook_env, hook_env["target"] / "a.py")
+    assert proc.returncode == 0, proc.stderr
+    assert not (hook_env["run_dir"] / ".reads-manifest").exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"),
+                    reason="mkfifo not available")
+def test_fifo_run_metadata_does_not_hang(hook_env):
+    """A FIFO planted at `.raptor-run.json` must not wedge the async
+    hook (a plain open blocks forever waiting for a writer) — the
+    subprocess timeout is the no-hang assertion.
+
+    This pins the at-rest-FIFO shape, which the hook's `[ -f ]`
+    prefilter already skips before any open. The swap-after-prefilter
+    race is covered by the helper-level FIFO fence
+    (test_hook_json_helper.py::TestFileGates), which exercises the
+    O_NONBLOCK + S_ISREG gate on the opened fd directly."""
+    meta = hook_env["run_dir"] / ".raptor-run.json"
+    meta.unlink()
+    os.mkfifo(meta)
+
+    proc = _fire(hook_env, hook_env["target"] / "a.py")
+    assert proc.returncode == 0, proc.stderr
+    assert not (hook_env["run_dir"] / ".reads-manifest").exists()
+
+
+def test_oversized_run_metadata_refused(hook_env):
+    """Over-budget run metadata (sandbox-writable) is refused instead
+    of buffered — the candidate is skipped."""
+    meta = hook_env["run_dir"] / ".raptor-run.json"
+    meta.write_text('{"status": "running", "pad": "'
+                    + "x" * 1_100_000 + '"}')
+
+    proc = _fire(hook_env, hook_env["target"] / "a.py")
+    assert proc.returncode == 0, proc.stderr
+    assert not (hook_env["run_dir"] / ".reads-manifest").exists()

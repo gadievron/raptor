@@ -17,53 +17,154 @@ Subcommands (all failures are silent — print nothing / append nothing
 and exit 0; an async hook must never turn a malformed payload into a
 visible error):
 
-  get <file|-> <dotted.key>
+  get <file|-> <dotted.key> [<dotted.key>...]
       Parse JSON from *file* (``-`` = stdin) and print the string
-      value at *dotted.key* (missing / non-string prints nothing).
+      value at each *dotted.key*. With ONE key: print the value, or
+      nothing when missing / non-scalar / refused. With SEVERAL keys:
+      print exactly one line per key (empty line for a missing /
+      refused value) so the bash consumer's positional ``read``s stay
+      aligned — a refused field must not shift its neighbours. The
+      per-key contract holds only once a source parses: when the
+      whole SOURCE is refused (unopenable, over budget, malformed),
+      ZERO lines print — consumers pre-initialise their fields empty,
+      so a silent source reads as all-empty either way.
 
   append <manifest> <line>
       Append one line with O_NOFOLLOW|O_APPEND, mode 0600 — the
       symlink-refusing append documented in the Python twin
       (core/coverage/track_read.py). Path and line arrive as argv
       DATA, never interpolated into code.
+
+Requires the invoking python3 to be >= 3.10 (PEP 604 ``X | Y``
+annotations) — the same floor the repo's requires-python declares.
 """
 
 import json
 import os
+import stat as _stat_mod
 import sys
 
+# Byte budget for any JSON this helper parses. Both directions:
+# lower breaks attribution for legitimately large run metadata /
+# project records (and diverges from the Python twin's identical
+# 1 MiB gate on the same files — core/coverage/track_read.py);
+# higher lets a planted file in the sandbox-writable run dir bloat
+# every hook fire (the hook runs on EVERY tracked read). Real
+# .raptor-run.json records are a few hundred bytes.
+_MAX_JSON_BYTES = 1 * 1024 * 1024
 
-def _get(src: str, key: str) -> None:
+
+def _read_json_source(src: str) -> object | None:
+    """Parsed JSON from *src* (``-`` = stdin), or None on refusal.
+
+    The file form is used on ``.raptor-run.json`` — run metadata in
+    the run OUTPUT dir, which is the sandbox's writable path while a
+    target runs — so every gate holds on the OPENED fd: O_NOFOLLOW
+    refuses a planted symlink (an unsandboxed parse of arbitrary
+    orchestrator-readable bytes), O_NONBLOCK + S_ISREG refuse a FIFO
+    without blocking (a FIFO stats 0 bytes and then hangs a plain
+    reader forever), and the byte budget is checked on the fstat size
+    AND re-checked after a capped read so a file that grows mid-read
+    is refused rather than buffered unbounded.
+    """
+    if src == "-":
+        try:
+            # Text-mode stdin: the bound counts CHARACTERS, so a
+            # multi-byte payload is bounded a little more tightly
+            # than the byte-accurate file lane — fine for a budget.
+            raw_text = sys.stdin.read(_MAX_JSON_BYTES + 1)
+        except (OSError, ValueError):
+            return None
+        if len(raw_text) > _MAX_JSON_BYTES:
+            return None
+        try:
+            return json.loads(raw_text or "{}")
+        except (ValueError, RecursionError):
+            # RecursionError: a within-budget nesting bomb (hundreds
+            # of thousands of nested arrays fit well under the byte
+            # budget) blows the parser's stack — malformed input,
+            # not a crash: stay silent-and-exit-0 like every other
+            # refusal.
+            return None
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     try:
-        if src == "-":
-            data = json.load(sys.stdin)
-        else:
-            with open(src, encoding="utf-8") as fh:
-                data = json.load(fh)
-    except (OSError, ValueError, UnicodeDecodeError):
-        return
+        fd = os.open(src, flags)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not _stat_mod.S_ISREG(st.st_mode):
+            return None
+        if st.st_size > _MAX_JSON_BYTES:
+            return None
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1  # fdopen owns it now
+            raw = fh.read(_MAX_JSON_BYTES + 1)
+        if len(raw) > _MAX_JSON_BYTES:
+            return None
+        return json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, RecursionError):
+        # RecursionError: see the stdin branch — a within-budget
+        # nesting bomb is malformed input, refused silently.
+        return None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _render_value(data: object, key: str) -> str | None:
+    """The printable value at dotted *key*, or None when refused.
+
+    Scalars, not only strings: .raptor-run.json records session_pid
+    as a JSON int — printing nothing for it silently killed the
+    whole attribution path (owner comparison never matched).
+    Mirrors jq -r: strings raw, numbers/bools rendered. Strings
+    carrying C0 control bytes or DEL render as NOTHING — the source
+    file is agent/sandbox-writable, an interior newline in a value
+    would shift $(...) captures and field reads in the bash consumer,
+    which skips the hostile candidate instead of misreading it. C1
+    controls and bidi overrides pass through: values feed equality
+    comparisons and a path filter only, never a terminal or report,
+    so the shift-the-reads class (C0/DEL) is the one that matters.
+    """
     cur = data
     for part in key.split("."):
         if not isinstance(cur, dict):
-            return
+            return None
         cur = cur.get(part)
-    # Scalars, not only strings: .raptor-run.json records session_pid
-    # as a JSON int — printing nothing for it silently killed the
-    # whole no-jq attribution path (owner comparison never matched).
-    # Mirrors jq -r: strings raw, numbers/bools rendered. Strings
-    # carrying control bytes print NOTHING — the source file is
-    # agent/sandbox-writable, an interior newline in a value would
-    # shift $(...) captures and field reads in the bash consumer, and
-    # the jq lane rejects the same class, keeping the two twins in
-    # lock-step (both skip the hostile candidate).
+    if isinstance(cur, bool):
+        return "true" if cur else "false"
     if isinstance(cur, str) and cur:
         if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in cur):
-            return
-        print(cur)
-    elif isinstance(cur, bool):
-        print("true" if cur else "false")
-    elif isinstance(cur, (int, float)):
-        print(cur)
+            return None
+        return cur
+    if isinstance(cur, (int, float)):
+        return str(cur)
+    return None
+
+
+def _get(src: str, keys: list[str]) -> None:
+    data = _read_json_source(src)
+    if data is None:
+        return
+    for key in keys:
+        value = _render_value(data, key)
+        if len(keys) == 1:
+            # Single-key form keeps the historical contract: a
+            # missing value prints NOTHING (consumers test -z on the
+            # captured output).
+            if value is not None:
+                print(value)
+        else:
+            print(value if value is not None else "")
 
 
 def _append(manifest: str, line: str) -> None:
@@ -80,8 +181,8 @@ def _append(manifest: str, line: str) -> None:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) == 3 and argv[0] == "get":
-        _get(argv[1], argv[2])
+    if len(argv) >= 3 and argv[0] == "get":
+        _get(argv[1], argv[2:])
     elif len(argv) == 3 and argv[0] == "append":
         _append(argv[1], argv[2])
     return 0

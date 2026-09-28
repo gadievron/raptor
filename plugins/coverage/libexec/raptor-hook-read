@@ -31,9 +31,12 @@ umask 077
 
 # Cache the jq detection once (this async hook fires on every tracked
 # Read; repeated `command -v` lookups were measurable on slow-PATH
-# hosts). The named helper handles the no-jq JSON fallbacks and the
-# O_NOFOLLOW manifest append — arguments stay argv DATA, never
-# interpolated into python source.
+# hosts). jq parses the STDIN payload only; every on-disk JSON parse
+# goes through the named helper, whose fd-gated open (O_NOFOLLOW,
+# O_NONBLOCK, regular-file check, byte budget) shell redirection and
+# jq-on-a-path cannot express. The helper also owns the O_NOFOLLOW
+# manifest append — arguments stay argv DATA, never interpolated
+# into python source.
 HAVE_JQ=0
 if command -v jq >/dev/null 2>&1; then
     HAVE_JQ=1
@@ -104,36 +107,37 @@ if [ -n "$_SESSION_PID" ]; then
             esac
             [ -f "$_rdir/.raptor-run.json" ] || continue
             [ "$_epoch" -gt "$BEST_EPOCH" ] || continue
-            # `|| true` on every probe: under `set -e` a jq parse
-            # failure on malformed run metadata (agent-writable file)
-            # would otherwise kill the hook mid-loop — a hostile or
-            # truncated .raptor-run.json must skip THIS candidate,
-            # not silence coverage attribution for the whole session.
-            if [ "$HAVE_JQ" = "1" ]; then
-                # Single jq spawn per candidate (three fields,
-                # newline-delimited; missing → empty line). Control
-                # bytes in a field value read as EMPTY: the file is
-                # agent/sandbox-writable, and a value like
-                # status="running\n<pid>" otherwise shifts the three
-                # `read`s — forging the owner check and clearing the
-                # target filter. Empty fails the status/owner tests
-                # below, so a hostile record skips THIS candidate —
-                # lock-step with the python twin, which rejects
-                # control-byte values the same way.
-                _meta3=$(jq -r '[(.status // ""), (.session_pid // ""), ((.target_path // "") | if type == "string" then . else "" end)] | map(tostring | if test("[\u0000-\u001F\u007F]") then "" else . end) | .[]' "$_rdir/.raptor-run.json" 2>/dev/null || true)
-                _status=""; _owner=""; _tgt=""
-                {
-                    IFS= read -r _status || true
-                    IFS= read -r _owner || true
-                    IFS= read -r _tgt || true
-                } <<META
+            # Candidate metadata is parsed by the named helper in
+            # BOTH lanes (jq stays for the stdin payload only). The
+            # file lives in the run OUTPUT dir — the sandbox's
+            # writable path while a target runs — and a by-name read
+            # here followed a planted symlink and could block forever
+            # on a planted FIFO (the `[ -f ]` probe races the open).
+            # Shell redirection cannot express the O_NOFOLLOW +
+            # O_NONBLOCK + fstat-on-the-open-fd discipline (the same
+            # reason the manifest append below delegates), so the
+            # helper owns the open: it refuses symlinks, FIFOs and
+            # over-budget files, and prints exactly one line per key
+            # (empty for a missing / refused value; control-byte
+            # values read as EMPTY — a status of "running\n<pid>"
+            # otherwise shifts the three `read`s, forging the owner
+            # check and clearing the target filter). Any refusal
+            # leaves the fields empty, failing the status/owner tests
+            # below, so a hostile record skips THIS candidate —
+            # lock-step with the python twin, which rejects the same
+            # classes.
+            # `|| true`: under `set -e` a helper failure on malformed
+            # metadata must skip this candidate, not silence coverage
+            # attribution for the whole session.
+            _meta3=$(python3 "$HELPER" get "$_rdir/.raptor-run.json" status session_pid target_path 2>/dev/null || true)
+            _status=""; _owner=""; _tgt=""
+            {
+                IFS= read -r _status || true
+                IFS= read -r _owner || true
+                IFS= read -r _tgt || true
+            } <<META
 $_meta3
 META
-            else
-                _status=$(python3 "$HELPER" get "$_rdir/.raptor-run.json" status 2>/dev/null || true)
-                _owner=$(python3 "$HELPER" get "$_rdir/.raptor-run.json" session_pid 2>/dev/null || true)
-                _tgt=$(python3 "$HELPER" get "$_rdir/.raptor-run.json" target_path 2>/dev/null || true)
-            fi
             [ "$_status" = "running" ] || continue
             [ "$_owner" = "$_SESSION_PID" ] || continue
             BEST_EPOCH="$_epoch"
@@ -164,13 +168,14 @@ else
     PROJECT_FILE="$HOME/.raptor/projects/$LINK_TARGET"
     [ ! -f "$PROJECT_FILE" ] && exit 0
 
-    if [ "$HAVE_JQ" = "1" ]; then
-        PROJECT_DIR=$(jq -r '.output_dir // empty' "$PROJECT_FILE" 2>/dev/null) || true
-        PROJECT_TARGET=$(jq -r '.target // empty' "$PROJECT_FILE" 2>/dev/null) || true
-    else
-        PROJECT_DIR=$(python3 "$HELPER" get "$PROJECT_FILE" output_dir 2>/dev/null) || true
-        PROJECT_TARGET=$(python3 "$HELPER" get "$PROJECT_FILE" target 2>/dev/null) || true
-    fi
+    # File parses go through the helper in both lanes (see the
+    # session route above for the full rationale): the project file
+    # is operator-owned, but the per-run .raptor-run.json below is
+    # in the sandbox-writable run dir and needs the helper's
+    # symlink/FIFO/size gates; one parser for both keeps the lanes
+    # from diverging.
+    PROJECT_DIR=$(python3 "$HELPER" get "$PROJECT_FILE" output_dir 2>/dev/null) || true
+    PROJECT_TARGET=$(python3 "$HELPER" get "$PROJECT_FILE" target 2>/dev/null) || true
     [ -z "$PROJECT_DIR" ] && exit 0
     [ ! -d "$PROJECT_DIR" ] && exit 0
 
@@ -179,11 +184,7 @@ else
     NEWEST_MTIME=0
     for d in "$PROJECT_DIR"/*/; do
         [ -f "${d}.raptor-run.json" ] || continue
-        if [ "$HAVE_JQ" = "1" ]; then
-            STATUS=$(jq -r '.status // empty' "${d}.raptor-run.json" 2>/dev/null) || true
-        else
-            STATUS=$(python3 "$HELPER" get "${d}.raptor-run.json" status 2>/dev/null) || true
-        fi
+        STATUS=$(python3 "$HELPER" get "${d}.raptor-run.json" status 2>/dev/null) || true
         [ "$STATUS" = "running" ] || continue
         MTIME=$(stat -c %Y "${d}.raptor-run.json" 2>/dev/null || stat -f %m "${d}.raptor-run.json" 2>/dev/null || true)
         [ -z "$MTIME" ] && MTIME=0

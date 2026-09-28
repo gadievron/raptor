@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -76,33 +75,103 @@ class TestGet:
         assert proc.returncode == 0
         assert proc.stdout == ""
 
-    def test_jq_lane_rejects_control_byte_values(self, tmp_path):
-        """The hook's single-spawn jq program (extracted from the hook
-        file itself so this cannot drift) must read a control-byte
-        field as EMPTY: three newline-delimited fields are consumed by
-        three `read`s, and an interior newline in .status otherwise
-        lands the pid of a victim session in the owner field."""
-        jq = shutil.which("jq")
-        if jq is None:
-            pytest.skip("jq not installed")
-        hook_text = HOOK.read_text(encoding="utf-8")
-        m = re.search(r"jq -r '([^']+)'", hook_text)
-        assert m, "hook jq program not found"
-        program = m.group(1)
+    def test_multi_key_prints_one_line_per_key(self, tmp_path):
+        """The hook consumes three newline-delimited fields with three
+        positional `read`s — a missing field must hold its slot as an
+        EMPTY line, never shift its neighbours."""
+        f = tmp_path / "run.json"
+        f.write_text(json.dumps({"status": "running",
+                                 "target_path": "/tgt"}))
+        proc = _helper("get", str(f), "status", "session_pid",
+                       "target_path")
+        assert proc.returncode == 0
+        assert proc.stdout.split("\n") == ["running", "", "/tgt", ""]
+
+    def test_multi_key_rejects_control_byte_values(self, tmp_path):
+        """A control-byte field reads as EMPTY in its slot: an
+        interior newline in .status otherwise lands the pid of a
+        victim session in the owner field (three positional `read`s
+        in the bash consumer)."""
         f = tmp_path / "run.json"
         f.write_text(json.dumps({"status": "running\n88771",
                                  "session_pid": 99999,
                                  "target_path": "/tgt"}))
-        proc = subprocess.run([jq, "-r", program, str(f)],
-                              capture_output=True, text=True,
-                              timeout=30, check=False)
-        assert proc.returncode == 0, proc.stderr
+        proc = _helper("get", str(f), "status", "session_pid",
+                       "target_path")
+        assert proc.returncode == 0
         lines = proc.stdout.split("\n")
         # status rejected -> empty; owner is field 2 (the real pid),
         # target field 3 — no shift.
         assert lines[0] == ""
         assert lines[1] == "99999"
         assert lines[2] == "/tgt"
+
+
+class TestFileGates:
+    """The file form parses `.raptor-run.json` — run metadata in the
+    sandbox-writable run dir — so the open is fd-gated: symlinks
+    refused (O_NOFOLLOW), FIFOs refused without blocking (O_NONBLOCK
+    + S_ISREG on the opened fd), over-budget files refused."""
+
+    def test_symlinked_source_not_read_through(self, tmp_path):
+        victim = tmp_path / "victim.json"
+        victim.write_text(json.dumps({"status": "running"}))
+        link = tmp_path / "run.json"
+        link.symlink_to(victim)
+        proc = _helper("get", str(link), "status")
+        assert proc.returncode == 0
+        assert proc.stdout == ""
+
+    def test_symlinked_source_multi_key_prints_nothing(self, tmp_path):
+        victim = tmp_path / "victim.json"
+        victim.write_text(json.dumps({"status": "running",
+                                      "session_pid": 1}))
+        link = tmp_path / "run.json"
+        link.symlink_to(victim)
+        proc = _helper("get", str(link), "status", "session_pid")
+        assert proc.returncode == 0
+        assert proc.stdout == ""
+
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"),
+                        reason="mkfifo not available")
+    def test_fifo_source_refused_without_blocking(self, tmp_path):
+        """A FIFO stats 0 bytes (passing any by-name size gate) and
+        then blocks a plain reader forever — the helper must return
+        promptly with no output (the subprocess timeout is the
+        no-hang assertion)."""
+        fifo = tmp_path / "run.json"
+        os.mkfifo(fifo)
+        proc = _helper("get", str(fifo), "status")
+        assert proc.returncode == 0
+        assert proc.stdout == ""
+
+    def test_oversized_source_refused(self, tmp_path):
+        f = tmp_path / "run.json"
+        f.write_text('{"status": "running", "pad": "'
+                     + "x" * 1_100_000 + '"}')
+        proc = _helper("get", str(f), "status")
+        assert proc.returncode == 0
+        assert proc.stdout == ""
+
+    def test_nesting_bomb_within_budget_refused_silently(self, tmp_path):
+        """A ~400 KB file of 200k nested arrays sits well inside the
+        byte budget but blows the JSON parser's stack — that is
+        malformed input, and the helper's contract is silent refusal
+        (print nothing, exit 0), never an uncaught RecursionError
+        traceback with rc=1."""
+        f = tmp_path / "run.json"
+        f.write_text("[" * 200_000 + "]" * 200_000)
+        proc = _helper("get", str(f), "status")
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == ""
+
+    def test_oversized_stdin_refused(self):
+        payload = ('{"tool_input": {"file_path": "/a.py"}, "pad": "'
+                   + "x" * 1_100_000 + '"}')
+        proc = _helper("get", "-", "tool_input.file_path",
+                       stdin=payload)
+        assert proc.returncode == 0
+        assert proc.stdout == ""
 
     def test_malformed_json_silent(self, tmp_path):
         f = tmp_path / "p.json"
@@ -165,6 +234,21 @@ class TestProcessShapePins:
         assert "python3 -c" not in code
         assert "python3 - " not in code
         assert "<<'PY'" not in code and "<<PY" not in code
+
+    def test_hook_never_hands_a_disk_file_to_jq(self):
+        """jq parses the STDIN payload only. Every on-disk JSON parse
+        must go through the helper's fd-gated open — jq-on-a-path
+        follows a planted symlink and blocks on a planted FIFO in the
+        sandbox-writable run dir."""
+        code_lines = [
+            line for line in HOOK.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        ]
+        for line in code_lines:
+            if "jq " not in line:
+                continue
+            assert ".raptor-run.json" not in line, line
+            assert "PROJECT_FILE" not in line, line
 
     def test_helper_is_stdlib_only(self):
         src = HELPER.read_text(encoding="utf-8")
