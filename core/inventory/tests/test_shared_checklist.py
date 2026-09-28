@@ -5,9 +5,22 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pytest
+
 from core.inventory import read_checklist, save_checklist, update_checklist
 from core.json import load_json, save_json
 from core.run.metadata import _promote_checklist, _setup_checklist_symlink
+
+
+@pytest.fixture(autouse=True)
+def _user_state_in_tmp(tmp_path: Path,
+                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """The symlink tests write the projects registry through the
+    module global; the root-conftest redirect of that global is
+    stripped from release extracts (conftest.py is export-ignore), so
+    the pin must travel in-file."""
+    from core.testing.state_isolation import pin_user_state_dirs
+    pin_user_state_dirs(monkeypatch, tmp_path)
 
 
 class TestReadChecklist(unittest.TestCase):
@@ -199,11 +212,16 @@ class TestSetupChecklistSymlink(unittest.TestCase):
             run_dir.mkdir()
 
             # Create the project JSON and .active symlink in the
-            # PER-TEST registry (root conftest redirects the module
-            # global) — never the operator's real ~/.raptor store,
-            # which this test used to mutate and restore.
+            # PER-TEST registry (the in-file autouse fixture pins the
+            # module global) — never the operator's real ~/.raptor
+            # store, which this test used to mutate and restore.
             from core.project import project as project_mod
             projects_dir = project_mod.PROJECTS_DIR
+            # Hard-stop before writing the registry: the .active
+            # symlink below hijacks machine-wide active-project
+            # resolution if it ever lands in the real store.
+            assert projects_dir != Path.home() / ".raptor" / "projects", (
+                projects_dir)
             projects_dir.mkdir(parents=True, exist_ok=True)
             active_link = projects_dir / ".active"
 
