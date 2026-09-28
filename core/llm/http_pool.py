@@ -68,6 +68,13 @@ Knobs (all optional; invalid values fall back to the default):
     instead of waiting for a middlebox to terminate the long-lived
     tunnel mid-flight. Inert on HTTP/1.1, where connection lifetime
     is managed per-connection by the pool.
+
+The dispatcher's forwarding-leg clients (:func:`forwarding_client`)
+additionally enable TCP keepalive on the connections they dial, so an
+idle pooled connection whose far side died without a FIN/RST reaching
+us is detected and reaped by the kernel between requests instead of
+being discovered by the next relay that rides it (see
+:func:`tcp_keepalive_socket_options`).
 """
 
 from __future__ import annotations
@@ -76,9 +83,11 @@ import importlib.util
 import logging
 import math
 import os
+import socket
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
 
 import httpx
 
@@ -596,8 +605,211 @@ def sdk_http_client(
     )
 
 
+# ── TCP keepalive for the forwarding leg ──────────────────────────
+#
+# TCP keepalive schedule for the dispatcher's forwarding-leg
+# connections. SO_KEEPALIVE alone inherits the kernel's schedule
+# (idle 7200s by default on common kernels) — hours of a silently-
+# dead connection sitting in the pool before the first probe. Both
+# directions on every constant: shorter probes chattier — kernel
+# wakeups and probe packets on perfectly healthy idle connections,
+# multiplied across every pooled connection; longer leaves a dead
+# connection undetected in the pool for longer, to be discovered
+# only by the next relay that rides it and pays the failure. This
+# schedule detects a dead peer within ~120s of idle (60 idle +
+# 20 x 3 probes) — long-lived multiplexed tunnels are the main
+# beneficiary; most idle HTTP/1.1 connections are reaped by the
+# pool's own keepalive expiry before the first probe fires.
+_TCP_KEEPALIVE_IDLE_S = 60
+_TCP_KEEPALIVE_INTERVAL_S = 20
+_TCP_KEEPALIVE_PROBES = 3
+
+
+def tcp_keepalive_socket_options() -> list[tuple[int, int, int]]:
+    """``socket_options`` enabling TCP keepalive with a schedule that
+    detects a dead peer within roughly two minutes of idle.
+
+    ``SO_KEEPALIVE`` is portable; the schedule constants are
+    platform-dependent (Linux spellings), so each is ``hasattr``-
+    guarded — platforms without them still get keepalive, at the
+    kernel's default schedule. Keepalive probes the first hop only:
+    behind a forward proxy that is the client-to-proxy leg, and the
+    tunnel's far leg is the proxy's to keep alive.
+    """
+    options: list[tuple[int, int, int]] = [
+        (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
+    ]
+    for name, value in (
+        ("TCP_KEEPIDLE", _TCP_KEEPALIVE_IDLE_S),
+        ("TCP_KEEPINTVL", _TCP_KEEPALIVE_INTERVAL_S),
+        ("TCP_KEEPCNT", _TCP_KEEPALIVE_PROBES),
+    ):
+        if hasattr(socket, name):
+            options.append((socket.IPPROTO_TCP, getattr(socket, name), value))
+    return options
+
+
+class _ProxyKeepaliveTransport(httpx.HTTPTransport):
+    """Proxy-route transport that actually applies ``socket_options``
+    to the connections it dials.
+
+    httpcore 1.0.9's ``HTTPProxy.create_connection`` builds its
+    forward/tunnel connections WITHOUT the pool's ``socket_options``
+    — the constructor accepts them, stores them on the pool, and
+    never passes them down — so options set through the public httpx
+    surface never reach a proxied socket (a regression test pins this;
+    when it fails, httpcore forwards them itself and this shim can
+    go). Until then: re-attach the options on the proxy-leg
+    ``HTTPConnection`` right after construction. Connections dial
+    lazily on first request, so the options are in place before
+    ``connect`` runs. Every hop is ``getattr``-guarded — if the
+    httpcore internals move, this degrades to the base transport's
+    behavior (options unset on the proxied route) instead of breaking
+    the relay.
+    """
+
+    def __init__(
+        self,
+        *,
+        proxy: str,
+        socket_options: list[tuple[int, int, int]],
+        http2: bool = False,
+        limits: httpx.Limits | None = None,
+    ) -> None:
+        kwargs: dict[str, Any] = {
+            "proxy": proxy,
+            "http2": http2,
+            "socket_options": socket_options,
+        }
+        if limits is not None:
+            kwargs["limits"] = limits
+        super().__init__(**kwargs)
+        pool = getattr(self, "_pool", None)
+        create = getattr(pool, "create_connection", None)
+        if create is None:
+            logger.debug(
+                "httpcore proxy-pool seam not found — proxied "
+                "connections keep default socket options",
+            )
+            return
+        options = list(socket_options)
+
+        def create_with_keepalive(origin: Any) -> Any:
+            connection = create(origin)
+            inner = getattr(connection, "_connection", None)
+            if (
+                inner is not None
+                and getattr(inner, "_socket_options", "missing") is None
+            ):
+                inner._socket_options = options
+            return connection
+
+        pool.create_connection = create_with_keepalive  # type: ignore[method-assign]
+
+
+# Warn-once flag for "httpx stopped exposing its env-proxy helper" —
+# the fallback keeps proxy routing correct (plain client, httpx's own
+# env resolution) and only loses the keepalive options, but the
+# degradation should be visible once, not per client build.
+_env_proxy_helper_warned = False
+
+
+def _env_proxy_mounts(
+    options: list[tuple[int, int, int]],
+    *,
+    http2: bool,
+    limits: httpx.Limits | None,
+) -> dict[str, httpx.BaseTransport | None] | None:
+    """Reproduce httpx's env-proxy mount map with keepalive-carrying
+    proxy transports.
+
+    Passing an explicit ``transport=`` to ``httpx.Client`` disables
+    its env-proxy resolution entirely (``allow_env_proxies`` requires
+    ``transport is None``), so a client that wants socket options on
+    its default route must rebuild the proxy mounts itself — from the
+    same helper httpx uses, so the routing patterns (including
+    ``NO_PROXY`` carve-outs, mapped to ``None`` = fall through to the
+    default transport) match exactly. Returns None when the private
+    helper is unavailable (httpx internals moved): callers fall back
+    to a plain client — proxy routing intact, keepalive lost.
+    """
+    try:
+        from httpx._utils import get_environment_proxies
+    except ImportError:
+        global _env_proxy_helper_warned
+        if not _env_proxy_helper_warned:
+            _env_proxy_helper_warned = True
+            logger.warning(
+                "httpx no longer exposes get_environment_proxies — "
+                "forwarding clients fall back to plain construction "
+                "(proxy routing intact, no TCP keepalive)",
+            )
+        return None
+    mounts: dict[str, httpx.BaseTransport | None] = {}
+    for pattern, proxy_url in get_environment_proxies().items():
+        if proxy_url is None:
+            # NO_PROXY carve-out: route to the client's default
+            # transport, which carries the options for direct dials.
+            mounts[pattern] = None
+        else:
+            mounts[pattern] = _ProxyKeepaliveTransport(
+                proxy=proxy_url,
+                socket_options=options,
+                http2=http2,
+                limits=limits,
+            )
+    return mounts
+
+
+def forwarding_client(
+    *,
+    timeout: float | httpx.Timeout,
+    limits: httpx.Limits | None = None,
+    http2: bool = False,
+    event_hooks: dict[str, list] | None = None,
+) -> httpx.Client:
+    """Forwarding-leg client with TCP keepalive on its connections.
+
+    Same proxy-env behaviour as a plain ``httpx.Client`` (the env
+    mounts are rebuilt explicitly — see :func:`_env_proxy_mounts`),
+    plus :func:`tcp_keepalive_socket_options` applied to both the
+    direct route and the proxy routes. If any part of the
+    keepalive-aware construction fails, this degrades to the plain
+    client rather than failing the relay path — losing keepalive is
+    an observability regression, losing the client is an outage.
+    """
+    client_kwargs: dict[str, Any] = {"timeout": timeout, "http2": http2}
+    if limits is not None:
+        client_kwargs["limits"] = limits
+    if event_hooks is not None:
+        client_kwargs["event_hooks"] = event_hooks
+    try:
+        options = tcp_keepalive_socket_options()
+        mounts = _env_proxy_mounts(options, http2=http2, limits=limits)
+        if mounts is not None:
+            transport_kwargs: dict[str, Any] = {
+                "http2": http2,
+                "socket_options": options,
+            }
+            if limits is not None:
+                transport_kwargs["limits"] = limits
+            return httpx.Client(
+                transport=httpx.HTTPTransport(**transport_kwargs),
+                mounts=mounts,
+                **client_kwargs,
+            )
+    except Exception:  # noqa: BLE001 — degrade, never break the relay path
+        logger.warning(
+            "keepalive-aware client construction failed — building a "
+            "plain client (no TCP keepalive on this leg)",
+            exc_info=True,
+        )
+    return httpx.Client(**client_kwargs)
+
+
 __all__ = [
     "ClientShards",
+    "forwarding_client",
     "http2_enabled",
     "last_http_version",
     "note_http_version",
@@ -607,5 +819,6 @@ __all__ = [
     "sdk_http_client",
     "shard_failure_threshold",
     "shard_max_age_s",
+    "tcp_keepalive_socket_options",
     "upstream_shard_count",
 ]

@@ -752,3 +752,169 @@ class TestNegotiatedProtocolTelemetry:
         assert _transport_http_version() is None
         http_pool.note_http_version("HTTP/2")
         assert _transport_http_version() == "h2"
+
+
+class TestTcpKeepaliveOptions:
+    """The forwarding leg's keepalive schedule and its platform
+    guards."""
+
+    def test_keepalive_enabled_first(self):
+        import socket
+
+        options = http_pool.tcp_keepalive_socket_options()
+        assert options[0] == (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+    def test_schedule_constants_follow_platform_support(self):
+        import socket
+
+        options = http_pool.tcp_keepalive_socket_options()
+        supported = 0
+        for name, value in (
+            ("TCP_KEEPIDLE", http_pool._TCP_KEEPALIVE_IDLE_S),
+            ("TCP_KEEPINTVL", http_pool._TCP_KEEPALIVE_INTERVAL_S),
+            ("TCP_KEEPCNT", http_pool._TCP_KEEPALIVE_PROBES),
+        ):
+            if hasattr(socket, name):
+                supported += 1
+                assert (
+                    socket.IPPROTO_TCP, getattr(socket, name), value,
+                ) in options
+        # SO_KEEPALIVE plus exactly the platform-supported schedule
+        # constants — nothing invented for platforms without them.
+        assert len(options) == 1 + supported
+
+    def test_schedule_bounds(self):
+        # Both directions. Idle below 30s probes healthy connections
+        # more often than the pool's own reuse cadence warrants;
+        # above 300s a dead connection outlives the keepalive window
+        # the schedule exists to police.
+        assert 30 <= http_pool._TCP_KEEPALIVE_IDLE_S <= 300
+        # Interval below 5s is probe spam on a lossy path; above 60s
+        # each unacked probe adds a minute to detection.
+        assert 5 <= http_pool._TCP_KEEPALIVE_INTERVAL_S <= 60
+        # Fewer than 2 probes turns one lost packet into a reaped
+        # healthy connection; more than 5 stretches detection with
+        # negligible extra confidence.
+        assert 2 <= http_pool._TCP_KEEPALIVE_PROBES <= 5
+
+    def test_detection_horizon_bounds(self):
+        # The whole-schedule property consumers rely on: a dead peer
+        # is detected within minutes (<= 300s), and not so
+        # aggressively (< 60s) that the schedule out-churns the
+        # pool's own idle expiry.
+        horizon = (
+            http_pool._TCP_KEEPALIVE_IDLE_S
+            + http_pool._TCP_KEEPALIVE_INTERVAL_S
+            * http_pool._TCP_KEEPALIVE_PROBES
+        )
+        assert 60 <= horizon <= 300
+
+
+_PROXY_ENV = (
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+)
+
+
+class TestForwardingClientKeepalive:
+    """The keepalive options must land on the connections that
+    actually serve requests — including the proxied route, where
+    the pinned httpcore drops them."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_proxy_env(self, monkeypatch):
+        for var in _PROXY_ENV:
+            monkeypatch.delenv(var, raising=False)
+
+    @staticmethod
+    def _origin(scheme: bytes = b"https"):
+        import httpcore
+
+        return httpcore.Origin(scheme, b"upstream.test", 443)
+
+    def test_pinned_httpcore_drops_options_on_proxied_route(self):
+        """Regression pin on the reason _ProxyKeepaliveTransport
+        exists: the pinned httpcore accepts ``socket_options`` on a
+        proxy pool but never passes them to the connections it
+        builds. When this test FAILS, httpcore forwards them itself
+        and the re-attach shim can be deleted."""
+        options = http_pool.tcp_keepalive_socket_options()
+        transport = httpx.HTTPTransport(
+            proxy="http://127.0.0.1:1", socket_options=options,
+        )
+        try:
+            assert transport._pool._socket_options == options
+            for scheme in (b"https", b"http"):  # tunnel + forward
+                conn = transport._pool.create_connection(
+                    self._origin(scheme),
+                )
+                assert conn._connection._socket_options is None
+        finally:
+            transport.close()
+
+    def test_proxy_keepalive_transport_reattaches_options(self):
+        options = http_pool.tcp_keepalive_socket_options()
+        transport = http_pool._ProxyKeepaliveTransport(
+            proxy="http://127.0.0.1:1", socket_options=options,
+        )
+        try:
+            for scheme in (b"https", b"http"):  # tunnel + forward
+                conn = transport._pool.create_connection(
+                    self._origin(scheme),
+                )
+                assert conn._connection._socket_options == options
+        finally:
+            transport.close()
+
+    def test_direct_route_carries_options(self):
+        options = http_pool.tcp_keepalive_socket_options()
+        with http_pool.forwarding_client(timeout=5.0) as client:
+            assert client._transport._pool._socket_options == options
+
+    def test_proxied_route_carries_options(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        monkeypatch.setenv("NO_PROXY", "direct.test")
+        options = http_pool.tcp_keepalive_socket_options()
+        with http_pool.forwarding_client(timeout=5.0) as client:
+            proxied = client._transport_for_url(
+                httpx.URL("https://upstream.test/v1"),
+            )
+            assert isinstance(proxied, http_pool._ProxyKeepaliveTransport)
+            conn = proxied._pool.create_connection(self._origin())
+            assert conn._connection._socket_options == options
+            # NO_PROXY carve-out falls through to the default
+            # transport — which carries the options for direct dials.
+            direct = client._transport_for_url(
+                httpx.URL("https://direct.test/v1"),
+            )
+            assert direct is client._transport
+            assert direct._pool._socket_options == options
+
+    def test_degrades_to_plain_client_when_mounts_unavailable(
+        self, monkeypatch,
+    ):
+        """If httpx's env-proxy helper vanishes, the builder must
+        fall back to a plain client: proxy routing intact (httpx's
+        own env resolution), keepalive honestly absent."""
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        monkeypatch.setattr(
+            http_pool, "_env_proxy_mounts", lambda *a, **k: None,
+        )
+        with http_pool.forwarding_client(timeout=5.0) as client:
+            proxied = client._transport_for_url(
+                httpx.URL("https://upstream.test/v1"),
+            )
+            # Proxy routing still resolved from the env by httpx.
+            assert proxied is not client._transport
+            # And the plain default transport has no options.
+            assert client._transport._pool._socket_options is None
+
+    def test_degrades_to_plain_client_when_construction_raises(
+        self, monkeypatch,
+    ):
+        def boom(*args, **kwargs):
+            raise RuntimeError("keepalive construction broke")
+
+        monkeypatch.setattr(http_pool, "_env_proxy_mounts", boom)
+        with http_pool.forwarding_client(timeout=5.0) as client:
+            assert client._transport._pool._socket_options is None

@@ -2186,6 +2186,7 @@ class LLMDispatcher:
             if self._upstream_shards is None or self._upstream_http_env != env:
                 from core.llm.http_pool import (
                     ClientShards,
+                    forwarding_client,
                     http2_enabled,
                     pool_limits,
                     response_event_hooks,
@@ -2195,7 +2196,11 @@ class LLMDispatcher:
                 )
 
                 def _build() -> httpx.Client:
-                    return httpx.Client(
+                    # forwarding_client = plain client + TCP keepalive
+                    # on both the direct and proxied routes, so an
+                    # idle pooled connection whose far side silently
+                    # died is reaped by the kernel between relays.
+                    return forwarding_client(
                         timeout=_upstream_timeout(), limits=pool_limits(),
                         http2=http2_enabled(),
                         event_hooks=response_event_hooks(),
@@ -2233,8 +2238,12 @@ class LLMDispatcher:
         behaviour and protocol observability as the pooled client;
         the retry helper closes it once the relayed response is
         drained."""
-        from core.llm.http_pool import http2_enabled, response_event_hooks
-        return httpx.Client(
+        from core.llm.http_pool import (
+            forwarding_client,
+            http2_enabled,
+            response_event_hooks,
+        )
+        return forwarding_client(
             timeout=_upstream_timeout(),
             http2=http2_enabled(),
             event_hooks=response_event_hooks(),

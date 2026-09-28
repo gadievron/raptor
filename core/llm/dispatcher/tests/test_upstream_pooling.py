@@ -269,6 +269,46 @@ class TestNegotiatedProtocolObservability:
         assert dispatched[-1]["http_version"] == "h2"
 
 
+class TestForwardingLegKeepalive:
+    """Both forwarding-leg client shapes — the pooled shards and the
+    stale-retry one-shot — carry the TCP keepalive options, so a
+    silently-dead idle upstream connection is reaped by the kernel
+    instead of being discovered by the next relay."""
+
+    def test_shard_clients_carry_keepalive_options(self, dispatcher):
+        from core.llm.http_pool import tcp_keepalive_socket_options
+
+        client = _sole_client(dispatcher)
+        expected = tcp_keepalive_socket_options()
+        assert client._transport._pool._socket_options == expected
+
+    def test_fresh_retry_client_carries_keepalive_options(self, dispatcher):
+        from core.llm.http_pool import tcp_keepalive_socket_options
+
+        client = dispatcher._fresh_upstream_client()
+        try:
+            expected = tcp_keepalive_socket_options()
+            assert client._transport._pool._socket_options == expected
+        finally:
+            client.close()
+
+    def test_proxied_route_uses_keepalive_transport(
+        self, dispatcher, monkeypatch,
+    ):
+        from core.llm.http_pool import _ProxyKeepaliveTransport
+
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        # Env change → the pool rebuilds; the rebuilt client must
+        # route proxied requests through the transport that actually
+        # applies the options (base httpx/httpcore drops them on the
+        # proxied path — pinned in the http_pool tests).
+        client = _sole_client(dispatcher)
+        proxied = client._transport_for_url(
+            httpx.URL("https://api.anthropic.com/v1/messages"),
+        )
+        assert isinstance(proxied, _ProxyKeepaliveTransport)
+
+
 class TestShardHealthSeam:
     """The relay feeds shard health: transport deaths on the shard's
     own client count toward the drain-and-rebuild threshold, clean
