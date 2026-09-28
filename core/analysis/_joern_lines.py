@@ -19,7 +19,17 @@ framing varies by REPL version and string shape:
   single short element), closed by ``)`` framing lines;
 * subprocess transcripts can carry BOTH the println copy and a value
   echo of the same records;
-* ANSI colour codes may wrap any of it.
+* ANSI colour codes may wrap any of it;
+* OVERSIZED records ride the chunk protocol: the emit-side helper
+  splits a record whose ``[...]`` payload exceeds
+  :data:`FLOW_RECORD_CHUNK_CHARS` into ordered
+  ``MARKER_PART:<i>/<n>/<len>:<fragment>`` lines (1-based contiguous
+  ``i`` of ``n``; ``len`` is the fragment's exact character count so
+  edge damage is detected, never silently absorbed; ``i == n`` is the
+  terminator).  :class:`MarkerChunkAssembler` reassembles them before
+  JSON parsing — a single overlong line used to be wrapped or
+  truncated by REPL rendering caps and every fragment then failed
+  per-line parsing, dropping the record.
 
 ``startswith(marker)`` parsers missed the first echoed record and
 raised "Extra data" on the last; this module is the one place that
@@ -35,6 +45,39 @@ import re
 from typing import Any
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+#: Emit-side chunking threshold AND chunk payload size, in characters
+#: of the record's ``[...]`` JSON text.  Records at or under it emit as
+#: one classic ``MARKER:[...]`` line; longer records emit as
+#: ``MARKER_PART:<i>/<n>/<len>:`` fragments of exactly this size (last
+#: one shorter).  Both directions bite:
+#: * HIGHER pushes each physical line back toward the REPL rendering
+#:   caps that motivated chunking — a single-line Java-escaped echo
+#:   roughly doubles worst-case (every quote/backslash escapes), and
+#:   caps observed across REPL stacks start in the tens of KB
+#:   (dotty's default print budget is 50k chars), while the field
+#:   failure cut multi-KB record lines, so chunk lines must stay well
+#:   under a kilobyte-scale safety margin after escape doubling;
+#: * LOWER multiplies line count and per-chunk framing overhead
+#:   (~30 chars of marker+header per fragment) and walks the echo
+#:   into line-COUNT display caps instead.
+#: The live-measured transport (joern 4.0.603, /query-sync and async
+#: /query+/result) carries single lines intact to 20 MB — this
+#: constant defends the REPL configurations that do not.
+#: Two-direction regression tests:
+#: packages/joern/tests/test_flow_chunk_transport.py.
+FLOW_RECORD_CHUNK_CHARS = 1000
+
+#: Chunk header after the chunk marker: ``<i>/<n>/<len>:``.  Bounded
+#: digit runs so hostile text shaped like a header cannot force
+#: pathological scans; a header that does not match is a damaged
+#: chunk line, reported, never guessed at.
+_CHUNK_HEAD_RE = re.compile(r"(\d{1,6})/(\d{1,6})/(\d{1,9}):")
+
+
+def chunk_marker(marker: str) -> str:
+    """Chunk-line marker for *marker*: ``JOERN_FLOW:`` -> ``JOERN_FLOW_PART:``."""
+    return marker[:-1] + "_PART:"
 
 # Scala REPL value-echo prefix, anchored to the exact echo shape
 # (binder ``resN``, declared type String, opening quote). Scanned-repo
@@ -225,6 +268,202 @@ def parse_marker_line(line: str, marker: str) -> tuple[list[Any], str | None]:
         return [], f"unparseable {marker} payload {payload[:200]!r}: {exc}"
 
 
+class MarkerChunkAssembler:
+    """Stateful per-transcript reassembly of chunked marker records.
+
+    Feed physical transcript lines in order (UNSTRIPPED — fragment
+    edges can be legitimate spaces inside JSON string content, and the
+    per-fragment ``len`` field exists precisely to catch edge loss).
+    Lines without the chunk marker delegate to
+    :func:`parse_marker_line` verbatim, so unchunked transcripts parse
+    exactly as before.  Chunk-bearing lines are recovered through the
+    same echo shapes (raw println, single-line Java-escaped value
+    echo, List-binder echo) and their fragments accumulated until the
+    terminator (``i == n``) completes the record.
+
+    Damage discipline: any sequence anomaly — gap, total mismatch,
+    declared-length mismatch, unparseable header, dangling partial at
+    :meth:`finish` — drops the record with ONE error, never silent
+    corruption.  Anchoring: when a line carries both the record marker
+    and the chunk marker, the EARLIEST occurrence wins, so record
+    payload text mentioning the chunk marker cannot reroute parsing
+    (and vice versa).  Consumers keep their canonical-JSON dedupe: a
+    transcript carrying the println copy AND an echo copy of the same
+    chunk sequence reassembles the record once per copy.
+    """
+
+    def __init__(self, marker: str) -> None:
+        self._marker = marker
+        self._chunk_marker = chunk_marker(marker)
+        self._parts: list[str] = []
+        self._total = 0
+        # Next expected 1-based index while collecting; 0 = idle.
+        self._next = 0
+        # Continuation swallowing for an already-reported broken
+        # sequence: (total, next index) — keeps one error per damaged
+        # record instead of one per surviving fragment.
+        self._poison: tuple[int, int] | None = None
+
+    # -- public API ----------------------------------------------------
+
+    def feed_line(self, line: str) -> tuple[list[Any], str | None]:
+        """Parse one physical line; mirrors :func:`parse_marker_line`."""
+        plain = strip_ansi(line)
+        c_idx = plain.find(self._chunk_marker)
+        if c_idx < 0:
+            return parse_marker_line(line, self._marker)
+        m_idx = plain.find(self._marker)
+        if 0 <= m_idx < c_idx:
+            # Earliest-marker anchoring: a genuine record line whose
+            # payload text mentions the chunk marker stays a record.
+            return parse_marker_line(line, self._marker)
+        m = _ECHO_PREFIX_RE.search(plain[:c_idx])
+        if m is not None:
+            rest = plain[m.end():]
+            if rest.startswith('""'):
+                # Triple-quoted multi-line echo prefix: content after
+                # the ``\"\"\"`` is RAW, not Java-escaped.
+                return self._feed_segment(rest[2:])
+            interior = rest.rstrip().rstrip('"')
+            text = _unescape_echo_body(interior)
+            if text is None:
+                return [], (
+                    f"unrecoverable {self._marker} echo body "
+                    f"{interior[:200]!r}"
+                )
+            return self._feed_text(text)
+        if _LIST_ECHO_LINE_RE.match(plain) is not None:
+            records: list[Any] = []
+            error: str | None = None
+            for body in _scan_string_literal_bodies(plain):
+                if (
+                    self._chunk_marker not in body
+                    and self._marker not in body
+                ):
+                    continue
+                text = _unescape_echo_body(body)
+                if text is None:
+                    error = error or (
+                        f"unrecoverable {self._marker} echo element "
+                        f"{body[:200]!r}"
+                    )
+                    continue
+                recs, err = self._feed_text(text)
+                records.extend(recs)
+                error = error or err
+            return records, error
+        return self._feed_segment(plain)
+
+    def finish(self) -> str | None:
+        """Flush transcript end; a dangling partial is a dropped record."""
+        error: str | None = None
+        if self._next:
+            error = (
+                f"unrecoverable {self._marker} chunk sequence: transcript "
+                f"ended after part {self._next - 1}/{self._total}"
+            )
+        self._reset()
+        self._poison = None
+        return error
+
+    # -- internals -----------------------------------------------------
+
+    def _reset(self) -> None:
+        self._parts = []
+        self._total = 0
+        self._next = 0
+
+    def _abort(self) -> str | None:
+        """Drop a partially-collected sequence; error if one was live."""
+        if not self._next:
+            return None
+        error = (
+            f"unrecoverable {self._marker} chunk sequence: dropped "
+            f"after part {self._next - 1}/{self._total}"
+        )
+        self._reset()
+        return error
+
+    def _feed_text(self, text: str) -> tuple[list[Any], str | None]:
+        records: list[Any] = []
+        error: str | None = None
+        for segment in text.splitlines():
+            recs, err = self._feed_segment(segment)
+            records.extend(recs)
+            error = error or err
+        return records, error
+
+    def _feed_segment(self, segment: str) -> tuple[list[Any], str | None]:
+        # A lone trailing \r is line-ending residue, never fragment
+        # content (jsonEsc strips \r from record text at emit time).
+        segment = segment.rstrip("\r")
+        c_idx = segment.find(self._chunk_marker)
+        m_idx = segment.find(self._marker)
+        if c_idx < 0 and m_idx < 0:
+            return [], None
+        if c_idx < 0 or 0 <= m_idx < c_idx:
+            return _marker_records_in_text(segment, self._marker)
+        head = _CHUNK_HEAD_RE.match(segment, c_idx + len(self._chunk_marker))
+        if head is None:
+            pending = self._abort()
+            return [], pending or (
+                f"unrecoverable {self._marker} chunk header "
+                f"{segment[c_idx:c_idx + 200]!r}"
+            )
+        idx, total = int(head.group(1)), int(head.group(2))
+        declared_len = int(head.group(3))
+        fragment = segment[head.end():]
+        pending: str | None = None
+        if idx == 1 and total >= 1:
+            pending = self._abort()
+            self._poison = None
+            self._parts = []
+            self._total = total
+            self._next = 1
+        if self._next:
+            if idx != self._next or total != self._total:
+                error = (
+                    f"unrecoverable {self._marker} chunk sequence: part "
+                    f"{idx}/{total} while expecting "
+                    f"{self._next}/{self._total}"
+                )
+                self._reset()
+                self._poison = (total, idx + 1) if idx < total else None
+                return [], pending or error
+            if len(fragment) != declared_len:
+                error = (
+                    f"unrecoverable {self._marker} chunk {idx}/{total}: "
+                    f"fragment length {len(fragment)} != declared "
+                    f"{declared_len} (transport damage)"
+                )
+                self._reset()
+                self._poison = (total, idx + 1) if idx < total else None
+                return [], pending or error
+            self._parts.append(fragment)
+            if idx == total:
+                payload = "".join(self._parts)
+                self._reset()
+                try:
+                    return [json.loads(payload)], pending
+                except ValueError as exc:
+                    return [], pending or (
+                        f"unrecoverable {self._marker} chunked record "
+                        f"{payload[:200]!r}: {exc}"
+                    )
+            self._next = idx + 1
+            return [], pending
+        if self._poison is not None:
+            p_total, p_next = self._poison
+            if total == p_total and idx == p_next:
+                self._poison = (total, idx + 1) if idx < total else None
+                return [], None
+        self._poison = (total, idx + 1) if idx < total else None
+        return [], (
+            f"unrecoverable {self._marker} chunk sequence: part "
+            f"{idx}/{total} without part 1"
+        )
+
+
 def parse_marker_records(
     raw_output: str,
     marker: str,
@@ -233,14 +472,16 @@ def parse_marker_records(
 
     Dedup is by canonical JSON: a transcript carrying both the println
     copy and a recovered echo copy of the same record must yield it
-    once.  Returns ``(records, errors)`` — errors only for genuinely
-    printed records that failed to decode.
+    once.  Chunked records (:class:`MarkerChunkAssembler`) reassemble
+    before parsing.  Returns ``(records, errors)`` — errors only for
+    genuinely printed records that failed to decode.
     """
     records: list[Any] = []
     errors: list[str] = []
     seen: set[str] = set()
+    assembler = MarkerChunkAssembler(marker)
     for line in (raw_output or "").splitlines():
-        recs, err = parse_marker_line(line, marker)
+        recs, err = assembler.feed_line(line)
         if err is not None:
             errors.append(err)
         for rec in recs:
@@ -249,6 +490,9 @@ def parse_marker_records(
                 continue
             seen.add(key)
             records.append(rec)
+    tail = assembler.finish()
+    if tail is not None:
+        errors.append(tail)
     return records, errors
 
 
