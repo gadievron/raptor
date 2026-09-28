@@ -146,7 +146,10 @@ def test_functions_analysed_resolves_abs_and_skips_unknown(tmp_path):
 def test_import_checked_by_is_function_level_and_llm(tmp_path):
     s = _store(tmp_path)
     assert import_checked_by(s, _CHECKLIST) == 1     # only f2 has checked_by
-    assert s.who_checked_function("a.c", 30, 60) == {"validate:stage-a": "full"}
+    # _CHECKLIST carries no claim token, so the review-grade label imports
+    # at the machine hint tier (see test_checked_by_mac.py for the tiers).
+    assert s.who_checked_function("a.c", 30, 60) == {
+        "validate:stage-a:machine": "full"}
     # validate:* classifies as llm, so f2 is NOT an llm gap; f1/g1 are.
     assert s.function_covered("a.c", 30, 60, category="llm") is True
 
@@ -299,10 +302,10 @@ def test_backfill_unions_checked_by_and_records_then_gap(tmp_path):
     # Nothing is a *total* gap -- semgrep touched every file.
     assert s.unchecked_functions(_CHECKLIST) == []
 
-    # Persists.
+    # Persists (unstamped checked_by claim lands at the machine tier).
     s.save()
     assert CoverageStore(tmp_path / "coverage.json").who_checked("a.c", 40) == [
-        "semgrep", "validate:stage-a",
+        "semgrep", "validate:stage-a:machine",
     ]
 
 

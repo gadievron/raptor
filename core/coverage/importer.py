@@ -158,8 +158,33 @@ def import_checked_by(store: CoverageStore, checklist: dict[str, Any]) -> int:
     partial upgrades (new engine reading a pre-migration checklist)
     still surface prior review state. Delete after the migration
     settles.
+
+    Claim-authority tiering: the checklist lives in target-writable
+    run/project directories, and a review-grade mark minted here
+    clears the function from every store-derived review-gap view — so
+    a forged ``checked_by`` row was durable review suppression. Each
+    ``(item, label)`` claim is now stamped at creation
+    (``core.inventory.checklist_mac``, minted by ``update_coverage``);
+    this importer is the one consumer that converts claims into
+    authority, so it verifies here: verified claims import under
+    their label, everything else on a review-grade label — tampered
+    tokens AND unstamped rows (pre-MAC legacy or forged) — demotes to
+    ``<label>:machine`` (hint tier: llm-extent examination evidence
+    at scanned depth, see ``core.coverage.registry.classify``), with
+    one loud structured warning. Never a refusal — the import always
+    completes. Only review-grade labels are tiered: scanned-depth
+    labels (``understand:*``, ``read``, unknown bases) grant no
+    review credit, so demotion would be pure label churn — same rule
+    as :func:`import_functions_analysed`.
     """
+    from core.inventory import checklist_mac
+
+    from .registry import CATEGORY_LLM, DEPTH_ANALYSED, classify
+
     marks = 0
+    tampered = 0
+    unstamped = 0
+    review_claims = 0
     for fe in iter_file_entries(checklist):
         path = fe.get("path")
         if not path or not isinstance(path, str):
@@ -176,8 +201,26 @@ def import_checked_by(store: CoverageStore, checklist: dict[str, Any]) -> int:
             for tool in checked_by:
                 if not isinstance(tool, str):
                     continue
-                store.mark(path, lo, hi, tool)
+                effective = tool
+                if classify(tool) == (CATEGORY_LLM, DEPTH_ANALYSED):
+                    review_claims += 1
+                    provenance = checklist_mac.claim_provenance(
+                        fe, fn, tool)
+                    if provenance != checklist_mac.CLAIM_VERIFIED:
+                        effective = f"{tool}:machine"
+                        if provenance == checklist_mac.CLAIM_TAMPERED:
+                            tampered += 1
+                        else:
+                            unstamped += 1
+                store.mark(path, lo, hi, effective)
                 marks += 1
+    if tampered or unstamped:
+        logger.warning(
+            "coverage import: %d of %d review-grade checked_by "
+            "claim(s) imported at machine tier (%d tampered token(s), "
+            "%d unstamped — pre-MAC legacy or unauthenticated) — "
+            "examination evidence kept, review credit withheld",
+            tampered + unstamped, review_claims, tampered, unstamped)
     return marks
 
 
