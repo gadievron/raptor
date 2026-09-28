@@ -313,6 +313,11 @@ def test_worst_shape_wall_at_real_caps(packs) -> None:
                for c in res.candidates)
 
 
+@pytest.mark.slow  # genuine flood cost: 10k route registrations
+# driven through the real engine at the real caps — the flood IS the
+# subject (bounded wall, cap-eviction accounting), so there is
+# nothing to mock, and the ~6-10s call breaches the default tier's
+# duration budget under loaded-runner variance. Nightly tier.
 def test_entry_point_flood_10k_routes(packs) -> None:
     # 10k route registrations (the route-model artifact's own cap)
     # over 10k one-hop handlers: the flood is absorbed within the
