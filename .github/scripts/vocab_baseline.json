@@ -1263,6 +1263,11 @@
     "kind": "literal",
     "note": "closed record schema, not a name vocabulary: the checkpoint hysteresis state record written to the run dir (the exact fields _load_state validates on read; the two sides must stay in lockstep)"
   },
+  "core/coverage/journal_mac.py::_GENERATION_VOCABULARY": {
+    "count": 49,
+    "kind": "literal",
+    "note": "shipped-generation schema manifest for the journal-row MAC verifier: the enumerated extra-key vocabulary each provenance generation is allowed to carry (covered-additive-field invariant - a row with keys outside its generation's set never verifies via the raw form); persistence schema keys in lockstep with the row writers, not a learned name vocabulary"
+  },
   "core/coverage/registry.py::_REGISTRY": {
     "count": 26,
     "kind": "literal"

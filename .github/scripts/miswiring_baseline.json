@@ -148,6 +148,12 @@
     "artifacts:orphan_reader::results_verified.json": {
       "note": "external-input pattern: the pinned OpenAnt subprocess writes results_verified.json when its verify stage runs; packages/openant/recovery prefers it over results.json, mirroring the upstream reporter's own active_results_path choice. RAPTOR never writes it"
     },
+    "artifacts:orphan_reader::review-journal.*.jsonl": {
+      "note": "single-literal read/dynamic write false positive: core/audit/report.py globs review-journal.*.jsonl to fold rolled journal shards into the digest, while the writer (core/coverage/journal.py _journal_shard_name) constructs each rotated name dynamically as f\"review-journal.{n:03d}.jsonl\" in the generation ladder - invisible to the literal-name index, so the glob reader looks orphaned"
+    },
+    "artifacts:orphan_reader::sandbox-x-aaaaaa.json": {
+      "note": "false positive minted by a gate-config literal: the only code occurrences are core/labeled_attempts/test_store.py writing and re-reading its own tmp_path file (test-tier), and the sole production-classified reader is the run_dir_reads_baseline.json key string naming that test read — a baseline entry, not a reader"
+    },
     "artifacts:orphan_reader::showmap-edges.txt": {
       "note": "written by the external afl-showmap tool, not by repo code (run_showmap builds the -o path and hands it to the sandboxed afl-showmap invocation); _parse_showmap_output reads it back as the banner-format-drift fallback, so the indexer only ever sees the read"
     },
@@ -636,6 +642,9 @@
     },
     "dead:dead_function:core/audit/frida_observe.py:collect_observed_functions": {
       "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
+    },
+    "dead:dead_function:core/concepts/audit_bridge.py:_model_content_digest": {
+      "note": "staged helper: canonical content-digest identity for a parsed domain model (thin wrapper over _model_content_canonical, which is live); its consumer arrives with the follow-on grepfold series (kit-13), so zero callers on this tree is expected until that lands"
     },
     "dead:dead_function:core/iris/api.py:load_project_assumptions": {
       "note": "zero-reference symbol at baseline cut — triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"

@@ -1696,6 +1696,128 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "default (.get(..., 0)), not finding text"
         ),
     ),
+    AllowlistEntry(
+        file="raptor_agentic.py",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="label",
+        audit_note=(
+            "label is one of three module-minted constants "
+            "('understand pre-pass' / 'gap-audit' / 'validate "
+            "post-pass') from _collect_child_pass_costs; the taint is "
+            "the helper-return flow from its run-dir JSON spend reads, "
+            "which only ever reach the print as float()-coerced "
+            "numbers"
+        ),
+    ),
+    AllowlistEntry(
+        file="raptor_agentic.py",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="spend",
+        audit_note=(
+            "spend is float()-coerced (ValueError-guarded, 0.0 "
+            "fallback) in _collect_child_pass_costs and rendered "
+            "through a :.2f format spec — no foreign text can survive "
+            "the coercion"
+        ),
+    ),
+    AllowlistEntry(
+        file="raptor_agentic.py",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="audit_postpass",
+        audit_note=(
+            "the sink is extra_sections.append of the ReportSection "
+            "built by _build_audit_report_section, which routes every "
+            "finding-derived field through its sanitise_string _cell "
+            "helper and otherwise interpolates isinstance-int-guarded "
+            "counters and RAPTOR-minted lifecycle paths; the "
+            "skipped-branch reason is module-minted except a "
+            "300-char-bounded child stderr tail, which the renderer's "
+            "escape_nonprintable content pass control-byte-escapes "
+            "before the section reaches the markdown file"
+        ),
+    ),
+    AllowlistEntry(
+        file="raptor_agentic.py",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="md_report",
+        audit_note=(
+            "md_report is render_report output — the renderer defangs "
+            "every single-line slot itself (sanitise_inline via "
+            "_md_heading/_md_table_cell) and control-byte-escapes "
+            "section content, and the section producers "
+            "(core/reporting/findings.py plus this module's section "
+            "builders) route free text through "
+            "sanitise_string/sanitise_code at construction; the write "
+            "is the run-dir agentic-report.md those contracts exist "
+            "for"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-review",
+        func_name="_collect_toolrun_rows",
+        kind="unsanitised_llm_value",
+        detail="file",
+        audit_note=(
+            "rows is a data RETURN value, not a report surface — the "
+            "append fires the accumulator-name heuristic; the sole "
+            "consumer cmd_tools routes the file field through _line "
+            "(sanitise_string) before printing, and --raw emits via "
+            "json.dumps ensure_ascii=True"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-review",
+        func_name="_collect_toolrun_rows",
+        kind="unsanitised_llm_value",
+        detail="function",
+        audit_note=(
+            "rows is a data RETURN value, not a report surface — the "
+            "sole consumer cmd_tools routes the function field through "
+            "_line (sanitise_string) before printing, and --raw emits "
+            "via json.dumps ensure_ascii=True"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-review",
+        func_name="_collect_toolrun_rows",
+        kind="unsanitised_llm_value",
+        detail="tool",
+        audit_note=(
+            "the audit-log tool name lands in the row's channel field, "
+            "which cmd_tools routes through _line (sanitise_string, "
+            "40-char cap) before printing; rows itself is a data "
+            "return value, not a report surface"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-review",
+        func_name="_collect_toolrun_rows",
+        kind="unsanitised_llm_value",
+        detail="reason",
+        audit_note=(
+            "the audit-log skip reason lands in the row's reason "
+            "field, which cmd_tools routes through _line "
+            "(sanitise_string, 120-char cap) before printing; rows "
+            "itself is a data return value, not a report surface"
+        ),
+    ),
+    AllowlistEntry(
+        file="libexec/raptor-review",
+        func_name="cmd_tools",
+        kind="unsanitised_llm_value",
+        detail="kind",
+        audit_note=(
+            "r['kind'] is minted in _collect_toolrun_rows as the "
+            "constants 'tool' / 'gate' only — the taint is the "
+            "one-level helper-return flow; every foreign field on the "
+            "same print (channel/status/reason/phase) goes through "
+            "_line"
+        ),
+    ),
 )
 
 

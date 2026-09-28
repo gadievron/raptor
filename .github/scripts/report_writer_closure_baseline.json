@@ -10,10 +10,10 @@
     ".claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py::extract_trace::unsanitised_llm_value::stderr": {
       "note": "crash-analysis skill helper script; gdb/rr output relayed for the skill's own agent consumption (KNOWN U35 row) — sanitise + register when the crash-analysis skill lane is hardened"
     },
-    "core/analysis/binary_oracle_edges.py::extract_direct_call_edges::unsanitised_llm_value::addr": {
+    "core/analysis/binary_oracle_edges.py::_extract_direct_call_edges_impl::unsanitised_llm_value::addr": {
       "note": "addr is an integer address hex-formatted for the r2 script file, not operator output"
     },
-    "core/analysis/binary_oracle_edges.py::extract_direct_call_edges::unsanitised_llm_value::script_lines": {
+    "core/analysis/binary_oracle_edges.py::_extract_direct_call_edges_impl::unsanitised_llm_value::script_lines": {
       "note": "r2 script-file write (scratch batch script), not an operator report/terminal lane; r2-command quoting is the module's own concern"
     },
     "core/analysis/binary_oracle_precision.py::_format_markdown::unsanitised_llm_value::function": {
