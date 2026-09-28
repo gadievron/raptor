@@ -2,13 +2,13 @@
   "_comment": "Triaged residual report-writer findings in UNREGISTERED files. Keys are file::func::kind::detail (no line numbers). check_report_writer_closure.py fails CI on any unregistered hit not listed here and warns on stale entries. Prefer fixing: sanitise the site and register the file in _REPORT_WRITER_FILES; add an entry ONLY with a note explaining why the hit is accepted.",
   "entries": {
     ".claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py::extract_trace::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     ".claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py::extract_trace::unsanitised_llm_value::output": {
-      "note": "crash-analysis skill helper script; gdb/rr output relayed for the skill's own agent consumption (KNOWN U35 row) \u2014 sanitise + register when the crash-analysis skill lane is hardened"
+      "note": "crash-analysis skill helper script; gdb/rr output relayed for the skill's own agent consumption (KNOWN U35 row) — sanitise + register when the crash-analysis skill lane is hardened"
     },
     ".claude/skills/crash-analysis/rr-debugger/scripts/crash_trace.py::extract_trace::unsanitised_llm_value::stderr": {
-      "note": "crash-analysis skill helper script; gdb/rr output relayed for the skill's own agent consumption (KNOWN U35 row) \u2014 sanitise + register when the crash-analysis skill lane is hardened"
+      "note": "crash-analysis skill helper script; gdb/rr output relayed for the skill's own agent consumption (KNOWN U35 row) — sanitise + register when the crash-analysis skill lane is hardened"
     },
     "core/analysis/binary_oracle_edges.py::extract_direct_call_edges::unsanitised_llm_value::addr": {
       "note": "addr is an integer address hex-formatted for the r2 script file, not operator output"
@@ -17,97 +17,97 @@
       "note": "r2 script-file write (scratch batch script), not an operator report/terminal lane; r2-command quoting is the module's own concern"
     },
     "core/analysis/binary_oracle_precision.py::_format_markdown::unsanitised_llm_value::function": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/analysis/binary_oracle_precision.py::main::unsanitised_llm_value::description": {
-      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
+      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low — sanitise + register on next functional touch"
     },
     "core/analysis/collection_guard_java.py::_text::sanitiser_shadow::_text": {
-      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "core/analysis/config_resolve_java.py::_text::sanitiser_shadow::_text": {
-      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "core/analysis/java_array_escape.py::_text::sanitiser_shadow::_text": {
-      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "core/analysis/java_collection_index.py::_text::sanitiser_shadow::_text": {
-      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "core/analysis/java_wrapper_summaries.py::_text::sanitiser_shadow::_text": {
-      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "core/analysis/java_xfile_const.py::_text::sanitiser_shadow::_text": {
-      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "core/annotations/storage.py::_render_file::unsanitised_llm_value::body": {
-      "note": "storage-format round-trip (annotation .md files) \u2014 the display surfaces (raptor-annotate, /project annotations view) are registered writers that sanitise on render"
+      "note": "storage-format round-trip (annotation .md files) — the display surfaces (raptor-annotate, /project annotations view) are registered writers that sanitise on render"
     },
     "core/audit/asm_zero_len_loop.py::_describe::unsanitised_llm_value::confidence": {
-      "note": "numeric confidence rendered under a :.2f format spec \u2014 a non-numeric value raises at format time; the built string is a finding-description artifact, not a direct terminal lane"
+      "note": "numeric confidence rendered under a :.2f format spec — a non-numeric value raises at format time; the built string is a finding-description artifact, not a direct terminal lane"
     },
     "core/audit/binary_context.py::assemble_binary_context::unsanitised_llm_value::kind": {
-      "note": "prompt/context construction \u2014 the ghidra_context block feeds an LLM prompt, not an operator render surface; the prompt envelope is the defence layer for that lane"
+      "note": "prompt/context construction — the ghidra_context block feeds an LLM prompt, not an operator render surface; the prompt envelope is the defence layer for that lane"
     },
     "core/audit/binary_layer0.py::format_layer0_context::unsanitised_llm_value::description": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/audit/concept_discovery.py::discover_invariants::unsanitised_llm_value::top_apis": {
       "note": "invariant-candidate description slot consumed by prompts/domain model, not a terminal lane; API names extracted from LLM hypotheses"
     },
     "core/audit/context.py::_format_caller_contract::unsanitised_llm_value::line": {
-      "note": "prompt/context construction \u2014 integer line-number field rendered into an LLM prompt block, not an operator render surface"
+      "note": "prompt/context construction — integer line-number field rendered into an LLM prompt block, not an operator render surface"
     },
     "core/audit/context.py::format_context_for_prompt._chain_entry::unsanitised_llm_value::body": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/audit/context.py::format_context_for_prompt._chain_entry::unsanitised_llm_value::function": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/audit/context.py::format_context_for_prompt._chain_entry::unsanitised_llm_value::hypothesis": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::cp": {
-      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; same disposition as this file's other rows"
+      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; same disposition as this file's other rows"
     },
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::ep": {
-      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; same disposition as this file's other rows"
+      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; same disposition as this file's other rows"
     },
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::gp": {
       "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; every artifact-derived field additionally rides _defend_identifier at append time; same disposition as this file's other rows"
     },
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::lines_cl": {
-      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; same disposition as this file's other rows"
+      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; same disposition as this file's other rows"
     },
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::lines_mdf": {
-      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; same disposition as this file's other rows"
+      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; same disposition as this file's other rows"
     },
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::pfa": {
-      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; same disposition as this file's other rows"
+      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; same disposition as this file's other rows"
     },
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::pp": {
-      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; same disposition as this file's other rows"
+      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; same disposition as this file's other rows"
     },
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::seed_hyp_text": {
-      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; the seed body additionally rides wrap_untrusted at construction; same disposition as this file's other rows"
+      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; the seed body additionally rides wrap_untrusted at construction; same disposition as this file's other rows"
     },
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::source": {
-      "note": "prompt/context construction \u2014 the analysed function's own source is fenced into the LLM prompt (the analysis subject), not an operator render surface"
+      "note": "prompt/context construction — the analysed function's own source is fenced into the LLM prompt (the analysis subject), not an operator render surface"
     },
     "core/audit/context.py::render_pattern_library::unsanitised_llm_value::exemplar_lines": {
-      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; same disposition as this file's other rows"
+      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; same disposition as this file's other rows"
     },
     "core/audit/context.py::render_pattern_library::unsanitised_llm_value::reasoning": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/audit/context.py::render_pattern_library::unsanitised_llm_value::title": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/audit/contracts.py::format_contract_violations_for_prompt::unsanitised_llm_value::evidence": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/audit/corpus/corpus_metrics.py::_enrich_from_labels::unsanitised_exception_text::exc": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "core/audit/corpus/corpus_metrics.py::format_attribution_report::unsanitised_llm_value::error": {
       "note": "'error' is an integer counter column in the corpus metrics report; the free-text hypothesis/trap prints in this dev tool are sanitised"
@@ -137,7 +137,7 @@
       "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
     },
     "core/audit/corpus/run_corpus.py::_build_checklist::unsanitised_exception_text::exc": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "core/audit/corpus/run_corpus.py::_run_audit::unsanitised_llm_value::error_reason": {
       "note": "mechanical_skip is a bool, error_reason/hypothesis reach the results-record dict (data artifact), and the terminal prints of the same fields are sanitised; dev corpus driver"
@@ -164,106 +164,106 @@
       "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
     },
     "core/audit/dispatch_table.py::format_displacement_context::unsanitised_llm_value::description": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/audit/dynamic_sweep.py::_run_python_harness::unsanitised_llm_value::harness_code": {
-      "note": "LLM harness source written to the sandbox execution file \u2014 byte-exact by design, not a rendered report"
+      "note": "LLM harness source written to the sandbox execution file — byte-exact by design, not a rendered report"
     },
     "core/audit/evidence_fusion.py::format_fused_evidence::unsanitised_llm_value::to_prompt_section": {
       "note": "prompt-builder lane, not an operator report/terminal writer: the fused-evidence block is rendered for the review PROMPT and its ONLY consumer (orchestrator._store_fused_evidence -> context.format_context_for_prompt) routes it through the defend_repo_text prompt-defence chokepoint before it is stored; pinned by TestFusedEvidenceReachesThePrompt.test_stored_block_is_defended"
     },
     "core/audit/evidence_grade.py::format_evidence_chain::unsanitised_llm_value::description": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/audit/evidence_grade.py::format_evidence_chain::unsanitised_llm_value::detail": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/audit/goconc.py::_text::sanitiser_shadow::_text": {
-      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "core/audit/heap_copy_checker.py::format_findings::unsanitised_llm_value::evidence": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/audit/integer_truncation_checker.py::format_findings::unsanitised_llm_value::evidence": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/audit/intra_function.py::format_intra_function_context::unsanitised_llm_value::description": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/audit/invariant_smt.py::_term::sanitiser_shadow::_term": {
       "note": "name collision, not a sanitiser definition: this _term is the SMT invariant expression parser's TERM production (recursive-descent), sharing a name with the recognised _term terminal helper; it renders nothing and the file is not a writer. Surfaced when the shadow arm's dead self-reference wrapper was fixed. Rename on next touch."
     },
     "core/audit/measurement.py::format_evaluation::unsanitised_llm_value::file": {
-      "note": "prompt-construction lane, not an operator terminal/report lane \u2014 input-side envelope territory"
+      "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
     "core/audit/measurement.py::format_evaluation::unsanitised_llm_value::function": {
-      "note": "prompt-construction lane, not an operator terminal/report lane \u2014 input-side envelope territory"
+      "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
     "core/audit/measurement.py::format_evaluation::unsanitised_llm_value::hypothesis": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/audit/measurement.py::format_evaluation::unsanitised_llm_value::vuln_type": {
-      "note": "prompt-construction lane, not an operator terminal/report lane \u2014 input-side envelope territory"
+      "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
     "core/audit/mechanical_gates.py::format_constant_dangerous_calls::unsanitised_llm_value::line": {
-      "note": "prompt/context construction \u2014 integer line-number field rendered into an LLM prompt block; the string fields on the same line route through defend_prompt_field"
+      "note": "prompt/context construction — integer line-number field rendered into an LLM prompt block; the string fields on the same line route through defend_prompt_field"
     },
     "core/audit/negative_space.py::format_negative_space_prose::unsanitised_llm_value::evidence": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/audit/postcondition_verify.py::format_postcondition_context::unsanitised_llm_value::description": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/audit/prefilter.py::PrefilterResult.mechanical_evidence::unsanitised_llm_value::message": {
-      "note": "prefilter mechanical-evidence block builds LLM PROMPT text (input side, prompt_envelope territory), not an operator report surface; hit.message is the detector's rule message which can quote target source \u2014 the envelope quarantines it before the model"
+      "note": "prefilter mechanical-evidence block builds LLM PROMPT text (input side, prompt_envelope territory), not an operator report surface; hit.message is the detector's rule message which can quote target source — the envelope quarantines it before the model"
     },
     "core/audit/proto_length_checker.py::format_findings::unsanitised_llm_value::evidence": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/audit/return_domain.py::_line::sanitiser_shadow::_line": {
-      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "core/audit/return_domain.py::_text::sanitiser_shadow::_text": {
-      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "core/audit/struct_accessor_index.py::format_co_accessor_context::unsanitised_llm_value::description": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/audit/struct_field_checker.py::format_findings::unsanitised_llm_value::evidence": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/concepts/audit_bridge.py::domain_bug_patterns::unsanitised_llm_value::desc": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/concepts/audit_bridge.py::domain_model_context::unsanitised_llm_value::desc": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/concepts/audit_bridge.py::domain_model_context::unsanitised_llm_value::description": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/concepts/audit_bridge.py::domain_model_context::unsanitised_llm_value::file": {
-      "note": "prompt-construction lane, not an operator terminal/report lane \u2014 input-side envelope territory"
+      "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
     "core/concepts/audit_bridge.py::primers_from_domain_model::unsanitised_llm_value::description": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/concepts/audit_bridge.py::primers_from_domain_model::unsanitised_llm_value::kind": {
-      "note": "prompt/context construction \u2014 pairing-primer lines feed LLM prompts, not an operator render surface"
+      "note": "prompt/context construction — pairing-primer lines feed LLM prompts, not an operator render surface"
     },
     "core/concepts/audit_bridge.py::primers_from_domain_model::unsanitised_llm_value::stmt": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/concepts/study.py::_stamp_related_strategies::unsanitised_llm_value::e": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/coverage/collect.py::collect_llvm::unsanitised_llm_value::r_stdout": {
-      "note": "verbatim tool/child-output capture into a run artifact or structured data file \u2014 raw by design; rendering to the operator happens in registered writers that sanitise"
+      "note": "verbatim tool/child-output capture into a run artifact or structured data file — raw by design; rendering to the operator happens in registered writers that sanitise"
     },
     "core/coverage/store_summary.py::format_file_breakdown::unsanitised_llm_value::path": {
-      "note": "coverage summary terminal lanes \u2014 filed upstream as the store_summary member; sanitise + register with that fix"
+      "note": "coverage summary terminal lanes — filed upstream as the store_summary member; sanitise + register with that fix"
     },
     "core/coverage/store_summary.py::format_file_level_view::unsanitised_llm_value::status": {
-      "note": "coverage summary terminal lanes \u2014 filed upstream as the store_summary member; sanitise + register with that fix"
+      "note": "coverage summary terminal lanes — filed upstream as the store_summary member; sanitise + register with that fix"
     },
     "core/coverage/store_summary.py::format_no_lane_residual::unsanitised_llm_value::line": {
       "note": "integer line-number field (same class as the format_store_view sibling); every string field on the same rendered line routes through the module's _defang"
@@ -275,10 +275,10 @@
       "note": "integer line-number field; every string field on the same rendered line routes through the module's _defang"
     },
     "core/coverage/store_summary.py::render_coverage::unsanitised_llm_value::table": {
-      "note": "coverage summary terminal lanes \u2014 filed upstream as the store_summary member; sanitise + register with that fix"
+      "note": "coverage summary terminal lanes — filed upstream as the store_summary member; sanitise + register with that fix"
     },
     "core/dataflow/cvefix_bridge.py::_extract_proposal::unsanitised_llm_value::diff": {
-      "note": "fix-commit diff text written to a scratch artifact for tier-0 analysis \u2014 byte-exact input material, not a report"
+      "note": "fix-commit diff text written to a scratch artifact for tier-0 analysis — byte-exact input material, not a report"
     },
     "core/dataflow/ghsa_harvester.py::main::unsanitised_llm_value::parent": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
@@ -287,7 +287,7 @@
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
     "core/dataflow/run_corpus.py::main::unsanitised_llm_value::output": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/dataflow/scripts/handlabel_seed.py::write_seed::unsanitised_llm_value::finding": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
@@ -296,46 +296,49 @@
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
     "core/iris/synthesise.py::_build_assumption_prompt::unsanitised_llm_value::reason": {
-      "note": "prompt-construction lane, not an operator terminal/report lane \u2014 input-side envelope territory"
+      "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
     "core/iris/synthesise.py::_build_user_prompt::unsanitised_llm_value::reason": {
-      "note": "prompt-construction lane, not an operator terminal/report lane \u2014 input-side envelope territory"
+      "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
     "core/llm/cwe_strategies/prompts.py::render_strategy::unsanitised_llm_value::_render_exemplar": {
-      "note": "prompt-construction lane, not an operator terminal/report lane \u2014 input-side envelope territory"
+      "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
     "core/llm/cwe_strategies/prompts.py::render_strategy::unsanitised_llm_value::description": {
-      "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+      "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
     "core/llm/providers.py::ClaudeCodeLLMProvider._build_turn_system_prompt::unsanitised_llm_value::description": {
-      "note": "tool-protocol / system-prompt construction from RAPTOR-authored ToolDef descriptions \u2014 prompt text, not an operator surface"
+      "note": "tool-protocol / system-prompt construction from RAPTOR-authored ToolDef descriptions — prompt text, not an operator surface"
     },
     "core/llm/providers.py::LLMProvider._render_tool_protocol::unsanitised_llm_value::description": {
-      "note": "tool-protocol / system-prompt construction from RAPTOR-authored ToolDef descriptions \u2014 prompt text, not an operator surface"
+      "note": "tool-protocol / system-prompt construction from RAPTOR-authored ToolDef descriptions — prompt text, not an operator surface"
     },
     "core/orchestration/skill_dispatch.py::run_skill_dispatch::unsanitised_llm_value::prompt": {
-      "note": "prompt-construction lane, not an operator terminal/report lane \u2014 input-side envelope territory"
+      "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
     "core/recall/score.py::render_markdown::unsanitised_llm_value::id": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/recall/verify_enforced.py::render_verify_markdown::unsanitised_llm_value::file_path": {
-      "note": "verify-enforced records are RAPTOR-authored artifacts; repo-derived path residue in the heading is the same triaged residual as this file's existing 'reason' entry \u2014 sanitise + register on next functional touch"
+      "note": "verify-enforced records are RAPTOR-authored artifacts; repo-derived path residue in the heading is the same triaged residual as this file's existing 'reason' entry — sanitise + register on next functional touch"
     },
     "core/recall/verify_enforced.py::render_verify_markdown::unsanitised_llm_value::reason": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
+    },
+    "core/sage/hooks.py::recall_prior_fp_verdicts::unsanitised_llm_value::tool": {
+      "note": "hint-tier data field, not a print site: the 'tool' value is extracted from a SAGE row that already passed _row_mac_ok (MAC-verified under the local per-purpose key, so operator-machine-minted), and the returned rows feed FP primers as data consumed by callers that render through their own sanitised writers."
     },
     "core/sage/scripts/register_agents.py::register_agents::unsanitised_llm_value::description": {
       "note": "dev setup script; descriptions are RAPTOR-authored agent-catalog constants"
     },
     "core/sage/scripts/register_agents.py::register_agents::unsanitised_llm_value::name": {
-      "note": "dry-run print of the module's own literal RAPTOR_AGENTS constant table \u2014 operator-authored constants, no foreign input"
+      "note": "dry-run print of the module's own literal RAPTOR_AGENTS constant table — operator-authored constants, no foreign input"
     },
     "core/sage/scripts/seed_sage_knowledge.py::seed::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "core/sage/scripts/seed_sage_knowledge.py::seed::unsanitised_llm_value::confidence": {
-      "note": "dry-run print of the module's own literal seed-knowledge constants \u2014 operator-authored constants, no foreign input"
+      "note": "dry-run print of the module's own literal seed-knowledge constants — operator-authored constants, no foreign input"
     },
     "core/sage/scripts/seed_sage_knowledge.py::seed::unsanitised_llm_value::i": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
@@ -350,160 +353,157 @@
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
     "core/sandbox/scripts/feature-matrix/bin/report.py::main::unsanitised_llm_value::errors": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/startup/init.py::_check_analyzer_capabilities::unsanitised_llm_value::gcc_ver": {
       "note": "gcc --version first line from the local trusted toolchain probe (safe_subprocess_env, no target input)"
     },
     "core/understand_graph/queries.py::prompt_context_for_location::unsanitised_llm_value::kind": {
-      "note": "prompt/context construction \u2014 graph-node context lines feed LLM prompts, not an operator render surface (same tier as this file's threat_model_graph_context entries)"
+      "note": "prompt/context construction — graph-node context lines feed LLM prompts, not an operator render surface (same tier as this file's threat_model_graph_context entries)"
     },
     "core/understand_graph/queries.py::threat_model_graph_context::unsanitised_llm_value::entry": {
-      "note": "builds the graph_context STRING from hostile-influenced node labels (scanned-tree file/function names, LLM hypothesis text); not itself a render sink \u2014 the prompt consumer rides the envelope and the raptor-graph-query terminal consumer escapes at its sink"
+      "note": "builds the graph_context STRING from hostile-influenced node labels (scanned-tree file/function names, LLM hypothesis text); not itself a render sink — the prompt consumer rides the envelope and the raptor-graph-query terminal consumer escapes at its sink"
     },
     "core/understand_graph/queries.py::threat_model_graph_context::unsanitised_llm_value::sink": {
-      "note": "builds the graph_context STRING from hostile-influenced node labels (scanned-tree file/function names, LLM hypothesis text); not itself a render sink \u2014 the prompt consumer rides the envelope and the raptor-graph-query terminal consumer escapes at its sink"
+      "note": "builds the graph_context STRING from hostile-influenced node labels (scanned-tree file/function names, LLM hypothesis text); not itself a render sink — the prompt consumer rides the envelope and the raptor-graph-query terminal consumer escapes at its sink"
     },
     "libexec/raptor-bq-query::_run_sandboxed::unsanitised_llm_value::stderr": {
-      "note": "verbatim tool/child-output capture into a run artifact or structured data file \u2014 raw by design; rendering to the operator happens in registered writers that sanitise"
+      "note": "verbatim tool/child-output capture into a run artifact or structured data file — raw by design; rendering to the operator happens in registered writers that sanitise"
     },
     "libexec/raptor-bq-query::_run_sandboxed::unsanitised_llm_value::stdout": {
-      "note": "verbatim tool/child-output capture into a run artifact or structured data file \u2014 raw by design; rendering to the operator happens in registered writers that sanitise"
+      "note": "verbatim tool/child-output capture into a run artifact or structured data file — raw by design; rendering to the operator happens in registered writers that sanitise"
     },
     "libexec/raptor-cve-env::_run_build::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-enrich-context-map-mitigation::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-enrich-context-map-sites::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-enrich-context-map-taint::_find_cached_cpg::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-enrich-flow-trace-ast-view::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-ghidra::_cmd_attach::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-ghidra::_cmd_decompile::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-ghidra::_cmd_detach::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-ghidra::_cmd_export::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-ghidra::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-pick-strategies::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-project-manager::<module>::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-run-feasibility::_enrich_with_empirical_mitigation_map::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-run-feasibility::main::unsanitised_llm_value::id": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-run-lifecycle::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-run-sandboxed::<module>::unsanitised_llm_value::data": {
-      "note": "this tool's documented contract IS verbatim relay of the sandboxed child's stdout/stderr to the caller \u2014 scrubbing here would corrupt captured tool output; consumers own their render"
+      "note": "this tool's documented contract IS verbatim relay of the sandboxed child's stdout/stderr to the caller — scrubbing here would corrupt captured tool output; consumers own their render"
     },
     "libexec/raptor-run-sandboxed::<module>::unsanitised_llm_value::stderr": {
-      "note": "this tool's documented contract IS verbatim relay of the sandboxed child's stdout/stderr to the caller \u2014 scrubbing here would corrupt captured tool output; consumers own their render"
+      "note": "this tool's documented contract IS verbatim relay of the sandboxed child's stdout/stderr to the caller — scrubbing here would corrupt captured tool output; consumers own their render"
     },
     "libexec/raptor-run-sandboxed::<module>::unsanitised_llm_value::stdout": {
-      "note": "this tool's documented contract IS verbatim relay of the sandboxed child's stdout/stderr to the caller \u2014 scrubbing here would corrupt captured tool output; consumers own their render"
+      "note": "this tool's documented contract IS verbatim relay of the sandboxed child's stdout/stderr to the caller — scrubbing here would corrupt captured tool output; consumers own their render"
     },
     "libexec/raptor-sage-mcp-guard::main::unsanitised_llm_value::out": {
-      "note": "guard relays the wrapped MCP server's framed protocol stream \u2014 byte-exact by contract (JSON-RPC framing), not a render surface"
+      "note": "guard relays the wrapped MCP server's framed protocol stream — byte-exact by contract (JSON-RPC framing), not a render surface"
     },
     "libexec/raptor-sage::_report_task_created::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sage::cmd_backlog::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sage::cmd_corroborate::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sage::cmd_domains::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sage::cmd_forget::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sage::cmd_get::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sage::cmd_link::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sage::cmd_list::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sage::cmd_recall::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sage::cmd_remember::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sage::cmd_status::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sage::cmd_task::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sage::cmd_timeline::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-sca-run::_run_analyse::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-self-test::_run_selected::unsanitised_exception_text::exc": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-session-init::warm_sage_embeddings::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-startup-check::_check_mismatch::unsanitised_llm_value::name": {
-      "note": "project names are charset-validated at create/adopt/import (ProjectManager._validate_name) \u2014 no separators or control bytes; the target/caller paths on the same banner are sanitised at the site"
+      "note": "project names are charset-validated at create/adopt/import (ProjectManager._validate_name) — no separators or control bytes; the target/caller paths on the same banner are sanitised at the site"
     },
     "libexec/raptor-startup-check::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "libexec/raptor-startup-check::main::unsanitised_llm_value::resolved": {
-      "note": "machine-contract stdout line (RAPTOR_RESOLVED_PROJECT=...) parsed by the launcher, value is a charset-validated project name or empty \u2014 escaping here would corrupt the contract"
+      "note": "machine-contract stdout line (RAPTOR_RESOLVED_PROJECT=...) parsed by the launcher, value is a charset-validated project name or empty — escaping here would corrupt the contract"
     },
     "libexec/raptor-zkpox::_cmd_reproduce::unsanitised_llm_value::reason": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/binary_analysis/crash_analyser.py::CrashAnalyser._get_disassembly::unsanitised_llm_value::line": {
       "note": "disassembly lines feed the analysis data structure (artifact); the rendering chokepoints in this package are registered"
     },
     "packages/codeql/agent.py::CodeQLAgent._print_dataflow_table::unsanitised_llm_value::sink": {
-      "note": "no-tabulate fallback print of CodeQL dataflow endpoints (target-derived symbol names); same residual tier as this file's baselined table lanes \u2014 sanitise + register on next functional touch"
+      "note": "no-tabulate fallback print of CodeQL dataflow endpoints (target-derived symbol names); same residual tier as this file's baselined table lanes — sanitise + register on next functional touch"
     },
     "packages/codeql/agent.py::CodeQLAgent._print_dataflow_table::unsanitised_llm_value::source": {
-      "note": "no-tabulate fallback print of CodeQL dataflow endpoints (target-derived symbol names); same residual tier as this file's baselined table lanes \u2014 sanitise + register on next functional touch"
+      "note": "no-tabulate fallback print of CodeQL dataflow endpoints (target-derived symbol names); same residual tier as this file's baselined table lanes — sanitise + register on next functional touch"
     },
     "packages/codeql/agent.py::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
-    },
-    "packages/codeql/autonomous_analyzer.py::AutonomousCodeQLAnalyzer.analyze_finding_autonomous::unsanitised_llm_value::exploit_code": {
-      "note": "artifact, not display: the exploit PoC file's contract is the raw LLM-generated code (same adjudicated split as the replay --json artifact lane); the write path is safe_id-derived and the operator-facing log line prints only the path; surfaced by the attribute-form helper-return arm widening"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "packages/codeql/autonomous_analyzer.py::AutonomousCodeQLAnalyzer.generate_exploit::unsanitised_llm_value::line": {
-      "note": "exploit PoC source assembly \u2014 byte-exact artifact by design, not a rendered report"
+      "note": "exploit PoC source assembly — byte-exact artifact by design, not a rendered report"
     },
     "packages/codeql/dataflow_visualizer.py::DataflowVisualizer.generate_ascii::unsanitised_llm_value::message": {
       "note": "routed through the function-local _clean (sanitise_string-based, byte-capped); a nested local helper def is outside the audit's sanitiser vocabulary so the wrapped read still fires"
@@ -514,32 +514,29 @@
     "packages/cve_diff/cve_diff/oracle/cross_check.py::_render_markdown::unsanitised_llm_value::notes": {
       "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
     },
-    "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::md": {
-      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
-    },
     "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::summary_path": {
-      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
+      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low — sanitise + register on next functional touch"
     },
     "packages/cve_diff/cve_diff/report/markdown.py::_render_consensus::unsanitised_llm_value::name": {
-      "note": "cell routes through the module's _md_cell (markdown/table-structure escapes: pipes, newlines, backticks, brackets); _md_cell builds on plain replaces rather than a canonical primitive, so the shadow arm bars it from _SANITISERS \u2014 control-byte residue is this file's documented residual tier"
+      "note": "cell routes through the module's _md_cell (markdown/table-structure escapes: pipes, newlines, backticks, brackets); _md_cell builds on plain replaces rather than a canonical primitive, so the shadow arm bars it from _SANITISERS — control-byte residue is this file's documented residual tier"
     },
     "packages/cve_diff/cve_diff/report/markdown.py::_render_consensus::unsanitised_llm_value::slug": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/cve_env/cve_env/agent/core_loop.py::build_core::unsanitised_exception_text::exc": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "packages/cve_env/cve_env/agent/refusals.py::append_events::unsanitised_llm_value::_render_event": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/describe/cli.py::_resolve_archive::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/analyzer.py::FeasibilityReport.summary::unsanitised_llm_value::line": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::_fmt": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes \u2014 sanitise + register on next functional touch"
+      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::description": {
       "note": "feasibility summaries interpolate the package's own mitigation-catalog constants; the target-derived residue is unit-filed to the exploit_feasibility owner (campaign row U17-18)"
@@ -548,46 +545,46 @@
       "note": "blocker names come from the package's own mitigation-catalog constants; same adjudication as this file's existing description/reason entries"
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::reason": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes \u2014 sanitise + register on next functional touch"
+      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::technique": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes \u2014 sanitise + register on next functional touch"
+      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::version": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes \u2014 sanitise + register on next functional touch"
+      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/api.py::format_analysis_summary::unsanitised_llm_value::viability_summary": {
       "note": "feasibility summaries interpolate the package's own mitigation-catalog constants; the target-derived residue is unit-filed to the exploit_feasibility owner (campaign row U17-18)"
     },
     "packages/exploit_feasibility/api.py::print_exploit_context::unsanitised_llm_value::b": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes \u2014 sanitise + register on next functional touch"
+      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/api.py::print_exploit_context::unsanitised_llm_value::name": {
-      "note": "binary-derived target symbol name in the terminal summary; same residual tier as this file's other baselined summary lanes \u2014 sanitise + register on next functional touch"
+      "note": "binary-derived target symbol name in the terminal summary; same residual tier as this file's other baselined summary lanes — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/api.py::print_exploit_context::unsanitised_llm_value::note": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes \u2014 sanitise + register on next functional touch"
+      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/api.py::print_exploit_context::unsanitised_llm_value::notes": {
-      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes \u2014 sanitise + register on next functional touch"
+      "note": "exploit-feasibility summary lanes, previously triaged on this file; widened vocabulary re-keys the same lanes — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/constraints.py::BadByteImpact.summary::unsanitised_llm_value::reason": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/constraints.py::InputConstraintAnalysis.summary::unsanitised_llm_value::b": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/constraints.py::InputConstraintAnalysis.summary::unsanitised_llm_value::n": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/constraints.py::LibcFingerprintingPotential.summary::unsanitised_llm_value::note": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/exploit_context.py::ExploitContext.summary::unsanitised_llm_value::line": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/mechanism_registry.py::render_markdown::unsanitised_llm_value::id": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/exploit_feasibility/mitigations.py::GlibcMitigations.summary::unsanitised_llm_value::description": {
       "note": "descriptions are the package's own mitigation-catalog constants"
@@ -596,19 +593,19 @@
       "note": "descriptions are the package's own mitigation-catalog constants"
     },
     "packages/exploit_feasibility/primitives.py::ConfidenceScore.summary::unsanitised_llm_value::r": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/exploitability_validation/scripts/measure_stage_e_empirical_influence.py::main::unsanitised_llm_value::r": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
     "packages/exploitability_validation/scripts/measure_stage_e_empirical_influence.py::main::unsanitised_llm_value::reasoning": {
-      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
+      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low — sanitise + register on next functional touch"
     },
     "packages/joern/netns_forwarder.py::self_probe::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "packages/joern/runner.py::_StallMonitor.run::unsanitised_llm_value::line": {
-      "note": "stall-monitor relays joern server lines through the raptor logger \u2014 the console-formatter chokepoint escapes them"
+      "note": "stall-monitor relays joern server lines through the raptor logger — the console-formatter chokepoint escapes them"
     },
     "packages/joern/scripts/compat_matrix.py::main::unsanitised_llm_value::results": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
@@ -623,43 +620,43 @@
       "note": "response_content is written through the module's _sanitise_artifact_text into artifact files, then rendered by registered writers"
     },
     "packages/llm_analysis/dataflow_validation.py::_build_hypothesis::unsanitised_llm_value::untrusted_inner": {
-      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; same disposition as this file's other rows"
+      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; same disposition as this file's other rows"
     },
     "packages/llm_analysis/flow_context_inject.py::_build_caller_block::unsanitised_llm_value::name": {
-      "note": "prompt/context construction \u2014 caller blocks are injected into LLM prompts, not an operator render surface; names are additionally clipped by the module's _clip"
+      "note": "prompt/context construction — caller blocks are injected into LLM prompts, not an operator render surface; names are additionally clipped by the module's _clip"
     },
     "packages/llm_analysis/flow_context_inject.py::_render_trace::unsanitised_llm_value::line": {
-      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane \u2014 input-side envelope territory; same disposition as this file's other rows"
+      "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; same disposition as this file's other rows"
     },
     "packages/llm_analysis/journal_emit.py::build_journal_body::unsanitised_llm_value::reasoning": {
-      "note": "journal-body construction \u2014 journal entries are data artifacts; the journal render surfaces (raptor-review, core/audit/report) are registered writers"
+      "note": "journal-body construction — journal entries are data artifacts; the journal render surfaces (raptor-review, core/audit/report) are registered writers"
     },
     "packages/llm_analysis/scripts/e2e_intent_match.py::_show::raw_serialiser_at_sink::dumps_display": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
     "packages/llm_analysis/scripts/e2e_intent_match.py::_show::unsanitised_llm_value::confidence": {
-      "note": "dev-time E2E script; confidence renders under a :.2f format spec \u2014 a non-numeric value raises at format time"
+      "note": "dev-time E2E script; confidence renders under a :.2f format spec — a non-numeric value raises at format time"
     },
     "packages/llm_analysis/scripts/e2e_intent_match.py::_show::unsanitised_llm_value::reasoning": {
-      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
+      "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low — sanitise + register on next functional touch"
     },
     "packages/llm_analysis/scripts/e2e_verify_exploit.py::main::raw_serialiser_at_sink::dumps_display": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
     "packages/sca/bump/cli.py::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "packages/sca/clean_cache.py::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "packages/sca/findings.py::write_findings_json::unsanitised_llm_value::_hygiene_finding_to_row": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/sca/findings.py::write_findings_json::unsanitised_llm_value::_license_finding_to_row": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/sca/findings.py::write_findings_json::unsanitised_llm_value::_supply_chain_finding_to_row": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/sca/harden.py::_run_self_test::unsanitised_llm_value::proc": {
       "note": "self-test lane relays its own child's output for the operator running the self-test; the child is RAPTOR's own harden CLI"
@@ -671,37 +668,37 @@
       "note": "self-test lane relays its own child's output for the operator running the self-test; the child is RAPTOR's own harden CLI"
     },
     "packages/sca/harden.py::_write_report::unsanitised_llm_value::detail": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/sca/parsers/pom.py::_text::sanitiser_shadow::_text": {
-      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "packages/sca/parsers/pom_inheritance.py::_text::sanitiser_shadow::_text": {
-      "note": "tree-sitter node-text accessor / analysis helper \u2014 a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
+      "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
     "packages/sca/reachability/go_function_level.py::refine_go_verdicts::unsanitised_llm_value::line": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/sca/reachability/go_function_level.py::refine_go_verdicts::unsanitised_llm_value::path": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/sca/reachability/java_function_level.py::refine_maven_verdicts::unsanitised_llm_value::line": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/sca/reachability/java_function_level.py::refine_maven_verdicts::unsanitised_llm_value::path": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/sca/reachability/npm_function_level.py::refine_npm_verdicts::unsanitised_llm_value::line": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/sca/reachability/npm_function_level.py::refine_npm_verdicts::unsanitised_llm_value::path": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/sca/reachability/python_function_level.py::refine_pypi_verdicts::unsanitised_llm_value::line": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/sca/reachability/python_function_level.py::refine_pypi_verdicts::unsanitised_llm_value::path": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
+      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "packages/sca/report_html.py::_vuln_card::unsanitised_llm_value::summary": {
       "note": "HTML report lane html.escape()s at emission (helper outside the audit vocabulary)"
@@ -710,93 +707,90 @@
       "note": "helper-return of the html card renderer whose summary row is triaged above (html-escaping inside the card)"
     },
     "packages/sca/supply_chain/typosquat_audit.py::_render_reaudit_llm::unsanitised_llm_value::rationale": {
-      "note": "re-audit rationale lane \u2014 unit-filed to the typosquat owner (campaign rows U07/U08)"
+      "note": "re-audit rationale lane — unit-filed to the typosquat owner (campaign rows U07/U08)"
     },
     "packages/sca/verify.py::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "packages/sca/verify.py::main::unsanitised_llm_value::delta_md": {
-      "note": "bool-propagation false positive: osv_degraded is a boolean derived from findings rows and passed into _render_markdown, so the detector taints the returned markdown; the render routes every foreign cell through md_cell and the degraded verdict line is a constant \u2014 the flag itself cannot carry bytes"
+      "note": "bool-propagation false positive: osv_degraded is a boolean derived from findings rows and passed into _render_markdown, so the detector taints the returned markdown; the render routes every foreign cell through md_cell and the degraded verdict line is a constant — the flag itself cannot carry bytes"
     },
     "packages/source_intel/measurement.py::_run_one::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "packages/source_intel/measurement.py::main::unsanitised_llm_value::output": {
       "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
     },
     "packages/source_intel/render.py::derive_evidence_strings::unsanitised_llm_value::_render_hazard_line": {
-      "note": "prompt-construction lane, not an operator terminal/report lane \u2014 input-side envelope territory"
-    },
-    "packages/web/external_validators.py::ExternalValidatorRunner._nuclei_batch::unsanitised_llm_value::stdout": {
-      "note": "nuclei stdout is parsed as JSON lines into finding records (artifact), not printed"
+      "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
     "packages/web/scanner.py::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "raptor.py::<module>::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "raptor.py::_run_script::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "raptor.py::_run_with_lifecycle::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "raptor.py::_unpack_archive_target::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "raptor.py::mode_binary::unsanitised_exception_text::exc": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "raptor.py::mode_sca::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "raptor_codeql.py::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     },
     "raptor_fuzzing.py::main::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+      "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
     }
   },
   "bash_manual_audit": {
     "bin/cve-diff": {
-      "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+      "note": "manual audit: launcher/dispatch shim — echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
     },
     "bin/cve-env": {
-      "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+      "note": "manual audit: launcher/dispatch shim — echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
     },
     "bin/raptor": {
-      "note": "manual audit: launcher \u2014 echo lanes carry $0, PATH-entry hygiene warnings, install paths, and argv; PATH entries are attacker-influenceable by the script's own threat model (hostile direnv/.envrc) and the hygiene warnings strip non-printables at echo (builtins, _fsince idiom; pinned by .github/tests/test_launcher_path_scrub.py); PATH entries are pre-scrubbed before any external command runs"
+      "note": "manual audit: launcher — echo lanes carry $0, PATH-entry hygiene warnings, install paths, and argv; PATH entries are attacker-influenceable by the script's own threat model (hostile direnv/.envrc) and the hygiene warnings strip non-printables at echo (builtins, _fsince idiom; pinned by .github/tests/test_launcher_path_scrub.py); PATH entries are pre-scrubbed before any external command runs"
     },
     "bin/raptor-sca": {
-      "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+      "note": "manual audit: launcher/dispatch shim — echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
     },
     "libexec/raptor-agentic": {
-      "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+      "note": "manual audit: launcher/dispatch shim — echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
     },
     "libexec/raptor-cc-trust-check": {
-      "note": "manual audit: dispatch shim \u2014 echo lanes carry argv flags and install paths; the trust verdict rendering happens in the python CLI it dispatches to"
+      "note": "manual audit: dispatch shim — echo lanes carry argv flags and install paths; the trust verdict rendering happens in the python CLI it dispatches to"
     },
     "libexec/raptor-frida": {
       "note": "manual audit: echo lanes relay the lifecycle stub's stdout (RAPTOR's own trusted child; the OUTPUT_DIR sentinel relay must stay byte-exact) plus paths/argv; target stdio is NOT echoed by the wrapper (the capture pipeline owns it)"
     },
     "libexec/raptor-frida-patch-verify": {
-      "note": "manual audit: same shape as raptor-frida \u2014 lifecycle relay + paths/argv; verdict text comes from the python patch oracle (a registered writer)"
+      "note": "manual audit: same shape as raptor-frida — lifecycle relay + paths/argv; verdict text comes from the python patch oracle (a registered writer)"
     },
     "libexec/raptor-llm-scorecard": {
-      "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+      "note": "manual audit: launcher/dispatch shim — echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
     },
     "libexec/raptor-openant": {
       "note": "bash launcher: exec's raptor_openant.py with env setup; no interpolated LLM/tool text in echo/printf"
     },
     "libexec/raptor-sage-mcp": {
-      "note": "manual audit: docker-exec dispatch shim \u2014 echo lanes carry $0/paths; server JSON-RPC traffic flows through the mcp-guard python filter, never through echo"
+      "note": "manual audit: docker-exec dispatch shim — echo lanes carry $0/paths; server JSON-RPC traffic flows through the mcp-guard python filter, never through echo"
     },
     "libexec/raptor-sage-setup": {
-      "note": "manual audit: the boot-payload approval displays route server-derived text through _render_payload_display (escape + bound, fail-closed on sanitiser failure) on every lane incl. the corrupt-header --reauthorize replace; covered by test_sage_setup_reauthorize display-integrity tests and the approval-surface registry wire-token check. status/verify_embeddings lanes echo container env (SAGE_EMBEDDING_*, OLLAMA_*) resolved through core/sage/docker-compose.yml \u2014 some values are host-env-defaulted (e.g. SAGE_EMBED_MODEL), and the lanes strip only whitespace, so they are safe only while those resolutions stay host-controlled, not by the audited script"
+      "note": "manual audit: the boot-payload approval displays route server-derived text through _render_payload_display (escape + bound, fail-closed on sanitiser failure) on every lane incl. the corrupt-header --reauthorize replace; covered by test_sage_setup_reauthorize display-integrity tests and the approval-surface registry wire-token check. status/verify_embeddings lanes echo container env (SAGE_EMBEDDING_*, OLLAMA_*) resolved through core/sage/docker-compose.yml — some values are host-env-defaulted (e.g. SAGE_EMBED_MODEL), and the lanes strip only whitespace, so they are safe only while those resolutions stay host-controlled, not by the audited script"
     },
     "libexec/raptor-threat-model": {
-      "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+      "note": "manual audit: launcher/dispatch shim — echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
     }
   }
 }

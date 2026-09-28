@@ -4585,7 +4585,8 @@ def _assemble_b(
     for n in nodes:
         for tgt in str(n.get("leads_to") or "").split(","):
             if tgt and tgt not in node_ids:
-                print(f"WARNING: attack-tree node {n.get('id')} leads_to "
+                print("WARNING: attack-tree node "
+                      f"{_sft(str(n.get('id')), max_len=80)} leads_to "
                       f"{_sft(tgt, max_len=80)} which is not in the "
                       "assembled tree", file=sys.stderr)
     inventory = load_json(workdir / "findings.json")
@@ -4682,11 +4683,13 @@ def assemble_parts(stage: str, workdir: str | Path) -> bool:
                          overwrite_generator=False)
         result = _lint.lint_artifact(schema_type, data, fname)
         for w in result.warnings:
-            print(f"WARNING: {fname}: {_sft(str(w), max_len=300)}",
+            print(f"WARNING: {_sft(fname, max_len=100)}: "
+                  f"{_sft(str(w), max_len=300)}",
                   file=sys.stderr)
         if result.errors:
             failed = True
-            print(f"ERRORS in assembled {fname}:", file=sys.stderr)
+            print(f"ERRORS in assembled {_sft(fname, max_len=100)}:",
+                  file=sys.stderr)
             for e in result.errors:
                 print(f"  {_sft(str(e), max_len=300)}", file=sys.stderr)
     if failed:
@@ -4724,7 +4727,8 @@ def assemble_parts(stage: str, workdir: str | Path) -> bool:
               receipt)
 
     print(f"Assembled stage {stage}: {len(merged_names)} part(s) merged, "
-          f"{len(quarantined)} quarantined -> {', '.join(sorted(written))}")
+          f"{len(quarantined)} quarantined -> "
+          f"{_sft(', '.join(sorted(written)), max_len=300)}")
     return True
 
 

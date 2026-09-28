@@ -3126,7 +3126,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
                     flush=True,
                 )
             elif _ck.advisory or _ck.aborted:
-                print(f"journal checkpoint: {_ck.reason}", flush=True)
+                print("journal checkpoint: "
+                      f"{sanitise_for_terminal(str(_ck.reason), max_len=300)}",
+                      flush=True)
 
     # --- journal completeness gate (spend-authorizing read) ---
     # Everything downstream — the drift gate, the own-run $0 reuse
