@@ -19968,12 +19968,40 @@ def _memoized_sweep_step(
     Falls back to a direct run when the config carries no memo (test
     stand-ins) or when any key part is un-hashable (``None`` value —
     see :meth:`SweepMemo.make_key`).
+
+    Checkpointable step types (coccinelle — see
+    ``core.audit.sweep_checkpoint``) additionally consult the run
+    directory's durable trail, so a drained-and-resumed segment
+    replays completed (rule, file) sweeps instead of re-running
+    spatch from file zero. Order: in-process memo, then the durable
+    trail (a replay is promoted into the memo), then the runner (its
+    result lands in both layers). Every checkpoint failure mode
+    degrades to "run it" — never to "skip it".
     """
     memo = getattr(config, "sweep_memo", None)
     if memo is None:
         return runner()
     key = SweepMemo.make_key(tool, key_parts)
-    return memo.get_or_run(key, runner)
+    if key is None:
+        return memo.get_or_run(key, runner)
+    from .sweep_checkpoint import checkpoint_for_run, tool_checkpointable
+    checkpoint = (
+        checkpoint_for_run(getattr(config, "out_dir", None))
+        if tool_checkpointable(tool) else None
+    )
+    if checkpoint is None:
+        return memo.get_or_run(key, runner)
+    cached = memo.get(key)
+    if cached is not None:
+        return cached
+    replayed = checkpoint.lookup(key)
+    if replayed is not None:
+        memo.put(key, replayed)
+        return replayed
+    result = runner()
+    memo.put(key, result)
+    checkpoint.record(key, result)
+    return result
 
 
 def _run_tool_chain(
