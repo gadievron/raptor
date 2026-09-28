@@ -2548,7 +2548,16 @@ def _chase_reading_list_definitions(
     safe_env = RaptorConfig.get_safe_env()
 
     target_resolved = target.resolve()
+    source_root_resolved = source_root.resolve()
     candidates: set[Path] = set()
+
+    def _contained(p: Path) -> bool:
+        """True iff *p* stays inside the scanned tree and outside the
+        study target. Filenames come from an untrusted repo: a
+        symlinked path (or a stale/hostile entry) resolving outside
+        ``source_root`` must never enter the study set."""
+        return (p.is_relative_to(source_root_resolved)
+                and not p.is_relative_to(target_resolved))
 
     def _collect_grep(dest: set[Path]) -> None:
         """Find files containing struct/function/typedef definitions."""
@@ -2562,17 +2571,23 @@ def _chase_reading_list_definitions(
             return
         combined = "|".join(def_patterns[:300])
         try:
+            # --null: NUL-delimited filenames. Repo file names are
+            # untrusted and may embed newlines — newline-split parsing
+            # would let one crafted name smuggle arbitrary path lines
+            # into the candidate set. The long spelling, not -Z: GNU
+            # grep aliases the two, but BSD grep's -Z means decompress
+            # while --null is the NUL framing on both.
             proc = subprocess.run(
-                ["grep", "-rlE", "--include=*.c", "--include=*.h",
-                 combined, str(source_root)],
+                ["grep", "-rlE", "--null", "--include=*.c",
+                 "--include=*.h", combined, str(source_root)],
                 capture_output=True, text=True, timeout=60, check=False,
                 env=safe_env,
             )
-            for line in proc.stdout.strip().split("\n"):
-                if not line:
+            for entry in proc.stdout.split("\0"):
+                if not entry:
                     continue
-                p = Path(line).resolve()
-                if p.is_file() and not p.is_relative_to(target_resolved):
+                p = Path(entry).resolve()
+                if p.is_file() and _contained(p):
                     dest.add(p)
         except (subprocess.TimeoutExpired, OSError):
             pass
@@ -2591,18 +2606,19 @@ def _chase_reading_list_definitions(
             name_args.extend(["-o", "-name", f"*_{il}.*"])
             name_args.extend(["-o", "-name", f"{il}_*.*"])
         try:
+            # -print0: NUL-delimited — see the grep --null rationale
+            # above.
             proc = subprocess.run(
                 ["find", str(source_root), "-type", "f", "("]
-                + name_args + [")"],
+                + name_args + [")", "-print0"],
                 capture_output=True, text=True, timeout=30, check=False,
                 env=safe_env,
             )
-            for line in proc.stdout.strip().split("\n"):
-                if not line:
+            for entry in proc.stdout.split("\0"):
+                if not entry:
                     continue
-                p = Path(line).resolve()
-                if p.suffix in (".c", ".h") \
-                        and not p.is_relative_to(target_resolved):
+                p = Path(entry).resolve()
+                if p.suffix in (".c", ".h") and _contained(p):
                     dest.add(p)
         except (subprocess.TimeoutExpired, OSError):
             pass

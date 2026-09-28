@@ -1869,6 +1869,80 @@ class TestChaseReadingListDefinitions:
         names = {p.name for p in result}
         assert "local_lock.h" in names
 
+    def _mirror_victim(self, repo: Path, victim: Path, content: str) -> Path:
+        """Recreate ``victim``'s absolute path inside ``repo`` under a
+        directory whose name ends with a newline. find/grep then print
+        the mirror's path as ``<repo>/lib/evil\\n<victim>`` — so
+        newline-split output parsing yields ``str(victim)`` as its own
+        line, smuggling an outside-the-tree path into the study set."""
+        mirror_dir = repo / "lib" / "evil\n"
+        for part in victim.parent.parts[1:]:
+            mirror_dir = mirror_dir / part
+        mirror_dir.mkdir(parents=True)
+        mirror = mirror_dir / victim.name
+        mirror.write_text(content, encoding="utf-8")
+        return mirror
+
+    def test_newline_filename_cannot_smuggle_outside_path_find(
+        self, tmp_path,
+    ) -> None:
+        """A repo filename embedding a newline must not add an
+        outside-the-tree path to the chase results (find lane)."""
+        repo = tmp_path / "repo"
+        target = repo / "crypto"
+        target.mkdir(parents=True)
+        (target / "main.c").write_text("int main(void) {}", encoding="utf-8")
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        victim = outside / "scatterlist.h"
+        victim.write_text("OUTSIDE THE SCANNED TREE", encoding="utf-8")
+
+        mirror = self._mirror_victim(repo, victim, "void sg(void) {}")
+
+        rl = self._write_rl(tmp_path, [
+            {"question": "What is struct scatterlist?",
+             "context": "Unresolved type: struct scatterlist",
+             "resolved": False, "resolution": "identifier"},
+        ])
+
+        result = prep._chase_reading_list_definitions(rl, repo, target)
+        resolved = {p.resolve() for p in result}
+        assert victim.resolve() not in resolved
+        # The mirror file itself is a real repo file — still studied.
+        assert mirror.resolve() in resolved
+
+    def test_newline_filename_cannot_smuggle_outside_path_grep(
+        self, tmp_path,
+    ) -> None:
+        """Same smuggle via the grep lane: the mirror file's CONTENT
+        matches the definition pattern, so grep prints its
+        newline-embedding path."""
+        repo = tmp_path / "repo"
+        target = repo / "crypto"
+        target.mkdir(parents=True)
+        (target / "main.c").write_text("int main(void) {}", encoding="utf-8")
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        victim = outside / "types.h"
+        victim.write_text("OUTSIDE THE SCANNED TREE", encoding="utf-8")
+
+        mirror = self._mirror_victim(
+            repo, victim, "struct crypto_spawn {\n    int dummy;\n};\n",
+        )
+
+        rl = self._write_rl(tmp_path, [
+            {"question": "What is `crypto_spawn`?",
+             "context": "Unresolved type: crypto_spawn",
+             "resolved": False, "resolution": "identifier"},
+        ])
+
+        result = prep._chase_reading_list_definitions(rl, repo, target)
+        resolved = {p.resolve() for p in result}
+        assert victim.resolve() not in resolved
+        assert mirror.resolve() in resolved
+
 
 # ------------------------------------------------------------------
 # Type reinjection
