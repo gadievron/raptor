@@ -583,12 +583,18 @@ def record_run_calibration(out_dir: Path) -> dict[str, Any] | None:
                               max_bytes=_MAX_CALIBRATION_BYTES)
         if not isinstance(breakdown, dict):
             return None
-        entry = calibration_entry(forecast, breakdown, run_id=out_dir.name)
+        from core.coverage.journal import INDEX_FILENAME, resolved_run_id
+
+        # Resolved basename, never the raw spelling: a relative
+        # out_dir ("." from inside the run dir) has name == "" — the
+        # calibration record would carry no run attribution (see
+        # resolved_run_id).
+        entry = calibration_entry(forecast, breakdown,
+                                  run_id=resolved_run_id(out_dir))
         append_calibration(out_dir / CALIBRATION_FILENAME, entry)
         # Project-level accumulation, keyed off the same marker gap
         # computation uses for prior-verdict folding: the journal
         # index identifies a project directory.
-        from core.coverage.journal import INDEX_FILENAME
         project_dir = out_dir.parent
         if (project_dir / INDEX_FILENAME).is_file():
             append_calibration(project_dir / CALIBRATION_FILENAME, entry)

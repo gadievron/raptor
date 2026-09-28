@@ -467,6 +467,28 @@ class TestRunCalibrationTail:
             project_dir / CALIBRATION_FILENAME).read_text().splitlines()
         assert json.loads(project_lines[0])["run_id"] == "run-1"
 
+    def test_relative_out_dir_stamps_resolved_run_id(
+            self, tmp_path: Path,
+            monkeypatch: pytest.MonkeyPatch) -> None:
+        # The run-attribution seam: "." from inside the run dir has
+        # name == "" unresolved — the calibration record would carry
+        # no run attribution.
+        run_dir = self._run_dir(tmp_path)
+        monkeypatch.chdir(run_dir)
+        entry = record_run_calibration(Path("."))
+        assert entry is not None
+        assert entry["run_id"] == "run-1"
+
+    def test_absolute_out_dir_stamp_unchanged(
+            self, tmp_path: Path) -> None:
+        # Differential pin: the completion tail passes absolute run
+        # dirs, and there the stamp stays exactly the pre-existing
+        # basename.
+        run_dir = self._run_dir(tmp_path)
+        entry = record_run_calibration(run_dir)
+        assert entry is not None
+        assert entry["run_id"] == run_dir.name == "run-1"
+
     def test_no_project_marker_stays_run_local(self, tmp_path: Path):
         run_dir = self._run_dir(tmp_path)
         assert record_run_calibration(run_dir) is not None

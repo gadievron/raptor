@@ -3,6 +3,8 @@ raptor-verified-outcomes, and the scanner's Phase 2.5 wiring."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("requests")
@@ -205,3 +207,44 @@ class TestScannerWiring:
         assert all("verification" in f for f in findings)
         assert [f["verification"]["status"] for f in findings] == [
             VERIFIED, "skipped", "skipped"]
+
+    def _recording_scanner(
+            self, out_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> tuple[object, dict]:
+        """Scanner whose scorecard bridge records the run_id it gets
+        (``_verify_findings`` imports it lazily, so patching the
+        bridge module attribute intercepts the call)."""
+        import packages.web.scorecard_bridge as bridge_mod
+
+        recorded: dict = {}
+
+        def _record(llm: object, hits: list, run_id: str = "") -> None:
+            recorded["run_id"] = run_id
+
+        monkeypatch.setattr(
+            bridge_mod, "record_web_oracle_outcomes", _record)
+        scanner = self._scanner(out_dir, monkeypatch)
+        scanner.llm = object()
+        return scanner, recorded
+
+    def test_scorecard_scope_relative_out_dir_stamps_resolved_run_id(
+            self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The run-attribution seam: "." from inside the run dir has
+        # name == "" unresolved — the scorecard cells would lose
+        # their run scope.
+        run = tmp_path / "web_run"
+        run.mkdir()
+        monkeypatch.chdir(run)
+        scanner, recorded = self._recording_scanner(Path("."), monkeypatch)
+        f = self._finding()
+        scanner._verify_findings([(f, "http://t.example/s", "q", "GET")])
+        assert recorded["run_id"] == "web_run"
+
+    def test_scorecard_scope_absolute_out_dir_stamp_unchanged(
+            self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Differential pin: run dirs from the lifecycle are absolute,
+        # and there the stamp stays exactly the pre-existing basename.
+        scanner, recorded = self._recording_scanner(tmp_path, monkeypatch)
+        f = self._finding()
+        scanner._verify_findings([(f, "http://t.example/s", "q", "GET")])
+        assert recorded["run_id"] == tmp_path.name

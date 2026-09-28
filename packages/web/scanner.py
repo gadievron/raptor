@@ -2321,13 +2321,18 @@ class WebScanner:
         # Self-labeling: the oracle verdicts double as ground truth for
         # the payload model's scorecard cells — no human labels needed.
         try:
+            from core.coverage.journal import resolved_run_id
             from packages.web.scorecard_bridge import (
                 record_web_oracle_outcomes,
             )
             record_web_oracle_outcomes(
                 self.llm,
                 [context[0] for context in probe_contexts],
-                run_id=self.out_dir.name,
+                # Resolved basename, never the raw spelling: a relative
+                # out_dir ("." from inside the run dir) has name == ""
+                # — the scorecard cells would lose their run scope
+                # (see resolved_run_id).
+                run_id=resolved_run_id(self.out_dir),
             )
         except Exception:
             logger.debug("web scorecard bridge failed", exc_info=True)

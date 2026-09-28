@@ -28,7 +28,8 @@ plural shape makes that concatenation trivial without a singular/plural
 schema awkwardness post-merge.
 
 What's INTENTIONALLY thin in a ProvenanceRef:
-  * run_id      = the run-dir basename (stable, file-system grep-able).
+  * run_id      = the RESOLVED run-dir basename (stable, file-system
+    grep-able; ``core.coverage.journal.resolved_run_id``).
   * ts          = the manifest's start-time ISO timestamp.
   * manifest_path = the path to ``.raptor-run.json``, always relative to
     the run dir (see ``_relative_manifest_path``). Consumers resolve it
@@ -88,8 +89,15 @@ def build_provenance_ref(run_dir: Path) -> dict[str, Any] | None:
     manifest = load_run_metadata(run_dir)
     if not manifest:
         return None
+    from core.coverage.journal import resolved_run_id
+
     ref = {
-        "run_id": run_dir.name,
+        # Resolved basename, never the raw spelling: a relative
+        # run_dir ("." from inside the run dir) has name == "" — the
+        # ref would fail is_canonical_ref_shape's non-empty run_id
+        # check and the run's findings would carry no back-link (see
+        # resolved_run_id).
+        "run_id": resolved_run_id(run_dir),
         "manifest_path": str(_relative_manifest_path(run_dir)),
     }
     # Manifest top-level uses ``timestamp`` (per core/run/metadata.py

@@ -50,6 +50,33 @@ def test_build_ref_minimal_shape(tmp_path: Path) -> None:
     }
 
 
+def test_build_ref_relative_run_dir_stamps_resolved_run_id(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The run-attribution seam: "." from inside the run dir has
+    # name == "" unresolved — the ref would fail
+    # is_canonical_ref_shape's non-empty run_id check and the run's
+    # findings would carry no back-link.
+    run = tmp_path / "scan_20260928"
+    run.mkdir()
+    _write_manifest(run)
+    monkeypatch.chdir(run)
+    ref = build_provenance_ref(Path("."))
+    assert ref is not None
+    assert ref["run_id"] == "scan_20260928"
+    assert is_canonical_ref_shape(ref)
+
+
+def test_build_ref_absolute_run_dir_stamp_unchanged(tmp_path: Path) -> None:
+    # Differential pin: lifecycle callers pass absolute run dirs, and
+    # there the stamp stays exactly the pre-existing basename.
+    run = tmp_path / "scan_alpha"
+    run.mkdir()
+    _write_manifest(run)
+    ref = build_provenance_ref(run)
+    assert ref is not None
+    assert ref["run_id"] == run.name == "scan_alpha"
+
+
 def test_build_ref_returns_none_without_manifest(tmp_path: Path) -> None:
     # No .raptor-run.json — caller must skip stamping, not synthesise a ref.
     assert build_provenance_ref(tmp_path) is None

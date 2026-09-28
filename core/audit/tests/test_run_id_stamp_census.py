@@ -1,21 +1,26 @@
-"""Run-attribution stamping: journal writers and the
+"""Run-attribution stamping: run_id producers and the
 resolved-identity helper.
 
-Contract under test: every journal writer that derives ``run_id``
+Contract under test: every ``run_id`` producer that derives the value
 from a run-directory path stamps the RESOLVED basename via the shared
 resolver (``core.coverage.journal.resolved_run_id``; the orchestrator
-through its ``_resolved_run_id`` delegate) — the exact identity
-``export_graded_from_journal`` compares MAC-covered receipts against.
+through its ``_resolved_run_id`` delegate). For journal writers that
+is the exact identity ``export_graded_from_journal`` compares
+MAC-covered receipts against; the non-journal producers (finding
+provenance refs, forecast calibration records, web scorecard cells,
+the dispatcher identity, the session ledger's start/finish records)
+stamp the same shape so their records stay attributable to the run.
 An unresolved stamp inverts for every relative spelling ("." from
 inside the run dir has ``Path(".").name == ""``): rows read as
 carrying no attribution and the run's own record can never grade
-run-scoped.
+run-scoped — and a ledger FINISH resolved differently from its start
+can never CAS its own record out of "running".
 
 The census here is a write-site tripwire, not a security boundary: a
 literal-shape census is evadable by a determined respelling (the
 variable could be renamed, the basename re-derived through ``str``
 slicing). The guarded property is producer-side dev-time correctness
-— a new journal writer reaching for the obvious ``out_dir.name`` /
+— a new run_id producer reaching for the obvious ``out_dir.name`` /
 ``run_dir.name`` spelling — so the census plus the helper being the
 one importable spelling is proportionate for that risk class.
 """
@@ -37,6 +42,12 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 ORCH_PATH = REPO_ROOT / "core" / "audit" / "orchestrator.py"
 EMIT_PATH = REPO_ROOT / "packages" / "llm_analysis" / "journal_emit.py"
 SUMMARY_PATH = REPO_ROOT / "libexec" / "raptor-coverage-summary"
+FINDINGS_PATH = REPO_ROOT / "core" / "run" / "findings.py"
+FORECAST_PATH = REPO_ROOT / "core" / "audit" / "forecast.py"
+WEB_SCANNER_PATH = REPO_ROOT / "packages" / "web" / "scanner.py"
+DISPATCHER_PATH = (
+    REPO_ROOT / "core" / "llm" / "dispatcher" / "lifecycle.py")
+SESSIONS_PATH = REPO_ROOT / "core" / "project" / "sessions.py"
 
 #: Accepted routed spellings: the shared resolver and the
 #: orchestrator's module-local delegate to it.
@@ -51,26 +62,50 @@ _DERIVATION_ROOTS = ("out_dir", "run_dir")
 #: seven writer sites (Collector construction, decomp-tree sweep,
 #: prompt-leak + consistency mechanical rows, _commit_outcome, the
 #: per-review append, the post-loop promotion append), the agentic
-#: per-finding emit, and coverage-summary's mark + unmark-withdrawal
-#: appends. A new writer raises the count — the floors only guard the
-#: census against going vacuous.
+#: per-finding emit, coverage-summary's mark + unmark-withdrawal
+#: appends, and the non-journal producers: the provenance-ref stamp,
+#: the forecast calibration record, the web scorecard-cell scope, the
+#: dispatcher identity, and the session ledger's start + finish
+#: records (a matched pair: the finish CAS only flips a record whose
+#: run_id resolves identically). A new producer raises the count —
+#: the floors only guard the census against going vacuous.
 _CENSUS_FILES = [
     pytest.param(ORCH_PATH, 7, id="orchestrator"),
     pytest.param(EMIT_PATH, 1, id="journal_emit"),
     pytest.param(SUMMARY_PATH, 2, id="coverage-summary"),
+    pytest.param(FINDINGS_PATH, 1, id="findings"),
+    pytest.param(FORECAST_PATH, 1, id="forecast"),
+    pytest.param(WEB_SCANNER_PATH, 1, id="web-scanner"),
+    pytest.param(DISPATCHER_PATH, 1, id="dispatcher-lifecycle"),
+    pytest.param(SESSIONS_PATH, 2, id="project-sessions"),
 ]
+
+#: Belt-and-braces token tripwire for the pre-sweep spellings.
+#: ``\)*`` (not ``\)?``): the finish-side ledger stamp spelled its
+#: derivation ``Path(str(run_dir)).name`` — TWO closing parens before
+#: ``.name`` — so a single-optional-paren pattern never saw it.
+_RAW_BASENAME_RE = r"(out_dir|run_dir)\s*\)*\s*\.\s*name\b"
 
 
 def _run_id_stamp_sites(source: str) -> tuple[list[int], list[str]]:
     """Classify every ``run_id`` stamp whose value derives from a
     run-directory variable (``_DERIVATION_ROOTS``): (routed
-    helper-call line numbers, direct-derivation violations). Both
-    keyword-argument stamps (``run_id=...``) and variable assignments
-    (``run_id = ...``) are swept.
+    helper-call line numbers, direct-derivation violations).
+    Keyword-argument stamps (``run_id=...``), variable and subscript
+    assignments (``run_id = ...``, ``rec["run_id"] = ...`` — the
+    ledger-record shape) and dict-literal entries (``"run_id": ...``
+    — the provenance-ref / calibration-record shape) are swept.
     """
     tree = ast.parse(source)
     routed: list[int] = []
     direct: list[str] = []
+
+    def targets_run_id(target: ast.expr) -> bool:
+        if isinstance(target, ast.Name):
+            return target.id == "run_id"
+        return (isinstance(target, ast.Subscript)
+                and isinstance(target.slice, ast.Constant)
+                and target.slice.value == "run_id")
 
     def classify(value: ast.expr, lineno: int) -> None:
         segment = ast.get_source_segment(source, value) or ""
@@ -89,14 +124,16 @@ def _run_id_stamp_sites(source: str) -> tuple[list[int], list[str]]:
                 if kw.arg == "run_id":
                     classify(kw.value, node.lineno)
         elif isinstance(node, ast.Assign):
-            if any(isinstance(t, ast.Name) and t.id == "run_id"
-                   for t in node.targets):
+            if any(targets_run_id(t) for t in node.targets):
                 classify(node.value, node.lineno)
         elif isinstance(node, ast.AnnAssign):
-            if (isinstance(node.target, ast.Name)
-                    and node.target.id == "run_id"
-                    and node.value is not None):
+            if targets_run_id(node.target) and node.value is not None:
                 classify(node.value, node.lineno)
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if (isinstance(key, ast.Constant)
+                        and key.value == "run_id"):
+                    classify(value, value.lineno)
 
     return routed, direct
 
@@ -116,16 +153,22 @@ class TestWriteSiteCensus:
     @pytest.mark.parametrize(
         "path",
         [pytest.param(ORCH_PATH, id="orchestrator"),
-         pytest.param(EMIT_PATH, id="journal_emit")],
+         pytest.param(EMIT_PATH, id="journal_emit"),
+         pytest.param(FINDINGS_PATH, id="findings"),
+         pytest.param(FORECAST_PATH, id="forecast"),
+         pytest.param(WEB_SCANNER_PATH, id="web-scanner"),
+         pytest.param(DISPATCHER_PATH, id="dispatcher-lifecycle"),
+         pytest.param(SESSIONS_PATH, id="project-sessions")],
     )
     def test_no_raw_basename_derivation(self, path):
         # Belt-and-braces token tripwire for the pre-sweep spellings:
-        # ``out_dir.name`` / ``Path(out_dir).name`` must not reappear —
-        # the resolver derives from its own local.
+        # ``out_dir.name`` / ``run_dir.name`` / ``Path(out_dir).name``
+        # / ``Path(str(run_dir)).name`` must not reappear — the
+        # resolver derives from its own local.
         # libexec/raptor-coverage-summary is deliberately absent here:
         # its ``run_dir.name`` appears in operator-facing display
         # strings, so the AST census above owns its stamps instead.
-        assert not re.search(r"out_dir\s*\)?\s*\.\s*name\b", path.read_text())
+        assert not re.search(_RAW_BASENAME_RE, path.read_text())
 
     def test_census_trips_on_direct_kwarg_spelling(self):
         # Mutant shape: one site reverted to the pre-sweep spelling.
@@ -151,6 +194,57 @@ class TestWriteSiteCensus:
             "))\n",
         )
         assert direct and not routed
+
+    def test_census_trips_on_dict_literal_spelling(self):
+        # Mutant shape: the provenance-ref / calibration-record sites'
+        # pre-fix spelling ("run_id" as a dict-literal key).
+        routed, direct = _run_id_stamp_sites(
+            "ref = {\n"
+            '    "run_id": run_dir.name,\n'
+            '    "manifest_path": str(_relative_manifest_path(run_dir)),\n'
+            "}\n",
+        )
+        assert direct and not routed
+
+    def test_census_accepts_routed_dict_literal_spelling(self):
+        routed, direct = _run_id_stamp_sites(
+            "ref = {\n"
+            '    "run_id": resolved_run_id(run_dir),\n'
+            "}\n",
+        )
+        assert routed and not direct
+
+    def test_census_trips_on_subscript_assignment_spelling(self):
+        # Mutant shape: a subscript-target assignment carrying the
+        # str()-wrapped derivation (the finish-side ledger stamp's
+        # pre-fix spelling) — subscript targets sat outside every AST
+        # arm and the extra ``)`` defeated the one-paren tripwire.
+        routed, direct = _run_id_stamp_sites(
+            'record["run_id"] = Path(str(run_dir)).name\n',
+        )
+        assert direct and not routed
+
+    def test_census_accepts_routed_subscript_assignment(self):
+        # Compliant resolved stamping through a subscript target stays
+        # green — the new arm only trips on direct derivations.
+        routed, direct = _run_id_stamp_sites(
+            'record["run_id"] = resolved_run_id(Path(run_dir))\n',
+        )
+        assert routed and not direct
+
+    def test_tripwire_catches_nested_paren_respelling(self):
+        # The finish-side ledger stamp's pre-fix spelling: two closing
+        # parens between the derivation root and ``.name``.
+        assert re.search(_RAW_BASENAME_RE, "Path(str(run_dir)).name")
+        assert re.search(_RAW_BASENAME_RE, "Path(str(out_dir)).name")
+
+    def test_tripwire_accepts_routed_spelling(self):
+        # Compliant resolved stamping must stay green under the
+        # widened paren run.
+        assert not re.search(
+            _RAW_BASENAME_RE, "run_id = resolved_run_id(Path(run_dir))")
+        assert not re.search(
+            _RAW_BASENAME_RE, "run_id=resolved_run_id(out_dir)")
 
     def test_census_accepts_routed_spelling(self):
         routed, direct = _run_id_stamp_sites(

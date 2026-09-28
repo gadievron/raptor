@@ -1252,8 +1252,8 @@ def _write_ledger(pid: int, records: list[dict],
     return True
 
 
-def _valid_run_dir(run_dir: str) -> bool:
-    """Vet a resolved run dir for the one-line ledger grammar.
+def _valid_run_dir(resolved: str) -> bool:
+    """Vet an already-RESOLVED run dir for the one-line ledger grammar.
 
     Non-printables are rejected everywhere (``str.splitlines`` splits
     on the U+2028 class, so a crafted component could forge a second
@@ -1264,11 +1264,11 @@ def _valid_run_dir(run_dir: str) -> bool:
     ``/home/u/My Projects/...`` tree must not silently lose ledger
     attribution — but never in the basename, which doubles as the
     space-delimited run-id field."""
-    if not run_dir.startswith("/") or not run_dir.isprintable():
+    if not resolved.startswith("/") or not resolved.isprintable():
         return False
-    if any(c.isspace() and c != " " for c in run_dir):
+    if any(c.isspace() and c != " " for c in resolved):
         return False
-    name = Path(run_dir).name
+    name = Path(resolved).name
     if not name:
         return False  # '/' — empty basename cannot be a run-id field
     return " " not in name
@@ -1315,7 +1315,13 @@ def ledger_record_start(run_dir: str | os.PathLike[str],
         logger.debug("sessions: stale entry stamp for pid %d — "
                      "ledger skipped", pid)
         return
-    run_id = Path(resolved).name
+    from core.coverage.journal import resolved_run_id
+
+    # Resolved basename, never the raw spelling: the finish CAS
+    # matches on run_id, so start and finish must derive the SAME
+    # identity however either end spells the dir (see
+    # resolved_run_id).
+    run_id = resolved_run_id(Path(run_dir))
     pin_value = NONE_SENTINEL if pin_project is None else pin_project
     if record_pin and pin_value != NONE_SENTINEL \
             and not _NAME_RE.match(pin_value):
@@ -1384,7 +1390,14 @@ def ledger_record_finish(run_dir: str | os.PathLike[str], status: str,
     if (_fin_fields.get("v") == ENTRY_VERSION
             and not _identity_matches(pid, _fin_fields)):
         return
-    run_id = Path(str(run_dir)).name
+    from core.coverage.journal import resolved_run_id
+
+    # Resolved basename, never the raw spelling: a relative finish
+    # spelling ("." from inside the run dir) has raw name == "" — it
+    # could never match the start-side record's resolved run_id and
+    # the record would silently stay "running" forever (see
+    # resolved_run_id).
+    run_id = resolved_run_id(Path(run_dir))
     try:
         resolved = str(Path(run_dir).resolve())
     except OSError:

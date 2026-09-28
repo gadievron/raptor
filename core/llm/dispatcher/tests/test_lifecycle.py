@@ -1,7 +1,8 @@
 """Tests for ``core.llm.dispatcher.lifecycle``.
 
 Confirms:
-  * ``dispatcher_for_run`` derives ``run_id`` from the run dir basename.
+  * ``dispatcher_for_run`` derives ``run_id`` from the RESOLVED run
+    dir basename.
   * Audit log lands at ``<run_dir>/audit-llm-dispatcher.jsonl``.
   * Context-manager shuts the dispatcher down on normal + exceptional exits.
   * Missing run_dir raises early (rather than silently writing audit
@@ -9,6 +10,8 @@ Confirms:
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
@@ -47,6 +50,21 @@ class TestDispatcherForRun:
         d = dispatcher_for_run(run_dir, creds=fake_creds)
         try:
             assert d.run_id == "scan_alpha"
+        finally:
+            d.shutdown()
+
+    def test_relative_run_dir_gets_resolved_run_id(
+            self, fake_creds: CredentialStore, tmp_path: Path,
+            monkeypatch: pytest.MonkeyPatch) -> None:
+        # The run-attribution seam: "." from inside the run dir has
+        # name == "" unresolved — the dispatcher identity (audit
+        # rows, socket-dir prefix) would carry no run attribution.
+        run_dir = tmp_path / "scan_beta"
+        run_dir.mkdir()
+        monkeypatch.chdir(run_dir)
+        d = dispatcher_for_run(Path("."), creds=fake_creds)
+        try:
+            assert d.run_id == "scan_beta"
         finally:
             d.shutdown()
 

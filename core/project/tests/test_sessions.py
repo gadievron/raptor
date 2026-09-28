@@ -458,6 +458,28 @@ class RunLedgerTest(_RegistryCase):
         runs = sessions.ledger_runs(pid=os.getpid())
         self.assertEqual(runs[0]["status"], "completed")
 
+    def test_relative_finish_spelling_flips_the_record(self):
+        # The run-attribution seam on the finish side: start records
+        # the RESOLVED basename, so a finish spelled "." from inside
+        # the run dir (raw name == "") must resolve to the SAME
+        # run_id — otherwise the CAS never matches and the record
+        # silently stays "running" forever.
+        d = self._mk_run("scan_rel")
+        sessions.ledger_record_start(d, pid=os.getpid())
+        (d / ".raptor-run.json").write_text(
+            '{"status": "completed"}', encoding="utf-8")
+        prior_cwd = os.getcwd()
+        os.chdir(d)
+        try:
+            sessions.ledger_record_finish(".", "completed",
+                                          pid=os.getpid())
+        finally:
+            os.chdir(prior_cwd)
+        runs = sessions.ledger_runs(pid=os.getpid())
+        self.assertEqual(
+            [(r["run_id"], r["status"]) for r in runs],
+            [("scan_rel", "completed")])
+
     def test_true_statuses_no_coercion(self):
         d = self._mk_run("scan_2")
         sessions.ledger_record_start(d, pid=os.getpid())

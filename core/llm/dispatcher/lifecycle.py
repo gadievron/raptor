@@ -2,7 +2,8 @@
 
 Constructs a dispatcher tied to a RAPTOR run directory: the audit log
 lands at ``<run_dir>/audit-llm-dispatcher.jsonl``, the dispatcher's
-``run_id`` is the run dir's basename, and shutdown is wired through
+``run_id`` is the run dir's RESOLVED basename
+(``core.coverage.journal.resolved_run_id``), and shutdown is wired through
 either ``atexit`` (when used directly) or the context-manager exit
 (when used via :func:`llm_dispatcher_in_run`).
 
@@ -81,7 +82,8 @@ def dispatcher_for_run(
     creds: CredentialStore | None = None,
 ) -> LLMDispatcher:
     """Return a fresh ``LLMDispatcher`` whose audit log lives inside
-    ``run_dir`` and whose ``run_id`` matches the run dir name.
+    ``run_dir`` and whose ``run_id`` matches the RESOLVED run dir
+    basename.
 
     The caller is responsible for ``shutdown()``. An ``atexit`` hook
     is registered as defence-in-depth so a forgotten shutdown still
@@ -96,7 +98,13 @@ def dispatcher_for_run(
         msg = f"run_dir does not exist: {run_dir}"
         raise FileNotFoundError(msg)
     audit_path = audit_path_for_run_dir(run_dir)
-    run_id = run_dir.name
+    from core.coverage.journal import resolved_run_id
+
+    # Resolved basename, never the raw spelling: a relative run_dir
+    # ("." from inside the run dir) has name == "" — the dispatcher
+    # identity (audit rows, socket-dir prefix) would carry no run
+    # attribution (see resolved_run_id).
+    run_id = resolved_run_id(run_dir)
     # Use only the kwargs the caller actually set, so the dispatcher
     # keeps its module-level defaults for the rest.
     dispatcher_kwargs: dict = {}
