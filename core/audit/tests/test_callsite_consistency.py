@@ -373,6 +373,153 @@ class TestGoCallSites:
         assert devs == []
 
 
+class TestSwiftCallSites:
+    """Swift wildcard assignment is the acknowledged-discard idiom.
+
+    The census routes .swift through the regex tier (no swift entry in
+    ts_extract._CALL_TYPES), so the idiom arm lives in the regex
+    table. `acknowledged` — not `captured_used` — is load-bearing:
+    it is what makes a security-role callee's census refutation hand
+    off to the fail_open channel's try?-erasure leg.
+    """
+
+    SRC = (
+        "func caller1() -> Bool {\n"
+        "    let ok = validateToken(t1)\n"
+        "    return ok\n"
+        "}\n"
+        "\n"
+        "func caller2() -> Bool {\n"
+        "    let ok = validateToken(t2)\n"
+        "    return ok\n"
+        "}\n"
+        "\n"
+        "func caller3() -> Bool {\n"
+        "    let ok = validateToken(t3)\n"
+        "    return ok\n"
+        "}\n"
+        "\n"
+        "func handlerD() {\n"
+        "    _ = validateToken(w)\n"
+        "}\n"
+        "\n"
+        "func handlerE() {\n"
+        "    _ = try? validateToken(v)\n"
+        "}\n"
+    )
+
+    def test_swift_underscore_assignment_is_acknowledged(self):
+        """Both spellings (`_ =`, `_ = try?`) classify acknowledged —
+        never captured_used (which would silently inflate the capture
+        majority) and never discarded (which would mint a deviation
+        against an author who demonstrably saw the return value)."""
+        from core.audit.callsite_consistency import build_return_census
+
+        census = build_return_census({"App.swift": self.SRC})
+        entry = census["validateToken"]
+        ack_lines = sorted(s.line for s in entry.acknowledged_sites)
+        assert ack_lines == [17, 21]
+        assert entry.deviants == []
+
+    def test_swift_underscore_assignment_regex_fallback(self):
+        from core.audit.callsite_consistency import (
+            USAGE_ACKNOWLEDGED,
+            _extract_callsites_regex,
+        )
+
+        sites = _extract_callsites_regex("App.swift", self.SRC)
+        by_func = {
+            s.enclosing_function: s
+            for s in sites if s.callee == "validateToken"
+        }
+        assert by_func["caller1"].usage != USAGE_ACKNOWLEDGED
+        assert by_func["handlerD"].usage == USAGE_ACKNOWLEDGED
+        assert by_func["handlerE"].usage == USAGE_ACKNOWLEDGED
+
+    def test_swift_acknowledged_security_role_hands_to_fail_open(self):
+        """The point of the idiom arm: an acknowledged discard of a
+        security-role callee refutes the consistency claim AND raises
+        the fail_open handoff — the premise splits to the erasure
+        leg instead of dying as a false discard deviation."""
+        from core.audit.callsite_consistency import build_return_census
+        from core.audit.consistency_verify import (
+            REFUTED_ACKNOWLEDGED,
+            census_verdict,
+        )
+        from core.audit.fail_open_roles import RoleContext
+
+        texts = {"App.swift": self.SRC}
+        census = build_return_census(texts)
+        entry = census["validateToken"]
+        assert entry.acknowledged_sites
+        res = census_verdict(
+            entry, entry.acknowledged_sites[0],
+            context=RoleContext(), source_texts=texts,
+        )
+        assert res.outcome == "refuted"
+        assert res.reason.startswith(REFUTED_ACKNOWLEDGED)
+        assert res.fail_open_handoff is True
+
+
+def test_underscore_assign_acknowledged_only_for_swift():
+    """The ``_ =`` acknowledged-discard arm is gated on ``.swift`` on
+    purpose: in JavaScript/TypeScript ``_`` is a REAL variable (the
+    lodash convention), so ``_ = validateToken(w)`` is a live capture
+    that gets used — classifying it ``acknowledged`` would exclude
+    the site from deviant comparison and steer a security-role
+    census toward refuted_acknowledged on evidence that does not
+    exist. Only the exact-language gate keeps that contract.
+    """
+    from core.audit.callsite_consistency import (
+        USAGE_ACKNOWLEDGED,
+        USAGE_CAPTURED_USED,
+        _extract_callsites_regex,
+    )
+
+    js = (
+        "function caller1() {\n"
+        "    const ok = validateToken(t1);\n"
+        "    return ok;\n"
+        "}\n"
+        "function handler() {\n"
+        "    _ = validateToken(w);\n"
+        "    audit(_);\n"
+        "}\n"
+    )
+    sites = [s for s in _extract_callsites_regex("app.js", js)
+             if s.callee == "validateToken"]
+    by_line = {s.line: s for s in sites}
+    assert by_line[6].usage != USAGE_ACKNOWLEDGED, (
+        "lodash-style `_` capture in a .js file treated as a Swift "
+        "wildcard discard"
+    )
+    assert by_line[6].usage == USAGE_CAPTURED_USED
+
+
+def test_swift_underscore_comparison_is_not_a_discard():
+    """``_ == expr`` is comparison-shaped, not a wildcard assignment;
+    the ``[^=]`` guard in ``_SWIFT_UNDERSCORE_ASSIGN_RE`` is what
+    separates them (mirroring the python arm's guard). Hostile or
+    macro-mangled Swift containing a line-initial ``_ ==`` must not
+    mint an acknowledged-discard receipt.
+    """
+    from core.audit.callsite_consistency import (
+        USAGE_ACKNOWLEDGED,
+        _extract_callsites_regex,
+    )
+
+    sw = (
+        "func hostile() {\n"
+        "    _ == validateToken(x)\n"
+        "}\n"
+    )
+    sites = [s for s in _extract_callsites_regex("App.swift", sw)
+             if s.callee == "validateToken"]
+    assert sites and all(
+        s.usage != USAGE_ACKNOWLEDGED for s in sites
+    ), "comparison-shaped `_ ==` line minted an acknowledged discard"
+
+
 class TestJsCallSites:
     def test_js_const_captured_bare_discarded(self):
         src = textwrap.dedent("""\

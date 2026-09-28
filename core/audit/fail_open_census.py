@@ -20,7 +20,7 @@ telemetry — absence is signal.
 
 Scope: the handler-outcome family only (Python except/suppress, Java
 catch clauses, Go recover()-to-continue, phase-3 JS/TS catch clauses
-+ promise ``.catch`` swallows, and phase-4 Kotlin + C# catch
++ promise ``.catch`` swallows, and phase-4 Kotlin + C# + Swift catch
 blocks). The ignored-return /
 discarded-error census over ALL callees is the consistency
 programme's (CWE-252 premise split) — its acknowledged-discard
@@ -29,7 +29,9 @@ callees, and this module must not duplicate that sweep. Rust is
 deliberately absent here: it has no exception-handler shape, and its
 ignored-``Result`` census (``let _ =`` is an *acknowledged* discard)
 is exactly the consistency sweep — the handoff path delivers those
-candidates to the channel's Rust leg at adjudication time.
+candidates to the channel's Rust leg at adjudication time. Swift's
+``try?``-erasure leg stays out of the census for the same premise
+split: only its do/catch handler leg joins the sweep here.
 
 The census is permanently detection-only: leads, never verdicts.
 Role binding deliberately passes no enclosing source, so Tier-B hook
@@ -60,6 +62,7 @@ from .fail_open_lang import (
     kotlin_handlers,
     language_for_path,
     python_handlers,
+    swift_handlers,
 )
 from .fail_open_roles import (
     GRADE_REGISTRY,
@@ -74,11 +77,11 @@ MAX_LEADS_PER_FILE = 5
 CENSUS_BUDGET_S = 60.0
 
 # Handler-outcome census languages (see module docstring for why the
-# C/Go/Rust ignored-return sweep is deliberately absent). Kotlin and
-# C# catch blocks are the Java handler-outcome shape, so they join
-# the same sweep.
+# C/Go/Rust ignored-return sweep is deliberately absent). Kotlin, C#
+# and Swift catch blocks are the Java handler-outcome shape, so they
+# join the same sweep; Swift's try?-erasure leg does not.
 CENSUS_LANGUAGES = (
-    frozenset({"python", "java", "go", "kotlin", "csharp"})
+    frozenset({"python", "java", "go", "kotlin", "csharp", "swift"})
     | JS_LANGUAGES
 )
 
@@ -94,6 +97,8 @@ def _handlers_for(
         return kotlin_handlers(source, file_path) or []
     if language == "csharp":
         return csharp_handlers(source, file_path) or []
+    if language == "swift":
+        return swift_handlers(source, file_path) or []
     if language == "go":
         return go_recover_handlers(source, file_path) or []
     if language in JS_LANGUAGES:

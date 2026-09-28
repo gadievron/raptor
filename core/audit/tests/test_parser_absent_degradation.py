@@ -166,6 +166,26 @@ class TestFailOpenAnalyzersReturnNone:
         )
         assert csharp_handlers(src, "C.cs") is None
 
+    def test_swift_handlers_none(self, _no_tree_sitter):
+        from core.audit.fail_open_lang import swift_handlers
+        src = (
+            "class C {\n"
+            "    func f() {\n"
+            "        do { try g() } catch { }\n"
+            "    }\n"
+            "}\n"
+        )
+        assert swift_handlers(src, "C.swift") is None
+
+    def test_swift_erasure_sites_none(self, _no_tree_sitter):
+        from core.audit.fail_open_lang import swift_erasure_sites
+        src = (
+            "class C {\n"
+            "    func f() { _ = try? g() }\n"
+            "}\n"
+        )
+        assert swift_erasure_sites(src, "C.swift", "g") is None
+
 
 class TestFailOpenVerdictIsLanguageUnsupported:
     """The verify channel converts analyzer-None into the enumerated
@@ -229,6 +249,24 @@ class TestFailOpenVerdictIsLanguageUnsupported:
             "}\n",
             "Check",
             "the broad catch in Check() returns true — fail open",
+        )
+        assert res.outcome == "inconclusive"
+        assert res.reason.startswith(REASON_LANGUAGE_UNSUPPORTED)
+
+    def test_swift_inconclusive(self, _no_tree_sitter, tmp_path):
+        from core.audit.fail_open_verify import (
+            REASON_LANGUAGE_UNSUPPORTED,
+        )
+        res = self._check(
+            tmp_path, "C.swift",
+            "class C {\n"
+            "    func check() -> Bool {\n"
+            "        do { return try verify() } "
+            "catch { return true }\n"
+            "    }\n"
+            "}\n",
+            "check",
+            "the broad catch in check() returns true — fail open",
         )
         assert res.outcome == "inconclusive"
         assert res.reason.startswith(REASON_LANGUAGE_UNSUPPORTED)

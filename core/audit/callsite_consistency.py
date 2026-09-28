@@ -15,8 +15,9 @@ Phase 1 of the consistency programme upgrades the per-site boolean
   is never consulted before rebinding/exit;
 * ``discarded`` — bare expression statement;
 * ``acknowledged`` — explicit-discard idioms (C/C++ ``(void)f()``,
-  Rust ``let _ =``, Python ``_ =``): the author demonstrably saw the
-  return, so the site refutes rather than supports a deviation;
+  Rust ``let _ =``, Python ``_ =``, Swift ``_ =``): the author
+  demonstrably saw the return, so the site refutes rather than
+  supports a deviation;
 * ``propagated`` — ``return f()`` / ``yield f()``: the caller inherits
   the obligation.
 
@@ -1124,6 +1125,13 @@ _GO_BLANK_ASSIGN_RE = re.compile(
 _C_VOID_CAST_RE = re.compile(r"^\s*\(\s*void\s*\)")
 _RUST_LET_UNDERSCORE_RE = re.compile(r"^\s*let\s+_\s*=")
 _PY_UNDERSCORE_ASSIGN_RE = re.compile(r"^\s*_\s*=[^=]")
+# Swift wildcard assignment — covers `_ = f()` and `_ = try? f()`
+# (the `let _ =` spelling rides _RUST_LET_UNDERSCORE_RE's shape).
+# This lives ONLY in the regex table: the census has no swift entry in
+# ts_extract._CALL_TYPES, so .swift files always take this fallback —
+# an acknowledged verdict here is what lets a security-role callee's
+# census refutation hand off to the fail_open try?-erasure leg (§2.3).
+_SWIFT_UNDERSCORE_ASSIGN_RE = re.compile(r"^\s*(?:let\s+)?_\s*=[^=]")
 
 
 def _extract_callsites_regex(
@@ -1176,6 +1184,8 @@ def _extract_callsites_regex(
             or _RUST_LET_UNDERSCORE_RE.match(stripped)
             or (file_path.endswith(".py")
                 and _PY_UNDERSCORE_ASSIGN_RE.match(stripped))
+            or (file_path.endswith(".swift")
+                and _SWIFT_UNDERSCORE_ASSIGN_RE.match(stripped))
         )
         is_assign = bool(_ASSIGN_LINE_RE.match(stripped))
         is_return = bool(_RETURN_LINE_RE.match(stripped))

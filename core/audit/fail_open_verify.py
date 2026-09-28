@@ -100,6 +100,13 @@ from .fail_open_lang import (
     rust_discard_sites,
     rust_function_returns_result,
     rust_function_span,
+    swift_do_has_plain_try,
+    swift_erasure_sites,
+    swift_function_declares_throws,
+    swift_function_span,
+    swift_function_throws,
+    swift_handlers,
+    swift_method_segment,
 )
 from .fail_open_roles import (
     GRADE_DETECTION,
@@ -1172,6 +1179,379 @@ def _run_csharp_check(
         reason=reason,
         rule_id=rule_id,
         language="csharp",
+        role=role.to_dict(),
+        handler=chosen.to_dict(),
+        fallible=fallible,
+    )
+    result.reachability = _entry_reachability(
+        role_context, inventory, file_path, function_name,
+    )
+    return result
+
+
+# ── Swift legs: do/catch outcome + try?-erasure ─────────────────────
+
+
+def _swift_fallibility(
+    handler: HandlerOutcome, source: str,
+) -> dict[str, Any] | None:
+    """Leg 2b for Swift's handler leg: evidence the do body can throw.
+
+    Strongest form is a same-file callee whose typed ``throws(X)``
+    clause or body ``throw`` names the very type the handler catches.
+    Swift's plain ``throws`` is untyped, so a declared-throws callee
+    helps only a broad catch; but the language adds a witness of its
+    own — ``try`` is required at exactly the call sites that can
+    throw, so a plain-``try``-marked call under a broad catch is
+    compiler-verified fallibility. A specific catch with no
+    caught-type evidence stays unresolved, never a guess.
+    """
+    caught = set(handler.caught)
+    line = handler.try_span[0] if handler.try_span else 0
+    for callee in handler.try_calls:
+        thrown = swift_function_throws(source, callee)
+        if thrown:
+            thrown_and_caught = set(thrown) & caught
+            if thrown_and_caught:
+                return {
+                    "callee": callee,
+                    "line": line,
+                    "evidence": "throws-caught-type",
+                    "types": thrown,
+                }
+            if handler.broad:
+                return {
+                    "callee": callee,
+                    "line": line,
+                    "evidence": "throws",
+                    "types": thrown,
+                }
+        if handler.broad and swift_function_declares_throws(
+                source, callee):
+            return {
+                "callee": callee,
+                "line": line,
+                "evidence": "declared-throws",
+                "types": thrown,
+            }
+    if handler.broad and handler.try_span and swift_do_has_plain_try(
+            source, handler.try_span):
+        return {
+            "callee": handler.try_calls[0] if handler.try_calls else "",
+            "line": line,
+            "evidence": "try-marked-call",
+            "types": sorted(caught),
+        }
+    if handler.broad and handler.try_calls:
+        return {
+            "callee": handler.try_calls[0],
+            "line": line,
+            "evidence": "catchable: any-call-under-broad-catch",
+            "types": sorted(caught),
+        }
+    return None
+
+
+def _swift_erasure_fallibility(
+    callee: str,
+    role: RoleEvidence,
+    source: str,
+    inventory: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Leg 2b for Swift's erasure leg: the callee is declared
+    ``throws`` (same-file signature, then inventory extractor
+    metadata), or a learned contract records fallibility. The ``try?``
+    marker itself already proves the compiler thinks the call can
+    throw, but the site classification must not double as its own
+    fallibility witness — the declaration is the receipt.
+    """
+    tail = _function_tail(callee)
+    if swift_function_declares_throws(source, tail):
+        return {
+            "callee": callee,
+            "evidence": "declared-throws (same-file signature)",
+            "types": swift_function_throws(source, tail),
+        }
+    sig = _inventory_signature(inventory, tail)
+    if sig and re.search(r"\bthrows\b", sig):
+        return {
+            "callee": callee,
+            "evidence": "declared-throws (inventory signature)",
+            "types": [],
+        }
+    if role.contract:
+        return {
+            "callee": callee,
+            "evidence": f"contract:{role.contract}",
+            "types": [],
+        }
+    return None
+
+
+def _run_swift_erasure_check(
+    source: str,
+    file_path: str,
+    function_name: str,
+    hypothesis: str,
+    role_context: RoleContext,
+    inventory: dict[str, Any] | None,
+) -> FailOpenResult:
+    """The ``try?``-erasure leg — the Rust discard-leg discipline on
+    Swift's try markers."""
+    span = swift_function_span(source, function_name)
+    if span is None:
+        return _inconclusive(
+            REASON_SPAN_UNRESOLVED,
+            f"cannot resolve the span of {function_name} — refusing "
+            "the whole-file scan (a match elsewhere in the file is "
+            "not evidence about this function)",
+            language="swift", rule_id=RULE_IGNORED_RETURN,
+        )
+    lines = split_lines(source)
+    segment = "\n".join(lines[span[0] - 1:span[1]])
+
+    candidates = _candidate_callees(hypothesis, segment)
+    if not candidates:
+        return _inconclusive(
+            REASON_HYPOTHESIS_UNBINDABLE,
+            f"hypothesis names no call present in {function_name} — "
+            "the try?-erasure leg cannot bind",
+            language="swift", rule_id=RULE_IGNORED_RETURN,
+        )
+
+    role: RoleEvidence | None = None
+    callee = ""
+    for candidate in candidates:
+        role = bind_role(
+            [candidate],
+            "",  # per-callee binding: the enclosing name must not
+                 # smuggle a role onto an unrelated callee
+            file_path,
+            language="swift",
+            context=role_context,
+            enclosing_source=segment,
+        )
+        if role is not None:
+            callee = candidate
+            break
+    if role is None:
+        return _inconclusive(
+            REASON_ROLE_UNBOUND,
+            "could not bind a security role to any hypothesis callee "
+            f"({', '.join(candidates)})",
+            language="swift", rule_id=RULE_IGNORED_RETURN,
+        )
+
+    tail = _function_tail(callee)
+    fallible = _swift_erasure_fallibility(callee, role, source,
+                                          inventory)
+    if fallible is None:
+        return _inconclusive(
+            REASON_FALLIBILITY_UNRESOLVED,
+            f"no throws-declared signature resolvable for {callee} "
+            "(same-file, inventory) and no learned contract — cannot "
+            "demonstrate the erased result can fail",
+            language="swift", rule_id=RULE_IGNORED_RETURN,
+        )
+
+    sites = swift_erasure_sites(
+        source, file_path, tail, function_span=span,
+    )
+    if sites is None:
+        return _inconclusive(
+            REASON_LANGUAGE_UNSUPPORTED,
+            "no tree-sitter swift parser available — try-marker "
+            "consumption is not honestly decidable from line shapes",
+            language="swift", rule_id=RULE_IGNORED_RETURN,
+        )
+    if not sites:
+        return _inconclusive(
+            REASON_HYPOTHESIS_UNBINDABLE,
+            f"no call sites of {callee} located in {function_name}",
+            language="swift", rule_id=RULE_IGNORED_RETURN,
+        )
+
+    unguarded = [s for s in sites if s.verdict == "unguarded"]
+    undecided = [s for s in sites if s.verdict == "undecided"]
+    rule_id = _apply_role_grade(RULE_IGNORED_RETURN, role)
+
+    if unguarded:
+        first = unguarded[0]
+        result = FailOpenResult(
+            outcome="confirmed",
+            reason=(
+                f"{first.code} at {file_path}:{first.line} — "
+                f"{first.evidence} ({role.kind}-role callee "
+                f"{callee}, {fallible['evidence']})"
+            ),
+            rule_id=rule_id,
+            language="swift",
+            role=role.to_dict(),
+            handler={
+                "idiom": "try_erasure",
+                "line": first.line,
+                "caught": [callee],
+                "broad": False,
+                "outcome_kind": "try_erasure",
+                "permissive_value": first.shape,
+                "code": first.code,
+                "parser": first.parser,
+            },
+            fallible=fallible,
+            sites=sites,
+        )
+        result.reachability = _entry_reachability(
+            role_context, inventory, file_path, function_name,
+        )
+        return result
+    if not undecided:
+        return FailOpenResult(
+            outcome="refuted",
+            reason=(
+                f"all {len(sites)} site(s) of {callee} in "
+                f"{function_name} consume the error branch "
+                f"fail-closed (receipts per site)"
+            ),
+            rule_id=RULE_IGNORED_RETURN,
+            language="swift",
+            role=role.to_dict(),
+            fallible=fallible,
+            sites=sites,
+        )
+    return FailOpenResult(
+        outcome="inconclusive",
+        reason=(
+            f"{REASON_HANDLER_UNDECIDED}: {len(undecided)} of "
+            f"{len(sites)} site(s) could not be structurally decided"
+        ),
+        rule_id=RULE_IGNORED_RETURN,
+        language="swift",
+        role=role.to_dict(),
+        fallible=fallible,
+        sites=sites,
+    )
+
+
+def _run_swift_check(
+    source: str,
+    file_path: str,
+    function_name: str,
+    hypothesis: str,
+    role_context: RoleContext,
+    inventory: dict[str, Any] | None,
+) -> FailOpenResult:
+    """Dual-leg dispatch: the do/catch handler leg when the function
+    has handlers, the ``try?``-erasure leg otherwise — and the
+    erasure leg also takes over when the hypothesis asserts a
+    discarded result that fail-closed handlers cannot refute (the
+    kotlin/java legs abstain there; Swift HAS an adjudicator for
+    that mechanism)."""
+    from .fail_open_lang import _ts_parser
+    if _ts_parser("swift") is None:
+        return _inconclusive(
+            REASON_LANGUAGE_UNSUPPORTED,
+            "no tree-sitter swift parser available — neither Swift "
+            "leg has an honest regex fallback",
+            language="swift",
+        )
+    all_handlers = swift_handlers(source, file_path) or []
+    handlers = [
+        h for h in all_handlers
+        if _handler_in_function(h, function_name)
+    ]
+    if not handlers:
+        return _run_swift_erasure_check(
+            source, file_path, function_name, hypothesis,
+            role_context, inventory,
+        )
+
+    permissive = [h for h in handlers if h.is_permissive]
+    fail_closed = [h for h in handlers if h.is_fail_closed]
+    undecided = [
+        h for h in handlers
+        if not h.is_permissive and not h.is_fail_closed
+    ]
+
+    if not permissive:
+        if fail_closed and not undecided:
+            if _IGNORED_RETURN_HYPOTHESIS_RE.search(hypothesis):
+                # The hypothesis is about a discarded result, not the
+                # handlers — route to the erasure leg, which
+                # adjudicates exactly that mechanism (where the
+                # java/kotlin legs must abstain).
+                return _run_swift_erasure_check(
+                    source, file_path, function_name, hypothesis,
+                    role_context, inventory,
+                )
+            first = fail_closed[0]
+            return FailOpenResult(
+                outcome="refuted",
+                reason=(
+                    f"fail-closed handler(s) demonstrated: "
+                    f"{first.evidence_snippet} at {file_path}:"
+                    f"{first.line} ({first.permissive_value}); no "
+                    f"permissive handler present in {function_name}"
+                ),
+                rule_id=RULE_HANDLER_OUTCOME,
+                language="swift",
+                handler=first.to_dict(),
+            )
+        first = undecided[0] if undecided else handlers[0]
+        return _inconclusive(
+            REASON_HANDLER_UNDECIDED,
+            f"handler at {file_path}:{first.line} does substantial "
+            f"fallback work ({first.permissive_value}) — outcome not "
+            "structurally decidable",
+            language="swift",
+        )
+
+    segment = swift_method_segment(source, function_name)
+    role: RoleEvidence | None = None
+    chosen: HandlerOutcome | None = None
+    for handler in permissive:
+        role = bind_role(
+            handler.try_calls,
+            function_name,
+            file_path,
+            language="swift",
+            context=role_context,
+            enclosing_source=segment,
+        )
+        if role is not None:
+            chosen = handler
+            break
+    if role is None or chosen is None:
+        return _inconclusive(
+            REASON_ROLE_UNBOUND,
+            "could not bind a security role to the guarded region "
+            f"(calls: {', '.join(permissive[0].try_calls) or '<none>'})",
+            language="swift",
+        )
+
+    fallible = _swift_fallibility(chosen, source)
+    if fallible is None:
+        return _inconclusive(
+            REASON_FALLIBILITY_UNRESOLVED,
+            "no throw evidence binding the do body to the caught "
+            "type (no same-file thrown-type match, and the catch is "
+            "not broad) — a swallow around code that cannot fail the "
+            "caught way is vacuous",
+            language="swift",
+        )
+
+    rule_id = _apply_role_grade(RULE_HANDLER_OUTCOME, role)
+    caught_desc = ", ".join(chosen.caught)
+    reason = (
+        f"{chosen.evidence_snippet or chosen.idiom} at "
+        f"{file_path}:{chosen.line} swallows {fallible['callee']} "
+        f"({caught_desc}) inside {role.kind}-role region; control "
+        f"proceeds as if the check passed"
+    )
+    result = FailOpenResult(
+        outcome="confirmed",
+        reason=reason,
+        rule_id=rule_id,
+        language="swift",
         role=role.to_dict(),
         handler=chosen.to_dict(),
         fallible=fallible,
@@ -2641,6 +3021,11 @@ def run_fail_open_check(
         )
     elif language == "csharp":
         result = _run_csharp_check(
+            source, file_path, function_name, hypothesis, ctx,
+            inventory,
+        )
+    elif language == "swift":
+        result = _run_swift_check(
             source, file_path, function_name, hypothesis, ctx,
             inventory,
         )

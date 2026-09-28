@@ -50,6 +50,17 @@ filter clauses un-broaden a catch, a typeless bare ``catch`` is
 broad, and fallibility comes from same-file thrown types only — C#
 too has no checked exceptions). Same no-regex-fallback rule.
 
+Phase 4 also adds Swift, which is dual-legged like Rust: the
+``do``/``catch`` handler leg (the same catch-outcome family — a
+pattern-less ``catch`` is broad, and a plain-``try``-marked call in
+the ``do`` body is a compiler-verified fallibility witness, since
+Swift requires ``try`` at exactly the call sites that can throw) and
+the ``try?``-erasure call-site leg (``_ = try?``, a bare ``try?``
+statement, and ``(try? ...) ?? default`` erase the error branch,
+while ``guard let``/``if let`` consume it and plain ``try`` /
+``try!`` are fail-closed consumptions). Same no-regex-fallback rule
+on both legs.
+
 Suffix→language mapping is strictly
 ``core.inventory.languages.LANGUAGE_MAP`` — no new extension list
 (dedup wave-3 rule). Unsupported languages are the caller's problem:
@@ -75,10 +86,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Languages with an analyzer. Phase 3 added JS/TS and Rust; phase 4
-# adds Kotlin and C#.
+# adds Kotlin, C# and Swift.
 SUPPORTED_LANGUAGES = frozenset({
     "python", "c", "cpp", "java", "go",
     "javascript", "typescript", "tsx", "rust", "kotlin", "csharp",
+    "swift",
 })
 
 # The JS analyzer family shares one grammar-node vocabulary; the
@@ -3545,6 +3557,784 @@ def csharp_method_segment(source: str, function_name: str) -> str:
             segment = header.strip() + "\n" + segment
         return segment
     return ""
+
+
+# ── Swift legs: do/catch outcome + try?-erasure sites ───────────────
+# Dual-legged like Rust. Handler leg: the Java catch-outcome family
+# on the ``do_statement``/``catch_block`` grammar — a pattern-less
+# ``catch`` (or a binding-only pattern) is broad, and statements are
+# direct ``statements`` children (no expression_statement wrapper).
+# Swift has untyped ``throws`` declarations, so caught-type
+# fallibility comes from same-file ``throw`` statements (the C#
+# model) — but the language adds a witness Java never had: ``try``
+# is REQUIRED at exactly the call sites that can throw, so a
+# plain-``try``-marked call in the do body is compiler-verified
+# fallibility. Erasure leg: ``try?`` converts the error branch to
+# ``nil`` — ``_ = try?``, a bare ``try?`` statement, and
+# ``(try? ...) ?? default`` erase the failure, while ``guard let`` /
+# ``if let`` consume it and plain ``try`` / ``try!`` are fail-closed
+# consumptions (propagate / trap). The erasure census over ALL
+# callees stays with the consistency programme (the Rust premise
+# split); this leg adjudicates role-bound hypotheses only.
+
+_SWIFT_BROAD_TYPES = frozenset({"Error", "NSError"})
+_SWIFT_LOUD_LOG_RE = re.compile(
+    r"\.(?:error|critical|fault|warn(?:ing)?|fatal)\s*\(",
+)
+_SWIFT_QUIET_LOG_RE = re.compile(
+    r"\.(?:debug|trace|info|notice|verbose|log)\s*\(",
+)
+_SWIFT_ABORT_RE = re.compile(
+    r"\bfatalError\s*\(|\bpreconditionFailure\s*\(|\bexit\s*\(|"
+    r"\babort\s*\(",
+)
+_SWIFT_PRINT_RE = re.compile(
+    r"\bprint\s*\(|\bdebugPrint\s*\(|\bdump\s*\(|\bNSLog\s*\(",
+)
+_SWIFT_RESTRICTIVE_RETURNS = frozenset({"false", "nil", "0", "-1", '""'})
+
+_SWIFT_FUNC_TYPES = ("function_declaration", "init_declaration")
+_SWIFT_COMMENT_TYPES = ("comment", "multiline_comment")
+# Subtrees whose throws never execute at handler level (closures,
+# local functions, nested type bodies).
+_SWIFT_BOUNDARY_TYPES = (
+    "lambda_literal", "function_declaration", "init_declaration",
+    "class_body",
+)
+_SWIFT_LITERAL_TYPES = (
+    "integer_literal", "real_literal", "line_string_literal",
+    "multi_line_string_literal", "boolean_literal",
+)
+
+
+def _swift_statements(node) -> Any | None:
+    """The direct ``statements`` child (do body / catch body)."""
+    if node is None:
+        return None
+    return next(
+        (c for c in node.children if c.type == "statements"), None,
+    )
+
+
+def _swift_stmts(node) -> list:
+    """Named statement children of a ``statements`` node, comments
+    dropped."""
+    stmts = _swift_statements(node) if node is not None \
+        and node.type != "statements" else node
+    if stmts is None:
+        return []
+    return [
+        c for c in stmts.children
+        if c.is_named and c.type not in _SWIFT_COMMENT_TYPES
+    ]
+
+
+def _swift_transfer_kind(stmt) -> str:
+    """Which transfer a ``control_transfer_statement`` performs —
+    ``return`` / ``throw`` / ``continue`` / ``break`` / ``""``."""
+    for c in stmt.children:
+        if c.type == "throw_keyword":
+            return "throw"
+        if c.type in ("return", "continue", "break"):
+            return c.type
+    return ""
+
+
+def _swift_catch_types(clause, src: bytes) -> tuple[list[str], bool]:
+    """(caught type names, broad?) from the catch pattern.
+
+    A pattern-less ``catch`` (the dominant idiom — it binds ``error``)
+    and a binding-only ``catch let e`` catch everything: sentinel
+    caught list, broad. A typed pattern narrows to its
+    ``type_identifier`` names, broad only for the ``Error`` protocol
+    itself.
+    """
+    pattern = next(
+        (c for c in clause.children if c.type == "pattern"), None,
+    )
+    names: list[str] = []
+    stack = list(pattern.children) if pattern is not None else []
+    while stack:
+        cur = stack.pop()
+        if cur.type == "type_identifier":
+            names.append(_ts_node_text(cur, src).rsplit(".", 1)[-1])
+            continue
+        stack.extend(cur.children)
+    if not names:
+        return ["<all>"], True
+    broad = any(n in _SWIFT_BROAD_TYPES for n in names)
+    return names, broad
+
+
+def _swift_callee_name(call, src: bytes) -> str:
+    """Dotted callee of a ``call_expression`` (first child is a
+    ``simple_identifier`` or ``navigation_expression``)."""
+    if not call.children:
+        return ""
+    callee = call.children[0]
+    if callee.type == "simple_identifier":
+        return _ts_node_text(callee, src)
+    if callee.type != "navigation_expression":
+        return ""
+    name = _ts_node_text(callee, src)
+    if "(" in name or "\n" in name:
+        # Chained receiver (``a.b().c``) — keep the terminal member.
+        idents: list[Any] = []
+        stack = list(callee.children)
+        while stack:
+            cur = stack.pop(0)
+            if cur.type == "simple_identifier":
+                idents.append(cur)
+            elif cur.type == "navigation_suffix":
+                stack.extend(cur.children)
+        name = _ts_node_text(idents[-1], src) if idents else ""
+    return name
+
+
+def _swift_call_index(root, src: bytes) -> list[tuple[int, str]]:
+    """One-pass ``(start_byte, dotted-name)`` index of every call
+    expression under ``root``, sorted for the shared
+    ``_calls_in_range`` slicing contract."""
+    calls: list[tuple[int, str]] = []
+    stack = list(root.children) if root is not None else []
+    while stack:
+        cur = stack.pop()
+        stack.extend(cur.children)
+        if cur.type != "call_expression":
+            continue
+        name = _swift_callee_name(cur, src)
+        if name:
+            calls.append((cur.start_byte, name))
+    calls.sort()
+    return calls
+
+
+def _swift_throws_at_handler_level(stmts) -> bool:
+    """A ``throw`` that demonstrably terminates THIS catch block.
+
+    Boundary-aware exactly like the Java walk: a throw inside a
+    closure / local function / nested type never executes here, and a
+    throw inside a nested ``do`` that has its own catch blocks may be
+    swallowed locally (the nested handlers cover only the nested do
+    BODY — throws in the nested catch blocks still propagate).
+    Neither may mint a fail-closed refutation receipt.
+    """
+    stack: list[tuple[Any, bool]] = [
+        (c, False) for c in (stmts.children if stmts is not None else [])
+    ]
+    while stack:
+        cur, swallowable = stack.pop()
+        if cur.type == "control_transfer_statement" \
+                and _swift_transfer_kind(cur) == "throw" \
+                and not swallowable:
+            return True
+        if cur.type in _SWIFT_BOUNDARY_TYPES:
+            continue
+        if cur.type == "do_statement" and any(
+            ch.type == "catch_block" for ch in cur.children
+        ):
+            body = _swift_statements(cur)
+            stack.extend(
+                (ch, swallowable or (body is not None and ch == body))
+                for ch in cur.children
+            )
+            continue
+        stack.extend((ch, swallowable) for ch in cur.children)
+    return False
+
+
+def _classify_swift_catch(clause: Node, src: bytes) -> tuple[str, str]:
+    """(outcome_kind, permissive_value) for one catch block — the
+    census classification vocabulary on the Swift grammar.
+
+    Text regexes run over the SANITIZED clause text (comments/string
+    literals blanked), same rationale as the Java leg.
+    """
+    from .source_view import sanitized_view
+    body = _swift_statements(clause)
+    text = sanitized_view(_ts_node_text(clause, src), language="swift")
+
+    if _swift_throws_at_handler_level(body):
+        return OUTCOME_FAIL_CLOSED, "re-throws"
+    if _SWIFT_ABORT_RE.search(text):
+        return OUTCOME_FAIL_CLOSED, "aborts"
+
+    stmts = _swift_stmts(body)
+    if not stmts:
+        return OUTCOME_PASS, ""
+
+    transfers = {
+        s.id: _swift_transfer_kind(s)
+        for s in stmts if s.type == "control_transfer_statement"
+    }
+    returns = [
+        s for s in stmts if transfers.get(s.id) == "return"
+    ]
+    if returns and len(returns) == len(stmts):
+        ret = returns[0]
+        result = ret.child_by_field_name("result")
+        value = _ts_node_text(result, src).strip() \
+            if result is not None else ""
+        if value == "" or value in _SWIFT_RESTRICTIVE_RETURNS:
+            return OUTCOME_FAIL_CLOSED, f"returns {value or '<void>'}"
+        if value == "true":
+            return OUTCOME_RETURN_PERMISSIVE, value
+        if result is not None and result.type in _SWIFT_LITERAL_TYPES:
+            return OUTCOME_RETURN_PERMISSIVE, value
+        return OUTCOME_FALLBACK_ACTION, value
+
+    if _SWIFT_LOUD_LOG_RE.search(text):
+        return OUTCOME_FALLBACK_ACTION, "loud-log-and-continue"
+    if _SWIFT_PRINT_RE.search(text):
+        return OUTCOME_FALLBACK_ACTION, "prints-and-continues"
+
+    if all(
+        transfers.get(s.id) in ("continue", "break") for s in stmts
+    ):
+        return OUTCOME_CONTINUE, ""
+    if _SWIFT_QUIET_LOG_RE.search(text) and all(
+        s.type == "call_expression" or transfers.get(s.id) == "return"
+        for s in stmts
+    ):
+        calls = [s for s in stmts if s.type == "call_expression"]
+        if all(
+            _SWIFT_QUIET_LOG_RE.search(
+                sanitized_view(_ts_node_text(s, src), language="swift"),
+            )
+            for s in calls
+        ):
+            return OUTCOME_QUIET_LOG_ONLY, ""
+
+    assigns = [
+        s for s in stmts
+        if s.type in ("assignment", "property_declaration")
+    ]
+    if assigns and all(
+        s.type in ("assignment", "property_declaration",
+                   "call_expression")
+        for s in stmts
+    ):
+        if any(s.type == "call_expression" for s in stmts):
+            return OUTCOME_FALLBACK_ACTION, "handler calls fallback code"
+        first = assigns[0]
+        value_node = (
+            first.child_by_field_name("result")
+            if first.type == "assignment"
+            else first.child_by_field_name("value")
+        )
+        value = _ts_node_text(value_node, src) \
+            if value_node is not None else ""
+        return OUTCOME_ASSIGN_DEFAULT, value
+    return OUTCOME_FALLBACK_ACTION, "substantial handler body"
+
+
+def _swift_name(node, src: bytes) -> str:
+    """Declaration name (``simple_identifier`` name field, or the
+    first simple_identifier child — init declarations have none)."""
+    name_node = node.child_by_field_name("name")
+    if name_node is not None and name_node.type in (
+            "simple_identifier", "type_identifier"):
+        return _ts_node_text(name_node, src)
+    ident = next(
+        (c for c in node.children if c.type == "simple_identifier"),
+        None,
+    )
+    return _ts_node_text(ident, src) if ident is not None else ""
+
+
+def swift_handlers(
+    source: str, file_path: str,
+) -> list[HandlerOutcome] | None:
+    """All classified ``do``/``catch`` blocks in a Swift source file.
+
+    ``None`` when no tree-sitter swift parser is available (the
+    channel reports ``language-unsupported`` — the Java
+    no-regex-fallback rule); empty list when the file has no
+    handlers.
+    """
+    parser = _ts_parser("swift")
+    if parser is None:
+        return None
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        logger.debug("fail_open_lang: swift parse failed for %s",
+                     file_path, exc_info=True)
+        return None
+    lines = split_lines(source)
+    call_index = _swift_call_index(tree.root_node, src)
+    out: list[HandlerOutcome] = []
+    # Enclosing names are carried down the walk (never .parent chains
+    # — the Java leg's measured O(depth^2) stall); the class name
+    # rides along so an initializer can report its type.
+    stack: list[tuple[Any, str, str]] = [(tree.root_node, "", "")]
+    while stack:
+        node, enclosing, class_name = stack.pop()
+        if node.type in ("class_declaration", "protocol_declaration"):
+            class_name = _swift_name(node, src) or class_name
+        elif node.type == "function_declaration":
+            enclosing = _swift_name(node, src)
+        elif node.type == "init_declaration":
+            enclosing = class_name or "init"
+        stack.extend(
+            (c, enclosing, class_name) for c in node.children
+        )
+        if node.type != "do_statement":
+            continue
+        body = _swift_statements(node)
+        try_calls = (
+            _calls_in_range(call_index, body.start_byte, body.end_byte)
+            if body is not None else []
+        )
+        try_span = (
+            (body.start_point[0] + 1, body.end_point[0] + 1)
+            if body is not None else (_line_of(node), _line_of(node))
+        )
+        for clause in node.children:
+            if clause.type != "catch_block":
+                continue
+            outcome_kind, value = _classify_swift_catch(clause, src)
+            caught, broad = _swift_catch_types(clause, src)
+            line = _line_of(clause)
+            snippet_end = min(clause.end_point[0] + 1, line + 2)
+            out.append(HandlerOutcome(
+                idiom=f"catch_{outcome_kind}",
+                file=file_path,
+                line=line,
+                caught=caught,
+                broad=broad,
+                outcome_kind=outcome_kind,
+                permissive_value=value,
+                evidence_snippet=" ".join(
+                    ln.strip() for ln in lines[line - 1:snippet_end]
+                ),
+                parser="tree-sitter",
+                enclosing_function=enclosing,
+                try_calls=try_calls,
+                try_span=try_span,
+            ))
+    return out
+
+
+def _swift_function_node(tree, src: bytes, function_name: str):
+    tail = function_name.rsplit(".", 1)[-1]
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type in _SWIFT_FUNC_TYPES \
+                and _swift_name(node, src) == tail:
+            return node
+    return None
+
+
+def swift_function_declares_throws(
+    source: str, function_name: str,
+) -> bool:
+    """True when a same-file Swift function is declared ``throws`` (a
+    bare ``throws`` keyword child, or a typed ``throws_clause``)."""
+    parser = _ts_parser("swift")
+    if parser is None:
+        return False
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return False
+    node = _swift_function_node(tree, src, function_name)
+    if node is None:
+        return False
+    return any(
+        c.type in ("throws", "throws_clause") for c in node.children
+    )
+
+
+def swift_function_throws(source: str, function_name: str) -> list[str]:
+    """Error types a same-file Swift function names: a typed
+    ``throws(X)`` clause plus ``throw X(...)`` / ``throw X.case``
+    statements in its body — leg-2b caught-type fallibility evidence.
+    Plain ``throws`` is untyped, so an empty list is never evidence
+    of infallibility (see :func:`swift_function_declares_throws`).
+    """
+    parser = _ts_parser("swift")
+    if parser is None:
+        return []
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return []
+    node = _swift_function_node(tree, src, function_name)
+    if node is None:
+        return []
+    thrown: list[str] = []
+    clause = next(
+        (c for c in node.children if c.type == "throws_clause"), None,
+    )
+    if clause is not None:
+        thrown.extend(
+            _ts_node_text(c, src).rsplit(".", 1)[-1]
+            for c in clause.children if c.type == "user_type"
+        )
+    stack = list(node.children)
+    while stack:
+        cur = stack.pop()
+        stack.extend(cur.children)
+        if cur.type != "control_transfer_statement" \
+                or _swift_transfer_kind(cur) != "throw":
+            continue
+        expr = next(
+            (c for c in cur.children
+             if c.is_named and c.type != "throw_keyword"), None,
+        )
+        if expr is None:
+            continue
+        if expr.type == "call_expression":
+            name = _swift_callee_name(expr, src)
+            if name:
+                thrown.append(name.rsplit(".", 1)[-1])
+        elif expr.type == "navigation_expression":
+            # ``throw AuthError.denied`` — the enum TYPE is the
+            # navigation target.
+            target = expr.child_by_field_name("target")
+            if target is not None \
+                    and target.type == "simple_identifier":
+                thrown.append(_ts_node_text(target, src))
+        elif expr.type == "simple_identifier":
+            thrown.append(_ts_node_text(expr, src))
+    return list(dict.fromkeys(thrown))
+
+
+def swift_do_has_plain_try(
+    source: str, span: tuple[int, int],
+) -> bool:
+    """A plain-``try``-marked call inside the given line span — the
+    compiler-verified fallibility witness (``try?`` / ``try!`` never
+    reach a catch block, so only the bare marker counts).
+
+    A ``try`` nested inside a closure or local function DEFINED within
+    the span is not a witness: its error propagates to that nested
+    body's own caller, never to the enclosing do/catch."""
+    parser = _ts_parser("swift")
+    if parser is None:
+        return False
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return False
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type != "try_expression":
+            continue
+        line = _line_of(node)
+        if not (span[0] <= line <= span[1]):
+            continue
+        cur = node.parent
+        nested = False
+        while cur is not None:
+            if cur.type in _SWIFT_BOUNDARY_TYPES:
+                # First boundary ancestor inside the span = a nested
+                # definition; outside = the enclosing function itself.
+                nested = span[0] <= _line_of(cur) <= span[1]
+                break
+            cur = cur.parent
+        if nested:
+            continue
+        op = next(
+            (c for c in node.children if c.type == "try_operator"),
+            None,
+        )
+        if op is not None and _ts_node_text(op, src) == "try":
+            return True
+    return False
+
+
+def swift_method_segment(source: str, function_name: str) -> str:
+    """Source of a Swift function (attributes included — the node
+    span covers its modifiers) plus the enclosing type declaration
+    header, for Tier-B hook-mechanics matching (protocol conformances
+    and attributes live on the type or function header)."""
+    parser = _ts_parser("swift")
+    if parser is None:
+        return ""
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return ""
+    node = _swift_function_node(tree, src, function_name)
+    if node is None:
+        return ""
+    segment = _ts_node_text(node, src)
+    cur = node.parent
+    while cur is not None and cur.type not in (
+            "class_declaration", "protocol_declaration"):
+        cur = cur.parent
+    if cur is not None:
+        body = cur.child_by_field_name("body")
+        header_end = (body.start_byte if body is not None
+                      else cur.end_byte)
+        header = src[cur.start_byte:header_end].decode(
+            "utf-8", errors="replace",
+        )
+        segment = header.strip() + "\n" + segment
+    return segment
+
+
+def swift_function_span(
+    source: str, function_name: str,
+) -> tuple[int, int] | None:
+    """(start_line, end_line) of a Swift function, or None."""
+    parser = _ts_parser("swift")
+    if parser is None:
+        return None
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return None
+    node = _swift_function_node(tree, src, function_name)
+    if node is None:
+        return None
+    return (node.start_point[0] + 1, node.end_point[0] + 1)
+
+
+def _iter_swift_calls(tree, src: bytes, callee: str,
+                      span: tuple[int, int] | None):
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type != "call_expression":
+            continue
+        name = _swift_callee_name(node, src)
+        if not name or name.rsplit(".", 1)[-1] != callee:
+            continue
+        line = _line_of(node)
+        if span is None or span[0] <= line <= span[1]:
+            yield node
+
+
+def _swift_next_use(func_node, src: bytes, var: str, after_byte: int):
+    if func_node is None:
+        return None
+    best = None
+    stack = [func_node]
+    while stack:
+        cur = stack.pop()
+        if cur.type == "simple_identifier" \
+                and cur.start_byte > after_byte \
+                and _ts_node_text(cur, src) == var:
+            if best is None or cur.start_byte < best.start_byte:
+                best = cur
+        stack.extend(cur.children)
+    return best
+
+
+def _swift_enclosing_function(node):
+    cur = node.parent
+    while cur is not None:
+        if cur.type in _SWIFT_FUNC_TYPES:
+            return cur
+        cur = cur.parent
+    return None
+
+
+def _swift_classify_binding(cur, src: bytes, site, line: int):
+    """Classify a binding of a ``try?`` result (``level = try? f()``
+    assignment or ``let u = try? f()`` declaration)."""
+    if cur.type == "assignment":
+        target = cur.child_by_field_name("target")
+        var = _ts_node_text(target, src).strip() \
+            if target is not None else ""
+    else:
+        name = cur.child_by_field_name("name")
+        bound = name.child_by_field_name("bound_identifier") \
+            if name is not None else None
+        var = _ts_node_text(bound, src) if bound is not None else ""
+    # Only the exact wildcard is a discard: Swift has no
+    # underscore-PREFIX convention, so `_verified` etc. are ordinary
+    # consumed bindings and take the next-use scan below.
+    if var == "_":
+        site.verdict = "unguarded"
+        site.shape = "underscore-discard"
+        site.evidence = (
+            "optional result explicitly discarded — the author saw "
+            "the `try?` but the error branch cannot alter control"
+        )
+        return site
+    func_node = _swift_enclosing_function(cur)
+    use = _swift_next_use(func_node, src, var, cur.end_byte)
+    if use is None:
+        site.verdict = "unguarded"
+        site.shape = "result-never-checked"
+        site.evidence = (
+            f"`{var}` bound at line {line} is never read afterwards "
+            "in this function"
+        )
+        return site
+    site.verdict = "guarded"
+    site.shape = "captured"
+    site.evidence = f"`{var}` consumed at line {_line_of(use)}"
+    return site
+
+
+def _classify_swift_call_site(
+    node, src: bytes, lines: list[str],
+) -> CallSiteOutcome:
+    """One Swift call node → guarded/unguarded/undecided for the
+    ``try?``-erasure leg."""
+    line = _line_of(node)
+    code = lines[line - 1].strip() if line <= len(lines) else ""
+    site = CallSiteOutcome(
+        file="", line=line, code=code, verdict="undecided",
+        parser="tree-sitter",
+    )
+    # Find the try marker first: an un-tried call cannot erase an
+    # error (only throwing calls carry one), so it is not this leg's
+    # to adjudicate.
+    cur = node.parent
+    while cur is not None and cur.type != "try_expression":
+        if cur.type == "value_arguments":
+            # Argument of an enclosing call: any try marker further
+            # up belongs to that call, and the enclosing call
+            # consumes this result.
+            site.verdict = "guarded"
+            site.shape = "consumed-as-argument"
+            site.evidence = "call result consumed by an enclosing call"
+            return site
+        if cur.type in ("statements", "function_body") \
+                or cur.type in _SWIFT_FUNC_TYPES:
+            site.evidence = (
+                "call is not try-marked — not adjudicable by the "
+                "try?-erasure leg"
+            )
+            return site
+        cur = cur.parent
+    if cur is None:
+        site.evidence = (
+            "call is not try-marked — not adjudicable by the "
+            "try?-erasure leg"
+        )
+        return site
+    op = next(
+        (c for c in cur.children if c.type == "try_operator"), None,
+    )
+    marker = _ts_node_text(op, src) if op is not None else "try"
+    if marker == "try":
+        site.verdict = "guarded"
+        site.shape = "propagated"
+        site.evidence = (
+            "plain `try` propagates the error to the caller"
+        )
+        return site
+    if marker == "try!":
+        site.verdict = "guarded"
+        site.shape = "try!-traps-on-error"
+        site.evidence = (
+            "`try!` aborts on the error branch — fail-closed at "
+            "this site"
+        )
+        return site
+    # ``try?`` — the error branch became nil; classify who looks.
+    cur = cur.parent
+    while cur is not None:
+        t = cur.type
+        if t in ("guard_statement", "if_statement",
+                 "while_statement"):
+            site.verdict = "guarded"
+            site.shape = "tested"
+            site.evidence = (
+                "optional result consumed by a binding condition — "
+                "the failure branch is handled"
+            )
+            return site
+        if t == "switch_statement":
+            # Scrutinee of a switch (a try? deeper inside a case BODY
+            # never reaches here — its walk terminates at the case's
+            # own `statements` block first). Swift switches are
+            # exhaustive: the compiler forces a case (or default) to
+            # cover the nil branch, so failure is structurally
+            # distinguished from success — the same claim a binding
+            # condition earns.
+            site.verdict = "guarded"
+            site.shape = "tested"
+            site.evidence = (
+                "optional result scrutinised by an exhaustive switch "
+                "— the nil branch must be covered by a case"
+            )
+            return site
+        if t == "nil_coalescing_expression":
+            site.verdict = "unguarded"
+            site.shape = "??-erases-error"
+            site.evidence = (
+                "`??` replaces the error branch with a default — "
+                "failure is indistinguishable from success"
+            )
+            return site
+        if t in ("assignment", "property_declaration"):
+            return _swift_classify_binding(cur, src, site, line)
+        if t == "value_argument":
+            site.verdict = "guarded"
+            site.shape = "consumed-as-argument"
+            site.evidence = "call result consumed by an enclosing call"
+            return site
+        if t == "control_transfer_statement":
+            site.verdict = "guarded"
+            site.shape = "propagated"
+            site.evidence = (
+                "optional result handed to the caller, who can "
+                "observe the nil branch"
+            )
+            return site
+        if t == "statements":
+            site.verdict = "unguarded"
+            site.shape = "bare-statement"
+            site.evidence = (
+                "bare `try?` statement — the optional result is "
+                "dropped and the error branch cannot alter control"
+            )
+            return site
+        if t in ("tuple_expression", "parenthesized_expression"):
+            cur = cur.parent
+            continue
+        cur = cur.parent
+    site.evidence = "could not classify the call's consumption context"
+    return site
+
+
+def swift_erasure_sites(
+    source: str,
+    file_path: str,
+    callee: str,
+    *,
+    function_span: tuple[int, int] | None = None,
+) -> list[CallSiteOutcome] | None:
+    """Call sites of ``callee`` classified for the Swift
+    ``try?``-erasure leg. ``None`` when no tree-sitter swift parser
+    is available (try-marker consumption is not honestly decidable
+    from line shapes)."""
+    parser = _ts_parser("swift")
+    if parser is None:
+        return None
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+        lines = split_lines(source)
+    except Exception:
+        logger.debug("fail_open_lang: swift erasure scan failed for %s",
+                     file_path, exc_info=True)
+        return None
+    sites = []
+    for node in _iter_swift_calls(tree, src, callee, function_span):
+        site = _classify_swift_call_site(node, src, lines)
+        site.file = file_path
+        sites.append(site)
+    return sites
 
 
 def function_parameters(
