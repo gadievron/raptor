@@ -147,6 +147,10 @@ class TestCompleteRunReport:
             "artifact is missing"
         )
         assert "raptor-audit resume" not in report["summary"]
+        # The completed-with-gaps shape still gets a prescription —
+        # the one the resume gate accepts: a new run with cross-run
+        # verdict reuse.
+        assert "Continue in a new run" in report["summary"]
 
     def test_segments_surface_on_resumed_completed_run(self, tmp_path):
         out = self._complete_run(tmp_path)
@@ -160,6 +164,60 @@ class TestCompleteRunReport:
         assert "Run segments: 2" in report["summary"]
         md = write_markdown_report(report, out).read_text()
         assert "Run segments: 2" in md
+
+
+class TestFinalStatusOverride:
+    """``generate_report(final_status=...)`` runs BEFORE the lifecycle
+    terminal stamp, while the on-disk status still reads ``running``
+    (a resumable status). The override must keep the completeness
+    block internally consistent — ``run_status``, ``partial`` AND
+    ``resumable`` all reflect the terminal status, and the rendered
+    prescription matches what the resume gate will actually accept."""
+
+    def _mid_finalisation_run(self, tmp_path: Path) -> Path:
+        out = _truncated_run(tmp_path)
+        _meta(out, "running")  # the mid-finalisation on-disk snapshot
+        return out
+
+    def test_completed_final_status_is_not_resumable(
+        self, tmp_path: Path,
+    ) -> None:
+        # The budget/breaker-stop shape: _finalize_run stamps
+        # "completed" for llm_budget_exceeded terminations. The baked
+        # report must not carry run_status="completed" alongside
+        # resumable=True, nor prescribe a resume the gate refuses.
+        out = self._mid_finalisation_run(tmp_path)
+        report = generate_report(out, final_status="completed")
+        comp = report["completeness"]
+        assert comp["run_status"] == "completed"
+        assert comp["resumable"] is False
+        summary = report["summary"]
+        assert "raptor-audit resume" not in summary
+        assert "Continue in a new run" in summary
+
+    def test_interrupted_final_status_stays_resumable(
+        self, tmp_path: Path,
+    ) -> None:
+        out = self._mid_finalisation_run(tmp_path)
+        report = generate_report(out, final_status="interrupted")
+        comp = report["completeness"]
+        assert comp["run_status"] == "interrupted"
+        assert comp["resumable"] is True
+        summary = report["summary"]
+        assert "raptor-audit resume" in summary
+        assert "Continue in a new run" not in summary
+
+    def test_no_final_status_reflects_on_disk_status(
+        self, tmp_path: Path,
+    ) -> None:
+        # The re-render path (report subcommand) passes no override:
+        # resumability keeps coming from the on-disk status.
+        out = self._mid_finalisation_run(tmp_path)
+        report = generate_report(out)
+        comp = report["completeness"]
+        assert comp["run_status"] == "running"
+        assert comp["resumable"] is True
+        assert "raptor-audit resume" in report["summary"]
 
 
 class TestShardedChecklistCompleteness:

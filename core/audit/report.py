@@ -145,6 +145,13 @@ def generate_report(
         # completeness block names the run's real end state instead
         # of a mid-finalisation snapshot.
         completeness["run_status"] = final_status
+        # Recompute resumability from the terminal status too: the
+        # on-disk snapshot reads "running" (a resumable status), so
+        # without this a budget/breaker-stopped run baked
+        # run_status="completed" alongside resumable=True and the
+        # report prescribed a `raptor-audit resume` the resume gate
+        # refuses (completed is not in RESUMABLE_STATUSES).
+        completeness["resumable"] = final_status in _RESUMABLE_STATUSES
         if final_status == "completed":
             completeness["partial"] = bool(completeness.get("missing"))
     segments = _load_segments(out_dir)
@@ -1674,6 +1681,15 @@ def _completeness_lines(report: dict[str, Any]) -> list[str]:
             lines.append(
                 "  Resumable: raptor-audit resume <run-dir> re-enters "
                 "this run ($0 verdict re-import, remaining budget)."
+            )
+        else:
+            # Completed-with-gaps (or unknown-status) shape: resume is
+            # refused for this run, so prescribe the path that works —
+            # a NEW run, whose cross-run verdict reuse imports this
+            # run's journal verdicts at $0.
+            lines.append(
+                "  Continue in a new run — cross-run verdict reuse "
+                "imports this run's verdicts at $0."
             )
     # Dark rows the /validate post-pass never adjudicated — stated
     # unconditionally (a completed run can still owe these), with the
