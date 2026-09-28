@@ -14,7 +14,6 @@ production. These exercise the real ``_compute_audit_prep`` with
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -180,8 +179,12 @@ def prep_with_binary_edges(tmp_path, monkeypatch):
 
     # Inject the binary_oracle block the enrichment pass would have
     # written (full-DWARF tier — the gate the producer insists on).
-    checklist_path = out / "checklist.json"
-    checklist = json.loads(checklist_path.read_text())
+    # Round-trip through the gated accessors: the frame is MAC-stamped
+    # at the write chokepoint, so an in-place json edit reads tampered
+    # and prep refuses the checklist.
+    from core.inventory import read_checklist, save_checklist
+
+    checklist = read_checklist(out)
     checklist["binary_oracle"] = {
         "binaries": [
             {"path": str(binary), "build_id": None, "tier": "full"},
@@ -190,7 +193,7 @@ def prep_with_binary_edges(tmp_path, monkeypatch):
         "earns_suppression": True,
         "any_symbol_only": False,
     }
-    checklist_path.write_text(json.dumps(checklist))
+    save_checklist(out, checklist)
 
     return _run_prep(target, out)
 

@@ -158,11 +158,14 @@ class TestAstViewShim:
         passed as the inventory — the enricher keeps its own fallback."""
         import core.orchestration.context_map_ast_view as av
 
-        checklist = json.loads(
-            (workdir / "checklist.json").read_text(encoding="utf-8"))
+        # Round-trip through the gated accessors: the frame is
+        # MAC-stamped at the write chokepoint, so an in-place json
+        # edit reads tampered and the shim refuses the checklist.
+        from core.inventory import read_checklist, save_checklist
+
+        checklist = read_checklist(workdir)
         checklist["files"] = []
-        (workdir / "checklist.json").write_text(
-            json.dumps(checklist), encoding="utf-8")
+        save_checklist(workdir, checklist)
 
         seen: dict = {}
 

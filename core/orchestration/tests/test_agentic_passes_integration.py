@@ -31,9 +31,11 @@ pytestmark = pytest.mark.usefixtures("cc_spawn_machinery_enabled")
 
 # Assume interactive — these tests exercise pass mechanics, not Rule of Two.
 _interactive_patch = None
+_xdg_tmp: TemporaryDirectory | None = None
+_xdg_patch = None
 
 def setUpModule():
-    global _interactive_patch
+    global _interactive_patch, _xdg_tmp, _xdg_patch
     # Force the agentic-pass gate open: mock the human-terminal leg True so
     # the full pass path runs under CI/pytest (no controlling terminal).
     _interactive_patch = patch(
@@ -41,8 +43,18 @@ def setUpModule():
         return_value=True,
     )
     _interactive_patch.start()
+    # Checklist frames are MAC-stamped at the write chokepoint, keyed
+    # off $XDG_DATA_HOME/raptor/checklist-frame-mac.key. Pin the key
+    # dir for the whole module so (a) stamping never mints the
+    # developer's real key and (b) the per-test HOME patches don't
+    # move the key path between the stamp and the read.
+    _xdg_tmp = TemporaryDirectory(prefix="agentic-passes-xdg-")
+    _xdg_patch = patch.dict(os.environ, {"XDG_DATA_HOME": _xdg_tmp.name})
+    _xdg_patch.start()
 
 def tearDownModule():
+    _xdg_patch.stop()
+    _xdg_tmp.cleanup()
     _interactive_patch.stop()
 
 
@@ -58,15 +70,20 @@ def _make_target(tmp: Path) -> Path:
 
 def _make_agentic_out(tmp: Path, target: Path) -> Path:
     """Create a fake agentic out_dir with a checklist that references target."""
+    from core.inventory import save_checklist
+
     out_dir = tmp / "agentic_run"
     out_dir.mkdir()
-    (out_dir / "checklist.json").write_text(json.dumps({
+    # Write through the stamping chokepoint: a raw write_text frame
+    # carries no MAC token and every gated reader downstream (prepass
+    # reuse, bridge discovery) refuses it.
+    save_checklist(out_dir, {
         "target_path": str(target),
         "files": [{
             "path": "handler.py",
             "items": [{"name": "handle_request", "line": 1}],
         }],
-    }))
+    })
     # Mark this dir as command_type=agentic so infer_command_type works correctly.
     (out_dir / ".raptor-run.json").write_text(json.dumps({
         "command": "agentic",

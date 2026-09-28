@@ -317,8 +317,12 @@ def prep_with_generated_asm(tmp_path_factory):
 
     cached = tmp_path_factory.mktemp("perlasm_cache") / "kernel.S"
     cached.write_text(_fixture("aes-sha1-armv8.linux64.S"))
-    checklist_path = out / "checklist.json"
-    checklist = json.loads(checklist_path.read_text())
+    # Round-trip through the gated accessors: the frame is MAC-stamped
+    # at the write chokepoint, so an in-place json edit reads tampered
+    # and prep refuses the checklist.
+    from core.inventory import read_checklist, save_checklist
+
+    checklist = read_checklist(out)
     checklist["files"].append({
         "path": ".perlasm-generated/crypto/aes/asm/aes-sha1-armv8.pl.linux64.S",
         "language": "asm-generated",
@@ -332,7 +336,7 @@ def prep_with_generated_asm(tmp_path_factory):
             "generated_path": str(cached),
         },
     })
-    checklist_path.write_text(json.dumps(checklist))
+    save_checklist(out, checklist)
 
     from core.audit.orchestrator import (
         OrchestratorConfig,
