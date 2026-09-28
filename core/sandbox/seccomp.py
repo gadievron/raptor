@@ -6,7 +6,11 @@ raw packets, AF_VSOCK's per-VM transport reachable through an empty netns,
 AF_ALG and friends' capability-free kernel attack surface),
 ptrace (cross-process attacks on same-UID host processes when ptrace_scope=0),
 keyctl/bpf/user_faultfd/perf_event_open (weird-corner syscalls historically
-used in container escapes).
+used in container escapes),
+broadcast signal delivery (kill(-1)/rt_sigqueueinfo(-1) reach every
+same-UID host process on Landlock-only floors without a pid namespace;
+Landlock ABI v6 signal scoping is the primary fix on 6.12+ kernels,
+this deny is the pre-v6 tier and belt-and-braces above it).
 
 SYSCALL axis: blocklist not allowlist — RAPTOR runs arbitrary target
 builds, so default-deny would require per-tool syscall profiles.
@@ -532,6 +536,43 @@ _TIOCLINUX = 0x541C
 
 _BLOCKED_IOCTL_CMDS = (_TIOCSTI, _TIOCCONS, _TIOCSCTTY, _TIOCLINUX)
 
+# Broadcast signal delivery. kill(-1, sig) fans out to EVERY process
+# the caller's credentials permit — on the Landlock-only containment
+# floor (no pid namespace: unprivileged user namespaces blocked) that
+# is the operator's entire same-UID session. SIGKILL silences the
+# supervisor and loggers, SIGSTOP freezes the sandbox's own timeout
+# machinery so it never fires, SIGTERM nukes every session on the box.
+# Landlock ABI v6 signal scoping (landlock.py `scoped`) is the primary,
+# domain-semantic fix on kernels >= 6.12; this arg-filtered deny is the
+# pre-v6 tier and belt-and-braces above it. rt_sigqueueinfo rides
+# along: its pid == -1 spelling answers ESRCH on current kernels
+# (kill_proc_info has no broadcast arm — live-verified), so nothing
+# legitimate can be calling it and the deny keeps the spelling closed
+# if a future kernel ever grows one.
+#
+# Deliberately NOT denied, with reasons:
+#   * kill(0, sig) — the caller's OWN process group: legitimate job
+#     control (build/test harnesses), and sandbox children are session
+#     leaders of their own fresh group (_spawn.py start_new_session
+#     default), so the group is inside the sandbox tree. A sandboxed
+#     descendant cannot setpgid() into a host group either — setpgid
+#     is same-session-only.
+#   * kill(-pgid) — targeted, not broadcast; covered by Landlock
+#     signal scoping on v6+ kernels. Below v6 it stays a residual of
+#     the same class as a per-pid kill() sweep, which no argument
+#     filter can close (pids/pgids are ordinary positive integers).
+#   * tkill/tgkill/rt_tgsigqueueinfo — tid/tgid-targeted; -1 is
+#     EINVAL/ESRCH (tkill live-verified), no broadcast form exists.
+#   * pidfd_send_signal — targets via an fd; cannot broadcast by
+#     construction.
+_SIGNAL_BROADCAST_SYSCALLS = ("kill", "rt_sigqueueinfo")
+# The kernel reads the pid argument as a 32-bit pid_t, so -1 (the
+# broadcast value) is any register whose low 32 bits are all-ones:
+# MASKED_EQ on _ARG32_MASK matches both the sign-extended libc
+# spelling (0xFFFFFFFFFFFFFFFF) and a zero-extended raw-syscall
+# garnish (0x00000000FFFFFFFF) that the kernel still truncates to -1.
+_PID_BROADCAST_LOW32 = 0xFFFFFFFF
+
 # 32-bit argument mask for MASKED_EQ deny rules. The kernel truncates
 # socket()'s family and ioctl()'s cmd to int/unsigned int, but seccomp
 # compares the RAW 64-bit register — an exact-equality rule misses
@@ -926,6 +967,12 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     send_flag_syscalls = [("sendto", _resolve("sendto"), 3),
                           ("sendmsg", _resolve("sendmsg"), 2),
                           ("sendmmsg", _resolve("sendmmsg"), 3)]
+    # Broadcast-signal deny (pid == -1) — see _SIGNAL_BROADCAST_SYSCALLS.
+    # Unconditional across profiles, debug/frida included: debuggers and
+    # instrumentation signal specific pids, never every process on the
+    # host, so no profile has a legitimate broadcast need.
+    signal_broadcast_syscalls = [(name, _resolve(name))
+                                 for name in _SIGNAL_BROADCAST_SYSCALLS]
     # Fileless-exec deny (deny_fd_exec): memfd_create wholesale +
     # execveat(AT_EMPTY_PATH). Resolved in the parent like everything
     # else; the child fail-closes if either is unresolved while the
@@ -974,6 +1021,8 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     if socketpair_num < 0:
         missing.append("socketpair")
     missing += [name for name, num, _arg in send_flag_syscalls
+                if num < 0]
+    missing += [name for name, num in signal_broadcast_syscalls
                 if num < 0]
     if missing and state.warn_once("_seccomp_arch_missing_warned"):
         logger.warning(
@@ -1577,6 +1626,35 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                     if ret < 0:
                         _os_write(2, b"sandbox: seccomp MSG_FASTOPEN rule"
                                      b" failed -- refusing to exec"
+                                     b" without filter\n")
+                        os._exit(126)
+
+                # Broadcast-signal deny — kill(-1, sig) and
+                # rt_sigqueueinfo(-1, ...) get EPERM in every profile
+                # (see _SIGNAL_BROADCAST_SYSCALLS for the threat and
+                # the not-denied neighbours). MASKED_EQ on the low 32
+                # bits of the pid argument (arg 0): the kernel reads a
+                # 32-bit pid_t, so this matches the sign-extended libc
+                # spelling and zero-extended raw-syscall garnish alike
+                # while leaving every non-broadcast pid — positive,
+                # 0 (own group), negative pgids — completely unfiltered.
+                # hard_deny: a broadcast SIGKILL/SIGSTOP against the
+                # operator's session is not observable-then-harmless —
+                # allow-and-log under audit mode would execute the nuke
+                # while recording it (same class as TIOCSTI).
+                for _sb_name, _sb_num in signal_broadcast_syscalls:
+                    if _sb_num < 0:
+                        continue
+                    arg = _ScmpArgCmp(arg=0, op=_SCMP_CMP_MASKED_EQ,
+                                      datum_a=_ARG32_MASK,
+                                      datum_b=_PID_BROADCAST_LOW32)
+                    arg_arr = (_ScmpArgCmp * 1)(arg)
+                    ret = lib.seccomp_rule_add_array(
+                        ctx, hard_deny, _sb_num, 1, arg_arr,
+                    )
+                    if ret < 0:
+                        _os_write(2, b"sandbox: seccomp signal-broadcast"
+                                     b" rule failed -- refusing to exec"
                                      b" without filter\n")
                         os._exit(126)
 
