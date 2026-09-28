@@ -710,3 +710,55 @@ class TestRmtreeHardened:
             assert victim.exists()
         finally:
             parent.chmod(0o700)
+
+
+class TestOpenHardenedRead:
+
+    def test_reads_regular_file(self, tmp_path):
+        import os
+
+        from core.atomic_fs import open_hardened_read
+
+        target = tmp_path / "artifact.log"
+        target.write_bytes(b"one\ntwo\n")
+        fd = open_hardened_read(target)
+        try:
+            assert os.read(fd, 1 << 16) == b"one\ntwo\n"
+        finally:
+            os.close(fd)
+
+    def test_refuses_symlink(self, tmp_path):
+        from core.atomic_fs import open_hardened_read
+
+        victim = tmp_path / "victim"
+        victim.write_text("attacker-chosen content")
+        link = tmp_path / "artifact.log"
+        link.symlink_to(victim)
+        with pytest.raises(OSError):
+            open_hardened_read(link)
+
+    @pytest.mark.skipif(
+        not hasattr(__import__("os"), "mkfifo"),
+        reason="mkfifo unavailable (non-POSIX)")
+    def test_refuses_writerless_fifo_without_blocking(self, tmp_path):
+        import os
+
+        from core.atomic_fs import open_hardened_read
+
+        target = tmp_path / "artifact.log"
+        os.mkfifo(target)
+        # O_NONBLOCK makes the read-side open of a writerless FIFO
+        # return immediately; the fstat gate must then refuse it —
+        # a plain open() here blocks forever.
+        with pytest.raises(OSError):
+            open_hardened_read(target)
+
+    def test_refuses_character_device(self):
+        from pathlib import Path
+
+        from core.atomic_fs import open_hardened_read
+
+        if not Path("/dev/null").exists():
+            pytest.skip("/dev/null unavailable")
+        with pytest.raises(OSError):
+            open_hardened_read("/dev/null")

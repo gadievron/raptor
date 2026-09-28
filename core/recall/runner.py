@@ -21,7 +21,11 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from core.atomic_fs import open_exclusive_artifact, open_hardened_append
+from core.atomic_fs import (
+    open_exclusive_artifact,
+    open_hardened_append,
+    open_hardened_read,
+)
 from core.json import dumps_artifact
 from core.sarif.parser import parse_sarif_findings
 
@@ -168,22 +172,38 @@ def run_pipeline(manifest: RecallManifest, target: Path, repo_root: Path,
         # nested tool output) can name other directories, so bind the
         # final one. Scan the stdout portion of the log line by line
         # (bounded memory).
+        # Hardened reopen (O_NOFOLLOW + non-regular refusal): the
+        # pipeline's children wrote under this directory, so the
+        # write-side symlink/FIFO discipline applies to the reads
+        # that follow them too. A refusal is a deliberate fail-closed
+        # verdict, so translate it to RunnerError here — the runner's
+        # error type is what the CLI turns into a clean ``error:``
+        # line; a bare OSError would surface as a traceback.
         sentinel_matches: list[str] = []
-        with open(log_path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                m = _OUTPUT_DIR_RE.match(line.rstrip("\n"))
-                if m:
-                    sentinel_matches.append(m.group(1))
+        try:
+            with os.fdopen(
+                open_hardened_read(log_path),
+                encoding="utf-8", errors="replace",
+            ) as f:
+                for line in f:
+                    m = _OUTPUT_DIR_RE.match(line.rstrip("\n"))
+                    if m:
+                        sentinel_matches.append(m.group(1))
 
-        # Append stderr behind the same separator the log always
-        # carried, by chunked copy (never buffered whole).
-        # Hardened append (O_NOFOLLOW + FIFO refusal) for the reopen
-        # of our own log after the pipeline's children ran.
-        with os.fdopen(
-            open_hardened_append(log_path), "ab",
-        ) as out_f, open(stderr_tmp, "rb") as err_f:
-            out_f.write(b"\n--- stderr ---\n")
-            shutil.copyfileobj(err_f, out_f)
+            # Append stderr behind the same separator the log always
+            # carried, by chunked copy (never buffered whole).
+            # Hardened append (O_NOFOLLOW + FIFO refusal) for the
+            # reopen of our own log after the pipeline's children ran.
+            with os.fdopen(
+                open_hardened_append(log_path), "ab",
+            ) as out_f, os.fdopen(
+                open_hardened_read(stderr_tmp), "rb",
+            ) as err_f:
+                out_f.write(b"\n--- stderr ---\n")
+                shutil.copyfileobj(err_f, out_f)
+        except OSError as exc:
+            msg = f"hardened reopen of the run log refused: {exc}"
+            raise RunnerError(msg) from exc
     finally:
         with contextlib.suppress(OSError):
             stderr_tmp.unlink(missing_ok=True)

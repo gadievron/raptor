@@ -329,3 +329,57 @@ class TestStreamedPipelineOutput:
         assert body.index("OUTPUT_DIR") < body.index("--- stderr ---")
         # No temp stream file left behind.
         assert not list(tmp_path.glob("*.stderr.tmp"))
+
+    def test_symlink_swapped_stderr_tmp_refused(self, tmp_path):
+        # The temp stream file has a predictable name in a directory
+        # the pipeline's children write under; a child swapping it
+        # for a symlink must get a refusal at the reopen, never have
+        # its target's bytes copied into the log.
+        victim = tmp_path / "victim"
+        victim.write_text("INJECTED-VICTIM-LINE\n", encoding="utf-8")
+        out = tmp_path / "run_out"
+        out.mkdir()
+        log = tmp_path / "pipeline.log"
+
+        def _run(argv, **kw):
+            kw["stdout"].write(f"OUTPUT_DIR={out}\n".encode())
+            kw["stderr"].write(b"real stderr\n")
+            stderr_tmp = log.with_suffix(log.suffix + ".stderr.tmp")
+            stderr_tmp.unlink()
+            stderr_tmp.symlink_to(victim)
+            return SimpleNamespace(returncode=0)
+
+        with patch("core.recall.runner.subprocess.run",
+                   side_effect=_run), \
+                pytest.raises(RunnerError, match="hardened reopen"):
+            run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
+        assert "INJECTED-VICTIM-LINE" not in log.read_text(
+            encoding="utf-8")
+
+    def test_symlink_swapped_log_refused_before_sentinel_binding(
+            self, tmp_path):
+        # Same swap on the log itself: the sentinel scan reopens the
+        # log after the children ran, and a planted symlink there
+        # must be refused rather than let an attacker-chosen file
+        # supply the OUTPUT_DIR binding.
+        attacker_dir = tmp_path / "attacker"
+        attacker_dir.mkdir()
+        bait = tmp_path / "bait.log"
+        bait.write_text(f"OUTPUT_DIR={attacker_dir}\n",
+                        encoding="utf-8")
+        log = tmp_path / "pipeline.log"
+
+        def _run(argv, **kw):
+            kw["stdout"].write(b"noise\n")
+            log.unlink()
+            log.symlink_to(bait)
+            return SimpleNamespace(returncode=0)
+
+        # RunnerError, not bare OSError: the refusal is a deliberate
+        # fail-closed verdict and must ride the runner's clean error
+        # channel (the CLI prints ``error:`` for RunnerError; a bare
+        # OSError surfaces as a traceback).
+        with patch("core.recall.runner.subprocess.run",
+                   side_effect=_run), \
+                pytest.raises(RunnerError, match="hardened reopen"):
+            run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)

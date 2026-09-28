@@ -440,6 +440,36 @@ def open_hardened_append(path: str | Path, *, mode: int = 0o644) -> int:
     return fd
 
 
+def open_hardened_read(path: str | Path) -> int:
+    """Open *path* for reading with the hardened trail shape; return
+    the fd.
+
+    Mirror of :func:`open_hardened_append` for the read side:
+    ``O_NOFOLLOW`` refuses a planted symlink (ELOOP); ``O_NONBLOCK``
+    makes a planted reader-less FIFO fail fast instead of blocking
+    the opener forever (and is a no-op once the fd is a regular
+    file); the post-open ``fstat`` S_ISREG check refuses everything
+    else non-regular (a FIFO with a writer, a device such as
+    /dev/zero that reads forever). Use this to REOPEN an artifact the
+    process wrote earlier into a directory that untrusted children
+    also write under.
+
+    Raises ``OSError`` on refusal. The caller owns the returned fd.
+    """
+    flags = os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK
+    fd = os.open(str(path), flags)
+    try:
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(
+                f"refusing to read {path}: not a regular file "
+                "(planted FIFO/device at the artifact path?)",
+            )
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
 def rmtree_hardened(path: str | Path) -> bool:
     """Remove a directory tree a sandboxed child may have griefed;
     return whether the path is actually gone.
@@ -492,6 +522,7 @@ def rmtree_hardened(path: str | Path) -> bool:
 __all__ = [
     "open_exclusive_artifact",
     "open_hardened_append",
+    "open_hardened_read",
     "rmtree_hardened",
     "write_bytes_atomically",
     "write_new_bytes",
