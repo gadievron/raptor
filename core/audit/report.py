@@ -348,6 +348,12 @@ def generate_report(
         }
         if tripped_channels:
             report["channel_health"] = tripped_channels
+            # Loud completeness surfacing: a channel that ENDED the
+            # run tripped with dispatches skipped behind it means
+            # every one of those verdicts was issued without this
+            # validation leg — that loss belongs next to `missing`,
+            # not only inside the channel_health mechanics block.
+            _annotate_channel_loss(completeness, tripped_channels)
 
     # Substrate skips: dispatches a tier refused because its
     # substrate provably cannot model the target (e.g. coccinelle on
@@ -1636,6 +1642,44 @@ def _load_dark_findings(out_dir: Path) -> list[dict[str, Any]]:
     ]
 
 
+def _annotate_channel_loss(
+    completeness: dict[str, Any],
+    tripped_channels: dict[str, Any],
+) -> None:
+    """Name run-ending validation-channel loss on the completeness block.
+
+    A channel still tripped at report time skipped every dispatch
+    since its trip — each of those reviews issued its verdict WITHOUT
+    this validation leg.  The ``channel_health`` block records the
+    mechanics; the loss itself must sit beside ``missing`` so the
+    summary states it loudly instead of burying it.  A channel that
+    recovered before run end, or tripped with nothing behind it
+    (zero skips), is not a loss.  Values are sanitised here: trip
+    reasons quote channel error strings that can echo target- or
+    server-derived bytes (tier-diagnostics.json is run-dir state).
+    """
+    losses: list[dict[str, Any]] = []
+    for raw_name, rec in sorted(tripped_channels.items()):
+        if not isinstance(rec, dict) or not rec.get("tripped"):
+            continue
+        try:
+            skips = int(rec.get("skips_since_trip") or 0)
+        except (TypeError, ValueError):
+            skips = 0
+        if skips <= 0:
+            continue
+        losses.append({
+            "channel": _line(raw_name, max_chars=40),
+            "skipped_dispatches": skips,
+            "reason": _line(
+                rec.get("trip_reason") or "consecutive dispatch failures",
+                max_chars=200,
+            ),
+        })
+    if losses:
+        completeness["channel_loss"] = losses
+
+
 def _annotate_dark_awaiting(
     completeness: dict[str, Any],
     out_dir: Path,
@@ -2066,6 +2110,39 @@ def _completeness_lines(report: dict[str, Any]) -> list[str]:
                 "  Continue in a new run — cross-run verdict reuse "
                 "imports this run's verdicts at $0."
             )
+    # Run-ending validation-channel loss: every review behind the
+    # trip issued its verdict without that channel's leg — a
+    # completeness fact, stated as loudly as `missing` (values were
+    # sanitised at annotation; re-applying _line is idempotent on the
+    # escaped text and keeps this renderer safe standalone).
+    for loss in completeness.get("channel_loss") or []:
+        if not isinstance(loss, dict):
+            continue
+        name = _line(loss.get("channel") or "?", max_chars=40)
+        try:
+            skips = int(loss.get("skipped_dispatches") or 0)
+        except (TypeError, ValueError):
+            skips = 0
+        reason = _line(
+            loss.get("reason") or "consecutive dispatch failures",
+            max_chars=200,
+        )
+        lines.append(
+            f"⚠️ Validation channel lost mid-run: {name} — "
+            f"{skips} dispatch(es) skipped after the trip, so the "
+            f"reviews behind them issued verdicts WITHOUT the {name} "
+            f"validation leg (trip: {reason})."
+        )
+        lines.append(
+            f"  Skipped is not refuted — treat the missing {name} "
+            "receipts as unanswered questions, not clean bills."
+        )
+        lines.append(
+            f"  Remedy: restore the {name} backend (server / "
+            "forwarder socket), then re-run or resume — the health "
+            "gate re-probes on a backoff schedule and resumes "
+            "dispatch as soon as the backend answers."
+        )
     # Dark rows the /validate post-pass never adjudicated — stated
     # unconditionally (a completed run can still owe these), with the
     # exact follow-up command.

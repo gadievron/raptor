@@ -22,12 +22,35 @@ Two robustness rules keep the gate from silencing a healthy server:
   be a single pathological query shape (one bad identifier or CWE
   class) on a perfectly healthy server; a dead server fails
   everything it is offered.
-* **Half-open re-probe** — after a trip, exactly ONE dispatch is let
-  through once :data:`REPROBE_AFTER_SKIPS` dispatches have been
+* **Half-open re-probe schedule** — after a trip, one dispatch is
+  let through once :data:`REPROBE_AFTER_SKIPS` dispatches have been
   skipped.  A success clears the trip (the server recovered — e.g.
-  its CPG re-import finished); a failure re-seals the gate for the
-  rest of the run.  One probe per run: recovery gets a bounded
-  chance, a flapping server does not get to re-open the burn.
+  its CPG re-import finished, a dead forwarder socket was
+  re-created) and dispatch resumes; a failure widens the spacing to
+  the next probe by :data:`REPROBE_BACKOFF_FACTOR`, capped at
+  :data:`REPROBE_MAX_SPACING`.  A genuinely dead channel therefore
+  costs a short geometric burst of probes and then at most one probe
+  per cap window for the rest of the run, while a channel that comes
+  back is picked up within one spacing window.  (The previous
+  one-probe-per-run budget left a restartable channel dead for over
+  a thousand reviews on a long run — every verdict after the trip
+  was issued without this validation leg.)
+* **Escalating reset base across recover→re-trip cycles** — each
+  recovery re-arms the schedule at a reset base that itself grows by
+  :data:`REPROBE_BACKOFF_FACTOR` per recovery (cycle *k* re-enters at
+  ``min(REPROBE_AFTER_SKIPS * REPROBE_BACKOFF_FACTOR**k,
+  REPROBE_MAX_SPACING)``).  The first cycle is unchanged, so a
+  genuine one-time outage still gets fast pickup; a flapping backend
+  (one that answers exactly the half-open probes while failing every
+  open-gate dispatch) cannot re-run the cheap base-spacing cycle
+  forever.  Honest whole-run worst case over *N* dispatch
+  opportunities: at most ``unhealthy_after + 1`` round trips per
+  cycle, across the geometric growth cycles (a handful — the reset
+  base reaches the cap after ``log(REPROBE_MAX_SPACING /
+  REPROBE_AFTER_SKIPS, REPROBE_BACKOFF_FACTOR)`` recoveries) plus
+  ``N // (unhealthy_after + REPROBE_MAX_SPACING)`` capped cycles —
+  the amortised burn converges to the capped rate instead of staying
+  proportional to *N* at the base rate.
 """
 
 from __future__ import annotations
@@ -55,12 +78,33 @@ DEFAULT_UNHEALTHY_AFTER = 8
 # query" while a dead server crosses it immediately.
 MIN_DISTINCT_TRIP_KEYS = 2
 
-# Skipped dispatches before the single half-open probe is allowed.
-# Smaller re-probes while a multi-minute CPG re-import is still
-# likely in flight (the probe then burns its one chance on a
-# still-restarting server); larger leaves a recovered server dark for
+# Skipped dispatches before the FIRST half-open probe after a trip —
+# also the base (and post-recovery reset value) of the backoff
+# schedule below.  Smaller re-probes while a multi-minute CPG
+# re-import is still likely in flight (the probe then just burns a
+# failure against a still-restarting server and widens the schedule
+# for nothing); larger leaves a quickly-recovered server dark for
 # more of the run than necessary.
 REPROBE_AFTER_SKIPS = 25
+
+# Each FAILED probe multiplies the spacing to the next probe by this
+# factor.  Smaller (1 = fixed spacing) probes a genuinely dead
+# channel at the full base rate for the whole run — sustained burn
+# the trip exists to stop, since one probe can hold a full
+# client-side query timeout; larger reaches the cap in fewer probes,
+# leaving a mid-outage recovery undetected for longer during the
+# growth phase while saving almost nothing (the whole doubling phase
+# already costs only a handful of probes).
+REPROBE_BACKOFF_FACTOR = 2
+
+# Ceiling on the probe spacing.  Lower re-opens the per-hypothesis
+# burn on a dead channel over a long run (each probe can hold a full
+# client-side query timeout, so the cap bounds the steady-state
+# waste: one dispatch per 400 skips = 0.25%); higher — or uncapped
+# doubling — leaves a late-restored server dark for a window that
+# grows with the outage length, recreating the observed failure mode
+# (a channel down for the rest of a multi-day run) in the limit.
+REPROBE_MAX_SPACING = 400
 
 
 class JoernChannelHealth:
@@ -85,35 +129,54 @@ class JoernChannelHealth:
         self._tripped: bool = False
         self._trip_reason: str | None = None
         self._skips_since_trip: int = 0
-        self._probe_spent: bool = False
+        self._skips_since_probe: int = 0
+        self._probe_spacing: int = REPROBE_AFTER_SKIPS
+        # Reset base the schedule re-arms to on recovery; escalates
+        # per recovery (see record_success) so the first cycle keeps
+        # the fast base pickup while repeated recover→re-trip cycles
+        # cannot re-run the cheap start forever.
+        self._reset_spacing: int = REPROBE_AFTER_SKIPS
+        self._probes_attempted: int = 0
         self._recovered_once: bool = False
         self._gated_spends: list[str] = []
 
     def allow_dispatch(self) -> bool:
         """True when the channel may dispatch.
 
-        Healthy: always.  Tripped: counts the skip and grants the one
-        half-open probe once enough skips have accumulated.  A granted
-        probe that the caller then does not dispatch (e.g. its own
-        deadline clamp skips the query) is simply spent — bounded
-        waste, never a wedged gate.
+        Healthy: always.  Tripped: counts the skip and grants a
+        half-open probe on the backoff schedule.  The spacing widens
+        at grant time, not on the probe's outcome — a granted probe
+        the caller then does not dispatch (e.g. its own deadline
+        clamp skips the query) is simply spent (bounded waste, never
+        a wedged gate), a failed probe leaves the widened spacing in
+        place, and a successful probe resets the whole schedule via
+        :meth:`record_success`.
         """
         with self._lock:
             if not self._tripped:
                 return True
-            self._skips_since_trip += 1
-            if (
-                not self._probe_spent
-                and self._skips_since_trip >= REPROBE_AFTER_SKIPS
-            ):
-                self._probe_spent = True
-                logger.info(
-                    "joern channel half-open probe: one dispatch "
-                    "allowed through the tripped gate (%d skips since "
-                    "trip)", self._skips_since_trip,
-                )
-                return True
-            return False
+            if self._skips_since_probe + 1 < self._probe_spacing:
+                # An ordinary gated skip.  Granted probes are NOT
+                # counted here: ``skips_since_trip`` feeds the
+                # report's ``skipped_dispatches`` — verdicts issued
+                # WITHOUT the leg — and a granted probe dispatches.
+                self._skips_since_trip += 1
+                self._skips_since_probe += 1
+                return False
+            self._skips_since_probe = 0
+            self._probes_attempted += 1
+            self._probe_spacing = min(
+                self._probe_spacing * REPROBE_BACKOFF_FACTOR,
+                REPROBE_MAX_SPACING,
+            )
+            probes = self._probes_attempted
+            skips = self._skips_since_trip
+        logger.info(
+            "joern channel half-open probe %d: one dispatch allowed "
+            "through the tripped gate (%d skips since trip)",
+            probes, skips,
+        )
+        return True
 
     def record_error(self, detail: str = "", key: str = "") -> None:
         """Record a failed joern round trip; trips the gate when the
@@ -137,19 +200,24 @@ class JoernChannelHealth:
                 f"failures across {len(self._streak_keys)} functions"
                 + (f" (last: {detail[:200]})" if detail else "")
             )
+            spacing = self._probe_spacing
         logger.warning(
             "joern channel unhealthy — %s; joern dispatches for this "
             "run are skipped (skipped, not refuted — see the report's "
-            "degradation section; one half-open re-probe after %d "
-            "skips)",
-            self._trip_reason, REPROBE_AFTER_SKIPS,
+            "degradation section; half-open re-probes on a backoff "
+            "schedule starting after %d skips)",
+            self._trip_reason, spacing,
         )
 
     def record_success(self) -> None:
         """Record a completed round trip (any verdict) — resets the
         consecutive-failure streak.  While tripped, a success is the
         half-open probe succeeding: the server recovered, clear the
-        trip."""
+        trip and re-arm the probe schedule at the escalated reset
+        base — far below the previous outage's widened spacing (the
+        next outage is a new outage and earns prompt pickup), but
+        never back at the cheap first-cycle start once the run has
+        already seen a recovery."""
         recovered = False
         with self._lock:
             self._total_successes += 1
@@ -159,12 +227,31 @@ class JoernChannelHealth:
                 self._tripped = False
                 self._recovered_once = True
                 self._skips_since_trip = 0
+                self._skips_since_probe = 0
+                # Escalate the reset base per recovery.  Escalating
+                # less (or resetting straight to base) lets a
+                # flapping backend — answers exactly the probes,
+                # fails every open-gate dispatch — repeat the cheap
+                # base-spacing cycle forever, so whole-run burn grows
+                # linearly with run length; escalating more (jumping
+                # straight to the cap) makes the SECOND genuine
+                # outage of a run wait a full cap window for its
+                # first probe, punishing an honestly twice-restarted
+                # backend as if it were a flapper.  Geometric growth
+                # by the existing factor keeps early re-trips fast
+                # while the amortised flap burn converges to the
+                # capped rate within a handful of cycles.
+                self._reset_spacing = min(
+                    self._reset_spacing * REPROBE_BACKOFF_FACTOR,
+                    REPROBE_MAX_SPACING,
+                )
+                self._probe_spacing = self._reset_spacing
                 recovered = True
         if recovered:
             logger.info(
                 "joern channel recovered — half-open probe completed; "
-                "dispatch re-enabled (a second trip is final for the "
-                "run)",
+                "dispatch re-enabled (a re-trip re-enters the probe "
+                "schedule at an escalated reset base)",
             )
 
     def note_gated_spend(self, phase: str) -> None:
@@ -212,8 +299,12 @@ class JoernChannelHealth:
             }
             if self._skips_since_trip:
                 data["skips_since_trip"] = self._skips_since_trip
-            if self._probe_spent:
-                data["probe_spent"] = True
+            if self._probes_attempted:
+                data["probes_attempted"] = self._probes_attempted
+            if self._tripped:
+                data["next_probe_in_skips"] = max(
+                    0, self._probe_spacing - self._skips_since_probe,
+                )
             if self._recovered_once:
                 data["recovered_once"] = True
             if self._gated_spends:
