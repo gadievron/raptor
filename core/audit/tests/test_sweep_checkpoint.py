@@ -6,9 +6,11 @@ writers, and the dispatch-seam integration in
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -163,6 +165,16 @@ def test_corrupt_line_invalidates_whole_trail(
     _assert_invalidated(tmp_path, caplog)
 
 
+def _restamp(rec: dict, run_dir: Path) -> dict:
+    """Re-mint a VALID token over an edited record, so the test
+    reaches the post-verification schema/version checks (an edit
+    without a re-mint lands in the tampered-skip tier instead)."""
+    key = sc._usable_mac_key()
+    assert key is not None
+    rec[sc.TOKEN_KEY] = sc._mint_token(key, rec, sc._run_binding(run_dir))
+    return rec
+
+
 def test_version_mismatch_invalidates_whole_trail(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -171,7 +183,7 @@ def test_version_mismatch_invalidates_whole_trail(
     trail = tmp_path / CHECKPOINT_FILENAME
     rec = json.loads(trail.read_text())
     rec["v"] = CHECKPOINT_VERSION + 1
-    trail.write_text(json.dumps(rec) + "\n")
+    trail.write_text(json.dumps(_restamp(rec, tmp_path)) + "\n")
     _assert_invalidated(tmp_path, caplog)
 
 
@@ -183,7 +195,7 @@ def test_schema_invalid_outcome_invalidates(
     trail = tmp_path / CHECKPOINT_FILENAME
     rec = json.loads(trail.read_text())
     rec["result"]["outcome"] = "error"  # never a valid persisted state
-    trail.write_text(json.dumps(rec) + "\n")
+    trail.write_text(json.dumps(_restamp(rec, tmp_path)) + "\n")
     _assert_invalidated(tmp_path, caplog)
 
 
@@ -245,6 +257,215 @@ def test_rotation_makes_next_resume_clean(
     assert not [
         r for r in caplog.records if r.levelno >= logging.WARNING
     ]
+
+
+# ── record authentication: adopt only what THIS install stamped ─────
+
+
+def _forged_record(parts: dict, outcome: str, matches: list) -> dict:
+    """A hand-crafted record with VALID content digests but no token —
+    exactly what an attacker with run-dir write access and read access
+    to the rule/file bytes can produce."""
+    return {
+        "v": CHECKPOINT_VERSION, "tool": "coccinelle", "parts": parts,
+        "result": {
+            "tool": "coccinelle", "file_path": parts["path"],
+            "function_name": "victim", "outcome": outcome,
+            "matches": matches, "errors": [], "rule_id": "planted",
+            "raw_output": "", "details": None,
+        },
+    }
+
+
+def _auth_warnings(
+    caplog: pytest.LogCaptureFixture,
+) -> list[logging.LogRecord]:
+    return [
+        r for r in caplog.records
+        if "unauthenticated record" in r.getMessage()
+    ]
+
+
+def test_forged_trail_with_valid_digests_never_adopted(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The full forgery drive: a planted trail whose digests are all
+    VALID (sha256 of readable rule/file bytes — computable by anyone
+    who can read them) carrying fabricated results, served through
+    the real dispatch seam. Both forgery directions must lose: the
+    runner runs for EVERY candidate and its result wins — a forged
+    ``refuted`` cannot suppress a real confirmation, and a forged
+    ``confirmed`` cannot mint a tool receipt."""
+    rule_hex = hashlib.sha256(b"@r@ expression E; @@\n- memcpy(E);\n").hexdigest()
+    file_hex = hashlib.sha256(b"int main(void){ memcpy(b, big, 400); }\n").hexdigest()
+    parts_a = {
+        "rule": rule_hex, "file": file_hex, "path": "src/a.c",
+        "defines": "",
+    }
+    parts_b = dict(parts_a, path="src/b.c")
+    trail = tmp_path / CHECKPOINT_FILENAME
+    with trail.open("w") as fh:
+        fh.write(json.dumps(_forged_record(parts_a, "refuted", [])) + "\n")
+        fh.write(json.dumps(_forged_record(
+            parts_b, "confirmed",
+            [{"file": "src/b.c", "line": 13, "content": "FABRICATED"}],
+        )) + "\n")
+
+    calls = {"a": 0, "b": 0}
+
+    def runner_a() -> SweepResult:
+        calls["a"] += 1
+        return _result(
+            "confirmed", file_path="src/a.c", matches=[{"line": 1}],
+        )
+
+    def runner_b() -> SweepResult:
+        calls["b"] += 1
+        return _result("refuted", file_path="src/b.c")
+
+    with caplog.at_level(logging.WARNING, logger=sc.__name__):
+        config = _seam_config(tmp_path)
+        res_a = _memoized_sweep_step(config, "coccinelle", parts_a, runner_a)
+        res_b = _memoized_sweep_step(config, "coccinelle", parts_b, runner_b)
+    assert calls == {"a": 1, "b": 1}  # spatch ran for every candidate
+    assert res_a.outcome == "confirmed"  # suppression forgery rejected
+    assert res_b.outcome == "refuted"  # receipt forgery rejected
+    assert res_b.matches == []
+    warnings = _auth_warnings(caplog)
+    assert len(warnings) == 1  # ONE loud warning, with counts
+    assert "unstamped=2" in warnings[0].getMessage()
+    assert "tampered=0" in warnings[0].getMessage()
+
+
+def test_bit_flipped_token_rejected(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    SweepCheckpoint(tmp_path).record(_key(), _result())
+    trail = tmp_path / CHECKPOINT_FILENAME
+    rec = json.loads(trail.read_text())
+    tok = rec[sc.TOKEN_KEY]
+    rec[sc.TOKEN_KEY] = ("0" if tok[0] != "0" else "1") + tok[1:]
+    trail.write_text(json.dumps(rec) + "\n")
+    with caplog.at_level(logging.WARNING, logger=sc.__name__):
+        resumed = SweepCheckpoint(tmp_path)
+    assert resumed.lookup(_key()) is None  # recompute, not adopt
+    warnings = _auth_warnings(caplog)
+    assert len(warnings) == 1
+    assert "tampered=1" in warnings[0].getMessage()
+
+
+def test_edited_content_under_kept_token_rejected(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    cp = SweepCheckpoint(tmp_path)
+    cp.record(_key(), _result("confirmed", matches=[{"line": 2}]))
+    trail = tmp_path / CHECKPOINT_FILENAME
+    rec = json.loads(trail.read_text())
+    rec["result"]["outcome"] = "refuted"  # flip the verdict, keep token
+    rec["result"]["matches"] = []
+    trail.write_text(json.dumps(rec) + "\n")
+    with caplog.at_level(logging.WARNING, logger=sc.__name__):
+        resumed = SweepCheckpoint(tmp_path)
+    assert resumed.lookup(_key()) is None
+    assert "tampered=1" in _auth_warnings(caplog)[0].getMessage()
+
+
+def test_replanted_trail_from_another_run_rejected(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Run binding: a genuinely-stamped trail copied verbatim from a
+    sibling run's directory must not verify there — its records are
+    not THIS run's history."""
+    run_a = tmp_path / "run-a"
+    run_b = tmp_path / "run-b"
+    run_a.mkdir()
+    run_b.mkdir()
+    SweepCheckpoint(run_a).record(_key(), _result())
+    shutil.copy(
+        run_a / CHECKPOINT_FILENAME, run_b / CHECKPOINT_FILENAME,
+    )
+    assert SweepCheckpoint(run_a).lookup(_key()) is not None  # genuine
+    with caplog.at_level(logging.WARNING, logger=sc.__name__):
+        moved = SweepCheckpoint(run_b)
+    assert moved.lookup(_key()) is None
+    assert "tampered=1" in _auth_warnings(caplog)[0].getMessage()
+
+
+def test_unstamped_record_rejected_then_repersisted(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No unstamped legacy tier (the format never shipped without
+    tokens): a token-stripped record is skipped — and the recompute
+    path re-records the unit, so the NEXT resume replays it."""
+    SweepCheckpoint(tmp_path).record(_key(), _result())
+    trail = tmp_path / CHECKPOINT_FILENAME
+    rec = json.loads(trail.read_text())
+    del rec[sc.TOKEN_KEY]
+    trail.write_text(json.dumps(rec) + "\n")
+    with caplog.at_level(logging.WARNING, logger=sc.__name__):
+        resumed = SweepCheckpoint(tmp_path)
+    assert resumed.lookup(_key()) is None
+    assert "unstamped=1" in _auth_warnings(caplog)[0].getMessage()
+    # The skipped digest is NOT dedup-blocked: recompute re-persists...
+    resumed.record(_key(), _result())
+    assert resumed.recorded == 1
+    # ...and the fresh stamped record is adopted next segment (the
+    # stripped one still sits on line 1, skipped again).
+    third = SweepCheckpoint(tmp_path)
+    assert third.lookup(_key()) is not None
+
+
+def test_mixed_trail_adopts_only_verified_records(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    cp = SweepCheckpoint(tmp_path)
+    cp.record(_key(rule="genuine"), _result())
+    forged = _forged_record(
+        {"rule": "aaa", "file": "bbb", "path": "src/x.c", "defines": ""},
+        "confirmed", [{"line": 3}],
+    )
+    with (tmp_path / CHECKPOINT_FILENAME).open("a") as fh:
+        fh.write(json.dumps(forged) + "\n")
+    with caplog.at_level(logging.WARNING, logger=sc.__name__):
+        resumed = SweepCheckpoint(tmp_path)
+    assert resumed.lookup(_key(rule="genuine")) is not None  # kept
+    assert resumed.lookup(_key()) is None  # forged sibling skipped
+    message = _auth_warnings(caplog)[0].getMessage()
+    assert "verified=1" in message
+    assert "unstamped=1" in message
+
+
+def test_unusable_key_disables_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Key unavailability (here: an unwritable/undirectory XDG data
+    path) degrades to checkpoint-disabled — warn, recompute
+    everything, adopt nothing, write nothing, never crash."""
+    blocked = tmp_path / "blocked-xdg"
+    blocked.write_text("")  # a FILE where the data dir should be
+    monkeypatch.setenv("XDG_DATA_HOME", str(blocked))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    # A planted trail is already present — it must NOT be adopted.
+    (run_dir / CHECKPOINT_FILENAME).write_text(
+        json.dumps(_forged_record(
+            {"rule": "aaa", "file": "bbb", "path": "src/x.c",
+             "defines": ""},
+            "refuted", [],
+        )) + "\n",
+    )
+    with caplog.at_level(logging.WARNING, logger=sc.__name__):
+        cp = SweepCheckpoint(run_dir)
+    assert cp.lookup(_key()) is None
+    cp.record(_key(rule="new"), _result())
+    assert cp.recorded == 0  # writes disabled too — nothing unstamped
+    disabled = [
+        r for r in caplog.records
+        if "durable sweep state disabled" in r.getMessage()
+    ]
+    assert len(disabled) == 1
 
 
 # ── byte bounds, both directions ─────────────────────────────────────

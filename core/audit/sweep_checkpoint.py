@@ -39,12 +39,36 @@ Soundness contract (inherits the memo's, plus durability rules):
   read-modify-write of shared file state, so parallel workers — and a
   future cross-file worker pool on the primary pass — compose with
   this trail unchanged.
+* Records are AUTHENTICATED. The trail lives in the run directory —
+  target-writable during runs — and a replayed record steers tool
+  verdicts: a forged ``refuted`` record suppresses a real
+  confirmation, a forged ``confirmed`` record mints a tool receipt
+  with spatch never having run. The content digests in the key
+  authenticate WHAT was swept, not WHO recorded the result — they
+  are computable from world-readable inputs. So every appended
+  record carries an HMAC-SHA256 token (``integrity`` field) over the
+  record's canonical JSON under a per-purpose 32-byte key
+  (``$XDG_DATA_HOME/raptor/sweep-checkpoint-mac.key``, the shared
+  ``core.security.mac_key`` discipline), domain-separated
+  (``sweep-checkpoint-record``) and RUN-BOUND: the MAC message
+  includes the run dir's resolved path, so a trail replanted from
+  another run's directory fails verification — the same posture as
+  the audit-log lane in ``core/coverage/journal_mac.py``. Load
+  adopts ONLY verified records; tampered and unstamped records are
+  skipped (recompute, never adopt) with one warning carrying
+  verified/tampered/unstamped counts. There is no unstamped legacy
+  tier: this file format has never existed without record tokens,
+  so unstamped means forged-or-foreign, never "old" (no era fence
+  needed). A missing or unusable key disables the checkpoint — warn
+  once, recompute everything, never crash, never adopt an
+  unverified record.
 """
 
 from __future__ import annotations
 
 import copy
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -52,6 +76,9 @@ import stat as _stat
 import threading
 from pathlib import Path
 from typing import Any
+
+from core.json.utils import dumps_canonical
+from core.security import mac_key
 
 from .sweep import SweepResult
 from .sweep_memo import SweepMemo
@@ -106,6 +133,118 @@ _RESULT_FIELDS: tuple[str, ...] = (
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+
+#: Record field carrying the per-record HMAC token (the review
+#: journal's ``TOKEN_KEY`` convention). Excluded from the canonical
+#: payload before hashing so the token covers everything else.
+TOKEN_KEY = "integrity"
+
+_MAC_KEY_LEN = 32
+
+# Domain separation, per the house per-purpose-key doctrine
+# (core/security/mac_key.py, core/coverage/journal_mac.py): this
+# trail has its OWN key file and its OWN domain prefix — never the
+# journal/checklist keys or domains — so a token minted for another
+# artifact class can never verify here even if a key were ever shared
+# by mistake, and deleting this key resets only this trail's trust
+# surface.
+_MAC_DOMAIN = b"sweep-checkpoint-record\x00"
+
+_key_warned: set[str] = set()
+
+
+def _mac_key_path() -> Path:
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return base / "raptor" / "sweep-checkpoint-mac.key"
+
+
+def _warn_once_suspect_key(path: Path, reason: str, remedy: str) -> None:
+    key = str(path)
+    if key in _key_warned:
+        logger.debug(
+            "sweep checkpoint: suspect MAC key %s (%s)", path, reason,
+        )
+        return
+    _key_warned.add(key)
+    logger.warning(
+        "sweep checkpoint: refusing MAC key %s — %s. Durable sweep "
+        "state is disabled (every sweep recomputes; nothing "
+        "unauthenticated is ever adopted) until this is fixed: %s",
+        path, reason, remedy,
+    )
+
+
+def _usable_mac_key() -> bytes | None:
+    """The per-purpose 32-byte key, lazily created (0700 dir, 0600
+    file, ``O_EXCL``) via the shared hardened discipline
+    (:func:`core.security.mac_key.load_or_create_key`). ``None`` on
+    ANY failure — an existing-but-unusable key file, an unwritable
+    data dir — the caller then disables the checkpoint rather than
+    crash the run or persist/adopt unauthenticated records."""
+    try:
+        return mac_key.load_or_create_key(
+            _mac_key_path(), key_len=_MAC_KEY_LEN,
+            warn=_warn_once_suspect_key,
+            recreate_hint="a fresh key is created on the next record",
+        )
+    except OSError:
+        return None
+
+
+def _run_binding(run_dir: Path) -> str:
+    """The run identity bound into record tokens: the run dir's
+    resolved path, derived by the consumer from its OWN directory —
+    never stored in a record or read from a run-dir artifact (an
+    attacker holding the run-dir write grant could plant any STORED
+    identity next to a replanted trail; the consumer's own directory
+    cannot be forged from inside it). Same derivation rationale as
+    the audit-log lane in ``core/coverage/journal_mac.py``."""
+    try:
+        return str(Path(run_dir).resolve())
+    except OSError:
+        return str(run_dir)
+
+
+def _mac_message(rec: dict[str, Any], run_binding: str) -> bytes:
+    """Domain prefix + run binding + sha256 hex of the record's
+    canonical JSON (token key excluded). The token therefore covers
+    the WHOLE record — version, tool, the memo key parts (the
+    rule/file content digests), the full result payload — plus WHERE
+    it lives: a validly-stamped record replayed under another run
+    dir fails verification."""
+    scrubbed = {k: v for k, v in rec.items() if k != TOKEN_KEY}
+    payload_hex = hashlib.sha256(
+        dumps_canonical(scrubbed).encode("utf-8"),
+    ).hexdigest()
+    return (
+        _MAC_DOMAIN
+        + run_binding.encode("utf-8", "surrogatepass") + b"\x00"
+        + payload_hex.encode("ascii")
+    )
+
+
+def _mint_token(
+    key: bytes, rec: dict[str, Any], run_binding: str,
+) -> str:
+    return hmac.new(
+        key, _mac_message(rec, run_binding), hashlib.sha256,
+    ).hexdigest()
+
+
+def _verify_token(
+    key: bytes, rec: dict[str, Any], token: Any, run_binding: str,
+) -> bool:
+    """Constant-time; never raises — any failure is the caller's
+    skip-and-recompute path, never an error."""
+    if not token or not isinstance(token, str):
+        return False
+    try:
+        return hmac.compare_digest(
+            _mint_token(key, rec, run_binding), token.strip().lower(),
+        )
+    except Exception:  # noqa: BLE001 — verification failure is the skip path
+        return False
 
 
 def tool_checkpointable(tool: str) -> bool:
@@ -183,10 +322,10 @@ def _valid_result_payload(payload: Any) -> bool:
 
 
 def _key_digest(tool: str, parts: dict[str, str | int]) -> bytes:
-    canonical = json.dumps(
-        {"tool": tool, "parts": parts}, sort_keys=True,
-        separators=(",", ":"),
-    )
+    # dumps_canonical is the one blessed serializer for hash lanes
+    # (byte-identical to the previous inline sort_keys/compact form
+    # for these str/int payloads).
+    canonical = dumps_canonical({"tool": tool, "parts": parts})
     return hashlib.sha256(canonical.encode("utf-8")).digest()
 
 
@@ -221,6 +360,25 @@ class SweepCheckpoint:
         self._persisted: set[bytes] = set()
         self.replayed = 0
         self.recorded = 0
+        self._run_binding = _run_binding(Path(run_dir))
+        # Per-record authentication (see the module docstring): the
+        # trail sits in the target-writable run dir and its records
+        # steer tool verdicts, so nothing is persisted or adopted
+        # without a token under the per-purpose key. No usable key ⇒
+        # the whole checkpoint is DISABLED for this instance: warn
+        # once, recompute every sweep, never crash the run, never
+        # fall back to adopting (or writing) unauthenticated records.
+        self._disabled = False
+        self._mac_key: bytes | None = _usable_mac_key()
+        if self._mac_key is None:
+            self._disabled = True
+            logger.warning(
+                "sweep checkpoint MAC key unavailable — durable sweep "
+                "state disabled for %s (every sweep recomputes; "
+                "unauthenticated records are never adopted)",
+                self._path,
+            )
+            return
         self._load()
 
     # ── load side ────────────────────────────────────────────────────
@@ -285,6 +443,12 @@ class SweepCheckpoint:
         except OSError as exc:
             self._invalidate(f"read failed: {exc.__class__.__name__}")
             return
+        key = self._mac_key
+        if key is None:  # defensive: __init__ never loads while disabled
+            return
+        verified = 0
+        tampered = 0
+        unstamped = 0
         for line in data.split(b"\n"):
             if not line.strip():
                 continue
@@ -296,9 +460,44 @@ class SweepCheckpoint:
             except (UnicodeDecodeError, ValueError):
                 self._invalidate("malformed record line")
                 return
+            if not isinstance(rec, dict):
+                self._invalidate("record failed schema validation")
+                return
+            # Authentication FIRST: only records this install stamped
+            # for this run dir are eligible for adoption; everything
+            # else is skipped (counted, warned once below) and the
+            # unit recomputes — never adopted, and never allowed to
+            # drive whole-trail invalidation either (a forger must
+            # not be able to rotate away the genuine records around
+            # its plant). There is no unstamped legacy tier: this
+            # file format has never existed without record tokens,
+            # so an unstamped record is forged-or-foreign, not old
+            # (no era fence needed).
+            token = rec.get(TOKEN_KEY)
+            if not token:
+                unstamped += 1
+                continue
+            if not _verify_token(key, rec, token, self._run_binding):
+                tampered += 1
+                continue
+            verified += 1
+            # A VERIFIED record failing schema is our own writer drift
+            # (only this module mints valid tokens) — the pre-existing
+            # fail-open whole-trail invalidation is the right answer.
             if not self._ingest(rec):
                 self._invalidate("record failed schema validation")
                 return
+        if tampered or unstamped:
+            logger.warning(
+                "sweep checkpoint %s: skipped %d unauthenticated "
+                "record(s) (verified=%d tampered=%d unstamped=%d) — "
+                "those units re-sweep (recompute, never adopt). The "
+                "trail lives in a target-writable directory; an "
+                "unauthenticated record there may be a forgery "
+                "attempt",
+                self._path, tampered + unstamped, verified, tampered,
+                unstamped,
+            )
 
     def _ingest(self, rec: Any) -> bool:
         """Fold one parsed record into the loaded map. False = invalid."""
@@ -368,7 +567,10 @@ class SweepCheckpoint:
         memo's exact invalidation semantics (changed rule or changed
         file ⇒ new key ⇒ re-sweep).
         """
-        if self._write_failed or not isinstance(result, SweepResult):
+        if (
+            self._disabled or self._write_failed
+            or not isinstance(result, SweepResult)
+        ):
             return
         if result.outcome == "error" or result.outcome not in _VALID_OUTCOMES:
             return
@@ -414,6 +616,15 @@ class SweepCheckpoint:
                 exc_info=True,
             )
             return
+        # Stamp AFTER the round-trip probe above proved the payload
+        # serialisable: the token authenticates the record's canonical
+        # JSON, run-bound, so a future segment adopts it only when it
+        # verifies under this install's key in this run dir.
+        mac = self._mac_key
+        if mac is None:  # unreachable behind _disabled; keeps types honest
+            return
+        rec[TOKEN_KEY] = _mint_token(mac, rec, self._run_binding)
+        line = json.dumps(rec, separators=(",", ":"), allow_nan=False)
         # +1 for the newline append_jsonl adds.
         if len(line.encode("utf-8")) + 1 > self._max_record_bytes:
             logger.debug(
