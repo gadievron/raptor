@@ -91,6 +91,13 @@ _PACKAGES = (
 # adjudication record, not an exemption of convenience.
 _ALLOWLIST: dict[tuple[str, str], str] = {
     (
+        "packages/binary_analysis/corpus_profile.py",
+        "obj_path.write_bytes(_wrap_bpf_object(code))",
+    ): (
+        "candidate object written into a fresh process-private "
+        "TemporaryDirectory created in the enclosing with-block"
+    ),
+    (
         "packages/fuzzing/afl_runner.py",
         "shutil.copy2(entry, staged / entry.name)",
     ): (

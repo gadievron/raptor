@@ -5,15 +5,24 @@ harvested from a target install (configuration blobs, channel files,
 protocol captures) and recovers the parts of the wire format that pure
 byte statistics can prove: per-offset constancy (magic / reserved
 bytes), enum-candidate offsets, size-field candidates cross-checked
-against actual file lengths, an entropy profile, and a repeating
-length-prefixed-record (TLV) likelihood. It emits a seed min-set and a
-``fuzz.dict`` for the fuzzing lane.
+against actual file lengths, an entropy profile, a repeating
+length-prefixed-record (TLV) likelihood, and — when a TLV shape wins —
+a hint-tier field-classification of record values ("value decodes as
+an eBPF instruction run"). It emits a seed min-set and a ``fuzz.dict``
+for the fuzzing lane.
 
 Discipline:
 
 - ZERO semantic parsing and ZERO execution. Every fact is a statistic
   over raw bytes; the profiler never interprets a sample with a format
-  library and never runs the target.
+  library and never runs the target. One carved-out exception: the
+  eBPF value classification decodes record bytes on the fixed 8-byte
+  instruction grid with first-party pure-Python checks (no format
+  library) and, when a host disassembler exists, cross-checks a
+  bounded handful of candidates with a sandboxed ``llvm-objdump``
+  (network denied, list-based argv, safe env). That is decode-only —
+  the sample is never executed — and the resulting label is HINT-TIER
+  routing evidence, never a verdict.
 - Samples are HOSTILE for their whole life here: they may themselves
   be attacker-written (a compromised install can plant samples that
   steer the profile). Facts are corpus-tier — the profile carries its
@@ -40,7 +49,11 @@ import dataclasses
 import fnmatch
 import math
 import os
+import re
+import shutil
 import stat as stat_module
+import struct
+import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -160,6 +173,95 @@ TLV_MAX_RECORDS = 4096
 # only would reject legitimate padded formats; a large slack lets a
 # walk that explains half the file claim success.
 TLV_TAIL_SLACK = 3
+
+# ─── eBPF value classification (standing field-classification) ──────
+# "TLV record value decodes as eBPF" — a GENERALISED classification
+# (no target-specific constants) whose label is HINT-TIER routing
+# evidence only: it may steer carving / lifter dispatch downstream,
+# but it is NEVER a verdict and no consumer may treat it as
+# suppression- or confirmation-grade on its own.
+
+# Minimum logical instructions before a run may classify. Shorter runs
+# fit non-code bytes by coincidence far too easily (most printable and
+# structured-data bytes are valid opcodes on some slot), so below the
+# floor the check declines with ``too_short_to_attest`` — mirroring
+# how TLV_MIN_RECORDS declines short walks. The known miss is real
+# trampoline-sized programs (``mov r0, imm; exit`` is 2 insns); a
+# lower floor would label those but re-open the coincidence channel.
+EBPF_MIN_INSNS = 8
+
+# Degenerate-run rejection: a classifying run must contain at least
+# this many DISTINCT 8/16-byte instruction words. A constant-fill body
+# decodes as one valid instruction repeated (the historical misdecode
+# this guard exists for), and simple two-word repeating padding is
+# nearly as cheap to hit; higher floors would reject legitimate small
+# programs built from a tight handful of instructions.
+EBPF_MIN_DISTINCT_INSNS = 4
+
+# Class-mix floor: distinct eBPF instruction CLASSES (opcode & 7) in a
+# classifying run. Every real program carries its BPF_EXIT (class JMP)
+# plus at least one compute/load/store class, so 2 is the honest
+# minimum; 3 would reject real ALU-then-exit-only programs.
+EBPF_MIN_CLASSES = 2
+
+# Classified-example bound in the artifact: enough evidence rows for a
+# downstream carver to locate the hits, while a hostile file with
+# thousands of classifying records cannot flood the profile (counts
+# always carry the true totals — house rule for example lists).
+_EBPF_EXAMPLE_CAP = 4
+
+# External cross-check bound: each decode-agreement check is a
+# sandboxed subprocess, so unbounded checking would let one hostile
+# file with thousands of classifying records turn the profiler into a
+# spawn flood; fewer than a handful could not tell a systematic
+# misdecode from a one-record fluke.
+_EBPF_EXTERNAL_CHECK_CAP = 4
+
+# Per-invocation timeout for the external decoder. Disassembling one
+# bounded record is sub-second, so this only bounds a pathological
+# hang; tighter risks killing a legitimate cold start (sandbox setup +
+# large record) and misreporting the decoder as failed, looser lets a
+# few hung checks stall the whole profiling pass for minutes.
+_EBPF_OBJDUMP_TIMEOUT_S = 20
+
+# Decoder discovery: the unversioned name first (distro alternatives /
+# operator symlink), then Debian/Ubuntu versioned suffixes, floored at
+# 17 — the oldest LLVM whose BPF disassembler decodes the full current
+# ISA (MEMSX / bswap / 32-bit JA); an older decoder would flag modern
+# encodings as unknown and fabricate disagreement. Longer lists are
+# pure which() cost per family; shorter would miss common installs.
+_EBPF_OBJDUMP_CANDIDATES = (
+    "llvm-objdump",
+    "llvm-objdump-21",
+    "llvm-objdump-20",
+    "llvm-objdump-19",
+    "llvm-objdump-18",
+    "llvm-objdump-17",
+)
+
+# Fixed eBPF instruction geometry (public ISA, RFC 9669): 8-byte
+# slots; ``lddw`` (0x18) consumes two slots; r0-r10 are the only
+# registers; a canonical program run ends with BPF_EXIT (0x95).
+_EBPF_INSN_SIZE = 8
+_EBPF_LDDW_OPCODE = 0x18
+_EBPF_EXIT_OPCODE = 0x95
+_EBPF_MAX_REG = 10
+
+# Byte-swap family (to-LE 0xd4 / to-BE 0xdc / unconditional bswap
+# 0xd7): the ISA fixes imm to the swap WIDTH and defines exactly
+# 16 / 32 / 64. Admitting other imm values would let undefined
+# encodings classify (llvm-objdump prints ``<unknown>`` for them,
+# manufacturing avoidable external-decoder disagreement); rejecting
+# any of the three defined widths would decline real byte-swapping
+# programs.
+_EBPF_BSWAP_OPCODES = frozenset({0xD4, 0xDC, 0xD7})
+_EBPF_BSWAP_WIDTHS = frozenset({16, 32, 64})
+
+_EBPF_HINT_NOTE = (
+    "hint-tier routing evidence (may steer carving / lifter "
+    "dispatch); never a verdict, never suppression- or "
+    "confirmation-grade on its own"
+)
 
 # Seed min-set budget. A larger copy budget duplicates the corpus into
 # the run dir (the run dir gets shared/archived); smaller budgets drop
@@ -819,11 +921,19 @@ _TLV_SHAPES: tuple[tuple[int, int, str, bool], ...] = tuple(
 )
 
 
-def _tlv_walk(data: bytes, start: int, shape: tuple[int, int, str, bool]) -> tuple[int, int]:
+def _tlv_walk(
+    data: bytes,
+    start: int,
+    shape: tuple[int, int, str, bool],
+    spans: list[tuple[int, int]] | None = None,
+) -> tuple[int, int]:
     """Walk one record shape over the sample bytes.
 
     Returns (record_count, distinct_length_count) on a successful walk
-    to (near-)EOF, else (0, 0).
+    to (near-)EOF, else (0, 0). When ``spans`` is a list, each walked
+    record's VALUE region is appended to it as ``(offset, length)`` —
+    only meaningful on a successful walk (a failed walk may leave a
+    partial prefix in the list).
     """
     type_size, len_size, endian, includes_header = shape
     header_size = type_size + len_size
@@ -842,11 +952,390 @@ def _tlv_walk(data: bytes, start: int, shape: tuple[int, int, str, bool]) -> tup
         if pos + total > n:
             break
         lengths.add(length)
+        if spans is not None:
+            spans.append((pos + header_size, value_len))
         pos += total
         records += 1
     if records >= TLV_MIN_RECORDS and n - pos <= TLV_TAIL_SLACK:
         return records, len(lengths)
     return 0, 0
+
+
+def _ebpf_opcode_set() -> frozenset[int]:
+    """The defined eBPF opcode byte set (public ISA, RFC 9669).
+
+    Built structurally from the ISA's class/op/source grammar rather
+    than listed literally, so each family is auditable against the
+    spec. Deliberately conformance-shaped, not permissive: undefined
+    op / source combinations (e.g. NEG with a register source) stay
+    out so structured non-code data cannot ride them in.
+    """
+    ops: set[int] = set()
+    # ALU (0x04) / ALU64 (0x07): ADD SUB MUL DIV OR AND LSH RSH MOD
+    # XOR MOV ARSH, each with immediate (K) and register (X) source.
+    for cls in (0x04, 0x07):
+        for op in (0x00, 0x10, 0x20, 0x30, 0x40, 0x50,
+                   0x60, 0x70, 0x90, 0xA0, 0xB0, 0xC0):
+            ops.add(cls | op)
+            ops.add(cls | 0x08 | op)
+        # NEG is defined with an immediate source only.
+        ops.add(cls | 0x80)
+    # Byte-swap family: ALU to-LE / to-BE, ALU64 unconditional bswap.
+    ops.update((0xD4, 0xDC, 0xD7))
+    # JMP (0x05) / JMP32 (0x06) conditionals, K and X source:
+    # JEQ JGT JGE JSET JNE JSGT JSGE JLT JLE JSLT JSLE.
+    for cls in (0x05, 0x06):
+        for op in (0x10, 0x20, 0x30, 0x40, 0x50, 0x60,
+                   0x70, 0xA0, 0xB0, 0xC0, 0xD0):
+            ops.add(cls | op)
+            ops.add(cls | 0x08 | op)
+        ops.add(cls)  # JA (16-bit offset form) / 32-bit JA
+    ops.add(0x85)  # CALL
+    ops.add(_EBPF_EXIT_OPCODE)
+    # LD (0x00): lddw plus the legacy BPF_ABS/BPF_IND packet loads
+    # (word / half / byte only).
+    ops.add(_EBPF_LDDW_OPCODE)
+    for mode in (0x20, 0x40):
+        for size in (0x00, 0x08, 0x10):
+            ops.add(mode | size)
+    for size in (0x00, 0x08, 0x10, 0x18):  # W / H / B / DW
+        ops.add(0x61 | size)  # LDX  BPF_MEM
+        ops.add(0x62 | size)  # ST   BPF_MEM
+        ops.add(0x63 | size)  # STX  BPF_MEM
+    for size in (0x00, 0x08, 0x10):  # sign-extending loads: no DW
+        ops.add(0x81 | size)  # LDX  BPF_MEMSX
+    ops.update((0xC3, 0xDB))  # STX BPF_ATOMIC, word / double-word
+    return frozenset(ops)
+
+
+_EBPF_VALID_OPCODES: frozenset[int] = _ebpf_opcode_set()
+
+# Per-guard receipt vocabulary: every heuristic outcome is a named
+# receipt on the record (fixed strings — aggregation-friendly, never
+# derived from sample bytes).
+_EBPF_RECEIPT_KEYS = (
+    "grid", "opcodes", "length", "terminator", "class_mix", "distinct",
+)
+
+
+def _ebpf_decode_check(value: bytes) -> dict[str, Any]:
+    """First-party pure-Python check: does this byte run decode as a
+    plausible eBPF instruction run?
+
+    Mechanical heuristics on the fixed 8-byte grid: opcode within the
+    defined encoding set, register fields <= r10, ``lddw`` pairing
+    with a reserved-zero second slot, reserved-zero BPF_EXIT, the
+    byte-swap width restriction (imm in 16 / 32 / 64), the
+    minimum-length floor, and degenerate-run rejection (distinct
+    instruction words + instruction-class mix). The terminator is
+    recorded honestly (``present`` / ``absent``) but does not decline
+    on its own. Every guard's outcome is a named receipt; guards after
+    a structural failure read ``not_evaluated``.
+
+    The outcome feeds a HINT-TIER field-classification only — never a
+    verdict (see ``_EBPF_HINT_NOTE``).
+    """
+    receipts: dict[str, str] = {key: "not_evaluated" for key in _EBPF_RECEIPT_KEYS}
+    out: dict[str, Any] = {"classified": False, "insn_count": 0, "receipts": receipts}
+    if not value:
+        receipts["grid"] = "empty"
+        return out
+    if len(value) % _EBPF_INSN_SIZE:
+        receipts["grid"] = "misaligned"
+        return out
+    receipts["grid"] = "aligned"
+
+    insns: list[bytes] = []
+    classes: set[int] = set()
+    slots = len(value) // _EBPF_INSN_SIZE
+    slot = 0
+    while slot < slots:
+        raw = value[slot * _EBPF_INSN_SIZE:(slot + 1) * _EBPF_INSN_SIZE]
+        opcode = raw[0]
+        if opcode not in _EBPF_VALID_OPCODES:
+            receipts["opcodes"] = "invalid_opcode"
+            return out
+        if (raw[1] & 0x0F) > _EBPF_MAX_REG or (raw[1] >> 4) > _EBPF_MAX_REG:
+            receipts["opcodes"] = "register_out_of_range"
+            return out
+        if opcode == _EBPF_LDDW_OPCODE:
+            # lddw consumes two slots; the ISA fixes the second slot
+            # to zero everywhere except the high-immediate bytes.
+            if slot + 1 >= slots:
+                receipts["opcodes"] = "lddw_unpaired"
+                return out
+            pair = value[(slot + 1) * _EBPF_INSN_SIZE:(slot + 2) * _EBPF_INSN_SIZE]
+            if pair[:4] != b"\x00\x00\x00\x00":
+                receipts["opcodes"] = "lddw_reserved_nonzero"
+                return out
+            insns.append(raw + pair)
+            classes.add(opcode & 0x07)
+            slot += 2
+            continue
+        if opcode == _EBPF_EXIT_OPCODE and raw[1:] != b"\x00" * 7:
+            # The ISA fixes BPF_EXIT's regs / offset / imm to zero.
+            receipts["opcodes"] = "exit_reserved_nonzero"
+            return out
+        if opcode in _EBPF_BSWAP_OPCODES:
+            # The byte-swap family fixes imm to the swap width; only
+            # 16 / 32 / 64 are defined encodings.
+            imm = int.from_bytes(raw[4:8], "little", signed=True)
+            if imm not in _EBPF_BSWAP_WIDTHS:
+                receipts["opcodes"] = "bswap_width_invalid"
+                return out
+        insns.append(raw)
+        classes.add(opcode & 0x07)
+        slot += 1
+
+    receipts["opcodes"] = "valid"
+    out["insn_count"] = len(insns)
+    receipts["length"] = (
+        "ok" if len(insns) >= EBPF_MIN_INSNS else "too_short_to_attest"
+    )
+    receipts["terminator"] = (
+        "present" if insns[-1][0] == _EBPF_EXIT_OPCODE else "absent"
+    )
+    receipts["distinct"] = (
+        "ok" if len(set(insns)) >= EBPF_MIN_DISTINCT_INSNS else "degenerate_run"
+    )
+    receipts["class_mix"] = (
+        "ok" if len(classes) >= EBPF_MIN_CLASSES else "single_class"
+    )
+    out["classified"] = (
+        receipts["length"] == "ok"
+        and receipts["distinct"] == "ok"
+        and receipts["class_mix"] == "ok"
+    )
+    return out
+
+
+def _wrap_bpf_object(code: bytes) -> bytes:
+    """Wrap a candidate byte run in a minimal EM_BPF relocatable ELF.
+
+    ``llvm-objdump`` only disassembles object files, so the RAPTOR-
+    authored envelope (fixed header, one ``.text`` section holding the
+    candidate bytes verbatim, a section-name table) is composed here —
+    the hostile bytes never choose any structural field.
+    """
+    shstrtab = b"\x00.text\x00.shstrtab\x00"
+    text_off = 64  # immediately after the ELF header
+    shstr_off = text_off + len(code)
+    shoff = shstr_off + len(shstrtab)
+    shoff += (-shoff) % 8  # section headers are 8-aligned
+    ident = b"\x7fELF" + bytes([2, 1, 1, 0]) + b"\x00" * 8  # 64-bit LE
+    ehdr = ident + struct.pack(
+        "<HHIQQQIHHHHHH",
+        1,      # e_type: ET_REL
+        247,    # e_machine: EM_BPF
+        1,      # e_version
+        0, 0,   # e_entry, e_phoff
+        shoff,  # e_shoff
+        0,      # e_flags
+        64,     # e_ehsize
+        0, 0,   # e_phentsize, e_phnum
+        64,     # e_shentsize
+        3,      # e_shnum: NULL, .text, .shstrtab
+        2,      # e_shstrndx
+    )
+
+    def shdr(name: int, sh_type: int, flags: int, offset: int,
+             size: int, align: int) -> bytes:
+        return struct.pack(
+            "<IIQQQQIIQQ", name, sh_type, flags, 0, offset, size, 0, 0, align, 0,
+        )
+
+    body = ehdr + code + shstrtab
+    body += b"\x00" * ((-len(body)) % 8)
+    body += shdr(0, 0, 0, 0, 0, 0)
+    body += shdr(1, 1, 6, text_off, len(code), 8)        # .text  AX PROGBITS
+    body += shdr(7, 3, 0, shstr_off, len(shstrtab), 1)   # .shstrtab
+    return body
+
+
+def _find_bpf_objdump() -> str | None:
+    """Locate a BPF-capable llvm-objdump; None when the host has none."""
+    for name in _EBPF_OBJDUMP_CANDIDATES:
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
+def _run_bpf_objdump(tool: str, code: bytes) -> str | None:
+    """Sandboxed decode of one candidate run; stdout, or None on any
+    execution failure.
+
+    The candidate bytes ride inside a RAPTOR-composed object file and
+    the decoder runs under the full sandbox (network denied, safe env,
+    list-based argv) — a disassembler parsing hostile bytes is attack
+    surface like any other tool.
+    """
+    from core.sandbox import run as _sandbox_run
+    try:
+        with tempfile.TemporaryDirectory(prefix="raptor-ebpf-xcheck-") as tmp_dir:
+            obj_path = Path(tmp_dir) / "candidate.o"
+            obj_path.write_bytes(_wrap_bpf_object(code))
+            result = _sandbox_run(
+                [tool, "-d", "--triple=bpfel", str(obj_path)],
+                target=tmp_dir, output=tmp_dir,
+                capture_output=True, text=True,
+                timeout=_EBPF_OBJDUMP_TIMEOUT_S,
+            )
+    except Exception:
+        # Cross-check degrades to "unavailable", never aborts the
+        # profiler: the sandbox raises its own setup errors and the
+        # subprocess layer raises timeouts — all of them mean the same
+        # thing here (no external witness for this record).
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+# One disassembly line per decoded instruction: "<slot>:<TAB>bytes...".
+# The anchor whitespace is spelled horizontally ([^\S\n]) on purpose:
+# a newline-capable \s* after a MULTILINE ^ re-scans a blank-line run
+# from every anchor (quadratic on hostile decoder output).
+_OBJDUMP_INSN_RE = re.compile(r"^[^\S\n]*\d+:\t", re.MULTILINE)
+
+
+def _ebpf_external_agreement(
+    candidates: list[tuple[bytes, int]],
+) -> dict[str, Any]:
+    """Decode-agreement receipt for classified record values.
+
+    ``candidates`` is a bounded list of ``(value, insn_count)`` pairs.
+    Agreement per record: the external decoder reports no unknown
+    instruction AND decodes exactly the instruction count the pure-
+    Python check found (lddw counts once in both). When no decoder is
+    on the host the receipt says so honestly — the label may still be
+    emitted from the pure-Python check alone (hint-tier either way).
+    """
+    tool = _find_bpf_objdump()
+    receipt: dict[str, Any] = {
+        "tool": None,
+        "status": "unavailable",
+        "checked": 0,
+        "agreed": 0,
+        "disagreed": 0,
+        "execution_failed": 0,
+    }
+    if tool is None:
+        receipt["detail"] = "no llvm-objdump on host"
+        return receipt
+    # Record the candidate NAME (our own constant vocabulary), never
+    # the resolved host path.
+    receipt["tool"] = Path(tool).name
+    if not candidates:
+        receipt["detail"] = "no classified records to cross-check"
+        return receipt
+    for value, insn_count in candidates:
+        stdout = _run_bpf_objdump(tool, value)
+        if stdout is None:
+            receipt["execution_failed"] += 1
+            continue
+        decoded = len(_OBJDUMP_INSN_RE.findall(stdout))
+        if "<unknown>" not in stdout and decoded == insn_count:
+            receipt["agreed"] += 1
+        else:
+            receipt["disagreed"] += 1
+    receipt["checked"] = receipt["agreed"] + receipt["disagreed"]
+    if receipt["checked"] == 0:
+        receipt["detail"] = "decoder execution failed"
+    elif receipt["disagreed"]:
+        receipt["status"] = "disagree"
+    else:
+        receipt["status"] = "agree"
+    return receipt
+
+
+def _tlv_value_classification(
+    probe_set: list[_Sample],
+    options: CorpusProfileOptions,
+    start: int,
+    shape: tuple[int, int, str, bool],
+) -> dict[str, Any]:
+    """Standing field-classification over the winning TLV shape's
+    record values: "value decodes as an eBPF instruction run".
+
+    Bounded re-read of the probe set (the same discipline as the shape
+    probe), one pure-Python decode check per record VALUE, per-guard
+    receipt counts, bounded classified examples, and a decode-
+    agreement receipt from a sandboxed external decoder when one
+    exists. Per §-honesty: a sample whose re-read or walk fails is a
+    per-sample residual (``samples_walk_failed``) — never evidence
+    about the rest of the family.
+
+    The label is HINT-TIER routing evidence ONLY (it may steer
+    carving / lifter dispatch); it is NEVER a verdict and no consumer
+    may treat it as suppression- or confirmation-grade on its own.
+    """
+    samples_reprobed = 0
+    samples_walk_failed = 0
+    records_checked = 0
+    records_classified = 0
+    terminator_present = 0
+    receipt_counts: Counter[str] = Counter()
+    examples: list[dict[str, Any]] = []
+    external_candidates: list[tuple[bytes, int]] = []
+    for sample in probe_set:
+        data = _bounded_read(sample.path, options.max_bytes_per_sample)
+        spans: list[tuple[int, int]] = []
+        if not data or not _tlv_walk(data, start, shape, spans=spans)[0]:
+            # Re-read raced a hostile mutation, or the shape did not
+            # hold on this file this time — per-sample residual.
+            samples_walk_failed += 1
+            continue
+        samples_reprobed += 1
+        for index, (offset, length) in enumerate(spans):
+            value = data[offset:offset + length]
+            check = _ebpf_decode_check(value)
+            records_checked += 1
+            for key, outcome in check["receipts"].items():
+                receipt_counts[f"{key}={outcome}"] += 1
+            if not check["classified"]:
+                continue
+            records_classified += 1
+            if check["receipts"]["terminator"] == "present":
+                terminator_present += 1
+            if len(examples) < _EBPF_EXAMPLE_CAP:
+                examples.append({
+                    "sample": _escaped_name(sample.rel_name),
+                    "record_index": index,
+                    "value_length": len(value),
+                    "insn_count": check["insn_count"],
+                    "receipts": dict(check["receipts"]),
+                    "derived_from_target": True,
+                })
+            if len(external_candidates) < _EBPF_EXTERNAL_CHECK_CAP:
+                external_candidates.append((value, check["insn_count"]))
+    if records_checked and records_classified:
+        confidence = records_classified / records_checked
+        if not terminator_present:
+            # No classifying record ever ended in BPF_EXIT: the runs
+            # may be fragments (or coincidence) — the label survives
+            # but at half weight. Not scaling would let terminator-
+            # less coincidences rank like clean programs; declining
+            # outright would hide real truncated-program evidence.
+            confidence *= 0.5
+        confidence = _conf(confidence)
+    else:
+        confidence = 0.0
+    return {
+        "label": "ebpf_instruction_run" if records_classified else None,
+        "tier": "hint",
+        "samples_reprobed": samples_reprobed,
+        "samples_walk_failed": samples_walk_failed,
+        "records_checked": records_checked,
+        "records_classified": records_classified,
+        "terminator_present": terminator_present,
+        "receipt_counts": dict(sorted(receipt_counts.items())),
+        "classified_examples": examples,
+        "external_decoder": _ebpf_external_agreement(external_candidates),
+        "confidence": confidence,
+        "note": _EBPF_HINT_NOTE,
+        "derived_from_target": True,
+    }
 
 
 def _tlv_profile(
@@ -897,6 +1386,7 @@ def _tlv_profile(
             "likelihood": 0.0,
             "samples_probed": probed,
             "shape": None,
+            "value_classification": None,
         }
     (start, shape), hits = shape_hits.most_common(1)[0]
     type_size, len_size, endian, includes_header = shape
@@ -910,6 +1400,9 @@ def _tlv_profile(
             "endianness": "le" if endian == "little" else "be",
             "length_includes_header": includes_header,
         },
+        "value_classification": _tlv_value_classification(
+            probe_set, options, start, shape,
+        ),
     }
 
 
@@ -1297,6 +1790,23 @@ def _render_markdown(profile: dict[str, Any]) -> str:
             )
         else:
             lines.append(f"- TLV likelihood: {tlv['likelihood']} ({tlv['samples_probed']} probed)")
+        classification = tlv["value_classification"]
+        if classification and classification["label"]:
+            # Every rendered piece here is RAPTOR-authored vocabulary
+            # (label constant, counts, receipt-status constants) —
+            # nothing sample-derived rides this line. Routed through
+            # md_inline anyway, like every other writer's cells, so the
+            # render chokepoint still holds if a future edit ever makes
+            # one of these fields sample-derived.
+            external = classification["external_decoder"]
+            lines.append(
+                f"- TLV value classification: {md_inline(classification['label'])} "
+                f"({classification['records_classified']}/"
+                f"{classification['records_checked']} records, confidence "
+                f"{md_inline(classification['confidence'])}, external decoder: "
+                f"{md_inline(external['status'])}) — hint-tier routing evidence, "
+                "never a verdict"
+            )
         lines.append("")
         lines.append("| Offset | Len | Kind | Value | Confidence | Evidence |")
         lines.append("|---|---|---|---|---|---|")
