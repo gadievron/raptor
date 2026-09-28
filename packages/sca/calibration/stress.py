@@ -393,8 +393,8 @@ def run_stress_sweep(
             cleanup_dir = Path(tempfile.mkdtemp(prefix="raptor-sca-stress-"))
             out_root = cleanup_dir
         else:
-            from packages.sca import SCA_CACHE_ROOT
-            out_root = SCA_CACHE_ROOT / "stress" / "clones"
+            from packages.sca import sca_cache_root
+            out_root = sca_cache_root() / "stress" / "clones"
     out_root.mkdir(parents=True, exist_ok=True)
 
     # Per-scan wall-clock budget: a scan must clone
@@ -989,8 +989,8 @@ def confirm_elapsed_regressions(
         return severity
 
     if out_root is None:
-        from packages.sca import SCA_CACHE_ROOT
-        out_root = SCA_CACHE_ROOT / "stress" / "clones"
+        from packages.sca import sca_cache_root
+        out_root = sca_cache_root() / "stress" / "clones"
 
     _RANK = {"ok": 0, "new": 0, "warn": 1, "fail": 2}
 

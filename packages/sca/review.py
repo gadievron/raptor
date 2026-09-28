@@ -42,7 +42,7 @@ from core.security.prompt_output_sanitise import sanitise_string
 
 from ._md import inline_code, neutralize_inline
 
-from . import SCA_CACHE_ROOT, default_client
+from . import sca_cache_root, default_client
 from .findings import build_vuln_findings, severity_rank
 from .models import (
     Confidence,
@@ -115,7 +115,7 @@ def _checked_main(
         return 3
 
     if cache is None:
-        cache = JsonCache(root=Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT)
+        cache = JsonCache(root=Path(args.cache_root) if args.cache_root else sca_cache_root())
     if http is None:
         http = default_client(offline=args.offline)
 

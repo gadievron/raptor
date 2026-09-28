@@ -25,7 +25,7 @@ import logging
 import sys
 from pathlib import Path
 
-from . import SCA_CACHE_ROOT
+from . import sca_cache_root
 from typing import TYPE_CHECKING
 
 from core.json import dumps_artifact
@@ -52,7 +52,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     local_path = Path(target)
     fp_input = ("path", local_path) if local_path.is_file() else ("image_ref", target)
 
-    cache_root = Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT
+    cache_root = Path(args.cache_root) if args.cache_root else sca_cache_root()
     store_dir = cache_root / "fingerprints"
 
     if args.check:

@@ -64,7 +64,7 @@ from core.atomic_fs import write_text_atomically
 from core.json import JsonCache, save_json
 from core.logging import configure_cli_logging
 
-from . import SCA_CACHE_ROOT, default_client
+from . import sca_cache_root, default_client
 from .discovery import find_manifests
 from .models import Dependency, PinStyle, canonical_cve_id, cve_ids
 from .osv import OsvClient
@@ -198,11 +198,11 @@ def _build_lookup_clients(
     """
     from core.cve import EpssClient, KevClient
     ttl = 0 if no_cache else 24 * 3600
-    osv = OsvClient(http, cache or JsonCache(root=SCA_CACHE_ROOT),
+    osv = OsvClient(http, cache or JsonCache(root=sca_cache_root()),
                     offline=offline, query_ttl=ttl, vuln_ttl=ttl)
-    kev = KevClient(http, cache or JsonCache(root=SCA_CACHE_ROOT),
+    kev = KevClient(http, cache or JsonCache(root=sca_cache_root()),
                     offline=offline, ttl_seconds=ttl)
-    epss = EpssClient(http, cache or JsonCache(root=SCA_CACHE_ROOT),
+    epss = EpssClient(http, cache or JsonCache(root=sca_cache_root()),
                       offline=offline, ttl_seconds=ttl)
     return osv, kev, epss
 
@@ -250,7 +250,7 @@ def main(argv: Sequence[str]) -> int:
 
     http = default_client(offline=args.offline)
     cache = (None if args.no_cache else
-             JsonCache(root=Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT))
+             JsonCache(root=Path(args.cache_root) if args.cache_root else sca_cache_root()))
     osv, kev, epss = _build_lookup_clients(
         http, cache, offline=args.offline, no_cache=args.no_cache,
     )

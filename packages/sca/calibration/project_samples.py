@@ -692,8 +692,8 @@ def _prewarm_global_feeds() -> None:
         from core.http import default_client
         from core.json import JsonCache
 
-        from .. import SCA_CACHE_ROOT
-        cache = JsonCache(root=SCA_CACHE_ROOT)
+        from .. import sca_cache_root
+        cache = JsonCache(root=sca_cache_root())
         # A throwaway lookup forces the catalog load → writes the disk cache.
         # KEV catalog is a single fixed host — pass it as the egress
         # allowlist (repo standard for network-facing production paths).

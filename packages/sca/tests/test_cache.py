@@ -133,3 +133,54 @@ def test_key_without_dots_still_lands_with_json_suffix(tmp_path: Path) -> None:
     cache = JsonCache(root=tmp_path)
     cache.put("vulns/GHSA-test", {"id": "x"}, ttl_seconds=60)
     assert (tmp_path / "vulns" / "GHSA-test.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Call-time default cache-root resolution (packages.sca.sca_cache_root)
+# ---------------------------------------------------------------------------
+
+def test_sca_cache_root_reads_home_at_call_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """$HOME is read per call, not snapshotted at import: a HOME pin
+    installed after the package was imported redirects the default
+    cache root (fabricated HOME — never the real one)."""
+    import packages.sca as sca_pkg
+    monkeypatch.setattr(sca_pkg, "SCA_CACHE_ROOT", None)
+    home_a = tmp_path / "home-a"
+    home_b = tmp_path / "home-b"
+    monkeypatch.setenv("HOME", str(home_a))
+    assert sca_pkg.sca_cache_root() == home_a / ".raptor" / "cache" / "sca"
+    # Changing HOME after the first call takes effect on the next.
+    monkeypatch.setenv("HOME", str(home_b))
+    assert sca_pkg.sca_cache_root() == home_b / ".raptor" / "cache" / "sca"
+    assert not home_a.exists() and not home_b.exists()
+
+
+def test_sca_cache_root_seam_wins_over_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A monkeypatched SCA_CACHE_ROOT (the tests' isolation seam)
+    wins over the env-derived default."""
+    import packages.sca as sca_pkg
+    monkeypatch.setenv("HOME", str(tmp_path / "ignored"))
+    monkeypatch.setattr(sca_pkg, "SCA_CACHE_ROOT", tmp_path / "pinned")
+    assert sca_pkg.sca_cache_root() == tmp_path / "pinned"
+
+
+def test_reachability_inventory_cache_dir_follows_call_time_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reachability inventory-cache seam resolves through
+    sca_cache_root() at call time — the decoy-probe writer class this
+    conversion exists for."""
+    import packages.sca as sca_pkg
+    from packages.sca.reachability import _inventory_cache_dir
+    monkeypatch.setattr(sca_pkg, "SCA_CACHE_ROOT", None)
+    fakehome = tmp_path / "fakehome"
+    monkeypatch.setenv("HOME", str(fakehome))
+    target = tmp_path / "repo"
+    target.mkdir()
+    cache = _inventory_cache_dir(target)
+    assert cache.parent == fakehome / ".raptor" / "cache" / "sca" / "inventory"
+    assert not fakehome.exists()

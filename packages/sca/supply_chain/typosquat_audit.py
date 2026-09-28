@@ -305,7 +305,7 @@ def run_llm_triage(
     review queues for the human. Falls back to the list when no LLM is set."""
     from core.json import JsonCache
 
-    from .. import SCA_CACHE_ROOT, default_client
+    from .. import sca_cache_root, default_client
     from ..llm import get_llm_client
     from .typosquat_triage import (
         Disposition,
@@ -324,7 +324,7 @@ def run_llm_triage(
         # Duck-typed probe: client doubles may lack the config chain.
         pass
     http = default_client()
-    cache = JsonCache(root=SCA_CACHE_ROOT)
+    cache = JsonCache(root=sca_cache_root())
     clients = _registry_clients(http, cache)
     auto: list[str] = []
     confirm: list[str] = []
@@ -404,7 +404,7 @@ def run_reaudit(reviewed_legit_path: Path, *, use_llm: bool = False) -> str:
     nothing is flagged)."""
     from core.json import JsonCache
 
-    from .. import SCA_CACHE_ROOT, default_client
+    from .. import sca_cache_root, default_client
     from .typosquat_triage import (
         collect_evidence_rich,
         make_llm_verdict_fn,
@@ -413,7 +413,7 @@ def run_reaudit(reviewed_legit_path: Path, *, use_llm: bool = False) -> str:
         reaudit_reviewed_legit,
     )
     http = default_client()
-    cache = JsonCache(root=SCA_CACHE_ROOT)
+    cache = JsonCache(root=sca_cache_root())
     clients = _registry_clients(http, cache)
 
     def _gm(eco, name):

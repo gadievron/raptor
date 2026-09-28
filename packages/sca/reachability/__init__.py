@@ -418,12 +418,12 @@ def _inventory_cache_dir(target: Path) -> Path:
     target path so distinct projects get distinct cache dirs.
     """
     import hashlib
-    from packages.sca import SCA_CACHE_ROOT
+    from packages.sca import sca_cache_root
     target_abs = str(target.resolve())
     target_hash = hashlib.sha256(
         target_abs.encode("utf-8"),
     ).hexdigest()[:16]
-    return SCA_CACHE_ROOT / "inventory" / target_hash
+    return sca_cache_root() / "inventory" / target_hash
 
 
 def _build_go_symbol_map(

@@ -2443,9 +2443,9 @@ def _compute_compat_reports(
         try:
             from core.json import JsonCache
 
-            from . import SCA_CACHE_ROOT, default_client
+            from . import sca_cache_root, default_client
             http = default_client()
-            cache = JsonCache(root=cache_root or SCA_CACHE_ROOT)
+            cache = JsonCache(root=cache_root or sca_cache_root())
         except Exception:
             logger.debug("api-compat: HttpClient setup failed; "
                          "running with semver heuristic only",

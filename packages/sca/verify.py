@@ -57,7 +57,7 @@ from core.json import JsonCache, load_json, save_json
 # self-produced budget for files a run_sca in THIS process just wrote.
 from .kinds import MAX_FINDINGS_BYTES as _MAX_FINDINGS_BYTES
 from .kinds import MAX_SELF_FINDINGS_BYTES as _MAX_SELF_FINDINGS_BYTES
-from . import SCA_CACHE_ROOT
+from . import sca_cache_root
 from .diff import compute_delta, md_cell
 from .findings import severity_rank
 from . import default_client
@@ -105,7 +105,7 @@ def main(
         return 2
 
     if cache is None:
-        cache = JsonCache(root=Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT)
+        cache = JsonCache(root=Path(args.cache_root) if args.cache_root else sca_cache_root())
     if http is None:
         http = default_client()
 

@@ -29,7 +29,7 @@ from core.cve import EpssClient, KevClient
 from core.json import JsonCache
 from core.progress import HackerProgressBar
 
-from . import SCA_CACHE_ROOT, default_client
+from . import sca_cache_root, default_client
 from . import suppressions as _suppressions
 from .discovery import find_manifests
 from .rows import FindingRow
@@ -318,7 +318,7 @@ def run_sca(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if cache is None:
-        cache = JsonCache(root=options.cache_root or SCA_CACHE_ROOT)
+        cache = JsonCache(root=options.cache_root or sca_cache_root())
     if http is None:
         # Pass the target so default_client can augment the
         # allowlist with Dockerfile-derived container-registry
@@ -518,7 +518,7 @@ def run_sca(
             dockerfile_cache = None
         else:
             dockerfile_cache = JsonCache(
-                root=(options.cache_root or SCA_CACHE_ROOT) / "dockerfile_from",
+                root=(options.cache_root or sca_cache_root()) / "dockerfile_from",
             )
         try:
             base_image_deps = scan_image_sources(
@@ -550,7 +550,7 @@ def run_sca(
             try:
                 from .image_drift import detect_image_drift
                 fingerprint_store = (
-                    options.cache_root or SCA_CACHE_ROOT
+                    options.cache_root or sca_cache_root()
                 ) / "fingerprints"
                 image_drift_findings = detect_image_drift(
                     target,
@@ -738,7 +738,7 @@ def run_sca(
         elif options.cache_root is not None:
             db_path = options.cache_root / "osv.sqlite"
         else:
-            db_path = SCA_CACHE_ROOT / "osv.sqlite"
+            db_path = sca_cache_root() / "osv.sqlite"
         offline_db = OsvOfflineDB(db_path, http=http)
         # Refresh per-ecosystem zips for the ecosystems we discovered.
         # Warn-and-degrade on refresh failure: the DB is shared across
@@ -1396,7 +1396,7 @@ def _run_maintainer_review(client, supply_chain_findings, canonical, http, optio
     # Build metadata from registry clients.
     from core.json import JsonCache
 
-    from . import SCA_CACHE_ROOT
+    from . import sca_cache_root
     from .registries.npm import NpmClient
     from .registries.pypi import PyPIClient
 
@@ -1406,9 +1406,9 @@ def _run_maintainer_review(client, supply_chain_findings, canonical, http, optio
     # the largest --offline leak surfaced by Tier-6 E2E.
     # ``cache_root`` also honoured so the operator's ``--cache-root``
     # override reaches this path (was previously hardcoded to
-    # ``SCA_CACHE_ROOT``).
+    # the default cache root).
     cache = JsonCache(
-        root=options.cache_root or SCA_CACHE_ROOT,
+        root=options.cache_root or sca_cache_root(),
     )
     pypi = _registry_metadata_client(
         PyPIClient, http=http, cache=cache, options=options)
@@ -1523,12 +1523,12 @@ def _run_slopsquat_review(
     # ``_run_maintainer_review``.
     from core.json import JsonCache
 
-    from . import SCA_CACHE_ROOT
+    from . import sca_cache_root
     from .registries.npm import NpmClient
     from .registries.pypi import PyPIClient
 
     cache = JsonCache(
-        root=options.cache_root or SCA_CACHE_ROOT,
+        root=options.cache_root or sca_cache_root(),
     )
     pypi = _registry_metadata_client(
         PyPIClient, http=http, cache=cache, options=options)

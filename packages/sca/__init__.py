@@ -5,9 +5,12 @@ into otherwise-generic ``core.http`` / ``core.json.cache`` machinery:
 
   - :data:`SCA_USER_AGENT` — pinned user-agent so /sca traffic is
     identifiable in OSV / KEV / EPSS rate-limit logs.
-  - :data:`SCA_CACHE_ROOT` — default disk-cache root under
-    ``~/.raptor/cache/sca/``. Callers thread this as the explicit
+  - :func:`sca_cache_root` — default disk-cache root under
+    ``~/.raptor/cache/sca/``, resolved at call time so env pins set
+    after import still apply. Callers thread this as the explicit
     fallback when the operator passes ``--cache-root`` as None.
+    (:data:`SCA_CACHE_ROOT` remains as the test-override seam the
+    accessor consults first.)
   - :data:`SCA_ALLOWED_HOSTS` — the full set of registries / vuln
     feeds /sca needs to reach. Anything outside this set is refused
     by the in-process egress proxy: a parser or registry-client
@@ -36,7 +39,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 SCA_USER_AGENT = "raptor-sca/0.1 (+https://github.com/gadievron/raptor)"
-SCA_CACHE_ROOT = Path.home() / ".raptor" / "cache" / "sca"
+
+# Test-override seam: when set (tests monkeypatch a tmp dir here) it
+# wins. Production leaves it None so :func:`sca_cache_root` re-reads
+# $HOME on every call — a HOME pin installed AFTER this package is
+# imported still redirects the cache instead of being silently
+# ignored by an import-time snapshot.
+SCA_CACHE_ROOT: Path | None = None
+
+
+def sca_cache_root() -> Path:
+    """Default disk-cache root, resolved at call time
+    (``~/.raptor/cache/sca``; ``Path.home()`` reads ``$HOME`` per
+    call). Callers thread this as the explicit fallback when the
+    operator passes ``--cache-root`` as None."""
+    if SCA_CACHE_ROOT is not None:
+        return SCA_CACHE_ROOT
+    return Path.home() / ".raptor" / "cache" / "sca"
 
 # The full set of hosts /sca needs to reach for vuln data + registry
 # metadata. Ordered by purpose for readability; the egress proxy treats
@@ -408,4 +427,5 @@ __all__ = [
     "SCA_USER_AGENT",
     "compose_proxy_hosts",
     "default_client",
+    "sca_cache_root",
 ]

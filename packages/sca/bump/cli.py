@@ -158,7 +158,7 @@ def main(argv: Sequence[str]) -> int:
     from core.cve import EpssClient, KevClient
     from core.json import JsonCache
 
-    from .. import SCA_CACHE_ROOT
+    from .. import sca_cache_root
     from .. import default_client as _sca_default_http
     from ..osv import OsvClient
     from ..registries.npm import NpmClient
@@ -170,7 +170,7 @@ def main(argv: Sequence[str]) -> int:
     # known-host set augmented by anything the target's Dockerfiles
     # reference.
     http = _sca_default_http(target=target, offline=args.offline)
-    cache_root = Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT
+    cache_root = Path(args.cache_root) if args.cache_root else sca_cache_root()
     # ``--no-cache`` never passes ``cache=None`` into the feed clients:
     # OsvClient / KevClient / EpssClient require a real JsonCache and
     # would crash on first use — the crash used to be swallowed by the

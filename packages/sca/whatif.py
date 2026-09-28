@@ -44,7 +44,7 @@ from core.json import JsonCache
 from core.security.log_sanitisation import escape_nonprintable
 from core.security.prompt_output_sanitise import sanitise_string
 
-from . import SCA_CACHE_ROOT, default_client
+from . import sca_cache_root, default_client
 from ._md import neutralize_inline
 from .findings import build_vuln_findings, severity_rank
 from .models import (
@@ -91,7 +91,7 @@ def main(
         args.ecosystem = canonical_eco
 
     if cache is None:
-        cache = JsonCache(root=Path(args.cache_root) if args.cache_root else SCA_CACHE_ROOT)
+        cache = JsonCache(root=Path(args.cache_root) if args.cache_root else sca_cache_root())
     if http is None:
         http = default_client(offline=args.offline)
 
