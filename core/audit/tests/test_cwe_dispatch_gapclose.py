@@ -75,9 +75,42 @@ class TestToctouFamily:
         assert entry["codeql"] == "cpp/toctou-race-condition"
 
     @pytest.mark.parametrize("cwe", ["CWE-59", "CWE-61"])
-    def test_fallback_chain(self, cwe):
+    def test_fallback_chain(
+        self, cwe: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Hermetic: the chain's codeql leg survives only when the
+        # entry's pack query ID resolves against installed CodeQL
+        # packs — environment state a bare runner lacks. Stub the
+        # resolver seam (the test_codeql_query_resolver pattern) so
+        # chain composition is what's under test, not pack presence.
+        ql = tmp_path / "TOCTOURaceCondition.ql"
+        ql.write_text("import cpp\nselect 1\n")
+        monkeypatch.setattr(
+            "core.audit.codeql_query_resolver.resolve_query_id",
+            lambda qid: (
+                str(ql) if qid == "cpp/toctou-race-condition" else None
+            ),
+        )
         types = {e["type"] for e in _cwe_fallback_chain(cwe)}
         assert types >= {"smt", "coccinelle", "codeql"}
+
+    @pytest.mark.parametrize("cwe", ["CWE-59", "CWE-61"])
+    def test_fallback_chain_degrades_without_packs(
+        self, cwe: str, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The bare-runner shape: an unresolvable pack ID drops the
+        # codeql leg only — smt + coccinelle still cover the claim.
+        monkeypatch.setattr(
+            "core.audit.codeql_query_resolver.resolve_query_id",
+            lambda qid: None,
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._CODEQL_UNSUPPORTED_IDS_LOGGED",
+            set(),
+        )
+        types = {e["type"] for e in _cwe_fallback_chain(cwe)}
+        assert "codeql" not in types
+        assert types >= {"smt", "coccinelle"}
 
 
 class TestTaintEntries:
