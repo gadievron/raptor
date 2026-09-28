@@ -197,3 +197,101 @@ class TestUnverifiedResidue:
         lines = format_residue_lines(report)
         assert lines and "Unverified residue" in lines[0]
         assert format_residue_lines({"unverified_residue": {}}) == []
+
+
+class TestErroredFunctions:
+    def test_json_carries_full_per_item_list(self, tmp_path: Path) -> None:
+        _append(tmp_path, ts="2026-01-01T00:00:01+00:00",
+                function="FUN_0036b4c0", verdict="error",
+                error_class="task_exception")
+        _append(tmp_path, ts="2026-01-01T00:00:02+00:00",
+                function="FUN_005278e0", verdict="error",
+                error_class="task_exception")
+
+        report = generate_report(tmp_path)
+        errored = report["errored_functions"]
+        assert {e["function"] for e in errored} == {
+            "FUN_0036b4c0", "FUN_005278e0",
+        }
+        assert all(e["file"] == "binary:lib.so" for e in errored)
+        assert all(e["error_class"] == "task_exception" for e in errored)
+
+    def test_console_lists_items_below_bound(self, tmp_path: Path) -> None:
+        for i in range(3):
+            _append(tmp_path, ts=f"2026-01-01T00:00:0{i}+00:00",
+                    function=f"FUN_err{i}", verdict="error",
+                    error_class="task_exception")
+
+        summary = generate_report(tmp_path)["summary"]
+        assert "Errored reviews (3)" in summary
+        for i in range(3):
+            assert f"FUN_err{i}" in summary
+        assert "task_exception" in summary
+        assert "more" not in summary.split("Errored reviews")[1].split(
+            "###")[0].lower()
+
+    def test_console_bounds_systemic_failure_runs(
+        self, tmp_path: Path,
+    ) -> None:
+        # Over-bound direction: a systemic failure (25 errored rows)
+        # must not swamp the console — first 20 plus an explicit
+        # elision naming the remainder and the full-list artifact.
+        for i in range(25):
+            _append(tmp_path, ts=f"2026-01-01T00:{i:02d}:00+00:00",
+                    function=f"FUN_err{i:02d}", verdict="error",
+                    error_class="environment")
+
+        report = generate_report(tmp_path)
+        assert len(report["errored_functions"]) == 25  # JSON stays full
+        summary = report["summary"]
+        assert "Errored reviews (25)" in summary
+        listed = sum(
+            1 for i in range(25) if f"FUN_err{i:02d}" in summary
+        )
+        assert listed == 20
+        assert "5 more" in summary
+        assert "audit-report.json" in summary
+
+    def test_errored_render_is_escaped(self, tmp_path: Path) -> None:
+        # Display integrity: journal fields land in terminal output —
+        # a forged row carrying OSC/ESC, raw C1 controls (0x85 NEL,
+        # 0x9b CSI, 0x9d OSC, 0x90 DCS), or bidi overrides
+        # (U+202E RLO, U+2066 LRI) must render inert. The seam
+        # (``sanitise_string``) escapes C1 to ``\xHH`` text and drops
+        # bidi controls.
+        _append(tmp_path, ts="2026-01-01T00:00:01+00:00",
+                function="FUN_x\x1b]0;pwned\x07\x85\x9b", verdict="error",
+                error_class="bad\x1b[31m\x9d\x90class‮gnp⁦")
+        summary = generate_report(tmp_path)["summary"]
+        assert "FUN_x" in summary  # the errored section DID render
+        for raw in ("\x1b", "\x07", "\x85", "\x9b", "\x9d", "\x90",
+                    "‮", "⁦"):
+            assert raw not in summary
+        assert "\\x9b" in summary  # C1 escaped to inert text, not dropped
+        assert "class" in summary  # content around bidi survives
+
+
+class TestMarkdownReportWiring:
+    def test_markdown_report_includes_residue_section(
+        self, tmp_path: Path,
+    ) -> None:
+        from core.audit.report import write_markdown_report
+        _seed_residue_run(tmp_path)
+        report = generate_report(tmp_path)
+        text = write_markdown_report(report, tmp_path).read_text(
+            encoding="utf-8")
+        assert "Unverified residue" in text
+        assert "findings-graded.json" in text
+
+    def test_finalise_tail_writes_markdown_report(self) -> None:
+        # The finalise tail must write audit-report.md alongside
+        # audit-report.json (the renderer existed caller-less; the
+        # report verb and the finalise tail are its two consumers).
+        import re
+        launcher = (
+            Path(__file__).resolve().parents[3]
+            / "libexec" / "raptor-audit"
+        ).read_text(encoding="utf-8")
+        assert re.search(r"write_markdown_report\(", launcher), (
+            "libexec/raptor-audit must call write_markdown_report"
+        )

@@ -30,6 +30,17 @@ _MAX_RUN_META_BYTES = 1024 * 1024
 _MAX_STATE_BYTES = 8 * 1024 * 1024
 _MAX_FINDINGS_BYTES = 64 * 1024 * 1024
 
+# Summary bound for the per-item errored-reviews list. 20 is deep
+# enough to name every errored function on a healthy run (errors are
+# rare — single digits on observed runs) while a systemic failure
+# (thousands of task_exception rows) cannot swamp the console; the
+# JSON report always carries the full list. Raising it floods the
+# end-of-run summary exactly when the run is at its most broken;
+# lowering it elides real per-function failures that would have fit.
+# Two-direction regression tests pin both behaviours
+# (test_report_residue.TestErroredFunctions).
+_MAX_ERRORED_LISTED = 20
+
 logger = logging.getLogger(__name__)
 
 
@@ -411,6 +422,26 @@ def generate_report(
     if decomp_sweep:
         report["decomp_sweep"] = decomp_sweep
 
+    # Errored reviews, per item: a failed review is not a clean
+    # verdict, and a count alone is a dead end — the report names
+    # each (file, function, error_class) so the operator can see
+    # WHICH functions never got a completed review. Full list in the
+    # JSON report; the summary bounds its rendering.
+    errored_functions = sorted(
+        (
+            {
+                "file": rec.get("file") or "",
+                "function": rec.get("function") or "",
+                "error_class": rec.get("error_class"),
+            }
+            for rec in audit_data.get("functions_analysed", [])
+            if not rec.get("mechanical") and rec.get("status") == "error"
+        ),
+        key=lambda r: (r["file"], r["function"]),
+    )
+    if errored_functions:
+        report["errored_functions"] = errored_functions
+
     # Unverified residue — the per-class index of everything this run
     # examined but could not fully verify. Counts derive from the
     # SAME sources as the headline stats (the journal-derived stats
@@ -689,6 +720,14 @@ def write_markdown_report(
     else:
         lines.append("No findings.")
     lines.append("")
+
+    # Unverified residue — same render seam as the report summary and
+    # the end-of-run console: a zero-findings report with residue must
+    # not read as all-clear on ANY operator surface.
+    residue_lines = format_residue_lines(report)
+    if residue_lines:
+        lines.extend(residue_lines)
+        lines.append("")
 
     # Capabilities used
     if capabilities:
@@ -1010,6 +1049,10 @@ def _load_review_state(out_dir: Path) -> dict[str, Any]:
             "line_end": getattr(entry, "line_end", None),
             "status": entry.verdict,
             "hash": entry.source_hash or None,
+            # Machine-readable failure class on error rows — carried
+            # so the report's per-item errored list can state WHY a
+            # review failed without re-reading the journal.
+            "error_class": getattr(entry, "error_class", None),
             # Post-loop mechanical entries (taint-spec / negative-space
             # checks journalled after the review loop) are not LLM
             # reviews — carry the marker so stats can state one
@@ -1925,6 +1968,31 @@ def _format_summary(report: dict[str, Any]) -> str:
     if residue_lines:
         lines.append("")
         lines.extend(residue_lines)
+
+    errored = report.get("errored_functions", [])
+    if errored:
+        lines.append("")
+        lines.append(
+            f"### Errored reviews ({len(errored)}) — failed, not clean"
+        )
+        lines.append(
+            "These reviews never completed — the absence of a finding "
+            "here is not a clean verdict; they stay gap-eligible."
+        )
+        for rec in errored[:_MAX_ERRORED_LISTED]:
+            # file / function come from the scanned repo's checklist
+            # and error_class from the journal — target-derived, so
+            # each renders through the one-line sanitise seam.
+            lines.append(
+                f"  - {_line(rec.get('file', '?'))}:"
+                f"{_line(rec.get('function', '?'), max_chars=80)} "
+                f"({_line(rec.get('error_class') or 'unclassified', max_chars=40)})"
+            )
+        if len(errored) > _MAX_ERRORED_LISTED:
+            lines.append(
+                f"  ... and {len(errored) - _MAX_ERRORED_LISTED} more "
+                "(full list: errored_functions in audit-report.json)"
+            )
 
     dark_findings = report.get("dark_findings", [])
     if dark_findings:

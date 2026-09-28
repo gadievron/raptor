@@ -1365,7 +1365,11 @@ def cmd_rules(args: argparse.Namespace) -> int:
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    from core.audit.report import generate_report, write_report
+    from core.audit.report import (
+        generate_report,
+        write_markdown_report,
+        write_report,
+    )
 
     out_dir = Path(args.out)
     target_path = Path(args.target) if args.target else None
@@ -1387,6 +1391,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 
     report = generate_report(out_dir, target_path=target_path)
     write_report(report, out_dir)
+    write_markdown_report(report, out_dir, target_path=target_path)
 
     _print_scrubbed(report["summary"])
     return 0
@@ -2300,6 +2305,18 @@ def _finalize_run(
         )
 
     report_path = write_report(report, out_dir)
+
+    # audit-report.md — the operator-facing render of the same report
+    # dict (the `report` verb writes it too; the renderer previously
+    # existed caller-less). Best-effort: a markdown render failure
+    # must never fail a fully-paid run at finalise.
+    try:
+        from core.audit.report import write_markdown_report
+        write_markdown_report(report, out_dir)
+    except Exception:  # noqa: BLE001 — completion tail is best-effort
+        logging.getLogger(__name__).debug(
+            "markdown report write failed", exc_info=True,
+        )
 
     # Completed-with-remainder note for supervisor-bounded runs: the
     # wall stop is a graceful completion, and the operator should know
