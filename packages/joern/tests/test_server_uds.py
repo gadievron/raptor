@@ -189,7 +189,8 @@ class TestUdsClientShim:
 
 class TestTierSelection:
     @staticmethod
-    def _boot(srv: JoernServer, *, netns: bool) -> list[str]:
+    def _boot(srv: JoernServer, *, netns: bool,
+              pidns: bool = False) -> list[str]:
         captured: list[str] = []
 
         def fake_popen(cmd, **kwargs):
@@ -205,6 +206,10 @@ class TestTierSelection:
             patch("packages.joern.prereqs._java_version", return_value=21),
             patch("packages.joern.server._netns_isolation_available",
                   return_value=netns),
+            # Patched even where the test never asks for the pidns
+            # tier: the real probe spawns a subprocess.
+            patch("packages.joern.server._pidns_supervision_available",
+                  return_value=pidns),
             patch("packages.joern.server._server_auth_supported",
                   return_value=True),
             patch("packages.joern.server._repl_bridge_path",

@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import secrets
+import select
 import shutil
 import signal
 import socket
@@ -42,6 +43,10 @@ except ImportError:
 from core.run.tmp_ownership import sweep_dead_owner_dirs, write_owner_marker
 
 from .heap_ledger import HeapReservation, reserve_heap_mb
+from .netns_forwarder import (
+    EXIT_PIDNS_UNSHARE_REFUSED,
+    EXIT_PIDNS_WAITER_UNARMED,
+)
 from .models import JoernMethodSummary, JoernResult, TaintFlow
 from .prereqs import _joern_path
 from .runner import (
@@ -82,6 +87,21 @@ _SUN_PATH_MAX_SAFE = 100
 # Per-process cache for the netns-tier probe (one python spawn).
 _NETNS_PROBE_CACHE: bool | None = None
 _NETNS_PROBE_LOCK = threading.Lock()
+
+# Per-process cache for the pidns-tier probe, kept SEPARATE from the
+# netns cache: hosts commonly allow unshare(USER|NET) while refusing
+# the same single call with CLONE_NEWPID added (LSM policy splits),
+# and a runtime pidns refusal must invalidate only this verdict — the
+# netns tier keeps working.
+_PIDNS_PROBE_CACHE: bool | None = None
+_PIDNS_PROBE_LOCK = threading.Lock()
+
+# Budget for the forwarder's achieved-tier report after the server
+# answered its first health check. The forwarder writes the report at
+# supervision-arm time — long before the JVM answers anything — so a
+# ready server whose line has not arrived within this budget has
+# effectively reported nothing: read as the weaker tier.
+_TIER_REPORT_TIMEOUT_S = 10.0
 
 # Disposable per-boot workspace dirs (see JoernServer.start). Removed
 # on stop(); the ownership marker + boot-time sweep below reclaim the
@@ -668,6 +688,93 @@ def _netns_isolation_available() -> bool:
         return ok
 
 
+def _pidns_supervision_available() -> bool:
+    """Probe whether the pid-namespace supervision tier can engage.
+
+    Runs the forwarder's ``--self-probe-pidns`` (the netns probe's
+    mechanism plus ``CLONE_NEWPID`` in the same single unshare call,
+    an in-namespace PID-1 check, a PDEATHSIG arm, and an in-namespace
+    thread-creation check) in a subprocess — the exact mechanism a
+    real ``--pidns`` boot uses. Cached per process; infrastructure
+    failures fall back for this boot without caching, mirroring
+    :func:`_netns_isolation_available`.
+    """
+    global _PIDNS_PROBE_CACHE
+    with _PIDNS_PROBE_LOCK:
+        if _PIDNS_PROBE_CACHE is not None:
+            return _PIDNS_PROBE_CACHE
+        from core.config import RaptorConfig
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(_FORWARDER_SCRIPT),
+                 "--self-probe-pidns"],
+                capture_output=True,
+                text=True,
+                timeout=_NETNS_PROBE_TIMEOUT_S,
+                env=RaptorConfig.get_safe_env(),
+                check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError, ValueError) as e:
+            # Probe INFRASTRUCTURE failure — not a kernel verdict.
+            logger.debug("joern pidns self-probe could not run: %s", e)
+            return False
+        ok = proc.returncode == 0
+        if not ok:
+            logger.debug(
+                "joern pidns self-probe failed: %s",
+                (proc.stderr or "").strip()[:500],
+            )
+        _PIDNS_PROBE_CACHE = ok
+        return ok
+
+
+def _invalidate_pidns_probe() -> None:
+    """Flip the cached pidns verdict to refused.
+
+    Called when a ``--pidns`` boot is refused at runtime after a
+    positive probe (host policy raced us): later boots in this
+    process must pick the achievable tier directly instead of paying
+    a refusal + relaunch each time.
+    """
+    global _PIDNS_PROBE_CACHE
+    with _PIDNS_PROBE_LOCK:
+        _PIDNS_PROBE_CACHE = False
+
+
+def _read_achieved_tier(
+    ready_r: int, timeout_s: float = _TIER_REPORT_TIMEOUT_S,
+) -> str:
+    """Read the forwarder's ACHIEVED-tier report from *ready_r*.
+
+    The forwarder reports the supervision tier it actually
+    established (``supervision_tier=pidns|group``); the caller records
+    only that — never the flag it passed. A missing, truncated, or
+    garbled report reads as ``"group"``: the safe direction, since a
+    misstamped ``pidns`` would route later kills down the short path
+    with the safety net absent (a leaked JVM presented as
+    impossible), while a mis-read ``group`` merely keeps the full
+    degraded kill ladder engaged.
+    """
+    deadline = time.monotonic() + timeout_s
+    buf = b""
+    poller = select.poll()
+    poller.register(ready_r, select.POLLIN)
+    while b"\n" not in buf:
+        remaining_ms = (deadline - time.monotonic()) * 1000
+        if remaining_ms <= 0 or not poller.poll(remaining_ms):
+            break
+        try:
+            chunk = os.read(ready_r, 256)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+    if buf.split(b"\n", 1)[0].strip() == b"supervision_tier=pidns":
+        return "pidns"
+    return "group"
+
+
 def _make_uds_dir() -> str:
     """0700 directory for the forwarder socket, sun_path-safe.
 
@@ -809,6 +916,13 @@ class JoernServer:
     # ... and for the forwarder orphan-idle override (read on the
     # start() path; bare instances must not AttributeError there).
     _orphan_idle_ttl_s: float | None = None
+    # ... and for the ACHIEVED supervision tier ("pidns" only when the
+    # forwarder reported it — never the requested flag). Bare
+    # instances, reuse handles, and pre-tier records read as "group":
+    # the safe direction, keeping the full degraded kill ladder
+    # engaged. The refusal reason feeds the per-boot posture log.
+    _supervision_tier: str = "group"
+    _tier_refusal_reason: str | None = None
 
     def __init__(
         self,
@@ -882,6 +996,10 @@ class JoernServer:
         self._workdir: str | None = None
         self._auth_user: str | None = None
         self._auth_password: str | None = None
+        # Achieved supervision tier for the CURRENT boot (see the
+        # class-level default above); (re)stamped per boot attempt.
+        self._supervision_tier: str = "group"
+        self._tier_refusal_reason: str | None = None
         # Strong-tier state: the unix socket clients dial instead of
         # TCP, and its parent directory (owned by the process that
         # booted the server; None on the fallback tier and on
@@ -1014,18 +1132,32 @@ class JoernServer:
                 "Cross-user isolation of /query-sync is DEGRADED to "
                 "that credential alone."
             )
+        # pid-namespace supervision rides ON TOP of the netns tier
+        # (same forwarder, CLONE_NEWPID added to the same single
+        # unshare call): the forwarder's death then collapses the
+        # whole namespace tree mechanically, eliminating the
+        # forwarder-dead-JVM-alive orphan class. Probed separately —
+        # hosts commonly allow USER|NET while refusing NEWPID.
+        use_pidns = use_netns and _pidns_supervision_available()
+        tier_refusal_reason: str | None = None
 
         from core.config import RaptorConfig
         try:
-            for attempt, tuning_flags in enumerate(flag_sets):
+            attempt = 0
+            while True:
+                tuning_flags = flag_sets[attempt]
                 self._port = _find_free_port()
                 self._base_url = f"http://127.0.0.1:{self._port}"
 
                 # Per-boot-attempt state: stop() after a failed attempt
                 # clears the credential and removes the workdir and
-                # socket directory.
+                # socket directory. The tier stamp resets with it: only
+                # THIS attempt's achieved report may set "pidns" — a
+                # relaunch must never inherit a prior attempt's tier.
                 self._auth_user = _AUTH_USERNAME
                 self._auth_password = secrets.token_urlsafe(32)
+                self._supervision_tier = "group"
+                self._tier_refusal_reason = None
                 if self._workdir is None:
                     self._workdir = _new_workspace()
 
@@ -1040,6 +1172,9 @@ class JoernServer:
                     "--server-auth-password", self._auth_password,
                 ]
 
+                ready_r: int | None = None
+                ready_w: int | None = None
+                pass_fds: tuple[int, ...] = ()
                 if use_netns:
                     # mkdtemp gives the 0700 parent the forwarder requires;
                     # the forwarder binds the socket (also 0700) BEFORE it
@@ -1047,11 +1182,22 @@ class JoernServer:
                     # the server can accept any traffic.
                     self._uds_dir = _make_uds_dir()
                     self._uds_path = os.path.join(self._uds_dir, _UDS_SOCKET_NAME)
-                    cmd = self._forwarder_argv(joern_cmd)
+                    # Achieved-tier report channel: the forwarder writes
+                    # supervision_tier=<tier> here once supervision is
+                    # actually armed. Parent-side write end is closed
+                    # right after the spawn so a forwarder that dies
+                    # (or a test double that inherits nothing) reads as
+                    # EOF — i.e. the weaker tier — instead of blocking.
+                    ready_r, ready_w = os.pipe()
+                    pass_fds = (ready_w,)
+                    cmd = self._forwarder_argv(
+                        joern_cmd, pidns=use_pidns, ready_fd=ready_w,
+                    )
                     logger.info(
                         "starting Joern server in a private network namespace "
-                        "(in-ns port %d, unix socket %s)",
+                        "(in-ns port %d, unix socket %s%s)",
                         self._port, self._uds_path,
+                        ", pid-ns supervised" if use_pidns else "",
                     )
                 else:
                     cmd = joern_cmd
@@ -1073,15 +1219,23 @@ class JoernServer:
                 # New session so stop() can signal the whole process group:
                 # the joern launcher may be a shell wrapper that spawns the
                 # JVM without exec — terminating just the wrapper orphans it.
-                self._proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    env=env,
-                    start_new_session=True,
-                    cwd=self._workdir,
-                )
+                try:
+                    self._proc = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        env=env,
+                        start_new_session=True,
+                        cwd=self._workdir,
+                        pass_fds=pass_fds,
+                    )
+                finally:
+                    # Ours went across (or the spawn failed); either
+                    # way the parent-side copy must go so the read end
+                    # sees EOF once the forwarder's copy is gone.
+                    if ready_w is not None:
+                        os.close(ready_w)
                 # start_new_session made the child the leader of a fresh
                 # group whose id is its pid; record it while that is
                 # guaranteed true so stop() can address the whole group
@@ -1089,9 +1243,16 @@ class JoernServer:
                 self._pgid = self._proc.pid
 
                 if self._wait_for_ready():
+                    if ready_r is not None:
+                        self._supervision_tier = _read_achieved_tier(ready_r)
+                        os.close(ready_r)
+                    self._tier_refusal_reason = tier_refusal_reason
                     break
 
-                died_during_boot = self._proc.poll() is not None
+                rc = self._proc.poll()
+                died_during_boot = rc is not None
+                if ready_r is not None:
+                    os.close(ready_r)
                 # Keep the heap admission across the flag-set retry:
                 # the retry boots the same-sized JVM immediately, and
                 # a release/re-reserve window would let a concurrent
@@ -1101,22 +1262,69 @@ class JoernServer:
                     self._heap_reservation, None)
                 self.stop()
                 self._heap_reservation = reservation
+                if use_pidns and rc in (EXIT_PIDNS_UNSHARE_REFUSED,
+                                        EXIT_PIDNS_WAITER_UNARMED):
+                    # Runtime refusal after a positive probe (host
+                    # policy raced us): the forwarder failed CLOSED
+                    # before creating a listener or a child, so this
+                    # attempt has no side effects to double. Relaunch
+                    # exactly once without --pidns on the same tuning
+                    # flags (use_pidns is now False, so these exit
+                    # codes cannot re-trigger this branch), and flip
+                    # the cached probe verdict so later boots in this
+                    # process pick the achievable tier directly.
+                    _invalidate_pidns_probe()
+                    use_pidns = False
+                    tier_refusal_reason = (
+                        "unshare(USER|NET|PID) refused at runtime"
+                        if rc == EXIT_PIDNS_UNSHARE_REFUSED
+                        else "ns-init waiter failed to arm PDEATHSIG"
+                    )
+                    logger.warning(
+                        "Joern server: pid-namespace supervision refused "
+                        "at runtime (forwarder exit %d: %s) after a "
+                        "positive probe — relaunching once without "
+                        "--pidns; supervision for this server is "
+                        "DEGRADED to process-group tier",
+                        rc, tier_refusal_reason,
+                    )
+                    continue
                 if died_during_boot and attempt + 1 < len(flag_sets):
                     logger.warning(
                         "Joern server died with tuned JVM flags; "
                         "retrying with launcher defaults"
                     )
+                    attempt += 1
                     continue
                 msg = f"Joern server failed to start within {self._boot_timeout_s}s"
                 raise RuntimeError(msg)
 
             logger.info("Joern server ready on port %d (pid %d)",
                          self._port, self._proc.pid)
+            # One loud posture line per boot: run artifacts must show
+            # which supervision world this server ran in without log
+            # archaeology.
+            logger.info(
+                "Joern server supervision tier: %s%s",
+                self._supervision_tier,
+                (f" (pidns refused: {tier_refusal_reason})"
+                 if tier_refusal_reason else ""),
+            )
 
-            # Derive the JVM member anchor now that the server answered:
-            # the JVM provably exists at this point, so a missing/ambiguous
-            # result means "no anchor" (fail-safe), not "too early".
-            member = _find_jvm_member(self._pgid)
+            if self._supervision_tier == "pidns":
+                # Strong tier: group death is proven by waitpid on the
+                # forwarder (the kernel blocks a pid-ns init's exit
+                # until the namespace is reaped, and the forwarder's
+                # death collapses the namespace), so the /proc-derived
+                # member anchor is never consulted — don't scan /proc
+                # to derive one.
+                member = None
+            else:
+                # Derive the JVM member anchor now that the server
+                # answered: the JVM provably exists at this point, so a
+                # missing/ambiguous result means "no anchor"
+                # (fail-safe), not "too early".
+                member = _find_jvm_member(self._pgid)
             if member is not None:
                 (self._member_pid, self._member_starttime,
                  self._member_comm) = member
@@ -1206,19 +1414,32 @@ class JoernServer:
         except Exception as e:  # noqa: BLE001 — warmup is best-effort
             logger.debug("Joern dataflow warmup failed: %s", e)
 
-    def _forwarder_argv(self, joern_cmd: list[str]) -> list[str]:
+    def _forwarder_argv(
+        self,
+        joern_cmd: list[str],
+        *,
+        pidns: bool = False,
+        ready_fd: int | None = None,
+    ) -> list[str]:
         """Build the netns-forwarder command line for *joern_cmd*.
 
         Requires ``_uds_path``/``_port`` to be assigned (start() sets
         both before calling). The orphan-idle override rides as a CLI
         flag because the horizon is enforced by the FORWARDER process,
-        which outlives this one by design.
+        which outlives this one by design. ``pidns`` opts the boot in
+        to pid-namespace supervision (only after a positive probe);
+        ``ready_fd`` is the inherited fd for the forwarder's
+        achieved-tier report.
         """
         argv = [
             sys.executable, str(_FORWARDER_SCRIPT),
             "--socket", str(self._uds_path),
             "--port", str(self._port),
         ]
+        if pidns:
+            argv.append("--pidns")
+        if ready_fd is not None:
+            argv += ["--ready-fd", str(ready_fd)]
         if self._orphan_idle_ttl_s is not None:
             argv += ["--orphan-idle-ttl", str(self._orphan_idle_ttl_s)]
         argv += ["--", *joern_cmd]
@@ -1255,13 +1476,42 @@ class JoernServer:
                 else:
                     self._proc.kill()
 
+        # Pid-ns supervised boot: the leader is the forwarder, which
+        # forwards signals down the supervision chain, and the kernel
+        # blocks the namespace init's exit until every member is
+        # reaped — so the leader's reap completing IS the group-death
+        # proof, and the group-kill ladder below is not consulted. A
+        # SIGKILLed forwarder instead collapses the namespace via the
+        # PDEATHSIG chain (kernel-guaranteed delivery, asynchronous),
+        # and a stalled collapse (D-state member) falls through to
+        # the background reaper plus the ladder as belt-and-braces.
+        pidns_tier = self._supervision_tier == "pidns"
+        group_death_proven = False
+
         try:
-            _signal_group(signal.SIGTERM)
+            if pidns_tier:
+                self._proc.terminate()
+            else:
+                _signal_group(signal.SIGTERM)
             self._proc.wait(timeout=_SHUTDOWN_GRACE_S)
+            group_death_proven = pidns_tier
         except subprocess.TimeoutExpired:
-            _signal_group(signal.SIGKILL)
+            if pidns_tier:
+                self._proc.kill()
+            else:
+                _signal_group(signal.SIGKILL)
             try:
                 self._proc.wait(timeout=5)
+                # A SIGKILLed forwarder never waited for its ns-init:
+                # the namespace collapses via the PDEATHSIG chain —
+                # kernel-guaranteed delivery, but ASYNCHRONOUS — so
+                # unlike the terminate path above, this reap proves
+                # only the leader. Probe the group (signal 0 plus
+                # procfs state, never a kill) before claiming proof:
+                # a running/D-state survivor stays LOUD by routing to
+                # the ladder below, whose corroboration gate decides
+                # whether escalation is safe.
+                group_death_proven = pidns_tier and not _pgid_alive(pgid)
             except subprocess.TimeoutExpired:
                 # SIGKILL is delivered but the process may legitimately
                 # take longer than 5s to reach the zombie state: a
@@ -1289,18 +1539,23 @@ class JoernServer:
         except OSError:
             pass
 
-        # The waits above observed only the LEADER; verify the whole
-        # group actually died (and escalate if not) BEFORE the
-        # uds/workdir teardown below destroys the only handles that
-        # point at a survivor. A still-unreaped Popen leader proves
-        # the group ours by itself (its pid cannot be recycled while
-        # we hold the handle); the boot-time JVM member anchor covers
-        # the leader-already-reaped case.
-        _ensure_group_dead(
-            pgid, label=f"stop of pid {pid}",
-            member_anchor=(self._member_pid, self._member_starttime),
-            corroborated=self._proc.poll() is None,
-        )
+        # The waits above observed only the LEADER; on the group tier
+        # (and on a pidns-tier collapse that stalled past both bounded
+        # waits) verify the whole group actually died (and escalate if
+        # not) BEFORE the uds/workdir teardown below destroys the only
+        # handles that point at a survivor. A still-unreaped Popen
+        # leader proves the group ours by itself (its pid cannot be
+        # recycled while we hold the handle); the boot-time JVM member
+        # anchor covers the leader-already-reaped case. On a proven
+        # pidns-tier stop the ladder is skipped: the reap already
+        # proved the namespace empty, and no /proc scanning belongs on
+        # that tier.
+        if not group_death_proven:
+            _ensure_group_dead(
+                pgid, label=f"stop of pid {pid}",
+                member_anchor=(self._member_pid, self._member_starttime),
+                corroborated=self._proc.poll() is None,
+            )
 
         self._proc = None
         self._pgid = None
@@ -1315,6 +1570,10 @@ class JoernServer:
         self._auth_user = None
         self._auth_password = None
         self._uds_path = None
+        # Tier state dies with the boot it described; the next start()
+        # stamps a fresh achieved tier.
+        self._supervision_tier = "group"
+        self._tier_refusal_reason = None
 
         if self._workdir is not None:
             shutil.rmtree(self._workdir, ignore_errors=True)
@@ -1367,6 +1626,35 @@ class JoernServer:
             # signal (same contract as stop()).
             return True
         try:
+            if self._supervision_tier == "pidns":
+                # One verified kill of our own child: the forwarder's
+                # death collapses the whole namespace via the
+                # PDEATHSIG chain (kernel-guaranteed), so the bounded
+                # budget here is honest rather than best-effort. A
+                # reap that outlasts the grace (D-state teardown)
+                # goes to the background reaper.
+                with contextlib.suppress(OSError):
+                    proc.kill()
+                try:
+                    proc.wait(timeout=grace_s)
+                except subprocess.TimeoutExpired:
+                    _reap_in_background(proc)
+                    return False
+                # The kill above reaped only the leader; the
+                # namespace collapse behind it is asynchronous.
+                # Signal-0 group probe before reporting the group
+                # verified dead — a stalled (D-state) member must be
+                # loud, not silently claimed collapsed.
+                if _pgid_alive(self._pgid or proc.pid):
+                    logger.warning(
+                        "Joern server group (forced-exit stop of pid "
+                        "%d) still has a running member after the "
+                        "namespace collapse — likely uninterruptible "
+                        "teardown; reporting it, not blocking on it",
+                        proc.pid,
+                    )
+                    return False
+                return True
             return _ensure_group_dead(
                 self._pgid or proc.pid,
                 label=f"forced-exit stop of pid {proc.pid}",
@@ -1539,7 +1827,10 @@ class JoernServer:
             old_pgid = self._pgid
             # Captured before stop() clears the member fields — the
             # second grace window below needs the identity anchor.
+            # The tier is captured with them: stop() resets it, and
+            # the grace window belongs to the group tier only.
             old_anchor = (self._member_pid, self._member_starttime)
+            old_tier = self._supervision_tier
             old_port = self._port
             old_socket = self._uds_path
             logger.info("restarting Joern server (stuck query recovery)")
@@ -1574,9 +1865,16 @@ class JoernServer:
             # block its cleanup on that; the one caller about to boot
             # a replacement JVM is where waiting again is worth it: a
             # survivor holds gigabytes and would accumulate one leaked
-            # JVM per recovery.
-            _ensure_group_dead(old_pgid, label=f"restart of pid {old_pid}",
-                               member_anchor=old_anchor)
+            # JVM per recovery. Group tier only: a pidns-tier stop()
+            # already proved namespace death by reaping the forwarder
+            # (or handed a stalled collapse to the background reaper
+            # plus the ladder), and no /proc-based group verification
+            # belongs on that tier.
+            if old_tier != "pidns":
+                _ensure_group_dead(
+                    old_pgid, label=f"restart of pid {old_pid}",
+                    member_anchor=old_anchor,
+                )
             try:
                 self.start()
             except RuntimeError:
