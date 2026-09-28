@@ -479,3 +479,69 @@ class TestBuildCpgAdmission:
             heap_is_derived=False,
         )
         assert "-J-Xmx6000m" in seen["cmd"]
+
+
+class TestLedgerPathResolution:
+    """Call-time resolution of the host-global ledger location."""
+
+    def test_xdg_data_home_read_at_call_time(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """XDG_DATA_HOME is read per call, not snapshotted at import:
+        a pin installed after the module was imported redirects the
+        ledger."""
+        monkeypatch.setattr(heap_ledger, "_LEDGER_PATH", None)
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+        assert heap_ledger._ledger_path() == (
+            tmp_path / "xdg-data" / "raptor" / "joern-heap-ledger.json"
+        )
+
+    def test_unset_env_keeps_shared_default_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No XDG_DATA_HOME → the legacy shared arbitration point
+        ``~/.local/share/raptor/joern-heap-ledger.json`` byte-identical
+        (fabricated HOME so the real home is never resolved). Every
+        spawner must resolve the SAME file for admission to arbitrate
+        anything — this shape is a cross-consumer contract."""
+        monkeypatch.setattr(heap_ledger, "_LEDGER_PATH", None)
+        monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+        fakehome = tmp_path / "fakehome"
+        monkeypatch.setenv("HOME", str(fakehome))
+        assert heap_ledger._ledger_path() == (
+            fakehome / ".local" / "share" / "raptor"
+            / "joern-heap-ledger.json"
+        )
+        assert not fakehome.exists()
+
+    def test_seam_wins_over_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A monkeypatched _LEDGER_PATH (this suite's isolation seam)
+        wins over any env pin."""
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "ignored"))
+        pinned = tmp_path / "pinned-ledger.json"
+        monkeypatch.setattr(heap_ledger, "_LEDGER_PATH", pinned)
+        assert heap_ledger._ledger_path() == pinned
+
+    def test_reserve_writes_under_env_pin_set_after_import(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """End-to-end: with only an env pin (no attribute seam), a
+        reservation lands under $XDG_DATA_HOME and a fabricated HOME
+        stays empty."""
+        monkeypatch.setattr(heap_ledger, "_LEDGER_PATH", None)
+        fakehome = tmp_path / "fakehome"
+        monkeypatch.setenv("HOME", str(fakehome))
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+        _set_budget(monkeypatch, 10000)
+        res = reserve_heap_mb(1000, derived=True)
+        try:
+            ledger = (
+                tmp_path / "xdg-data" / "raptor" / "joern-heap-ledger.json"
+            )
+            assert ledger.is_file()
+            assert len(_rows(ledger)) == 1
+            assert not fakehome.exists()
+        finally:
+            res.release()

@@ -676,3 +676,69 @@ class TestSignalServerSentinelRefusal(unittest.TestCase):
         ):
             lifecycle._signal_server(pid, 15)
         self.assertEqual(sent, [("killpg", pid, 15)])
+
+
+class StatePathResolution(unittest.TestCase):
+    """Call-time resolution of the cross-session state/lock paths."""
+
+    def setUp(self):
+        self._saved_env = {
+            k: os.environ.get(k) for k in ("XDG_CACHE_HOME", "HOME")
+        }
+        self._saved_seams = (
+            lifecycle._STATE_DIR, lifecycle._STATE_FILE,
+            lifecycle._LOCK_FILE,
+        )
+        lifecycle._STATE_DIR = None
+        lifecycle._STATE_FILE = None
+        lifecycle._LOCK_FILE = None
+        self._tmp = tempfile.TemporaryDirectory()
+        self._dir = Path(self._tmp.name)
+
+    def tearDown(self):
+        (lifecycle._STATE_DIR, lifecycle._STATE_FILE,
+         lifecycle._LOCK_FILE) = self._saved_seams
+        for key, val in self._saved_env.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+        self._tmp.cleanup()
+
+    def test_xdg_cache_home_read_at_call_time(self):
+        """XDG_CACHE_HOME is read per call, not snapshotted at
+        import: a pin installed after the module was imported
+        redirects state, lock, and dir together."""
+        os.environ["XDG_CACHE_HOME"] = str(self._dir / "xdg-cache")
+        root = self._dir / "xdg-cache" / "raptor"
+        self.assertEqual(lifecycle._state_dir(), root)
+        self.assertEqual(lifecycle._state_file(),
+                         root / "joern-server.json")
+        self.assertEqual(lifecycle._lock_file(),
+                         root / "joern-server.lock")
+
+    def test_unset_env_keeps_shared_default_path(self):
+        """No XDG_CACHE_HOME → the legacy shared rendezvous
+        ``~/.cache/raptor`` byte-identical (fabricated HOME so the
+        real home is never resolved)."""
+        os.environ.pop("XDG_CACHE_HOME", None)
+        fakehome = self._dir / "fakehome"
+        os.environ["HOME"] = str(fakehome)
+        root = fakehome / ".cache" / "raptor"
+        self.assertEqual(lifecycle._state_dir(), root)
+        self.assertEqual(lifecycle._state_file(),
+                         root / "joern-server.json")
+        self.assertEqual(lifecycle._lock_file(),
+                         root / "joern-server.lock")
+        self.assertFalse(fakehome.exists())
+
+    def test_seams_win_over_env(self):
+        """Monkeypatched seams (this suite's _TmpState pattern) win
+        over any env pin."""
+        os.environ["XDG_CACHE_HOME"] = str(self._dir / "ignored")
+        lifecycle._STATE_DIR = self._dir
+        lifecycle._STATE_FILE = self._dir / "s.json"
+        lifecycle._LOCK_FILE = self._dir / "s.lock"
+        self.assertEqual(lifecycle._state_dir(), self._dir)
+        self.assertEqual(lifecycle._state_file(), self._dir / "s.json")
+        self.assertEqual(lifecycle._lock_file(), self._dir / "s.lock")

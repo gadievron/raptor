@@ -43,9 +43,26 @@ from core.fs_lock import artifact_lock
 
 logger = logging.getLogger(__name__)
 
-_LEDGER_PATH = (
-    Path.home() / ".local" / "share" / "raptor" / "joern-heap-ledger.json"
-)
+# Test-override seam: when set (tests monkeypatch a tmp path here) it
+# wins over the env-derived default. Production leaves it None so
+# ``_ledger_path()`` re-reads ``XDG_DATA_HOME`` on every call — an env
+# pin installed AFTER this module is imported still redirects the
+# ledger instead of being silently ignored by an import-time snapshot.
+# The unset-env default is the shared host-global arbitration point;
+# every spawner must resolve the SAME file for admission to arbitrate
+# anything, so the default path is a cross-consumer contract.
+_LEDGER_PATH: Path | None = None
+
+
+def _ledger_path() -> Path:
+    """Ledger location, resolved at call time:
+    ``$XDG_DATA_HOME/raptor/joern-heap-ledger.json`` (default
+    ``~/.local/share/raptor/joern-heap-ledger.json``)."""
+    if _LEDGER_PATH is not None:
+        return _LEDGER_PATH
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return base / "raptor" / "joern-heap-ledger.json"
 
 # Grant floor (MB) when the budget is exhausted. Both directions
 # matter: lower and the granted JVM cannot boot the REPL or hold any
@@ -233,7 +250,7 @@ def reserve_heap_mb(
     keyed on *pid* (default: this process) until :meth:`rebind`.
     """
     pid = os.getpid() if pid is None else pid
-    path = _LEDGER_PATH if ledger_path is None else ledger_path
+    path = _ledger_path() if ledger_path is None else ledger_path
     granted = requested_mb
     row_id = uuid.uuid4().hex
     try:

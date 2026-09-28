@@ -50,9 +50,39 @@ from .tunables import JoernTunables
 
 logger = logging.getLogger(__name__)
 
-_STATE_DIR = Path.home() / ".cache" / "raptor"
-_STATE_FILE = _STATE_DIR / "joern-server.json"
-_LOCK_FILE = _STATE_DIR / "joern-server.lock"
+# Test-override seams: when set (tests monkeypatch tmp paths here)
+# they win over the env-derived defaults. Production leaves them None
+# so the accessors re-read ``XDG_CACHE_HOME`` on every call — an env
+# pin installed AFTER this module is imported still redirects the
+# state instead of being silently ignored by an import-time snapshot.
+# The unset-env defaults are the shared cross-session rendezvous
+# (every session must resolve the SAME state/lock files for server
+# reuse to arbitrate anything), so they are a cross-consumer contract.
+_STATE_DIR: Path | None = None
+_STATE_FILE: Path | None = None
+_LOCK_FILE: Path | None = None
+
+
+def _state_dir() -> Path:
+    """State root, resolved at call time: ``$XDG_CACHE_HOME/raptor``
+    (default ``~/.cache/raptor``)."""
+    if _STATE_DIR is not None:
+        return _STATE_DIR
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".cache"
+    return base / "raptor"
+
+
+def _state_file() -> Path:
+    if _STATE_FILE is not None:
+        return _STATE_FILE
+    return _state_dir() / "joern-server.json"
+
+
+def _lock_file() -> Path:
+    if _LOCK_FILE is not None:
+        return _LOCK_FILE
+    return _state_dir() / "joern-server.lock"
 
 # SIGTERM grace for ``_kill_server``: how long the whole recorded
 # server tree gets to exit before SIGKILL escalation. Module-level so
@@ -166,14 +196,15 @@ def _member_anchor_fields(srv: JoernServer) -> dict[str, Any]:
 
 
 def _read_state(_lock_fd: int) -> dict[str, Any] | None:
-    if not _STATE_FILE.exists():
+    state_file = _state_file()
+    if not state_file.exists():
         return None
     # The state file carries the server credential; tighten legacy
     # files that predate the 0600 write path.
     with contextlib.suppress(OSError):
-        _STATE_FILE.chmod(0o600)
+        state_file.chmod(0o600)
     from core.json import load_json
-    return load_json(_STATE_FILE, max_bytes=1024 * 1024)
+    return load_json(state_file, max_bytes=1024 * 1024)
 
 
 def _write_state(_lock_fd: int, state: dict[str, Any]) -> None:
@@ -181,20 +212,20 @@ def _write_state(_lock_fd: int, state: dict[str, Any]) -> None:
     # save_json installs the mode on its tempfile before the rename
     # publishes it, so the credential is never readable in transit.
     from core.json import save_json
-    save_json(_STATE_FILE, state, mode=0o600)
+    save_json(_state_file(), state, mode=0o600)
 
 
 def _remove_state(_lock_fd: int) -> None:
     try:
-        _STATE_FILE.unlink(missing_ok=True)
+        _state_file().unlink(missing_ok=True)
     except OSError:
         pass
 
 
 @contextlib.contextmanager
 def _locked():
-    _STATE_DIR.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(_LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o600)
+    _state_dir().mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(_lock_file()), os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield fd
