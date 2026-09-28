@@ -986,3 +986,181 @@ class TestForwardingClientKeepalive:
         monkeypatch.setattr(http_pool, "_env_proxy_mounts", boom)
         with http_pool.forwarding_client(timeout=5.0) as client:
             assert client._transport._pool._socket_options is None
+
+
+class TestSdkClientKeepalive:
+    """SDK-side parity with the forwarding leg's TCP keepalive: the
+    SDK pool has the identical silent-death exposure (an idle pooled
+    connection whose far side died without a FIN/RST), and the
+    trust_env=False loopback pin must survive the construction change
+    — no proxy route may exist on a pinned client."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_proxy_env(self, monkeypatch):
+        for var in _PROXY_ENV:
+            monkeypatch.delenv(var, raising=False)
+
+    @staticmethod
+    def _origin(scheme: bytes = b"https"):
+        import httpcore
+
+        return httpcore.Origin(scheme, b"upstream.test", 443)
+
+    def test_direct_route_carries_options(self):
+        options = http_pool.tcp_keepalive_socket_options()
+        with http_pool.sdk_http_client(30) as client:
+            assert client._transport._pool._socket_options == options
+
+    def test_proxied_route_carries_options(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        monkeypatch.setenv("NO_PROXY", "direct.test")
+        options = http_pool.tcp_keepalive_socket_options()
+        with http_pool.sdk_http_client(30) as client:
+            proxied = client._transport_for_url(
+                httpx.URL("https://upstream.test/v1"),
+            )
+            assert isinstance(proxied, http_pool._ProxyKeepaliveTransport)
+            conn = proxied._pool.create_connection(self._origin())
+            assert conn._connection._socket_options == options
+            # NO_PROXY carve-out falls through to the default
+            # transport — which carries the options for direct dials.
+            direct = client._transport_for_url(
+                httpx.URL("https://direct.test/v1"),
+            )
+            assert direct is client._transport
+            assert direct._pool._socket_options == options
+
+    def test_trust_env_false_has_no_proxy_route(self, monkeypatch):
+        """The loopback-gateway safety property: with proxy env set
+        every which way, a pinned client must be structurally
+        incapable of an env-proxy detour — the only transport it owns
+        is the direct one, and no mount exists to shadow it."""
+        import httpcore
+
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:59999")
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        monkeypatch.setenv("ALL_PROXY", "http://127.0.0.1:59999")
+        options = http_pool.tcp_keepalive_socket_options()
+        with http_pool.sdk_http_client(30, trust_env=False) as client:
+            assert client.trust_env is False
+            assert dict(client._mounts) == {}
+            for url in (
+                "http://localhost:11434/v1",
+                "https://remote.test/v1",
+            ):
+                routed = client._transport_for_url(httpx.URL(url))
+                assert routed is client._transport
+            # And the direct transport dials directly — its pool is
+            # not a proxy pool — while still carrying keepalive.
+            pool = client._transport._pool
+            assert not isinstance(pool, httpcore.HTTPProxy)
+            assert pool._socket_options == options
+
+    def test_trust_env_true_keeps_env_proxy_routing(self, monkeypatch):
+        """The other half of the trust_env contract: remote-base
+        clients must still route through env proxies after the
+        keepalive-aware construction (the egress-chokepoint path)."""
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        with http_pool.sdk_http_client(30) as client:
+            proxied = client._transport_for_url(
+                httpx.URL("https://remote.test/v1"),
+            )
+            assert proxied is not client._transport
+
+    def test_trust_env_reaches_direct_transport(self, monkeypatch):
+        """The direct transport builds its TLS context at
+        construction time from ``trust_env`` (``SSL_CERT_FILE`` etc.
+        are read there, not by the client): if the flag stopped
+        riding the transport kwargs, a pinned (trust_env=False)
+        client's transport would silently default to True and start
+        honouring TLS env — diverging from the plain client the
+        degrade path builds. Pin the passthrough for BOTH values."""
+        seen = []
+        real_transport = httpx.HTTPTransport
+
+        class _Recording(real_transport):
+            def __init__(self, **kwargs):
+                seen.append(dict(kwargs))
+                super().__init__(**kwargs)
+
+        monkeypatch.setattr(httpx, "HTTPTransport", _Recording)
+        for trust_env in (True, False):
+            seen.clear()
+            with http_pool.sdk_http_client(30, trust_env=trust_env):
+                pass
+            # Exactly one transport built (the direct route; proxy
+            # env is clean here), and the flag reached it verbatim.
+            assert [k.get("trust_env") for k in seen] == [trust_env]
+
+    def test_pool_limits_survive_construction(self, monkeypatch):
+        """The SDK owns the request loop — the pool knobs must reach
+        the transport that actually serves it."""
+        monkeypatch.setenv("RAPTOR_HTTP_MAX_CONNECTIONS", "7")
+        monkeypatch.setenv("RAPTOR_HTTP_MAX_KEEPALIVE", "3")
+        monkeypatch.setenv("RAPTOR_HTTP_KEEPALIVE_S", "120")
+        with http_pool.sdk_http_client(30) as client:
+            pool = client._transport._pool
+            assert pool._max_connections == 7
+            assert pool._max_keepalive_connections == 3
+            assert pool._keepalive_expiry == 120.0
+
+    def test_timeout_and_hooks_survive_construction(self):
+        with http_pool.sdk_http_client(33) as client:
+            assert client.timeout.read == 33.0
+            assert http_pool._response_hook in client.event_hooks["response"]
+
+    def test_degrades_to_plain_when_mounts_unavailable(self, monkeypatch):
+        """If httpx's env-proxy helper vanishes, the SDK builder must
+        fall back to a plain client: proxy routing intact (httpx's
+        own env resolution), keepalive honestly absent."""
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        monkeypatch.setattr(
+            http_pool, "_env_proxy_mounts", lambda *a, **k: None,
+        )
+        with http_pool.sdk_http_client(30) as client:
+            proxied = client._transport_for_url(
+                httpx.URL("https://upstream.test/v1"),
+            )
+            assert proxied is not client._transport
+            assert client._transport._pool._socket_options is None
+
+    def test_degrades_to_plain_when_construction_raises(
+        self, monkeypatch, caplog,
+    ):
+        def boom(*args, **kwargs):
+            raise RuntimeError("keepalive construction broke")
+
+        monkeypatch.setattr(
+            http_pool, "tcp_keepalive_socket_options", boom,
+        )
+        with caplog.at_level("WARNING", logger="core.llm.http_pool"):
+            with http_pool.sdk_http_client(30) as client:
+                assert client._transport._pool._socket_options is None
+                assert client.timeout.read == 30.0
+        # The degrade must be visible, not silent — the operator lost
+        # keepalive and should learn it from the log, not from a
+        # connection post-mortem.
+        assert any(
+            "no TCP keepalive on this leg" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_degraded_pinned_client_still_ignores_proxy_env(
+        self, monkeypatch,
+    ):
+        """The loopback safety property must hold on the degrade path
+        too: a plain client built with trust_env=False never reads
+        proxy env — httpx's own trust_env handling guarantees it."""
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("keepalive construction broke")
+
+        monkeypatch.setattr(
+            http_pool, "tcp_keepalive_socket_options", boom,
+        )
+        with http_pool.sdk_http_client(30, trust_env=False) as client:
+            routed = client._transport_for_url(
+                httpx.URL("https://remote.test/v1"),
+            )
+            assert routed is client._transport

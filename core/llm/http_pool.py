@@ -70,10 +70,11 @@ Knobs (all optional; invalid values fall back to the default):
     is managed per-connection by the pool.
 
 The dispatcher's forwarding-leg clients (:func:`forwarding_client`)
-additionally enable TCP keepalive on the connections they dial, so an
-idle pooled connection whose far side died without a FIN/RST reaching
-us is detected and reaped by the kernel between requests instead of
-being discovered by the next relay that rides it (see
+and the SDK-side clients (:func:`sdk_http_client`) additionally
+enable TCP keepalive on the connections they dial, so an idle pooled
+connection whose far side died without a FIN/RST reaching us is
+detected and reaped by the kernel between requests instead of being
+discovered by the next call that rides it (see
 :func:`tcp_keepalive_socket_options`).
 """
 
@@ -637,14 +638,48 @@ def sdk_http_client(
 
     The client's own ``timeout`` is a fallback — the SDKs set their
     per-request timeout on each request they send.
+
+    Connections dialled here carry the same TCP keepalive schedule
+    as the dispatcher's forwarding leg (:func:`forwarding_client`) —
+    the SDK-side pool has the identical silent-death exposure: an
+    idle pooled connection whose far side died without a FIN/RST
+    reaching us sits undetected until the next SDK call rides it.
+    With ``trust_env=True`` the env-proxy mounts are rebuilt with
+    keepalive-carrying proxy transports (NO_PROXY carve-outs
+    preserved); with ``trust_env=False`` the client gets the direct
+    keepalive transport and no mounts at all, so an env-proxy detour
+    is impossible by construction, not merely disabled. If any part
+    of the keepalive-aware construction fails, this degrades to the
+    plain client — which honours ``trust_env`` identically, so the
+    loopback pin survives degradation — rather than failing the SDK
+    path: losing keepalive is an observability regression, losing
+    the client is an outage.
     """
-    return httpx.Client(
-        timeout=timeout,
-        trust_env=trust_env,
-        limits=pool_limits(),
-        http2=http2_enabled(),
-        event_hooks=response_event_hooks(),
-    )
+    client_kwargs: dict[str, Any] = {
+        "timeout": timeout,
+        "trust_env": trust_env,
+        "limits": pool_limits(),
+        "http2": http2_enabled(),
+        "event_hooks": response_event_hooks(),
+    }
+    try:
+        parts = _keepalive_transport_and_mounts(
+            http2=client_kwargs["http2"],
+            limits=client_kwargs["limits"],
+            trust_env=trust_env,
+        )
+        if parts is not None:
+            transport, mounts = parts
+            return httpx.Client(
+                transport=transport, mounts=mounts, **client_kwargs,
+            )
+    except Exception:  # noqa: BLE001 — degrade, never break the SDK path
+        logger.warning(
+            "keepalive-aware SDK client construction failed — building "
+            "a plain client (no TCP keepalive on this leg)",
+            exc_info=True,
+        )
+    return httpx.Client(**client_kwargs)
 
 
 # ── TCP keepalive for the forwarding leg ──────────────────────────
@@ -803,6 +838,62 @@ def _env_proxy_mounts(
     return mounts
 
 
+def _keepalive_direct_transport(
+    options: list[tuple[int, int, int]],
+    *,
+    http2: bool,
+    limits: httpx.Limits | None,
+    trust_env: bool = True,
+) -> httpx.HTTPTransport:
+    """Direct-route transport carrying the keepalive socket options.
+
+    ``trust_env`` mirrors the owning client's flag so the transport's
+    TLS context keeps the env behaviour (``SSL_CERT_FILE`` etc.) the
+    plain-client construction would have given it.
+    """
+    kwargs: dict[str, Any] = {
+        "http2": http2,
+        "socket_options": options,
+        "trust_env": trust_env,
+    }
+    if limits is not None:
+        kwargs["limits"] = limits
+    return httpx.HTTPTransport(**kwargs)
+
+
+def _keepalive_transport_and_mounts(
+    *,
+    http2: bool,
+    limits: httpx.Limits | None,
+    trust_env: bool = True,
+) -> tuple[httpx.HTTPTransport, dict[str, httpx.BaseTransport | None]] | None:
+    """Keepalive-carrying direct transport plus the mounts that keep
+    proxy routing correct alongside it, or None when the env-proxy
+    mounts cannot be rebuilt (callers degrade to a plain client).
+
+    ``trust_env=False`` returns an EMPTY mounts map with the direct
+    transport: a client built from these parts has no route other
+    than its direct transport, so it cannot detour through an
+    env-configured proxy — the loopback-gateway pin, preserved by
+    construction rather than by flag.
+    """
+    options = tcp_keepalive_socket_options()
+    mounts: dict[str, httpx.BaseTransport | None]
+    if trust_env:
+        env_mounts = _env_proxy_mounts(options, http2=http2, limits=limits)
+        if env_mounts is None:
+            return None
+        mounts = env_mounts
+    else:
+        mounts = {}
+    return (
+        _keepalive_direct_transport(
+            options, http2=http2, limits=limits, trust_env=trust_env,
+        ),
+        mounts,
+    )
+
+
 def forwarding_client(
     *,
     timeout: float | httpx.Timeout,
@@ -826,19 +917,11 @@ def forwarding_client(
     if event_hooks is not None:
         client_kwargs["event_hooks"] = event_hooks
     try:
-        options = tcp_keepalive_socket_options()
-        mounts = _env_proxy_mounts(options, http2=http2, limits=limits)
-        if mounts is not None:
-            transport_kwargs: dict[str, Any] = {
-                "http2": http2,
-                "socket_options": options,
-            }
-            if limits is not None:
-                transport_kwargs["limits"] = limits
+        parts = _keepalive_transport_and_mounts(http2=http2, limits=limits)
+        if parts is not None:
+            transport, mounts = parts
             return httpx.Client(
-                transport=httpx.HTTPTransport(**transport_kwargs),
-                mounts=mounts,
-                **client_kwargs,
+                transport=transport, mounts=mounts, **client_kwargs,
             )
     except Exception:  # noqa: BLE001 — degrade, never break the relay path
         logger.warning(
