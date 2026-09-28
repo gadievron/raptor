@@ -4436,8 +4436,9 @@ def _assemble_a(
 
     findings.sort(key=lambda f: f["id"])
     assembled = {"stage": "A", "findings": findings}
-    checklist = load_json(workdir / "checklist.json") or {}
-    if isinstance(checklist, dict) and checklist.get("target_path"):
+    from core.inventory import read_checklist
+    checklist = read_checklist(workdir)
+    if checklist.get("target_path"):
         assembled["target_path"] = checklist["target_path"]
 
     # Exact-id-set check against the inventory (loud, never fatal —
