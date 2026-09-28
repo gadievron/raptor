@@ -1043,6 +1043,23 @@ class TestDefaultCacheDir:
         )
         assert builder._default_inventory_cache_root() == tmp_path / "pinned"
 
+    def test_reach_cache_writes_land_under_the_conftest_pin(self) -> None:
+        """Every ``build_inventory`` in this suite persists a
+        reachability index; the conftest's XDG_CACHE_HOME pin is what
+        keeps those writes out of the developer's real
+        ``~/.cache/raptor/reachability/`` (whose small eviction budget
+        a single suite run would otherwise churn through). Fail loudly
+        if the pin disappears or stops steering the store."""
+        import os
+
+        from core.analysis import _reach_cache
+
+        pinned = os.environ.get("XDG_CACHE_HOME")
+        assert pinned, "conftest must pin XDG_CACHE_HOME for this suite"
+        assert _reach_cache._cache_dir() == (
+            Path(pinned) / "raptor" / "reachability"
+        )
+
     def test_build_inventory_uses_default_when_output_dir_omitted(
         self, tmp_path, monkeypatch,
     ):
