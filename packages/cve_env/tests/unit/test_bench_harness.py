@@ -310,3 +310,29 @@ def test_render_report_defangs_hostile_sidecar_fields(bench) -> None:
     assert "| EVIL" not in text          # pipe escaped, cell not split
     assert "\n# Injected" not in text    # no injected heading
     assert "\r# fake" not in text        # CR flattened
+
+
+def test_render_report_coerces_pseudo_numeric_cells(bench) -> None:
+    """repeat / num_turns / total_cost_usd / duration_s interpolate
+    bare (they are numeric cells); a --report-only results.jsonl can
+    carry arbitrary strings there. Parsed values are re-serialised
+    canonically (int()/float() accept surrounding whitespace including
+    newlines); unparsable values arrive escaped, never verbatim."""
+    records = [{
+        "cve_id": "CVE-2024-0002",
+        "backend": "core",
+        "repeat": "2\n# fake-heading",
+        "status": "success",
+        "verify_passed": True,
+        "num_turns": "7\n",
+        "total_cost_usd": "0.5 |x",
+        "refusals": 0,
+        "give_up_reason": "",
+        "duration_s": "\n3.5\n",
+    }]
+    text = bench.render_report(records, {"source": "test"})
+    assert "\n# fake-heading" not in text        # no injected heading
+    assert "| 7 |" in text                       # canonical int, newline gone
+    assert "| 3.5 |" in text                     # canonical float
+    rows = [ln for ln in text.splitlines() if "CVE-2024-0002" in ln]
+    assert len(rows) == 1                        # row never split
