@@ -154,12 +154,24 @@ def test_rebuild_interrupt_keeps_previous_graph(tmp_path, monkeypatch):
     assert _node_count(graph_path) == baseline
 
 
-def test_rebuild_refuses_foreign_directory(tmp_path, capsys):
+def test_rebuild_refuses_foreign_directory(
+        tmp_path, monkeypatch, capsys):
     """rebuild_graph(<dir that is not a project/run dir>) with an
     ACTIVE project used to resolve to the active project's graph,
     DELETE it, and return None. The resolved store must live under
     the passed directory or the rebuild refuses."""
+    import core.project.project as project_mod
     from core.project.project import ProjectManager
+    from core.testing.state_isolation import pin_user_state_dirs
+
+    # The ACTIVE project this test creates must live in a scratch
+    # registry: the root-conftest redirect is stripped from release
+    # extracts (conftest.py is export-ignore), and without it the
+    # create/set_active/delete below land on the operator's real
+    # ~/.raptor/projects and flip/unlink the real .active link.
+    pin_user_state_dirs(monkeypatch, tmp_path / "user-state")
+    assert project_mod.PROJECTS_DIR.is_relative_to(tmp_path), (
+        project_mod.PROJECTS_DIR)
 
     target = tmp_path / "target"
     target.mkdir()
@@ -186,6 +198,11 @@ def test_rebuild_refuses_foreign_directory(tmp_path, capsys):
         assert _node_count(graph_path) == baseline
         assert "refus" in capsys.readouterr().err.lower()
     finally:
+        # Hard-stop before the destructive registry op: the delete
+        # unlinks the registry entry AND the .active link it points
+        # at — both must be scratch.
+        assert project_mod.PROJECTS_DIR.is_relative_to(tmp_path), (
+            project_mod.PROJECTS_DIR)
         mgr.delete("rebuild-foreign-dir")
 
 
