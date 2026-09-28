@@ -453,46 +453,69 @@ def _register_private_joern_reap_hook(
     caller_owns: bool,
     lifecycle_shared: bool,
 ) -> bool:
-    """Arm a forced-exit teardown for a RUN-PRIVATE Joern server.
+    """Arm a forced-exit teardown for the Joern pair THIS RUN started.
 
     The graceful ``finally`` in :func:`run_orchestrator` stops the
     server, but the FORCED-exit paths (SIGTERM-grace watchdog expiry,
     second TERM) run only ``_sigterm_flush_hooks`` before
     ``os._exit`` — without an entry here the netns forwarder detaches
     to init with its JVM and squats on the heap until its own 8h
-    orphan TTL. Registered ONLY for the run-private class, the one
-    whose server nothing can ever re-acquire:
+    orphan TTL. Registered for every server whose forwarder ``Popen``
+    handle this run owns (it started the process), which is exactly
+    the set the graceful ``finally`` stops via
+    :func:`_stop_joern_server` — run-private servers AND fresh
+    lifecycle-recorded ones (``_lifecycle_token`` set). The bounded
+    joern release also rides the flush-hook registry, but behind an
+    exactly-once lock: a watchdog expiring while the graceful release
+    is still mid-ladder finds that lock held, no-ops, and can
+    ``os._exit`` between the ladder's TERM and KILL — this UNGUARDED,
+    idempotent ``stop_fast`` backstop is what closes that window, so
+    the fresh class needs it exactly as much as the run-private
+    class. Refused classes:
 
     * caller-owned servers are the caller's lifecycle;
-    * lifecycle handles — reused (no ``_proc``) or freshly recorded
-      in the state file (``_lifecycle_token`` set) — stay alive on
-      purpose: the state file lets later runs re-acquire them warm,
-      and a concurrent session may hold a reference (killing a shared
-      server is cross-run collateral).
+    * reuse handles (``lifecycle_shared`` / no ``_proc``) — another
+      session's process, never ours to signal.
+
+    A concurrent session that acquired this run's fresh recorded
+    server loses it here — the same exposure the graceful stop
+    already has; the next acquire's health check reconciles the
+    stale state-file record (connect fails → kill + remove). A
+    refcount-aware release is deliberately NOT attempted from this
+    hook: the guarded bounded release handles that when it wins its
+    lock, and the state-file flock is unbounded while this path runs
+    moments before ``os._exit``.
 
     Returns True when a hook was registered. The hook is
     exception-guarded and idempotent against the graceful path: the
     ``finally`` clears the hook registry once its own release is
-    done, and a watchdog firing during that window only re-signals an
+    done, and a double-fire in that window only re-signals an
     already-dead corroborated group (``stop_fast`` mutates no
-    instance state).
+    instance state). Teardown reuses the server's own tier-aware
+    stop machinery — the supervision tier (``_supervision_tier``,
+    ``"group"`` when unstamped) is read here only to attribute the
+    reap in the log; ``stop_fast`` itself implements the per-tier
+    kill rules and stays within its existing bounded grace.
     """
     if joern_server is None or caller_owns or lifecycle_shared:
-        return False
-    if getattr(joern_server, "_lifecycle_token", None) is not None:
         return False
     if getattr(joern_server, "_proc", None) is None:
         return False
 
-    def _reap_private_joern_on_forced_exit() -> None:
+    def _reap_owned_joern_on_forced_exit() -> None:
         try:
+            tier: str = getattr(joern_server, "_supervision_tier", "group")
+            logger.info(
+                "forced-exit joern reap: stopping the run-started "
+                "forwarder+JVM pair (supervision tier=%s)", tier,
+            )
             joern_server.stop_fast()
         except Exception:  # noqa: BLE001 — flush hooks must never raise
             logger.debug(
                 "forced-exit joern reap failed", exc_info=True,
             )
 
-    _sigterm_flush_hooks.append(_reap_private_joern_on_forced_exit)
+    _sigterm_flush_hooks.append(_reap_owned_joern_on_forced_exit)
     return True
 
 
@@ -2184,9 +2207,13 @@ def run_orchestrator(
             and joern_server._proc is None
         )
 
-    # Forced-exit reap for a run-private server (see the helper): the
-    # graceful finally below stops it, but watchdog-expiry / second-
-    # TERM exits bypass that finally entirely.
+    # Forced-exit reap for the pair this run started (see the
+    # helper): the graceful finally below stops it, but watchdog-
+    # expiry / second-TERM exits bypass that finally entirely. This
+    # is the UNGUARDED backstop next to the lock-guarded bounded
+    # release registered just below — the lock no-ops the release
+    # while the graceful teardown is mid-flight; this hook still
+    # fires (stop_fast, idempotent) in exactly that window.
     _register_private_joern_reap_hook(
         joern_server,
         caller_owns=_caller_owns_joern,
