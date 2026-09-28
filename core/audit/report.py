@@ -1446,14 +1446,130 @@ def _build_unverified_residue(
 
 
 # Render order + operator-facing labels for the residue classes.
-# Insertion order here IS the render order.
-_RESIDUE_LABELS = {
+# Insertion order here IS the render order. Public: the run digest
+# renders the same classes under the same names.
+RESIDUE_LABELS = {
     "llm_suspicious": "LLM suspicious",
     "mechanical_suspicious": "Mechanical-sweep suspicious",
     "dark": "Dark (tool-blind)",
     "graded_low_confidence": "Graded low-confidence",
     "errored": "Errored reviews",
 }
+
+
+def load_unverified_residue(out_dir: Path) -> dict[str, Any]:
+    """The ``unverified_residue`` block recomputed from the run's
+    artifacts — the exact derivation ``generate_report`` embeds,
+    without building the full report. Consumers that need only the
+    residue view (the run digest) read it here so the two surfaces
+    cannot drift."""
+    audit_data = _load_review_state(out_dir)
+    return _build_unverified_residue(
+        _compute_stats(audit_data),
+        audit_data,
+        len(_load_dark_findings(out_dir)),
+        _load_graded_stats(out_dir),
+    )
+
+
+def journal_present_but_unparsed(out_dir: Path) -> bool:
+    """True when a review journal EXISTS with content yet zero
+    entries parse.
+
+    A wholly-undecodable journal contributes nothing to the residue
+    counts, so a digest reading only the counts would render a bare
+    all-clear over a run whose evidence it could not read. Absent or
+    zero-byte journals return False — a run that never journalled is
+    not "unreadable". Any parsable row also returns False: partial
+    corruption already degrades correctly through the residue
+    classes (the loader skips corrupt lines), and this accessor must
+    not replace that path.
+    """
+    base = Path(out_dir)
+    try:
+        shards = [base / "review-journal.jsonl",
+                  *sorted(base.glob("review-journal.*.jsonl"))]
+        content_bytes = 0
+        for p in shards:
+            try:
+                if p.is_file():
+                    content_bytes += p.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        return False
+    if content_bytes <= 0:
+        return False
+    try:
+        from .journal import load_entries
+        return not load_entries(out_dir)
+    except Exception:  # noqa: BLE001 — a loader failure over a present journal is exactly the unconfirmable case
+        return True
+
+
+def residue_top_items(out_dir: Path,
+                      limit: int = 5) -> list[dict[str, Any]]:
+    """Bounded per-item preview of the unverified residue.
+
+    Items come from the graded export (``findings-graded.json``,
+    status suspicious/dark) where present — those carry curated
+    one-line titles — else from the run journal's latest-per-site
+    non-mechanical suspicious rows (title = first line of the review
+    body). Values are target-derived; callers escape at render.
+    """
+    limit = max(0, limit)
+    items: list[dict[str, Any]] = []
+    path = out_dir / "findings-graded.json"
+    if path.exists():
+        data = load_json(path, max_bytes=_MAX_FINDINGS_BYTES)
+        findings = data.get("findings") if isinstance(data, dict) else None
+        for f in findings if isinstance(findings, list) else []:
+            if not isinstance(f, dict):
+                continue
+            if f.get("status") not in ("suspicious", "dark"):
+                continue
+            items.append({
+                "function": str(f.get("function") or ""),
+                "file": str(f.get("file") or ""),
+                "title": str(f.get("title") or f.get("hypothesis") or ""),
+                "status": str(f.get("status") or ""),
+                "confidence": str(f.get("confidence") or ""),
+            })
+            if len(items) >= limit:
+                break
+    if items:
+        return items
+    # Journal fallback — same collapse rule as _load_review_state:
+    # mechanical echoes never speak for a site, the latest LLM row
+    # holds verdict authority.
+    try:
+        from .journal import load_entries
+        best: dict[tuple, Any] = {}
+        for e in load_entries(out_dir):
+            if _is_mechanical_echo(e):
+                continue
+            k = (e.file, e.function, e.line_start or 0)
+            prev = best.get(k)
+            if prev is None or e.ts > prev.ts:
+                best[k] = e
+        for e in best.values():
+            if e.verdict != "suspicious":
+                continue
+            body_lines = str(getattr(e, "body", "") or "").strip() \
+                .splitlines()
+            items.append({
+                "function": e.function,
+                "file": e.file,
+                "title": body_lines[0] if body_lines else "",
+                "status": "suspicious",
+                "confidence": str(getattr(e, "confidence", None) or ""),
+            })
+            if len(items) >= limit:
+                break
+    except Exception:  # noqa: BLE001 — preview is best-effort, counts still render
+        logger.debug("residue top-item journal fallback failed",
+                     exc_info=True)
+    return items
 
 
 def format_residue_lines(report: dict[str, Any]) -> list[str]:
@@ -1473,7 +1589,7 @@ def format_residue_lines(report: dict[str, Any]) -> list[str]:
     if not isinstance(residue, dict):
         return []
     lines: list[str] = []
-    for key, label in _RESIDUE_LABELS.items():
+    for key, label in RESIDUE_LABELS.items():
         rec = residue.get(key)
         if not isinstance(rec, dict):
             continue

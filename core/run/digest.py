@@ -106,6 +106,12 @@ class RunDigest:
     coverage_scope: str | None = None
     coverage_reviewed: int | None = None
     coverage_total: int | None = None
+    # unverified residue (audit runs): nonzero class → count, plus a
+    # bounded per-item preview (function / file / title / status /
+    # confidence). Raw target-derived values — renderers escape.
+    residue_counts: dict[str, int] = field(default_factory=dict)
+    residue_top: list[dict[str, Any]] = field(default_factory=list)
+    residue_journal_unreadable: bool = False
     # target (sealed into .raptor-run.json at start_run)
     target_path: str | None = None
     # shipped fuzz harnesses on the target tree, engine → count
@@ -473,6 +479,58 @@ def _read_coverage(digest: RunDigest) -> None:
         logger.debug("digest: coverage layer unreadable", exc_info=True)
 
 
+def _read_residue(digest: RunDigest) -> None:
+    """Unverified residue for audit-family runs.
+
+    The digest's findings sections read verified / exploitable
+    outcomes; a run whose only output is residue (suspicious journal
+    rows, low-confidence graded items, errored reviews) used to
+    render a bare all-clear line. The counts come from the report
+    module's own residue derivation (same sources as the report's
+    ``unverified_residue`` block — never a parallel count), the
+    per-item preview from the graded export with a journal fallback.
+    Artifact-driven: non-audit runs simply have none of the source
+    files and stay empty.
+    """
+    try:
+        from core.audit.report import (
+            load_unverified_residue,
+            residue_top_items,
+        )
+        residue = load_unverified_residue(digest.run_dir)
+    except Exception:  # noqa: BLE001 — layer readers degrade to absent
+        logger.debug("digest: residue layer unreadable", exc_info=True)
+        return
+    counts: dict[str, int] = {}
+    for key, rec in residue.items():
+        if not isinstance(rec, dict):
+            continue
+        count = rec.get("count")
+        if isinstance(count, int) and not isinstance(count, bool) \
+                and count > 0:
+            counts[str(key)] = count
+    if not counts:
+        # Zero counts are ambiguous: a clean run AND a present but
+        # wholly-undecodable journal both land here. The second must
+        # never render as a bare all-clear — the run's evidence was
+        # unreadable, not clean. (Any parsable row feeds the counts,
+        # so partial corruption stays on the residue path above.)
+        try:
+            from core.audit.report import journal_present_but_unparsed
+            digest.residue_journal_unreadable = \
+                journal_present_but_unparsed(digest.run_dir)
+        except Exception:  # noqa: BLE001 — layer readers degrade to absent
+            logger.debug("digest: journal-parse probe failed",
+                         exc_info=True)
+        return
+    digest.residue_counts = counts
+    try:
+        digest.residue_top = residue_top_items(digest.run_dir,
+                                               limit=_MAX_LISTED)
+    except Exception:  # noqa: BLE001 — preview is best-effort, counts still render
+        logger.debug("digest: residue preview unreadable", exc_info=True)
+
+
 def _read_fuzz_census(digest: RunDigest) -> None:
     """Shipped fuzz harnesses on the run's target — one bounded,
     read-only census at digest build.
@@ -534,7 +592,7 @@ def read_run_digest(run_dir: Path) -> RunDigest:
     digest = RunDigest(run_dir=Path(run_dir))
     for layer in (_read_lifecycle, _read_spend, _read_telemetry,
                   _read_findings, _read_suppressions, _read_coverage,
-                  _read_fuzz_census, _read_next_steps):
+                  _read_residue, _read_fuzz_census, _read_next_steps):
         try:
             layer(digest)
         except Exception:  # noqa: BLE001 — one broken layer must not hide the rest
@@ -576,6 +634,16 @@ def _coverage_text(digest: RunDigest) -> str | None:
                 f" queued unit(s) reviewed this run "
                 f"({digest.coverage_percent:.1f}%)")
     return f"{digest.coverage_percent:.1f}% of reviewable units"
+
+
+def _residue_label(key: str) -> str:
+    """Operator-facing label for a residue class key — the report
+    module's label table, so both surfaces speak the same names."""
+    try:
+        from core.audit.report import RESIDUE_LABELS
+        return str(RESIDUE_LABELS.get(key, key))
+    except Exception:  # noqa: BLE001 — label lookup never breaks a render
+        return str(key)
 
 
 def _age(seconds: float | None) -> str:
@@ -689,7 +757,46 @@ def render_run_digest(digest: RunDigest) -> str:
 
     if not digest.verified and not digest.exploitable_unverified:
         lines.append("")
-        lines.append("  No verified or exploitable-unverified findings.")
+        if digest.residue_counts:
+            # Never imply all-clear while residue exists — the
+            # qualified line hands off to the residue section below.
+            lines.append("  No verified or exploitable-unverified "
+                         "findings — but unverified residue remains.")
+        elif digest.residue_journal_unreadable:
+            # A present but wholly-undecodable review journal parsed
+            # to zero entries: the run's evidence was unreadable, not
+            # clean — same never-imply-all-clear contract as residue.
+            lines.append("  No verified or exploitable-unverified "
+                         "findings — but the review journal is "
+                         "present and unreadable (cannot confirm "
+                         "all-clear).")
+        else:
+            lines.append("  No verified or exploitable-unverified "
+                         "findings.")
+
+    if digest.residue_counts:
+        # Ranks below real findings, above silence: everything the
+        # run examined but could not fully verify, with a bounded
+        # per-item preview and the query surface for the rest.
+        lines.append("")
+        parts = ", ".join(
+            f"{count} {_residue_label(key)}"
+            for key, count in digest.residue_counts.items())
+        lines.append("  Unverified residue — examined, not fully "
+                     f"verified (not all-clear): {_line(parts, max_len=300)}")
+        for item in digest.residue_top[:_MAX_LISTED]:
+            entry = "    - " + _line(
+                item.get("function") or item.get("file"), max_len=60)
+            title = _line(item.get("title"), max_len=100)
+            if title:
+                entry += f"  {title}"
+            tag_bits = [str(b) for b in (item.get("status"),
+                                         item.get("confidence")) if b]
+            if tag_bits:
+                entry += f"  [{_line(', '.join(tag_bits), max_len=40)}]"
+            lines.append(entry)
+        lines.append("    Browse: raptor-review findings --out "
+                     f"{_line(digest.run_dir, max_len=200)}")
 
     if digest.suppressed_dropped:
         lines.append("")
