@@ -32,10 +32,62 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 from core.project.project import VALID_TRUST_MARKERS
 
 logger = logging.getLogger(__name__)
+
+
+class TrustResolution(NamedTuple):
+    """One marker-consent resolution, with its provenance.
+
+    ``granted`` is the verdict the plain bool resolvers return.
+    ``source`` names WHICH rule decided: ``"explicit"`` (per-run flag,
+    either direction), ``"marker"`` (project trust marker applied),
+    ``"marker-target-mismatch"`` (marker present but ignored by the
+    one-target rule), or ``"default"`` (no flag, no marker — off).
+    ``project`` is the consulted project's name (``None`` when no
+    project governs the context, or when an explicit flag decided
+    before any project was loaded). ``layer`` names the resolution
+    layer consulted: ``"run-pin"`` when the caller supplied a run
+    directory (the run's frozen project governs), ``"ambient"``
+    otherwise (argv override > session binding > symlink default).
+    Refusal messages built from these fields let an operator see at a
+    glance whether the WRONG project answered — the failure mode that
+    motivated the detail API.
+    """
+
+    granted: bool
+    source: str
+    project: str | None
+    layer: str
+
+
+def _resolve_marker_consent(
+    marker: str, explicit: bool | None, *, banner: bool,
+    target_path: str | Path | None, run_dir: str | Path | None,
+) -> TrustResolution:
+    """Shared precedence body for the single-marker consent resolvers:
+    explicit per-run choice (either direction) > project *marker*
+    (one-target rule applied) > default off. The explicit branch
+    short-circuits before any project load, exactly as the resolvers
+    always did."""
+    layer = "run-pin" if run_dir is not None else "ambient"
+    if explicit is not None:
+        return TrustResolution(bool(explicit), "explicit", None, layer)
+    markers, name = active_project_trust(run_dir)
+    if marker in markers:
+        run_target = target_path or os.environ.get("RAPTOR_CALLER_DIR")
+        if not run_target_matches_project(run_target, run_dir):
+            _emit_marker_target_mismatch(
+                [marker], run_target and str(run_target))
+            return TrustResolution(
+                False, "marker-target-mismatch", name, layer)
+        if banner:
+            emit_trust_banner([marker])
+        return TrustResolution(True, "marker", name, layer)
+    return TrustResolution(False, "default", name, layer)
 
 
 def _context_project_name(run_dir: str | Path | None = None) -> str | None:
@@ -416,19 +468,29 @@ def resolve_dynamic_validation(
     project's target (same one-target rule as
     :func:`apply_project_trust_flags`; ``RAPTOR_CALLER_DIR`` is the
     fallback signal when the caller passes none).
+
+    Callers WITH a run directory in hand must pass *run_dir* — it
+    routes the marker lookup to the RUN PIN's project. Without it the
+    ambient session project answers, which is wrong in both
+    directions once a run exists (a pinned grant goes missing; an
+    unrelated ambient grant leaks in).
     """
-    if explicit is not None:
-        return bool(explicit)
-    markers, _name = active_project_trust(run_dir)
-    if "dynamic" in markers:
-        run_target = target_path or os.environ.get("RAPTOR_CALLER_DIR")
-        if not run_target_matches_project(run_target, run_dir):
-            _emit_marker_target_mismatch(["dynamic"], run_target and str(run_target))
-            return False
-        if banner:
-            emit_trust_banner(["dynamic"])
-        return True
-    return False
+    return resolve_dynamic_validation_detail(
+        explicit, banner=banner, target_path=target_path,
+        run_dir=run_dir).granted
+
+
+def resolve_dynamic_validation_detail(
+    explicit: bool | None, *, banner: bool = True,
+    target_path: str | Path | None = None,
+    run_dir: str | Path | None = None,
+) -> TrustResolution:
+    """:func:`resolve_dynamic_validation` returning the full
+    :class:`TrustResolution` — for consumers whose refusal messages
+    must name the consulted project and resolution layer."""
+    return _resolve_marker_consent(
+        "dynamic", explicit, banner=banner, target_path=target_path,
+        run_dir=run_dir)
 
 
 def resolve_repo_trust(
@@ -442,20 +504,24 @@ def resolve_repo_trust(
     /agentic and /codeql entry points consume; else off.
 
     Same one-target rule as :func:`resolve_dynamic_validation`: the
-    marker asserts trust for the active project's target only.
+    marker asserts trust for the active project's target only. Same
+    *run_dir* contract too: pass it whenever a run directory exists.
     """
-    if explicit is not None:
-        return bool(explicit)
-    markers, _name = active_project_trust(run_dir)
-    if "config" in markers:
-        run_target = target_path or os.environ.get("RAPTOR_CALLER_DIR")
-        if not run_target_matches_project(run_target, run_dir):
-            _emit_marker_target_mismatch(["config"], run_target and str(run_target))
-            return False
-        if banner:
-            emit_trust_banner(["config"])
-        return True
-    return False
+    return resolve_repo_trust_detail(
+        explicit, banner=banner, target_path=target_path,
+        run_dir=run_dir).granted
+
+
+def resolve_repo_trust_detail(
+    explicit: bool | None, *, banner: bool = True,
+    target_path: str | Path | None = None,
+    run_dir: str | Path | None = None,
+) -> TrustResolution:
+    """:func:`resolve_repo_trust` returning the full
+    :class:`TrustResolution`."""
+    return _resolve_marker_consent(
+        "config", explicit, banner=banner, target_path=target_path,
+        run_dir=run_dir)
 
 
 def active_project_sandbox_floor(
@@ -626,23 +692,29 @@ def resolve_build_execution(
     Building a repo executes repo-influenced code, so this rides the
     same operator assertion traced-build extraction uses — including
     the one-target rule (the marker never authorises building a tree
-    that is not the active project's target).
+    that is not the active project's target). Same *run_dir* contract
+    as :func:`resolve_dynamic_validation`: pass it whenever a run
+    directory exists.
     """
-    if explicit is not None:
-        return bool(explicit)
-    markers, _name = active_project_trust(run_dir)
-    if "build" in markers:
-        run_target = target_path or os.environ.get("RAPTOR_CALLER_DIR")
-        if not run_target_matches_project(run_target, run_dir):
-            _emit_marker_target_mismatch(["build"], run_target and str(run_target))
-            return False
-        if banner:
-            emit_trust_banner(["build"])
-        return True
-    return False
+    return resolve_build_execution_detail(
+        explicit, banner=banner, target_path=target_path,
+        run_dir=run_dir).granted
+
+
+def resolve_build_execution_detail(
+    explicit: bool | None, *, banner: bool = True,
+    target_path: str | Path | None = None,
+    run_dir: str | Path | None = None,
+) -> TrustResolution:
+    """:func:`resolve_build_execution` returning the full
+    :class:`TrustResolution`."""
+    return _resolve_marker_consent(
+        "build", explicit, banner=banner, target_path=target_path,
+        run_dir=run_dir)
 
 
 __all__ = [
+    "TrustResolution",
     "active_project_sandbox_floor",
     "active_project_target",
     "active_project_trust",
@@ -650,8 +722,11 @@ __all__ = [
     "apply_project_trust_flags",
     "emit_trust_banner",
     "resolve_build_execution",
+    "resolve_build_execution_detail",
     "resolve_dynamic_validation",
+    "resolve_dynamic_validation_detail",
     "resolve_repo_trust",
+    "resolve_repo_trust_detail",
     "resolve_trust_flag",
     "run_target_matches_project",
 ]

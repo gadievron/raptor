@@ -90,10 +90,14 @@ class TestBridgeConfigMarker:
 
 class TestWitnessExecutionGate:
 
-    def test_gate_receives_run_target(self, tmp_path, monkeypatch, capsys):
+    def test_gate_receives_run_target_and_run_dir(self, tmp_path,
+                                                  monkeypatch, capsys):
         # The project 'dynamic' marker's one-target rule must be
         # resolved from the run's --target (like the sibling sink-watch
-        # and symbolic-replay gates), not from the launcher cwd.
+        # and symbolic-replay gates), not from the launcher cwd — and
+        # the marker lookup must be routed to the RUN PIN's project by
+        # passing the workdir as run_dir (an omitted run_dir consults
+        # the ambient session project, wrong in both directions).
         mod = _load_helper()
         trust = pytest.importorskip("core.project.trust")
         ws = pytest.importorskip(
@@ -103,12 +107,14 @@ class TestWitnessExecutionGate:
         def fake_gate(explicit, *, banner=True, target_path=None,
                       run_dir=None):
             seen["target_path"] = target_path
-            return False
+            seen["run_dir"] = run_dir
+            return trust.TrustResolution(False, "default", None, "run-pin")
 
         def never(*args, **kwargs):
             raise AssertionError("must not execute when gate refuses")
 
-        monkeypatch.setattr(trust, "resolve_dynamic_validation", fake_gate)
+        monkeypatch.setattr(trust, "resolve_dynamic_validation_detail",
+                            fake_gate)
         monkeypatch.setattr(ws, "eligible_findings",
                             lambda findings: list(findings))
         monkeypatch.setattr(ws, "run_witness_stage", never)
@@ -117,4 +123,5 @@ class TestWitnessExecutionGate:
         mod._run_witness_execution(str(tmp_path), str(tmp_path / "tree"),
                                    data, dynamic=None)
         assert seen["target_path"] == str(tmp_path / "tree")
+        assert Path(seen["run_dir"]) == tmp_path
         assert "dynamic execution not granted" in capsys.readouterr().out

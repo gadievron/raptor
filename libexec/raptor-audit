@@ -1117,8 +1117,11 @@ def cmd_sweep(args: argparse.Namespace) -> int:
             function_name=args.function,
             out_dir=out_dir,
             cwe=args.cwe or "",
+            # run_dir=out_dir: replay executes the target, so the
+            # marker grant follows the RUN PIN's project, never the
+            # ambient session's.
             replay=resolve_dynamic_validation(
-                None, target_path=target_path,
+                None, target_path=target_path, run_dir=out_dir,
             ),
         )
         entry = result.to_log_entry()

@@ -270,8 +270,11 @@ def provision_codeql_dbs(
         return provision
 
     from core.project.trust import resolve_build_execution
+    # run_dir=out_dir: building executes repo-influenced code, so the
+    # marker grant follows the RUN PIN's project when the caller has a
+    # run directory in hand — never the ambient session's project.
     build_trusted = resolve_build_execution(
-        traced_build, target_path=target_path,
+        traced_build, target_path=target_path, run_dir=out_dir,
     )
 
     to_build: list[str] = []

@@ -19,6 +19,7 @@ from core.project.trust import (
     active_project_trust,
     apply_project_trust_flags,
     resolve_dynamic_validation,
+    resolve_dynamic_validation_detail,
     resolve_trust_flag,
 )
 
@@ -282,6 +283,69 @@ class TestResolveDynamicValidation(TrustProjectFixture):
         result, out = self._resolve(None, target=other)
         self.assertFalse(result)
         self.assertIn("IGNORED", out)
+
+
+class TestTrustResolutionDetail(TrustProjectFixture):
+    """The detail variant carries the resolution's provenance so
+    consumers can name the consulted project and layer in refusal
+    messages. The ``granted`` field must always equal what the plain
+    bool resolver returns (the bool functions delegate to it)."""
+
+    def _detail(self, explicit, target=None, run_dir=None):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            res = resolve_dynamic_validation_detail(
+                explicit, target_path=target or self.target,
+                run_dir=run_dir)
+        return res, out.getvalue()
+
+    def test_explicit_decides_before_any_project_load(self):
+        res, out = self._detail(False)
+        self.assertEqual(
+            (res.granted, res.source, res.project, res.layer),
+            (False, "explicit", None, "ambient"))
+        res, _ = self._detail(True)
+        self.assertEqual((res.granted, res.source), (True, "explicit"))
+
+    def test_marker_grant_names_project_and_layer(self):
+        self.mgr.set_trust_marker("p", "dynamic")
+        res, out = self._detail(None)
+        self.assertEqual(
+            (res.granted, res.source, res.project, res.layer),
+            (True, "marker", "p", "ambient"))
+        self.assertIn("[*] project trust: dynamic", out)
+
+    def test_default_refusal_names_consulted_project(self):
+        res, _ = self._detail(None)
+        self.assertEqual(
+            (res.granted, res.source, res.project, res.layer),
+            (False, "default", "p", "ambient"))
+
+    def test_target_mismatch_is_distinct_from_default(self):
+        self.mgr.set_trust_marker("p", "dynamic")
+        other = Path(self._tmp.name) / "other-detail"
+        other.mkdir()
+        res, out = self._detail(None, target=other)
+        self.assertEqual(
+            (res.granted, res.source, res.project),
+            (False, "marker-target-mismatch", "p"))
+        self.assertIn("IGNORED", out)
+
+    def test_run_dir_marks_run_pin_layer(self):
+        # A run dir pinned to NO project (marker present, project
+        # null) resolves through the run-pin layer and reports it —
+        # and the ambient project's marker stays out of the verdict.
+        from core.json import save_json
+        self.mgr.set_trust_marker("p", "dynamic")
+        run_dir = Path(self._tmp.name) / "out" / "run-x"
+        run_dir.mkdir(parents=True)
+        save_json(run_dir / ".raptor-run.json",
+                  {"status": "running", "project": None,
+                   "project_source": "argv"})
+        res, _ = self._detail(None, run_dir=run_dir)
+        self.assertEqual(
+            (res.granted, res.source, res.project, res.layer),
+            (False, "default", None, "run-pin"))
 
 
 class TestAuditPipelineDynamicOptr(unittest.TestCase):
