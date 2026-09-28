@@ -467,3 +467,64 @@ def test_save_within_cap_still_writes(monkeypatch):
     idx.definitions[("ok.py", "h")] = {fn}
     _reach_cache.save_index(fp, idx)
     assert _reach_cache.load_index(fp) is not None
+
+
+# ---------------------------------------------------------------------------
+# Call-time cache-root resolution
+# ---------------------------------------------------------------------------
+
+def test_cache_dir_honors_xdg_cache_home_set_after_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """XDG_CACHE_HOME is read per call, not snapshotted at import: a
+    pin installed after the module was imported redirects the cache."""
+    monkeypatch.setattr(_reach_cache, "_CACHE_DIR", None)  # production shape
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
+    assert _reach_cache._cache_dir() == (
+        tmp_path / "xdg-cache" / "raptor" / "reachability"
+    )
+    # Public accessor tracks the same call-time resolution.
+    assert _reach_cache.cache_dir() == _reach_cache._cache_dir()
+
+
+def test_cache_dir_unset_env_keeps_legacy_home_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No XDG_CACHE_HOME → the legacy ``~/.cache/raptor/reachability``
+    default (fabricated HOME so the real home is never resolved)."""
+    monkeypatch.setattr(_reach_cache, "_CACHE_DIR", None)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "fakehome"))
+    assert _reach_cache._cache_dir() == (
+        tmp_path / "fakehome" / ".cache" / "raptor" / "reachability"
+    )
+
+
+def test_cache_dir_seam_wins_over_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The monkeypatch seam (what this suite's autouse fixture uses)
+    wins over any env pin — pinned tests stay deterministic."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "ignored"))
+    monkeypatch.setattr(_reach_cache, "_CACHE_DIR", tmp_path / "pinned")
+    assert _reach_cache._cache_dir() == tmp_path / "pinned"
+
+
+def test_save_index_writes_under_env_pin_set_after_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: with only an env pin (no attribute seam), a save
+    lands under $XDG_CACHE_HOME and a fabricated HOME stays empty."""
+    monkeypatch.setattr(_reach_cache, "_CACHE_DIR", None)
+    fakehome = tmp_path / "fakehome"
+    monkeypatch.setenv("HOME", str(fakehome))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
+    fp = "e" * 64
+    idx = _AdjacencyIndex()
+    fn = InternalFunction(file_path="env.py", name="f", line=1)
+    idx.definitions[("env.py", "f")] = {fn}
+    _reach_cache.save_index(fp, idx)
+    written = tmp_path / "xdg-cache" / "raptor" / "reachability"
+    assert (written / (fp + ".json")).is_file()
+    assert _reach_cache.load_index(fp) is not None
+    assert not fakehome.exists()

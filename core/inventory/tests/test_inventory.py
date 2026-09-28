@@ -1011,6 +1011,38 @@ class TestDefaultCacheDir:
         absolute = default_cache_dir(str(proj))
         assert rel == absolute
 
+    def test_default_cache_root_reads_home_at_call_time(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """$HOME is read per call, not snapshotted at import: a HOME
+        pin installed after the module was imported redirects the
+        default cache root (fabricated HOME — never the real one)."""
+        import core.inventory.builder as builder
+        monkeypatch.setattr(builder, "_DEFAULT_INVENTORY_CACHE_ROOT", None)
+        home_a = tmp_path / "home-a"
+        home_b = tmp_path / "home-b"
+        monkeypatch.setenv("HOME", str(home_a))
+        assert builder._default_inventory_cache_root() == (
+            home_a / ".raptor" / "cache" / "inventory"
+        )
+        # Changing HOME after the first call takes effect on the next.
+        monkeypatch.setenv("HOME", str(home_b))
+        cache = builder.default_cache_dir(str(tmp_path))
+        assert cache.parent == home_b / ".raptor" / "cache" / "inventory"
+        assert not home_a.exists() and not home_b.exists()
+
+    def test_default_cache_root_seam_wins_over_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The monkeypatch seam (what this suite's other tests use)
+        wins over the env-derived default."""
+        import core.inventory.builder as builder
+        monkeypatch.setenv("HOME", str(tmp_path / "ignored"))
+        monkeypatch.setattr(
+            builder, "_DEFAULT_INVENTORY_CACHE_ROOT", tmp_path / "pinned",
+        )
+        assert builder._default_inventory_cache_root() == tmp_path / "pinned"
+
     def test_build_inventory_uses_default_when_output_dir_omitted(
         self, tmp_path, monkeypatch,
     ):

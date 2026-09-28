@@ -104,7 +104,23 @@ logger = logging.getLogger(__name__)
 # over-claimed identity.
 _CACHE_VERSION = 12
 
-_CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
+# Test-override seam: when set (tests monkeypatch a tmp dir here) it
+# wins over the env-derived default. Production leaves it None so
+# ``_cache_dir()`` re-reads ``XDG_CACHE_HOME`` on every call — an env
+# pin installed AFTER this module is imported (test harness, sandboxed
+# run) still redirects the cache instead of being silently ignored by
+# an import-time snapshot.
+_CACHE_DIR: Path | None = None
+
+
+def _cache_dir() -> Path:
+    """Cache root, resolved at call time: ``$XDG_CACHE_HOME/raptor/
+    reachability`` (default ``~/.cache/raptor/reachability``)."""
+    if _CACHE_DIR is not None:
+        return _CACHE_DIR
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".cache"
+    return base / "raptor" / "reachability"
 
 # A short header sentinel prefixed to each cache entry. Lets us
 # version-bump the on-disk format without colliding with a stale
@@ -266,7 +282,7 @@ def _cache_path_for(fingerprint: str) -> Path | None:
             fingerprint,
         )
         return None
-    return _CACHE_DIR / f"{fingerprint}{_CACHE_SUFFIX}"
+    return _cache_dir() / f"{fingerprint}{_CACHE_SUFFIX}"
 
 
 # ---------------------------------------------------------------------------
@@ -646,8 +662,9 @@ def save_index(
     if path is None:
         return
     try:
-        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        os.chmod(_CACHE_DIR, 0o700)
+        cache_root = _cache_dir()
+        cache_root.mkdir(parents=True, exist_ok=True)
+        os.chmod(cache_root, 0o700)
     except OSError as exc:
         logger.debug("reach_cache: dir setup failed: %s", exc)
         return
@@ -686,8 +703,9 @@ def _cache_entries() -> list:
     legacy suffixes (never loaded, but swept by eviction/clearing
     so they don't squat the cache dir forever)."""
     entries: list = []
+    cache_root = _cache_dir()
     for suffix in (_CACHE_SUFFIX, *_LEGACY_SUFFIXES):
-        entries.extend(_CACHE_DIR.glob(f"*{suffix}"))
+        entries.extend(cache_root.glob(f"*{suffix}"))
     return entries
 
 
@@ -722,7 +740,7 @@ def _evict_oldest() -> None:
 
 def clear_cache() -> int:
     """Delete every cache entry; return the count removed."""
-    if not _CACHE_DIR.exists():
+    if not _cache_dir().exists():
         return 0
     n = 0
     for p in _cache_entries():
@@ -735,8 +753,8 @@ def clear_cache() -> int:
 
 
 def cache_dir() -> Path:
-    """Public accessor for the cache root."""
-    return _CACHE_DIR
+    """Public accessor for the cache root (call-time resolution)."""
+    return _cache_dir()
 
 
 __all__ = [

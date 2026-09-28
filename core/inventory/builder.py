@@ -560,9 +560,21 @@ MAX_FILE_BYTES = 8 * 1024 * 1024  # 8 MiB
 # keys distinct projects so two scans of unrelated trees don't
 # share state. Operator-purge: ``rm -rf ~/.raptor/cache/inventory/``
 # or ``raptor-sca clean-cache``.
-_DEFAULT_INVENTORY_CACHE_ROOT = (
-    Path.home() / ".raptor" / "cache" / "inventory"
-)
+# Test-override seam: when set (tests monkeypatch a tmp dir here) it
+# wins. Production leaves it None so the accessor re-reads $HOME on
+# every call — a HOME pin installed AFTER this module is imported
+# still redirects the cache instead of being silently ignored by an
+# import-time snapshot.
+_DEFAULT_INVENTORY_CACHE_ROOT: Path | None = None
+
+
+def _default_inventory_cache_root() -> Path:
+    """Inventory-checklist cache root, resolved at call time
+    (``~/.raptor/cache/inventory``; ``Path.home()`` reads ``$HOME``
+    per call)."""
+    if _DEFAULT_INVENTORY_CACHE_ROOT is not None:
+        return _DEFAULT_INVENTORY_CACHE_ROOT
+    return Path.home() / ".raptor" / "cache" / "inventory"
 
 
 def default_cache_dir(
@@ -599,7 +611,7 @@ def default_cache_dir(
     # paths come from the filesystem and can carry surrogate escapes
     # (non-UTF-8 filenames), which a strict encode crashes on.
     target_hash = sha256_string(key)[:16]
-    return _DEFAULT_INVENTORY_CACHE_ROOT / target_hash
+    return _default_inventory_cache_root() / target_hash
 
 
 #: Bounds for the case-collision note: at most this many collided
