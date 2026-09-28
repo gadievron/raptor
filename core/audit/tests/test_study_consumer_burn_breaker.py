@@ -332,3 +332,108 @@ class TestLaneTruncationBudget:
         assert any(
             "sub-cap churn budget exhausted" in m for m in warnings
         )
+
+
+class TestDrainProgressCheckpointPaths:
+    """The drain's progress checkpoint must fire on FAILED invocations
+    too, and the loop exit must flush the counters' final state — an
+    all-failing drain whose only writes rode the success path looked
+    frozen (updated_at never moved), indistinguishable from a hung
+    one."""
+
+    @staticmethod
+    def _seed_metadata(tmp_path):
+        import json
+        (tmp_path / ".raptor-run.json").write_text(
+            json.dumps({"status": "running", "extra": {}}),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _progress(tmp_path):
+        import json
+        meta = json.loads(
+            (tmp_path / ".raptor-run.json").read_text(encoding="utf-8"),
+        )
+        return meta.get("extra", {})
+
+    @staticmethod
+    def _record_progress_writes(monkeypatch):
+        import core.audit.orchestrator as _orch
+        real = _orch._update_run_progress
+        writes = []
+
+        def _recording(out_dir, result, **kw):
+            writes.append(kw.get("study"))
+            real(out_dir, result, **kw)
+
+        monkeypatch.setattr(_orch, "_update_run_progress", _recording)
+        return writes
+
+    def test_all_failing_drain_still_checkpoints(
+        self, monkeypatch, tmp_path,
+    ):
+        import core.audit.orchestrator as _orch
+        monkeypatch.setattr(
+            _orch, "_PROGRESS_CHECKPOINT_INTERVAL", 0.0)
+        writes = self._record_progress_writes(monkeypatch)
+
+        def failing_run_study(*a, **kw):
+            msg = "all batches failed"
+            raise RuntimeError(msg)
+
+        _wire(monkeypatch, tmp_path, failing_run_study)
+        _capture_warnings(monkeypatch)
+        self._seed_metadata(tmp_path)
+
+        _run_loop(_config(tmp_path), _queue_with_batches(90))
+
+        # A write after the FIRST failed invocation — impossible if
+        # only the success path (or only the exit flush) wrote.
+        assert writes, "failed invocations must checkpoint progress"
+        assert writes[0]["batches_failed"] == 1
+        assert writes[0]["batches_completed"] == 0
+        # The final record carries the drain's full failure count.
+        progress = self._progress(tmp_path)["progress"]
+        assert progress["study"]["batches_failed"] == 3
+        assert progress["study"]["batches_completed"] == 0
+        assert progress["updated_at"]
+
+    def test_loop_exit_flushes_final_state(
+        self, monkeypatch, tmp_path,
+    ):
+        """With the default 60s interval a short drain never passes
+        the gate — the exit flush is what lands the tail state."""
+        writes = self._record_progress_writes(monkeypatch)
+
+        def ok_run_study(*a, **kw):
+            return None
+
+        _wire(monkeypatch, tmp_path, ok_run_study)
+        _capture_warnings(monkeypatch)
+        self._seed_metadata(tmp_path)
+
+        _run_loop(_config(tmp_path), _queue_with_batches(2))
+
+        assert writes, "loop exit must flush progress"
+        progress = self._progress(tmp_path)["progress"]
+        assert progress["study"]["batches_completed"] == 1
+        assert progress["study"]["batches_failed"] == 0
+
+    def test_no_invocation_writes_nothing(self, monkeypatch, tmp_path):
+        """A drain that never ran a study invocation has nothing to
+        report — the flush is guarded so no empty study record is
+        invented."""
+        writes = self._record_progress_writes(monkeypatch)
+
+        def never_called_run_study(*a, **kw):  # pragma: no cover
+            raise AssertionError("no batches — must not be called")
+
+        _wire(monkeypatch, tmp_path, never_called_run_study)
+        _capture_warnings(monkeypatch)
+        self._seed_metadata(tmp_path)
+
+        _run_loop(_config(tmp_path), _queue_with_batches(0))
+
+        assert writes == []
+        assert "progress" not in self._progress(tmp_path)

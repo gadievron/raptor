@@ -17,7 +17,9 @@ class TestUpdateRunProgress:
         )
         _update_run_progress(tmp_path, SimpleNamespace(reviewed=7))
         updated = json.loads(meta_path.read_text(encoding="utf-8"))
-        assert updated["extra"]["progress"] == {"completed": 7}
+        progress = updated["extra"]["progress"]
+        assert progress["completed"] == 7
+        assert "updated_at" in progress
         assert updated["status"] == "running"
 
     def test_preserves_concurrently_set_terminal_status(
@@ -37,7 +39,126 @@ class TestUpdateRunProgress:
         updated = json.loads(meta_path.read_text(encoding="utf-8"))
         assert updated["status"] == "interrupted"
         assert updated["extra"]["interrupt_reason"] == "sigterm"
-        assert updated["extra"]["progress"] == {"completed": 3}
+        assert updated["extra"]["progress"]["completed"] == 3
+
+    def test_updated_at_is_utc_iso8601(self, tmp_path) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        meta_path = tmp_path / ".raptor-run.json"
+        meta_path.write_text(
+            json.dumps({"status": "running", "extra": {}}),
+            encoding="utf-8",
+        )
+        before = datetime.now(timezone.utc)
+        _update_run_progress(tmp_path, SimpleNamespace(reviewed=1))
+        after = datetime.now(timezone.utc)
+        updated = json.loads(meta_path.read_text(encoding="utf-8"))
+        stamp = datetime.fromisoformat(
+            updated["extra"]["progress"]["updated_at"],
+        )
+        assert stamp.utcoffset() == timedelta(0)
+        assert before <= stamp <= after
+
+    def test_study_fields_written_under_study_key(
+        self, tmp_path,
+    ) -> None:
+        meta_path = tmp_path / ".raptor-run.json"
+        meta_path.write_text(
+            json.dumps({"status": "running", "extra": {}}),
+            encoding="utf-8",
+        )
+        _update_run_progress(
+            tmp_path, SimpleNamespace(reviewed=4),
+            study={
+                "batches_completed": 3,
+                "batches_failed": 1,
+                "questions_resolved": 9,
+                "re_reviews": 2,
+            },
+        )
+        progress = json.loads(
+            meta_path.read_text(encoding="utf-8"),
+        )["extra"]["progress"]
+        assert progress["completed"] == 4
+        assert progress["study"] == {
+            "batches_completed": 3,
+            "batches_failed": 1,
+            "questions_resolved": 9,
+            "re_reviews": 2,
+        }
+
+    def test_review_checkpoint_preserves_study_fields(
+        self, tmp_path,
+    ) -> None:
+        """The executor's review checkpoints (no ``study``) and the
+        study consumer's drain checkpoints interleave on the same
+        record — a study-less write must not erase the drain's
+        fields, and the drain's write must not change ``completed``'s
+        meaning."""
+        meta_path = tmp_path / ".raptor-run.json"
+        meta_path.write_text(
+            json.dumps({"status": "running", "extra": {}}),
+            encoding="utf-8",
+        )
+        _update_run_progress(
+            tmp_path, SimpleNamespace(reviewed=4),
+            study={"batches_completed": 2},
+        )
+        _update_run_progress(tmp_path, SimpleNamespace(reviewed=6))
+        progress = json.loads(
+            meta_path.read_text(encoding="utf-8"),
+        )["extra"]["progress"]
+        assert progress["completed"] == 6
+        assert progress["study"] == {"batches_completed": 2}
+
+    def test_non_dict_prior_progress_is_replaced(
+        self, tmp_path,
+    ) -> None:
+        meta_path = tmp_path / ".raptor-run.json"
+        meta_path.write_text(
+            json.dumps({
+                "status": "running",
+                "extra": {"progress": "corrupt"},
+            }),
+            encoding="utf-8",
+        )
+        _update_run_progress(tmp_path, SimpleNamespace(reviewed=2))
+        progress = json.loads(
+            meta_path.read_text(encoding="utf-8"),
+        )["extra"]["progress"]
+        assert progress["completed"] == 2
+
+    def test_checkpoint_write_leaves_no_debris(self, tmp_path) -> None:
+        """Still routed through the shared atomic + locked primitive:
+        only the metadata file and every writer's flock sidecar may
+        exist afterwards."""
+        meta_path = tmp_path / ".raptor-run.json"
+        meta_path.write_text(
+            json.dumps({"status": "running", "extra": {}}),
+            encoding="utf-8",
+        )
+        _update_run_progress(
+            tmp_path, SimpleNamespace(reviewed=1),
+            study={"batches_completed": 1},
+        )
+        leftovers = [
+            q.name for q in tmp_path.iterdir()
+            if q.name not in (
+                ".raptor-run.json", ".raptor-run.json.lock",
+            )
+        ]
+        assert leftovers == []
+
+    def test_checkpoint_interval_matches_executor(self) -> None:
+        """The consumer mirrors the executor's interval (importing it
+        back would be circular) — the two constants must not drift."""
+        import core.audit.executor as executor
+        import core.audit.orchestrator as orchestrator
+
+        assert (
+            orchestrator._PROGRESS_CHECKPOINT_INTERVAL
+            == executor._PROGRESS_CHECKPOINT_INTERVAL
+        )
 
     def test_missing_metadata_is_noop(self, tmp_path) -> None:
         _update_run_progress(tmp_path, SimpleNamespace(reviewed=1))

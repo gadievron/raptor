@@ -581,7 +581,22 @@ def _reset_shutdown_state() -> None:
     _sigterm_state["count"] = 0
 
 
-def _update_run_progress(out_dir: Path, result: Any) -> None:
+# Seconds between progress-checkpoint writes from the study consumer.
+# Mirrors the executor's identically named constant (imported lazily
+# from THIS module by the executor, so importing it back would be
+# circular) — a sync test asserts they stay equal. Both directions
+# hurt: shorter churns the metadata lock + an atomic rewrite of
+# .raptor-run.json after nearly every batch; longer leaves operators
+# staring at a stale progress record on multi-hour drains.
+_PROGRESS_CHECKPOINT_INTERVAL = 60.0
+
+
+def _update_run_progress(
+    out_dir: Path,
+    result: Any,
+    *,
+    study: dict[str, int] | None = None,
+) -> None:
     """Update run metadata with progress checkpoint.
 
     Atomic + locked like every other ``.raptor-run.json`` writer
@@ -592,9 +607,20 @@ def _update_run_progress(out_dir: Path, result: Any) -> None:
     update (a SIGTERM drain marking the run ``interrupted`` could be
     clobbered back to ``running`` by a checkpoint that loaded the
     stale status a moment earlier).
+
+    ``study``: optional study-drain fields, stored under
+    ``progress["study"]``. The progress record is merge-updated, not
+    replaced: the executor's review checkpoints (no ``study``) and
+    the study consumer's drain checkpoints run concurrently, and each
+    writer must not erase the other's fields. ``completed`` keeps its
+    meaning (reviews completed) on every write, and every write
+    stamps ``updated_at`` (ISO-8601 UTC) so readers can tell a live
+    run from a stalled one.
     """
     meta_path = out_dir / ".raptor-run.json"
     try:
+        from datetime import datetime, timezone
+
         from core.json import load_json, save_json
         from core.run.metadata import _metadata_lock
 
@@ -602,11 +628,20 @@ def _update_run_progress(out_dir: Path, result: Any) -> None:
             meta = load_json(meta_path)
             if not isinstance(meta, dict):
                 return
-            meta.setdefault("extra", {})["progress"] = {
-                # OrchestratorResult counts completed reviews in
-                # ``reviewed`` (it has no ``completed`` field).
-                "completed": getattr(result, "reviewed", 0),
-            }
+            extra = meta.setdefault("extra", {})
+            prev = extra.get("progress")
+            progress: dict[str, Any] = (
+                dict(prev) if isinstance(prev, dict) else {}
+            )
+            # OrchestratorResult counts completed reviews in
+            # ``reviewed`` (it has no ``completed`` field).
+            progress["completed"] = getattr(result, "reviewed", 0)
+            if study is not None:
+                progress["study"] = dict(study)
+            progress["updated_at"] = (
+                datetime.now(timezone.utc).isoformat()
+            )
+            extra["progress"] = progress
             save_json(meta_path, meta)
     except Exception:
         logger.debug("progress checkpoint write failed", exc_info=True)
@@ -16180,6 +16215,40 @@ def _study_consumer_loop(
     runstudy_failed = 0
     runstudy_consec_failed = 0
     lane_truncation_failures = 0
+    # Study-drain progress checkpointing: same interval discipline as
+    # the executor's review loops. Resolved-question accounting is
+    # cumulative over each batch's eligible keys (the cheap number
+    # this loop already computes); a pending count would need a full
+    # reading-list scan per batch.
+    study_questions_resolved = 0
+    _last_progress_checkpoint = time.monotonic()
+
+    def _study_checkpoint(*, force: bool = False) -> None:
+        """Progress checkpoint: reviews completed (the executor's
+        field, unchanged meaning) plus this drain's study fields.
+        Interval-gated unless forced. Called after every run_study
+        invocation — failures included: an all-failing drain must
+        still advance ``updated_at`` (the frozen-record signal this
+        checkpointing exists to fix) and record its failure counts —
+        and forced once at loop exit so the counters' final state is
+        never lost to the interval gate.
+        """
+        nonlocal _last_progress_checkpoint
+        _now = time.monotonic()
+        if (not force
+                and _now - _last_progress_checkpoint
+                < _PROGRESS_CHECKPOINT_INTERVAL):
+            return
+        _update_run_progress(
+            config.out_dir, result,
+            study={
+                "batches_completed": runstudy_ok,
+                "batches_failed": runstudy_failed,
+                "questions_resolved": study_questions_resolved,
+                "re_reviews": re_review_count,
+            },
+        )
+        _last_progress_checkpoint = _now
     # Compile-probe cap is per RUN, shared across batches.
     probe_budget = st.get("probe_budget")
     if probe_budget is None:
@@ -16543,6 +16612,11 @@ def _study_consumer_loop(
             runstudy_consec_failed += 1
             lane_truncation_failures += int(
                 phase_stats.get("truncation_failures") or 0)
+            # Failed invocations checkpoint too (interval-gated):
+            # without this an all-failing drain never writes progress
+            # and looks identical to a hung one. The breaker breaks
+            # below fall through to the loop-exit flush.
+            _study_checkpoint()
             total_runs = runstudy_ok + runstudy_failed
             if _is_config_shaped_study_failure(run_exc):
                 # The phase itself concluded the failure is
@@ -16632,6 +16706,9 @@ def _study_consumer_loop(
                 "study-consumer: reading-list resolve failed",
                 exc_info=True,
             )
+        study_questions_resolved += len(eligible_keys)
+
+        _study_checkpoint()
 
         if (lane_truncation_failures >= _STUDY_LANE_TRUNCATION_BUDGET
                 and not phase_stats.get("truncation_capped")):
@@ -16765,6 +16842,14 @@ def _study_consumer_loop(
         )
         re_review_count += len(to_review)
         study_queue.note_progress()
+
+    if runstudy_ok + runstudy_failed:
+        # Final flush: every exit path (drained queue, stop request,
+        # breaker trip) lands here, and the interval gate may have
+        # swallowed the last batches' outcome. Guarded so a loop that
+        # never ran a study invocation writes nothing (no progress
+        # record to go stale, nothing to report).
+        _study_checkpoint(force=True)
 
     logger.info(
         "study-consumer: done (re-reviews=%d, stale_batches=%d)",
