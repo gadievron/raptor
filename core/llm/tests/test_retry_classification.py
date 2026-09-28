@@ -1,10 +1,14 @@
 """Retry / disposition classification for transport errors.
 
-Three related invariants in ``core.llm.client``:
+Four related invariants in ``core.llm.client``:
 
 * google-genai wraps every 5xx in a bare ``ServerError`` whose message
   starts with the status ("500 INTERNAL ..."); it must classify as
   retryable, while its 4xx counterpart ``ClientError`` stays fatal.
+* HTTP 529 / "overloaded_error" (capacity saturation) arrives as a
+  generic status-error type that matches none of the retryable type
+  names; it must classify retryable via the anchored 529 status / the
+  "overloaded" message pattern.
 * A fast HTTP 502/503/504 whose reason phrase contains "Timeout"
   ("Gateway Timeout") is a server-side transient, not a client-side
   timeout — it must ride the ordinary retryable path instead of
@@ -85,6 +89,94 @@ class TestGenaiServerErrors:
             RuntimeError("HTTP 502 Bad Gateway")) is True
         assert _is_retryable_error(
             RuntimeError("upstream returned 504")) is True
+
+
+# ---------------------------------------------------------------------------
+# 529 / overloaded (capacity saturation)
+# ---------------------------------------------------------------------------
+
+
+class TestOverloadedErrors:
+
+    def test_529_overloaded_body_is_retryable(self) -> None:
+        # Real provider error-string shape (synthetic request_id): the
+        # SDK raises a status-error type whose name matches none of
+        # the retryable type names, so the message must carry the
+        # classification.
+        err = RuntimeError(
+            "Error code: 529 - {'type': 'error', 'request_id': "
+            "'req_011CTsynthetic0000000000', 'error': {'type': "
+            "'overloaded_error', 'message': 'Overloaded'}}"
+        )
+        assert _is_retryable_error(err) is True
+        assert _failure_disposition(err) == "retryable"
+        assert is_timeout_error(err) is False
+
+    def test_529_status_without_overloaded_text_is_retryable(self) -> None:
+        # The status arm must carry the classification on its own —
+        # a relayed 529 can arrive without the word "overloaded"
+        # anywhere in the message.
+        assert _is_retryable_error(
+            RuntimeError("Error code: 529 - upstream saturated")) is True
+
+    def test_529_context_variants_are_retryable(self) -> None:
+        # Every context the anchored RE accepts: explicit context word,
+        # message-start status, and status + reason phrase.
+        for msg in ("HTTP 529 from provider",
+                    "status 529 returned by gateway",
+                    "529 upstream capacity exceeded",
+                    "529 Overloaded"):
+            assert _is_retryable_error(RuntimeError(msg)) is True, msg
+
+    def test_overloaded_error_without_status_is_retryable(self) -> None:
+        # A relayed message can carry the body type without the
+        # numeric status.
+        assert _is_retryable_error(
+            RuntimeError("overloaded_error: Overloaded")) is True
+
+    def test_bare_overloaded_message_is_retryable(self) -> None:
+        # ... or the human-readable message without the body type.
+        assert _is_retryable_error(RuntimeError("Overloaded")) is True
+
+    def test_bare_numerics_do_not_read_as_529(self) -> None:
+        """Both directions of the anchored 529 arm: a fatal error
+        embedding a 529-shaped numeric must stay non-retryable."""
+        assert _is_retryable_error(
+            RuntimeError(
+                "Error code: 400 - {'error': {'message': 'prompt is "
+                "1529 tokens over the limit'}}"
+            )) is False
+
+    def test_request_id_digits_do_not_read_as_529(self) -> None:
+        # A request-id-like token embedding "529" between word
+        # characters never reads as the status.
+        assert _is_retryable_error(
+            RuntimeError(
+                "Error code: 400 - {'request_id': 'req_a529b', "
+                "'error': {'message': 'invalid request'}}"
+            )) is False
+
+    def test_punctuation_adjacent_529_does_not_read_as_status(self) -> None:
+        """Word boundaries alone are not enough: a 529 sitting next to
+        punctuation (a parenthesised value, a stack-trace line number)
+        is not a status and must leave a fatal error fatal."""
+        assert _is_retryable_error(
+            RuntimeError(
+                "Error code: 400 - {'error': {'message': "
+                "'invalid parameter (529)'}}"
+            )) is False
+        assert _is_retryable_error(
+            RuntimeError(
+                'ValueError at File "handler.py", line 529, in parse'
+            )) is False
+
+    def test_neighboring_status_digits_never_retryable(self) -> None:
+        # Exact-digit pinning: adjacent 52x codes carry no retry
+        # policy here, in any of the accepted status contexts.
+        assert _is_retryable_error(
+            RuntimeError("status 528 returned by gateway")) is False
+        assert _is_retryable_error(
+            RuntimeError("upstream trace recorded (520) mid-request")) is False
 
 
 # ---------------------------------------------------------------------------

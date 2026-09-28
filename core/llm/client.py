@@ -1023,6 +1023,18 @@ def _is_response_shape_failure(error: Exception) -> bool:
 # start of the message (google-genai's "500 INTERNAL ..." shape), or
 # followed by its canonical reason phrase.
 _GATEWAY_STATUS_RE = re.compile(r"\b50[234]\b")
+# 529 is the capacity-saturation status (Anthropic sends it with an
+# "overloaded_error" body) — the canonical retry-with-backoff signal,
+# same transient class as 502/503/504. Context-anchored like the 500
+# pattern: word boundaries alone still match punctuation-adjacent
+# numerics ("line 529, in ..." stack-trace line numbers, "(529)"), so
+# the status must arrive with a context word, at the start of the
+# message, or followed by its reason phrase.
+_OVERLOADED_STATUS_RE = re.compile(
+    r"\b(?:http|status|code)\s*(?::\s*)?529\b"
+    r"|^\s*529\b"
+    r"|\b529\s+overloaded\b",
+)
 # The optional colon gates its own trailing whitespace — the naive
 # ``\s*:?\s*`` put two whitespace spans around it, quadratic on a
 # status token followed by a whitespace run.
@@ -1116,11 +1128,23 @@ def _is_retryable_error(error: Exception) -> bool:
     # max_retries paid attempts on a hopeless call (same class as the
     # anchored 429/401/500 classifiers).
     error_str = str(error).lower()
+    # "overloaded" is the bare word, not just "overloaded_error": the
+    # provider's error body spells the type "overloaded_error" while
+    # the human-readable message is plain "Overloaded", and either can
+    # arrive without the other through relaying transports.
     retryable_patterns = ("timeout", "timed out", "connection",
-                          "internal server error", "service unavailable")
+                          "internal server error", "service unavailable",
+                          "overloaded")
     if any(p in error_str for p in retryable_patterns):
         return True
     if _GATEWAY_STATUS_RE.search(error_str):
+        return True
+
+    # HTTP 529 in the text is the capacity-saturation status — same
+    # transient class as 502/503/504. The SDK surfaces it as a generic
+    # status-error type none of the retryable type names above match,
+    # so classification rides the message text.
+    if _OVERLOADED_STATUS_RE.search(error_str):
         return True
 
     # HTTP 500 in the text ("500 INTERNAL", "code: 500") is the same
