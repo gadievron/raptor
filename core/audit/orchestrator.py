@@ -10560,6 +10560,13 @@ def _run_audit_body(
     # every current AND later-added pass.
     _environment_stop_booked(config, result)
 
+    # Close the reopened post_loop_checks slot: the run body returns
+    # from here on (flushes, journal checkpoint, diagnostics — run
+    # bookkeeping, not pass work), and a phase left open at return
+    # never books its pass wall and reads as a dangling in-flight
+    # pass in the reconciled cost breakdown.
+    _pass_ledger.end_phase()  # post_loop_checks (differential tail)
+
     result.total_duration_s = time.monotonic() - start_time
 
     # --- Collector flush: write all buffered state to disk ---
