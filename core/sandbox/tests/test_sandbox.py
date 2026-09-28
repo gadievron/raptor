@@ -1005,6 +1005,23 @@ class TestPidNamespace(unittest.TestCase):
         """kill(host_pid) returns ESRCH — host PID doesn't exist in the ns."""
         import os as _os
         host_pid = _os.getpid()
+        if host_pid < 300:
+            # A fresh pid namespace hands out 1, 2, 3, ... to the
+            # sandbox's own processes, so a SMALL host pid (a nested-
+            # namespace test runner: pytest under unshare -pf IS pid 1)
+            # can exist inside the child namespace as a DIFFERENT
+            # process -- kill(host_pid, 0) then probes the sandbox's
+            # own tree and cannot discriminate host visibility. 300 is
+            # comfortably above the handful of pids a fresh namespace
+            # allocates during one sandbox run (false-pass direction)
+            # and far below the pids a real host session runs at, so
+            # the assertion still executes everywhere it is meaningful
+            # (false-skip direction).
+            self.skipTest(
+                f"test runner pid {host_pid} is small enough to "
+                "collide with the sandbox's fresh pid namespace -- "
+                "host-visibility probe would be vacuous"
+            )
         with TemporaryDirectory() as d:
             r = sandbox_run(
                 ["python3", "-c", (

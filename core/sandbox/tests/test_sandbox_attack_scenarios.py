@@ -884,6 +884,24 @@ class TestPidNamespaceDefenses(unittest.TestCase):
         """kill(host_pid) must return ESRCH — the host PID does not exist
         inside the PID namespace."""
         host_pid = os.getpid()
+        if host_pid < 300:
+            # A fresh pid namespace hands out 1, 2, 3, ... to the
+            # sandbox's own processes, so a SMALL host pid (a nested-
+            # namespace test runner: pytest under unshare -pf IS pid 1)
+            # can exist inside the child namespace as a DIFFERENT
+            # process -- kill -0 / procfs on it then probes the
+            # sandbox's own tree and cannot discriminate host
+            # visibility. 300 mirrors the lowest-pid gate used for
+            # kill safety fleet-wide: comfortably above the handful of
+            # pids a fresh namespace allocates during one sandbox run
+            # (false-pass direction), and far below the pids a real
+            # host session runs at, so the test still executes
+            # everywhere it is meaningful (false-skip direction).
+            self.skipTest(
+                f"test runner pid {host_pid} is small enough to "
+                "collide with the sandbox's fresh pid namespace -- "
+                "host-visibility probe would be vacuous"
+            )
         r = run_untrusted(
             ["sh", "-c", f"kill -0 {host_pid} 2>&1; echo rc=$?"],
             target=self.tmp.name, output=self.tmp.name,
@@ -945,6 +963,24 @@ class TestRestrictReadsCredentialExfil(unittest.TestCase):
         """Cross-process /proc/<host_pid>/environ read must return ENOENT
         (host pid invisible under the new PID ns)."""
         host_pid = os.getpid()
+        if host_pid < 300:
+            # A fresh pid namespace hands out 1, 2, 3, ... to the
+            # sandbox's own processes, so a SMALL host pid (a nested-
+            # namespace test runner: pytest under unshare -pf IS pid 1)
+            # can exist inside the child namespace as a DIFFERENT
+            # process -- kill -0 / procfs on it then probes the
+            # sandbox's own tree and cannot discriminate host
+            # visibility. 300 mirrors the lowest-pid gate used for
+            # kill safety fleet-wide: comfortably above the handful of
+            # pids a fresh namespace allocates during one sandbox run
+            # (false-pass direction), and far below the pids a real
+            # host session runs at, so the test still executes
+            # everywhere it is meaningful (false-skip direction).
+            self.skipTest(
+                f"test runner pid {host_pid} is small enough to "
+                "collide with the sandbox's fresh pid namespace -- "
+                "host-visibility probe would be vacuous"
+            )
         r = run_untrusted(
             ["sh", "-c", f"cat /proc/{host_pid}/environ 2>&1 || echo BLOCKED"],
             target=self.tmp.name, output=self.tmp.name,
