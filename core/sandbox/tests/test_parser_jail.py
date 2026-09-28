@@ -38,8 +38,10 @@ from __future__ import annotations
 
 import json
 import os
+import resource
 import socket
 import subprocess
+import sys
 import threading
 import time
 import types
@@ -1059,3 +1061,185 @@ class TestEndToEnd:
             assert counters["requests_non_connect"] == 1
         finally:
             proxy.stop()
+
+
+# ---------------------------------------------------------------------------
+# startup attribution (real child + in-process child main)
+# ---------------------------------------------------------------------------
+
+
+class TestStartupAttribution:
+    """A worker that dies during self-confinement must say where and
+    why. Pre-fix, any startup exception unwound past the ready frame
+    and surfaced to the parent as a bare, unattributable EOF ("parser
+    worker closed the socket") with the traceback lost to the DEVNULL
+    stderr — a platform where one startup step misbehaves became an
+    undebuggable every-request storm of the fail-closed jail."""
+
+    def test_direct_spawn_ready_frame_with_stderr_captured(self):
+        """Spawn the real child exactly as the manager does, but with
+        stderr CAPTURED: on any pre-frame death this test's failure
+        output carries the child's traceback and exit status — the
+        diagnostic breadcrumb the production spawn (rightly)
+        discards. Keep this test alive on every platform the suite
+        runs on: it is the first responder for "the worker dies on
+        platform X and nobody knows why"."""
+        from core.config import RaptorConfig
+
+        env = RaptorConfig.get_safe_env()
+        env["PYTHONPATH"] = parser_jail._raptor_dir()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        child_argv = [sys.executable]
+        if sys.version_info >= (3, 11):
+            child_argv.append("-P")
+        child_argv += ["-m", "core.sandbox._parser_jail_child"]
+
+        parent_sock, child_sock = socket.socketpair()
+        try:
+            proc = subprocess.Popen(
+                child_argv + [str(child_sock.fileno())],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                close_fds=True,
+                pass_fds=(child_sock.fileno(),),
+                cwd=parser_jail._raptor_dir(),
+                env=env,
+            )
+        finally:
+            child_sock.close()
+        frame_id = payload = None
+        try:
+            parent_sock.settimeout(parser_jail._READY_TIMEOUT_S)
+            try:
+                header = _recv_exact(parent_sock, FRAME_HEADER.size)
+                length, frame_id = FRAME_HEADER.unpack(header)
+                payload = json.loads(_recv_exact(parent_sock, length))
+            except (OSError, ValueError) as exc:
+                try:
+                    _, stderr = proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    _, stderr = proc.communicate()
+                pytest.fail(
+                    "worker died before the ready frame: read failed "
+                    f"with {exc!r}; exit status {proc.returncode}; "
+                    "child stderr:\n"
+                    + stderr.decode("utf-8", "backslashreplace"))
+            assert frame_id == READY_FRAME_ID
+            # ready:false here is a real confinement failure — surface
+            # the attributed error (this is exactly the signal the
+            # attribution frame exists to carry).
+            assert payload.get("ready") is True, (
+                f"worker refused to confine: {payload}")
+            assert isinstance(payload.get("landlock"), bool)
+        finally:
+            parent_sock.close()  # EOF -> clean child exit
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=10)
+
+    def test_startup_exception_reports_stage_in_ready_frame(
+        self, monkeypatch,
+    ):
+        """Any exception in the staged startup region produces an
+        attributed ready:false frame (stage + exception class +
+        message) and rc 1 — never a silent EOF. Driven in-process:
+        child main() runs in this process against one end of a real
+        socketpair, with the probe forced to blow up."""
+        from core.sandbox import _parser_jail_child as child_mod
+        from core.sandbox import landlock as landlock_mod
+
+        parent_sock, worker_sock = socket.socketpair()
+        wfd = worker_sock.detach()  # main() adopts sole ownership
+        monkeypatch.setattr(child_mod, "_close_inherited_fds",
+                            lambda keep_fd: None)
+        monkeypatch.setattr(child_mod, "_SOCK_FD", wfd)
+
+        def boom() -> bool:
+            raise RuntimeError("forced by test")
+
+        monkeypatch.setattr(landlock_mod, "check_landlock_available",
+                            boom)
+        try:
+            rc = child_mod.main(["prog", str(wfd)])
+            assert rc == 1
+            parent_sock.settimeout(5.0)
+            header = _recv_exact(parent_sock, FRAME_HEADER.size)
+            length, frame_id = FRAME_HEADER.unpack(header)
+            payload = json.loads(_recv_exact(parent_sock, length))
+            assert frame_id == READY_FRAME_ID
+            assert payload["ready"] is False
+            assert "startup failed at landlock probe" in payload["error"]
+            assert "RuntimeError: forced by test" in payload["error"]
+        finally:
+            parent_sock.close()
+
+    def test_rlimit_failures_are_best_effort_and_reported(
+        self, monkeypatch,
+    ):
+        """A failing setrlimit no longer kills the worker: every limit
+        is still attempted and the failures come back for the ready
+        frame (platform rlimit semantics vary; the limits are the belt
+        of the floor, not the wall)."""
+        from core.sandbox import _parser_jail_child as child_mod
+
+        attempted: "list[int]" = []
+
+        def flaky(res: int, value: int) -> None:
+            attempted.append(res)
+            if res == resource.RLIMIT_AS:
+                raise ValueError("forced by test")
+
+        monkeypatch.setattr(child_mod, "_set_limit", flaky)
+        failures = child_mod._apply_rlimits()
+        assert failures == ["as: ValueError: forced by test"]
+        assert len(attempted) == 5  # every limit attempted regardless
+
+    def test_parent_warns_on_partially_applied_rlimits(
+        self, monkeypatch, caplog,
+    ):
+        ready = {"ready": True, "landlock": True, "pid": -1,
+                 "rlimits_failed": ["as: ValueError: forced by test"]}
+        monkeypatch.setattr(
+            parser_jail, "subprocess",
+            _fake_subprocess(ready, _honest_responder))
+        jail = parser_jail.ParserJail()
+        with caplog.at_level("WARNING",
+                             logger="core.sandbox.parser_jail"):
+            jail.start()
+        try:
+            warned = [r for r in caplog.records
+                      if "rlimits only partially" in r.getMessage()]
+            assert len(warned) == 1
+            assert "as: ValueError: forced by test" in warned[0].getMessage()
+        finally:
+            jail.stop()
+
+    def test_handshake_eof_reports_worker_exit_code(self, monkeypatch):
+        """A worker that dies pre-frame gets its fate quoted in the
+        ParserJailUnavailable message (exit code / signal / killed),
+        captured before the manager's own kill+reap destroys it."""
+        real_popen = subprocess.Popen
+
+        def early_exit_popen(argv: list, **kwargs: object) -> subprocess.Popen:
+            return real_popen(
+                [sys.executable, "-c", "import sys; sys.exit(7)"],
+                **kwargs)
+
+        monkeypatch.setattr(
+            parser_jail, "subprocess",
+            types.SimpleNamespace(
+                Popen=early_exit_popen,
+                DEVNULL=subprocess.DEVNULL,
+                TimeoutExpired=subprocess.TimeoutExpired,
+            ))
+        jail = parser_jail.ParserJail()
+        with pytest.raises(
+            parser_jail.ParserJailUnavailable,
+            match=r"closed the socket.*worker exited with code 7",
+        ):
+            jail.start()
+        jail.stop()
