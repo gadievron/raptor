@@ -86,10 +86,18 @@ import errno
 import logging
 import os
 import re
-import unicodedata
-from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.security._trust_common import (
+    RAPTOR_DIR as _RAPTOR_DIR,
+    FileScan,
+    Finding,
+    mask as _mask,
+    render_scan_report,
+    resolve_supplied_target,
+    safe_text as _safe,
+    truncate as _truncate,
+)
 from core.security.capped_read import read_capped
 
 try:
@@ -211,27 +219,9 @@ def set_trust_override(val: bool) -> None:
     _trust_override_set = bool(val)
 
 
-# ---------------------------------------------------------------------------
-# Finding / FileScan dataclasses (parallel to cc_trust)
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class Finding:
-    """One labelled row in the per-file findings table."""
-    label: str
-    value: str
-    blocking: bool
-
-
-@dataclass
-class FileScan:
-    """Findings for one inspected file."""
-    path: Path
-    findings: list[Finding] = field(default_factory=list)
-
-    def has_blocking(self) -> bool:
-        return any(f.blocking for f in self.findings)
+# Finding / FileScan result shapes ship from the shared trust-gate
+# helper layer (core/security/_trust_common.py), re-exported here for
+# this gate's callers (see __all__).
 
 
 # ---------------------------------------------------------------------------
@@ -248,11 +238,6 @@ class FileScan:
 # load-bearing — revisit the docstring and walk boundaries instead.
 PACK_PROBE_VERIFIED_CLI = "2.26.3"
 
-# Repo root: core/security/codeql_trust.py → core/security → core →
-# repo. (A stale copy of this comment still described the module's
-# old packages/codeql home.)
-_RAPTOR_DIR = Path(__file__).resolve().parents[2]
-
 # 1 MiB cap on pack files. Real codeql-pack.yml files are <10 KiB; the
 # cap exists to bound the YAML parser's memory exposure.
 _MAX_CONFIG_BYTES = 1_048_576
@@ -262,16 +247,6 @@ _MAX_CONFIG_BYTES = 1_048_576
 # enough to catch any realistic pack layout while keeping the walk
 # bounded.
 _MAX_PACK_FILES = 200
-
-# U+2028/U+2029 line-separators slip past Cc/Cf categories but
-# render as newlines in terminals — strip them so output can't be
-# split by an attacker-supplied label.
-# Escaped spellings (matching cc_trust._EXTRA_STRIP): the literal
-# characters are invisible in an editor, so a reviewer cannot tell
-# the set from a pair of ordinary quoted blanks — and an accidental
-# "cleanup" to real spaces would silently disable the defence while
-# corrupting every space in sanitised output.
-_EXTRA_STRIP = frozenset({"\u2028", "\u2029"})
 
 # CodeQL's canonical (Microsoft-authored) pack namespace. Anything
 # outside this namespace is third-party and may carry custom
@@ -310,39 +285,15 @@ def _is_canonical_pack_ref(ref: str) -> bool:
     return True
 
 
-def _safe(s: str) -> str:
-    """Strip Unicode control/format chars and line/paragraph separators.
-    Same defence as cc_trust._safe — see that docstring for the threat
-    model (ANSI escapes, Trojan Source bidi, zero-width chars)."""
-    return "".join(
-        c if c == "\t" or (
-            c not in _EXTRA_STRIP
-            and unicodedata.category(c) not in ("Cc", "Cf")
-        ) else "?"
-        for c in s
-    )
+# _safe / _truncate / _mask (sanitise, bound, redact — the display
+# path every attacker-influencable value rides through), the U+2028/
+# U+2029 strip set, and _RAPTOR_DIR (repo-root self-scan skip) live in
+# the shared trust-gate helper layer; see core/security/
+# _trust_common.py for the threat model.
 
-
-def _truncate(s: str, limit: int = 80) -> str:
-    safe = _safe(s)
-    return safe[:limit] + "..." if len(safe) > limit else safe
-
-
-def _mask(s: str, keep: int = 8) -> str:
-    """Render a command-bearing config value without echoing it.
-
-    Scan output lands on stdout and from there in retained CI logs;
-    extractor / build-hook command lines can embed credentials in
-    their arguments. Keep a short identifying prefix, redact the
-    tail, show the length. Mirrors cc_trust._mask.
-    """
-    safe = _safe(s)
-    if not safe:
-        return "(empty)"
-    # A prefix of a value no longer than ``keep`` IS the value —
-    # fully redact rather than echo it whole.
-    prefix = safe[:keep] if 0 < keep < len(safe) else ""
-    return f"{prefix}*** ({len(safe)} chars)"
+# Operator-facing subject for this gate's shared renderer / resolve
+# gate — names what was scanned.
+_SCAN_SUBJECT = "CodeQL pack config"
 
 
 def _path_present(p: Path) -> bool:
@@ -751,63 +702,24 @@ def check_repo_codeql_trust(
         return False
     if trust_override is None:
         trust_override = _trust_override_set
-    # A SUPPLIED repo the checker cannot resolve or stat is refused,
-    # not waved through: these lanes previously returned "clean", but
-    # that verdict had examined nothing — a vanished (TOCTOU),
-    # mistyped, or pathological path skipped the gate entirely while
-    # the caller went on to run `codeql database create` against the
-    # same spelling. The trust override downgrades to warn-and-proceed
-    # exactly like a real finding. Mirrors cc_trust's gate.
-    try:
-        resolved = str(Path(repo_path).resolve())
-        os.stat(resolved)
-    except (ValueError, OSError) as e:
-        reason = getattr(e, "strerror", None) or type(e).__name__
-        shown = _truncate(_safe(repo_path), limit=200)
-        if trust_override:
-            print(f"raptor: cannot examine {shown} for CodeQL pack "
-                  f"config ({_safe(str(reason))}) — proceeding "
-                  f"(trust override active)")
-            return False
-        print(f"raptor: cannot examine {shown} for CodeQL pack "
-              f"config ({_safe(str(reason))}) — treating as dangerous")
-        return True
+    # Fail-closed resolve+stat gate (shared helper layer): a SUPPLIED
+    # repo the checker cannot resolve or stat is refused, not waved
+    # through — the caller would otherwise go on to run `codeql
+    # database create` against the same spelling. The trust override
+    # downgrades to warn-and-proceed.
+    resolved, refuse = resolve_supplied_target(
+        repo_path, trust_override, subject=_SCAN_SUBJECT)
+    if resolved is None:
+        return refuse
     scans, any_blocking = _scan_repo(resolved)
     if scans:
         target = Path(resolved)
-        _render_scan_report(target, scans, any_blocking, trust_override)
+        # Rendering (core.security._trust_common.render_scan_report)
+        # stays separated from ``_scan_repo`` so the scan stays
+        # side-effect free.
+        render_scan_report(target, scans, any_blocking, trust_override,
+                           subject=_SCAN_SUBJECT)
     return any_blocking and not trust_override
-
-
-def _render_scan_report(
-    target: Path,
-    scans: tuple[FileScan, ...],
-    any_blocking: bool,
-    trust_override: bool,
-) -> None:
-    """Pure rendering — separated from ``_scan_repo`` so the scan stays
-    side-effect free."""
-    safe_target = _safe(str(target))
-    if any_blocking:
-        if trust_override:
-            print(f"raptor: {safe_target} has dangerous CodeQL pack config "
-                  f"(trust override active):")
-        else:
-            print(f"raptor: {safe_target} has dangerous CodeQL pack config:")
-    else:
-        print(f"raptor: {safe_target} has CodeQL pack config:")
-
-    for fs in scans:
-        try:
-            rel = fs.path.relative_to(target)
-        except ValueError:
-            rel = fs.path
-        print(f"  {_safe(str(rel))}")
-        if not fs.findings:
-            continue
-        label_w = max(len(f.label) for f in fs.findings) + 2
-        for f in fs.findings:
-            print(f"    {f.label:<{label_w}}{f.value}")
 
 
 __all__ = [
