@@ -569,6 +569,45 @@ def _remove_stale_dedup_report(dest_dir: Path) -> None:
               f"special?)", file=sys.stderr)
 
 
+def _remove_stale_preflight(dest_dir: Path) -> None:
+    """Remove a previous run's capability-preflight artifact.
+
+    Called BEFORE the preflight body (outside its guard), so a
+    crashing preflight can never leave the previous run's warnings on
+    disk looking current in a reused ``--out`` — the artifact is
+    fresh-or-absent, never stale. Never raises (it runs outside the
+    preflight's try block). Same regular-file-only posture as the
+    sibling removers.
+    """
+    import stat as _stat_mod
+    # Single-homed in capability_preflight.PREFLIGHT_FILENAME; the
+    # literal is a fallback so a broken module import cannot disable
+    # the stale-removal (equality is test-pinned).
+    filename = "capability-preflight.json"
+    try:
+        from packages.exploitability_validation.capability_preflight import (
+            PREFLIGHT_FILENAME,
+        )
+        filename = PREFLIGHT_FILENAME
+    except Exception:  # noqa: BLE001 — fall back to the pinned literal
+        pass
+    path = Path(dest_dir) / filename
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return
+    if not _stat_mod.S_ISREG(st.st_mode):
+        print(f"  ⚠️  {filename} is not a regular file "
+              f"(mode=0o{st.st_mode:o}) — left in place (planted "
+              f"special?)", file=sys.stderr)
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as e:
+        print(f"  ⚠️  could not remove stale {filename}: "
+              f"{_sft(str(e), max_len=200)}", file=sys.stderr)
+
+
 def _route_dark_to_witness_backlog(
     container: dict, dest_dir: Path, source_name: str,
 ) -> int:
@@ -3995,8 +4034,15 @@ def _rank_priority_targets(checklist: dict, out_dir) -> None:
 
 def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
               sanitizer_cut_mode=None, sanitizer_cut_parity_log=None,
-              findings_path=None, rank=False, include_dark=False):
-    """Stage 0: start lifecycle, build checklist, bridge understand output."""
+              findings_path=None, rank=False, include_dark=False,
+              dynamic=None, build=None):
+    """Stage 0: start lifecycle, build checklist, bridge understand output.
+
+    ``dynamic`` / ``build`` are the tri-state per-run consent flags
+    (None = the project trust marker decides) — stage 0 only READS
+    them, for the capability preflight's warning; the stage-E gates
+    re-resolve independently.
+    """
     if not target:
         print("ERROR: --target is required for stage 0", file=sys.stderr)
         sys.exit(1)
@@ -4126,6 +4172,43 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
             _remove_stale_import_marker(out_dir)
             _remove_stale_witness_backlog(out_dir)
             _remove_stale_dedup_report(out_dir)
+
+        # Capability preflight (warning-only): name the verdict ceiling
+        # BEFORE any LLM spend. A run with no binary, no usable project
+        # binary, and no build consent discovers only at stage E —
+        # after the stage A–D spend — that its memory-corruption
+        # findings cap at 'confirmed_unverified' (prepare_F demotes
+        # exploitable-family statuses without a mechanical feasibility
+        # stamp). The assessment artifact is fresh-or-absent (the
+        # previous run's artifact is removed BEFORE the body, so a
+        # crashing preflight cannot leave stale warnings looking
+        # current) and the report generator renders
+        # it. Best-effort by contract: a preflight failure warns and
+        # NEVER blocks stage 0 — this must not turn a working run into
+        # a failed one.
+        _remove_stale_preflight(out_dir)
+        try:
+            from packages.exploitability_validation.capability_preflight import (
+                PREFLIGHT_FILENAME,
+                assess_capabilities,
+                render_warning_lines,
+            )
+            findings_container = (load_json(out_dir / "findings.json")
+                                  if findings_path else None)
+            assessment = assess_capabilities(
+                target, run_dir=out_dir,
+                findings=(findings_container
+                          if isinstance(findings_container, dict) else None),
+                checklist=checklist if isinstance(checklist, dict) else None,
+                dynamic=dynamic, build=build,
+            )
+            from core.json import save_json as _preflight_save
+            _preflight_save(out_dir / PREFLIGHT_FILENAME, assessment)
+            for _line in render_warning_lines(assessment):
+                print(_line)
+        except Exception as e:  # noqa: BLE001 — warning-only, never fatal
+            print(f"  ⚠️  capability preflight skipped: "
+                  f"{_sft(str(e), max_len=200)}", file=sys.stderr)
 
         # Durable bridge opt-out marker, rewritten to THIS
         # invocation's truth BOTH ways: later stage boundaries re-run
@@ -4946,7 +5029,7 @@ def main():
                   sanitizer_cut_mode=sanitizer_cut_mode,
                   sanitizer_cut_parity_log=sanitizer_cut_parity_log,
                   findings_path=findings_path, rank=rank,
-                  include_dark=include_dark)
+                  include_dark=include_dark, dynamic=dynamic, build=build)
         return
 
     # All other stages need a workdir
