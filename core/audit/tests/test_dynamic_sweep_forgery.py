@@ -400,6 +400,7 @@ def _sandbox_delivers_signals() -> bool:
     import tempfile as _tf
 
     from core.sandbox import context as _ctx
+    from core.sandbox.errors import SandboxSetupError
     try:
         with _tf.TemporaryDirectory(prefix="sigprobe-") as out:
             # A KERNEL-generated fault via the system interpreter:
@@ -414,7 +415,13 @@ def _sandbox_delivers_signals() -> bool:
                 target="/tmp", output=out,
                 capture_output=True, timeout=60,
             )
-    except Exception:
+    except (SandboxSetupError, Exception):
+        # SandboxSetupError is a BaseException on purpose (runtime
+        # refusals must not be swallowed by broad handlers) — but this
+        # probe runs at COLLECTION time, and on a host that cannot
+        # create user namespaces the floor refusal must read as
+        # "signals not deliverable" (skip the class) rather than
+        # erroring the whole suite's collection.
         return False
     return isinstance(r, _sp.CompletedProcess) and r.returncode < 0
 
