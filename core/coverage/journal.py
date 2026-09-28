@@ -22,6 +22,7 @@ import time
 import types
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field, replace
+from dataclasses import fields as dataclass_fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any, Union, get_args, get_origin, get_type_hints
@@ -662,6 +663,16 @@ class ReviewJournalEntry:
         # ``schema_version`` is required; keep even when default.
         d["schema_version"] = self.schema_version
         return d
+
+
+#: The field names THIS checkout's dataclass round-trip preserves.
+#: ``_entry_from_dict`` compares persisted rows against this set to
+#: detect a lossy projection (keys the local schema does not know)
+#: and stash the raw-form provenance evidence — see
+#: :data:`core.coverage.journal_mac.RAW_FORM_ATTR`.
+_ENTRY_FIELD_NAMES: frozenset[str] = frozenset(
+    f.name for f in dataclass_fields(ReviewJournalEntry)
+)
 
 
 def is_mechanical_echo(entry: Any) -> bool:
@@ -2614,6 +2625,46 @@ def _entry_from_dict(raw: dict[str, Any]) -> ReviewJournalEntry:
         _le = None
     if _le is not None and _ls and (_le - _ls) > 50_000:
         _le = _ls + 50_000  # no real function is 50k lines
+    entry = _entry_from_validated(raw, _ls, _le, version)
+    _stash_raw_form(entry, raw)
+    return entry
+
+
+def _stash_raw_form(entry: ReviewJournalEntry, raw: dict[str, Any]) -> None:
+    """Stash raw-form provenance evidence on a freshly loaded entry.
+
+    When the persisted row carries keys this checkout's dataclass does
+    not know, the ``entry.to_dict()`` round-trip is LOSSY — a token
+    minted over the persisted bytes can never verify over the
+    projection, so projection-only verification reads the honest row
+    as tampered (the mass-demotion class: a follow-on audit of a large
+    C codebase forfeited 1,490 paid verdicts this way). Stash the
+    persisted row's canonical hash plus the extra key names as
+    :data:`journal_mac.RAW_FORM_ATTR`; ``entry_provenance_detail``
+    uses them as the raw-form ladder rung, bounded by the shipped
+    generation vocabulary. Attribute-only (never a dataclass field):
+    it attests the AS-LOADED bytes and must not survive ``replace`` /
+    ``asdict`` copies, whose content is no longer those bytes.
+    """
+    extra = frozenset(raw) - _ENTRY_FIELD_NAMES
+    if not extra:
+        return
+    from core.coverage import journal_mac
+    if not raw.get(journal_mac.TOKEN_KEY):
+        return
+    setattr(
+        entry,
+        journal_mac.RAW_FORM_ATTR,
+        (journal_mac.row_sha256(raw), extra),
+    )
+
+
+def _entry_from_validated(
+    raw: dict[str, Any],
+    _ls: int,
+    _le: int | None,
+    version: int,
+) -> ReviewJournalEntry:
     return ReviewJournalEntry(
         ts=raw["ts"],
         run_id=raw["run_id"],
@@ -3425,6 +3476,7 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
         key_ok = journal_mac.key_usable()
 
         stripped = 0
+        upgraded = 0
         healed = 0
         # Each merged key remembers the PRE-RUN value it displaced so
         # the byte-eviction arm below can RESTORE it: an evicted
@@ -3438,24 +3490,50 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
             key = entry.index_key
             row = entry.to_dict()
             token = row.get(journal_mac.TOKEN_KEY)
-            if key_ok and token and not journal_mac.verify_row(row, token):
-                # A token is persisted ONLY with content it verifies
-                # over. The dataclass round-trip above is lossy for
-                # any journal field this checkout's schema does not
-                # know (version skew: a newer writer stamped a field —
-                # e.g. the slim-clean ``body_offload`` pointer — that
-                # an older merge silently drops), and a token carried
-                # verbatim over the reduced row makes every future
-                # fold read an HONEST row as tampered, permanently
-                # revoking its verdict-reuse authority. Strip the
-                # token instead: the row lands in the honest unstamped
-                # tier (exact-hash fold credit, no verdict reuse) —
-                # the same tier a failing token demotes to, minus the
-                # false tamper attribution and with repair possible
-                # (a later skew-free merge's verifying copy replaces
-                # it via the same-``ts`` tie-break below).
-                row.pop(journal_mac.TOKEN_KEY, None)
-                stripped += 1
+            if key_ok and token:
+                if not journal_mac.verify_row(row, token):
+                    # A token is persisted ONLY with content it
+                    # verifies over. The dataclass round-trip above is
+                    # lossy for any journal field this checkout's
+                    # schema does not know (version skew: a newer
+                    # writer stamped a field — e.g. the slim-clean
+                    # ``body_offload`` pointer — that an older merge
+                    # silently drops), and a token carried verbatim
+                    # over the reduced row makes every future fold
+                    # read an HONEST row as tampered, permanently
+                    # revoking its verdict-reuse authority. Strip the
+                    # token instead: the row lands in the honest
+                    # unstamped tier (exact-hash fold credit, no
+                    # verdict reuse) — the same tier a failing token
+                    # demotes to, minus the false tamper attribution
+                    # and with repair possible (a later skew-free
+                    # merge's verifying copy replaces it via the
+                    # same-``ts`` tie-break below). Never re-mint over
+                    # the reduced row instead: a re-stamped reduced
+                    # copy would pass _row_provenance_ok and block
+                    # that same-``ts`` heal forever — the strip is
+                    # load-bearing for healability, not an
+                    # optimization target.
+                    row.pop(journal_mac.TOKEN_KEY, None)
+                    stripped += 1
+                elif (journal_mac.token_generation(token)
+                        != journal_mac.GENERATION_CURRENT):
+                    # Legacy-generation upgrade: the token verifies
+                    # (same authority as a current-form token), so the
+                    # index copy is re-stamped at the CURRENT
+                    # generation — the ladder's live population
+                    # shrinks at every merge instead of growing until
+                    # a rung falls off. Only ever after a successful
+                    # verify: re-stamping is a restatement of already-
+                    # proven provenance, never a laundering of an
+                    # unverified row. Mint failure (key outage mid-
+                    # merge) keeps the verified legacy token — losing
+                    # authority to an upgrade attempt would invert the
+                    # feature.
+                    fresh = journal_mac.mint_row(row)
+                    if fresh:
+                        row[journal_mac.TOKEN_KEY] = fresh
+                        upgraded += 1
             existing = index.get(key)
             if existing is None or entry.ts > _row_ts(existing):
                 slot = merged_rows.get(key)
@@ -3501,6 +3579,13 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
                 "token; exact-hash fold credit only until a "
                 "skew-free merge re-projects them)",
                 stripped, run_dir,
+            )
+        if upgraded:
+            logger.info(
+                "journal index: re-stamped %d row(s) from a legacy "
+                "canonicalisation generation at the current "
+                "generation (verified first; authority unchanged)",
+                upgraded,
             )
         if healed:
             logger.info(

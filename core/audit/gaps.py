@@ -3098,6 +3098,14 @@ def _verify_entries_fold(
             credits.setdefault(key, []).append(int(line_start or 0))
 
     tampered = 0
+    # Demotions bucketed by entry_provenance_detail reason — the
+    # fold's drift telemetry. A mass hash_mismatch fire points at
+    # canonicalisation/schema drift or a reduced index copy; the
+    # verified-tier legacy buckets show drift being ABSORBED (rows
+    # retaining full authority via the generation ladder / raw form)
+    # rather than forfeited.
+    tampered_reasons: dict[str, int] = {}
+    legacy_verified: dict[str, int] = {}
     unstamped_credited = 0
     unstamped_unverifiable = 0
     reuse_blocked: dict[str, int] = {}
@@ -3213,14 +3221,25 @@ def _verify_entries_fold(
         # Unverifiable-token rows are not dropped BELOW the unstamped
         # tier: the token is strippable, so that would punish only
         # honest newer-schema rows, not attackers.
-        provenance = journal_mac.entry_provenance(entry)
+        provenance, prov_reason = journal_mac.entry_provenance_detail(entry)
         if provenance == journal_mac.ROW_TAMPERED:
             tampered += 1
+            tampered_reasons[prov_reason] = (
+                tampered_reasons.get(prov_reason, 0) + 1)
             logger.debug(
                 "journal-fold: %s row has a provenance token that "
-                "does not verify — demoted to the unstamped tier "
-                "(hash-gated credit only, no verdict reuse)", key,
+                "does not verify (%s) — demoted to the unstamped "
+                "tier (hash-gated credit only, no verdict reuse)",
+                key, prov_reason,
             )
+        elif (provenance == journal_mac.ROW_VERIFIED
+                and prov_reason != journal_mac.REASON_CURRENT_FORM):
+            # Legacy-generation / raw-form verification: SAME
+            # authority as the current form — counted so the fold
+            # log shows how much of the corpus rides the legacy
+            # ladder (drift that is being absorbed, not forfeited).
+            legacy_verified[prov_reason] = (
+                legacy_verified.get(prov_reason, 0) + 1)
         verified_row = provenance == journal_mac.ROW_VERIFIED
         # Candidate spans, tried in order — a match on ANY verifies:
         # * the entry's OWN recorded span: same-named items (macro
@@ -3285,17 +3304,34 @@ def _verify_entries_fold(
         to_verify.setdefault(entry.file, []).append(
             (entry, key, spans, verified_row))
 
+    if legacy_verified:
+        split = ", ".join(
+            f"{reason}={n}" for reason, n in sorted(legacy_verified.items()))
+        logger.info(
+            "journal-fold: %d row(s) verified under a legacy "
+            "canonical form (%s) — full verdict authority retained. "
+            "legacy_generation rows are re-stamped at the current "
+            "generation by the index merge; raw_form rows keep fold "
+            "authority but merge as reduced unstamped index copies "
+            "until a skew-free merge (or `raptor-audit journal "
+            "reindex <run-dir>`) re-projects them",
+            sum(legacy_verified.values()), split,
+        )
     if tampered:
+        split = ", ".join(
+            f"{reason}={n}" for reason, n in sorted(tampered_reasons.items()))
         logger.warning(
             "journal-fold: %d row(s) carried a provenance token that "
-            "does not verify (edited content, another install's key, "
-            "a newer row schema, or an index copy written by a "
-            "version-skewed merge that dropped a stamped field) — "
-            "demoted to the unstamped tier: exact-hash fold credit "
-            "only, no verdict reuse. If these are project-index rows "
-            "whose run journal still verifies, `raptor-audit journal "
-            "reindex <run-dir>` re-projects the verifying copies",
-            tampered,
+            "verifies under NO known canonicalisation generation "
+            "(%s: edited content, another install's key, a newer row "
+            "schema outside the shipped vocabulary, or an index copy "
+            "written by a version-skewed merge that dropped a stamped "
+            "field) — demoted to the unstamped tier: exact-hash fold "
+            "credit only, no verdict reuse. If these are "
+            "project-index rows whose run journal still verifies, "
+            "`raptor-audit journal reindex <run-dir>` re-projects the "
+            "verifying copies",
+            tampered, split,
         )
     if unstamped_unverifiable:
         logger.info(
