@@ -411,6 +411,48 @@ class TestCache:
         assert a == b
         assert a != c
 
+    @requires_ts("c")
+    def test_cache_read_bound_two_directions(
+        self, tmp_path, monkeypatch,
+    ):
+        """_MAX_CACHE_BYTES from both sides: a cache file within the
+        bound is read and served; one over the bound is refused
+        before any read and the index is rebuilt from source."""
+        import json
+
+        from core.analysis import clone_index as ci
+
+        sources = {"a.c": (
+            _clone_fn("copy_a") + _clone_fn("copy_b")
+        )}
+        first = load_or_build_clone_index(sources, out_dir=tmp_path)
+        assert first is not None
+        path = tmp_path / CLONE_INDEX_FILENAME
+        # Plant a sentinel key (fingerprint/version untouched) so a
+        # served reload is detectable, not just plausible.
+        raw = json.loads(path.read_text())
+        raw["families"][0]["key"] = "planted:sentinel"
+        path.write_text(json.dumps(raw))
+        size = path.stat().st_size
+
+        # In bound (== the bound): reload serves the cache.
+        monkeypatch.setattr(ci, "_MAX_CACHE_BYTES", size)
+        served = load_or_build_clone_index(sources, out_dir=tmp_path)
+        assert served is not None
+        assert any(
+            f["key"] == "planted:sentinel" for f in served.families
+        )
+
+        # Over bound (one byte under the file size): the read is
+        # refused and the sentinel never surfaces — the index is
+        # rebuilt from source instead.
+        monkeypatch.setattr(ci, "_MAX_CACHE_BYTES", size - 1)
+        rebuilt = load_or_build_clone_index(sources, out_dir=tmp_path)
+        assert rebuilt is not None
+        assert all(
+            f["key"] != "planted:sentinel" for f in rebuilt.families
+        )
+
 
 class TestResolverLayer:
     @requires_ts("c")
