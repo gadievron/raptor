@@ -624,6 +624,29 @@ def _upstream_timeout_for(body: bytes) -> httpx.Timeout:
 # in test_upstream_stale_retry.py).
 _STALE_REUSE_ERRORS = (httpx.RemoteProtocolError, httpx.ReadError)
 
+# Transport-death shapes that indict the HELD SHARD's own
+# connections and feed its consecutive-failure counter
+# (ClientShards.report_failure): connection establishment failures,
+# read-side deaths, protocol violations, and read-timeout trips (the
+# stall watchdog surfaces a wedged tunnel as ReadTimeout). Distinct
+# from _STALE_REUSE_ERRORS above — that tuple decides what may be
+# transparently RETRIED (deliberately excluding timeouts and connect
+# errors: double-billing / failover-delay), this one decides what
+# counts as evidence the shard's client needs a drain-shaped rebuild.
+# Counting is further gated at the relay: watcher-induced aborts
+# (the dispatcher shut the upstream socket itself) and failures on
+# the stale-retry's one-shot client are evidence about something
+# other than the shard, so they stay neutral. Worker-side failures
+# (WorkerDisconnected, RelayLimitExceeded, wfile OSErrors) are plain
+# OSError shapes and never match this tuple.
+_SHARD_HEALTH_ERRORS: tuple[type[Exception], ...] = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadError,
+    httpx.RemoteProtocolError,
+    httpx.ReadTimeout,
+)
+
 # Retry-eligibility ceiling: a failed attempt is only retried when it
 # died within this many seconds of the request being sent. The error
 # CLASS alone cannot distinguish "stale pooled connection, request
@@ -2166,6 +2189,8 @@ class LLMDispatcher:
                     http2_enabled,
                     pool_limits,
                     response_event_hooks,
+                    shard_failure_threshold,
+                    shard_max_age_s,
                     upstream_shard_count,
                 )
 
@@ -2179,6 +2204,14 @@ class LLMDispatcher:
                 old = self._upstream_shards
                 self._upstream_shards = ClientShards(
                     _build, upstream_shard_count(),
+                    # Shard lifecycle: consecutive transport failures
+                    # drain-and-rebuild the sick shard (both HTTP
+                    # modes); age-based rotation replaces long-lived
+                    # HTTP/2 connections before a middlebox-imposed
+                    # tunnel lifetime does (None = off under
+                    # HTTP/1.1).
+                    failure_threshold=shard_failure_threshold(),
+                    max_age_s=shard_max_age_s(),
                 )
                 self._upstream_http_env = env
                 if old is not None:
@@ -2980,8 +3013,17 @@ def _make_request_handler(
             # from a genuine mid-response loss — flat rows made those
             # indistinguishable.
             upstream_sent_at = time.monotonic()
+            # Shard-health provenance: after a stale-reuse retry the
+            # response rides the retry's one-shot client, so neither
+            # a subsequent success nor a subsequent failure says
+            # anything about the SHARD's connections — the shard's
+            # consecutive-failure counter only moves on evidence
+            # about its own client (see _SHARD_HEALTH_ERRORS).
+            _stale_retried = False
 
             def _note_stale_retry(exc: Exception) -> None:
+                nonlocal _stale_retried
+                _stale_retried = True
                 # Written before the retry's outcome is known —
                 # status "attempt", never "ok" (the next dispatch/
                 # error row carries the outcome). The row keeps the
@@ -3218,6 +3260,13 @@ def _make_request_handler(
                     if _prev_chunk is not None:
                         self.wfile.write(_prev_chunk)
                     self.wfile.flush()
+                if not _stale_retried:
+                    # Clean drain on the shard's own client: reset
+                    # its consecutive-failure counter. Skipped after
+                    # a stale-reuse retry — that success rode the
+                    # one-shot client and would falsely acquit a
+                    # shard whose own open just failed.
+                    shards.report_success(shard_index)
                 dispatcher._audit(AuditEvent(
                     ts=time.time(), event="request.dispatch",
                     peer_pid=None, peer_uid=None,
@@ -3234,6 +3283,16 @@ def _make_request_handler(
                     },
                 ))
             except (httpx.HTTPError, OSError) as exc:
+                if (
+                    not _stale_retried
+                    and not watcher.worker_gone.is_set()
+                    and isinstance(exc, _SHARD_HEALTH_ERRORS)
+                ):
+                    # Transport death on the shard's own client (not
+                    # the retry one-shot, not the watcher shutting
+                    # the socket down itself): one strike toward the
+                    # drain-and-rebuild threshold.
+                    shards.report_failure(shard_index)
                 if scanner is not None and not _usage_booked:
                     # Aborted mid-stream — book what the upstream
                     # already reported (message_start input tokens at

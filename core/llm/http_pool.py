@@ -57,6 +57,17 @@ Knobs (all optional; invalid values fall back to the default):
     Number of independent upstream clients the dispatcher's
     forwarding leg spreads relays across (default 4 under HTTP/2,
     1 otherwise — see :func:`upstream_shard_count`).
+``RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD``
+    Consecutive transport failures on one shard before it is drained
+    and replaced with a fresh client (default 3; active in both HTTP
+    modes — see :func:`shard_failure_threshold`).
+``RAPTOR_HTTP2_SHARD_MAX_AGE_S``
+    Proactive shard rotation age in seconds under HTTP/2 (default
+    2400 — see :func:`shard_max_age_s`). A shard past this age is
+    drained at a moment with no live streams and replaced fresh,
+    instead of waiting for a middlebox to terminate the long-lived
+    tunnel mid-flight. Inert on HTTP/1.1, where connection lifetime
+    is managed per-connection by the pool.
 """
 
 from __future__ import annotations
@@ -66,6 +77,7 @@ import logging
 import math
 import os
 import threading
+import time
 from collections.abc import Callable
 
 import httpx
@@ -272,9 +284,85 @@ def upstream_shard_count() -> int:
     return _env_count(_HTTP2_SHARDS_ENV, default)
 
 
+_SHARD_FAIL_THRESHOLD_ENV = "RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD"
+_SHARD_MAX_AGE_ENV = "RAPTOR_HTTP2_SHARD_MAX_AGE_S"
+
+# Consecutive transport failures before a shard is drained. Both
+# directions matter: lower (1) drains on every isolated blip —
+# ordinary keepalive churn after an idle gap would rebuild shards
+# continuously, each rebuild paying a fresh CONNECT chain + TLS
+# handshake for a connection that was never sick; higher keeps
+# routing relays onto a client whose connections have already failed
+# several times in a row — every extra strike required is another
+# aborted relay before the repair happens.
+_DEFAULT_SHARD_FAIL_THRESHOLD = 3
+
+# Proactive rotation age for HTTP/2 shards, in seconds. Middleboxes
+# impose hard lifetimes on long-lived tunnels under load; when the
+# middlebox wins the race it terminates the connection with every
+# multiplexed stream still on it. Rotating proactively replaces the
+# connection at a moment of our choosing — drained, zero live streams
+# — instead of the middlebox's. Both directions: lower churns
+# handshakes (each rotation is a fresh CONNECT chain + TLS) and, near
+# the floor, degenerates toward per-request clients — the pool stops
+# pooling; higher loses the race to the imposed lifetime and the
+# rotation protects nothing.
+_DEFAULT_SHARD_MAX_AGE_S = 2400.0
+_SHARD_MAX_AGE_FLOOR_S = 60.0
+
+
+def shard_failure_threshold() -> int:
+    """Consecutive transport failures that drain a shard.
+
+    Active in both HTTP modes — a repeatedly-failing HTTP/1.1 pool
+    benefits from a fresh client exactly like a broken multiplexed
+    connection does. ``RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD`` overrides;
+    invalid values (non-numeric, below 1) warn and fall back like the
+    other knobs here.
+    """
+    return _env_count(_SHARD_FAIL_THRESHOLD_ENV, _DEFAULT_SHARD_FAIL_THRESHOLD)
+
+
+def shard_max_age_s() -> float | None:
+    """Proactive rotation age for the forwarding-leg shards, or None
+    when rotation is off.
+
+    Only meaningful under HTTP/2 — that is where one long-lived
+    multiplexed connection concentrates every in-flight stream behind
+    a middlebox-imposed tunnel lifetime. On HTTP/1.1 the pool already
+    manages per-connection lifetime, so rotation is disabled rather
+    than churning whole clients for nothing.
+    """
+    if not http2_enabled():
+        return None
+    value = _env_number(_SHARD_MAX_AGE_ENV, _DEFAULT_SHARD_MAX_AGE_S)
+    if value < _SHARD_MAX_AGE_FLOOR_S:
+        logger.warning(
+            "%s=%r is below the %.0fs floor — using default %.0f",
+            _SHARD_MAX_AGE_ENV, os.environ.get(_SHARD_MAX_AGE_ENV),
+            _SHARD_MAX_AGE_FLOOR_S, _DEFAULT_SHARD_MAX_AGE_S,
+        )
+        return _DEFAULT_SHARD_MAX_AGE_S
+    return value
+
+
+class _Shard:
+    """One slot's live client plus its lifecycle state (all fields
+    guarded by the owning :class:`ClientShards` lock)."""
+
+    __slots__ = ("born", "client", "draining", "failures", "in_flight")
+
+    def __init__(self, client: httpx.Client) -> None:
+        self.client = client
+        self.in_flight = 0
+        self.failures = 0
+        self.born = time.monotonic()
+        self.draining = False
+
+
 class ClientShards:
-    """A fixed set of independent ``httpx.Client`` instances with
-    least-in-flight selection.
+    """A small pool of independent ``httpx.Client`` instances with
+    least-in-flight selection and drain-shaped repair.
 
     Under HTTP/2 a single client funnels every concurrent request
     onto one multiplexed connection (see the module docstring), so
@@ -287,65 +375,201 @@ class ClientShards:
     holds plus its shard index; callers hold the shard for the full
     request lifetime and MUST ``release(index)`` in a ``finally``.
     Thread-safe; ``close()`` is idempotent.
+
+    Lifecycle: a shard whose caller-reported consecutive transport
+    failures reach ``failure_threshold``, or whose age exceeds
+    ``max_age_s`` (None disables either mechanism), enters DRAINING —
+    excluded from selection, never closed with live holds, retired
+    (closed + slot replaced fresh or tombstoned back toward the
+    target count) the moment its in-flight count reaches zero. The
+    pool always has at least one selectable shard: if every live
+    shard is draining with holds still in flight, ``acquire``
+    provisions a fresh one rather than blocking or riding a dying
+    connection. Slot indices are stable for the life of a hold —
+    slots are appended or replaced in place, never shifted — so a
+    caller's ``release``/``report_*`` always lands on the shard it
+    acquired.
     """
 
     def __init__(
         self,
         build: Callable[[], httpx.Client],
         count: int,
+        *,
+        failure_threshold: int | None = None,
+        max_age_s: float | None = None,
     ) -> None:
         if count < 1:
             raise ValueError("ClientShards needs at least one shard")
-        self._clients: list[httpx.Client] = [build() for _ in range(count)]
-        self._in_flight: list[int] = [0] * count
+        self._build = build
+        self._count = count
+        self._failure_threshold = failure_threshold
+        self._max_age_s = max_age_s
+        self._slots: list[_Shard | None] = [
+            _Shard(build()) for _ in range(count)
+        ]
         self._lock = threading.Lock()
         self._closed = False
 
     def __len__(self) -> int:
-        return len(self._clients)
+        with self._lock:
+            return sum(1 for shard in self._slots if shard is not None)
 
     @property
     def clients(self) -> tuple[httpx.Client, ...]:
-        """The shard clients (introspection — e.g. asserting every
-        shard carries the protocol-observability hook)."""
-        return tuple(self._clients)
+        """The live shard clients (introspection — e.g. asserting
+        every shard carries the protocol-observability hook)."""
+        with self._lock:
+            return tuple(
+                shard.client for shard in self._slots if shard is not None
+            )
 
     @property
     def in_flight(self) -> tuple[int, ...]:
-        """Snapshot of per-shard in-flight hold counts."""
+        """Snapshot of per-live-shard in-flight hold counts."""
         with self._lock:
-            return tuple(self._in_flight)
-
-    def acquire(self) -> tuple[httpx.Client, int]:
-        """Reserve the least-loaded shard: ``(client, index)``."""
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("ClientShards is closed")
-            index = min(
-                range(len(self._in_flight)),
-                key=self._in_flight.__getitem__,
+            return tuple(
+                shard.in_flight
+                for shard in self._slots
+                if shard is not None
             )
-            self._in_flight[index] += 1
-            return self._clients[index], index
 
-    def release(self, index: int) -> None:
-        """Return a hold taken by :meth:`acquire`."""
-        with self._lock:
-            if self._in_flight[index] > 0:
-                self._in_flight[index] -= 1
+    def _retire_idle_draining_locked(self) -> list[httpx.Client]:
+        """Retire every draining shard with zero holds: close its
+        client (returned for closing OUTSIDE the lock — close does
+        I/O) and either refill the slot with a fresh shard or
+        tombstone it, whichever moves the live-slot count toward the
+        target. Caller holds the lock."""
+        stale: list[httpx.Client] = []
+        for i, shard in enumerate(self._slots):
+            if shard is None or not shard.draining or shard.in_flight:
+                continue
+            stale.append(shard.client)
+            others = sum(
+                1 for j, s in enumerate(self._slots)
+                if s is not None and j != i
+            )
+            self._slots[i] = (
+                _Shard(self._build()) if others < self._count else None
+            )
+        return stale
 
-    def close(self) -> None:
-        """Close every shard client. Idempotent."""
-        with self._lock:
-            if self._closed:
-                return
-            self._closed = True
-            clients = list(self._clients)
-        for client in clients:
+    def _holds_locked(self, index: int) -> int:
+        """Least-loaded selection key. Caller holds the lock and only
+        passes live-slot indices."""
+        shard = self._slots[index]
+        return shard.in_flight if shard is not None else 0
+
+    @staticmethod
+    def _close_stale(stale: list[httpx.Client]) -> None:
+        for client in stale:
             try:
                 client.close()
             except Exception:  # noqa: BLE001 — close the rest regardless
                 logger.debug("shard client close failed", exc_info=True)
+
+    def acquire(self) -> tuple[httpx.Client, int]:
+        """Reserve the least-loaded selectable shard: ``(client,
+        index)``. Also the rotation seam: overdue shards are marked
+        draining here, and idle draining shards are retired."""
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("ClientShards is closed")
+            if self._max_age_s is not None:
+                now = time.monotonic()
+                for i, shard in enumerate(self._slots):
+                    if (
+                        shard is not None
+                        and not shard.draining
+                        and now - shard.born >= self._max_age_s
+                    ):
+                        shard.draining = True
+                        logger.info(
+                            "http shard %d rotating out at age %.0fs",
+                            i, now - shard.born,
+                        )
+            stale = self._retire_idle_draining_locked()
+            candidates = [
+                i for i, shard in enumerate(self._slots)
+                if shard is not None and not shard.draining
+            ]
+            if candidates:
+                index = min(candidates, key=self._holds_locked)
+            else:
+                # Invariant: at least one selectable shard. Every
+                # live slot is draining with holds still in flight —
+                # provision fresh rather than block the relay or ride
+                # a connection already condemned.
+                self._slots.append(_Shard(self._build()))
+                index = len(self._slots) - 1
+            shard = self._slots[index]
+            if shard is None:  # pragma: no cover — candidates are live
+                raise RuntimeError("selected shard slot is empty")
+            shard.in_flight += 1
+            client = shard.client
+        self._close_stale(stale)
+        return client, index
+
+    def release(self, index: int) -> None:
+        """Return a hold taken by :meth:`acquire`. The last hold off
+        a draining shard retires it here — the drain-shaped repair
+        never closes a client with live streams."""
+        with self._lock:
+            shard = self._slots[index]
+            if shard is None:
+                return
+            if shard.in_flight > 0:
+                shard.in_flight -= 1
+            stale = (
+                self._retire_idle_draining_locked()
+                if not self._closed and shard.draining
+                and shard.in_flight == 0
+                else []
+            )
+        self._close_stale(stale)
+
+    def report_success(self, index: int) -> None:
+        """Caller seam: the held shard carried a request to clean
+        completion — reset its consecutive-failure count."""
+        with self._lock:
+            shard = self._slots[index]
+            if shard is not None:
+                shard.failures = 0
+
+    def report_failure(self, index: int) -> None:
+        """Caller seam: the held shard's request died a transport
+        death attributable to the shard's own connections. At the
+        threshold the shard drains (stops being selected) and is
+        replaced once its live holds finish."""
+        if self._failure_threshold is None:
+            return
+        with self._lock:
+            shard = self._slots[index]
+            if shard is None:
+                return
+            shard.failures += 1
+            if (
+                shard.failures >= self._failure_threshold
+                and not shard.draining
+            ):
+                shard.draining = True
+                logger.warning(
+                    "http shard %d draining after %d consecutive "
+                    "transport failures — will be replaced when its "
+                    "in-flight requests finish",
+                    index, shard.failures,
+                )
+
+    def close(self) -> None:
+        """Close every live shard client. Idempotent."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            clients = [
+                shard.client for shard in self._slots if shard is not None
+            ]
+        self._close_stale(clients)
 
 
 def sdk_http_client(
@@ -381,5 +605,7 @@ __all__ = [
     "protocol_counts",
     "response_event_hooks",
     "sdk_http_client",
+    "shard_failure_threshold",
+    "shard_max_age_s",
     "upstream_shard_count",
 ]

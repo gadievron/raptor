@@ -10,6 +10,7 @@ that outlives the gap and gives every SDK the same tunable pool.
 from __future__ import annotations
 
 import sys
+import time
 import types
 
 import httpx
@@ -23,6 +24,8 @@ _KNOB_VARS = (
     "RAPTOR_HTTP_MAX_CONNECTIONS",
     "RAPTOR_HTTP2",
     "RAPTOR_HTTP2_SHARDS",
+    "RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD",
+    "RAPTOR_HTTP2_SHARD_MAX_AGE_S",
 )
 
 
@@ -439,6 +442,251 @@ class TestClientShards:
         assert all(client.is_closed for client in clients)
         with pytest.raises(RuntimeError):
             shards.acquire()
+
+
+class TestShardLifecycleKnobs:
+    """The drain-and-rebuild threshold and the proactive rotation
+    age, validated like every other pool knob (warn + fallback)."""
+
+    def _force_h2(self, monkeypatch):
+        monkeypatch.setenv("RAPTOR_HTTP2", "1")
+        monkeypatch.setattr(
+            http_pool.importlib.util, "find_spec",
+            lambda name: object() if name == "h2" else None,
+        )
+
+    def test_failure_threshold_default_and_override(self, monkeypatch):
+        assert (
+            http_pool.shard_failure_threshold()
+            == http_pool._DEFAULT_SHARD_FAIL_THRESHOLD
+        )
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "5")
+        assert http_pool.shard_failure_threshold() == 5
+
+    @pytest.mark.parametrize("bad", ["never", "0", "-1", "0.5"])
+    def test_failure_threshold_invalid_falls_back(self, monkeypatch, bad):
+        # Floor at 1: a zero threshold would drain a shard that has
+        # never failed.
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", bad)
+        assert (
+            http_pool.shard_failure_threshold()
+            == http_pool._DEFAULT_SHARD_FAIL_THRESHOLD
+        )
+
+    @pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+    def test_failure_threshold_non_finite_falls_back_not_crash(
+        self, monkeypatch, bad,
+    ):
+        # Pre-guard, nan/inf passed _env_number's positivity check
+        # and int() then raised ValueError/OverflowError out of
+        # _env_count — an uncaught crash at pool build on the relay
+        # hot path. Non-finite must warn + fall back like any other
+        # garbage.
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", bad)
+        assert (
+            http_pool.shard_failure_threshold()
+            == http_pool._DEFAULT_SHARD_FAIL_THRESHOLD
+        )
+
+    def test_failure_threshold_default_bounds_both_directions(self):
+        # Direction 1: at 1, every isolated transport blip (ordinary
+        # keepalive churn after an idle gap) rebuilds the shard —
+        # constant CONNECT + TLS churn for connections that were
+        # never sick.
+        assert http_pool._DEFAULT_SHARD_FAIL_THRESHOLD >= 2
+        # Direction 2: every extra strike required is another relay
+        # aborted on a client already known to be failing.
+        assert http_pool._DEFAULT_SHARD_FAIL_THRESHOLD <= 5
+
+    def test_max_age_off_without_http2(self):
+        # HTTP/1.1 pools manage per-connection lifetime already;
+        # rotating whole clients there churns for nothing.
+        assert http_pool.shard_max_age_s() is None
+
+    def test_max_age_default_and_override_under_http2(self, monkeypatch):
+        self._force_h2(monkeypatch)
+        assert (
+            http_pool.shard_max_age_s()
+            == http_pool._DEFAULT_SHARD_MAX_AGE_S
+        )
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_MAX_AGE_S", "900")
+        assert http_pool.shard_max_age_s() == 900.0
+
+    def test_max_age_below_floor_warns_and_falls_back(
+        self, monkeypatch, caplog,
+    ):
+        self._force_h2(monkeypatch)
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_MAX_AGE_S", "5")
+        with caplog.at_level("WARNING", logger="core.llm.http_pool"):
+            assert (
+                http_pool.shard_max_age_s()
+                == http_pool._DEFAULT_SHARD_MAX_AGE_S
+            )
+        assert any(
+            "RAPTOR_HTTP2_SHARD_MAX_AGE_S" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_max_age_garbage_falls_back(self, monkeypatch):
+        self._force_h2(monkeypatch)
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_MAX_AGE_S", "forever")
+        assert (
+            http_pool.shard_max_age_s()
+            == http_pool._DEFAULT_SHARD_MAX_AGE_S
+        )
+
+    @pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+    def test_max_age_non_finite_falls_back(self, monkeypatch, bad):
+        # nan sails past both the positivity check and the floor
+        # comparison (every nan comparison is False) and would leak
+        # into the age check, where ``now - born >= nan`` is always
+        # False — rotation silently never fires; inf disables it the
+        # same way. Both must fall back to the (finite) default.
+        self._force_h2(monkeypatch)
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_MAX_AGE_S", bad)
+        assert (
+            http_pool.shard_max_age_s()
+            == http_pool._DEFAULT_SHARD_MAX_AGE_S
+        )
+
+    def test_max_age_default_bounds_both_directions(self):
+        # Direction 1: rotating faster than a few minutes churns
+        # handshakes and degenerates toward per-request clients — the
+        # pool stops pooling.
+        assert http_pool._DEFAULT_SHARD_MAX_AGE_S >= 600.0
+        # Direction 2: middleboxes impose hard lifetimes on
+        # long-lived tunnels under load; a rotation age past an hour
+        # loses that race and protects nothing.
+        assert http_pool._DEFAULT_SHARD_MAX_AGE_S <= 3600.0
+        assert http_pool._SHARD_MAX_AGE_FLOOR_S >= 60.0
+
+
+class TestClientShardsLifecycle:
+    """Drain-shaped repair: sick or overdue shards stop being
+    selected, are never closed with live holds, and are replaced
+    fresh the moment they idle."""
+
+    def _shards(self, count, **kwargs):
+        return http_pool.ClientShards(
+            lambda: httpx.Client(timeout=5.0), count, **kwargs,
+        )
+
+    def test_failures_below_threshold_keep_the_shard(self):
+        shards = self._shards(1, failure_threshold=2)
+        try:
+            client, index = shards.acquire()
+            shards.report_failure(index)
+            shards.release(index)
+            again, _ = shards.acquire()
+            assert again is client
+            assert not client.is_closed
+        finally:
+            shards.close()
+
+    def test_threshold_drains_and_replaces_when_idle(self):
+        shards = self._shards(1, failure_threshold=2)
+        try:
+            client, index = shards.acquire()
+            shards.report_failure(index)
+            shards.release(index)
+            _, index = shards.acquire()
+            shards.report_failure(index)  # second consecutive strike
+            shards.release(index)
+            # Retired at idle: old client closed, slot refilled fresh.
+            assert client.is_closed
+            replacement, _ = shards.acquire()
+            assert replacement is not client
+            assert not replacement.is_closed
+            assert len(shards) == 1
+        finally:
+            shards.close()
+
+    def test_success_resets_the_counter(self):
+        shards = self._shards(1, failure_threshold=2)
+        try:
+            client, index = shards.acquire()
+            shards.report_failure(index)
+            shards.report_success(index)  # clean completion in between
+            shards.report_failure(index)
+            shards.release(index)
+            # Never two CONSECUTIVE failures — the shard stays.
+            again, _ = shards.acquire()
+            assert again is client
+            assert not client.is_closed
+        finally:
+            shards.close()
+
+    def test_never_rebuilds_with_live_holds(self):
+        # The drain shape: a shard at the threshold stops being
+        # selected but its client is NOT closed under an in-flight
+        # stream — closing would abort the very relay it still
+        # carries.
+        shards = self._shards(1, failure_threshold=1)
+        try:
+            client, first = shards.acquire()
+            _, second = shards.acquire()  # second hold, same shard
+            assert second == first
+            shards.report_failure(first)  # threshold hit: draining
+            shards.release(first)
+            assert not client.is_closed  # one hold still live
+            shards.release(second)
+            assert client.is_closed  # last hold gone: retired
+        finally:
+            shards.close()
+
+    def test_age_rotation_replaces_idle_shard(self):
+        shards = self._shards(1, max_age_s=0.05)
+        try:
+            client, index = shards.acquire()
+            shards.release(index)
+            time.sleep(0.06)
+            replacement, index = shards.acquire()
+            assert replacement is not client
+            assert client.is_closed
+            shards.release(index)
+            # The replacement's birth clock is fresh — it must not
+            # rotate again immediately.
+            again, index = shards.acquire()
+            assert again is replacement
+            shards.release(index)
+        finally:
+            shards.close()
+
+    def test_no_rotation_when_disabled(self):
+        shards = self._shards(1)  # max_age_s=None
+        try:
+            client, index = shards.acquire()
+            shards.release(index)
+            time.sleep(0.06)
+            again, index = shards.acquire()
+            assert again is client
+            shards.release(index)
+        finally:
+            shards.close()
+
+    def test_all_draining_provisions_fresh_instead_of_blocking(self):
+        # Invariant: at least one selectable shard. The only shard is
+        # draining but still held — acquire must hand out a FRESH
+        # client immediately, never block on the drain and never
+        # route onto the condemned connection.
+        shards = self._shards(1, failure_threshold=1)
+        try:
+            condemned, first = shards.acquire()
+            shards.report_failure(first)  # draining, hold still live
+            fresh, second = shards.acquire()
+            assert second != first
+            assert fresh is not condemned
+            assert not fresh.is_closed
+            shards.release(first)
+            # The drained slot retires; the pool converges back to
+            # its target size with only the fresh shard live.
+            assert condemned.is_closed
+            assert len(shards) == 1
+            assert shards.clients == (fresh,)
+            shards.release(second)
+            assert shards.in_flight == (0,)
+        finally:
+            shards.close()
 
 
 class TestNegotiatedProtocolTelemetry:

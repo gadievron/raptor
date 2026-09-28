@@ -29,9 +29,12 @@ from core.llm.http_pool import ClientShards
 @pytest.fixture(autouse=True)
 def _default_shard_env(monkeypatch):
     # HTTP/2 off + no shard override → one shard, the degenerate
-    # single-client shape these relay tests pin.
+    # single-client shape these relay tests pin. Lifecycle knobs at
+    # their defaults too (hermetic against ambient tuning).
     monkeypatch.delenv("RAPTOR_HTTP2", raising=False)
     monkeypatch.delenv("RAPTOR_HTTP2_SHARDS", raising=False)
+    monkeypatch.delenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", raising=False)
+    monkeypatch.delenv("RAPTOR_HTTP2_SHARD_MAX_AGE_S", raising=False)
 
 
 @pytest.fixture
@@ -264,3 +267,110 @@ class TestNegotiatedProtocolObservability:
         assert dispatched, "no request.dispatch audit row written"
         # AuditEvent.extra is spread flat into the on-disk row.
         assert dispatched[-1]["http_version"] == "h2"
+
+
+class TestShardHealthSeam:
+    """The relay feeds shard health: transport deaths on the shard's
+    own client count toward the drain-and-rebuild threshold, clean
+    completions reset the counter, worker-side failures stay
+    neutral."""
+
+    def _post_via(self, dispatcher, token, body: bytes = b"{}"):
+        transport = httpx.HTTPTransport(uds=str(dispatcher.socket_path))
+        with httpx.Client(transport=transport, timeout=10.0) as c:
+            return c.post(
+                "http://_/anthropic/v1/messages",
+                headers={_TOKEN_HEADER: token},
+                content=body,
+            )
+
+    def _make_failing(self, monkeypatch, client):
+        # Bind the CLASS method, not the instance attribute — the
+        # instance attribute may itself be an earlier patch (the
+        # reset test alternates fail/ok/fail on one client).
+        real_stream = httpx.Client.stream.__get__(client)
+
+        def failing_stream(method, url, **kwargs):
+            # Nothing listens on port 1: the open dies with
+            # httpx.ConnectError — a shard-health shape that is NOT
+            # stale-retry-eligible, so it propagates to the abort
+            # path and lands one strike on the shard.
+            return real_stream(
+                "GET", "http://127.0.0.1:1/unreachable",
+                timeout=kwargs.get("timeout"),
+            )
+
+        monkeypatch.setattr(client, "stream", failing_stream)
+
+    def test_transport_failure_drains_and_rebuilds_the_shard(
+        self, dispatcher, monkeypatch,
+    ):
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "1")
+        pooled = _sole_client(dispatcher)
+        self._make_failing(monkeypatch, pooled)
+        token = _issue_token(dispatcher, "health-fail")
+        assert self._post_via(dispatcher, token).status_code == 502
+        # One strike at threshold 1: the shard drained on release and
+        # was rebuilt fresh — same pool object, new client.
+        shards = dispatcher._upstream_client_shards()
+        rebuilt = _sole_client(dispatcher)
+        assert rebuilt is not pooled
+        assert pooled.is_closed
+        assert not rebuilt.is_closed
+        assert shards.in_flight == (0,)
+
+    def test_success_resets_the_failure_counter(
+        self, dispatcher, monkeypatch,
+    ):
+        from contextlib import contextmanager
+
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "2")
+        pooled = _sole_client(dispatcher)
+        token = _issue_token(dispatcher, "health-reset")
+
+        # Strike one.
+        self._make_failing(monkeypatch, pooled)
+        assert self._post_via(dispatcher, token).status_code == 502
+        assert _sole_client(dispatcher) is pooled  # below threshold
+
+        # Clean completion on the same shard client: counter resets.
+        class FakeUpstreamResponse:
+            status_code = 200
+            headers = httpx.Headers({"content-type": "application/json"})
+            http_version = "HTTP/1.1"
+
+            def iter_raw(self):
+                return iter([b"{}"])
+
+        @contextmanager
+        def ok_stream(method, url, **kwargs):
+            yield FakeUpstreamResponse()
+
+        monkeypatch.setattr(pooled, "stream", ok_stream)
+        assert self._post_via(dispatcher, token).status_code == 200
+
+        # Strike again: only ONE consecutive failure — without the
+        # reset this second strike would have hit the threshold and
+        # rebuilt the shard.
+        self._make_failing(monkeypatch, pooled)
+        assert self._post_via(dispatcher, token).status_code == 502
+        assert _sole_client(dispatcher) is pooled
+        assert not pooled.is_closed
+
+    def test_worker_side_failures_are_not_shard_evidence(self):
+        # WorkerDisconnected (the worker left) and RelayLimitExceeded
+        # (our own caps) say nothing about the upstream connection's
+        # health — they must never feed the drain threshold.
+        from core.llm.dispatcher.server import (
+            _SHARD_HEALTH_ERRORS,
+            RelayLimitExceeded,
+            WorkerDisconnected,
+        )
+
+        assert not isinstance(WorkerDisconnected("x"), _SHARD_HEALTH_ERRORS)
+        assert not isinstance(RelayLimitExceeded("x"), _SHARD_HEALTH_ERRORS)
+        # The stall watchdog's trip shape, by contrast, IS shard
+        # evidence — a wedged tunnel is exactly what a rebuild fixes.
+        assert isinstance(
+            httpx.ReadTimeout("stall"), _SHARD_HEALTH_ERRORS,
+        )
