@@ -9,6 +9,7 @@ import json
 
 import pytest
 
+import core.audit.corpus.history as history_mod
 import core.audit.corpus.run_corpus as run_corpus
 from core.audit.corpus.run_corpus import (
     _emit_summary,
@@ -16,6 +17,19 @@ from core.audit.corpus.run_corpus import (
     _splice_results,
     _verify_labels,
 )
+
+
+@pytest.fixture(autouse=True)
+def _history_store_in_tmp(tmp_path: Path,
+                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every main() drive that reaches _write_results records the run
+    in the history store, which defaults to the operator's real
+    ~/.local/share/raptor/corpus-history.jsonl. Pin the store per
+    test; tests that assert on history contents set their own path
+    on top of this default."""
+    monkeypatch.setenv(
+        history_mod.HISTORY_ENV, str(tmp_path / "history-default.jsonl"),
+    )
 
 
 def _label(repo="test", file="a.c", fid="a.c:f"):
