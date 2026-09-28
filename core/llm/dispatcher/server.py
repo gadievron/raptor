@@ -594,7 +594,12 @@ def _path_wants_stream(upstream_path: str) -> bool:
     by one."""
     if not upstream_path or "#" in upstream_path:
         return False
-    path = upstream_path.partition("?")[0].rstrip("/")
+    # Tolerate AT MOST one trailing slash: a single ".../method/" is a
+    # routine client spelling of the same endpoint, so it keeps the
+    # streaming classification; two or more trailing slashes are a
+    # degenerate shape no provider publishes, so they refuse (safe
+    # direction — an unclassified path keeps the full read timeout).
+    path = upstream_path.partition("?")[0].removesuffix("/")
     return path.endswith(_STREAM_PATH_SUFFIXES)
 
 

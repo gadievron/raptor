@@ -316,6 +316,10 @@ class TestUrlMethodStreamDetection:
         # Fragment AFTER query: endswith alone would match once the
         # query is stripped — only the fragment guard refuses it.
         "/v1beta/models/g:streamGenerateContent?alt=sse#frag",
+        # Trailing-slash tolerance stops at one: multi-slash shapes
+        # are not paths any provider publishes for these methods.
+        "/model/some.model-id/converse-stream//",
+        "/model/some.model-id/converse-stream///",
     ])
     def test_everything_else_stays_body_based(self, path):
         assert _request_wants_stream(_PLAIN_BODY, path) is False
