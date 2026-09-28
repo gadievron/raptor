@@ -338,19 +338,19 @@
     "kind": "literal"
   },
   "core/audit/condition_extraction.py::_CALL_TYPES": {
-    "count": 13,
+    "count": 15,
     "kind": "literal"
   },
   "core/audit/condition_extraction.py::_CONDITIONAL_TYPES": {
-    "count": 13,
+    "count": 15,
     "kind": "literal"
   },
   "core/audit/condition_extraction.py::_EXIT_TYPES": {
-    "count": 13,
+    "count": 15,
     "kind": "literal"
   },
   "core/audit/condition_extraction.py::_FUNCTION_TYPES": {
-    "count": 13,
+    "count": 15,
     "kind": "literal"
   },
   "core/audit/condition_extraction_python.py::_PY_SINKS": {
@@ -597,6 +597,11 @@
     "kind": "literal",
     "note": "lead receipt-dict field names (schema keys, not a function-name vocabulary)"
   },
+  "core/audit/fail_open_lang.py::SUPPORTED_LANGUAGES": {
+    "count": 12,
+    "kind": "literal",
+    "note": "closed supported-language enumeration for the fail-open analyzer registry (inventory language ids with a wired analyzer); language-tier policy constant, not a learned name vocabulary"
+  },
   "core/audit/fail_open_lang.py::_classify_ignored_return_site": {
     "count": 10,
     "kind": "literal",
@@ -702,6 +707,11 @@
   "core/audit/llm_review.py::REVIEW_SCHEMA_BLIND": {
     "count": 12,
     "kind": "literal"
+  },
+  "core/audit/llm_review.py::STUDY_SUPPORTED_LANGUAGES": {
+    "count": 10,
+    "kind": "literal",
+    "note": "closed supported-language enumeration for the study loop's reading-list resolution gate (display-form language names, kept in lockstep with core.concepts.lang_resolve); language-tier policy constant, not a learned name vocabulary"
   },
   "core/audit/llm_review.py::_BUG_CLASS_FIELD": {
     "count": 16,
@@ -981,7 +991,7 @@
     "kind": "literal"
   },
   "core/audit/source_view.py::_C_FAMILY_SPECS": {
-    "count": 10,
+    "count": 13,
     "kind": "literal",
     "note": "closed language-id routing table for the sanitized_view scanner's per-language string-grammar specs (inventory language ids -> _CFamilySpec); infrastructure routing keys, not a learned name vocabulary"
   },
@@ -1124,9 +1134,19 @@
     "count": 53,
     "kind": "literal"
   },
+  "core/concepts/lang_resolve.py::STUDY_LANGUAGES": {
+    "count": 11,
+    "kind": "literal",
+    "note": "closed supported-language enumeration for study-loop identifier resolution (inventory language ids with a wired tree-sitter branch plus fallback); language-tier policy constant, not a learned name vocabulary"
+  },
   "core/concepts/lang_resolve.py::_CALL_STOPWORDS": {
     "count": 36,
     "kind": "literal"
+  },
+  "core/concepts/lang_resolve.py::_LINE_COMMENT": {
+    "count": 11,
+    "kind": "literal",
+    "note": "per-language line-comment syntax table for doc-comment scanning (language id -> comment leaders); language grammar constants, not a learned name vocabulary"
   },
   "core/concepts/lang_resolve.py::_STOP_KEYWORDS": {
     "count": 24,
