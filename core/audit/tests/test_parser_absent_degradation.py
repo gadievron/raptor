@@ -144,6 +144,17 @@ class TestFailOpenAnalyzersReturnNone:
         from core.audit.fail_open_lang import go_function_span
         assert go_function_span(self._GO, "run") is None
 
+    def test_kotlin_handlers_none(self, _no_tree_sitter):
+        from core.audit.fail_open_lang import kotlin_handlers
+        src = (
+            "class C {\n"
+            "    fun f() {\n"
+            "        try { g() } catch (e: Exception) { }\n"
+            "    }\n"
+            "}\n"
+        )
+        assert kotlin_handlers(src, "C.kt") is None
+
 
 class TestFailOpenVerdictIsLanguageUnsupported:
     """The verify channel converts analyzer-None into the enumerated
@@ -167,6 +178,24 @@ class TestFailOpenVerdictIsLanguageUnsupported:
             "    boolean check() {\n"
             "        try { return verify(); }\n"
             "        catch (Exception e) { return true; }\n"
+            "    }\n"
+            "}\n",
+            "check",
+            "the broad catch in check() returns true — fail open",
+        )
+        assert res.outcome == "inconclusive"
+        assert res.reason.startswith(REASON_LANGUAGE_UNSUPPORTED)
+
+    def test_kotlin_inconclusive(self, _no_tree_sitter, tmp_path):
+        from core.audit.fail_open_verify import (
+            REASON_LANGUAGE_UNSUPPORTED,
+        )
+        res = self._check(
+            tmp_path, "C.kt",
+            "class C {\n"
+            "    fun check(): Boolean {\n"
+            "        try { return verify() } "
+            "catch (e: Exception) { return true }\n"
             "    }\n"
             "}\n",
             "check",

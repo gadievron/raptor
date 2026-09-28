@@ -41,6 +41,12 @@ follow the Java/Go no-regex-fallback rule: a missing grammar reports
 ``None`` and the channel returns ``inconclusive("language-
 unsupported")`` rather than guessing.
 
+Phase 4 adds Kotlin (the Java catch-clause outcome family on the
+``try_expression``/``catch_block`` grammar, with ``@Throws(X::class)``
+as the declared-fallibility witness — Kotlin has no checked
+exceptions, so the Java compilability witness has no counterpart
+here). Same no-regex-fallback rule.
+
 Suffix→language mapping is strictly
 ``core.inventory.languages.LANGUAGE_MAP`` — no new extension list
 (dedup wave-3 rule). Unsupported languages are the caller's problem:
@@ -65,10 +71,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Languages with an analyzer. Phase 3 added JS/TS and Rust.
+# Languages with an analyzer. Phase 3 added JS/TS and Rust; phase 4
+# adds Kotlin.
 SUPPORTED_LANGUAGES = frozenset({
     "python", "c", "cpp", "java", "go",
-    "javascript", "typescript", "tsx", "rust",
+    "javascript", "typescript", "tsx", "rust", "kotlin",
 })
 
 # The JS analyzer family shares one grammar-node vocabulary; the
@@ -2719,6 +2726,425 @@ def rust_function_span(
     if node is None:
         return None
     return (node.start_point[0] + 1, node.end_point[0] + 1)
+
+
+# ── Kotlin leg: catch-block outcome ─────────────────────────────────
+# The Java catch-clause outcome family on the Kotlin grammar:
+# try_expression/catch_block instead of try_statement/catch_clause,
+# block children are statements DIRECTLY (no expression_statement
+# wrapper), and the grammar exposes NO field names — every child
+# access is positional/type-based. ``continue``/``break`` and the
+# ``true``/``false``/``null`` keywords parse as bare ``identifier``
+# nodes, so those checks match by text. Kotlin has no checked
+# exceptions: declared fallibility reads the JVM-interop
+# ``@Throws(X::class)`` annotation instead of a ``throws`` clause,
+# and the Java checked-exception compilability witness has no Kotlin
+# counterpart (a specific catch compiles regardless of what the try
+# body can throw).
+
+_KOTLIN_BROAD_TYPES = frozenset({
+    "Exception", "Throwable", "RuntimeException", "Error",
+})
+# kotlin-logging passes message lambdas — ``log.error { "..." }`` —
+# so the log regexes accept ``(`` or ``{`` after the member name.
+_KOTLIN_LOUD_LOG_RE = re.compile(
+    r"\.(?:error|severe|fatal|warn(?:ing)?)\s*[({]",
+)
+_KOTLIN_QUIET_LOG_RE = re.compile(
+    r"\.(?:debug|trace|info|config|fine|log)\s*[({]",
+)
+_KOTLIN_ABORT_RE = re.compile(
+    r"\bexitProcess\s*\(|\bSystem\.exit\s*\(|\.halt\s*\(",
+)
+_KOTLIN_PRINT_RE = re.compile(
+    r"\bprintStackTrace\s*\(|\bprint(?:ln)?\s*\(|\bSystem\.(?:err|out)\b",
+)
+_KOTLIN_RESTRICTIVE_RETURNS = frozenset({"false", "null", "0", "-1", '""'})
+
+# Subtrees whose throws never execute at handler level (lambdas,
+# anonymous functions, object expressions, class bodies, local
+# functions).
+_KOTLIN_BOUNDARY_TYPES = (
+    "lambda_literal", "anonymous_function", "object_literal",
+    "class_body", "function_declaration",
+)
+_KOTLIN_LITERAL_TYPES = (
+    "number_literal", "float_literal", "string_literal",
+    "character_literal",
+)
+
+
+def _kotlin_block(node) -> Any | None:
+    """First block-typed child (the grammar has no field names)."""
+    if node is None:
+        return None
+    return next((c for c in node.children if c.type == "block"), None)
+
+
+def _kotlin_name(node, src: bytes) -> str:
+    """First identifier-typed child's text (declaration name)."""
+    ident = next(
+        (c for c in node.children if c.type == "identifier"), None,
+    )
+    return _ts_node_text(ident, src) if ident is not None else ""
+
+
+def _kotlin_catch_types(clause, src: bytes) -> tuple[list[str], bool]:
+    """(caught type names, broad?) from the catch parameter — the
+    user_type children before the handler block."""
+    names: list[str] = []
+    for child in clause.children:
+        if child.type == "block":
+            break
+        if child.type == "user_type":
+            names.append(_ts_node_text(child, src).rsplit(".", 1)[-1])
+    broad = any(n in _KOTLIN_BROAD_TYPES for n in names)
+    return (names or ["<expr>"]), broad
+
+
+def _kotlin_call_index(root, src: bytes) -> list[tuple[int, str]]:
+    """One-pass ``(start_byte, dotted-name)`` index of every call
+    expression under ``root``, sorted for the shared
+    ``_calls_in_range`` slicing contract."""
+    calls: list[tuple[int, str]] = []
+    stack = list(root.children) if root is not None else []
+    while stack:
+        cur = stack.pop()
+        stack.extend(cur.children)
+        if cur.type != "call_expression" or not cur.children:
+            continue
+        callee = cur.children[0]
+        if callee.type == "identifier":
+            name = _ts_node_text(callee, src)
+        elif callee.type == "navigation_expression":
+            name = _ts_node_text(callee, src)
+            if "(" in name or "\n" in name:
+                # Chained receiver (``a.b().c``) — keep the terminal
+                # member name only.
+                idents = [
+                    c for c in callee.children if c.type == "identifier"
+                ]
+                name = _ts_node_text(idents[-1], src) if idents else ""
+        else:
+            continue
+        if name:
+            calls.append((cur.start_byte, name))
+    calls.sort()
+    return calls
+
+
+def _kotlin_throws_at_handler_level(block) -> bool:
+    """A ``throw`` that demonstrably terminates THIS catch block.
+
+    Boundary-aware exactly like the Java walk: a throw inside a
+    lambda / object expression / local function never executes here,
+    and a throw inside a nested ``try`` that has its own catch blocks
+    may be swallowed locally (the nested handlers cover only the
+    nested try BODY — throws in the nested catch/finally still
+    propagate). Neither may mint a fail-closed refutation receipt.
+    """
+    stack: list[tuple[Any, bool]] = [
+        (c, False) for c in (block.children if block is not None else [])
+    ]
+    while stack:
+        cur, swallowable = stack.pop()
+        if cur.type == "throw_expression" and not swallowable:
+            return True
+        if cur.type in _KOTLIN_BOUNDARY_TYPES:
+            continue
+        if cur.type == "try_expression" and any(
+            ch.type == "catch_block" for ch in cur.children
+        ):
+            body = _kotlin_block(cur)
+            stack.extend((ch, swallowable or (
+                    body is not None and ch == body)) for ch in cur.children)
+            continue
+        stack.extend((ch, swallowable) for ch in cur.children)
+    return False
+
+
+def _classify_kotlin_catch(clause: Node, src: bytes) -> tuple[str, str]:
+    """(outcome_kind, permissive_value) for one catch block — the
+    census classification vocabulary on the Kotlin grammar.
+
+    Text regexes run over the SANITIZED clause text (comments/string
+    literals blanked), same rationale as the Java leg.
+    """
+    from .source_view import sanitized_view
+    block = _kotlin_block(clause)
+    text = sanitized_view(_ts_node_text(clause, src), language="kotlin")
+
+    if _kotlin_throws_at_handler_level(block):
+        return OUTCOME_FAIL_CLOSED, "re-throws"
+    if _KOTLIN_ABORT_RE.search(text):
+        return OUTCOME_FAIL_CLOSED, "aborts"
+
+    # Same comment/brace child vocabulary as the Java grammar.
+    stmts = _java_stmts(block)
+    if not stmts:
+        return OUTCOME_PASS, ""
+
+    returns = [s for s in stmts if s.type == "return_expression"]
+    if returns and all(s.type == "return_expression" for s in stmts):
+        ret = returns[0]
+        exprs = [c for c in ret.children if c.is_named]
+        value = _ts_node_text(exprs[0], src).strip() if exprs else ""
+        if value == "" or value in _KOTLIN_RESTRICTIVE_RETURNS:
+            return OUTCOME_FAIL_CLOSED, f"returns {value or '<void>'}"
+        if value == "true":
+            return OUTCOME_RETURN_PERMISSIVE, value
+        if exprs and exprs[0].type in _KOTLIN_LITERAL_TYPES:
+            return OUTCOME_RETURN_PERMISSIVE, value
+        return OUTCOME_FALLBACK_ACTION, value
+
+    if _KOTLIN_LOUD_LOG_RE.search(text):
+        return OUTCOME_FALLBACK_ACTION, "loud-log-and-continue"
+    if _KOTLIN_PRINT_RE.search(text):
+        return OUTCOME_FALLBACK_ACTION, "prints-and-continues"
+
+    if all(
+        s.type == "identifier"
+        and _ts_node_text(s, src) in ("continue", "break")
+        for s in stmts
+    ):
+        return OUTCOME_CONTINUE, ""
+    if _KOTLIN_QUIET_LOG_RE.search(text) and all(
+        s.type in ("call_expression", "return_expression")
+        for s in stmts
+    ):
+        non_return = [s for s in stmts if s.type == "call_expression"]
+        if all(
+            _KOTLIN_QUIET_LOG_RE.search(
+                sanitized_view(_ts_node_text(s, src), language="kotlin"),
+            )
+            for s in non_return
+        ):
+            return OUTCOME_QUIET_LOG_ONLY, ""
+
+    assigns = [
+        s for s in stmts
+        if s.type in ("assignment", "property_declaration")
+    ]
+    if assigns and all(
+        s.type in ("assignment", "property_declaration",
+                   "call_expression")
+        for s in stmts
+    ):
+        if any(s.type == "call_expression" for s in stmts):
+            return OUTCOME_FALLBACK_ACTION, "handler calls fallback code"
+        first = assigns[0]
+        value = ""
+        eq_seen = False
+        for c in first.children:
+            if c.type == "=":
+                eq_seen = True
+                continue
+            if eq_seen and c.is_named:
+                value = _ts_node_text(c, src)
+                break
+        return OUTCOME_ASSIGN_DEFAULT, value
+    return OUTCOME_FALLBACK_ACTION, "substantial handler body"
+
+
+def kotlin_handlers(
+    source: str, file_path: str,
+) -> list[HandlerOutcome] | None:
+    """All classified catch blocks in a Kotlin source file.
+
+    ``None`` when no tree-sitter kotlin parser is available (the
+    channel reports ``language-unsupported`` — the Java
+    no-regex-fallback rule); empty list when the file has no
+    handlers.
+    """
+    parser = _ts_parser("kotlin")
+    if parser is None:
+        return None
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        logger.debug("fail_open_lang: kotlin parse failed for %s",
+                     file_path, exc_info=True)
+        return None
+    lines = split_lines(source)
+    call_index = _kotlin_call_index(tree.root_node, src)
+    out: list[HandlerOutcome] = []
+    # Enclosing names are carried down the walk (never .parent chains
+    # — the Java leg's measured O(depth^2) stall); the class name
+    # rides along so a secondary constructor can report its class.
+    stack: list[tuple[Any, str, str]] = [(tree.root_node, "", "")]
+    while stack:
+        node, enclosing, class_name = stack.pop()
+        if node.type in ("class_declaration", "object_declaration"):
+            class_name = _kotlin_name(node, src) or class_name
+        elif node.type == "function_declaration":
+            enclosing = _kotlin_name(node, src)
+        elif node.type == "secondary_constructor":
+            enclosing = class_name or "constructor"
+        stack.extend(
+            (c, enclosing, class_name) for c in node.children
+        )
+        if node.type != "try_expression":
+            continue
+        body = _kotlin_block(node)
+        try_calls = (
+            _calls_in_range(call_index, body.start_byte, body.end_byte)
+            if body is not None else []
+        )
+        try_span = (
+            (body.start_point[0] + 1, body.end_point[0] + 1)
+            if body is not None else (_line_of(node), _line_of(node))
+        )
+        for clause in node.children:
+            if clause.type != "catch_block":
+                continue
+            outcome_kind, value = _classify_kotlin_catch(clause, src)
+            caught, broad = _kotlin_catch_types(clause, src)
+            line = _line_of(clause)
+            snippet_end = min(clause.end_point[0] + 1, line + 2)
+            out.append(HandlerOutcome(
+                idiom=f"catch_{outcome_kind}",
+                file=file_path,
+                line=line,
+                caught=caught,
+                broad=broad,
+                outcome_kind=outcome_kind,
+                permissive_value=value,
+                evidence_snippet=" ".join(
+                    ln.strip() for ln in lines[line - 1:snippet_end]
+                ),
+                parser="tree-sitter",
+                enclosing_function=enclosing,
+                try_calls=try_calls,
+                try_span=try_span,
+            ))
+    return out
+
+
+def _kotlin_annotation_throws(node, src: bytes) -> list[str]:
+    """Types named by a ``@Throws(X::class, ...)`` annotation on a
+    function node (``modifiers > annotation > constructor_invocation``
+    with ``X::class`` class-literal arguments)."""
+    thrown: list[str] = []
+    modifiers = next(
+        (c for c in node.children if c.type == "modifiers"), None,
+    )
+    if modifiers is None:
+        return thrown
+    stack = list(modifiers.children)
+    while stack:
+        cur = stack.pop()
+        if cur.type != "constructor_invocation":
+            stack.extend(cur.children)
+            continue
+        utype = next(
+            (c for c in cur.children if c.type == "user_type"), None,
+        )
+        if utype is None or _ts_node_text(
+                utype, src).rsplit(".", 1)[-1] != "Throws":
+            continue
+        args = next(
+            (c for c in cur.children if c.type == "value_arguments"),
+            None,
+        )
+        for arg in (args.children if args is not None else []):
+            if arg.type != "value_argument":
+                continue
+            expr = next((c for c in arg.children if c.is_named), None)
+            if expr is None:
+                continue
+            text = _ts_node_text(expr, src)
+            if text.endswith("::class"):
+                text = text[: -len("::class")]
+            text = text.rsplit(".", 1)[-1].strip()
+            if text:
+                thrown.append(text)
+    return thrown
+
+
+def kotlin_function_throws(source: str, function_name: str) -> list[str]:
+    """Exception types a same-file Kotlin function declares
+    (``@Throws(X::class)``, the JVM-interop spelling of a throws
+    clause) or raises (``throw X(...)``) — leg-2b fallibility
+    evidence. Unlike Java's ``throws`` the annotation is optional, so
+    its absence is never evidence of infallibility.
+    """
+    parser = _ts_parser("kotlin")
+    if parser is None:
+        return []
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return []
+    tail = function_name.rsplit(".", 1)[-1]
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type != "function_declaration":
+            continue
+        if _kotlin_name(node, src) != tail:
+            continue
+        thrown = _kotlin_annotation_throws(node, src)
+        inner = [node]
+        while inner:
+            cur = inner.pop()
+            inner.extend(cur.children)
+            if cur.type != "throw_expression":
+                continue
+            for c in cur.children:
+                if c.type == "call_expression" and c.children:
+                    callee = c.children[0]
+                    if callee.type in ("identifier",
+                                       "navigation_expression"):
+                        thrown.append(_ts_node_text(
+                            callee, src).rsplit(".", 1)[-1])
+        return list(dict.fromkeys(thrown))
+    return []
+
+
+def kotlin_method_segment(source: str, function_name: str) -> str:
+    """Source of a Kotlin function (annotations included — the node
+    span covers its modifiers) plus the enclosing class/object
+    declaration header, for Tier-B hook-mechanics matching
+    (interface supertypes and annotations live on the class or
+    function header)."""
+    parser = _ts_parser("kotlin")
+    if parser is None:
+        return ""
+    try:
+        src = source.encode("utf-8", errors="replace")
+        tree = parser.parse(src)
+    except Exception:
+        return ""
+    tail = function_name.rsplit(".", 1)[-1]
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        if node.type != "function_declaration":
+            continue
+        if _kotlin_name(node, src) != tail:
+            continue
+        segment = _ts_node_text(node, src)
+        cur = node.parent
+        while cur is not None and cur.type not in (
+                "class_declaration", "object_declaration"):
+            cur = cur.parent
+        if cur is not None:
+            body = next(
+                (c for c in cur.children if c.type == "class_body"),
+                None,
+            )
+            header_end = (body.start_byte if body is not None
+                          else cur.end_byte)
+            header = src[cur.start_byte:header_end].decode(
+                "utf-8", errors="replace",
+            )
+            segment = header.strip() + "\n" + segment
+        return segment
+    return ""
 
 
 def function_parameters(

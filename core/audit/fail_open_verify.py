@@ -83,6 +83,9 @@ from .fail_open_lang import (
     java_function_throws,
     java_handlers,
     java_method_segment,
+    kotlin_function_throws,
+    kotlin_handlers,
+    kotlin_method_segment,
     js_function_returns_promise,
     js_function_span,
     js_function_throws,
@@ -815,6 +818,182 @@ def _run_java_check(
         reason=reason,
         rule_id=rule_id,
         language="java",
+        role=role.to_dict(),
+        handler=chosen.to_dict(),
+        fallible=fallible,
+    )
+    result.reachability = _entry_reachability(
+        role_context, inventory, file_path, function_name,
+    )
+    return result
+
+
+# ── Kotlin leg: catch-block outcome ─────────────────────────────────
+
+
+def _kotlin_fallibility(
+    handler: HandlerOutcome, source: str,
+) -> dict[str, Any] | None:
+    """Leg 2b for Kotlin: evidence that the guarded region can throw.
+
+    Strongest form is a same-file callee whose ``@Throws(X::class)``
+    annotation (or a ``throw`` in its body) names the very type the
+    handler catches. Kotlin has no checked exceptions, so unlike Java
+    there is no compilability witness: a specific catch of a type
+    nothing throws still compiles. Broad catches accept any call with
+    the weaker ``any-call-under-broad-catch`` receipt.
+    """
+    caught = set(handler.caught)
+    line = handler.try_span[0] if handler.try_span else 0
+    for callee in handler.try_calls:
+        thrown = kotlin_function_throws(source, callee)
+        if not thrown:
+            continue
+        declared_and_caught = set(thrown) & caught
+        if declared_and_caught:
+            return {
+                "callee": callee,
+                "line": line,
+                "evidence": "declared-throws",
+                "types": thrown,
+            }
+        if handler.broad:
+            return {
+                "callee": callee,
+                "line": line,
+                "evidence": "throws",
+                "types": thrown,
+            }
+    if handler.broad and handler.try_calls:
+        return {
+            "callee": handler.try_calls[0],
+            "line": line,
+            "evidence": "catchable: any-call-under-broad-catch",
+            "types": sorted(caught),
+        }
+    return None
+
+
+def _run_kotlin_check(
+    source: str,
+    file_path: str,
+    function_name: str,
+    hypothesis: str,
+    role_context: RoleContext,
+    inventory: dict[str, Any] | None,
+) -> FailOpenResult:
+    all_handlers = kotlin_handlers(source, file_path)
+    if all_handlers is None:
+        return _inconclusive(
+            REASON_LANGUAGE_UNSUPPORTED,
+            "no tree-sitter kotlin parser available — the Kotlin leg "
+            "has no honest regex fallback for brace-delimited "
+            "handlers",
+            language="kotlin",
+        )
+    handlers = [
+        h for h in all_handlers
+        if _handler_in_function(h, function_name)
+    ]
+    if not handlers:
+        return _inconclusive(
+            REASON_HYPOTHESIS_UNBINDABLE,
+            f"no catch block found in {function_name}",
+            language="kotlin",
+        )
+
+    permissive = [h for h in handlers if h.is_permissive]
+    fail_closed = [h for h in handlers if h.is_fail_closed]
+    undecided = [
+        h for h in handlers
+        if not h.is_permissive and not h.is_fail_closed
+    ]
+
+    if not permissive:
+        if fail_closed and not undecided:
+            if _IGNORED_RETURN_HYPOTHESIS_RE.search(hypothesis):
+                # Same mechanism-binding as the python/java legs: no
+                # ignored-return adjudicator here, so a fail-closed
+                # catch block cannot refute a hypothesis about a
+                # return value nothing examined.
+                return _inconclusive(
+                    REASON_MECHANISM_UNSUPPORTED,
+                    "hypothesis asserts an ignored/discarded return "
+                    "value — the kotlin leg adjudicates catch-block "
+                    "outcomes only and never examined that "
+                    "mechanism; fail-closed handler evidence cannot "
+                    "refute it",
+                    language="kotlin",
+                )
+            first = fail_closed[0]
+            return FailOpenResult(
+                outcome="refuted",
+                reason=(
+                    f"fail-closed handler(s) demonstrated: "
+                    f"{first.evidence_snippet} at {file_path}:"
+                    f"{first.line} ({first.permissive_value}); no "
+                    f"permissive handler present in {function_name}"
+                ),
+                rule_id=RULE_HANDLER_OUTCOME,
+                language="kotlin",
+                handler=first.to_dict(),
+            )
+        first = undecided[0] if undecided else handlers[0]
+        return _inconclusive(
+            REASON_HANDLER_UNDECIDED,
+            f"handler at {file_path}:{first.line} does substantial "
+            f"fallback work ({first.permissive_value}) — outcome not "
+            "structurally decidable",
+            language="kotlin",
+        )
+
+    segment = kotlin_method_segment(source, function_name)
+    role: RoleEvidence | None = None
+    chosen: HandlerOutcome | None = None
+    for handler in permissive:
+        role = bind_role(
+            handler.try_calls,
+            function_name,
+            file_path,
+            language="kotlin",
+            context=role_context,
+            enclosing_source=segment,
+        )
+        if role is not None:
+            chosen = handler
+            break
+    if role is None or chosen is None:
+        return _inconclusive(
+            REASON_ROLE_UNBOUND,
+            "could not bind a security role to the guarded region "
+            f"(calls: {', '.join(permissive[0].try_calls) or '<none>'})",
+            language="kotlin",
+        )
+
+    fallible = _kotlin_fallibility(chosen, source)
+    if fallible is None:
+        return _inconclusive(
+            REASON_FALLIBILITY_UNRESOLVED,
+            "no throw-capable callee resolvable inside the try body "
+            "(no same-file @Throws/throw evidence and the catch is "
+            "not broad) — a swallow around code that cannot throw is "
+            "vacuous",
+            language="kotlin",
+        )
+
+    rule_id = _apply_role_grade(RULE_HANDLER_OUTCOME, role)
+    caught_desc = ", ".join(chosen.caught)
+    reason = (
+        f"{chosen.evidence_snippet or chosen.idiom} at "
+        f"{file_path}:{chosen.line} swallows {fallible['callee']} "
+        f"({caught_desc}) inside {role.kind}-role region; control "
+        f"proceeds as if the check passed"
+    )
+    result = FailOpenResult(
+        outcome="confirmed",
+        reason=reason,
+        rule_id=rule_id,
+        language="kotlin",
         role=role.to_dict(),
         handler=chosen.to_dict(),
         fallible=fallible,
@@ -2274,6 +2453,11 @@ def run_fail_open_check(
         )
     elif language == "rust":
         result = _run_rust_check(
+            source, file_path, function_name, hypothesis, ctx,
+            inventory,
+        )
+    elif language == "kotlin":
+        result = _run_kotlin_check(
             source, file_path, function_name, hypothesis, ctx,
             inventory,
         )
