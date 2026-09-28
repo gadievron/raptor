@@ -106,7 +106,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Downloaded from GitHub releases
 # ============================================================================
 
-ARG CODEQL_VERSION=2.27.0
+ARG CODEQL_VERSION=2.27.1
 RUN mkdir -p /opt/codeql \
     && curl -L "https://github.com/github/codeql-cli-binaries/releases/download/v${CODEQL_VERSION}/codeql-linux64.zip" -o /tmp/codeql.zip \
     && unzip /tmp/codeql.zip -d /opt \
