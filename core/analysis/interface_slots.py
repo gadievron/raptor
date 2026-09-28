@@ -48,7 +48,8 @@ logger = logging.getLogger(__name__)
 # target code — dies loudly here too.
 GROUP_TYPE_INTERFACE_SLOT = "interface_slot"
 
-#: Slot families emitted per run. Both directions: more lets a
+#: FLOOR of the derived family cap (the old fixed cap — small trees
+#: keep exactly the historical bound). Both directions: more lets a
 #: generated tree (one ops struct per file, thousands of slots) flood
 #: the exclusive chain and the downstream comparator with
 #: single-purpose families; fewer hides real breadth on
@@ -57,6 +58,40 @@ GROUP_TYPE_INTERFACE_SLOT = "interface_slot"
 #: linear census, no pairwise work, so the cap bounds review volume,
 #: not compute.
 MAX_SLOT_FAMILIES = 500
+
+#: Derivation rate: one family of allowance per this many census
+#: input files. Both directions: a smaller divisor hands a flood tree
+#: (one synthetic ops struct per file) a cap near its file count —
+#: the flood defence the floor exists for stops binding; a larger one
+#: starves legitimately dispatch-heavy trees (kernel-shaped targets
+#: run roughly one real ops slot per handful of C files, so //4
+#: clears them with margin).
+_SLOT_FAMILY_FILES_PER_FAMILY = 4
+
+#: Absolute CEILING of the derived cap — memory/review-volume
+#: backstop, the role the fixed 500 used to play. Both directions:
+#: higher stops bounding what downstream must hold and reviewers must
+#: triage (families feed the resolver chain and the parity comparator
+#: run-long); lower re-creates the kernel-scale silent drop — a full
+#: kernel tree (tens of thousands of C files) derives past 8k, and
+#: its real slot census measures in the low thousands, so 8_000
+#: clears it while still bounding a hostile tree. At the ceiling
+#: truncation is still stamped in-band (``caps_hit``), never silent.
+MAX_SLOT_FAMILIES_CEILING = 8_000
+
+
+def _derive_slot_family_cap(n_input_files: int) -> int:
+    """Family cap derived from census input scale.
+
+    ``max(floor, files // rate)`` clamped to the ceiling. The floor
+    and ceiling are read at call time so tests (and operators) that
+    monkeypatch the module constants keep binding.
+    """
+    derived = max(
+        MAX_SLOT_FAMILIES,
+        n_input_files // _SLOT_FAMILY_FILES_PER_FAMILY,
+    )
+    return min(derived, MAX_SLOT_FAMILIES_CEILING)
 
 #: Distinct implementations a slot needs before it is a family.
 #: Two is the smallest peer notion; the resolver layer separately
@@ -235,19 +270,28 @@ def interface_slot_families(
     families.extend(_override_families(checklist))
     if not families:
         return None
-    if len(families) > MAX_SLOT_FAMILIES:
+    # Cap derived from census input scale: every source text plus
+    # every checklist file entry is one input file (both censuses
+    # draw members from those pools).
+    n_input_files = len(source_texts or {})
+    if isinstance(checklist, dict):
+        checklist_files = checklist.get("files")
+        if isinstance(checklist_files, list):
+            n_input_files += len(checklist_files)
+    cap = _derive_slot_family_cap(n_input_files)
+    if len(families) > cap:
         # In-band, never partial-silent: keep (kind, key) order
         # (deterministic and, unlike arrival order, not
         # attacker-reorderable by file layout), mark the survivors'
         # census as capped.
         families = sorted(
             families, key=lambda f: (f.kind, f.key),
-        )[:MAX_SLOT_FAMILIES]
+        )[:cap]
         for fam in families:
             fam.caps_hit = True
         logger.info(
             "interface-slot census capped at %d families",
-            MAX_SLOT_FAMILIES,
+            cap,
         )
     logger.info(
         "interface-slot census: %d families (%d ops-slot, %d "

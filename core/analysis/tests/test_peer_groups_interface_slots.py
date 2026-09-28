@@ -113,6 +113,87 @@ class TestOpsSlotCensus:
         assert all(f.caps_hit for f in fams)
 
 
+class TestDerivedFamilyCap:
+    """Cap derived from census input scale: floor for small trees,
+    linear growth with input files, absolute ceiling as backstop."""
+
+    def test_small_tree_keeps_the_floor(self):
+        from core.analysis.interface_slots import _derive_slot_family_cap
+        assert _derive_slot_family_cap(0) == MAX_SLOT_FAMILIES
+        assert _derive_slot_family_cap(1) == MAX_SLOT_FAMILIES
+        # Right at the crossover the floor still binds.
+        assert _derive_slot_family_cap(
+            4 * MAX_SLOT_FAMILIES,
+        ) == MAX_SLOT_FAMILIES
+
+    def test_large_tree_derives_above_the_floor(self):
+        from core.analysis.interface_slots import _derive_slot_family_cap
+        assert _derive_slot_family_cap(4_000) == 1_000
+
+    def test_ceiling_binds_at_kernel_scale(self):
+        from core.analysis.interface_slots import (
+            MAX_SLOT_FAMILIES_CEILING,
+            _derive_slot_family_cap,
+        )
+        # A full kernel tree is tens of thousands of C files.
+        assert _derive_slot_family_cap(40_000) == \
+            MAX_SLOT_FAMILIES_CEILING
+        assert _derive_slot_family_cap(10**9) == \
+            MAX_SLOT_FAMILIES_CEILING
+
+    def test_constants_read_at_call_time(self, monkeypatch):
+        import core.analysis.interface_slots as isl
+        monkeypatch.setattr(isl, "MAX_SLOT_FAMILIES", 2)
+        monkeypatch.setattr(isl, "MAX_SLOT_FAMILIES_CEILING", 3)
+        assert isl._derive_slot_family_cap(0) == 2
+        assert isl._derive_slot_family_cap(100) == 3
+
+    @staticmethod
+    def _flood_texts(n_files: int) -> dict[str, str]:
+        # One two-member family per file.
+        return {
+            f"f{i}.c": (
+                f"struct ops{i} a{i} = {{ .go = f{i}_a, }};\n"
+                f"struct ops{i} b{i} = {{ .go = f{i}_b, }};\n"
+            )
+            for i in range(n_files)
+        }
+
+    def test_scale_raises_cap_above_floor(self, monkeypatch):
+        # Below the derived cap: at scale the derivation admits
+        # families the bare floor would have dropped.
+        import core.analysis.interface_slots as isl
+        monkeypatch.setattr(isl, "MAX_SLOT_FAMILIES", 1)
+        monkeypatch.setattr(isl, "_SLOT_FAMILY_FILES_PER_FAMILY", 1)
+        fams = isl.interface_slot_families(self._flood_texts(3))
+        assert fams is not None
+        assert len(fams) == 3
+        assert not any(f.caps_hit for f in fams)
+
+    def test_ceiling_still_caps_with_marker(self, monkeypatch):
+        # At the ceiling: truncation happens and is stamped in-band.
+        import core.analysis.interface_slots as isl
+        monkeypatch.setattr(isl, "MAX_SLOT_FAMILIES", 1)
+        monkeypatch.setattr(isl, "_SLOT_FAMILY_FILES_PER_FAMILY", 1)
+        monkeypatch.setattr(isl, "MAX_SLOT_FAMILIES_CEILING", 2)
+        fams = isl.interface_slot_families(self._flood_texts(3))
+        assert fams is not None
+        assert len(fams) == 2
+        assert all(f.caps_hit for f in fams)
+
+    def test_checklist_files_count_toward_scale(self, monkeypatch):
+        import core.analysis.interface_slots as isl
+        monkeypatch.setattr(isl, "MAX_SLOT_FAMILIES", 1)
+        monkeypatch.setattr(isl, "_SLOT_FAMILY_FILES_PER_FAMILY", 1)
+        checklist = {"files": [{"path": f"p{i}.py"} for i in range(2)]}
+        fams = isl.interface_slot_families(
+            self._flood_texts(1), checklist,
+        )
+        # 1 source text + 2 checklist entries = cap 3 >= 1 family.
+        assert fams is not None
+        assert not any(f.caps_hit for f in fams)
+
+
 # ── census: override-set families ─────────────────────────────────────
 
 
