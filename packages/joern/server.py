@@ -150,6 +150,13 @@ _RECORD_LINE_MARKERS = (
     "JOERN_SINK_ARG:", "METHOD_SUMMARY:", "JOERN_GUARD_SUMMARY:",
     "JOERN_FLOWS_START", "JOERN_FLOWS_END", "JOERN_EXISTS:",
     "JOERN_CALLERS_DONE", "JOERN_DARK:", "JOERN_DIAG:",
+    # Chunk lines of the oversized-record protocol (flowRecordLines):
+    # each fragment is a raw slice of record JSON quoting scanned-repo
+    # text, exactly like the classic line it replaces — without this
+    # entry a diagnostic-shaped string inside a fragment vetoes the
+    # query (_has_scala_error) or reads as a graph swap
+    # (_lease_swapped).
+    "JOERN_FLOW_PART:",
     # The audit verify channels' sentinel protocol (joern_verify):
     # sentinel payloads quote scanned-repo source — a payload
     # containing a "path:N: error:"-shaped string literal must never
@@ -2964,7 +2971,7 @@ class JoernServer:
         if not valid_pairs:
             return []
 
-        from .runner import SCALA_JSON_ESC_DEF
+        from .runner import SCALA_FLOW_EMIT_DEF, SCALA_JSON_ESC_DEF
         from .semantics import render_context_arg, render_semantics_decl
         sem_decl = render_semantics_decl(self._flow_semantics)
         sem_arg = render_context_arg(self._flow_semantics)
@@ -2977,6 +2984,11 @@ class JoernServer:
             # Shared escape helper for every JSON-string interpolation
             # below (visible inside the per-pair locally{} blocks).
             SCALA_JSON_ESC_DEF,
+            # Shared record emitter: one classic JOERN_FLOW line for a
+            # short record, ordered JOERN_FLOW_PART chunk lines for an
+            # oversized one — REPL rendering caps wrap/truncate a
+            # single overlong line and the record is lost in transit.
+            SCALA_FLOW_EMIT_DEF,
         ]
         if sem_decl:
             lines.append(sem_decl.rstrip("\n"))
@@ -3023,7 +3035,7 @@ class JoernServer:
                 f'    val flEsc = jsonEsc(fl)\n'
                 f'    s"""{{"line":$ln,"code":"$cd","function":"$fnEsc","file":"$flEsc"}}"""\n'
                 f'  }}.mkString(",")\n'
-                f'  raptorBatchLines += ("JOERN_FLOW:[" + steps + "]")\n'
+                '  raptorBatchLines ++= flowRecordLines(steps)\n'
                 f'}}\n'
                 f'}}'
             )

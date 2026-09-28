@@ -797,7 +797,7 @@ def build_flow_query(
     transport (the server's echo-tolerant marker parsing handles the
     echoed shape, same as the batch taint lane).
     """
-    from packages.joern.runner import SCALA_JSON_ESC_DEF
+    from packages.joern.runner import SCALA_FLOW_EMIT_DEF, SCALA_JSON_ESC_DEF
 
     fn = _escape(function_name)
     src = _escape(source_id)
@@ -827,7 +827,11 @@ def build_flow_query(
         '        s"""{"line":$ln,"code":"$cd",'
         '"function":"$fnEsc","file":"$flEsc"}"""\n'
         '      }.mkString(",")\n'
-        '      raptorOut += ("JOERN_FLOW:[" + steps + "]")\n'
+        # Shared record emitter: one classic JOERN_FLOW line for a
+        # short record, ordered JOERN_FLOW_PART chunk lines for an
+        # oversized one — REPL rendering caps wrap/truncate a single
+        # overlong line and the record is lost in transit.
+        '      raptorOut ++= flowRecordLines(steps)\n'
         '    }\n'
     )
     # Same transport discipline as build_guard_dominance_query: every
@@ -846,6 +850,7 @@ def build_flow_query(
         'import io.shiftleft.codepropertygraph.generated.nodes.CfgNode\n'
         'import scala.util.Try\n'
         f'{SCALA_JSON_ESC_DEF}\n'
+        f'{SCALA_FLOW_EMIT_DEF}\n'
         'implicit val raptorCtx: EngineContext = EngineContext('
         f'config = EngineConfig(maxCallDepth = {int(max_call_depth)}))\n'
         'locally {\n'

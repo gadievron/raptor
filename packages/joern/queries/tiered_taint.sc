@@ -36,7 +36,19 @@ __SEMANTICS_DECL__
 // MARKER:{json} line.
 def jsonEsc(v: String): String = v.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", " ").flatMap(c => if (c.toInt < 0x20 || c.toInt == 0x85 || c.toInt == 0x2028 || c.toInt == 0x2029) " " else c.toString)
 
-def flowToJson(flow: io.joern.dataflowengineoss.language.Path): String = {
+// flowRecordLines — the one record emitter for JOERN_FLOW lines: one
+// classic single line for a short record, ordered chunk lines
+// (marker JOERN_FLOW_PART, header i/n/len; len counts code points
+// and the cut never splits a surrogate pair) for an oversized one —
+// REPL rendering caps wrap/truncate a single overlong line and the
+// record is lost in transit. Neither marker is spelled with its
+// trailing colon here: an echoed comment line carrying the verbatim
+// marker form would abort a live chunk sequence in the parser. The
+// parser reassembles chunks before JSON parsing
+// (core.analysis._joern_lines.MarkerChunkAssembler).
+def flowRecordLines(steps: String): List[String] = { val rec = "[" + steps + "]"; if (rec.length <= 1000) List("JOERN_FLOW:" + rec) else { val ps = List.unfold(0) { s => if (s >= rec.length) None else { val c = math.min(s + 1000, rec.length); val e = if (c < rec.length && Character.isHighSurrogate(rec.charAt(c - 1))) c - 1 else c; Some((rec.substring(s, e), e)) } }; ps.zipWithIndex.map { case (p, i) => "JOERN_FLOW_PART:" + (i + 1) + "/" + ps.size + "/" + p.codePointCount(0, p.length) + ":" + p } } }
+
+def flowToLines(flow: io.joern.dataflowengineoss.language.Path): List[String] = {
   val steps = flow.elements.map { e =>
     val ln = e.lineNumber.getOrElse(0)
     // .take(200) on the RAW string BEFORE jsonEsc — escape-then-
@@ -52,7 +64,7 @@ def flowToJson(flow: io.joern.dataflowengineoss.language.Path): String = {
     val flEsc = jsonEsc(fl)
     s"""{"line":$ln,"code":"$cd","function":"$fnEsc","file":"$flEsc"}"""
   }.mkString(",")
-  "JOERN_FLOW:[" + steps + "]"
+  flowRecordLines(steps)
 }
 
 // --- Tier 0: indexed discovery (E2/E5 — O(1) per name via inverse index) ---
@@ -115,7 +127,7 @@ if (methodsWithSinks.isEmpty) {
   val tier1Flows = allSinkArgs.iterator
     .reachableByFlows(tier1Sources)(tier1Ctx)
     .take(500).l
-  val tier1Lines = tier1Flows.map(flowToJson)
+  val tier1Lines = tier1Flows.flatMap(flowToLines)
 
   val resolvedT1 = tier1Flows.flatMap { f =>
     f.elements.headOption.flatMap {
@@ -128,8 +140,8 @@ if (methodsWithSinks.isEmpty) {
   println(s"JOERN_TIER:1:${resolvedT1.size} resolved intra-proc, ${t1Unresolved.size} need deeper analysis")
 
   // --- Tier 2: Inter-procedural (maxCallDepth=effectiveDepth) ---
-  val tier2Lines = if (t1Unresolved.isEmpty) {
-    List.empty[String]
+  val (tier2Lines, tier2FlowCount) = if (t1Unresolved.isEmpty) {
+    (List.empty[String], 0)
   } else {
     val tier2Config = EngineConfig(
       maxCallDepth = effectiveDepth,
@@ -157,12 +169,15 @@ if (methodsWithSinks.isEmpty) {
     val t2Unresolved = t1Unresolved -- resolvedT2
     println(s"JOERN_TIER:2:${resolvedT2.size} resolved at depth $effectiveDepth, ${t2Unresolved.size} no flow found")
 
-    tier2Flows.map(flowToJson)
+    (tier2Flows.flatMap(flowToLines), tier2Flows.size)
   }
 
   val allLines = tier1Lines ++ tier2Lines
+  // Chunked records emit several physical lines per flow, so the flow
+  // count is tallied from the flow lists, never from allLines.size.
+  val totalFlows = tier1Flows.size + tier2FlowCount
   val darkCount = darkMethods.size
-  val stats = s"""JOERN_TIER_STATS:{"t0_candidates":$t0Count,"t0_direct":$t0Direct,"t0_total":$t0Total,"t1_resolved":${resolvedT1.size},"t1_unresolved":${t1Unresolved.size},"effective_depth":$effectiveDepth,"total_flows":${allLines.size},"dark_methods":$darkCount,"sink_args":${allSinkArgs.size}}"""
+  val stats = s"""JOERN_TIER_STATS:{"t0_candidates":$t0Count,"t0_direct":$t0Direct,"t0_total":$t0Total,"t1_resolved":${resolvedT1.size},"t1_unresolved":${t1Unresolved.size},"effective_depth":$effectiveDepth,"total_flows":$totalFlows,"dark_methods":$darkCount,"sink_args":${allSinkArgs.size}}"""
 
   allLines.foreach(println)
   println(stats)

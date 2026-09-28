@@ -23,14 +23,18 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.analysis._joern_lines import parse_marker_line, parse_marker_records
+from core.analysis._joern_lines import (
+    FLOW_RECORD_CHUNK_CHARS,
+    MarkerChunkAssembler,
+    parse_marker_records,
+)
 from core.fs_lock import artifact_lock
 
 from .heap_ledger import heap_admission
 from .models import FlowStep, JoernCPG, JoernMethodSummary, JoernResult, TaintFlow
 from .prereqs import _joern_parse_path, _joern_path, joern_tool_paths
 from .tunables import sandbox_cpu_limits
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -110,6 +114,33 @@ def _escape_scala_string(value: str) -> str:
 #: queries embed this constant; the ``queries/*.sc`` files carry the
 #: identical line (drift-guarded by tests/test_template_json_escaping).
 SCALA_JSON_ESC_DEF = r'''def jsonEsc(v: String): String = v.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", " ").flatMap(c => if (c.toInt < 0x20 || c.toInt == 0x85 || c.toInt == 0x2028 || c.toInt == 0x2029) " " else c.toString)'''
+
+#: The one Scala-side record emitter for ``JOERN_FLOW`` lines. A record
+#: whose ``[...]`` payload fits ``FLOW_RECORD_CHUNK_CHARS`` emits as the
+#: classic single ``JOERN_FLOW:[...]`` line; a longer record emits as
+#: ordered ``JOERN_FLOW_PART:<i>/<n>/<len>:<fragment>`` lines that the
+#: parser (``core.analysis._joern_lines.MarkerChunkAssembler``)
+#: reassembles before JSON parsing — one overlong line used to be
+#: wrapped/truncated by REPL rendering caps, every fragment then failed
+#: per-line parsing, and the record was dropped. ``len`` is the
+#: fragment's exact length in Unicode CODE POINTS
+#: (``codePointCount``), never UTF-16 code units: the parse side is
+#: Python, whose ``len()`` counts code points, so declaring units
+#: would spuriously drop every chunked record carrying a non-BMP
+#: character (Scala ``String.length`` counts an astral char as 2).
+#: The cut steps back one unit when it would bisect a surrogate pair
+#: (``isHighSurrogate`` at the boundary): a split pair becomes two
+#: lone surrogates that the JVM stdout encoder replaces independently
+#: (one unit AND one code point each), which passes a naive length
+#: check and silently corrupts the reassembled record.
+#: jsonEsc has already flattened every line-break class out of record
+#: text, so fragments never split across transcript segments. Kept on
+#: ONE line, mirrored byte-identically into ``queries/*.sc``
+#: (drift-guarded by tests/test_flow_chunk_transport.py).
+SCALA_FLOW_EMIT_DEF = (
+    r'''def flowRecordLines(steps: String): List[String] = { val rec = "[" + steps + "]"; if (rec.length <= __CHUNK__) List("JOERN_FLOW:" + rec) else { val ps = List.unfold(0) { s => if (s >= rec.length) None else { val c = math.min(s + __CHUNK__, rec.length); val e = if (c < rec.length && Character.isHighSurrogate(rec.charAt(c - 1))) c - 1 else c; Some((rec.substring(s, e), e)) } }; ps.zipWithIndex.map { case (p, i) => "JOERN_FLOW_PART:" + (i + 1) + "/" + ps.size + "/" + p.codePointCount(0, p.length) + ":" + p } } }'''
+    .replace("__CHUNK__", str(FLOW_RECORD_CHUNK_CHARS))
+)
 
 
 def _default_sandbox_runner():
@@ -1217,6 +1248,8 @@ import scala.util.Try
 
 ''' + SCALA_JSON_ESC_DEF + r'''
 
+''' + SCALA_FLOW_EMIT_DEF + r'''
+
 implicit val engineContext: EngineContext = EngineContext(config = EngineConfig(maxCallDepth = __MAX_CALL_DEPTH__))
 val source = __SOURCE_FILTER__
 val sink = cpg.call.name("__SINK_CALL__").argument
@@ -1225,7 +1258,7 @@ val sink = cpg.call.name("__SINK_CALL__").argument
 // lower = real flows silently dropped past the cap (the JOERN_FLOW
 // protocol has no truncation marker). 500 mirrors tiered_taint.sc.
 val flows = sink.reachableByFlows(source).take(500).l
-val flowLines = flows.map { flow =>
+val flowLines = flows.flatMap { flow =>
   val steps = flow.elements.map { e =>
     val ln = e.lineNumber.getOrElse(0)
     val cd = jsonEsc(e.code.take(200))
@@ -1238,7 +1271,7 @@ val flowLines = flows.map { flow =>
     val flEsc = jsonEsc(fl)
     s"""{"line":${ln},"code":"${cd}","function":"${fnEsc}","file":"${flEsc}"}"""
   }.mkString(",")
-  "JOERN_FLOW:[" + steps + "]"
+  flowRecordLines(steps)
 }
 flowLines.foreach(println)
 "JOERN_FLOWS_START\n" + flowLines.mkString("\n") + "\nJOERN_FLOWS_END"
@@ -2170,8 +2203,15 @@ def _infer_call(code: str) -> str:
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
+# Bound on the first-failure excerpt carried by the aggregated
+# "failed to parse flow:" entry. Lower cuts into the failure's own
+# message (payload excerpts upstream are !r-escaped and 200-bounded,
+# plus marker/exception text) and costs diagnosis; higher re-grows the
+# very log noise the aggregation exists to bound.
+_PARSE_FAILURE_HEAD_CHARS = 500
 
-def _parse_output(stdout: str) -> tuple:
+
+def _parse_output(stdout: str) -> tuple[list[TaintFlow], list[str]]:
     """Parse Joern stdout for JOERN_FLOW: lines.
 
     Returns (flows, errors).
@@ -2180,7 +2220,8 @@ def _parse_output(stdout: str) -> tuple:
     (joern 4.x) wraps values in ANSI colour codes and echoes the final
     string as ``val resN: String = \"\"\"JOERN_FLOWS_START...``, and
     each flow may appear multiple times (println + value echoes, the
-    latter with escaped quotes).  ``parse_marker_line`` owns that
+    latter with escaped quotes).  ``MarkerChunkAssembler`` (delegating
+    unchunked lines to ``parse_marker_line``) owns that
     transport tolerance; echo discrimination is by the echo prefix
     shape, not by escaped quotes in the payload (genuinely printed
     records deliberately contain ``\\"`` via jsonEsc).
@@ -2190,23 +2231,24 @@ def _parse_output(stdout: str) -> tuple:
     never prints the final-expression sentinels, and sentinel-gated
     error recording let dropped flows read as genuine negatives to
     refuting callers that honour the ``result.errors`` contract.
+    Repeated decode failures aggregate into ONE bounded ``errors``
+    entry keeping the ``failed to parse flow: `` prefix (the benign-
+    noise classifier in ``core.analysis.reachability_gates`` matches
+    on that substring) — a transcript-wide transport failure used to
+    repeat one line per damaged fragment, unbounded.
+
+    Oversized records arrive chunked (``JOERN_FLOW_PART:`` lines, see
+    ``SCALA_FLOW_EMIT_DEF``); the assembler reassembles them before
+    parsing, and lines are fed UNSTRIPPED because fragment edges can
+    be legitimate spaces inside JSON string content.
     """
     flows: list[TaintFlow] = []
     errors: list[str] = []
+    parse_failures: list[str] = []
     seen_flows: set[str] = set()
+    assembler = MarkerChunkAssembler("JOERN_FLOW:")
 
-    for raw_line in stdout.splitlines():
-        line = _ANSI_ESCAPE_RE.sub("", raw_line).strip()
-        # Sentinel lines are framing, never content.
-        if line.endswith("JOERN_FLOWS_START"):
-            continue
-        if line.startswith("JOERN_FLOWS_END") or line.endswith("JOERN_FLOWS_END"):
-            continue
-
-        records, decode_error = parse_marker_line(line, "JOERN_FLOW:")
-        if decode_error is not None:
-            errors.append(f"failed to parse flow: {decode_error}")
-            continue
+    def _consume(records: list[Any]) -> None:
         for steps_data in records:
             dedupe_key = json.dumps(steps_data, sort_keys=True)
             if dedupe_key in seen_flows:
@@ -2230,6 +2272,44 @@ def _parse_output(stdout: str) -> tuple:
                         is_inter_procedural=len(funcs) > 1,
                     )
                     flows.append(flow)
+
+    for raw_line in stdout.splitlines():
+        line = _ANSI_ESCAPE_RE.sub("", raw_line)
+        framing = line.strip()
+        # Sentinel lines are framing, never content. This filter runs
+        # BEFORE the assembler, so a chunk fragment whose content ends
+        # exactly at a chunk boundary with the literal sentinel text is
+        # eaten as framing — the resulting sequence gap is a LOUD chunk
+        # error (fail-closed), never a silent wrong record; the classic
+        # single-line emission always ends "]" and could not hit this.
+        if framing.endswith("JOERN_FLOWS_START"):
+            continue
+        if framing.startswith("JOERN_FLOWS_END") or framing.endswith("JOERN_FLOWS_END"):
+            continue
+
+        records, decode_error = assembler.feed_line(line)
+        if decode_error is not None:
+            parse_failures.append(decode_error)
+        _consume(records)
+    tail = assembler.finish()
+    if tail is not None:
+        parse_failures.append(tail)
+
+    if parse_failures:
+        # One bounded entry for the whole transcript. The head keeps
+        # the first failure verbatim (its embedded payload excerpts
+        # are already !r-escaped and 200-bounded upstream); the count
+        # preserves the evidence that MORE was lost. A single failure
+        # keeps the exact historical message shape.
+        head = parse_failures[0][:_PARSE_FAILURE_HEAD_CHARS]
+        suppressed = len(parse_failures) - 1
+        if suppressed:
+            errors.append(
+                f"failed to parse flow: {head} "
+                f"(+{suppressed} more parse failure(s) suppressed)"
+            )
+        else:
+            errors.append(f"failed to parse flow: {head}")
 
     return flows, errors
 

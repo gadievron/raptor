@@ -34,6 +34,18 @@ val dangerousSinks = List(__SINK_NAMES__)
 // MARKER:{json} line.
 def jsonEsc(v: String): String = v.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", " ").flatMap(c => if (c.toInt < 0x20 || c.toInt == 0x85 || c.toInt == 0x2028 || c.toInt == 0x2029) " " else c.toString)
 
+// flowRecordLines — the one record emitter for JOERN_FLOW lines: one
+// classic single line for a short record, ordered chunk lines
+// (marker JOERN_FLOW_PART, header i/n/len; len counts code points
+// and the cut never splits a surrogate pair) for an oversized one —
+// REPL rendering caps wrap/truncate a single overlong line and the
+// record is lost in transit. Neither marker is spelled with its
+// trailing colon here: an echoed comment line carrying the verbatim
+// marker form would abort a live chunk sequence in the parser. The
+// parser reassembles chunks before JSON parsing
+// (core.analysis._joern_lines.MarkerChunkAssembler).
+def flowRecordLines(steps: String): List[String] = { val rec = "[" + steps + "]"; if (rec.length <= 1000) List("JOERN_FLOW:" + rec) else { val ps = List.unfold(0) { s => if (s >= rec.length) None else { val c = math.min(s + 1000, rec.length); val e = if (c < rec.length && Character.isHighSurrogate(rec.charAt(c - 1))) c - 1 else c; Some((rec.substring(s, e), e)) } }; ps.zipWithIndex.map { case (p, i) => "JOERN_FLOW_PART:" + (i + 1) + "/" + ps.size + "/" + p.codePointCount(0, p.length) + ":" + p } } }
+
 val flowLines = dangerousSinks.flatMap { sinkName =>
   val sinks = cpg.call.name(sinkName).argument
   val sources = cpg.method.parameter
@@ -44,7 +56,7 @@ val flowLines = dangerousSinks.flatMap { sinkName =>
   // past the cap (the JOERN_FLOW protocol has no truncation marker).
   val flows = sinks.reachableByFlows(sources).take(500).l
 
-  flows.map { flow =>
+  flows.flatMap { flow =>
     val steps = flow.elements.map { e =>
       val ln = e.lineNumber.getOrElse(0)
       // .take(200) on the RAW string BEFORE jsonEsc — escape-then-
@@ -60,7 +72,7 @@ val flowLines = dangerousSinks.flatMap { sinkName =>
       val flEsc = jsonEsc(fl)
       s"""{"line":$ln,"code":"$cd","function":"$fnEsc","file":"$flEsc"}"""
     }.mkString(",")
-    "JOERN_FLOW:[" + steps + "]"
+    flowRecordLines(steps)
   }
 }
 

@@ -24,9 +24,16 @@ framing varies by REPL version and string shape:
   splits a record whose ``[...]`` payload exceeds
   :data:`FLOW_RECORD_CHUNK_CHARS` into ordered
   ``MARKER_PART:<i>/<n>/<len>:<fragment>`` lines (1-based contiguous
-  ``i`` of ``n``; ``len`` is the fragment's exact character count so
-  edge damage is detected, never silently absorbed; ``i == n`` is the
-  terminator).  :class:`MarkerChunkAssembler` reassembles them before
+  ``i`` of ``n``; ``len`` is the fragment's exact length in Unicode
+  code points — the Scala emitter declares ``codePointCount`` and its
+  cut never bisects a surrogate pair, so Python's ``len()`` compares
+  like-for-like — and edge damage is detected, never silently
+  absorbed; ``i == n`` is the terminator).  Chunk lines are never the
+  FINAL line of a triple-quoted value echo: every emitter closes its
+  flow block with a sentinel line (e.g. ``JOERN_FLOWS_END``) that
+  absorbs the closing quotes, and a stray quote glued onto a fragment
+  would fail the length check loudly rather than corrupt the record.
+  :class:`MarkerChunkAssembler` reassembles them before
   JSON parsing — a single overlong line used to be wrapped or
   truncated by REPL rendering caps and every fragment then failed
   per-line parsing, dropping the record.
@@ -283,8 +290,12 @@ class MarkerChunkAssembler:
 
     Damage discipline: any sequence anomaly — gap, total mismatch,
     declared-length mismatch, unparseable header, dangling partial at
-    :meth:`finish` — drops the record with ONE error, never silent
-    corruption.  Anchoring: when a line carries both the record marker
+    :meth:`finish` — drops the record loudly, never silent corruption,
+    with errors bounded at ONE per fed line (contiguous continuations
+    of an already-reported broken sequence are swallowed; unrelated
+    orphan fragments each report, and ``packages.joern.runner``
+    aggregates the burst into one bounded entry downstream).
+    Anchoring: when a line carries both the record marker
     and the chunk marker, the EARLIEST occurrence wins, so record
     payload text mentioning the chunk marker cannot reroute parsing
     (and vice versa).  Consumers keep their canonical-JSON dedupe: a
@@ -430,6 +441,10 @@ class MarkerChunkAssembler:
                 self._reset()
                 self._poison = (total, idx + 1) if idx < total else None
                 return [], pending or error
+            # ``declared_len`` is Unicode code points (the emitter
+            # declares codePointCount and never cuts inside a
+            # surrogate pair), so Python's len() compares
+            # like-for-like.
             if len(fragment) != declared_len:
                 error = (
                     f"unrecoverable {self._marker} chunk {idx}/{total}: "
