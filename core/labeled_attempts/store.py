@@ -170,28 +170,51 @@ def _write_atomic(path: Path, payload: str, *, max_retries: int = 5) -> Path:
     # O_CREAT | O_EXCL: create new; fail if exists.
     # 0o600: records can carry target details and exploit payloads —
     # keep new files owner-only. Existing records are not migrated.
+    #
+    # Stage-then-link: the payload is written COMPLETELY to a private
+    # tmp name first (write-until-done loop — os.write may return
+    # short), then published under the final name with os.link, which
+    # fails with EEXIST instead of clobbering (rename would replace a
+    # racing writer's finished record). Readers therefore never see a
+    # truncated record at the final name, and a short write can no
+    # longer silently persist a partial JSON document.
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-    for _attempt_n in range(max_retries):
-        try:
-            fd = os.open(path, flags, 0o600)
-            try:
-                os.write(fd, payload.encode("utf-8"))
-            finally:
-                os.close(fd)
-            return path
-        except FileExistsError:
-            # Re-roll the random suffix and try again. Format is
-            # "<base>-<suffix>.json" — replace the suffix.
-            stem = path.stem  # e.g. "sandbox-20260603T140532.123Z-abc123"
-            base = "-".join(stem.split("-")[:-1])
-            new_suffix = secrets.token_hex(3)
-            path = path.with_name(f"{base}-{new_suffix}.json")
-            continue
-    msg = (
-        f"could not create unique filename after {max_retries} retries "
-        f"(this should never happen — bug?)"
+    data = payload.encode("utf-8")
+    tmp = path.with_name(
+        f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
     )
-    raise OSError(msg)
+    try:
+        fd = os.open(tmp, flags, 0o600)
+        try:
+            view = memoryview(data)
+            while view:
+                n = os.write(fd, view)
+                if n <= 0:  # defensive: only ever 0 on regular files
+                    msg = f"short write to {tmp} (os.write returned {n})"
+                    raise OSError(msg)
+                view = view[n:]
+        finally:
+            os.close(fd)
+        for _attempt_n in range(max_retries):
+            try:
+                os.link(tmp, path)
+                return path
+            except FileExistsError:
+                # Re-roll the random suffix and try again. Format is
+                # "<base>-<suffix>.json" — replace the suffix.
+                stem = path.stem  # e.g. "sandbox-2026...123Z-abc123"
+                base = "-".join(stem.split("-")[:-1])
+                new_suffix = secrets.token_hex(3)
+                path = path.with_name(f"{base}-{new_suffix}.json")
+                continue
+        msg = (
+            f"could not create unique filename after {max_retries} "
+            f"retries (this should never happen — bug?)"
+        )
+        raise OSError(msg)
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
 
 
 def write(

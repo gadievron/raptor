@@ -712,6 +712,94 @@ def test_write_atomic_with_existing_symlink_refuses_open(tmp_path):
     assert victim.read_text() == "untouched"
 
 
+# --------------------------------------------------------------------------
+# Adversarial: short kernel writes must not truncate records
+# --------------------------------------------------------------------------
+
+
+def test_short_kernel_writes_do_not_truncate_record(
+    tmp_path, monkeypatch,
+):
+    """os.write may return a short count (signal interruption, quota
+    edge). The writer must loop until the whole payload is on disk —
+    a single unchecked write would silently persist a truncated JSON
+    document that readers then skip as corrupt, losing the record."""
+    import os
+
+    from core.labeled_attempts.store import _write_atomic
+
+    real_open = os.open
+    real_write = os.write
+    tracked: set[int] = set()
+
+    def tracking_open(path, flags, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
+        fd = real_open(path, flags, *args, **kwargs)
+        if str(tmp_path) in str(path):
+            tracked.add(fd)
+        return fd
+
+    def short_write(fd, data):  # noqa: ANN001, ANN202
+        if fd in tracked:
+            # Kernel accepts at most 7 bytes per call.
+            return real_write(fd, bytes(memoryview(data)[:7]))
+        return real_write(fd, data)
+
+    monkeypatch.setattr(os, "open", tracking_open)
+    monkeypatch.setattr(os, "write", short_write)
+
+    payload = '{"k": "' + "x" * 100 + '"}'
+    out = _write_atomic(tmp_path / "sandbox-x-aaaaaa.json", payload)
+
+    monkeypatch.undo()
+    assert out.read_text(encoding="utf-8") == payload
+    # No stage-file debris survives a successful publish.
+    assert [p.name for p in tmp_path.iterdir()] == [out.name]
+
+
+def test_failed_write_leaves_no_partial_at_final_name(
+    tmp_path, monkeypatch,
+):
+    """A write that dies midway (short write, then ENOSPC) must raise
+    AND leave nothing at the final name — readers scanning the pool
+    must never observe a partially-written record under a
+    publishable filename."""
+    import os
+
+    from core.labeled_attempts.store import _write_atomic
+
+    real_open = os.open
+    real_write = os.write
+    tracked: set[int] = set()
+    calls = {"n": 0}
+
+    def tracking_open(path, flags, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
+        fd = real_open(path, flags, *args, **kwargs)
+        if str(tmp_path) in str(path):
+            tracked.add(fd)
+        return fd
+
+    def dying_write(fd, data):  # noqa: ANN001, ANN202
+        if fd in tracked:
+            if calls["n"] == 0:
+                calls["n"] += 1
+                return real_write(fd, bytes(memoryview(data)[:7]))
+            raise OSError(28, "No space left on device")
+        return real_write(fd, data)
+
+    monkeypatch.setattr(os, "open", tracking_open)
+    monkeypatch.setattr(os, "write", dying_write)
+
+    final = tmp_path / "sandbox-x-aaaaaa.json"
+    with pytest.raises(OSError):
+        _write_atomic(final, '{"k": "' + "x" * 100 + '"}')
+
+    monkeypatch.undo()
+    assert not final.exists()
+    # No partial record under ANY name — the failed stage file is
+    # cleaned up too.
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_missing_oracle_record_is_skipped(project_dir):
     """A record with no oracle evidence violates the constraint and
     should be skipped on read, not raise."""
