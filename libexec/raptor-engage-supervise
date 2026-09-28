@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Engagement supervisor over one engagement ledger.
+
+Thin launcher for ``core.engagement.supervise`` — the unattended loop
+that composes the existing engagement machinery (depth-policy
+governor, per-artifact ELF chain) into one operator-schedulable
+command. It sequences, reserves, reconciles, parks, and reports; no
+analysis lives here or in the module.
+
+Idempotent + cron-safe: launch once, then re-enter with ``--resume``
+as often as you like — a complete engagement reports nothing-to-do,
+a parked one reports its parks without mutating them. Distinct exit
+codes: 0 advanced, 1 segment failure (re-run resumes), 2 usage,
+3 nothing to do (complete), 4 parked — acknowledge with
+``--resume --acknowledge <park-id>`` (code-drift parks: add
+``--accept-code-drift``), 5 paused at a safe boundary (drain request
+or wall bound — auto-resumable).
+
+Usage:
+    raptor-engage-supervise <ledger-dir>
+    raptor-engage-supervise <ledger-dir> --resume
+        [--acknowledge PARK-ID] [--accept-code-drift]
+        [--target-root DIR] [--model M] [--max-cost USD]
+        [--envelope USD] [--mechanical-only]
+    raptor-engage-supervise <ledger-dir> --parks
+    raptor-engage-supervise <ledger-dir> --request-drain
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
+
+import argparse  # noqa: E402
+
+from core.engagement.supervise import (  # noqa: E402
+    RC_NOTHING,
+    RC_OK,
+    RC_USAGE,
+    list_parks,
+    supervise,
+)
+
+
+def _show_parks(ledger_dir: Path) -> int:
+    parks = list_parks(ledger_dir)
+    if not parks:
+        print("no parks recorded")
+        return RC_NOTHING
+    waiting = 0
+    for park in parks:
+        acked = park.get("acknowledged_at")
+        tag = "acknowledged" if acked else "WAITING"
+        waiting += 0 if acked else 1
+        aid = park.get("artifact_id")
+        where = (f" artifact={_sft(str(aid), max_len=100)}"
+                 if aid else "")
+        print(f"[{tag}] {_sft(str(park.get('park_id')), max_len=24)} "
+              f"{_sft(str(park.get('kind')), max_len=40)} "
+              f"({_sft(str(park.get('scope')), max_len=12)}{where}) — "
+              f"{_sft(str(park.get('reason') or ''), max_len=300)}")
+    if waiting:
+        print(f"\n{waiting} park(s) awaiting acknowledgment — resume "
+              "with: libexec/raptor-engage-supervise <ledger-dir> "
+              "--resume --acknowledge <park-id>")
+    return RC_OK
+
+
+def _request_drain(ledger_dir: Path) -> int:
+    from core.project import sessions
+    if sessions.ledger_record_drain_request(ledger_dir):
+        print("drain requested — the supervisor pauses at the next "
+              "segment boundary (exit code 5); re-enter with --resume")
+        return RC_OK
+    print("drain request not recorded (no registered session ledger "
+          "for this run — the supervisor honors requests only from "
+          "registered sessions)", file=sys.stderr)
+    return RC_USAGE
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="raptor-engage-supervise",
+        description="Run (or resume) the engagement supervisor loop "
+                    "over an engagement ledger.",
+    )
+    ap.add_argument("ledger_dir", type=Path,
+                    help="Engagement output directory (holds "
+                         "ledger.json).")
+    ap.add_argument("--resume", action="store_true",
+                    help="Re-enter an already-launched engagement "
+                         "(idempotent; cron-safe).")
+    ap.add_argument("--acknowledge", metavar="PARK-ID", default=None,
+                    help="Acknowledge one park by id before "
+                         "resuming (requires --resume).")
+    ap.add_argument("--accept-code-drift", action="store_true",
+                    help="Resume under moved framework code; the "
+                         "acceptance is recorded in the residual "
+                         "map (requires --resume).")
+    ap.add_argument("--target-root", type=Path, default=None,
+                    help="Override the ledger's recorded target root "
+                         "(artifact paths resolve under it).")
+    ap.add_argument("--model", default=None,
+                    help="LLM model override passed to the chain's "
+                         "study and audit stages.")
+    ap.add_argument("--max-cost", type=float, default=None,
+                    metavar="USD",
+                    help="Per-stage LLM budget passed to the chain. "
+                         "Persisted at launch: a bare --resume keeps "
+                         "enforcing it; passing the flag on --resume "
+                         "replaces the persisted figure (recorded in "
+                         "the residual map).")
+    ap.add_argument("--envelope", type=float, default=None,
+                    metavar="USD",
+                    help="Engagement spend envelope for feasibility "
+                         "and per-segment reservations. Persisted at "
+                         "launch: a bare --resume keeps enforcing "
+                         "it; passing the flag on --resume replaces "
+                         "the persisted figure (recorded in the "
+                         "residual map and policy amendments).")
+    ap.add_argument("--mechanical-only", action="store_true",
+                    help="Skip the LLM stages — each skip is a "
+                         "recorded degradation a later full "
+                         "capability resume lifts.")
+    ap.add_argument("--parks", action="store_true",
+                    help="List the park registry and exit (no run).")
+    ap.add_argument("--request-drain", action="store_true",
+                    help="Record a fleet drain request for this "
+                         "engagement and exit; the live supervisor "
+                         "pauses at its next segment boundary.")
+    parsed = ap.parse_args()
+
+    if not parsed.ledger_dir.is_dir():
+        # Operator-typed, but tab-completed hostile names are still
+        # hostile bytes on a terminal — escape the echoed path.
+        print(f"error: not a directory: "
+              f"{_sft(str(parsed.ledger_dir), max_len=300)}",
+              file=sys.stderr)
+        return RC_USAGE
+    if parsed.parks:
+        return _show_parks(parsed.ledger_dir)
+    if parsed.request_drain:
+        return _request_drain(parsed.ledger_dir)
+    if parsed.acknowledge and not parsed.resume:
+        print("error: --acknowledge requires --resume",
+              file=sys.stderr)
+        return RC_USAGE
+    if parsed.accept_code_drift and not parsed.resume:
+        print("error: --accept-code-drift requires --resume",
+              file=sys.stderr)
+        return RC_USAGE
+
+    return supervise(
+        parsed.ledger_dir,
+        resume=parsed.resume,
+        acknowledge=parsed.acknowledge,
+        accept_code_drift=parsed.accept_code_drift,
+        target_root=parsed.target_root,
+        model=parsed.model,
+        max_cost=parsed.max_cost,
+        envelope_usd=parsed.envelope,
+        mechanical_only=parsed.mechanical_only,
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())
