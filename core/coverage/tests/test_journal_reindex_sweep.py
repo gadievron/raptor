@@ -472,3 +472,140 @@ class TestSweepCore:
         report = _sweep(project_env.name)
         assert report.outcomes == []
         assert report.total_merged == 0
+
+
+class TestSweepCli:
+    """``raptor-audit journal reindex --project <name>`` — the sweep
+    form of the single-run reindex remedy."""
+
+    def _load_cli(self):
+        import importlib.util
+        from importlib.machinery import SourceFileLoader
+        cli_path = str(
+            Path(__file__).resolve().parents[3]
+            / "libexec" / "raptor-audit",
+        )
+        loader = SourceFileLoader("raptor_audit_cli_sweep_test",
+                                  cli_path)
+        spec = importlib.util.spec_from_loader(
+            "raptor_audit_cli_sweep_test", loader)
+        assert spec is not None
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        return mod
+
+    def _reindex(self, cli, *, run_dir=None, project=None):
+        return cli.cmd_journal(SimpleNamespace(
+            journal_command="reindex", run_dir=run_dir,
+            sweep_project=project))
+
+    def test_sweep_heals_what_single_reindex_cannot(
+        self, project_env, capsys,
+    ):
+        """HEADLINE — the incident, end to end. The index's damaged
+        row came from the OLDER run; reindexing the newest run (the
+        obvious first remedy) is a no-op for it; ONE sweep heals it."""
+        run_a = _make_run(project_env.dir, "scan-20260101-000000")
+        run_b = _make_run(project_env.dir, "scan-20260102-000000")
+        append_entry(run_a, _entry("old_fn"))
+        append_entry(run_b, _entry("new_fn"))
+        assert merge_run_into_index(project_env.dir, run_a) == 1
+        assert merge_run_into_index(project_env.dir, run_b) == 1
+        key = _damage_stored_copy(project_env.dir, "old_fn")
+        cli = self._load_cli()
+
+        # Single-run reindex of the CURRENT run: rc 0, but the damaged
+        # row's truth lives in run_a — it stays broken.
+        assert self._reindex(cli, run_dir=str(run_b)) == 0
+        row = _raw_index_rows(project_env.dir)[key]
+        assert not journal_mac.verify_row(
+            row, row.get(journal_mac.TOKEN_KEY))
+
+        capsys.readouterr()
+        rc = self._reindex(cli, project=project_env.name)
+        out = capsys.readouterr().out
+
+        assert rc == 0
+        row = _raw_index_rows(project_env.dir)[key]
+        token = row.get(journal_mac.TOKEN_KEY)
+        assert token
+        assert journal_mac.verify_row(row, token)
+        assert row.get("body") == "reviewed, no concern"
+        assert INDEX_FILENAME in out
+        assert "scan-20260101-000000" in out
+        assert "scan-20260102-000000" in out
+        assert "1 repaired" in out
+
+    def test_run_dir_and_project_are_mutually_exclusive(
+        self, project_env, tmp_path, capsys,
+    ):
+        cli = self._load_cli()
+        rc = self._reindex(cli, run_dir=str(tmp_path),
+                           project=project_env.name)
+        assert rc == 1
+        assert "not both" in capsys.readouterr().err
+
+    def test_neither_run_dir_nor_project_is_usage_error(self, capsys):
+        cli = self._load_cli()
+        rc = self._reindex(cli)
+        assert rc == 1
+        assert "error" in capsys.readouterr().err
+
+    def test_unknown_project_is_rc1(self, project_env, capsys):
+        cli = self._load_cli()
+        rc = self._reindex(cli, project="no-such-project")
+        assert rc == 1
+        assert "unknown project" in capsys.readouterr().err
+
+    def test_invalid_project_name_is_rc1(self, project_env, capsys):
+        cli = self._load_cli()
+        rc = self._reindex(cli, project="../escape")
+        assert rc == 1
+        assert "invalid project name" in capsys.readouterr().err
+
+    def test_empty_project_is_rc0(self, project_env, capsys):
+        cli = self._load_cli()
+        rc = self._reindex(cli, project=project_env.name)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "0 merged" in out
+
+    def test_corrupt_index_is_rc1(self, project_env, capsys):
+        run = _make_run(project_env.dir, "scan-20260101-000000")
+        append_entry(run, _entry())
+        (project_env.dir / INDEX_FILENAME).write_text(
+            "{ not json\n", encoding="utf-8")
+        cli = self._load_cli()
+
+        rc = self._reindex(cli, project=project_env.name)
+        assert rc == 1
+        assert "unreadable" in capsys.readouterr().err
+
+    def test_unreadable_run_journal_shows_in_summary(
+        self, project_env, capsys,
+    ):
+        run_bad = _make_run(project_env.dir, "scan-20260101-000000")
+        (run_bad / JOURNAL_FILENAME).write_text("{ not json\n",
+                                                encoding="utf-8")
+        run_ok = _make_run(project_env.dir, "scan-20260102-000000")
+        append_entry(run_ok, _entry())
+        cli = self._load_cli()
+
+        rc = self._reindex(cli, project=project_env.name)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "unreadable or malformed" in out
+        assert "1 run(s) with unreadable journal(s)" in out
+        assert "1 merged" in out
+
+    def test_live_writer_refusal_is_rc1(
+        self, project_env, monkeypatch, capsys,
+    ):
+        run = _make_run(project_env.dir, "scan-20260101-000000")
+        append_entry(run, _entry())
+        _plant_live_running_meta(run, monkeypatch)
+        cli = self._load_cli()
+
+        rc = self._reindex(cli, project=project_env.name)
+        assert rc == 1
+        assert "writing this project" in capsys.readouterr().err

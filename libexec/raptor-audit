@@ -2646,8 +2646,57 @@ def _check_legacy_state(project_dir: Path) -> str | None:
     )
 
 
+def _journal_reindex_project(project_name: str) -> int:
+    """``journal reindex --project <name>`` — sweep form: re-project
+    EVERY run of the project, oldest→newest, through the single-run
+    merge path (logic and safety gates in
+    ``core.coverage.journal_sweep``). The remedy when the damaged
+    index rows' intact source of truth lives in a PRIOR run's
+    journal, where reindexing the current run alone is a no-op.
+    """
+    from core.coverage.journal_sweep import (
+        SweepRefused,
+        reindex_project_journals,
+    )
+    try:
+        report = reindex_project_journals(project_name)
+    except SweepRefused as exc:
+        # Unknown/invalid project is a hard error by contract, never
+        # a fallback. The message can carry operator argv and sibling
+        # metadata fields — escape before the terminal.
+        print(f"error: {sanitise_for_terminal(str(exc), max_len=500)}",
+              file=sys.stderr)
+        return 1
+    print(f"index: {sanitise_for_terminal(str(report.index_path), max_len=300)}")
+    for outcome in report.outcomes:
+        name = sanitise_for_terminal(outcome.run_name, max_len=120)
+        if outcome.skipped_reason is not None:
+            reason = sanitise_for_terminal(
+                outcome.skipped_reason, max_len=200)
+            print(f"  {name}: skipped — {reason}")
+        else:
+            line = (f"  {name}: {outcome.merged} merged "
+                    f"({outcome.healed} repaired, "
+                    f"{outcome.stripped} stripped)")
+            if outcome.unreadable:
+                line += (f"; {outcome.unreadable} journal location(s) "
+                         "unreadable or malformed — those rows NOT "
+                         "merged (run journal kept on disk)")
+            print(line)
+    totals = (f"  total: {report.total_merged} merged "
+              f"({report.total_healed} repaired, "
+              f"{report.total_stripped} stripped) across "
+              f"{report.swept} run(s); {report.skipped} skipped")
+    if report.unreadable_runs:
+        totals += (f"; {report.unreadable_runs} run(s) with "
+                   "unreadable journal(s)")
+    print(totals)
+    return 0
+
+
 def _journal_reindex(args: argparse.Namespace) -> int:
-    """``journal reindex <run-dir>`` — see :func:`cmd_journal`.
+    """``journal reindex <run-dir> | --project <name>`` — see
+    :func:`cmd_journal`.
 
     The governing project comes from the RUN PIN, the exact
     resolution run completion's merge uses — a run is never
@@ -2655,8 +2704,25 @@ def _journal_reindex(args: argparse.Namespace) -> int:
     pin-to-none (standalone) run refuses loudly. Legacy marker-less
     dirs resolve through the same containment probe run completion
     applies (a project-shaped parent directory), no wider.
+
+    The two forms are mutually exclusive: a run dir names ONE run
+    (its pin decides the project); ``--project`` names the project
+    (its runs' pins are checked one by one) — both at once would
+    leave ambiguous which resolution governs.
     """
-    run_dir = Path(args.run_dir).resolve()
+    run_dir_arg = getattr(args, "run_dir", None)
+    project_arg = getattr(args, "sweep_project", None)
+    if run_dir_arg and project_arg:
+        print("error: pass a run dir OR --project <name>, not both",
+              file=sys.stderr)
+        return 1
+    if project_arg:
+        return _journal_reindex_project(project_arg)
+    if not run_dir_arg:
+        print("error: usage: raptor-audit journal reindex <run-dir> | "
+              "journal reindex --project <name>", file=sys.stderr)
+        return 1
+    run_dir = Path(run_dir_arg).resolve()
     if not run_dir.is_dir():
         print(
             "error: "
@@ -2721,6 +2787,11 @@ def cmd_journal(args: argparse.Namespace) -> int:
     a stored copy whose token is absent or failing with the run
     journal's verifying copy at the same timestamp. Idempotent — a
     healthy index re-merges as a no-op.
+
+    ``journal reindex --project <name>`` sweeps EVERY run of the
+    project through the same path, oldest→newest — for damage whose
+    intact truth lives in a PRIOR run's journal. Refuses while a live
+    run is writing the project; per-run and total counts reported.
     """
     if getattr(args, "journal_command", None) == "reindex":
         return _journal_reindex(args)
@@ -4819,7 +4890,22 @@ def main() -> int:
     )
     p_jreindex.add_argument(
         "run_dir",
-        help="Run output directory containing review-journal.jsonl",
+        nargs="?",
+        help="Run output directory containing review-journal.jsonl "
+             "(omit with --project to sweep a whole project)",
+    )
+    # dest is NOT "project": main() treats a parsed args.project as
+    # the run-pin flag (set_process_project + the sandbox-floor
+    # consent read) — this flag names a sweep TARGET, not a pin.
+    p_jreindex.add_argument(
+        "--project",
+        dest="sweep_project",
+        metavar="NAME",
+        help="Sweep form: re-project EVERY run of the named project, "
+             "oldest→newest, through the same merge path — for index "
+             "damage whose intact truth lives in a prior run's "
+             "journal. Mutually exclusive with the run-dir form; "
+             "refuses while a live run is writing the project",
     )
 
     p_backlog = sub.add_parser(
