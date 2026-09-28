@@ -7,10 +7,20 @@ contract: gate order, StageError abort, output validation, truncation
 policy, and the settled-lifecycle pattern.
 """
 
+import subprocess
+import sys
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
+
+# The tests below patch core.orchestration.skill_dispatch.subprocess.run
+# — that target resolves through the SHARED subprocess module object, so
+# the patch is global for its duration. The honest-fake sandboxes spawn
+# real child processes and must reach the genuine implementation, so it
+# is bound here at import time, before any patch is active.
+_REAL_SUBPROCESS_RUN = subprocess.run
 
 from core.orchestration.skill_dispatch import (
     MAX_VALIDATE_FINDINGS,
@@ -51,6 +61,41 @@ def tearDownModule():
 
 def _ok(returncode=0, stdout="", stderr=""):
     return MagicMock(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def _faithful_ok(kwargs: dict, *, returncode: int = 0, stdout: str = "",
+                 stderr: str = "") -> MagicMock:
+    """CompletedProcess-shaped result honouring the runner's capture
+    contract: streams exist ONLY when the dispatch requested
+    ``capture_output`` (the sandbox runner defaults it to False, under
+    which both streams are ``None``). A fake that hands streams back
+    unconditionally is exactly how the missing-capture defect stayed
+    invisible to a green suite — every stream-consuming double in this
+    file must route through here.
+    """
+    if kwargs.get("capture_output"):
+        return _ok(returncode=returncode, stdout=stdout, stderr=stderr)
+    return _ok(returncode=returncode, stdout=None, stderr=None)
+
+
+#: Static program text for the honest-fake dispatch child. Never
+#: interpolated: every emitted byte rides as hex argv DATA so hostile
+#: and invalid-UTF-8 sequences survive the argv boundary without ever
+#: appearing inside program text (the instruction-file `python3 -c`
+#: census rule, applied to test children).
+#: argv: <stdout_hex> <stderr_hex> <exit_code> [<sleep_s>]
+_CHILD_SCRIPT_SOURCE = """\
+import sys
+import time
+
+sys.stdout.buffer.write(bytes.fromhex(sys.argv[1]))
+sys.stdout.buffer.flush()
+sys.stderr.buffer.write(bytes.fromhex(sys.argv[2]))
+sys.stderr.buffer.flush()
+if len(sys.argv) > 4:
+    time.sleep(float(sys.argv[4]))
+sys.exit(int(sys.argv[3]))
+"""
 
 
 def _lifecycle_dispatcher(start_dir):
@@ -566,12 +611,20 @@ class ChildTailTests(unittest.TestCase):
     multiplexes its errors onto stdout, so the old stderr-only excerpt
     went blank exactly when the operator needed it."""
 
-    def _fail_sandbox(self, run_dir, *, returncode, stdout="", stderr=""):
+    def _fail_sandbox(self, run_dir: Path, *, returncode: int,
+                      stdout: str = "", stderr: str = "",
+                      ) -> Callable[..., MagicMock]:
+        # Capture-faithful (via _faithful_ok): these tests pin tail
+        # content and quoting, but their double must not hand streams
+        # back unconditionally — that shape kept the suite green while
+        # the dispatch never requested capture at all.
         dispatcher = _lifecycle_dispatcher(run_dir)
 
-        def _sandbox(cmd, *args, **kwargs):
+        def _sandbox(cmd: object, *args: object,
+                     **kwargs: object) -> MagicMock:
             dispatcher(cmd, *args, **kwargs)
-            return _ok(returncode=returncode, stdout=stdout, stderr=stderr)
+            return _faithful_ok(kwargs, returncode=returncode,
+                                stdout=stdout, stderr=stderr)
         return _sandbox
 
     def test_nonzero_exit_surfaces_stdout_when_stderr_empty(self):
@@ -677,6 +730,80 @@ class ChildTailTests(unittest.TestCase):
             self.assertIn("| exit=0", lines)
             self.assertIn("| --- stderr tail ---", lines)
 
+    def test_oversized_streams_persist_the_tail_not_the_head(self) -> None:
+        # The artifact's sections promise a TAIL: for a stream beyond
+        # the persist cap the terminal error lives at the END — a
+        # head-slice keeps startup noise and silently loses the crash
+        # line while still labelling itself "tail".
+        from core.orchestration.skill_dispatch import (
+            _CHILD_TAIL_PERSIST_CHARS,
+        )
+        cap: int = _CHILD_TAIL_PERSIST_CHARS
+        stdout = "OUT-HEAD-MARK-4a7 " + "o" * cap + " OUT-TAIL-MARK-8d2\n"
+        stderr = "ERR-HEAD-MARK-1f6 " + "e" * cap + " ERR-TAIL-MARK-5b9\n"
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING"):
+                _run(tmp, run_dir,
+                     sandbox=self._fail_sandbox(
+                         run_dir, returncode=1,
+                         stdout=stdout, stderr=stderr))
+            content = (run_dir / "dispatch-child-tail.log").read_text()
+        self.assertIn("OUT-TAIL-MARK-8d2", content)
+        self.assertIn("ERR-TAIL-MARK-5b9", content)
+        self.assertNotIn("OUT-HEAD-MARK-4a7", content,
+                         "capped stdout must keep the tail, not the head")
+        self.assertNotIn("ERR-HEAD-MARK-1f6", content,
+                         "capped stderr must keep the tail, not the head")
+
+    def test_exact_cap_stream_survives_in_full(self) -> None:
+        # Boundary pin on the persist cap: a 64 KiB stream must land
+        # whole — an off-by-one shaves the stream's first characters
+        # off exactly at the boundary. The length is the LITERAL
+        # 65536, deliberately NOT the imported constant: a stream
+        # sized from the constant tracks any off-by-one in the
+        # constant itself and can never witness it. Both directions:
+        # raising the cap keeps this green (stream fits under it);
+        # lowering it below 64 KiB fails here and must be a conscious
+        # retune of this literal alongside it.
+        head = "ERR-FIRST-MARK-2c8 "
+        tail = " ERR-LAST-MARK-6e3"
+        stderr = head + "e" * (65536 - len(head) - len(tail)) + tail
+        self.assertEqual(len(stderr), 65536)
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING"):
+                _run(tmp, run_dir,
+                     sandbox=self._fail_sandbox(
+                         run_dir, returncode=1, stderr=stderr))
+            content = (run_dir / "dispatch-child-tail.log").read_text()
+        self.assertIn("ERR-FIRST-MARK-2c8", content,
+                      "an exactly-cap stream must persist in full")
+        self.assertIn("ERR-LAST-MARK-6e3", content)
+
+    def test_warning_excerpt_is_the_stdout_tail_not_head(self) -> None:
+        # The WARNING line advertises a "stdout tail" — for a stdout
+        # narrative longer than its 500-char excerpt the crash line at
+        # the END must be the part that survives, not the head noise.
+        stdout = "OUT-HEAD-MARK-3e1 " + "x" * 600 + " OUT-TAIL-MARK-9c4\n"
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING") as logs:
+                _run(tmp, run_dir,
+                     sandbox=self._fail_sandbox(
+                         run_dir, returncode=1, stdout=stdout))
+        joined = "\n".join(logs.output)
+        self.assertIn("stdout tail", joined)
+        self.assertIn("OUT-TAIL-MARK-9c4", joined,
+                      "the excerpt must end with the stream's tail")
+        self.assertNotIn("OUT-HEAD-MARK-3e1", joined,
+                         "a head-slice excerpt loses the crash line")
 
     def test_timeout_persists_partial_capture(self):
         # The kill's partial capture is the only account of what the
@@ -779,6 +906,10 @@ class ChildStreamCaptureTests(unittest.TestCase):
         self.assertTrue(result.ran)
         self.assertIs(seen.get("capture_output"), True)
         self.assertEqual(seen.get("errors"), "replace")
+        # text=True must be explicit: the sandbox fork backend decodes
+        # streams keyed solely on `text` (genuine run() would mask its
+        # omission because errors= alone enables text mode there).
+        self.assertIs(seen.get("text"), True)
 
     def test_failing_child_leaves_a_nonempty_diagnostic(self):
         # The regression this class exists for: under a run()-faithful
@@ -873,6 +1004,243 @@ class ChildStreamCaptureTests(unittest.TestCase):
         self.assertIn("streams=empty", content)
 
 
+class RealChildStreamCaptureTests(unittest.TestCase):
+    """Capture pins that bite on a REAL subprocess child.
+
+    The doubles above pin the kwargs contract and the artifact writer;
+    none of them exercises actual stream capture — a hand-written fake
+    decides what streams look like, so it can never catch a decode
+    posture or plumbing regression the fake's author didn't imagine.
+    These tests spawn a real child process through a runner-shaped shim
+    that forwards the dispatch's stream-plumbing kwargs VERBATIM
+    (present-or-absent — never defaulted by the shim) to the genuine
+    ``subprocess.run``: real pipes, real nonzero exits, real
+    invalid-UTF-8 bytes on both streams, a real timeout kill. If the
+    dispatch stops requesting capture the streams come back ``None``
+    from the OS-level run, and if it drops ``errors="replace"`` a
+    hostile byte raises ``UnicodeDecodeError`` in the parent — either
+    way these tests fail on the real mechanism, not on a double's
+    say-so.
+    """
+
+    #: The dispatch kwargs that ARE the stream-plumbing contract with
+    #: the runner. Sandbox-only kwargs (target/output/env/cwd/...) are
+    #: dropped: the shim stands in for the sandbox, not for isolation.
+    #: `stdin` is deliberately absent: proxy-credential mode transports
+    #: a stdin file handle, but that leg exists only on the fork/netns
+    #: backend — a genuine-run() shim cannot exercise it honestly.
+    _STREAM_KWARGS = ("capture_output", "text", "errors", "input",
+                      "timeout")
+
+    def _write_child(self, tmp: Path) -> Path:
+        child = Path(tmp) / "dispatch-child.py"
+        child.write_text(_CHILD_SCRIPT_SOURCE)
+        return child
+
+    def _real_child_sandbox(
+        self, run_dir: Path, child: Path, *,
+        stdout: bytes = b"", stderr: bytes = b"",
+        exit_code: int = 0, sleep_s: float = 0.0,
+    ) -> Callable[..., subprocess.CompletedProcess]:
+        child_argv: list[str] = [
+            sys.executable, str(child),
+            stdout.hex(), stderr.hex(), str(exit_code), str(sleep_s),
+        ]
+
+        def _sandbox(cmd: object, *args: object,
+                     **kwargs: object) -> subprocess.CompletedProcess:
+            # text=True is pinned HERE because the genuine run() below
+            # cannot witness its omission: errors= alone still enables
+            # text mode. The real sandbox fork backend decodes keyed
+            # SOLELY on `text` — without it every stream comes back as
+            # bytes and both failure-path consumers crash before any
+            # artifact lands.
+            if kwargs.get("text") is not True:
+                raise AssertionError(
+                    "dispatch must pass text=True explicitly: the "
+                    "sandbox fork backend decodes streams keyed on it")
+            run_kwargs: dict = {k: kwargs[k] for k in self._STREAM_KWARGS
+                                if k in kwargs}
+            # _REAL_SUBPROCESS_RUN: subprocess.run itself is patched
+            # module-globally while the dispatch runs (see the import-
+            # time binding at the top of this file).
+            return _REAL_SUBPROCESS_RUN(child_argv, check=False,
+                                        **run_kwargs)
+
+        return _sandbox
+
+    def test_failing_child_narrative_survives_end_to_end(self) -> None:
+        # The parent defect, replayed with a real child: a nonzero-exit
+        # child's stdout narrative must reach the tail artifact AND the
+        # WARNING excerpt via real pipes — not via a fake that hands
+        # streams back regardless of capture.
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            child = self._write_child(Path(tmp))
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING") as logs:
+                result = _run(
+                    tmp, run_dir,
+                    sandbox=self._real_child_sandbox(
+                        run_dir, child,
+                        stdout=b"Stage C helper: TypeError: boom\n",
+                        exit_code=3))
+            self.assertFalse(result.ran)
+            self.assertEqual(result.skipped_reason,
+                             "subprocess returned 3")
+            self.assertEqual(result.child_exit, "3")
+            content = (run_dir / "dispatch-child-tail.log").read_text()
+            self.assertIn("exit=3", content)
+            self.assertIn("TypeError: boom", content,
+                          "real child's narrative must be persisted")
+            self.assertNotIn("capture=missing", content,
+                             "capture must actually be active")
+            joined = "\n".join(logs.output)
+            self.assertIn("stdout tail", joined)
+            self.assertIn("TypeError: boom", joined)
+
+    def test_streams_land_in_their_own_sections(self) -> None:
+        # Real interleaved output on BOTH pipes: each stream's bytes
+        # must land under its own section marker (a swapped or
+        # swallowed stream renders under the wrong header), and the
+        # WARNING excerpt must prefer stderr when it is non-empty.
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            child = self._write_child(Path(tmp))
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING") as logs:
+                result = _run(
+                    tmp, run_dir,
+                    sandbox=self._real_child_sandbox(
+                        run_dir, child,
+                        stdout=b"OUT-MARKER-7f3\n",
+                        stderr=b"ERR-MARKER-2c9\n",
+                        exit_code=1))
+            self.assertFalse(result.ran)
+            content = (run_dir / "dispatch-child-tail.log").read_text()
+            stderr_section = content.split(
+                "--- stderr tail ---\n", 1)[1].split(
+                "--- stdout tail ---\n", 1)[0]
+            stdout_section = content.split(
+                "--- stdout tail ---\n", 1)[1]
+            self.assertIn("ERR-MARKER-2c9", stderr_section)
+            self.assertNotIn("OUT-MARKER-7f3", stderr_section)
+            self.assertIn("OUT-MARKER-7f3", stdout_section)
+            self.assertNotIn("ERR-MARKER-2c9", stdout_section)
+            joined = "\n".join(logs.output)
+            self.assertIn("ERR-MARKER-2c9", joined)
+            self.assertNotIn("stdout tail", joined)
+
+    def test_hostile_bytes_replace_decoded_never_raise(self) -> None:
+        # errors="replace" is load-bearing: a real child emitting
+        # invalid UTF-8 on both streams must produce a clean failure
+        # record — under a strict decode the parent raises
+        # UnicodeDecodeError and loses the very narrative capture
+        # exists to keep. The raw bytes must never be persisted;
+        # U+FFFD stands in for them.
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            child = self._write_child(Path(tmp))
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING"):
+                result = _run(
+                    tmp, run_dir,
+                    sandbox=self._real_child_sandbox(
+                        run_dir, child,
+                        stdout=b"pre-marker \xff\xfe post-marker\n",
+                        stderr=b"err-marker \x80 tail\n",
+                        exit_code=1))
+            self.assertFalse(result.ran)
+            self.assertEqual(result.skipped_reason,
+                             "subprocess returned 1")
+            raw = (run_dir / "dispatch-child-tail.log").read_bytes()
+            self.assertNotIn(b"\xff", raw,
+                             "hostile byte must never persist raw")
+            content = raw.decode("utf-8")
+            self.assertIn("pre-marker", content)
+            self.assertIn("post-marker", content)
+            self.assertIn("err-marker", content)
+            self.assertIn("�", content,
+                          "invalid bytes must decode to U+FFFD")
+
+    def test_silent_failing_child_yields_streams_empty(self) -> None:
+        # A real child that exits nonzero without writing a byte:
+        # capture is ACTIVE (empty-string streams, not None), so the
+        # artifact must carry the streams=empty disclosure — never
+        # capture=missing, and never two silent empty tails.
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            child = self._write_child(Path(tmp))
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING"):
+                result = _run(
+                    tmp, run_dir,
+                    sandbox=self._real_child_sandbox(
+                        run_dir, child, exit_code=1))
+            self.assertFalse(result.ran)
+            content = (run_dir / "dispatch-child-tail.log").read_text()
+            self.assertIn("exit=1", content)
+            self.assertIn("duration=", content)
+            self.assertIn("streams=empty", content)
+            self.assertIn("produced no output on stdout or stderr",
+                          content)
+            self.assertNotIn("capture=missing", content)
+
+    def test_success_child_output_captured_and_discarded(self) -> None:
+        # Success-path semantics under real capture: a chatty exit-0
+        # child completes the pass and leaves no tail artifact.
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            child = self._write_child(Path(tmp))
+            result = _run(
+                tmp, run_dir,
+                sandbox=self._real_child_sandbox(
+                    run_dir, child,
+                    stdout=b"result narrative\n", exit_code=0))
+            self.assertTrue(result.ran)
+            self.assertIsNone(result.skipped_reason)
+            self.assertEqual(result.child_exit, "0")
+            self.assertFalse(
+                (run_dir / "dispatch-child-tail.log").exists(),
+                "success must not write a failure artifact")
+
+    def test_timeout_kill_persists_real_partial_capture(self) -> None:
+        # A real child writes to both pipes (stdout carrying an
+        # invalid-UTF-8 byte: the kill precedes decoding, so this leg
+        # decodes bytes itself), flushes, then outlives the dispatch
+        # timeout. The genuine TimeoutExpired must carry the partial
+        # capture into the artifact — with capture off it carries
+        # nothing and the artifact goes empty.
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            child = self._write_child(Path(tmp))
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING"):
+                result = _run(
+                    tmp, run_dir,
+                    sandbox=self._real_child_sandbox(
+                        run_dir, child,
+                        stdout=b"Stage A written \xff mid-flight\n",
+                        stderr=b"partial err line\n",
+                        exit_code=0, sleep_s=30.0),
+                    timeout_s=1)
+            self.assertFalse(result.ran)
+            self.assertEqual(result.skipped_reason, "timeout after 1s")
+            self.assertEqual(result.child_exit, "timeout after 1s")
+            raw = (run_dir / "dispatch-child-tail.log").read_bytes()
+            self.assertNotIn(b"\xff", raw)
+            content = raw.decode("utf-8")
+            self.assertIn("exit=timeout after 1s", content)
+            self.assertIn("Stage A written", content,
+                          "partial capture must reach the artifact")
+            self.assertIn("partial err line", content)
+
+
 class ChildTailPlantTests(unittest.TestCase):
     """run_dir is child-writable by design: a planted symlink at the
     artifact name must never steer the parent's write."""
@@ -884,14 +1252,16 @@ class ChildTailPlantTests(unittest.TestCase):
             victim.write_text('{"verdict": "untouched"}')
             dispatcher = _lifecycle_dispatcher(run_dir)
 
-            def _sandbox(cmd, *args, **kwargs):
+            def _sandbox(cmd: object, *args: object,
+                         **kwargs: object) -> MagicMock:
                 dispatcher(cmd, *args, **kwargs)
                 # The child plants the symlink inside its writable
                 # run dir, then fails.
                 link = run_dir / "dispatch-child-tail.log"
                 if not link.exists() and not link.is_symlink():
                     link.symlink_to(victim)
-                return _ok(returncode=1, stdout="attacker narrative")
+                return _faithful_ok(kwargs, returncode=1,
+                                    stdout="attacker narrative")
 
             with self.assertLogs(
                     "core.orchestration.skill_dispatch",
@@ -912,9 +1282,10 @@ class ChildTailPlantTests(unittest.TestCase):
             run_dir = Path(tmp) / "run"
             dispatcher = _lifecycle_dispatcher(run_dir)
 
-            def _sandbox(cmd, *args, **kwargs):
+            def _sandbox(cmd: object, *args: object,
+                         **kwargs: object) -> MagicMock:
                 dispatcher(cmd, *args, **kwargs)
-                return _ok(returncode=1, stdout="boom")
+                return _faithful_ok(kwargs, returncode=1, stdout="boom")
 
             with self.assertLogs(
                     "core.orchestration.skill_dispatch",
