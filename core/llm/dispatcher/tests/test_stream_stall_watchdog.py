@@ -425,6 +425,13 @@ class TestRelayWiring:
 
 
 class TestWatchdogTrips:
+    # Genuine cost, slow tier: each trip test holds a real wedge for
+    # the stall window before the watchdog fires, and the window is
+    # already pinned at _STREAM_STALL_FLOOR_S (5s) — any lower value
+    # falls back to the default (test_below_floor_falls_back), so the
+    # ~6s call cannot shrink without weakening the trip behaviour
+    # under test. The wait IS the subject; nothing to mock.
+    pytestmark = pytest.mark.slow
 
     def test_mid_stream_wedge_trips_within_the_window(
         self, fake_creds, tmp_path, monkeypatch,
