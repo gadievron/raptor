@@ -335,22 +335,26 @@ def test_cache_rejects_cross_target_collision(
     from core.config import RaptorConfig
     monkeypatch.setattr(RaptorConfig, "BASE_OUT_DIR", tmp_path)
 
-    # Save a cache entry under build_id X claiming it's for /bin/binA.
-    idx = BinaryEdgeIndex(binary_path="/bin/binA")
-    idx.edges = [BinaryCallEdge("main", "foo", "/bin/binA")]
+    # Save a cache entry under build_id X claiming it's for binA.
+    # (Real file: since the v2 content binding, the saver hashes the
+    # binary at the recorded path and skips unbindable entries.)
+    bin_a = tmp_path / "binA"
+    bin_a.write_bytes(b"\x7fELF binA bytes")
+    idx = BinaryEdgeIndex(binary_path=str(bin_a))
+    idx.edges = [BinaryCallEdge("main", "foo", str(bin_a))]
     cache_file = _cache_path_for("abcdef" * 7)
     assert cache_file is not None
     _save_cached_index(cache_file, idx)
 
     # Now look up that same build_id but for a DIFFERENT binary path.
     # The cached binary_path mismatch should drive a miss.
-    loaded = _load_cached_index(cache_file, "/bin/binB")
+    loaded = _load_cached_index(cache_file, str(tmp_path / "binB"))
     assert loaded is None, (
         "cache must refuse to return entries whose recorded "
         "binary_path differs from the lookup's binary_path"
     )
     # Sanity: lookup with the matching path still works.
-    loaded = _load_cached_index(cache_file, "/bin/binA")
+    loaded = _load_cached_index(cache_file, str(bin_a))
     assert loaded is not None
     assert len(loaded.edges) == 1
 
@@ -413,10 +417,12 @@ def test_cache_round_trips_edges_under_build_id(tmp_path, monkeypatch) -> None:
     from core.config import RaptorConfig
     monkeypatch.setattr(RaptorConfig, "BASE_OUT_DIR", tmp_path)
 
-    idx = BinaryEdgeIndex(binary_path="/tmp/binA")
+    bin_a = tmp_path / "binA"
+    bin_a.write_bytes(b"\x7fELF binA bytes")
+    idx = BinaryEdgeIndex(binary_path=str(bin_a))
     idx.edges = [
-        BinaryCallEdge("main", "foo", "/tmp/binA"),
-        BinaryCallEdge("<vtable@0x6fab0>", "Foo::method", "/tmp/binA"),
+        BinaryCallEdge("main", "foo", str(bin_a)),
+        BinaryCallEdge("<vtable@0x6fab0>", "Foo::method", str(bin_a)),
     ]
     idx.callees = {"foo", "Foo::method"}
 
@@ -424,7 +430,7 @@ def test_cache_round_trips_edges_under_build_id(tmp_path, monkeypatch) -> None:
     _save_cached_index(cache_file, idx)
     assert cache_file.is_file()
     # Re-load — should match exactly
-    loaded = _load_cached_index(cache_file, "/tmp/binA")
+    loaded = _load_cached_index(cache_file, str(bin_a))
     assert loaded is not None
     assert len(loaded.edges) == 2
     assert ("main", "foo") in {(e.caller, e.callee) for e in loaded.edges}
@@ -434,7 +440,7 @@ def test_cache_round_trips_edges_under_build_id(tmp_path, monkeypatch) -> None:
     payload = _json.loads(cache_file.read_text())
     payload["version"] = 999
     cache_file.write_text(_json.dumps(payload))
-    assert _load_cached_index(cache_file, "/tmp/binA") is None
+    assert _load_cached_index(cache_file, str(bin_a)) is None
 
 
 def test_graph_store_reuse_requires_matching_binary_sha_and_keeps_requested_path(

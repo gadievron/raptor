@@ -49,7 +49,10 @@ logger = logging.getLogger(__name__)
 # the serialised edge format (BinaryEdgeIndex fields, edge record
 # shape). Old cache entries with a stale version are ignored and the
 # extractor re-runs from scratch.
-_EDGE_CACHE_VERSION = 1
+# v2: the payload carries a mandatory ``binary_sha256`` binding the
+# entry to the analysed binary's content (see _load_cached_index);
+# v1 entries lack the field and re-extract once.
+_EDGE_CACHE_VERSION = 2
 
 # One cached edge index. Indexes are per-build-id and grow with
 # the binary's call graph; the cache dir is shared, so a planted
@@ -199,6 +202,35 @@ def _load_cached_index(
             cached_path, binary_path,
         )
         return None
+    # Content binding: version and
+    # binary_path only bind the entry to a NAME. The cache outlives
+    # the run, so an extraction persisted while impostor bytes sat at
+    # the name (pin-bracket withholds the edges from THAT run, but the
+    # impl already wrote the cache), or a pre-poisoned file dropped
+    # under the shared cache dir with the right version+path, would be
+    # served on the NEXT run — after the identity pin re-verifies
+    # against the restored honest binary. Bind the payload to the
+    # binary's content sha, exactly as _try_graph_store binds
+    # graph-store reuse. Same posture as binary_path: the field must
+    # be PRESENT and match — missing/non-string is a miss, never a
+    # pass (a crafted payload could otherwise just omit it).
+    cached_sha = payload.get("binary_sha256")
+    if not isinstance(cached_sha, str):
+        logger.warning(
+            "binary_oracle_edges: cache entry for %s lacks a valid "
+            "binary_sha256 field; treating as cache miss",
+            binary_path,
+        )
+        return None
+    current_sha = _content_hash(Path(binary_path))
+    if current_sha is None or cached_sha != current_sha:
+        logger.warning(
+            "binary_oracle_edges: cache entry for %s was extracted "
+            "from different binary content than the bytes now at the "
+            "name; treating as cache miss (re-extracting)",
+            binary_path,
+        )
+        return None
     edges_raw = payload.get("edges") or []
     idx = BinaryEdgeIndex(binary_path=binary_path)
     for r in edges_raw:
@@ -218,10 +250,24 @@ def _save_cached_index(cache_file: Path, idx: BinaryEdgeIndex) -> None:
     """Persist the edge index. Best-effort — IO failures are logged at
     debug and don't break the extraction path."""
     try:
+        # Content binding: stamp the sha of the bytes at the name at
+        # save time so the load side can refuse the entry once the
+        # binary's content changes (or was never what the entry
+        # claims). An entry the saver cannot hash could only ever
+        # load as a miss — skip the write instead of persisting a
+        # payload one field short of the contract in a shared dir.
+        content_sha = _content_hash(Path(idx.binary_path))
+        if content_sha is None:
+            logger.debug(
+                "binary_oracle_edges: cache write skipped for %s "
+                "(binary unreadable at save time — cannot bind the "
+                "entry to its content)", idx.binary_path)
+            return
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "version":     _EDGE_CACHE_VERSION,
-            "binary_path": idx.binary_path,
+            "version":       _EDGE_CACHE_VERSION,
+            "binary_path":   idx.binary_path,
+            "binary_sha256": content_sha,
             "edges": [
                 {"caller": e.caller, "callee": e.callee,
                  "binary_path": e.binary_path}

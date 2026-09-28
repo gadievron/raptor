@@ -126,8 +126,10 @@ def test_cache_save_then_version_mismatch_load_returns_none(
     from core.config import RaptorConfig
     monkeypatch.setattr(RaptorConfig, "BASE_OUT_DIR", tmp_path)
 
-    idx = BinaryEdgeIndex(binary_path="/bin/x")
-    idx.edges = [BinaryCallEdge("main", "foo", "/bin/x")]
+    bin_x = tmp_path / "x"
+    bin_x.write_bytes(b"\x7fELF x bytes")
+    idx = BinaryEdgeIndex(binary_path=str(bin_x))
+    idx.edges = [BinaryCallEdge("main", "foo", str(bin_x))]
     cache_file = _cache_path_for("abcdef" * 7)
     assert cache_file is not None
     _save_cached_index(cache_file, idx)
@@ -135,7 +137,7 @@ def test_cache_save_then_version_mismatch_load_returns_none(
     payload = json.loads(cache_file.read_text())
     payload["version"] = 9999
     cache_file.write_text(json.dumps(payload))
-    assert _load_cached_index(cache_file, "/bin/x") is None
+    assert _load_cached_index(cache_file, str(bin_x)) is None
 
 
 def test_parse_axffj_handles_adjacent_batch_lines_no_body() -> None:
