@@ -2099,6 +2099,10 @@
     "count": 13,
     "kind": "literal"
   },
+  "packages/binary_analysis/corpus_profile.py::_tlv_value_classification": {
+    "count": 13,
+    "kind": "literal"
+  },
   "packages/binary_analysis/corpus_profile.py::profile_corpus": {
     "count": 17,
     "kind": "literal",
@@ -2518,6 +2522,10 @@
     "count": 10,
     "kind": "literal",
     "note": "binary-substrate.json discovery-receipt field manifest (selection + identity-verification facts, incl. sha_verified) \u2014 persistence schema keys, not a learned name vocabulary"
+  },
+  "packages/exploitability_validation/capability_preflight.py::assess_capabilities": {
+    "count": 16,
+    "kind": "literal"
   },
   "packages/exploitability_validation/orchestrator.py::STATUS_DISPLAY": {
     "count": 19,
