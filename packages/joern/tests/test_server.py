@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import gc
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,6 +20,22 @@ from packages.joern.server import (
     _server_auth_supported,
 )
 from packages.joern.tunables import JoernTunables
+
+
+@pytest.fixture(autouse=True)
+def _heap_ledger_in_tmp(tmp_path: Path,
+                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """In-file twin of the suite conftest's _isolated_heap_ledger:
+    release archives strip conftest.py (export-ignore), and a start()
+    with an explicit heap_mb then reserves against — rewrites and
+    evicts rows in — the operator's real
+    ~/.local/share/raptor/joern-heap-ledger.json, the live host-wide
+    heap arbitration state. The pin must travel with the file."""
+    from packages.joern import heap_ledger
+    monkeypatch.setattr(
+        heap_ledger, "_LEDGER_PATH", tmp_path / "heap-ledger.json",
+    )
+    monkeypatch.setattr(heap_ledger, "_host_budget_mb", lambda: 1 << 24)
 
 
 class TestFindFreePort:
