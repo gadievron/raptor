@@ -136,8 +136,10 @@ def _census_source(
 
 def _python_sources() -> Iterator[tuple[str, Path]]:
     """Runtime source surface: core/, packages/, libexec/ (python
-    scripts by shebang), raptor.py. Test files are excluded — tests
-    legitimately exercise the gates with default placement.
+    scripts by shebang), and the repo-root ``raptor*.py`` CLIs
+    (raptor.py plus the raptor_* pipeline scripts it executes — all
+    structural peers for gate access). Test files are excluded —
+    tests legitimately exercise the gates with default placement.
     """
     for base in ("core", "packages"):
         for path in sorted((REPO_ROOT / base).rglob("*.py")):
@@ -157,7 +159,11 @@ def _python_sources() -> Iterator[tuple[str, Path]]:
         if "python" not in first:
             continue
         yield path.relative_to(REPO_ROOT).as_posix(), path
-    yield "raptor.py", REPO_ROOT / "raptor.py"
+    for path in sorted(REPO_ROOT.glob("raptor*.py")):
+        if (not path.is_file() or path.name.startswith("test_")
+                or path.name == "conftest.py"):
+            continue
+        yield path.name, path
 
 
 class TestRouteGateRunDirCensus:
@@ -196,6 +202,31 @@ class TestRouteGateRunDirCensus:
         # Rot guard: every allowlist entry must still match a caller.
         stale = set(ALLOWLIST) - used_allowlist
         assert not stale, f"stale allowlist entries: {sorted(stale)}"
+
+
+class TestSweepSurface:
+    """The repo-root sweep must cover every raptor*.py CLI (miss
+    direction) and nothing else at the root (over-match direction)."""
+
+    @staticmethod
+    def _root_entries() -> set[str]:
+        return {rel for rel, _ in _python_sources() if "/" not in rel}
+
+    def test_every_root_raptor_cli_is_swept(self) -> None:
+        # Independent spelling (iterdir + name checks, not glob) so a
+        # sweep regression cannot hide inside a shared helper.
+        on_disk = {
+            path.name for path in REPO_ROOT.iterdir()
+            if path.is_file() and path.name.startswith("raptor")
+            and path.name.endswith(".py")
+            and not path.name.startswith("test_")
+        }
+        assert "raptor.py" in on_disk  # root sweep must stay non-vacuous
+        assert on_disk <= self._root_entries()
+
+    def test_root_sweep_matches_only_raptor_clis(self) -> None:
+        for rel in self._root_entries():
+            assert rel.startswith("raptor") and rel.endswith(".py"), rel
 
 
 class TestCensusMechanics:
