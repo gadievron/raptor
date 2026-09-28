@@ -19,6 +19,7 @@ import os
 import subprocess
 import time
 import types
+from pathlib import Path
 
 import pytest
 
@@ -29,6 +30,11 @@ _OLD = time.time() - 25 * 3600
 def _root_conftest():
     import conftest
     return conftest
+
+
+# Captured pre-patching (the autouse fixture below replaces the module
+# attribute); None on a tree that predates the seam.
+_ORIG_SWEEP_ROOTS = getattr(_root_conftest(), "_scratch_sweep_roots", None)
 
 
 def _dead_pid() -> int:
@@ -80,6 +86,16 @@ class TestSessionScratchSweep:
         assert not dead.exists()
         assert live.is_dir()
 
+    def test_young_dead_dir_survives_the_sweep(self, tmp_path):
+        # The conftest path inherits the reaper's age floor: a
+        # freshly-touched dir is never reaped on a dead verdict alone
+        # (concurrent namespaced sessions probe ESRCH for LIVE pids).
+        conftest_mod = _root_conftest()
+        young = tmp_path / f"raptor-pytest-{_dead_pid()}-fresh"
+        young.mkdir()
+        conftest_mod._sweep_dead_session_scratch(_fake_config(worker=False))
+        assert young.is_dir()
+
     def test_worker_configure_never_sweeps(self, tmp_path):
         conftest_mod = _root_conftest()
         dead = tmp_path / f"raptor-pytest-{_dead_pid()}-oldsess"
@@ -108,3 +124,15 @@ class TestSessionScratchSweep:
         os.utime(dead, (_OLD, _OLD))
         conftest_mod._sweep_dead_session_scratch(_fake_config(worker=False))
         assert not dead.exists()
+
+    def test_default_roots_cover_tempdir_and_shared_tmp(
+            self, monkeypatch, tmp_path):
+        # The seam's DEFAULT must keep covering both the session
+        # TMPDIR and the shared /tmp — launcher sessions scratch in
+        # their private TMPDIR, bare sessions in /tmp, and the sweep
+        # exists for both leak shapes.
+        if _ORIG_SWEEP_ROOTS is None:
+            pytest.fail("_scratch_sweep_roots seam missing from the "
+                        "root conftest")
+        monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+        assert _ORIG_SWEEP_ROOTS() == {tmp_path, Path("/tmp")}
