@@ -3764,6 +3764,7 @@ def _compute_forecast(args: argparse.Namespace, out_dir: Path,
         return None
     try:
         from core.audit.forecast import (
+            filter_priors_to_checklist,
             forecast_audit_cost,
             gap_slocs,
             predicted_suspicious_density,
@@ -3807,6 +3808,11 @@ def _compute_forecast(args: argparse.Namespace, out_dir: Path,
             priors = prior_verdicts_from_run_dirs(
                 [Path(p) for p in args.prior_journal],
             )
+        # Run-scope the project-wide priors BEFORE both consumers
+        # (density + seed mass): a multi-binary project's index
+        # carries other binaries' rows, which cannot re-enter this
+        # run's deepen phase and only inflate the band.
+        priors = filter_priors_to_checklist(priors, checklist_data)
         density = predicted_suspicious_density(gaps, priors)
         queue_keys = {
             (g.get("file"), g.get("name"))

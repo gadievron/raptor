@@ -252,6 +252,81 @@ def test_forecast_uses_journal_priors(cli_env, capsys, tmp_path):
     assert doc["density_source"] == "priors"
 
 
+def test_forecast_priors_are_run_scoped(cli_env, capsys):
+    # A multi-binary project's index carries OTHER targets' rows. Only
+    # this run's (file, function) universe may price the band: the two
+    # a.php rows keep the priors density source, and the 100 foreign
+    # suspicious rows contribute zero seed re-review mass (pre-fix they
+    # priced the deepen phase as 100 seed rows on a 2-item queue).
+    from core.coverage.journal import INDEX_FILENAME
+    entries = {
+        f"a.php:f{i}:m:h:audit": {
+            "ts": "2026-01-01T00:00:00Z", "run_id": "r0",
+            "file": "a.php", "function": f"f{i}",
+            "verdict": "suspicious", "source_hash": "00",
+        }
+        for i in (1, 2)
+    }
+    entries.update({
+        f"other-binary:g{i}:m:h:audit": {
+            "ts": "2026-01-01T00:00:00Z", "run_id": "r0",
+            "file": "other-binary", "function": f"g{i}",
+            "verdict": "suspicious", "source_hash": "00",
+        }
+        for i in range(100)
+    })
+    index = {
+        "schema_version": 1,
+        "updated_at": "2026-01-01T00:00:00Z",
+        "entries": entries,
+    }
+    (cli_env.out_dir.parent / INDEX_FILENAME).write_text(json.dumps(index))
+    rc = cli_env.run_cli([
+        "run", str(cli_env.target), "--out", str(cli_env.out_dir),
+        "--forecast",
+    ])
+    capsys.readouterr()
+    assert rc == 0
+    doc = json.loads((cli_env.out_dir / "forecast.json").read_text())
+    # Same-target rows still drive the density...
+    assert doc["density_source"] == "priors"
+    # ...and the foreign rows are excluded from the seed mass entirely
+    # (both same-target rows are queue members, so the scoped seed is 0).
+    assert doc["seed_rereview_mass"] == 0
+
+
+def test_all_foreign_prior_index_prices_cold(cli_env, capsys):
+    # Filter-before-density wiring pin: when EVERY index row belongs
+    # to other targets, the scoped prior set is empty and the density
+    # must come from the cold default. An implementation that lets
+    # the density consumer see the unfiltered project-wide mapping
+    # (filtering only the seed term) would report "priors" here.
+    from core.coverage.journal import INDEX_FILENAME
+    entries = {
+        f"other-binary:g{i}:m:h:audit": {
+            "ts": "2026-01-01T00:00:00Z", "run_id": "r0",
+            "file": "other-binary", "function": f"g{i}",
+            "verdict": "suspicious", "source_hash": "00",
+        }
+        for i in range(50)
+    }
+    index = {
+        "schema_version": 1,
+        "updated_at": "2026-01-01T00:00:00Z",
+        "entries": entries,
+    }
+    (cli_env.out_dir.parent / INDEX_FILENAME).write_text(json.dumps(index))
+    rc = cli_env.run_cli([
+        "run", str(cli_env.target), "--out", str(cli_env.out_dir),
+        "--forecast",
+    ])
+    capsys.readouterr()
+    assert rc == 0
+    doc = json.loads((cli_env.out_dir / "forecast.json").read_text())
+    assert doc["density_source"] == "cold"
+    assert doc["seed_rereview_mass"] == 0
+
+
 def _finalize_env(tmp_path, monkeypatch):
     """Shared _finalize_run harness: stubbed report module + lifecycle."""
     mod = _load_cli()

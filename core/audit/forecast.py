@@ -171,6 +171,45 @@ def prior_verdicts_from_run_dirs(
     return result
 
 
+def filter_priors_to_checklist(
+    prior_verdicts: dict[tuple[str, str], str] | None,
+    checklist: dict[str, Any] | None,
+) -> dict[tuple[str, str], str]:
+    """Restrict a project-wide priors mapping to THIS run's
+    ``(file, function)`` universe (the checklist).
+
+    The journal index is project-level: on a multi-binary project it
+    carries every other binary's rows, and feeding those into the
+    density and seed-mass terms priced thousands of cross-target
+    suspicious rows into a run whose deepen phase only ever re-reviews
+    its own outcomes — inflating the band without any corresponding
+    spend. Exact-key filtering keeps precisely the rows that can
+    re-enter this run's deepen machinery.
+
+    An empty/foreign checklist shape yields an empty mapping (cold
+    density), the safe direction for a $0 informational forecast.
+    """
+    if not prior_verdicts:
+        return {}
+    run_keys: set[tuple[str, str]] = set()
+    if isinstance(checklist, dict):
+        for file_entry in checklist.get("files") or []:
+            if not isinstance(file_entry, dict):
+                continue
+            path = file_entry.get("path")
+            if not isinstance(path, str) or not path:
+                continue
+            items = file_entry.get("items",
+                                   file_entry.get("functions", []))
+            for item in items or []:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name")
+                if isinstance(name, str) and name:
+                    run_keys.add((path, name))
+    return {k: v for k, v in prior_verdicts.items() if k in run_keys}
+
+
 def predicted_suspicious_density(
     gaps: list[dict[str, Any]],
     prior_verdicts: dict[tuple[str, str], str] | None,

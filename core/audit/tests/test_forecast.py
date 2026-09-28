@@ -26,6 +26,7 @@ from core.audit.forecast import (
     actual_phase_split,
     append_calibration,
     calibration_entry,
+    filter_priors_to_checklist,
     forecast_audit_cost,
     format_calibration_line,
     format_forecast_lines,
@@ -271,6 +272,86 @@ class TestSeedMass:
     def test_empty(self):
         assert seed_rereview_mass(None) == 0
         assert seed_rereview_mass({}) == 0
+
+
+class TestRunScopedPriors:
+    """filter_priors_to_checklist — the project index is project-wide;
+    only rows in THIS run's (file, function) universe may price the
+    density and seed-mass terms. A multi-binary project's index
+    carries other targets' rows, which cannot re-enter this run's
+    deepen phase and would only inflate the band."""
+
+    @staticmethod
+    def _checklist(files_functions: list[tuple[str, str]]) -> dict:
+        by_file: dict[str, list[str]] = {}
+        for f, n in files_functions:
+            by_file.setdefault(f, []).append(n)
+        return {
+            "files": [
+                {"path": f, "items": [{"name": n} for n in names]}
+                for f, names in by_file.items()
+            ],
+        }
+
+    def test_cross_target_excluded_same_target_retained(self):
+        priors = {
+            ("a.php", "f1"): "suspicious",
+            ("a.php", "f2"): "clean",
+            ("binary:other", "g1"): "suspicious",
+            ("lib/other.c", "g2"): "finding",
+        }
+        kept = filter_priors_to_checklist(
+            priors, self._checklist([("a.php", "f1"), ("a.php", "f2")]))
+        assert kept == {
+            ("a.php", "f1"): "suspicious",
+            ("a.php", "f2"): "clean",
+        }
+
+    def test_seed_mass_computed_from_retained_keys_only(self):
+        # Queue holds f1; f3 is a covered same-target suspicious prior
+        # (legitimate seed mass); 50 cross-target suspicious rows must
+        # contribute nothing.
+        priors = {
+            ("a.php", "f1"): "suspicious",
+            ("a.php", "f3"): "suspicious",
+        }
+        priors.update({
+            ("binary:other", f"g{i}"): "suspicious" for i in range(50)
+        })
+        checklist = self._checklist([("a.php", "f1"), ("a.php", "f3")])
+        queue_keys = {("a.php", "f1")}
+        # The pre-filter inflation this closes:
+        assert seed_rereview_mass(priors, queue_keys) == 51
+        kept = filter_priors_to_checklist(priors, checklist)
+        assert seed_rereview_mass(kept, queue_keys) == 1
+
+    def test_all_cross_target_priors_fall_back_to_cold_density(self):
+        priors = {("binary:other", "g1"): "suspicious"}
+        kept = filter_priors_to_checklist(
+            priors, self._checklist([("a.php", "f1")]))
+        assert kept == {}
+        density = predicted_suspicious_density(
+            _gaps([("a.php", "f1")]), kept)
+        assert density["source"] == "cold"
+
+    def test_functions_spelling_retained(self):
+        # Checklist file entries may spell the item list "functions".
+        checklist = {
+            "files": [{"path": "a.c",
+                       "functions": [{"name": "f1"}]}],
+        }
+        kept = filter_priors_to_checklist(
+            {("a.c", "f1"): "suspicious"}, checklist)
+        assert kept == {("a.c", "f1"): "suspicious"}
+
+    def test_foreign_shapes_yield_empty(self):
+        priors = {("a.php", "f1"): "suspicious"}
+        assert filter_priors_to_checklist(priors, None) == {}
+        assert filter_priors_to_checklist(priors, {"files": "junk"}) == {}
+        assert filter_priors_to_checklist(
+            priors, {"files": ["junk", {"path": 3, "items": None}]}) == {}
+        assert filter_priors_to_checklist(None, {"files": []}) == {}
+        assert filter_priors_to_checklist({}, {"files": []}) == {}
 
 
 # --------------------------------------------------------- gap census
