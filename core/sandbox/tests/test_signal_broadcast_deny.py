@@ -150,9 +150,18 @@ _PROBE = textwrap.dedent("""
         failures.append("kill(child) denied errno=%d" % ex.errno)
 
     # 5. Legitimate direction: own process group, both spellings —
-    #    kill(0, 0) and the negative-pgid killpg form (sig 0: the
-    #    group may contain processes outside the sandbox when the
-    #    probe runs unsessioned under pytest).
+    #    kill(0, 0) and the negative-pgid killpg form. Runners MUST
+    #    session the probe (start_new_session=True — the shape
+    #    core.sandbox.run gives payloads by default) so getpgrp() is the
+    #    probe's own pid: in an init-less container (docker without
+    #    --init, e.g. the feature-matrix lanes) the inherited pgid
+    #    is 1, and killpg(1, 0) IS kill(-1, 0) — the broadcast
+    #    constant. Process group 1 is unaddressable via the
+    #    negative-pid spelling even without the filter (the kernel
+    #    reads -1 as broadcast, never as a pgid), so an unsessioned
+    #    probe measures the container's process-group shape, not the
+    #    filter. (sig 0 throughout regardless — module-docstring
+    #    safety shape.)
     try:
         os.kill(0, 0)
         print("own-group-kill OK", flush=True)
@@ -219,9 +228,18 @@ class TestSeccompLayerAlone:
 
         fn = _make_seccomp_preexec(profile)
         assert fn is not None
+        # start_new_session: the probe's step-5 killpg(getpgrp(), 0)
+        # needs a pgid > 1 — in an init-less container the inherited
+        # pgid is 1 and killpg(1, 0) is kill(-1, 0), the broadcast
+        # constant itself (see the probe's step-5 comment). setsid
+        # also matches how core.sandbox.run spawns payloads by
+        # default (child is a new session leader), so the raw-filter
+        # shape under test stays faithful to the product's default
+        # spawn shape.
         return subprocess.run(
             _probe_cmd(),
             preexec_fn=fn, capture_output=True, text=True, timeout=60,
+            start_new_session=True,
         )
 
     @pytest.mark.parametrize("profile", ["full", "debug", "frida"])
