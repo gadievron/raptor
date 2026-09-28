@@ -3235,6 +3235,7 @@ def _run_batch_splitting_on_truncation(
     correlate: list[str] | None = None,
     discard_sink: list | None = None,
     vocab_sink: list | None = None,
+    trunc_events: list | None = None,
 ) -> tuple[
     list[Concept], list[Invariant], list[Contract],
     list[BugPattern], list[dict[str, str]],
@@ -3279,6 +3280,22 @@ def _run_batch_splitting_on_truncation(
     exception's ``__context__`` to the truncation error being
     handled, and the chain-walking classifier would then read
     unrelated transport failures as truncation.
+
+    ``trunc_events``: caller-owned sink recording each ITEM the
+    ladder terminally discarded — still truncating past its own
+    escalated retry (or the retry's stand-down) with nothing left to
+    split. Appended once at the discarding leaf and at NO level above
+    it, so a salvaged batch's record count equals its discarded items
+    regardless of batch size or ladder depth (one oversized item in a
+    batch of 32 is one record, not one per halving level — the unit
+    the consumer's per-item lane budget is sized in). Escalation- and
+    split-cured truncations are deliberately absent, and on a batch
+    that terminally FAILS the phase loops discard the sink's records
+    (success-only fold), so a terminal failure is never stacked with
+    its own leaf records: the sink exists solely to surface per-item
+    discards inside batches that limped to success without
+    re-counting the terminal failures the loops already account for
+    themselves.
     """
     trunc_exc: _BatchLLMError | None = None
     try:
@@ -3343,6 +3360,16 @@ def _run_batch_splitting_on_truncation(
                               "item",
                     "names": [item.name],
                 })
+            if trunc_events is not None:
+                # Terminal leaf — the ONLY ladder level that records
+                # (see docstring): one record per discarded item keeps
+                # the fold depth- and batch-size-independent.
+                # GIL-atomic list.append — same sharing convention as
+                # discard_sink/vocab_sink.
+                trunc_events.append({
+                    "items": 1,
+                    "escalated": escalated is not None,
+                })
         raise trunc_exc
 
     mid = len(focus) // 2
@@ -3371,6 +3398,7 @@ def _run_batch_splitting_on_truncation(
                 None,
                 doc_context=doc_context, correlate=correlate,
                 discard_sink=discard_sink, vocab_sink=vocab_sink,
+                trunc_events=trunc_events,
             )
         except _PhaseBudgetExhausted as stop:
             # Salvage the sibling half's already-paid results onto
@@ -3430,7 +3458,12 @@ def run_phase2(
     with failure accounting (``batches_failed``,
     ``truncation_failures``, ``truncation_capped``) — exceptions only
     surface the all-failed case, and the consumer's burn breaker needs
-    to see partial-failure churn too.
+    to see partial-failure churn too. ``truncation_failures`` counts
+    terminally truncation-failed batches PLUS items the split ladder
+    terminally discarded inside batches it salvaged — one count per
+    discarded item, independent of batch size and ladder depth (each
+    such item re-bought paid calls even though its batch limped to
+    success); ``truncation_capped`` keys on the terminal count only.
 
     Returns:
         (concepts, invariants, contracts, bug_patterns, struct_annotations)
@@ -3513,6 +3546,7 @@ def _run_phase2_serial(
     total = len(batches)
     consecutive_failures = 0
     truncation_failures = 0
+    salvaged_truncations = 0
     failures = 0
     successes = 0
     stopped = False
@@ -3520,7 +3554,21 @@ def _run_phase2_serial(
     def _note_stats() -> None:
         if phase_stats is not None:
             phase_stats["batches_failed"] = failures
-            phase_stats["truncation_failures"] = truncation_failures
+            # Terminal batch failures PLUS items the split ladder
+            # terminally discarded inside batches it salvaged: the
+            # consumer's per-lane truncation budget must see sub-cap
+            # churn even when each batch limps to success — in the
+            # budget's own unit (one count per discarded ITEM,
+            # independent of ladder depth; the ladder records only at
+            # the discarding leaf). A terminally failed batch
+            # contributes only its terminal +1 — its ladder events
+            # are discarded, never double-counted.
+            phase_stats["truncation_failures"] = (
+                truncation_failures + salvaged_truncations
+            )
+            # The phase-halt marker stays keyed to TERMINAL
+            # truncations only — salvaged churn is budget-relevant
+            # but not "this configuration produces no output".
             phase_stats["truncation_capped"] = (
                 truncation_failures >= _TRUNCATION_FAIL_LIMIT
             )
@@ -3535,6 +3583,7 @@ def _run_phase2_serial(
             )
             stopped = True
             break
+        batch_trunc_events: list = []
         try:
             concepts, invariants, contracts, bug_patterns, struct_annots = (
                 _run_batch_splitting_on_truncation(
@@ -3542,6 +3591,7 @@ def _run_phase2_serial(
                     llm_client, reading_list, on_batch, doc_context=doc_context,
                     correlate=correlate, discard_sink=discard_sink,
                     vocab_sink=vocab_sink,
+                    trunc_events=batch_trunc_events,
                 )
             )
         except _PhaseBudgetExhausted as exc:
@@ -3603,6 +3653,12 @@ def _run_phase2_serial(
             continue
         consecutive_failures = 0
         successes += 1
+        # The batch made it — each item its ladder terminally
+        # discarded is one salvaged-churn count (leaf-only records
+        # keep the fold depth-independent; terminally failed batches
+        # raised instead, discarding their events, so nothing is
+        # counted twice).
+        salvaged_truncations += len(batch_trunc_events)
         all_concepts.extend(concepts)
         all_invariants.extend(invariants)
         all_contracts.extend(contracts)
@@ -3659,6 +3715,7 @@ def _run_phase2_parallel(
     _fail_lock = _threading.Lock()
     _consecutive_failures = [0]
     _truncation_failures = [0]
+    _salvaged_truncations = [0]
 
     _successes = [0]
 
@@ -3671,15 +3728,23 @@ def _run_phase2_parallel(
             _abort.set()
             return ([], [], [], [], [])
         idx, focus, ctx = args
+        batch_trunc_events: list = []
         result = _run_batch_splitting_on_truncation(
             idx, total, focus, ctx, target, source_root,
             llm_client, reading_list, on_batch,
             doc_context=doc_context, correlate=correlate,
             discard_sink=discard_sink, vocab_sink=vocab_sink,
+            trunc_events=batch_trunc_events,
         )
         with _fail_lock:
             _consecutive_failures[0] = 0
             _successes[0] += 1
+            # Items the ladder terminally discarded inside a batch
+            # that still made it — one count per item, see the
+            # sequential path's twin. A terminally failed batch never
+            # reaches here; its events die with this thread-local
+            # list, so terminal counts once.
+            _salvaged_truncations[0] += len(batch_trunc_events)
         return result
 
     items = [(i, focus, ctx) for i, (focus, ctx) in enumerate(batches)]
@@ -3758,7 +3823,11 @@ def _run_phase2_parallel(
     if phase_stats is not None:
         with _fail_lock:
             phase_stats["batches_failed"] = _failed[0]
-            phase_stats["truncation_failures"] = _truncation_failures[0]
+            # Terminal + salvaged, capped on terminal only — see the
+            # sequential path's _note_stats for the rationale.
+            phase_stats["truncation_failures"] = (
+                _truncation_failures[0] + _salvaged_truncations[0]
+            )
             phase_stats["truncation_capped"] = (
                 _truncation_failures[0] >= _TRUNCATION_FAIL_LIMIT
             )

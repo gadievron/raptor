@@ -14765,7 +14765,12 @@ _STUDY_RUN_RATE_LIMIT = 0.5
 # churn — a handful of full-price zero-yield calls EVERY invocation —
 # never tripped anything. The consumer accumulates
 # phase_stats["truncation_failures"] across invocations and disables
-# the lane at this budget. Both directions hurt: too LOW and a target
+# the lane at this budget. The stat's unit is per-ITEM: a salvaged
+# invocation contributes one count per item its split ladder
+# terminally discarded (recorded only at the discarding leaf, so the
+# count is independent of batch size and ladder depth), and an
+# invocation whose batch failed terminally contributes one per failed
+# batch. Both directions hurt: too LOW and a target
 # with genuinely oversized items spread across invocations loses the
 # lane while the split ladder was handling them item-by-item (each
 # discarded item is one truncation failure); too HIGH and sub-cap

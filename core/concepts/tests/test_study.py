@@ -3114,6 +3114,222 @@ class TestPhase2TruncationEscalation:
         assert _TRUNCATION_ESCALATION_MULTIPLIER <= 4
 
 
+class TestPhase2SalvagedTruncationAccounting:
+    """phase_stats["truncation_failures"] must surface the items the
+    split ladder terminally discarded inside batches it salvaged —
+    one count per discarded item, never per ladder level, and never
+    counting a truncation twice."""
+
+    _Client = TestPhase2TruncationEscalation._CapSensitiveClient
+
+    def _items(self, n: int, file: str = "x.c") -> list[StudyItem]:
+        return [StudyItem(id=f"i{k}", kind="function", name=f"fn{k}",
+                          file=file) for k in range(n)]
+
+    def _serial(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "core.llm.concurrency.derive_max_workers", lambda _m: 1)
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "16384")
+
+    def test_escalation_cured_truncation_adds_nothing(
+        self, monkeypatch,
+    ):
+        """A truncation the escalated retry cured is not churn the
+        lane budget should see — it cost one extra call and bought
+        the whole batch."""
+        self._serial(monkeypatch)
+        stats: dict = {}
+        client = self._Client(tokens_per_item=20000)
+        concepts, *_ = run_phase2(
+            self._items(2), "t/", client, batch_target=2,
+            phase_stats=stats,
+        )
+        assert len(concepts) == 2
+        assert stats["truncation_failures"] == 0
+        assert stats["truncation_capped"] is False
+        assert stats["batches_failed"] == 0
+
+    def test_split_cured_truncation_adds_nothing(self, monkeypatch):
+        """A truncation the SPLIT cured (escalation also truncated,
+        but every half fit and survived) discards no item — nothing
+        reaches the per-item stat."""
+        self._serial(monkeypatch)
+        stats: dict = {}
+        client = self._Client(tokens_per_item=30000)
+        concepts, *_ = run_phase2(
+            self._items(2), "t/", client, batch_target=2,
+            phase_stats=stats,
+        )
+        assert len(concepts) == 2
+        assert stats["truncation_failures"] == 0
+        assert stats["batches_failed"] == 0
+        assert stats["truncation_capped"] is False
+
+    def test_discarded_item_adds_exactly_one(self, monkeypatch):
+        """One item over even the escalated cap: the ladder discards
+        it at its terminal leaf and salvages the sibling — exactly
+        one count reaches the stats."""
+        self._serial(monkeypatch)
+        stats: dict = {}
+        client = self._Client(tokens_per_item={"fn0": 60000})
+        concepts, *_ = run_phase2(
+            self._items(2), "t/", client, batch_target=2,
+            phase_stats=stats,
+        )
+        assert [c.id for c in concepts] == ["fn1"]
+        assert stats["truncation_failures"] == 1
+        assert stats["batches_failed"] == 0
+        # Salvaged churn is budget-relevant but never the
+        # config-shaped phase-halt signal.
+        assert stats["truncation_capped"] is False
+
+    def test_discard_count_is_depth_independent(self, monkeypatch):
+        """The lane budget's unit: ONE oversized item costs ONE count
+        whatever batch size it rode in — the ladder walks one uncured
+        level per halving, but only the discarding leaf records."""
+        self._serial(monkeypatch)
+        for n in (2, 8, 32):
+            stats: dict = {}
+            client = self._Client(tokens_per_item={"fn0": 60000})
+            concepts, *_ = run_phase2(
+                self._items(n), "t/", client, batch_target=n,
+                phase_stats=stats,
+            )
+            assert len(concepts) == n - 1, n
+            assert stats["truncation_failures"] == 1, n
+            assert stats["batches_failed"] == 0, n
+            assert stats["truncation_capped"] is False, n
+
+    def test_two_discarded_items_count_two(self, monkeypatch):
+        """Per-item, not per-batch either: two oversized items in one
+        salvaged batch are two counts."""
+        self._serial(monkeypatch)
+        stats: dict = {}
+        client = self._Client(
+            tokens_per_item={"fn0": 60000, "fn1": 60000},
+        )
+        concepts, *_ = run_phase2(
+            self._items(4), "t/", client, batch_target=4,
+            phase_stats=stats,
+        )
+        assert sorted(c.id for c in concepts) == ["fn2", "fn3"]
+        assert stats["truncation_failures"] == 2
+        assert stats["batches_failed"] == 0
+        assert stats["truncation_capped"] is False
+
+    def test_terminal_ladder_failure_counts_exactly_once(
+        self, monkeypatch,
+    ):
+        """A batch whose ladder fails terminally already increments
+        the terminal counter — its leaf discard records must be
+        discarded, never stacked on top."""
+        import pytest
+
+        from core.concepts.study import _BatchLLMError
+        self._serial(monkeypatch)
+        stats: dict = {}
+        # A single item over even the escalated cap: leaf discard
+        # record AND terminal failure on the same truncation.
+        client = self._Client(tokens_per_item=60000)
+        with pytest.raises(_BatchLLMError, match="refusing"):
+            run_phase2(
+                self._items(1), "t/", client, batch_target=1,
+                phase_stats=stats,
+            )
+        assert stats["truncation_failures"] == 1
+        assert stats["batches_failed"] == 1
+        assert stats["truncation_capped"] is False
+
+    def test_salvaged_churn_counted_in_parallel(self, monkeypatch):
+        """Parallel twin: each batch salvages around one terminally
+        discarded item — both counts reach the stats."""
+        monkeypatch.setattr(
+            "core.llm.concurrency.derive_max_workers", lambda _m: 2)
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "16384")
+        items = (self._items(2, file="a/f.c")
+                 + [StudyItem(id=f"i{k}", kind="function",
+                              name=f"fn{k}", file="b/f.c")
+                    for k in range(2, 4)])
+        stats: dict = {}
+        # gemini-2.5-flash: non-thinking, so the standard cap is the
+        # bare 16384 text budget and the escalated one is 49152. The
+        # 60000-token item overflows both alone (discarded at its
+        # leaf); its 1000-token sibling survives.
+        client = self._Client(
+            tokens_per_item={"fn0": 60000, "fn2": 60000},
+        )
+        client.model = "gemini-2.5-flash"
+        concepts, *_ = run_phase2(
+            items, "t/", client, batch_target=2, phase_stats=stats,
+        )
+        assert sorted(c.id for c in concepts) == ["fn1", "fn3"]
+        assert stats["truncation_failures"] == 2
+        assert stats["batches_failed"] == 0
+        assert stats["truncation_capped"] is False
+
+    def _churn_weights(self, n_batches: int) -> dict[str, int]:
+        """One 60000-token item per batch: over the escalated cap on
+        its own, so each batch terminally discards it and salvages
+        the 1000-token sibling."""
+        return {f"fn{2 * k}": 60000 for k in range(n_batches)}
+
+    def _churn_items(self, n_batches: int) -> list[StudyItem]:
+        """2 items per file — with batch_target=2 each file is its
+        own batch."""
+        return [
+            StudyItem(id=f"i{k}", kind="function", name=f"fn{k}",
+                      file=f"f{k // 2}/f.c")
+            for k in range(2 * n_batches)
+        ]
+
+    def test_heavy_salvaged_churn_never_flips_capped_serial(
+        self, monkeypatch,
+    ):
+        """Salvaged per-item discards at/above _TRUNCATION_FAIL_LIMIT
+        with ZERO terminal batch failures must NOT flip
+        truncation_capped (the config-shaped phase-halt marker) or
+        halt the phase — capped keys on TERMINAL truncations only,
+        however loud the salvaged count in truncation_failures
+        gets."""
+        from core.concepts.study import _TRUNCATION_FAIL_LIMIT
+        self._serial(monkeypatch)
+        stats: dict = {}
+        items = self._churn_items(_TRUNCATION_FAIL_LIMIT)
+        client = self._Client(
+            tokens_per_item=self._churn_weights(_TRUNCATION_FAIL_LIMIT),
+        )
+        concepts, *_ = run_phase2(
+            items, "t/", client, batch_target=2, phase_stats=stats,
+        )
+        # Every batch was bought and salvaged — the phase never halted.
+        assert len(concepts) == _TRUNCATION_FAIL_LIMIT
+        assert stats["truncation_failures"] == _TRUNCATION_FAIL_LIMIT
+        assert stats["batches_failed"] == 0
+        assert stats["truncation_capped"] is False
+
+    def test_heavy_salvaged_churn_never_flips_capped_parallel(
+        self, monkeypatch,
+    ):
+        """Parallel twin of the serial capped-marker pin."""
+        from core.concepts.study import _TRUNCATION_FAIL_LIMIT
+        monkeypatch.setattr(
+            "core.llm.concurrency.derive_max_workers", lambda _m: 2)
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "16384")
+        stats: dict = {}
+        items = self._churn_items(_TRUNCATION_FAIL_LIMIT)
+        client = self._Client(
+            tokens_per_item=self._churn_weights(_TRUNCATION_FAIL_LIMIT),
+        )
+        client.model = "gemini-2.5-flash"
+        concepts, *_ = run_phase2(
+            items, "t/", client, batch_target=2, phase_stats=stats,
+        )
+        assert len(concepts) == _TRUNCATION_FAIL_LIMIT
+        assert stats["truncation_failures"] == _TRUNCATION_FAIL_LIMIT
+        assert stats["batches_failed"] == 0
+        assert stats["truncation_capped"] is False
+
+
 class TestPhase2TruncationHonesty:
     """Split subtrees must not launder non-truncation failures."""
 
