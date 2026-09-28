@@ -207,3 +207,45 @@ class TestLedgerPhaseClosure:
             "checker_synthesis_ondemand", "prior_segments",
             "unclassified",
         ]) == []
+
+    def test_breaker_trip_class_is_covered(self):
+        # The degraded-mode LLM breaker persists one $0 telemetry
+        # record (call_class="run_breaker") when it stops a run;
+        # book_unbooked_classes imports it as a ledger row at
+        # finalize. A ledger row, never a tool invocation — it must
+        # not warn "invoked without policy" on every breaker-stopped
+        # run.
+        from core.audit.sandbox_policy import validate_all_tools_sandboxed
+        assert validate_all_tools_sandboxed(["run_breaker"]) == []
+
+    def test_telemetry_call_class_literals_are_covered(self):
+        """The orchestrator-literal scan above misses call classes
+        emitted straight to telemetry by OTHER modules that run inside
+        the orchestrator process (spec inference, the pre-loop
+        summary pass, the LLM breaker, ...): book_unbooked_classes
+        imports every telemetry class into the ledger, so each literal
+        needs an _LLM_PHASES entry or it becomes a guaranteed false
+        "unsandboxed tool" advisory. Scan those modules' sources so a
+        new emit site cannot silently regress."""
+        import re
+        from pathlib import Path
+
+        import core.audit as audit_pkg
+        import core.llm as llm_pkg
+        from core.audit.sandbox_policy import validate_all_tools_sandboxed
+
+        sources = sorted(Path(audit_pkg.__file__).parent.glob("*.py"))
+        sources += sorted(Path(llm_pkg.__file__).parent.glob("*.py"))
+        names: set[str] = set()
+        for src in sources:
+            names |= set(re.findall(
+                r'call_class="([a-z_]+)"',
+                src.read_text(encoding="utf-8"),
+            ))
+        # Extraction sanity: the family's known members must be seen,
+        # or the regex / module layout went stale.
+        assert {"run_breaker", "summary", "spec_inference"} <= names
+        missing = validate_all_tools_sandboxed(sorted(names))
+        assert missing == [], (
+            f"telemetry call class(es) missing from _LLM_PHASES: {missing}"
+        )

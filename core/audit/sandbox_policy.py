@@ -208,6 +208,12 @@ _LLM_PHASES = frozenset({
     # Both are ledger rows, not tool invocations (each warned as an
     # "unsandboxed tool" on a live run).
     "checker_synthesis_ondemand", "prior_segments",
+    # Degraded-mode breaker trip: core.llm.breaker persists one $0
+    # telemetry record (call_class="run_breaker") when it stops a run;
+    # book_unbooked_classes imports it as a ledger row. A ledger row,
+    # never a tool invocation (warned "invoked without policy:
+    # run_breaker" on every breaker-stopped run's finalize).
+    "run_breaker",
     # Pass-ledger phase names the orchestrator books directly
     # (``_phase(...)`` / ``start_phase(...)`` literals) — prep stages,
     # post-loop passes, and resolution sweeps. Same construction
