@@ -186,6 +186,17 @@ def cmd_gaps(args: argparse.Namespace) -> int:
 
     annotations_dir = Path(args.annotations_dir) if args.annotations_dir else None
 
+    # Same project resolution as the run path's forecast: a run dir
+    # inside a project has the review-journal index one level up, and
+    # without it compute_gaps cannot fold verdicts already recorded by
+    # earlier runs — the CLI would report the whole checklist as
+    # uncovered while the run/forecast residual is a handful.
+    from core.coverage.journal import INDEX_FILENAME
+    project_dir = (
+        out_dir.parent
+        if (out_dir.parent / INDEX_FILENAME).is_file() else None
+    )
+
     gaps = compute_gaps(
         checklist,
         coverage_records,
@@ -198,6 +209,7 @@ def cmd_gaps(args: argparse.Namespace) -> int:
         scope_floor=args.scope_floor,
         annotations_dir=annotations_dir,
         out_dir=out_dir,
+        project_dir=project_dir,
     )
 
     if args.prioritize:
