@@ -23,6 +23,21 @@ import time
 import types
 from pathlib import Path
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _pin_root_pidns(monkeypatch):
+    """Hermeticity: this session may itself run inside a pid namespace
+    (the batteries do), where the reaper rightly refuses pid-liveness
+    reaping and every collapse assert here would go vacuous. Pin the
+    root-namespace verdict; ``raising=False`` keeps the fixture
+    harmless on a pre-probe tree."""
+    import core.run.tmp_reaper as reaper_mod
+    monkeypatch.setattr(
+        reaper_mod, "_in_child_pid_ns", lambda: False, raising=False,
+    )
+
 
 def _root_conftest():
     # Fresh import of the root conftest module (pytest loads it under
@@ -47,6 +62,10 @@ def test_emulation_gate_sweeps_dead_emu_roots(tmp_path, monkeypatch):
     stale = tmp_path / f"raptor-pytest-emu-{_dead_pid()}"
     stale.mkdir()
     (stale / "old-run").mkdir()
+    # Aged past the reaper's dead-pid floor so the keep=3 retention —
+    # not the age floor — is what this assert exercises.
+    aged = time.time() - 2 * 3600
+    os.utime(stale, (aged, aged))
 
     config = types.SimpleNamespace(
         option=types.SimpleNamespace(basetemp=""),
@@ -78,7 +97,10 @@ def test_emulation_gate_collapses_beyond_the_keep_horizon(
     for i in range(5):
         d = tmp_path / f"raptor-pytest-emu-{_dead_pid()}"
         d.mkdir()
-        os.utime(d, (now - 1000 * (i + 1), now - 1000 * (i + 1)))
+        # 2h steps: every root sits past the reaper's dead-pid age
+        # floor, so keep=3 retention alone decides who survives.
+        aged = now - 2 * 3600 * (i + 1)
+        os.utime(d, (aged, aged))
         dead_roots.append(d)
 
     config = types.SimpleNamespace(

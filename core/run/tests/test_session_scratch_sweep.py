@@ -7,13 +7,23 @@ either wrong placement leaves the sweep inert in exactly the ``-n``
 sessions that leak biggest (one killed session's scratch exhausted the
 tmp filesystem's inode table). These tests drive the ROOT conftest's
 hook path, not just the reaper primitive.
+
+Safety: every test pins ``_scratch_sweep_roots`` to a PRIVATE root —
+the real sweep covers the shared /tmp, and a test that lets it loose
+there is itself the collateral incident these gates exist to stop.
 """
 
 from __future__ import annotations
 
 import os
 import subprocess
+import time
 import types
+
+import pytest
+
+# Older than every reaper age floor (dead: 1h, unverifiable: 24h).
+_OLD = time.time() - 25 * 3600
 
 
 def _root_conftest():
@@ -34,25 +44,47 @@ def _fake_config(worker: bool):
     return cfg
 
 
+@pytest.fixture(autouse=True)
+def _pin_sweep_environment(monkeypatch, tmp_path):
+    """Point the sweep at a private root and pin the root-namespace
+    verdict: this session may itself run inside a pid namespace (the
+    batteries do), where the real probe would rightly refuse and turn
+    every behavioural assert vacuous. ``raising=False`` keeps the
+    fixture harmless on a pre-probe tree."""
+    conftest_mod = _root_conftest()
+    # Belt and braces on BOTH trees: the seam pin covers the fixed
+    # conftest; the gettempdir pin covers a pre-seam tree (red-leg
+    # runs against the base) whose sweep reads gettempdir directly.
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        conftest_mod, "_scratch_sweep_roots", lambda: {tmp_path},
+        raising=False,
+    )
+    import core.run.tmp_reaper as reaper_mod
+    monkeypatch.setattr(
+        reaper_mod, "_in_child_pid_ns", lambda: False, raising=False,
+    )
+
+
 class TestSessionScratchSweep:
-    def test_controller_configure_sweeps_dead_dirs(
-            self, tmp_path, monkeypatch):
+    def test_controller_configure_sweeps_dead_dirs(self, tmp_path):
         conftest_mod = _root_conftest()
-        monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
         dead = tmp_path / f"raptor-pytest-{_dead_pid()}-oldsess"
         dead.mkdir()
         (dead / "leak").write_text("x")
+        os.utime(dead, (_OLD, _OLD))
         live = tmp_path / f"raptor-pytest-{os.getpid()}-cur"
         live.mkdir()
+        os.utime(live, (_OLD, _OLD))
         conftest_mod._sweep_dead_session_scratch(_fake_config(worker=False))
         assert not dead.exists()
         assert live.is_dir()
 
-    def test_worker_configure_never_sweeps(self, tmp_path, monkeypatch):
+    def test_worker_configure_never_sweeps(self, tmp_path):
         conftest_mod = _root_conftest()
-        monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
         dead = tmp_path / f"raptor-pytest-{_dead_pid()}-oldsess"
         dead.mkdir()
+        os.utime(dead, (_OLD, _OLD))
         conftest_mod._sweep_dead_session_scratch(_fake_config(worker=True))
         assert dead.is_dir()
 
@@ -70,9 +102,9 @@ class TestSessionScratchSweep:
         # A nested controller inside an xdist worker inherits
         # PYTEST_XDIST_WORKER; worker-ness must come from workerinput.
         conftest_mod = _root_conftest()
-        monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
         monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw3")
         dead = tmp_path / f"raptor-pytest-{_dead_pid()}-oldsess"
         dead.mkdir()
+        os.utime(dead, (_OLD, _OLD))
         conftest_mod._sweep_dead_session_scratch(_fake_config(worker=False))
         assert not dead.exists()

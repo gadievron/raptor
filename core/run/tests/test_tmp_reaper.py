@@ -37,6 +37,39 @@ def _pin_sweep_roots(monkeypatch):
     monkeypatch.setattr(reaper_mod, "_lane_fallback_bases", lambda: ())
 
 
+@pytest.fixture(autouse=True)
+def _pin_root_pidns(monkeypatch):
+    """Hermeticity: this test session may itself run inside a pid
+    namespace (namespaced batteries, containerised CI), where the
+    reaper refuses pid-liveness reaping outright. Pin the probe to
+    the root-namespace shape; the namespace-behaviour tests override
+    it (``raising=False`` so a pre-probe tree still runs the
+    behavioural asserts instead of erroring in the fixture)."""
+    import core.run.tmp_reaper as reaper_mod
+    monkeypatch.setattr(
+        reaper_mod, "_in_child_pid_ns", lambda: False, raising=False,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _guard_pid_one_kill(monkeypatch):
+    """Doctrine guard: no code path exercised here — test or module
+    under test, on any tree — may issue a REAL kill() with pid <= 1,
+    signal 0 included. The kernel's answer to an unprivileged caller
+    is EPERM; raise it without making the syscall. (The SIGKILL drill
+    below runs its kill(0, 9) in a CHILD interpreter, out of reach of
+    this patch by design — it kills its own fresh process group.)"""
+    real_kill = os.kill
+
+    def guarded_kill(pid: int, sig: int) -> None:
+        if pid <= 1:
+            raise PermissionError(
+                "test guard: refusing kill() with pid <= 1")
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", guarded_kill)
+
+
 @pytest.fixture
 def tmp_root(tmp_path, monkeypatch):
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
@@ -811,10 +844,12 @@ class TestLiveOwnerKeepalive:
 
 class TestDeadPidDirReaping:
     """reap_dead_pid_dirs — per-pid scratch roots whose embedded pid is
-    the liveness contract (darwin-emu basetemp roots)."""
+    the liveness contract (darwin-emu basetemp roots). Dirs are aged
+    past the pid-liveness age floor by default: a liveness verdict
+    alone never reaps a young dir (TestPidLivenessAgeFloor)."""
 
     @staticmethod
-    def _pid_dir(root, pid, mtime=None):
+    def _pid_dir(root, pid, mtime=_OLD):
         d = root / f"raptor-pytest-emu-{pid}"
         d.mkdir()
         (d / "litter").write_text("x")
@@ -831,21 +866,34 @@ class TestDeadPidDirReaping:
     def test_dead_pid_dir_reaped_live_and_own_kept(self, tmp_path):
         from core.run.tmp_reaper import reap_dead_pid_dirs
         dead = self._pid_dir(tmp_path, self._dead_pid())
-        live = self._pid_dir(tmp_path, os.getppid())  # provably alive
-        own = self._pid_dir(tmp_path, os.getpid())
-        assert reap_dead_pid_dirs(tmp_path, "raptor-pytest-emu-") == [dead]
-        assert not dead.exists()
-        assert live.is_dir() and own.is_dir()
+        # The live owner is a spawned child, not getppid(): under a
+        # namespaced battery the controller IS pid 1 in the namespace,
+        # and a pid-1-named dir is age-governed, not liveness-kept.
+        owner = subprocess.Popen(
+            ["sleep", "30"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            live = self._pid_dir(tmp_path, owner.pid)  # provably alive
+            own = self._pid_dir(tmp_path, os.getpid())
+            assert reap_dead_pid_dirs(
+                tmp_path, "raptor-pytest-emu-") == [dead]
+            assert not dead.exists()
+            assert live.is_dir() and own.is_dir()
+        finally:
+            owner.terminate()
+            owner.wait(timeout=10)
 
     def test_keep_retains_newest_dead_roots(self, tmp_path):
         from core.run.tmp_reaper import reap_dead_pid_dirs
         now = time.time()
-        # Three dead roots with distinct ages; keep=2 must retain the
-        # two newest (pytest's keep-last-N retention, per-pid level).
+        # Three dead roots with distinct ages, all past the liveness
+        # age floor; keep=2 must retain the two newest (pytest's
+        # keep-last-N retention, per-pid level).
         pids = [self._dead_pid() for _ in range(3)]
-        oldest = self._pid_dir(tmp_path, pids[0], mtime=now - 3000)
-        mid = self._pid_dir(tmp_path, pids[1], mtime=now - 2000)
-        newest = self._pid_dir(tmp_path, pids[2], mtime=now - 1000)
+        oldest = self._pid_dir(tmp_path, pids[0], mtime=now - 4 * 3600)
+        mid = self._pid_dir(tmp_path, pids[1], mtime=now - 3 * 3600)
+        newest = self._pid_dir(tmp_path, pids[2], mtime=now - 2 * 3600)
         reaped = reap_dead_pid_dirs(tmp_path, "raptor-pytest-emu-", keep=2)
         assert reaped == [oldest]
         assert mid.is_dir() and newest.is_dir()
@@ -860,6 +908,9 @@ class TestDeadPidDirReaping:
         (victim / "data").write_text("precious")
         link = tmp_path / f"raptor-pytest-emu-{dead_pid}"
         link.symlink_to(victim)
+        # Aged past every floor: the lstat gate, not the age floor,
+        # must be what refuses the squat.
+        os.utime(link, (_OLD, _OLD), follow_symlinks=False)
         assert reap_dead_pid_dirs(tmp_path, "raptor-pytest-emu-") == []
         assert notes.is_dir()
         assert link.is_symlink()
@@ -982,10 +1033,14 @@ class TestPidSuffixDirReaping:
     (one leaked multi-million-inode tree exhausted /tmp's inodes)."""
 
     @staticmethod
-    def _sfx_dir(root, pid, tail="aB3xZ0"):
+    def _sfx_dir(root, pid, tail="aB3xZ0", mtime=_OLD):
+        # Aged past the pid-liveness floor by default — a liveness
+        # verdict alone never reaps a young dir.
         d = root / f"raptor-pytest-{pid}-{tail}"
         d.mkdir()
         (d / "litter").write_text("x")
+        if mtime is not None:
+            os.utime(d, (mtime, mtime))
         return d
 
     def _dead_pid(self):
@@ -996,11 +1051,21 @@ class TestPidSuffixDirReaping:
     def test_dead_suffixed_dir_reaped_live_kept(self, tmp_path):
         from core.run.tmp_reaper import reap_dead_pid_dirs
         dead = self._sfx_dir(tmp_path, self._dead_pid())
-        live = self._sfx_dir(tmp_path, os.getppid())
-        got = reap_dead_pid_dirs(
-            tmp_path, "raptor-pytest-", pid_suffix=True)
-        assert got == [dead]
-        assert not dead.exists() and live.is_dir()
+        # Spawned child, not getppid(): under a namespaced battery the
+        # controller is pid 1 and its name would be age-governed.
+        owner = subprocess.Popen(
+            ["sleep", "30"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            live = self._sfx_dir(tmp_path, owner.pid)
+            got = reap_dead_pid_dirs(
+                tmp_path, "raptor-pytest-", pid_suffix=True)
+            assert got == [dead]
+            assert not dead.exists() and live.is_dir()
+        finally:
+            owner.terminate()
+            owner.wait(timeout=10)
 
     def test_suffix_shape_is_strict(self, tmp_path):
         from core.run.tmp_reaper import reap_dead_pid_dirs
@@ -1034,6 +1099,7 @@ class TestPidSuffixDirReaping:
         (victim / "keep").write_text("x")
         link = tmp_path / f"raptor-pytest-{self._dead_pid()}-sq"
         link.symlink_to(victim)
+        os.utime(link, (_OLD, _OLD), follow_symlinks=False)
         got = reap_dead_pid_dirs(
             tmp_path, "raptor-pytest-", pid_suffix=True)
         # The lstat gate must refuse the squat OUTRIGHT — pin the
@@ -1066,6 +1132,7 @@ class TestPidSuffixDirReaping:
         poison.mkdir()
         dead = tmp_path / f"raptor-pytest-emu-{self._dead_pid()}"
         dead.mkdir()
+        os.utime(dead, (_OLD, _OLD))
         got = reap_dead_pid_dirs(tmp_path, "raptor-pytest-emu-")
         assert got == [dead]
         assert poison.is_dir()

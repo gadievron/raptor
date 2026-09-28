@@ -72,6 +72,7 @@ import os
 import shutil
 import socket
 import stat
+import sys
 import tempfile
 from pathlib import Path
 
@@ -425,6 +426,107 @@ def _pid_file_match(name: str, prefix: str, suffix: str) -> int | None:
     return int(digits)
 
 
+# --------------------------------------------------------------------
+# Pid-liveness doctrine: namespaces and age floors
+# --------------------------------------------------------------------
+#
+# ``os.kill(pid, 0)`` verdicts are only meaningful about pids in the
+# CALLER'S pid namespace and only within one pid-reuse epoch. Inside a
+# child pid namespace every other session's live pid probes ESRCH
+# ("invisible from here", not "dead"), and even in the root namespace
+# a name-embedded pid may have been minted inside another namespace
+# (where it meant a different process) or already recycled. Every
+# liveness-based deletion below is therefore double-gated: refuse
+# entirely outside the root namespace, and never let ESRCH alone reap
+# a YOUNG entry — the mtime age floor is the backstop.
+
+# Fixed inode of the initial pid namespace's nsfs entry
+# (PROC_PID_INIT_INO in include/linux/proc_ns.h; ABI-stable since
+# namespace proc inodes were introduced).
+_PROC_PID_INIT_INO = 0xEFFFFFFC
+
+
+def _in_child_pid_ns() -> bool:
+    """True when this process runs in a non-initial pid namespace —
+    where kill(2) verdicts about other sessions' pids are meaningless.
+
+    Two unprivileged probes, either one sufficing to refuse:
+
+    - the ``/proc/self/ns/pid`` nsfs inode versus the kernel's fixed
+      initial-namespace inode. This works even under ``--mount-proc``,
+      where the remounted ``/proc`` hides every outer namespace (and
+      makes the NSpid line below single-entry). In every coherent
+      ``/proc`` shape — host-mounted or remounted — this primary
+      answers first and the NSpid leg below never decides.
+    - the NSpid entry count in ``/proc/self/status``: more than one
+      entry proves nesting below the namespace that mounted this
+      ``/proc``. Belt-and-braces for INCOHERENT ``/proc`` shapes
+      only: a ``/proc/self/ns/pid`` masked or bind-mounted from an
+      outer namespace (container runtimes overmounting proc entries)
+      while ``status`` still reflects nesting. Deliberately kept
+      although no test exercises it — it is dead code wherever
+      ``/proc`` is self-consistent — because a hit here can only ADD
+      a refusal (the fail-safe direction), never suppress one.
+
+    Non-Linux platforms have no pid namespaces, so the probe reads
+    False there (verdicts are always in-namespace). On Linux, probe
+    ERRORS read True — a ``/proc`` too broken to answer is not a
+    ``/proc`` to base deletions on (fail toward keeping).
+    """
+    if sys.platform != "linux":
+        return False
+    try:
+        if os.stat("/proc/self/ns/pid").st_ino != _PROC_PID_INIT_INO:
+            return True
+        with open("/proc/self/status", "rb") as fh:
+            for line in fh:
+                if line.startswith(b"NSpid:"):
+                    return len(line.split()) > 2
+        return False
+    except OSError:
+        return True
+
+
+# Age floor for pid-liveness dir reaping (reap_dead_pid_dirs): a dir
+# younger than this is NEVER reaped, whatever the liveness verdict.
+# A live session's scratch is always recently touched (core.run.scratch
+# keepalive-refreshes owned dirs' mtimes at most one interval apart),
+# so a young dir is presumed to belong to a live concurrent session
+# whose pid this process simply cannot judge. Churn-prone limit — both
+# directions:
+#   - LOWERED, ESRCH edges back toward being sufficient on its own: a
+#     concurrent session whose pid is invisible from here (nested
+#     containers, namespaced batteries) or already recycled loses LIVE
+#     scratch mid-run — the exact collateral this floor exists to
+#     stop. It must never drop below two keepalive ticks
+#     (2 * core.run.scratch._KEEPALIVE_INTERVAL_S) or a live
+#     keepalive'd dir could age past it between refreshes.
+#   - RAISED, killed sessions' scratch survives that much longer, and
+#     the leak this sweep exists for (one killed session's
+#     multi-million-inode build tree exhausted /tmp's inode table)
+#     gets that much more time to starve the filesystem. Hours, not
+#     days: past ~4h this sweep stops adding value over the 24h
+#     stale-tmp age gate.
+# The two-direction regression test pins both bounds.
+_PID_DIR_AGE_FLOOR_S: float = 3600.0
+
+# Age floor for UNVERIFIABLE owners — pid 1 (init in every namespace:
+# a probe against it is meaningless, and no kill() call with pid <= 1
+# is ever made) and EPERM verdicts (some process holds the pid under
+# another uid: the same-euid owner either exited and the pid was
+# recycled, or minted the name inside another namespace). Age-governed
+# instead of kept forever. Both directions:
+#   - LOWERED toward the dead floor, a quiet-but-live keepalive-less
+#     dir whose in-namespace pid collides with another uid's host
+#     process gets a shrinking survival margin; 24h matches the
+#     stale-tmp sweep's default floor, which the same dirs were
+#     already subject to.
+#   - RAISED, namespace-minted ``raptor-pytest-1-*`` roots (in-ns
+#     pid 1) accrete for that much longer — the observed pileup this
+#     floor exists to clear ran to hundreds of dirs.
+_UNVERIFIABLE_PID_DIR_AGE_FLOOR_S: float = 24 * 3600.0
+
+
 def _pid_alive(pid: int) -> bool:
     """Conservative liveness for the pid-file contract: only a
     confirmed-dead pid reads False. EPERM means alive under another
@@ -432,8 +534,17 @@ def _pid_alive(pid: int) -> bool:
     reap — the safe direction. OverflowError is in the net because
     ``os.kill`` raises it (not OSError) for out-of-range pids — a
     single poison-named file must read "alive" (kept, skipped), never
-    abort the sweep for every entry after it."""
-    if pid <= 0:
+    abort the sweep for every entry after it.
+
+    Namespace honesty: inside a child pid namespace every outer
+    session's pid probes ESRCH ("invisible from here", not "dead"),
+    so everything reads alive there — a dead owner's pair is
+    reclaimed by the next root-namespace sweep instead. pid 1 is init
+    in EVERY namespace: it reads alive without probing (no kill()
+    call is ever made with pid <= 1)."""
+    if pid <= 1:
+        return True
+    if _in_child_pid_ns():
         return True
     try:
         os.kill(pid, 0)
@@ -813,10 +924,33 @@ def reap_dead_pid_dirs(root: Path, prefix: str, *, keep: int = 0,
     liveness contract (the root conftest's darwin-emulation basetemp
     roots, ``raptor-pytest-emu-<pid>``): per-pid roots defeat both
     pytest's keep-last-N retention (it prunes numbered runs under one
-    shared basetemp, never sibling per-pid roots) and the age-floor
+    shared basetemp, never sibling per-pid roots) and the stale-tmp
     sweep's cadence, so dead sessions accreted tens of thousands of
-    inodes each. A dead owning pid is proof positive the session is
-    gone — no age floor needed.
+    inodes each.
+
+    A dead-probing pid is strong evidence the session is gone — but
+    only within this process's pid namespace and one pid-reuse epoch,
+    so it is never sufficient on its own:
+
+      - In a child pid namespace (``unshare`` batteries, nested CI
+        containers) EVERY outer session's live pid probes ESRCH; a
+        sweep running there deleted concurrent sessions' LIVE scratch
+        under the shared system tmp mid-run. The sweep refuses to run
+        at all outside the root namespace (:func:`_in_child_pid_ns`).
+      - Even in the root namespace a dead-probing pid may be a
+        namespace-minted name (a session's in-namespace pid means
+        nothing here) or sit in a reuse window, so ESRCH alone never
+        reaps a YOUNG dir: the mtime age floor
+        (``_PID_DIR_AGE_FLOOR_S``) is the backstop — a live session's
+        scratch is keepalive-refreshed and always recently touched.
+      - Unverifiable owners (pid 1 — init in every namespace — and
+        EPERM probes) are governed by the longer
+        ``_UNVERIFIABLE_PID_DIR_AGE_FLOOR_S`` instead of being kept
+        forever (observed: hundreds of namespace-minted
+        ``raptor-pytest-1-*`` roots accreting unreaped).
+      - Dirs this euid cannot remove (root-owned strays from
+        privileged runs) are skipped without probing and disclosed
+        once per sweep — never crashed on, never spammed per entry.
 
     ``keep`` retains that many of the most-recently-modified DEAD dirs
     for post-mortem inspection, mirroring pytest's own retention
@@ -834,10 +968,8 @@ def reap_dead_pid_dirs(root: Path, prefix: str, *, keep: int = 0,
 
     Safety posture matches the launcher's dead-session sweep: lstat
     only (a symlink squatting on the name is never followed), dirs
-    only, same-euid only, exact-shape names, live pids always kept
-    (EPERM reads as live; pid reuse merely delays reclamation one
-    cycle — the safe direction). Best-effort by contract — never
-    raises.
+    only, same-euid only, exact-shape names, live pids always kept.
+    Best-effort by contract — never raises.
     """
     try:
         return _reap_dead_pid_dirs(root, prefix, keep,
@@ -849,12 +981,24 @@ def reap_dead_pid_dirs(root: Path, prefix: str, *, keep: int = 0,
 
 def _reap_dead_pid_dirs(root: Path, prefix: str, keep: int, *,
                         pid_suffix: bool = False) -> list[Path]:
+    if _in_child_pid_ns():
+        logger.debug(
+            "dead-pid dir sweep skipped under %s: this process runs in "
+            "a child pid namespace, where kill() verdicts about other "
+            "sessions' pids are meaningless", root,
+        )
+        return []
+    import time
+
     try:
         names = os.listdir(root)
     except OSError:
         return []
+    now = time.time()
     euid = os.geteuid()
-    dead: list[tuple[float, Path]] = []
+    dead: list[tuple[float, Path, os.stat_result]] = []
+    foreign_owned = 0
+    unremovable = 0
     for name in names:
         if not name.startswith(prefix):
             continue
@@ -887,24 +1031,94 @@ def _reap_dead_pid_dirs(root: Path, prefix: str, keep: int, *,
             st = path.lstat()
         except OSError:
             continue
-        if not stat.S_ISDIR(st.st_mode) or st.st_uid != euid:
+        if not stat.S_ISDIR(st.st_mode):
+            continue
+        if st.st_uid != euid:
+            # Not removable by this euid (root-owned strays from
+            # privileged runs): skip without probing; disclosed once
+            # per sweep below.
+            foreign_owned += 1
+            continue
+        age = now - st.st_mtime
+        if age < _PID_DIR_AGE_FLOOR_S:
+            # Young dir: never reaped on a liveness verdict alone —
+            # see the floor's rationale at its definition.
+            continue
+        if pid == 1:
+            # pid 1 is init in EVERY pid namespace: such names are
+            # minted by sessions running inside their own namespace
+            # (their in-namespace pid is 1), so the real owner is
+            # unknowable from here — and no kill() call with
+            # pid <= 1 is ever made. Age-governed.
+            if age >= _UNVERIFIABLE_PID_DIR_AGE_FLOOR_S:
+                dead.append((st.st_mtime, path, st))
             continue
         try:
             os.kill(pid, 0)
         except (ProcessLookupError, OverflowError):
-            # Dead — or a pid beyond pid_t (a planted huge-digit name),
-            # which no live process can hold.
-            dead.append((st.st_mtime, path))
+            # Dead in this (root) namespace — or a pid beyond pid_t
+            # (a planted huge-digit name), which no live process can
+            # hold. The age floor above already vouched this is not a
+            # live concurrent session's fresh scratch.
+            dead.append((st.st_mtime, path, st))
         except OSError:
-            continue  # EPERM etc.: someone lives there; keep
+            # EPERM: some process holds this pid under another uid —
+            # the same-euid owner either exited and the pid was
+            # recycled, or minted the name inside another namespace.
+            # Unverifiable either way: age-governed so old strays are
+            # cleaned instead of accreting forever.
+            if age >= _UNVERIFIABLE_PID_DIR_AGE_FLOOR_S:
+                dead.append((st.st_mtime, path, st))
+            continue
         else:
             continue  # alive; keep
-    dead.sort(reverse=True)
+    dead.sort(key=lambda entry: entry[0], reverse=True)
     reaped: list[Path] = []
-    for _, path in dead[max(keep, 0):]:
+    for _, path, st in dead[max(keep, 0):]:
+        # Same validation-to-delete identity pin as the sibling
+        # sweeps: everything above judged an lstat snapshot; deletion
+        # is by pathname. A dir that VANISHED since classification (a
+        # concurrent sweep or the owner's own cleanup won the race —
+        # historically this raced rmtree into FileNotFoundError
+        # mid-walk) is skipped and never reported reaped; a same-uid
+        # writer swapping a different entry (or a symlink — S_ISDIR
+        # on lstat is then false) into the name is skipped this
+        # sweep.
+        try:
+            st2 = path.lstat()
+        except OSError:
+            continue
+        if (
+            (st2.st_dev, st2.st_ino) != (st.st_dev, st.st_ino)
+            or not stat.S_ISDIR(st2.st_mode)
+        ):
+            logger.debug(
+                "dead-pid dir sweep: %s changed identity between "
+                "validation and delete; skipping this sweep", path,
+            )
+            continue
         shutil.rmtree(path, ignore_errors=True)
         if not path.exists():
             reaped.append(path)
+        else:
+            # Partial-permission residue (e.g. root-owned entries
+            # inside a same-euid dir): rmtree could not finish. Count
+            # for the bounded disclosure below instead of failing or
+            # logging per entry; the dir is retried on later sweeps
+            # and remains visible to an operator.
+            unremovable += 1
+    if foreign_owned:
+        logger.info(
+            "dead-pid dir sweep: left %d %s* dir(s) under %s in place "
+            "(owned by another user — not removable from this account)",
+            foreign_owned, prefix, root,
+        )
+    if unremovable:
+        logger.info(
+            "dead-pid dir sweep: %d %s* dir(s) under %s resisted "
+            "removal (permission residue inside); left in place",
+            unremovable, prefix, root,
+        )
     if reaped:
         logger.info(
             "reaped %d dead-owner %s* dir(s) under %s",

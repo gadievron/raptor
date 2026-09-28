@@ -204,9 +204,10 @@ def _apply_platform_emulation(config):
         # prunes numbered runs under one SHARED basetemp, never
         # sibling per-pid roots) and, under the launcher, sits outside
         # the session-TMPDIR the stale-tmp sweep covers — dead emu
-        # roots accreted ~25k inodes each. A dead owning pid is proof
-        # the session is gone; keep=3 preserves pytest's post-mortem
-        # retention semantics at the root level.
+        # roots accreted ~25k inodes each. A dead owning pid marks
+        # the session gone (the reaper gates the verdict: root pid
+        # namespace only, mtime age floor); keep=3 preserves pytest's
+        # post-mortem retention semantics at the root level.
         from core.run.tmp_reaper import reap_dead_pid_dirs
         reap_dead_pid_dirs(tmp_root, "raptor-pytest-emu-", keep=3)
         basetemp = (
@@ -929,7 +930,11 @@ def _sweep_dead_session_scratch(config) -> None:
     stale-tmp sweep's 24h floor is far too slow for the worst leaks —
     one killed session left a multi-million-inode build tree that
     exhausted the tmp filesystem's inode table before the gate could
-    fire. The pid in the name is proof of death; sweep immediately.
+    fire. A dead owning pid marks the session gone; the reaper itself
+    gates the verdict (root pid namespace only, mtime age floor — a
+    namespaced session's kill() probes call every outer session's
+    LIVE pid dead, and this sweep once deleted their scratch under
+    the shared /tmp mid-run).
 
     Runs from ``pytest_configure`` on the CONTROLLER only —
     worker-ness decided from ``config.workerinput`` per this file's
@@ -941,10 +946,15 @@ def _sweep_dead_session_scratch(config) -> None:
     if getattr(config, "workerinput", None) is not None:
         return
     from core.run.tmp_reaper import reap_dead_pid_dirs
-    roots = {Path(tempfile.gettempdir()), Path("/tmp")}
-    for root in roots:
+    for root in _scratch_sweep_roots():
         if root.is_dir():
             reap_dead_pid_dirs(root, "raptor-pytest-", pid_suffix=True)
+
+
+def _scratch_sweep_roots() -> "set[Path]":
+    """Roots the dead-session scratch sweep covers. A seam so tests
+    can pin the sweep to private roots instead of the real /tmp."""
+    return {Path(tempfile.gettempdir()), Path("/tmp")}
 
 
 def _check_egress_leak(session):
