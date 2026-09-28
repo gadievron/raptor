@@ -102,6 +102,10 @@ MAX_BACKLOG_BYTES = 8 * 1024 * 1024
 #: ``core.concepts.study_answers``'s own read budget).
 MAX_STUDY_BYTES = 8 * 1024 * 1024
 
+#: Byte budget for a graded findings export handed to ``reimport``
+#: (matches the audit report's own graded-file read budget).
+MAX_GRADED_BYTES = 64 * 1024 * 1024
+
 #: Flood discipline: a site that failed this many synthesis attempts
 #: across drains stays parked until an operator clears its counter —
 #: re-spending on the same refusing hypothesis every drain is how a
@@ -119,6 +123,12 @@ DEFAULT_MAX_DISPATCH = 25
 #: producer's own listing bounds.
 _MAX_CLUSTERS_READ = 200
 _MAX_SITES_PER_CLUSTER_READ = 100
+
+#: Sites per cluster ``reimport`` writes — the producer's own chunk
+#: size (``raptor-validation-helper``'s ``_BACKLOG_SITES_PER_CLUSTER``),
+#: kept under ``_MAX_SITES_PER_CLUSTER_READ`` so every appended site
+#: is readable at the next intake.
+_SITES_PER_CLUSTER_WRITE = 50
 
 #: Per-row records kept in the drain report (counts stay exact).
 _MAX_REPORT_ROWS = 2000
@@ -266,6 +276,22 @@ def _cap(value: Any, cap: int) -> str:
     if len(value) > cap:
         return value[: cap - 1] + "…"
     return value
+
+
+#: Cluster-class cap — the producers' own class cap (both the
+#: findings import and :func:`reimport` write classes capped to this).
+_CLASS_CAP = 100
+
+
+def _class_key(value: Any) -> str:
+    """Canonical, capped form of a cluster-class string — used both to
+    WRITE appended cluster classes and to MATCH classes during
+    reconciliation. Every side of a class comparison must go through
+    this one function: two different cappings silently never match a
+    class longer than the cap. Trailing whitespace exposed by the cap
+    is dropped so the key is idempotent — a written class re-keys to
+    itself at the next reimport."""
+    return _coerce_text(value)[:_CLASS_CAP].rstrip()
 
 
 def _is_bad_path(file_path: str) -> bool:
@@ -756,6 +782,354 @@ def rank(
     return plans, report
 
 
+@dataclass
+class ReimportReport:
+    """Aggregate result of one ``reimport`` pass."""
+
+    graded_total: int = 0
+    dark_rows: int = 0
+    already_listed: int = 0
+    appended: int = 0
+    witnessed_excluded: int = 0
+    skipped_unusable: int = 0
+    listed_before: int = 0
+    listed_after: int = 0
+    clusters_before: int = 0
+    clusters_after: int = 0
+    total_before: int = 0
+    total_after: int = 0
+    changed: bool = False
+
+
+def _graded_site(finding: dict[str, Any]) -> dict[str, Any]:
+    """A backlog site dict in the producer's shape — the same field
+    picks, caps, and line coercion ``raptor-validation-helper``'s
+    ``_site()`` applies, so a reimported row is byte-shaped like an
+    import-time listing of the same graded row."""
+    line = finding.get("line")
+    if isinstance(line, bool) or not isinstance(line, int):
+        line = 0
+    return {
+        "id": str(finding.get("id") or "")[:_ID_CAP],
+        "file": str(finding.get("file")
+                    or finding.get("file_path") or "")[:_FILE_CAP],
+        "function": str(finding.get("function") or "")[:_FUNCTION_CAP],
+        "line": line,
+        "title": str(finding.get("title")
+                     or finding.get("hypothesis") or "")[:_TITLE_CAP],
+    }
+
+
+def _graded_cluster_class(finding: dict[str, Any]) -> str:
+    """The producer's cluster-class fallback (``cwe_id`` → ``cwe`` →
+    ``vuln_type`` → ``"unclassified"``), capped through
+    :func:`_class_key` — reimported rows land in the same class their
+    import-time listing would have used, and the class doubles as the
+    reconciliation match key."""
+    for key in ("cwe_id", "cwe"):
+        cwe = finding.get(key)
+        if isinstance(cwe, str) and cwe.strip():
+            return _class_key(cwe.upper())
+    vt = finding.get("vuln_type")
+    if isinstance(vt, str) and vt.strip():
+        return _class_key(vt.lower())
+    return "unclassified"
+
+
+def _site_identity(site: dict[str, Any]) -> tuple[str, str, int, str] | None:
+    """The consumer-side identity of a site dict — EXACTLY the
+    coercions :func:`load_backlog` applies when building a
+    :class:`DarkRow` (file/function caps, line clamp, title
+    sanitisation), so a site compared here matches its own listing at
+    the next intake. ``None`` when intake would refuse the site (no
+    usable file path)."""
+    file_raw = site.get("file")
+    if not isinstance(file_raw, str) or not file_raw.strip():
+        return None
+    file_path = _cap(file_raw, _FILE_CAP)
+    if _is_bad_path(file_path):
+        return None
+    function = site.get("function", "")
+    title = site.get("title", "")
+    if function is not None and not isinstance(function, str):
+        return None
+    if title is not None and not isinstance(title, str):
+        return None
+    line = site.get("line")
+    if isinstance(line, bool) or not isinstance(line, int) or line < 0:
+        line = 0
+    return (
+        file_path,
+        _cap(function, _FUNCTION_CAP),
+        line,
+        sanitise_for_terminal(_coerce_text(title), max_len=_TITLE_CAP),
+    )
+
+
+def _load_graded_findings(path: Path) -> list[dict[str, Any]]:
+    """Load a graded findings export for :func:`reimport` — bounded,
+    regular-file-only, loud on refusal (same artifact discipline as
+    :func:`load_backlog`). Accepts the canonical ``{"findings": [...]}``
+    container or a bare findings list."""
+    import os
+    import stat as _stat
+
+    path = Path(path)
+    try:
+        st = os.lstat(path)
+    except OSError as exc:
+        raise BacklogError(
+            f"graded findings file {path} unreadable "
+            f"({exc.__class__.__name__}) — nothing to reimport"
+        ) from exc
+    if not _stat.S_ISREG(st.st_mode):
+        raise BacklogError(
+            f"graded findings file {path} is not a regular file "
+            f"(mode=0o{st.st_mode:o}) — planted special? refusing"
+        )
+    from core.json import load_json
+    try:
+        data = load_json(path, strict=True, max_bytes=MAX_GRADED_BYTES)
+    except Exception as exc:
+        raise BacklogError(
+            f"graded findings file unreadable/malformed/oversized: {exc}"
+        ) from exc
+    findings = data.get("findings") if isinstance(data, dict) else data
+    if not isinstance(findings, list):
+        raise BacklogError(
+            f"graded findings file {path} carries no findings list — "
+            f"not a graded export"
+        )
+    return findings
+
+
+def _witnessed_site_keys(
+    run_dir: Path, witnessed_total: int,
+) -> set[tuple[str, str, int]]:
+    """Identities of rows past drains removed on a landed witness,
+    recovered from the run dir's drain report — a reimport must never
+    resurrect them.
+
+    The report is overwritten per drain, so only the LAST drain's rows
+    are recoverable: when the ledger's accumulated ``witnessed_total``
+    exceeds what the report lists, the missing identities are
+    unrecoverable and the reimport refuses loudly (fresh ``--out`` is
+    the escape hatch). Report rows carry no title, so exclusion is by
+    ``(file, function, line)`` — conservative in the safe direction
+    (never re-lists any hypothesis at a witnessed site)."""
+    from core.json import load_json
+
+    path = Path(run_dir) / DRAIN_REPORT_FILENAME
+    refusal = (
+        f"the backlog's drained ledger records {witnessed_total} "
+        f"witnessed removal(s) but their identities are not "
+        f"recoverable from {DRAIN_REPORT_FILENAME} — a reimport could "
+        f"resurrect witnessed rows; refusing. Re-import into a fresh "
+        f"--out instead."
+    )
+    try:
+        report = load_json(path, strict=True, max_bytes=MAX_BACKLOG_BYTES)
+    except Exception as exc:
+        raise BacklogError(f"{refusal} ({exc.__class__.__name__})") from exc
+    rows = report.get("rows") if isinstance(report, dict) else None
+    if not isinstance(rows, list):
+        raise BacklogError(refusal)
+    keys: set[tuple[str, str, int]] = set()
+    listed = 0
+    for row in rows:
+        if not isinstance(row, dict) or row.get("action") != "witnessed":
+            continue
+        listed += 1
+        file_path = _cap(row.get("file"), _FILE_CAP)
+        function = _cap(row.get("function"), _FUNCTION_CAP)
+        line = row.get("line")
+        if isinstance(line, bool) or not isinstance(line, int) or line < 0:
+            line = 0
+        if not file_path:
+            raise BacklogError(refusal)
+        keys.add((file_path, function, line))
+    if listed < witnessed_total:
+        raise BacklogError(refusal)
+    return keys
+
+
+def reimport(run_dir: Path, graded_path: Path) -> ReimportReport:
+    """Additively re-list dark rows from a graded findings export into
+    the run's ``witness-backlog.json`` (mechanical — no LLM spend).
+
+    The recovery path for a listing the producer truncated on disk:
+    graded dark rows whose identity ``(file, function, line, title)``
+    is not already listed are appended as same-class clusters of
+    <= ``_SITES_PER_CLUSTER_WRITE`` sites. Additive by contract:
+
+    * existing site dicts are never modified (``drain_attempts``
+      untouched by construction) and no row is ever removed;
+    * the ``drained`` ledger is never touched;
+    * an already-listed identity is never listed twice (idempotent);
+    * witnessed rows never resurrect — when the ledger records
+      witnessed removals their identities are excluded, refusing
+      loudly when they cannot be recovered;
+    * ``total`` never decreases, and stays exact when the reimported
+      export is the one the artifact was produced from: appended rows
+      are debited against the artifact-level truncation surplus
+      (declared total minus site rows listed on disk — the rows the
+      producer counted but never listed, whether whole clusters were
+      dropped by the cluster cap or sites behind a legacy per-cluster
+      ``sites_truncated`` marker), and ``total`` rises only for
+      appended rows past that surplus. Legacy ``sites_truncated``
+      clusters additionally get their per-cluster count debited, the
+      marker dropping once the cluster lists what it counts;
+    * the surplus debit is attribution-blind — a count, not
+      identities: the artifact does not record WHICH rows it counted
+      but never listed, so on a DIVERGENT graded export it is a
+      heuristic, not an exactness contract — never-counted rows can
+      consume the surplus, clearing the ``total > listed`` truncation
+      signal while originally counted rows stay unlisted, until a
+      reimport of the original export re-lists them (raising ``total``
+      for any surplus already consumed).
+
+    The artifact is only written when something was appended — a
+    no-op reimport leaves the file byte-identical.
+    """
+    from core.schema_constants import is_dark_row
+
+    run_dir = Path(run_dir)
+    _refuse_live_run(run_dir)
+    artifact, rows, _malformed = load_backlog(run_dir)
+    findings = _load_graded_findings(graded_path)
+    dark = [f for f in findings if isinstance(f, dict) and is_dark_row(f)]
+
+    report = ReimportReport(
+        graded_total=len(findings),
+        dark_rows=len(dark),
+        listed_before=len(rows),
+        clusters_before=len(artifact["clusters"]),
+    )
+    declared = _declared_total(artifact)
+    report.total_before = declared if declared is not None else len(rows)
+
+    witnessed_keys: set[tuple[str, str, int]] = set()
+    drained = artifact.get("drained")
+    if isinstance(drained, dict):
+        witnessed_total = drained.get("witnessed_total")
+        if isinstance(witnessed_total, int) \
+                and not isinstance(witnessed_total, bool) \
+                and witnessed_total > 0:
+            witnessed_keys = _witnessed_site_keys(run_dir, witnessed_total)
+
+    listed_keys = {(r.file, r.function, r.line, r.title) for r in rows}
+    new_by_class: dict[str, list[dict[str, Any]]] = {}
+    for finding in dark:
+        site = _graded_site(finding)
+        key = _site_identity(site)
+        if key is None:
+            report.skipped_unusable += 1
+            continue
+        if key in listed_keys:
+            report.already_listed += 1
+            continue
+        if (key[0], key[1], key[2]) in witnessed_keys:
+            report.witnessed_excluded += 1
+            continue
+        listed_keys.add(key)
+        new_by_class.setdefault(
+            _graded_cluster_class(finding), []).append(site)
+        report.appended += 1
+
+    clusters = artifact["clusters"]
+    new_cluster_count = sum(
+        math.ceil(len(sites) / _SITES_PER_CLUSTER_WRITE)
+        for sites in new_by_class.values()
+    )
+    if report.appended and \
+            len(clusters) + new_cluster_count > _MAX_CLUSTERS_READ:
+        raise BacklogError(
+            f"reimport would list {len(clusters) + new_cluster_count} "
+            f"clusters — past the consumer read bound "
+            f"({_MAX_CLUSTERS_READ}); appended rows would be "
+            f"unreadable. Re-import into a fresh --out instead."
+        )
+
+    # The artifact-level truncation surplus: rows the producer counted
+    # but never listed, whatever shape dropped them — whole clusters
+    # dropped by the cluster cap (``clusters_truncated``: the rows
+    # appear in NO cluster, marker or otherwise) or sites behind a
+    # legacy per-cluster ``sites_truncated`` marker. Measured
+    # pre-merge, straight off the artifact bytes: the declared total
+    # counts every routed row, the on-disk site rows are what it
+    # actually lists (junk entries inflate the on-disk count, which
+    # only ever shrinks the surplus — errors point upward).
+    listed_on_disk = sum(
+        len(c["sites"]) for c in clusters
+        if isinstance(c, dict) and isinstance(c.get("sites"), list)
+    )
+    surplus = (
+        declared - listed_on_disk
+        if declared is not None and declared > listed_on_disk
+        else 0
+    )
+
+    for cls, sites in sorted(
+            new_by_class.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        existing = list(clusters)  # snapshot: reconcile pre-merge clusters
+        for start in range(0, len(sites), _SITES_PER_CLUSTER_WRITE):
+            chunk = sites[start:start + _SITES_PER_CLUSTER_WRITE]
+            clusters.append(
+                {"class": cls, "count": len(chunk), "sites": chunk})
+        # Per-cluster bookkeeping for legacy ``sites_truncated``
+        # clusters of the same class: debit the unlisted remainder the
+        # rows just listed came out of, so per-cluster counts stay
+        # exact and the marker drops once the cluster lists what it
+        # counts. This never drives ``total`` — the artifact-level
+        # surplus above does.
+        remaining = len(sites)
+        for cluster in existing:
+            if remaining <= 0:
+                break
+            if not isinstance(cluster, dict) \
+                    or not cluster.get("sites_truncated") \
+                    or _class_key(cluster.get("class")) != cls:
+                continue
+            count = cluster.get("count")
+            cluster_sites = cluster.get("sites")
+            if isinstance(count, bool) or not isinstance(count, int) \
+                    or not isinstance(cluster_sites, list):
+                continue
+            slack = count - len(cluster_sites)
+            if slack <= 0:
+                continue
+            take = min(slack, remaining)
+            cluster["count"] = count - take
+            remaining -= take
+            if cluster["count"] == len(cluster_sites):
+                del cluster["sites_truncated"]
+
+    report.listed_after = report.listed_before + report.appended
+    # ``total`` reconciliation: appended rows are debited against the
+    # truncation surplus first — a counted row re-listed must not be
+    # re-counted — and ``total`` rises only for appended rows past it.
+    # Attribution-blind by construction (see the docstring): the debit
+    # is a count, exact on the artifact's own source export, heuristic
+    # on a divergent one; ``total`` never decreases either way. A
+    # missing/unusable declared total is left alone: upward-only
+    # trust, same as ``_declared_total``.
+    uncounted = max(0, report.appended - surplus)
+    if uncounted and declared is not None:
+        artifact["total"] = declared + uncounted
+    declared_after = _declared_total(artifact)
+    report.total_after = (
+        declared_after if declared_after is not None
+        else report.listed_after
+    )
+    report.clusters_after = len(clusters)
+
+    if report.appended:
+        from core.json import save_json
+        save_json(run_dir / BACKLOG_FILENAME, artifact)
+        report.changed = True
+    return report
+
+
 def drain(
     run_dir: Path,
     target_path: Path,
@@ -1099,11 +1473,14 @@ __all__ = [
     "DarkRow",
     "DrainReport",
     "MAX_BACKLOG_BYTES",
+    "MAX_GRADED_BYTES",
     "MAX_ROW_ATTEMPTS",
+    "ReimportReport",
     "RowPlan",
     "drain",
     "load_backlog",
     "load_pending_questions",
     "plan_rows",
     "rank",
+    "reimport",
 ]

@@ -13,7 +13,7 @@ Subcommands:
     rules    — manage synthesized checker rules (Mode 2: save/list/run)
     report   — generate final summary
     feedback — import /validate results into the review journal
-    backlog  — witness-backlog consumer (list / drain dark rows)
+    backlog  — witness-backlog consumer (list / drain / reimport dark rows)
     stale    — list annotations with stale source hashes
     ast      — extract function AST subtree and call targets
     critique — identify gaps in tool coverage
@@ -2793,25 +2793,50 @@ def cmd_backlog(args: argparse.Namespace) -> int:
     explicit ``--budget``: Mode-2 checker synthesis is retargeted at
     each dark hypothesis, and only a landed tool verdict (confirmed
     rule receipt + journal row) moves a row — the drain never mints
-    verdicts. Non-interactive by design.
+    verdicts. ``backlog reimport`` additively re-lists dark rows from
+    a graded findings export (mechanical, no LLM spend) — the recovery
+    path for a listing the producer truncated on disk. Non-interactive
+    by design.
     """
     from core.audit.backlog_drain import (
         DEFAULT_MAX_DISPATCH,
         BacklogError,
         drain,
         rank,
+        reimport,
     )
 
     sub = getattr(args, "backlog_command", None)
-    if sub not in ("list", "drain"):
-        print("error: usage: raptor-audit backlog {list|drain} ...",
-              file=sys.stderr)
+    if sub not in ("list", "drain", "reimport"):
+        print("error: usage: raptor-audit backlog {list|drain|reimport} "
+              "...", file=sys.stderr)
         return 1
 
     run_dir = Path(args.out)
     if not run_dir.is_dir():
         print(f"error: --out {run_dir} is not a directory", file=sys.stderr)
         return 1
+
+    if sub == "reimport":
+        try:
+            rep = reimport(run_dir, Path(args.graded))
+        except BacklogError as exc:
+            print(f"error: {sanitise_for_terminal(str(exc), max_len=500)}",
+                  file=sys.stderr)
+            return 1
+        print(f"backlog reimport: {rep.dark_rows} dark row(s) in "
+              f"{sanitise_for_terminal(str(args.graded), max_len=300)}")
+        print(f"  appended: {rep.appended}   "
+              f"already listed: {rep.already_listed}   "
+              f"witnessed-excluded: {rep.witnessed_excluded}   "
+              f"unusable: {rep.skipped_unusable}")
+        print(f"  listed: {rep.listed_before} -> {rep.listed_after}   "
+              f"total: {rep.total_after}   "
+              f"clusters: {rep.clusters_before} -> {rep.clusters_after}")
+        if not rep.changed:
+            print("  artifact unchanged (no new identities)")
+        return 0
+
     study = Path(args.study_answers) if args.study_answers else None
 
     def _row_line(record: dict) -> str:
@@ -4796,6 +4821,17 @@ def main() -> int:
     p_bd.add_argument("--model", default=None,
                       help="Model for synthesis calls (default: the "
                            "configured primary)")
+    p_br = backlog_sub.add_parser(
+        "reimport",
+        help="Additively re-list dark rows from a graded findings "
+             "export into witness-backlog.json (mechanical, no LLM "
+             "spend) — recovery for a producer-truncated listing",
+    )
+    p_br.add_argument("--out", required=True,
+                      help="Run directory containing witness-backlog.json")
+    p_br.add_argument("--graded", required=True,
+                      help="findings-graded.json (or equivalent graded "
+                           "export) carrying the run's dark rows")
 
     p_coverage = sub.add_parser(
         "coverage",
