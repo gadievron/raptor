@@ -26,6 +26,14 @@ import pytest
 from core.sandbox import proxy as proxy_mod
 
 
+@pytest.fixture(autouse=True)
+def _confined_parser_floor(confined_parser_floor: None) -> None:
+    """This file pins registration buffers as empty-until-recorded;
+    on Landlock-less hosts the per-registration degraded-floor marker
+    would break that assumption (see confined_parser_floor,
+    conftest)."""
+
+
 @pytest.fixture
 def reset_proxy():
     proxy_mod._reset_for_tests()

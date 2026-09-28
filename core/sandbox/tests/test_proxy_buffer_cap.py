@@ -18,6 +18,14 @@ import pytest
 import core.sandbox.proxy as proxy_mod
 
 
+@pytest.fixture(autouse=True)
+def _confined_parser_floor(confined_parser_floor: None) -> None:
+    """This file pins exact buffer lengths against the cap; on
+    Landlock-less hosts the per-registration degraded-floor marker
+    would consume a slot and shift every count (see
+    confined_parser_floor, conftest)."""
+
+
 @pytest.fixture
 def small_caps(monkeypatch):
     monkeypatch.setattr(proxy_mod, "_SANDBOX_BUFFER_MAX_EVENTS", 5)

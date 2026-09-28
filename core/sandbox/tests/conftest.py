@@ -76,6 +76,33 @@ def hermetic_invalid_dns(monkeypatch):
     yield
 
 
+@pytest.fixture
+def confined_parser_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the parser-jail floor to confined (``landlocked`` -> True).
+
+    Buffer-semantics tests (lane fan-out, caps, record/unregister
+    serialisation) pin the EXACT contents of registration event
+    buffers. On a host without Landlock (macOS; Linux < 5.13) the
+    parser-jail worker comes up on the degraded floor, and
+    ``register_sandbox`` then injects the documented per-registration
+    ``parser_jail_degraded`` control-plane marker into every buffer —
+    shifting every count, segregation set, and index-0 assumption by
+    one. That marker contract is pinned hermetically BOTH ways in
+    test_parser_jail.py (TestDegradedFloor); pinning the floor here
+    keeps the buffer pins running identically on every host instead
+    of skipping them off-platform. Patches the class property so
+    proxies constructed later inside the test observe it, and only
+    the floor REPORT is pinned — the real worker still parses.
+    """
+    from core.sandbox import parser_jail as _parser_jail_mod
+
+    def _confined(self: "_parser_jail_mod.ParserJail") -> bool:
+        return True
+
+    monkeypatch.setattr(_parser_jail_mod.ParserJail, "landlocked",
+                        property(_confined))
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _resolver_seam_leak_guard():
     """Leak tripwire for the proxy resolve seam.

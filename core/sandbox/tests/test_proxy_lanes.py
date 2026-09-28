@@ -27,6 +27,13 @@ pytestmark = pytest.mark.skipif(
 _DENIED = "denied.invalid:443"
 
 
+@pytest.fixture(autouse=True)
+def _confined_parser_floor(confined_parser_floor: None) -> None:
+    """This file pins exact buffer contents; on Landlock-less hosts
+    the per-registration degraded-floor marker would shift every
+    count and segregation set (see confined_parser_floor, conftest)."""
+
+
 @pytest.fixture
 def reset_proxy():
     proxy_mod._reset_for_tests()
