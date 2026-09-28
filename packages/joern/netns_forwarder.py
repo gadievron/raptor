@@ -733,6 +733,35 @@ def _start_orphan_watchdog(
     return t
 
 
+_UID_MAP_PATH = "/proc/self/uid_map"
+
+# Operator-authored constant (no interpolated values): printed verbatim on
+# the probe's stderr, which callers may quote into logs and prompts unescaped.
+_UNMAPPED_EUID_HINT = (
+    "self-probe hint: the euid has no entry in /proc/self/uid_map (a bare"
+    " `unshare -Up` leaves it unmapped) and the kernel refuses"
+    " user-namespace operations from an unmapped euid; map the uid first"
+    " (e.g. unshare --map-current-user)"
+)
+
+
+def _euid_unmapped() -> bool:
+    """True when the uid_map of the calling namespace is empty.
+
+    An empty map only occurs inside a user namespace whose creator never
+    wrote a uid mapping — the initial namespace reads ``0 0 4294967295``.
+    The kernel refuses ``unshare(CLONE_NEWUSER)`` (and the map writes)
+    from an unmapped euid with EPERM, so this discriminates "missing uid
+    map" from "namespaces denied by host policy". Best-effort: any read
+    failure returns False and the hint simply stays silent.
+    """
+    try:
+        with open(_UID_MAP_PATH, "rb") as f:
+            return f.read(1) == b""
+    except OSError:
+        return False
+
+
 def self_probe(include_pid: bool = False) -> int:
     """Exercise the full isolation mechanism; 0 = strong tier works.
 
@@ -788,6 +817,8 @@ def self_probe(include_pid: bool = False) -> int:
     except Exception as e:  # noqa: BLE001 — any failure means fallback tier
         kind = "pidns" if include_pid else "netns"
         print(f"{kind} self-probe failed: {e}", file=sys.stderr)
+        if isinstance(e, PermissionError) and _euid_unmapped():
+            print(_UNMAPPED_EUID_HINT, file=sys.stderr)
         return 1
     return 0
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import shutil
 import socket
 import stat
 import subprocess
@@ -26,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from packages.joern import netns_forwarder
 from packages.joern.netns_forwarder import Forwarder, create_listener
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "netns_forwarder.py"
@@ -461,3 +463,87 @@ class TestSelfProbe:
     @needs_userns
     def test_probe_passes_where_userns_works(self):
         assert _HAS_USERNS  # gate and assertion agree by construction
+
+
+class TestUnmappedEuidHint:
+    """The EPERM hint fires only for PermissionError + an empty uid_map."""
+
+    @pytest.fixture
+    def empty_map(self, tmp_path, monkeypatch):
+        path = tmp_path / "uid_map"
+        path.write_bytes(b"")
+        monkeypatch.setattr(netns_forwarder, "_UID_MAP_PATH", str(path))
+        return path
+
+    def test_euid_unmapped_false_on_this_process(self):
+        # Whatever namespace pytest runs in, its creator wrote a map —
+        # an empty map would mean this very process couldn't have been
+        # set up the way it was.
+        assert netns_forwarder._euid_unmapped() is False
+
+    def test_euid_unmapped_true_on_empty_map(self, empty_map):
+        assert netns_forwarder._euid_unmapped() is True
+
+    def test_euid_unmapped_false_when_map_unreadable(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            netns_forwarder, "_UID_MAP_PATH", str(tmp_path / "absent"),
+        )
+        assert netns_forwarder._euid_unmapped() is False
+
+    def _probe_stderr(self, capsys, exc, include_pid=False, monkeypatch=None):
+        def _refuse(include_pid=False):
+            raise exc
+
+        monkeypatch.setattr(netns_forwarder, "enter_private_netns", _refuse)
+        rc = netns_forwarder.self_probe(include_pid=include_pid)
+        assert rc == 1
+        return capsys.readouterr().err
+
+    def test_hint_on_eperm_with_empty_map(self, capsys, monkeypatch, empty_map):
+        err = self._probe_stderr(
+            capsys, PermissionError(1, "Operation not permitted"),
+            monkeypatch=monkeypatch,
+        )
+        assert "netns self-probe failed" in err
+        assert netns_forwarder._UNMAPPED_EUID_HINT in err
+
+    def test_hint_on_pidns_arm_too(self, capsys, monkeypatch, empty_map):
+        err = self._probe_stderr(
+            capsys, PermissionError(1, "Operation not permitted"),
+            include_pid=True, monkeypatch=monkeypatch,
+        )
+        assert "pidns self-probe failed" in err
+        assert netns_forwarder._UNMAPPED_EUID_HINT in err
+
+    def test_no_hint_when_map_is_populated(self, capsys, monkeypatch, tmp_path):
+        path = tmp_path / "uid_map"
+        path.write_text("0 0 4294967295\n")
+        monkeypatch.setattr(netns_forwarder, "_UID_MAP_PATH", str(path))
+        err = self._probe_stderr(
+            capsys, PermissionError(1, "Operation not permitted"),
+            monkeypatch=monkeypatch,
+        )
+        assert "self-probe failed" in err
+        assert netns_forwarder._UNMAPPED_EUID_HINT not in err
+
+    def test_no_hint_on_other_failures(self, capsys, monkeypatch, empty_map):
+        err = self._probe_stderr(
+            capsys, RuntimeError("loopback refused"), monkeypatch=monkeypatch,
+        )
+        assert "self-probe failed" in err
+        assert netns_forwarder._UNMAPPED_EUID_HINT not in err
+
+    @needs_userns
+    @pytest.mark.skipif(
+        shutil.which("unshare") is None, reason="needs the unshare binary",
+    )
+    def test_hint_end_to_end_under_unmapped_userns(self):
+        # A bare `unshare -U` (no uid map) is exactly the misuse the
+        # hint exists for: the probe's nested CLONE_NEWUSER gets EPERM.
+        proc = subprocess.run(
+            ["unshare", "-U", sys.executable, str(_SCRIPT), "--self-probe"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        assert proc.returncode == 1
+        assert "self-probe failed" in proc.stderr
+        assert "unshare --map-current-user" in proc.stderr
