@@ -51,13 +51,16 @@ def _walk_files(
 ) -> list[Path]:
     """Recursive file enumeration that never follows directory symlinks.
 
-    ``Path.rglob`` follows directory symlinks on Python < 3.13, so a
-    scanned repo containing ``src -> /`` steers detect/synthesise —
-    which run in the UNSANDBOXED parent — into a host-filesystem walk,
-    and ``detect_missing_config_headers`` then reads host files in the
-    parent. ``os.walk(followlinks=False)`` bounds the walk to the real
-    tree on every supported interpreter. File symlinks are still
-    yielded (rglob parity); unreadable subtrees are skipped
+    Detect/synthesise run in the UNSANDBOXED parent against scanned
+    repos, so a repo containing ``src -> /`` must never steer the walk
+    across the host filesystem (``detect_missing_config_headers``
+    would then read host files in the parent). ``Path.rglob``
+    recurses into directory symlinks only via 3.13's
+    ``recurse_symlinks=True`` opt-in (it's
+    ``glob.glob(recursive=True)`` that followed them by default);
+    ``os.walk(followlinks=False)`` bounds the walk to the real tree
+    explicitly on every supported interpreter. File symlinks are
+    still yielded (rglob parity); unreadable subtrees are skipped
     (``os.walk`` default).
 
     ``suffixes`` filters by case-sensitive ``str.endswith`` — the same
@@ -441,13 +444,14 @@ class BuildDetector:
                     detected_files.append(build_file)
                     # Use the directory of the first match WITH
                     # containment + executability checks. Pre-fix
-                    # `working_dir = matches[0].parent` blindly
-                    # used the rglob result, which on Python <
-                    # 3.13 follows symlinks — a symlink in the
-                    # repo pointing OUT to e.g. /etc could land
-                    # us with `working_dir = /etc` which codeql
-                    # can't cd into and which leaks the
-                    # operator's filesystem layout into logs.
+                    # `working_dir = matches[0].parent` used the
+                    # match blindly; the working dir handed to
+                    # codeql must RESOLVE inside the repo — a
+                    # symlinked path segment would otherwise make
+                    # the cd effectively land elsewhere (e.g.
+                    # /etc), a dir codeql can't build from and
+                    # whose surfacing leaks the operator's
+                    # filesystem layout into logs.
                     # X_OK check refuses dirs we can't actually
                     # browse into.
                     candidate = matches[0].parent

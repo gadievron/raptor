@@ -2754,8 +2754,11 @@ def _print_status(project) -> None:
                 print(f"    ⚠ {parked}")
         # Disk usage — use os.walk(followlinks=False) so we stay inside
         # the run dir even if a stray symlink points outside (or back into
-        # the run, creating a loop). Path.rglob follows symlinked dirs on
-        # Python <3.13, so a symlink loop would hang status indefinitely.
+        # the run, creating a loop). Path.rglob follows symlinked dirs
+        # only via 3.13's recurse_symlinks=True opt-in (glob.glob's
+        # recursive mode is what followed them by default); the explicit
+        # os.walk idiom keeps the no-follow guarantee obvious — a
+        # followed symlink loop would hang status indefinitely.
         total_size = 0
         for d in runs:
             for root, _dirs, files in os.walk(d, followlinks=False):

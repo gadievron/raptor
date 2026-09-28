@@ -93,8 +93,10 @@ class CorpusManager:
             raise FileNotFoundError(msg)
 
         # `os.walk(followlinks=False)` instead of `Path.rglob` —
-        # `rglob` follows symlinks under Python <3.13. Two failure
-        # modes:
+        # keeps the no-follow guarantee explicit (`rglob` recurses
+        # into dir symlinks only via 3.13's `recurse_symlinks=True`
+        # opt-in; `glob.glob(recursive=True)` is what followed them
+        # by default). Two failure modes guarded against:
         #   1. Symlink loop in source_dir → infinite walk.
         #   2. Symlink pointing at /etc/shadow / /var/log/* → the
         #      `file.read_bytes()` would pull privileged content

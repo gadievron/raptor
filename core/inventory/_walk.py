@@ -1,12 +1,13 @@
 """Symlink-safe file enumeration for untrusted target trees.
 
-``Path.rglob`` follows directory symlinks on every Python before 3.13
-(the repo floor is >= 3.10), so a hostile target shipping ``dir -> /``
-(or a symlink loop) steers the enumeration — which runs in the
-UNSANDBOXED parent — across the host filesystem, and the callers here
-then read out-of-tree file content (1 MB per file, no aggregate cap)
-into audit prompts. Same class as the fix in
-core/security/codeql_trust.py: walk with ``os.walk(followlinks=False)``.
+A hostile target shipping ``dir -> /`` (or a symlink loop) must not
+steer the enumeration — which runs in the UNSANDBOXED parent — across
+the host filesystem: the callers here read file content (1 MB per
+file, no aggregate cap) into audit prompts. ``Path.rglob`` recurses
+into directory symlinks only via 3.13's ``recurse_symlinks=True``
+opt-in (``glob.glob(recursive=True)`` is the API that followed them
+by default); walking with ``os.walk(followlinks=False)`` keeps the
+refusal explicit — same idiom as core/security/codeql_trust.py.
 """
 
 from __future__ import annotations

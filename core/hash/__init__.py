@@ -78,10 +78,11 @@ def sha256_tree(
 
     h = hashlib.sha256()
     skipped = []
-    # `os.walk(followlinks=False)` instead of `rglob` so we don't
-    # follow symlinks during tree enumeration. Pre-fix `rglob`
-    # follows symlinks by default on Python < 3.13. Three failure
-    # modes:
+    # `os.walk(followlinks=False)` instead of `rglob` so the
+    # no-follow guarantee is explicit (`rglob` recurses into dir
+    # symlinks only via 3.13's `recurse_symlinks=True` opt-in; it's
+    # `glob.glob(recursive=True)` that followed them by default).
+    # Three failure modes guarded against:
     #   1. Symlink loop in the target tree → infinite enumeration,
     #      hash never completes.
     #   2. Symlink to a directory OUTSIDE root → that external

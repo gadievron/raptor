@@ -9,12 +9,14 @@ from typing import Any
 
 
 def _run_dir_size(d: Path) -> int:
-    # `Path.rglob` follows symlinks under Python <3.13 with no opt-out; a
-    # malicious or accidental symlink under the run dir (e.g.
-    # `out/run-X/incoming -> /var/log`) would walk into and stat-sum
-    # unrelated trees, double-counting bytes and (worse) reading from
-    # arbitrary file descriptors. Use os.walk(followlinks=False) so we stay
-    # inside the run dir tree on every supported Python version.
+    # Directory-symlink recursion stays off explicitly: `Path.rglob`
+    # follows dir symlinks only via 3.13's `recurse_symlinks=True`
+    # opt-in (`glob.glob(recursive=True)` is what followed them by
+    # default), and a malicious or accidental symlink under the run dir
+    # (e.g. `out/run-X/incoming -> /var/log`) walked into would
+    # stat-sum unrelated trees, double-counting bytes. Use
+    # os.walk(followlinks=False) so we stay inside the run dir tree on
+    # every supported Python version.
     size = 0
     for root, _dirs, files in os.walk(d, followlinks=False):
         for fname in files:

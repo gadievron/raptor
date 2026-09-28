@@ -813,12 +813,14 @@ class TestExtraStripSpelling:
 
 
 class TestWalkNeverFollowsDirectorySymlinks:
-    """pathlib's ``**`` follows directory symlinks on every Python
-    before 3.13; the scan runs against untrusted repos BEFORE
-    ``codeql database create``, so a repo shipping ``dir -> <host
-    path>`` must not steer the trust gate at host files (or into a
-    symlink loop). The walk is pinned to os.walk(followlinks=False)
-    semantics on every supported interpreter."""
+    """The scan runs against untrusted repos BEFORE ``codeql
+    database create``, so a repo shipping ``dir -> <host path>``
+    must not steer the trust gate at host files (or into a symlink
+    loop). pathlib's ``**`` recurses into directory symlinks only
+    via 3.13's ``recurse_symlinks=True`` opt-in (it's
+    ``glob.glob(recursive=True)`` that followed them by default);
+    the walk is pinned to os.walk(followlinks=False) semantics so
+    the refusal stays explicit on every supported interpreter."""
 
     def test_out_of_repo_dir_symlink_not_followed(self, tmp_path, capsys):
         outside = tmp_path / "outside"

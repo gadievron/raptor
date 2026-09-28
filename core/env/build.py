@@ -572,16 +572,19 @@ def _elf_executables(root: Path) -> dict[str, Path]:
     """ELF executables under *root*, keyed by repo-relative path.
 
     Walks with ``os.walk(followlinks=False)``: the rootfs comes out
-    of an attacker-influenced containerized build, and ``pathlib``'s
-    ``**`` follows DIRECTORY symlinks on every Python before 3.13 —
-    two planted in-tree self-links (``loop -> .`` + ``up -> ..``,
-    both of which survive tar extraction under ``filter="data"``)
-    give combinatorial path expansion that the old eager ``sorted()``
-    materialised in the TRUSTED parent, and a link into the toolchain
-    rootfs misattributed image binaries as repo build artifacts. The
-    per-entry file checks below already skipped symlinked FILES;
-    never ENTERING symlinked directories closes the traversal too
-    (same idiom as the codeql_trust pack walk).
+    of an attacker-influenced containerized build, so directory-
+    symlink recursion must stay off explicitly (``pathlib``'s ``**``
+    recurses into directory symlinks only via 3.13's
+    ``recurse_symlinks=True`` opt-in; it's
+    ``glob.glob(recursive=True)`` that followed them by default) —
+    a followed pair of in-tree self-links (``loop -> .`` +
+    ``up -> ..``, both of which survive tar extraction under
+    ``filter="data"``) would give combinatorial path expansion
+    materialised eagerly in the TRUSTED parent, and a followed link
+    into the toolchain rootfs would misattribute image binaries as
+    repo build artifacts. The per-entry file checks below already
+    skip symlinked FILES; never ENTERING symlinked directories closes
+    the traversal too (same idiom as the codeql_trust pack walk).
     """
     found: dict[str, Path] = {}
     if not root.is_dir():

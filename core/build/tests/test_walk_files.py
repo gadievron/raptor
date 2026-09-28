@@ -3,9 +3,12 @@ containment.
 
 Detection and synthesis run in the UNSANDBOXED parent, so the walk
 itself is a security boundary: a scanned repo containing ``src -> /``
-must not steer enumeration into the host filesystem
-(``Path.rglob`` follows directory symlinks on Python < 3.13), and a
-hostile file farm must not monopolise detection wall time.
+must not steer enumeration into the host filesystem (directory-
+symlink recursion is opt-in for ``Path.rglob`` — 3.13's
+``recurse_symlinks=True``; ``glob.glob(recursive=True)`` is what
+followed them by default — and these tests pin the no-follow
+behaviour), and a hostile file farm must not monopolise detection
+wall time.
 """
 
 from __future__ import annotations

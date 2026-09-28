@@ -663,18 +663,21 @@ def _scan_repo(resolved_path: str) -> tuple[tuple[FileScan, ...], bool]:
     if target == _RAPTOR_DIR or _is_registered_worktree_of_self(target):
         return ((), False)
 
-    # Walk for pack files. ``pathlib``'s ``**`` follows directory
-    # symlinks on every Python before 3.13, so a hostile repo shipping
-    # ``dir -> /`` (or a symlink loop) would walk the HOST filesystem
-    # at this pre-CodeQL trust gate — unbounded wall time, and
-    # out-of-repo qlpack.yml files surfacing as "repo" findings. Walk
-    # with ``os.walk(followlinks=False)`` instead: symlinked
-    # directories are listed but never entered. Dotted dirs (``.git``,
-    # ``.claude/worktrees``) are pruned at walk time except
-    # ``.github``, which holds codeql-config.yml legitimately — the
-    # same set the old post-match filter skipped (and pruned matches
-    # never counted toward the cap). Entries NAMED like a pack file
-    # that are symlinks or directories stay in the match set: the
+    # Walk for pack files. This pre-CodeQL trust gate faces hostile
+    # repos: one shipping ``dir -> /`` (or a symlink loop) must never
+    # steer the walk across the HOST filesystem — unbounded wall
+    # time, and out-of-repo qlpack.yml files surfacing as "repo"
+    # findings. ``pathlib``'s ``**`` recurses into directory symlinks
+    # only via 3.13's ``recurse_symlinks=True`` opt-in (it's
+    # ``glob.glob(recursive=True)`` that followed them by default);
+    # walking with ``os.walk(followlinks=False)`` keeps that refusal
+    # explicit: symlinked directories are listed but never entered.
+    # Dotted dirs (``.git``, ``.claude/worktrees``) are pruned at
+    # walk time except ``.github``, which holds codeql-config.yml
+    # legitimately — the same set the old post-match filter skipped
+    # (and pruned matches never counted toward the cap). Entries
+    # NAMED like a pack file that are symlinks or directories stay
+    # in the match set: the
     # per-file scan below marks them blocking (symlink / unreadable),
     # exactly as before. The cap is applied PER PATTERN so a flood of
     # one filename cannot starve enumeration of the other.
