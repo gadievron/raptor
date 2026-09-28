@@ -4346,7 +4346,12 @@ def review_one_function(
         sq = getattr(shared, "study_queue", None)
         if sq is not None:
             for rl_item in review_result["reading_list"]:
-                if isinstance(rl_item, dict) and rl_item.get("question"):
+                # A present-but-null / non-str question is not a
+                # study request; StudyRequest.__post_init__ heals the
+                # remaining leaves.
+                if (isinstance(rl_item, dict)
+                        and isinstance(rl_item.get("question"), str)
+                        and rl_item.get("question")):
                     sq.enqueue(StudyRequest(
                         question=rl_item["question"],
                         source_file=gap["file"],
@@ -14420,6 +14425,23 @@ class StudyRequest:
     priority: str = "normal"
     resolution: str = "identifier"
     context: str = ""
+
+    def __post_init__(self) -> None:
+        # Enqueue sites feed LLM review output straight into these
+        # fields; present-but-null and non-str leaves must route like
+        # absent BEFORE the Path()/.strip() consumers
+        # (_partition_study_batch, scope derivation) see them — a bad
+        # leaf here crashes the study consumer thread, not one item.
+        # Enum-backed fields heal to their defaults ("" is not a
+        # valid priority/resolution).
+        for field_name in ("question", "source_file",
+                           "source_function", "context"):
+            if not isinstance(getattr(self, field_name), str):
+                setattr(self, field_name, "")
+        if not isinstance(self.priority, str) or not self.priority:
+            self.priority = "normal"
+        if not isinstance(self.resolution, str) or not self.resolution:
+            self.resolution = "identifier"
 
 
 # C/C++ suffixes route to the study-prep corpus; the other supported

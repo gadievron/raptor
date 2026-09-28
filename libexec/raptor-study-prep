@@ -1820,6 +1820,34 @@ _IDENT_RE = re.compile(r"\b([a-zA-Z_]\w+_t)\b")
 _CONTEXT_NAME_RE = re.compile(r"(?:Unresolved|Dependency)\s+\w+:\s+(\S+)")
 
 
+def _reading_items(raw: object) -> "list[dict]":
+    """Dict rows of a reading-list payload, shape-tolerant.
+
+    reading-list.json is an LLM-authored artifact: ``items`` itself
+    arrives present-but-null, and rows arrive as strings/numbers.
+    Malformed shapes must cost the bad rows only, never a prep abort
+    (prep exit!=0 disables the domain-model subsystem for the whole
+    run). Mirrors ReadingList.load's per-record degrade.
+    """
+    if not isinstance(raw, dict):
+        return []
+    items = raw.get("items")
+    if not isinstance(items, list):
+        return []
+    return [i for i in items if isinstance(i, dict)]
+
+
+def _item_str(item: dict, key: str) -> str:
+    """A reading-list row leaf as str.
+
+    Present-but-null AND non-str leaves (int/list file hints are the
+    observed LLM drift) route like an absent value — never reach
+    Path()/regex/.strip() as the wrong type.
+    """
+    v = item.get(key)
+    return v if isinstance(v, str) else ""
+
+
 def _scope_fingerprint(parsed: argparse.Namespace) -> dict:
     """Scope stamp for the study-list cache: every input that changes
     which items land in study-list.json. Stored under ``scope`` in the
@@ -1829,14 +1857,12 @@ def _scope_fingerprint(parsed: argparse.Namespace) -> dict:
     if parsed.reading_list:
         raw = load_json(Path(parsed.reading_list),
                         max_bytes=_MAX_STUDY_ARTIFACT_BYTES)
-        if isinstance(raw, dict):
-            pending = sorted(
-                str(item.get("id") or item.get("question") or "")
-                for item in raw.get("items", [])
-                if isinstance(item, dict)
-                and not item.get("resolved")
-                and not item.get("unresolvable")
-            )
+        pending = sorted(
+            str(item.get("id") or item.get("question") or "")
+            for item in _reading_items(raw)
+            if not item.get("resolved")
+            and not item.get("unresolvable")
+        )
     return {
         "identifier": parsed.identifier or "",
         "concept": parsed.concept or "",
@@ -1888,22 +1914,22 @@ def _load_reading_list(path: Path) -> tuple[list[str], list[str]]:
     seen: set[str] = set()
     identifiers: list[str] = []
     concepts: list[str] = []
-    for item in raw.get("items", []):
+    for item in _reading_items(raw):
         if item.get("resolved"):
             continue
         resolution = item.get("resolution", "identifier")
         if resolution == "concept":
-            q = (item.get("question") or "").strip()
+            q = _item_str(item, "question").strip()
             if q and q not in seen:
                 seen.add(q)
                 concepts.append(q)
             continue
         # source_function is the strongest anchor — always include it
-        src_fn = (item.get("source_function") or "").strip()
+        src_fn = _item_str(item, "source_function").strip()
         if src_fn and src_fn not in seen:
             seen.add(src_fn)
             identifiers.append(src_fn)
-        ctx = item.get("context") or ""
+        ctx = _item_str(item, "context")
         m = _CONTEXT_NAME_RE.search(ctx)
         if m:
             name = m.group(1)
@@ -1911,7 +1937,7 @@ def _load_reading_list(path: Path) -> tuple[list[str], list[str]]:
                 seen.add(name)
                 identifiers.append(name)
             continue
-        for m2 in _IDENT_RE.finditer(item.get("question") or ""):
+        for m2 in _IDENT_RE.finditer(_item_str(item, "question")):
             name = m2.group(1)
             if name not in seen:
                 seen.add(name)
@@ -2104,24 +2130,25 @@ def _multilang_pass(
         )
         if not isinstance(raw, dict):
             raw = {}
-        for item in raw.get("items", []):
+        for item in _reading_items(raw):
             if item.get("resolved") or item.get("unresolvable"):
                 continue
-            # `or ""`, not a .get default: reading-list.json is an
-            # LLM-authored artifact and rows arrive with these keys
-            # PRESENT but null — a null must route like an absent
-            # value, never reach Path()/regex as None.
-            sf = item.get("source_file") or ""
+            # _item_str, not a .get default: reading-list.json is an
+            # LLM-authored artifact — keys arrive PRESENT but null
+            # and leaves arrive non-str; both must route like an
+            # absent value, never reach Path()/regex as the wrong
+            # type.
+            sf = _item_str(item, "source_file")
             if not language_for_path(sf):
                 continue  # C/C++ and unsupported handled elsewhere
-            question = item.get("question") or ""
-            context = item.get("context") or ""
+            question = _item_str(item, "question")
+            context = _item_str(item, "context")
             if item.get("resolution") == "concept":
                 if question:
                     concept_questions.append(question)
                 continue
             names = extract_question_identifiers(question, context)
-            src_fn = (item.get("source_function") or "").strip()
+            src_fn = _item_str(item, "source_function").strip()
             if src_fn:
                 names.append(src_fn)
             for name in names:
@@ -2177,8 +2204,8 @@ def _scope_from_reading_list(
         return None
 
     seed_files: set[str] = set()
-    for item in raw.get("items", []):
-        sf = item.get("source_file") or ""
+    for item in _reading_items(raw):
+        sf = _item_str(item, "source_file")
         if sf:
             seed_files.add(sf)
     if not seed_files:
@@ -2493,11 +2520,11 @@ def _chase_reading_list_definitions(
         r"(?:(?:struct|union|enum)\s+)?([A-Za-z_]\w+)"
     )
     idents: set[str] = set()
-    for item in raw.get("items", []):
+    for item in _reading_items(raw):
         if item.get("resolved"):
             continue
-        ctx = item.get("context") or ""
-        q = item.get("question") or ""
+        ctx = _item_str(item, "context")
+        q = _item_str(item, "question")
         # "Unresolved type: struct scatterlist" → scatterlist
         m = _CTX_FULL_RE.search(ctx)
         if m:

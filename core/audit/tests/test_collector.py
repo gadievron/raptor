@@ -165,6 +165,36 @@ class TestCollectorJournalDualWrite:
         assert len(entries) == 1
         assert entries[0].model == "test-model"
 
+    def test_reading_list_null_question_never_persists_null(
+        self, tmp_path: Path,
+    ) -> None:
+        # The journal declares reading_list_items: list[str]. LLM
+        # rows carry present-but-null / non-str questions, and a
+        # .get default never fires on a present null — the str(item)
+        # fallback must catch those leaves instead of persisting
+        # JSON null into the typed field.
+        from core.audit.collector import append_journal_for_outcome
+        from core.coverage.journal import load_entries
+        append_journal_for_outcome(
+            out_dir=tmp_path,
+            target_path=tmp_path,
+            run_id="r1",
+            outcome=_FakeOutcome(review_result={"reading_list": [
+                {"question": None},
+                {"question": 42},
+                {"question": "real question?"},
+                "stray-non-dict",
+            ]}),
+            gap=_make_gap(),
+        )
+        (entry,) = load_entries(tmp_path)
+        assert "real question?" in entry.reading_list_items
+        assert all(
+            isinstance(q, str) and q
+            for q in entry.reading_list_items
+        )
+        assert len(entry.reading_list_items) == 3
+
     def test_submit_creates_journal_entry(self, tmp_path: Path) -> None:
         from core.coverage.journal import load_entries
         c = Collector(out_dir=tmp_path, target_path=tmp_path, run_id="test-run")

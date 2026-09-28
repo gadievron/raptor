@@ -84,6 +84,41 @@ class TestReadingListItem:
         assert item.source_hash == ""
         assert item.context == ""
 
+    def test_non_str_leaves_normalised_at_construction(self) -> None:
+        # One step past null in the same LLM drift class: int/list/
+        # dict leaves in the str-typed fields route like absent, and
+        # the enum-backed fields heal to their DEFAULTS (an empty
+        # string is not a valid Priority/Resolution — "" there would
+        # trade a None crash for a ValueError downstream).
+        item = ReadingListItem(**{
+            "id": "rl-004",
+            "question": 42,
+            "source_command": "/audit",
+            "source_file": 9,
+            "source_function": ["f"],
+            "context": {"k": 1},
+            "priority": None,
+            "resolution": None,
+        })
+        assert item.question == ""
+        assert item.source_file == ""
+        assert item.source_function == ""
+        assert item.context == ""
+        assert item.priority == "normal"
+        assert item.resolution == "identifier"
+        assert set(item._healed_fields) == {
+            "question", "source_file", "source_function", "context",
+            "priority", "resolution",
+        }
+
+    def test_clean_construction_heals_nothing(self) -> None:
+        item = ReadingListItem(
+            id="rl-005",
+            question="q?",
+            source_command="/audit",
+        )
+        assert item._healed_fields == ()
+
 
 # ------------------------------------------------------------------
 # ReadingList — queue operations
@@ -312,6 +347,48 @@ class TestReadingListPersistence:
         assert len(loaded) == 1
         assert loaded.items[0].source_file == ""
         assert loaded.items[0].context == ""
+
+    def test_load_warns_when_healing(
+        self, tmp_path: Path, caplog,
+    ) -> None:
+        # Once every writer normalises at construction, a healed
+        # field in a PERSISTED artifact is evidence — legacy poison
+        # or an external edit — and must not vanish silently.
+        import json
+        import logging
+        p = tmp_path / "reading-list.json"
+        p.write_text(json.dumps({"items": [{
+            "id": "rl-1",
+            "question": "q?",
+            "source_command": "/audit",
+            "source_file": None,
+            "context": 7,
+        }]}))
+        with caplog.at_level(logging.WARNING, logger="core.concepts.reading_list"):
+            loaded = ReadingList.load(p)
+        assert len(loaded) == 1
+        healed_lines = [
+            r.message for r in caplog.records if "healed" in r.message
+        ]
+        assert len(healed_lines) == 1
+        assert "2" in healed_lines[0]
+
+    def test_load_clean_artifact_no_heal_warning(
+        self, tmp_path: Path, caplog,
+    ) -> None:
+        import json
+        import logging
+        p = tmp_path / "reading-list.json"
+        p.write_text(json.dumps({"items": [{
+            "id": "rl-1",
+            "question": "q?",
+            "source_command": "/audit",
+        }]}))
+        with caplog.at_level(logging.WARNING, logger="core.concepts.reading_list"):
+            ReadingList.load(p)
+        assert not [
+            r for r in caplog.records if "healed" in r.message
+        ]
 
     def test_atomic_write(self, tmp_path: Path) -> None:
         p = tmp_path / "reading-list.json"

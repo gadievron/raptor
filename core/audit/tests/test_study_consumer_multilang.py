@@ -107,6 +107,43 @@ class TestPartitionStudyBatch:
         )
         assert len(c) == 1 and len(ml) == 1 and len(un) == 1
 
+    def test_non_str_source_files_route_like_absent(self) -> None:
+        # Enqueue sites feed LLM review output straight into
+        # StudyRequest; present-but-null and non-str leaves heal to
+        # "" at construction, so partitioning (Path().suffix on the
+        # field) routes them like a missing source_file instead of
+        # killing the study consumer thread — a thread death here is
+        # SILENT (no disable line), the worst fail direction.
+        c, ml, un = _partition_study_batch([
+            _req(None), _req(9), _req(["a.c"]),
+        ])
+        assert len(c) == 3 and not ml and not un
+
+
+class TestStudyRequestHealing:
+    def test_non_str_leaves_heal_at_construction(self) -> None:
+        req = StudyRequest(
+            question=None,
+            source_file=9,
+            source_function=["f"],
+            priority=None,
+            resolution=None,
+            context={"k": 1},
+        )
+        assert req.question == ""
+        assert req.source_file == ""
+        assert req.source_function == ""
+        assert req.context == ""
+        # Enum-backed fields heal to their defaults, not "".
+        assert req.priority == "normal"
+        assert req.resolution == "identifier"
+
+    def test_clean_request_untouched(self) -> None:
+        req = _req("a.c", priority="high", resolution="concept")
+        assert req.source_file == "a.c"
+        assert req.priority == "high"
+        assert req.resolution == "concept"
+
 
 # ------------------------------------------------------------------
 # Reading-list marking semantics (pinned)

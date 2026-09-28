@@ -1017,6 +1017,41 @@ class TestQueueUnresolved:
         assert item.source_file == ""
         assert item.context == "Unresolved type: task_struct"
 
+    def test_non_str_shapes_route_like_absent_or_skip(self) -> None:
+        # The same LLM drift one step past null: non-str leaves.
+        # kind/file_hint degrade to their defaults; a ref whose
+        # name/question is not a str cannot form an id (the id
+        # helpers .encode/regex a str) and is skipped, costing only
+        # itself. The array itself and its rows also arrive
+        # malformed — never a crash, never a poisoned persist.
+        from core.concepts.reading_list import ReadingList
+        rl = ReadingList()
+        result = {
+            "concepts": [],
+            "unresolved_references": [
+                "stray",
+                None,
+                {"name": ["a"], "question": "q?"},
+                {"name": "b", "question": 42},
+                {"name": "task_struct",
+                 "question": "What is task_struct's lifecycle?",
+                 "kind": ["k"], "file_hint": 9},
+            ],
+        }
+        queued = _queue_unresolved(rl, result, [])
+        assert queued == 1
+        item = rl.pending()[0]
+        assert item.source_file == ""
+        assert item.context == "Unresolved type: task_struct"
+
+    def test_non_list_refs_array_queues_nothing(self) -> None:
+        from core.concepts.reading_list import ReadingList
+        for refs in (None, "stray", {"name": "x"}, 42):
+            rl = ReadingList()
+            assert _queue_unresolved(
+                rl, {"unresolved_references": refs}, []) == 0
+            assert len(rl) == 0
+
 
 # ------------------------------------------------------------------
 # Evidence staleness hashing

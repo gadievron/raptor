@@ -2129,6 +2129,79 @@ class TestScopeFromReadingListNullSeeds:
         assert any(p.name == "a.h" for p in scoped)
 
 
+class TestMalformedReadingListShapes:
+    """``items`` itself and its rows are LLM output too: a
+    present-but-null items array, non-dict rows, and non-str leaves
+    must cost the bad rows only — a prep crash on any of them exits
+    non-zero and disables the domain-model subsystem for the whole
+    run."""
+
+    _SHAPES = (
+        {"items": None},
+        {"items": [None]},
+        {"items": ["stray", 42]},
+        {"items": {"not": "a list"}},
+    )
+
+    def test_items_shapes_never_crash_readers(self, tmp_path) -> None:
+        for i, doc in enumerate(self._SHAPES):
+            rl_path = tmp_path / f"rl{i}.json"
+            rl_path.write_text(json.dumps(doc))
+            idents, concepts = prep._load_reading_list(rl_path)
+            assert (idents, concepts) == ([], [])
+            assert prep._scope_from_reading_list(
+                rl_path, tmp_path, [tmp_path]) is None
+            items, docs, unresolved = prep._multilang_pass(
+                tmp_path, tmp_path, rl_path, [], [],
+                c_files_in_scope=True)
+            assert (items, docs, unresolved) == ([], [], [])
+
+    def test_reading_items_helper(self) -> None:
+        assert prep._reading_items(None) == []
+        assert prep._reading_items({"items": None}) == []
+        assert prep._reading_items(
+            {"items": [1, "x", {"a": 1}]}) == [{"a": 1}]
+
+    def test_bad_rows_cost_only_themselves(self, tmp_path) -> None:
+        rl_path = tmp_path / "reading-list.json"
+        rl_path.write_text(json.dumps({"items": [
+            None, "stray",
+            {"id": "rl-1", "question": "ownership of `pool_alloc`?",
+             "source_function": "pool_alloc", "resolved": False,
+             "resolution": "identifier"},
+        ]}))
+        idents, _ = prep._load_reading_list(rl_path)
+        assert "pool_alloc" in idents
+
+    def test_non_str_leaves_route_like_absent(self, tmp_path) -> None:
+        # int/list/dict leaves are the observed LLM drift one step
+        # past null — same class, same contract: route like absent,
+        # never reach Path()/regex/.strip() as the wrong type (a
+        # list source_file crashed set.add, an int crashed confine).
+        (tmp_path / "a.h").write_text("int x;\n")
+        rl_path = tmp_path / "reading-list.json"
+        rl_path.write_text(json.dumps({"items": [
+            {"id": "rl-1", "question": 42, "source_file": 9,
+             "source_function": ["f"], "context": {"k": 1},
+             "resolved": False, "resolution": "identifier"},
+            {"id": "rl-2", "question": 7, "resolved": False,
+             "resolution": "concept"},
+            {"id": "rl-3", "question": "q3?", "source_file": ["a.c"],
+             "resolved": False, "resolution": "identifier"},
+            {"id": "rl-4", "question": "q4?", "source_file": "a.h",
+             "resolved": False, "resolution": "identifier"},
+        ]}))
+        idents, concepts = prep._load_reading_list(rl_path)
+        assert concepts == []
+        scoped = prep._scope_from_reading_list(
+            rl_path, tmp_path, [tmp_path])
+        assert scoped is not None
+        assert any(p.name == "a.h" for p in scoped)
+        prep._multilang_pass(
+            tmp_path, tmp_path, rl_path, [], [],
+            c_files_in_scope=True)
+
+
 # ------------------------------------------------------------------
 # Project promotion
 # ------------------------------------------------------------------

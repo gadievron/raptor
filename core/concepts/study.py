@@ -2633,17 +2633,30 @@ def _queue_unresolved(
 
     queued = 0
 
-    for ref in result.get("unresolved_references") or []:
+    refs = result.get("unresolved_references")
+    if not isinstance(refs, list):
+        refs = []
+    for ref in refs:
+        # isinstance guards, not .get defaults: unresolved_references
+        # is LLM output — the array itself, its rows, and every leaf
+        # arrive present-but-null or as the wrong type (int/list file
+        # hints observed), and a non-str persisted into
+        # reading-list.json poisons every later reader that assumes
+        # the str schema.
+        if not isinstance(ref, dict):
+            continue
         name = ref.get("name", "")
         question = ref.get("question", "")
+        if not isinstance(name, str) or not isinstance(question, str):
+            continue
         if not name or not question:
             continue
-        # `or`-defaults, not .get defaults: unresolved_references is
-        # LLM output — keys arrive present-but-null, and a null
-        # file_hint written into reading-list.json as source_file
-        # poisons every later reader that assumes the str schema.
-        kind = ref.get("kind") or "type"
-        file_hint = ref.get("file_hint") or ""
+        kind = ref.get("kind")
+        if not isinstance(kind, str) or not kind:
+            kind = "type"
+        file_hint = ref.get("file_hint")
+        if not isinstance(file_hint, str):
+            file_hint = ""
         reading_list.queue(ReadingListItem(
             # Name alone is lossy — two different questions about one
             # unresolved name must not share an id (the persistence

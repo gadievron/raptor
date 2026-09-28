@@ -109,16 +109,33 @@ class ReadingListItem:
 
     def __post_init__(self) -> None:
         # Producers hand LLM-derived values into the str-typed fields,
-        # where a key can be present-but-null; a None persisted here
-        # rides reading-list.json into every future consumer that
-        # trusts the str schema (Path()/regex on None). Normalise at
-        # the one construction boundary all producers share.
+        # where a key can be present-but-null or carry a non-str leaf
+        # (int/list file hints are the observed drift). Either shape
+        # persisted here rides reading-list.json into every future
+        # consumer that trusts the str schema (Path()/regex/.strip()
+        # on the wrong type). Normalise at the one construction
+        # boundary all producers share: non-str routes like absent.
+        # Healed field names are kept as evidence — after this
+        # normalisation, a healed row in a loaded artifact signals
+        # legacy poison or an external edit, and load() surfaces it.
+        healed: list[str] = []
         for field_name in ("id", "question", "source_command",
                            "source_file", "source_function",
                            "source_hash", "context",
                            "unresolvable_reason"):
-            if getattr(self, field_name) is None:
+            if not isinstance(getattr(self, field_name), str):
                 setattr(self, field_name, "")
+                healed.append(field_name)
+        # Enum-backed str fields heal to their DEFAULTS, not "" — an
+        # empty string is not a valid Priority/Resolution and would
+        # trade a None crash for a ValueError downstream.
+        if not isinstance(self.priority, str) or not self.priority:
+            self.priority = Priority.NORMAL.value
+            healed.append("priority")
+        if not isinstance(self.resolution, str) or not self.resolution:
+            self.resolution = Resolution.IDENTIFIER.value
+            healed.append("resolution")
+        self._healed_fields: tuple[str, ...] = tuple(healed)
 
     def resolve(self, concept_id: str) -> None:
         self.resolved = True
@@ -355,6 +372,19 @@ class ReadingList:
             logger.warning(
                 "reading list %s: skipped %d malformed item(s); "
                 "%d loaded", path, skipped, len(items),
+            )
+        # Healing is silent at construction (every producer shares
+        # it) but must not be silent for a PERSISTED artifact: once
+        # writers normalise at construction, a healed field on disk
+        # is evidence of legacy poison or an external edit.
+        healed = sum(
+            len(getattr(i, "_healed_fields", ())) for i in items
+        )
+        if healed:
+            logger.warning(
+                "reading list %s: healed %d null/non-str field(s) "
+                "on load — artifact predates normalisation or was "
+                "edited outside the writers", path, healed,
             )
         return cls(items=items, _path=path)
 
