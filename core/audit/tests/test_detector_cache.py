@@ -20,6 +20,8 @@ import textwrap
 import types
 from pathlib import Path
 
+import pytest
+
 import core.audit.detector_cache as dc
 from core.audit.detector_cache import (
     DETECTOR_CACHE_FILENAME,
@@ -438,6 +440,12 @@ class TestClosureRegistry:
         assert set(dc.DETECTOR_ENTRY_POINTS) <= registry
         assert set(dc._GLUE_MODULES) <= registry
 
+    @pytest.mark.slow  # genuine whole-tree sweep: the UNPRUNED import
+    # closure AST-walks every module reachable from the detector entry
+    # points over the real repo (~2M AST nodes + ~20k path resolutions)
+    # — over the 10s tier budget on a loaded CI runner and growing with
+    # the tree. The registry/entry-point pins above stay in the default
+    # tier; only this reachability witness needs the full walk.
     def test_exempt_modules_are_reachable_but_not_registered(self):
         # Reachability witness: an exemption nothing imports any more
         # is stale and must be removed; a role change (the module
