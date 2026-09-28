@@ -13,7 +13,10 @@ threading cannot be dropped one hop above the gate.
 
 The census is a write-site tripwire, not a security boundary: a
 literal-shape census is evadable by a determined respelling (an alias
-assignment, ``functools.partial``, ``**kwargs`` forwarding). The
+assignment, ``functools.partial``, ``**kwargs`` forwarding). Import
+aliases (``from … import <gate> as <alias>``) are NOT an escape: they
+are an ordinary low-intent spelling, so the census maps each asname
+back to the gate it names. The
 guarded property is producer-side dev-time correctness — a new
 standalone CLI reaching for the gate without threading its run
 directory, the exact class this sweep closed — so an AST census over
@@ -71,6 +74,24 @@ def _has_run_dir_param(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return any(p.arg == "run_dir" for p in params)
 
 
+def _gate_import_aliases(tree: ast.Module) -> dict[str, str]:
+    """asname → gate for every ``from … import <gate> as <asname>``.
+
+    Unlike an alias assignment or ``functools.partial``, an import
+    alias is an ordinary spelling a well-meaning caller reaches for,
+    so the census maps it back to the gate it names instead of
+    letting it end the sweep.
+    """
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        for alias in node.names:
+            if alias.name in GATE_NAMES and alias.asname:
+                aliases[alias.asname] = alias.name
+    return aliases
+
+
 def _census_source(
     source: str,
 ) -> tuple[list[tuple[str, str]], int, int, set[str]]:
@@ -88,7 +109,10 @@ def _census_source(
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     ]
 
-    censused: set[str] = set(GATE_NAMES)
+    # Censused spelling → canonical name (gates map through their
+    # import aliases; wrappers are their own canonical).
+    censused: dict[str, str] = {name: name for name in GATE_NAMES}
+    censused.update(_gate_import_aliases(tree))
     changed = True
     while changed:
         changed = False
@@ -101,7 +125,7 @@ def _census_source(
                 for node in ast.walk(fn)
             )
             if calls_censused:
-                censused.add(fn.name)
+                censused[fn.name] = fn.name
                 changed = True
 
     violations: list[tuple[str, str]] = []
@@ -112,22 +136,26 @@ def _census_source(
         if not isinstance(node, ast.Call):
             continue
         name = _callee_name(node)
-        if name not in censused:
+        if name is None or name not in censused:
             continue
-        seen.add(name)
-        if name in GATE_NAMES:
+        canonical = censused[name]
+        seen.add(canonical)
+        if canonical in GATE_NAMES:
             gate_calls += 1
         else:
             wrapper_calls += 1
         kw = next(
             (k for k in node.keywords if k.arg == "run_dir"), None)
+        # Violations carry the CANONICAL name (allowlist entries stay
+        # stable however a caller spells its import); the message
+        # cites the spelling at the call site.
         if kw is None:
-            violations.append((name, (
+            violations.append((canonical, (
                 f"line {node.lineno}: {name}(...) without run_dir — "
                 "thread the caller's run directory, or allowlist with "
                 "a rationale when it genuinely has none")))
         elif isinstance(kw.value, ast.Constant) and kw.value.value is None:
-            violations.append((name, (
+            violations.append((canonical, (
                 f"line {node.lineno}: {name}(run_dir=None) literal — "
                 "an explicit None defeats the audit-log placement; "
                 "run-dir-less callers belong on the allowlist instead")))
@@ -248,6 +276,43 @@ class TestCensusMechanics:
             'ensure_route_for_client(client, "some-cli", '
             "run_dir=out_dir)\n")
         assert not violations and gates == 1
+
+    def test_trips_on_aliased_gate_import(self) -> None:
+        source = (
+            "from core.llm.dispatcher.lifecycle import (\n"
+            "    ensure_route_for_client as _gate,\n"
+            ")\n"
+            '_gate(client, "some-cli")\n'
+        )
+        violations, gates, _, _ = _census_source(source)
+        assert violations and gates == 1
+        # Canonical name, so an allowlist entry keyed on the gate
+        # matches regardless of the caller's import spelling.
+        assert violations[0][0] == "ensure_route_for_client"
+
+    def test_accepts_threaded_aliased_gate_call(self) -> None:
+        source = (
+            "from core.llm.dispatcher.lifecycle import (\n"
+            "    ensure_route_for_client as _gate,\n"
+            ")\n"
+            '_gate(client, "some-cli", run_dir=out_dir)\n'
+        )
+        violations, gates, _, _ = _census_source(source)
+        assert not violations and gates == 1
+
+    def test_wrapper_over_aliased_gate_is_swept(self) -> None:
+        source = (
+            "from core.llm.dispatcher.lifecycle import (\n"
+            "    ensure_route_for_client as _gate,\n"
+            ")\n"
+            "def _wrap(client, label, run_dir=None):\n"
+            '    _gate(client, label, run_dir=run_dir)\n'
+            "def main(out_dir):\n"
+            '    _wrap(client, "cli")\n'
+        )
+        violations, gates, wrappers, _ = _census_source(source)
+        assert gates == 1 and wrappers == 1
+        assert violations and violations[0][0] == "_wrap"
 
     def test_wrapper_call_sites_are_swept(self) -> None:
         source = (
