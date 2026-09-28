@@ -89,7 +89,25 @@ def _pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    return True
+    # kill(pid, 0) also reaches dead-but-unreaped processes: a killed
+    # grandchild whose parent died with it stays signal-visible until
+    # an ancestor reaps it, and when the inheriting ancestor never
+    # waits on orphans (a plain process serving as a pid-namespace
+    # init) that is forever. Dead-but-unreaped IS dead for these
+    # tests — the signal provably landed. A missed kill leaves the
+    # process running (state R/S/D), which still reads as alive.
+    return _proc_state(pid) != "Z"
+
+
+def _proc_state(pid: int) -> str | None:
+    """Process state letter from ``/proc/<pid>/stat``, None where
+    unreadable (off-Linux, or the pid vanished) — callers then keep
+    the plain kill-0 answer."""
+    try:
+        stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return stat_text[stat_text.rfind(")") + 2:].split()[0]
 
 
 class TestGracefulSignalDisposition:
@@ -98,9 +116,12 @@ class TestGracefulSignalDisposition:
         → the run must complete, and fail must never be written."""
         root = _make_fake_tree(tmp_path, "raptor-frida")
         marker = tmp_path / "child-running"
+        # Arm the trap BEFORE signaling readiness: a TERM delivered
+        # in the gap hits sh's default disposition (exit 143) and the
+        # trapped verdict path never runs — observed under host load.
         env = _stub_python(tmp_path, (
-            f'touch "{marker}"\n'
             "trap 'exit 0' TERM\n"
+            f'touch "{marker}"\n'
             "sleep 30 &\n"
             "wait $!\n"
             "exit 0\n"
@@ -125,9 +146,10 @@ class TestGracefulSignalDisposition:
         naming the signal."""
         root = _make_fake_tree(tmp_path, "raptor-frida")
         marker = tmp_path / "child-running"
+        # Trap armed before readiness — see the clean-exit test above.
         env = _stub_python(tmp_path, (
-            f'touch "{marker}"\n'
             "trap 'exit 17' TERM\n"
+            f'touch "{marker}"\n'
             "sleep 30 &\n"
             "wait $!\n"
             "exit 17\n"
@@ -157,10 +179,12 @@ class TestProcessGroupKill:
         (the instrumented target), not just the direct child."""
         root = _make_fake_tree(tmp_path, "raptor-frida")
         pid_file = tmp_path / "grandchild.pid"
+        # Trap armed before readiness (the pid file) — see
+        # TestGracefulSignalDisposition.
         env = _stub_python(tmp_path, (
+            "trap 'exit 0' TERM\n"
             "sleep 30 &\n"
             f'echo $! > "{pid_file}"\n'
-            "trap 'exit 0' TERM\n"
             "wait\n"
         ))
         proc = subprocess.Popen(
@@ -236,9 +260,13 @@ class TestPatchVerifyDisposition:
         before = tmp_path / "before.bin"
         before.write_bytes(b"\x7fELF")
         marker = tmp_path / "child-running"
+        # Trap armed before readiness — see
+        # TestGracefulSignalDisposition (this stub is where the
+        # unarmed-window TERM was observed live: child died 143 and
+        # the wrapper recorded an interrupt instead of the verdict).
         env = _stub_python(tmp_path, (
-            f'touch "{marker}"\n'
             "trap 'exit 1' TERM\n"
+            f'touch "{marker}"\n'
             "sleep 30 &\n"
             "wait $!\n"
             "exit 1\n"

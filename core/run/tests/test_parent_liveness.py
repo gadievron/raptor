@@ -40,7 +40,25 @@ def _pid_alive(pid: int) -> bool:
         return False
     except OSError:
         return True
-    return True
+    # kill(pid, 0) also reaches dead-but-unreaped processes: a killed
+    # child whose parent died with it stays signal-visible until an
+    # ancestor reaps it, and when the inheriting ancestor never waits
+    # on orphans (a plain process serving as a pid-namespace init)
+    # that is forever. Dead-but-unreaped IS dead for these tests —
+    # the signal provably landed. A missed kill leaves the process
+    # running (state R/S/D), which still reads as alive.
+    return _proc_state(pid) != "Z"
+
+
+def _proc_state(pid: int) -> str | None:
+    """Process state letter from ``/proc/<pid>/stat``, None where
+    unreadable (off-Linux, or the pid vanished) — callers then keep
+    the plain kill-0 answer."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return stat[stat.rfind(")") + 2:].split()[0]
 
 
 class TestArmDecision:

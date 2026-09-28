@@ -18,6 +18,8 @@ starttime-dependent tests.
 
 import json
 import os
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -54,9 +56,33 @@ def _fake_starttime(table):
 
 class TestWorkerStampRecorder(unittest.TestCase):
 
+    def _distinct_live_parent(self) -> int:
+        """A live, never-init pid DISTINCT from this process, for
+        pinning ``os.getppid``: pinning our OWN pid would let a
+        recorder that mistakenly stamps ``os.getpid()`` pass the
+        equality assertions vacuously. A sleeper child is real and
+        live for the test's duration; cleanup kills/waits only the
+        Popen handle we spawned, and nothing else ever signals it.
+        """
+        sleeper = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(120)"])
+
+        def _reap() -> None:
+            sleeper.kill()
+            sleeper.wait(timeout=10)
+
+        self.addCleanup(_reap)
+        return sleeper.pid
+
     def test_session_bound_start_records_parent_with_starttime(self):
-        table = {os.getppid(): "424242"}
+        # Pin the live-parent launch shape the same way the detached
+        # tests below pin theirs: under a harness whose own parent IS
+        # init (pytest as a pid-namespace init), the real getppid() is
+        # 1 and the recorder's detached arm engages instead.
+        live_parent = self._distinct_live_parent()
+        table = {live_parent: "424242"}
         with TemporaryDirectory() as d, \
+                mock.patch("os.getppid", return_value=live_parent), \
                 mock.patch("core.run.metadata._get_session_pid",
                            return_value=11111), \
                 mock.patch.object(sessions, "proc_starttime",
@@ -64,7 +90,7 @@ class TestWorkerStampRecorder(unittest.TestCase):
             out = Path(d) / "run"
             start_run(out, "scan")
             meta = load_json(out / RUN_METADATA_FILE)
-        self.assertEqual(meta["tool_pid"], os.getppid())
+        self.assertEqual(meta["tool_pid"], live_parent)
         self.assertEqual(meta["tool_pid_start"], "424242")
 
     def test_detached_start_records_own_pid_not_init(self):
@@ -96,18 +122,28 @@ class TestWorkerStampRecorder(unittest.TestCase):
     def test_unreadable_starttime_records_bare_pid(self):
         # Off-Linux / unreadable /proc: the record degrades to the
         # legacy bare-pid shape — readers then apply legacy semantics.
-        with mock.patch.object(sessions, "proc_starttime",
-                               lambda pid: None):
+        # Live-parent shape pinned as in the session-bound test above
+        # (a harness that is itself init-parented would otherwise land
+        # in the detached arm).
+        live_parent = self._distinct_live_parent()
+        with mock.patch("os.getppid", return_value=live_parent), \
+                mock.patch.object(sessions, "proc_starttime",
+                                  lambda pid: None):
             stamp = _worker_stamp(session_bound=True)
         self.assertNotIn("tool_pid_start", stamp)
-        self.assertEqual(stamp["tool_pid"], os.getppid())
+        self.assertEqual(stamp["tool_pid"], live_parent)
 
     def test_sessionless_interactive_start_records_no_worker(self):
         # Bare-shell run with a live interactive parent: recording
         # that parent would wedge resume/compaction on every crashed
         # run until the terminal closed (the pid-1 wedge class with a
         # different always-alive pid) — record nothing, as before.
+        # Live-parent shape pinned as in the session-bound test above
+        # (a harness that is itself init-parented would otherwise land
+        # in the detached arm, which DOES record a worker).
         with TemporaryDirectory() as d, \
+                mock.patch("os.getppid",
+                           return_value=self._distinct_live_parent()), \
                 mock.patch("core.run.metadata._get_session_pid",
                            return_value=None):
             out = Path(d) / "run"
