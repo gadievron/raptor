@@ -2638,8 +2638,12 @@ def _queue_unresolved(
         question = ref.get("question", "")
         if not name or not question:
             continue
-        kind = ref.get("kind", "type")
-        file_hint = ref.get("file_hint", "")
+        # `or`-defaults, not .get defaults: unresolved_references is
+        # LLM output — keys arrive present-but-null, and a null
+        # file_hint written into reading-list.json as source_file
+        # poisons every later reader that assumes the str schema.
+        kind = ref.get("kind") or "type"
+        file_hint = ref.get("file_hint") or ""
         reading_list.queue(ReadingListItem(
             # Name alone is lossy — two different questions about one
             # unresolved name must not share an id (the persistence

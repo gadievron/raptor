@@ -107,6 +107,19 @@ class ReadingListItem:
     unresolvable: bool = False
     unresolvable_reason: str = ""
 
+    def __post_init__(self) -> None:
+        # Producers hand LLM-derived values into the str-typed fields,
+        # where a key can be present-but-null; a None persisted here
+        # rides reading-list.json into every future consumer that
+        # trusts the str schema (Path()/regex on None). Normalise at
+        # the one construction boundary all producers share.
+        for field_name in ("id", "question", "source_command",
+                           "source_file", "source_function",
+                           "source_hash", "context",
+                           "unresolvable_reason"):
+            if getattr(self, field_name) is None:
+                setattr(self, field_name, "")
+
     def resolve(self, concept_id: str) -> None:
         self.resolved = True
         self.resolved_concept_id = concept_id

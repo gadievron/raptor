@@ -64,6 +64,26 @@ class TestReadingListItem:
         assert item.source_line == 244
         assert item.priority == Priority.HIGH
 
+    def test_null_str_fields_normalised_at_construction(self) -> None:
+        # Producers hand LLM-derived values into the str fields, and
+        # load() rehydrates persisted rows through this constructor:
+        # a present-but-null value must land as the field default, so
+        # a poisoned reading-list.json heals on load instead of
+        # crashing every consumer that trusts the str schema.
+        item = ReadingListItem(**{
+            "id": "rl-003",
+            "question": "what does sg_chain do?",
+            "source_command": "/audit",
+            "source_file": None,
+            "source_function": None,
+            "source_hash": None,
+            "context": None,
+        })
+        assert item.source_file == ""
+        assert item.source_function == ""
+        assert item.source_hash == ""
+        assert item.context == ""
+
 
 # ------------------------------------------------------------------
 # ReadingList — queue operations
@@ -270,6 +290,28 @@ class TestReadingListPersistence:
         p = tmp_path / "nonexistent.json"
         loaded = ReadingList.load(p)
         assert len(loaded) == 0
+
+    def test_load_heals_persisted_null_fields(self, tmp_path: Path) -> None:
+        # A reading list already poisoned on disk (rows persisted with
+        # source_file/context null before writers normalised) must
+        # rehydrate with the nulls healed to "" — existing run
+        # artifacts recover on load, no re-write required.
+        import json
+        p = tmp_path / "reading-list.json"
+        p.write_text(json.dumps({"items": [{
+            "id": "study_unresolved_apr_pool.deadbeef1234",
+            "question": "What does `apr_pool_cleanup` guarantee?",
+            "source_command": "/understand --study",
+            "source_file": None,
+            "source_function": None,
+            "context": None,
+            "resolved": False,
+            "resolution": "identifier",
+        }]}))
+        loaded = ReadingList.load(p)
+        assert len(loaded) == 1
+        assert loaded.items[0].source_file == ""
+        assert loaded.items[0].context == ""
 
     def test_atomic_write(self, tmp_path: Path) -> None:
         p = tmp_path / "reading-list.json"

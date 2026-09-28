@@ -53,6 +53,13 @@ class TestLanguageSupport:
         assert not is_study_supported_path("a.rb")
         assert not is_study_supported_path("a.lua")
 
+    def test_none_routes_like_unsupported(self) -> None:
+        # Callers feed paths straight from LLM-authored JSON where a
+        # key can be present-but-null; None must answer like an
+        # unsupported path, never reach Path() and crash the caller.
+        assert language_for_path(None) is None
+        assert not is_study_supported_path(None)
+
     def test_identifier_tail(self) -> None:
         assert identifier_tail("json.loads") == "loads"
         assert identifier_tail("Vec::new") == "new"

@@ -1586,6 +1586,27 @@ class TestLoadReadingList:
         idents, _ = prep._load_reading_list(rl_path)
         assert idents.count("do_thing") == 1
 
+    def test_null_fields_route_like_absent(self, tmp_path) -> None:
+        # reading-list.json is an LLM-authored artifact: rows arrive
+        # with these keys PRESENT but null, so .get(key, "") defaults
+        # never fire. A null must route exactly like an absent value
+        # — never reach .strip()/regex as None.
+        rl = {"items": [
+            {"id": "rl-1", "question": None, "source_function": None,
+             "context": None, "resolved": False,
+             "resolution": "identifier"},
+            {"id": "rl-2", "question": None, "resolved": False,
+             "resolution": "concept"},
+            {"id": "rl-3", "question": "ownership of `pool_alloc`?",
+             "source_function": "pool_alloc", "resolved": False,
+             "resolution": "identifier"},
+        ]}
+        rl_path = tmp_path / "reading-list.json"
+        rl_path.write_text(json.dumps(rl))
+        idents, concepts = prep._load_reading_list(rl_path)
+        assert "pool_alloc" in idents
+        assert concepts == []
+
 
 class TestReadingListAnchors:
     def test_name_match(self) -> None:
@@ -2050,6 +2071,62 @@ class TestMultilangPass:
             tmp_path, tmp_path, None, ["main"], [], c_files_in_scope=True,
         )
         assert (items, docs, unresolved) == ([], [], [])
+
+    def test_null_source_file_routes_like_absent(self, tmp_path) -> None:
+        # The study loop's unresolved-refs writer persisted rows with
+        # source_file/context PRESENT but null; .get("source_file", "")
+        # never fires on present-null, and this pass crashed in
+        # Path(None) reading the run's OWN prior output — every later
+        # study prep on the run died on the same rows. A null must
+        # route like the absent-source_file case: row skipped, healthy
+        # rows still resolve.
+        self._tree(tmp_path)
+        rl = self._reading_list(tmp_path, [
+            {"id": "study_unresolved_apr_pool.deadbeef1234",
+             "question": "What does `apr_pool_cleanup` guarantee?",
+             "source_command": "/understand --study",
+             "source_file": None, "context": None,
+             "resolved": False, "resolution": "identifier"},
+            {"id": "rl-2",
+             "question": "Does `ParseHeader` bound the length?",
+             "source_file": "server/header.go",
+             "resolved": False, "resolution": "identifier"},
+        ])
+        items, _docs, _unresolved = prep._multilang_pass(
+            tmp_path, tmp_path, rl, [], [], c_files_in_scope=False,
+        )
+        assert any(it.name == "ParseHeader" for it in items)
+
+
+class TestScopeFromReadingListNullSeeds:
+    def test_null_source_file_seeds_ignored(self, tmp_path) -> None:
+        # Include-chase seeding reads the same LLM-authored rows: a
+        # present-but-null source_file must be ignored, and a list
+        # with ONLY null seeds must fall back to full-rglob (None) —
+        # same contract as no seeds at all.
+        rl_path = tmp_path / "reading-list.json"
+        rl_path.write_text(json.dumps({"items": [
+            {"id": "rl-1", "question": "q?", "source_file": None,
+             "resolved": False, "resolution": "identifier"},
+        ]}))
+        assert prep._scope_from_reading_list(
+            rl_path, tmp_path, [tmp_path],
+        ) is None
+
+    def test_null_seed_beside_real_seed(self, tmp_path) -> None:
+        (tmp_path / "a.h").write_text("int x;\n")
+        rl_path = tmp_path / "reading-list.json"
+        rl_path.write_text(json.dumps({"items": [
+            {"id": "rl-1", "question": "q?", "source_file": None,
+             "resolved": False, "resolution": "identifier"},
+            {"id": "rl-2", "question": "q2?", "source_file": "a.h",
+             "resolved": False, "resolution": "identifier"},
+        ]}))
+        scoped = prep._scope_from_reading_list(
+            rl_path, tmp_path, [tmp_path],
+        )
+        assert scoped is not None
+        assert any(p.name == "a.h" for p in scoped)
 
 
 # ------------------------------------------------------------------

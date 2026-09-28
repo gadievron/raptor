@@ -92,20 +92,28 @@ _C_SUFFIXES = frozenset(
 )
 
 
-def language_for_path(path: str | Path) -> str | None:
+def language_for_path(path: str | Path | None) -> str | None:
     """Study-resolvable language for *path*, or None.
 
     C/C++ returns None here — that path is handled by the dedicated
-    study-prep machinery, not this module.
+    study-prep machinery, not this module. None and other
+    non-path-like values answer None: callers feed this straight
+    from LLM-authored artifacts where a path field can arrive null.
     """
+    if not isinstance(path, (str, Path)):
+        return None
     suffix = Path(path).suffix.lower()
     lang = LANGUAGE_MAP.get(suffix)
     return lang if lang in STUDY_LANGUAGES else None
 
 
-def is_study_supported_path(path: str | Path) -> bool:
+def is_study_supported_path(path: str | Path | None) -> bool:
     """True when the study loop has ANY resolver for *path* (C/C++ or
-    one of :data:`STUDY_LANGUAGES`)."""
+    one of :data:`STUDY_LANGUAGES`). None and other non-path-like
+    values are unsupported, same contract as
+    :func:`language_for_path`."""
+    if not isinstance(path, (str, Path)):
+        return False
     suffix = Path(path).suffix.lower()
     return suffix in _C_SUFFIXES or suffix in STUDY_SUFFIXES
 

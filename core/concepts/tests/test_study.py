@@ -993,6 +993,30 @@ class TestQueueUnresolved:
         queued = _queue_unresolved(None, {"concepts": []}, [])
         assert queued == 0
 
+    def test_null_file_hint_and_kind_route_like_absent(self) -> None:
+        # unresolved_references is LLM output: keys arrive PRESENT
+        # but null, so .get(key, default) never fires. A null
+        # file_hint persisted into reading-list.json as source_file
+        # poisons every later reader that trusts the str schema —
+        # the writer must normalise it to "" exactly like an absent
+        # key.
+        from core.concepts.reading_list import ReadingList
+        rl = ReadingList()
+        result = {
+            "concepts": [],
+            "unresolved_references": [{
+                "name": "task_struct",
+                "kind": None,
+                "question": "What is task_struct's lifecycle?",
+                "file_hint": None,
+            }],
+        }
+        queued = _queue_unresolved(rl, result, [])
+        assert queued == 1
+        item = rl.pending()[0]
+        assert item.source_file == ""
+        assert item.context == "Unresolved type: task_struct"
+
 
 # ------------------------------------------------------------------
 # Evidence staleness hashing

@@ -1893,7 +1893,7 @@ def _load_reading_list(path: Path) -> tuple[list[str], list[str]]:
             continue
         resolution = item.get("resolution", "identifier")
         if resolution == "concept":
-            q = item.get("question", "").strip()
+            q = (item.get("question") or "").strip()
             if q and q not in seen:
                 seen.add(q)
                 concepts.append(q)
@@ -1911,7 +1911,7 @@ def _load_reading_list(path: Path) -> tuple[list[str], list[str]]:
                 seen.add(name)
                 identifiers.append(name)
             continue
-        for m2 in _IDENT_RE.finditer(item.get("question", "")):
+        for m2 in _IDENT_RE.finditer(item.get("question") or ""):
             name = m2.group(1)
             if name not in seen:
                 seen.add(name)
@@ -2107,11 +2107,15 @@ def _multilang_pass(
         for item in raw.get("items", []):
             if item.get("resolved") or item.get("unresolvable"):
                 continue
-            sf = item.get("source_file", "")
+            # `or ""`, not a .get default: reading-list.json is an
+            # LLM-authored artifact and rows arrive with these keys
+            # PRESENT but null — a null must route like an absent
+            # value, never reach Path()/regex as None.
+            sf = item.get("source_file") or ""
             if not language_for_path(sf):
                 continue  # C/C++ and unsupported handled elsewhere
-            question = item.get("question", "")
-            context = item.get("context", "")
+            question = item.get("question") or ""
+            context = item.get("context") or ""
             if item.get("resolution") == "concept":
                 if question:
                     concept_questions.append(question)
@@ -2174,7 +2178,7 @@ def _scope_from_reading_list(
 
     seed_files: set[str] = set()
     for item in raw.get("items", []):
-        sf = item.get("source_file", "")
+        sf = item.get("source_file") or ""
         if sf:
             seed_files.add(sf)
     if not seed_files:
