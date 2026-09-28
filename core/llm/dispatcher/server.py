@@ -63,7 +63,6 @@ import json
 import logging
 import math
 import os
-import re
 import secrets
 import select
 import socket
@@ -91,6 +90,7 @@ from core.run.tmp_ownership import (
 )
 from core.security.log_sanitisation import escape_nonprintable
 
+from ._usage_scan import scan_usage
 from .auth import (
     BedrockTransformError,
     CredentialStore,
@@ -1168,157 +1168,17 @@ class _UsageScanner:
                 del self._tail[:len(self._tail) - self._TAIL_CAP]
                 self.truncated = True
 
-    def _is_sse(self, head: str, tail: str) -> bool:
-        """SSE classification. Header wins; the body fallback is
-        LINE-anchored (an SSE field name starts a line) — a ``data:``
-        substring inside a JSON string value cannot start a line
-        because JSON string encoding escapes newlines."""
-        if self._content_type is not None:
-            return "text/event-stream" in self._content_type.lower()
-        # Tail bytes start mid-line whenever the tail buffer is in
-        # use (it only fills after the head cap, and front-trimming
-        # also cuts mid-line) — skip that fragment line so a cut
-        # landing inside a JSON string can't fabricate a line start.
-        for lines in (head.splitlines(), tail.splitlines()[1:]):
-            for line in lines:
-                if line.startswith(("data:", "event:")):
-                    return True
-        return False
-
     def extract(self) -> dict:
         """Return ``{model, input_tokens, output_tokens,
         cache_read_tokens, cache_creation_tokens}`` (zeros / None when
-        the body carried no usage)."""
-        out = {
-            "model": None,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-            "cache_creation_tokens": 0,
-        }
-        head = self._head.decode("utf-8", "replace")
-        tail = self._tail.decode("utf-8", "replace")
-        if self._is_sse(head, tail):
-            for text in (head, tail):
-                for line in text.splitlines():
-                    line = line.strip()
-                    if not line.startswith("data:"):
-                        continue
-                    try:
-                        obj = json.loads(line[len("data:"):].strip())
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-                    if not isinstance(obj, dict):
-                        continue
-                    self._merge_event(obj, out)
-            return out
-        # Non-streamed JSON body.
-        if not self.truncated:
-            try:
-                obj = json.loads(head + tail)
-            except (json.JSONDecodeError, ValueError):
-                obj = None
-            if isinstance(obj, dict):
-                if isinstance(obj.get("model"), str):
-                    out["model"] = obj["model"]
-                self._merge_usage(obj.get("usage"), out)
-            return out
-        # Truncated non-SSE body: the middle is gone, so a full parse
-        # is impossible — but Anthropic Messages JSON carries its
-        # ``usage`` block at the END, inside the retained tail.
-        # Recover it there so an oversize response still books its
-        # real cost instead of $0 (the caller warns loudly when even
-        # this fails — see ``_book_child_usage``).
-        self._merge_usage(_usage_object_from_text(tail), out)
-        model = _model_id_from_text(head) or _model_id_from_text(tail)
-        if model:
-            out["model"] = model
-        return out
-
-    @staticmethod
-    def _merge_event(obj: dict, out: dict) -> None:
-        etype = obj.get("type")
-        if etype == "message_start":
-            message = obj.get("message")
-            if isinstance(message, dict):
-                if isinstance(message.get("model"), str):
-                    out["model"] = message["model"]
-                _UsageScanner._merge_usage(message.get("usage"), out)
-        elif etype == "message_delta":
-            _UsageScanner._merge_usage(obj.get("usage"), out)
-
-    @staticmethod
-    def _merge_usage(usage, out: dict) -> None:
-        if not isinstance(usage, dict):
-            return
-        for src, dst in (
-            ("input_tokens", "input_tokens"),
-            ("output_tokens", "output_tokens"),
-            ("cache_read_input_tokens", "cache_read_tokens"),
-            ("cache_creation_input_tokens", "cache_creation_tokens"),
-        ):
-            v = usage.get(src)
-            if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
-                # Later frames report cumulative totals — take the max
-                # so a final message_delta overrides, while partial
-                # streams (abort) keep whatever the upstream reported.
-                out[dst] = max(out[dst], v)
-
-
-# Injection note for both recovery helpers below: model-authored
-# response text rides inside JSON string values, whose ``"`` and
-# newline characters arrive escaped (``\"``, ``\n``) — so a raw
-# ``"usage"`` / ``"model"`` key token (unescaped quotes) can only come
-# from the response document's own structure, never from content a
-# prompt-injected child steered the model into emitting.
-_MODEL_KEY_RE = re.compile(r'"model"\s*:\s*"([^"\\]+)"')
-
-
-def _model_id_from_text(text: str) -> str | None:
-    """Best-effort model id from a partial JSON document (the model
-    key rides early in Anthropic Messages JSON, so it survives in the
-    head window of a truncated body)."""
-    m = _MODEL_KEY_RE.search(text)
-    return m.group(1) if m else None
-
-
-def _usage_object_from_text(text: str) -> dict | None:
-    """Recover the trailing ``usage`` object from a truncated non-SSE
-    body's retained tail. Bounded: one reverse find plus a single
-    brace scan over the (already capped) tail. Returns ``None`` when
-    no parseable usage object is present."""
-    idx = text.rfind('"usage"')
-    if idx < 0:
-        return None
-    brace = text.find("{", idx)
-    if brace < 0:
-        return None
-    depth = 0
-    in_str = False
-    escaped = False
-    for i in range(brace, len(text)):
-        c = text[i]
-        if in_str:
-            if escaped:
-                escaped = False
-            elif c == "\\":
-                escaped = True
-            elif c == '"':
-                in_str = False
-            continue
-        if c == '"':
-            in_str = True
-        elif c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    obj = json.loads(text[brace:i + 1])
-                except (json.JSONDecodeError, ValueError):
-                    return None
-                return obj if isinstance(obj, dict) else None
-    return None
+        the body carried no usage). All interpretation of the retained
+        bytes lives in ``_usage_scan.scan_usage`` — this class only
+        buffers."""
+        return scan_usage(
+            bytes(self._head), bytes(self._tail),
+            truncated=self.truncated,
+            content_type=self._content_type,
+        )
 
 
 def _usage_cost_usd(usage: dict) -> tuple[float, bool]:
