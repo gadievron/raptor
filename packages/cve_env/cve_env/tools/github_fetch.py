@@ -340,6 +340,20 @@ def github_fetch(
             reason_class="poc_repo_blocked",
         )
     clean_path = path.strip("/")
+    # '.'/'..' segments survive quote() (safe="/" keeps the
+    # separators) and are resolved by the HTTP stack / server —
+    # "../{other}/contents/x" would re-point the request at a
+    # different API route than the one audited above. Refuse them.
+    if any(seg in (".", "..") for seg in clean_path.split("/")):
+        return GhFetchResult(
+            ok=False,
+            reason=(
+                f"path {path!r} contains a '.' or '..' segment — "
+                "give the repo-relative file path without traversal "
+                "segments"
+            ),
+            reason_class="not_found",
+        )
     encoded_path = urllib.parse.quote(clean_path, safe="/")
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{encoded_path}"
     if ref:

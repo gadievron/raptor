@@ -494,3 +494,50 @@ class TestOwnerRepoCharset:
             r = github_fetch(owner="vulhub", repo="vulhub", path="README.md")
         assert r.ok is True
         mock_fetch.assert_called_once()
+
+class TestPathTraversalSegments:
+    """path is interpolated into the API URL between audited '/'
+    separators; '.'/'..' segments survive quote(safe='/') and are
+    resolved by the HTTP stack or server into a DIFFERENT API route
+    than the one the gates above audited. Refuse them pre-network."""
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "..",
+            ".",
+            "../secrets.yml",
+            "a/../b.yml",
+            "a/..",
+            "/../x.yml",
+            "a/./b.yml",
+        ],
+    )
+    def test_dot_segments_rejected_pre_network(self, path: str) -> None:
+        with patch("cve_env.tools.github_fetch.web_fetch") as mock_fetch:
+            r = github_fetch(owner="vulhub", repo="vulhub", path=path)
+        assert r.ok is False
+        assert "segment" in r.reason
+        assert r.reason_class == "not_found"
+        mock_fetch.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            ".github/workflows/ci.yml",
+            "dir/.gitignore",
+            ".env.example",
+            "a..b/c.yml",
+        ],
+    )
+    def test_dotfile_names_still_fetch(self, path: str) -> None:
+        ok_result = MagicMock()
+        ok_result.ok = True
+        ok_result.status = 200
+        ok_result.body = "[]"
+        with patch(
+            "cve_env.tools.github_fetch.web_fetch", return_value=ok_result
+        ) as mock_fetch:
+            r = github_fetch(owner="vulhub", repo="vulhub", path=path)
+        assert r.ok is True
+        mock_fetch.assert_called_once()
