@@ -99,6 +99,13 @@ class RunDigest:
     suppression_verdicts: dict[str, int] = field(default_factory=dict)
     # coverage
     coverage_percent: float | None = None
+    # coverage scope: "run" — this run's scheduled queue (audit /
+    # gap-audit runs; reviewed/total carry the split), or
+    # "checklist" — the store view over the run's checklist. None
+    # when no coverage layer produced a figure.
+    coverage_scope: str | None = None
+    coverage_reviewed: int | None = None
+    coverage_total: int | None = None
     # target (sealed into .raptor-run.json at start_run)
     target_path: str | None = None
     # shipped fuzz harnesses on the target tree, engine → count
@@ -420,6 +427,32 @@ def _read_suppressions(digest: RunDigest) -> None:
 
 
 def _read_coverage(digest: RunDigest) -> None:
+    # Run-scope first — the honest figure for runs driven by a
+    # scheduled gap queue. The store view below was structurally
+    # wrong for them twice over: (1) it is built with
+    # ``store_path=<run>/coverage.json``, so the store's project-dir
+    # derivation lands on the RUN dir and the project journal index
+    # is never found; (2) the store is line-interval based, so
+    # line-less (binary) checklist items can never earn credit. A
+    # residual-queue gap audit that reviewed 4 of its 6 queued
+    # functions rendered "Coverage: 0.0% of reviewable units" over
+    # the full 3950-item checklist. The run's own queue versus its
+    # own journal is the denominator that matches what the run set
+    # out to do.
+    try:
+        from core.audit.report import run_scope_coverage
+        scope = run_scope_coverage(digest.run_dir)
+    except Exception:  # noqa: BLE001 — layer readers degrade to absent
+        logger.debug("digest: run-scope coverage unreadable",
+                     exc_info=True)
+        scope = None
+    if scope is not None:
+        reviewed, total = scope
+        digest.coverage_scope = "run"
+        digest.coverage_reviewed = reviewed
+        digest.coverage_total = total
+        digest.coverage_percent = 100.0 * reviewed / total
+        return
     try:
         from core.coverage.store_summary import (
             coverage_view,
@@ -435,6 +468,7 @@ def _read_coverage(digest: RunDigest) -> None:
         )
         if view and view.get("llm_reviewable"):
             digest.coverage_percent = store_llm_coverage_percent(view)
+            digest.coverage_scope = "checklist"
     except Exception:  # noqa: BLE001 — layer readers degrade to absent
         logger.debug("digest: coverage layer unreadable", exc_info=True)
 
@@ -527,6 +561,23 @@ def _title(status: str) -> str:
         or _TERMINAL_NONE.capitalize()
 
 
+def _coverage_text(digest: RunDigest) -> str | None:
+    """The coverage statement both renderers print (single seam).
+
+    Run-scope figures state their denominator explicitly — "N of M
+    queued unit(s) reviewed this run" — so a residual-queue audit is
+    measured against its own queue, never against a checklist-wide
+    percentage it was not asked to cover.
+    """
+    if digest.coverage_percent is None:
+        return None
+    if digest.coverage_scope == "run" and digest.coverage_total:
+        return (f"{digest.coverage_reviewed} of {digest.coverage_total}"
+                f" queued unit(s) reviewed this run "
+                f"({digest.coverage_percent:.1f}%)")
+    return f"{digest.coverage_percent:.1f}% of reviewable units"
+
+
 def _age(seconds: float | None) -> str:
     if seconds is None:
         return _TERMINAL_NONE
@@ -590,9 +641,9 @@ def render_run_status(digest: RunDigest) -> str:
     if digest.suppressed_dropped:
         lines.append(f"Suppressed: {digest.suppressed_dropped} "
                      "finding(s) pre-LLM")
-    if digest.coverage_percent is not None:
-        lines.append(f"Coverage:  {digest.coverage_percent:.1f}% of "
-                     "reviewable units")
+    coverage = _coverage_text(digest)
+    if coverage is not None:
+        lines.append(f"Coverage:  {coverage}")
     return "\n".join(lines)
 
 
@@ -650,10 +701,10 @@ def render_run_digest(digest: RunDigest) -> str:
         lines.append(f"  Suppressed pre-LLM: {digest.suppressed_dropped}"
                      f" ({parts})")
 
-    if digest.coverage_percent is not None:
+    coverage = _coverage_text(digest)
+    if coverage is not None:
         lines.append("")
-        lines.append(f"  Coverage: {digest.coverage_percent:.1f}% of "
-                     "reviewable units")
+        lines.append(f"  Coverage: {coverage}")
 
     if digest.fuzz_harness_counts:
         # ONE opportunistic line — engine names are census constants

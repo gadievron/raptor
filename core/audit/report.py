@@ -1317,6 +1317,50 @@ def _load_segments(out_dir: Path) -> dict[str, Any] | None:
     }
 
 
+def run_scope_coverage(out_dir: Path) -> tuple[int, int] | None:
+    """``(reviewed, queued)`` over THIS run's scheduled gap queue.
+
+    The run-scope coverage figure: how much of what the run set out
+    to review actually got a completed review. ``queued`` is the
+    gaps.json queue size; ``reviewed`` counts queue items covered by
+    a non-mechanical, non-error journal entry (the same per-site rule
+    as ``_count_remaining_gaps`` — errored reviews and mechanical
+    echoes stay unreviewed / gap-eligible). ``None`` when the run has
+    no scheduled queue (absent or empty gaps.json) — callers fall
+    back to checklist-wide figures.
+    """
+    gaps_data = _load_gaps(out_dir)
+    if not isinstance(gaps_data, dict):
+        return None
+    gaps_list = gaps_data.get("gaps")
+    dict_rows = ([g for g in gaps_list if isinstance(g, dict)]
+                 if isinstance(gaps_list, list) else [])
+    if isinstance(gaps_list, list) and gaps_list:
+        # Same denominator _count_remaining_gaps iterates: the item
+        # list when one exists (dict rows only), else the count.
+        total = len(dict_rows)
+    else:
+        try:
+            total = int(gaps_data.get("count", 0) or 0)
+        except (TypeError, ValueError):
+            total = 0
+    if total <= 0:
+        return None
+    # Delegate on a NORMALISED view, never the raw artifact:
+    # _count_remaining_gaps trusts its input shape (str ``count``
+    # reaches the legacy subtraction raw; a truthy non-list or mixed
+    # ``gaps`` reaches the per-row ``.get``), and gaps.json is a run
+    # artifact a hostile target's build tooling can influence. The
+    # coerced int and the dict-row filter above ARE the shape this
+    # accessor already priced its denominator on — hand the delegate
+    # exactly that, so hostile shapes fall back per the docstring
+    # contract instead of raising.
+    normalised = {"gaps": dict_rows, "count": total}
+    remaining = _count_remaining_gaps(normalised, _load_review_state(out_dir))
+    remaining = min(max(0, remaining), total)
+    return total - remaining, total
+
+
 def _load_graded_stats(out_dir: Path) -> dict[str, Any]:
     """The ``stats`` block of ``findings-graded.json`` — {} when the
     export, or the block, is absent or malformed."""
