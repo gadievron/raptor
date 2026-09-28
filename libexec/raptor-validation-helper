@@ -3478,6 +3478,17 @@ def prepare_E(workdir, target=None, dynamic=None, build=None,
               mitigation_matrix=False, build_command=None):
     _apply_stage_file(workdir, "D")
 
+    # Freeze the run pin BEFORE any consent window opens in this
+    # process: stage E runs target code with the run dir writable
+    # (env-build inside binary discovery, sink-watch, witness
+    # execution), and a .raptor-run.json rewritten inside such a
+    # window must not steer a LATER gate's trust resolution toward a
+    # different project. The freeze also rides the session ledger's
+    # pin witness, so a marker rewritten in an EARLIER stage's window
+    # loses to the out-of-grant witness where one exists.
+    from core.project.trust import freeze_gate_context
+    freeze_gate_context(workdir)
+
     # Stage-0 consent reload (mirrors the sanitizer-cut reload in
     # main()): the orchestrated stage-E invocation passes no consent
     # flags, so the explicit --dynamic/--no-dynamic/--build/--no-build

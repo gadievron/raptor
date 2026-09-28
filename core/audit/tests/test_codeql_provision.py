@@ -187,6 +187,33 @@ class TestBuildGate:
         _wait(provision)
         assert fake_env["manager"].build_calls[0]["traced"] == {"go"}
 
+    def test_build_gate_receives_out_dir_as_run_dir(
+        self, fake_env, tmp_path, monkeypatch,
+    ):
+        """default-None resolution must consult the RUN PIN's project
+        (``run_dir=out_dir``), not the ambient session — an autobuild
+        language under a pinned run otherwise gains/loses the 'build'
+        marker of whatever project the SESSION happens to be bound
+        to."""
+        import core.project.trust as trust
+
+        seen: dict = {}
+
+        def fake_gate(traced, *, banner=True, target_path=None,
+                      run_dir=None):
+            seen["run_dir"] = run_dir
+            return False
+
+        monkeypatch.setattr(trust, "resolve_build_execution", fake_gate)
+        _FakeDetector.languages = {"go": object()}
+        target = tmp_path / "repo"
+        target.mkdir()
+        out_dir = tmp_path / "audit-out"
+        out_dir.mkdir()
+        provision_codeql_dbs(target, out_dir=out_dir, traced_build=None)
+        assert "run_dir" in seen, "build gate never consulted"
+        assert seen["run_dir"] == out_dir
+
     def test_kill_switch_short_circuits(self, fake_env, tmp_path, monkeypatch):
         from core.config import RaptorConfig
         monkeypatch.setattr(RaptorConfig, "CODEQL_ENABLED", False)

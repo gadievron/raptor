@@ -32,9 +32,12 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from core.project.project import VALID_TRUST_MARKERS
+
+if TYPE_CHECKING:
+    from core.run.pin import RunPin
 
 logger = logging.getLogger(__name__)
 
@@ -90,15 +93,79 @@ def _resolve_marker_consent(
     return TrustResolution(False, "default", name, layer)
 
 
+#: First-consult pin memo for run-dir trust resolution, keyed by the
+#: resolved run-dir path. The run marker (.raptor-run.json) sits inside
+#: the sandbox/target write grant, so target code executed in a consent
+#: window this process already opened (env-build, witness execution)
+#: can rewrite it between two gate consults — re-reading it per gate
+#: converts a build grant into whatever project the rewrite names.
+#: Freezing the FIRST resolution per run dir makes every later gate in
+#: this process answer from the pre-window pin (consent-window hosts
+#: prime it explicitly via :func:`freeze_gate_context` before running
+#: any target code). Cross-process rewrites are the session ledger
+#: witness's job (see :func:`core.run.pin.resolve_witnessed_run_pin`:
+#: a witness that disagrees wins outright). Unlike core.run.pin's
+#: freeze cache this never promotes the pin to ambient/process state —
+#: it only stabilises repeated run-dir TRUST reads.
+_gate_pin_memo: dict[str, "RunPin"] = {}
+
+
+def _gate_pin(run_dir: str | Path) -> "RunPin":
+    """The run pin trust resolution consumes for *run_dir*:
+    ledger-witness cross-checked (a rewritten/deleted marker loses to
+    the out-of-grant witness where a session ledger exists) and frozen
+    at first consult per process (see ``_gate_pin_memo``).
+
+    Adjudicated fail direction where NO witness exists (sessionless
+    contexts — CI, bare subprocesses, pre-witness runs): the marker as
+    read at first consult stands, grants and refusals alike. Refusing
+    unwitnessed markers outright would strip every legitimate
+    sessionless run of its project trust; the residual — a marker
+    rewritten by an EARLIER process's consent window against a
+    sessionless run — is accepted and documented, because only the
+    witness can see across processes."""
+    try:
+        key = str(Path(run_dir).resolve())
+    except OSError:
+        key = str(run_dir)
+    pin = _gate_pin_memo.get(key)
+    if pin is None:
+        from core.run.pin import resolve_witnessed_run_pin
+        pin, _witnessed = resolve_witnessed_run_pin(run_dir)
+        _gate_pin_memo[key] = pin
+    return pin
+
+
+def freeze_gate_context(run_dir: str | Path | None) -> None:
+    """Prime the gate-pin freeze for *run_dir* NOW.
+
+    Consent-window hosts (the /validate stage-E helper, the validation
+    orchestrator's stage E) call this BEFORE any target code runs in
+    their process, so the pin every later gate consults is the one
+    read before the first build/witness window opened — not whatever a
+    sandboxed child rewrote the marker to in between. Best-effort:
+    resolution failures leave the gates to resolve (and freeze) at
+    first consult, exactly as before."""
+    if run_dir is None:
+        return
+    try:
+        _gate_pin(run_dir)
+    except Exception:  # noqa: BLE001 — priming is best-effort by contract
+        logger.debug("trust: gate-pin freeze failed for %s", run_dir,
+                     exc_info=True)
+
+
 def _context_project_name(run_dir: str | Path | None = None) -> str | None:
     """The project whose state governs THIS context:
-    inside a run, the RUN PIN (resolved by walking up from *run_dir*)
-    — a mid-session /project switch must never move an in-flight
-    run's trust posture; outside a run, the layered ambient
-    resolution (argv override > session binding > symlink)."""
+    inside a run, the RUN PIN (resolved by walking up from *run_dir*,
+    cross-checked against the session ledger's pin witness and frozen
+    at first consult — see :func:`_gate_pin`) — a mid-session /project
+    switch must never move an in-flight run's trust posture, and a run
+    marker rewritten inside a consent window must never steer a later
+    gate; outside a run, the layered ambient resolution (argv override
+    > session binding > symlink)."""
     if run_dir is not None:
-        from core.run.pin import resolve_run_pin
-        return resolve_run_pin(run_dir).project
+        return _gate_pin(run_dir).project
     try:
         from core.run.pin import (
             ARGV_NONE,
@@ -721,6 +788,7 @@ __all__ = [
     "apply_project_sandbox_floor",
     "apply_project_trust_flags",
     "emit_trust_banner",
+    "freeze_gate_context",
     "resolve_build_execution",
     "resolve_build_execution_detail",
     "resolve_dynamic_validation",
