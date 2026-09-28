@@ -187,7 +187,8 @@ def _postpass_env(tmp_path, monkeypatch):
     audit_dir.mkdir()
     monkeypatch.setattr(
         skill_dispatch, "start_lifecycle",
-        lambda cmd, target, parent_run_dir=None: audit_dir,
+        lambda cmd, target, parent_run_dir=None:
+            skill_dispatch.LifecycleStart(audit_dir),
     )
     fails: list = []
     monkeypatch.setattr(
@@ -284,11 +285,27 @@ class TestRunAuditPostpass:
         from core.orchestration import skill_dispatch
         monkeypatch.setattr(
             skill_dispatch, "start_lifecycle",
-            lambda cmd, target, parent_run_dir=None: None,
+            lambda cmd, target, parent_run_dir=None:
+                skill_dispatch.LifecycleStart(None),
         )
         phase = run_audit_postpass(_args(), tmp_path, tmp_path)
         assert phase["completed"] is False
         assert phase["skipped_reason"] == "lifecycle start failed"
+
+    def test_lifecycle_start_failure_carries_detail(self, tmp_path,
+                                                    monkeypatch):
+        from core.orchestration import skill_dispatch
+        monkeypatch.setattr(
+            skill_dispatch, "start_lifecycle",
+            lambda cmd, target, parent_run_dir=None:
+                skill_dispatch.LifecycleStart(
+                    None, "ERROR: target /t is outside project p (/p)"),
+        )
+        phase = run_audit_postpass(_args(), tmp_path, tmp_path)
+        assert phase["completed"] is False
+        assert phase["skipped_reason"] == (
+            "lifecycle start failed: "
+            "ERROR: target /t is outside project p (/p)")
 
 
 class TestReportSection:

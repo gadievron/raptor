@@ -44,7 +44,7 @@ from core.llm.cc_proxy_hosts import (
 )
 from core.sandbox import run_untrusted_networked
 from core.sandbox.errors import SandboxSetupError as _SandboxSetupError
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -502,12 +502,123 @@ class StageError(Exception):
 # ---------------------------------------------------------------------------
 
 
+class LifecycleStart(NamedTuple):
+    """Outcome of :func:`start_lifecycle`.
+
+    ``run_dir`` — the started run dir, or None when the helper failed.
+    ``error`` — on failure, a one-line sanitised detail for the
+    caller's skip record (helper stderr quotes project names and
+    target paths, so it is escaped and bounded before it travels);
+    None when there is nothing to say.
+    """
+
+    run_dir: Path | None
+    error: str | None = None
+
+
+def _vet_threaded_pin(pinned: str, target: Path, command: str) -> str:
+    """Return the project pin to thread for a CHILD run — a three-way
+    vet of *pinned* against the CHILD's target:
+
+    * **Match** — the child target lies inside the project's
+      registered target: thread *pinned* unchanged.
+    * **Mismatch** — the project loaded and the target-match
+      predicate answers False: thread ``ARGV_NONE`` (start the child
+      standalone), loudly. Threading the pin would deterministically
+      refuse the child's start — the lifecycle helper's target-match
+      gate errors with "target ... is outside project ...". That
+      poisoned-pin shape is real: a parent started with ``--out``
+      records its AMBIENT pin even when the ambient project does not
+      match the parent's own target (``get_output_dir``'s ``--out``
+      arm warns and proceeds), so the parent marker carries a project
+      the target was never inside, and threading it verbatim killed
+      every child pass (the /validate post-pass of an exhaustive
+      audit run skipped with "lifecycle start failed"). Mirror the
+      ``--out`` doctrine: outside the project's target, project
+      placement and trust markers do not apply.
+    * **Unknown** — the project cannot be loaded
+      (``ProjectManager.load`` funnels every file-level failure —
+      missing entry, unreadable file or dir, corrupt JSON — to
+      ``None``) or the vet itself raises: KEEP the pin and let the
+      helper's own gate adjudicate moments later. Its refusal rides
+      back as the recorded skip detail, so deferring loses nothing,
+      while demoting on a non-verdict would silently strip project
+      placement from a healthy pinned run on a transient registry
+      read error.
+
+    The demotion warning interpolates the child target and the
+    project's registered target — attacker-influenceable strings
+    (checkout directory names) — so both are escaped and bounded per
+    the log-sanitisation contract before they reach the log stream.
+    """
+    from core.security.log_sanitisation import sanitise_for_terminal
+    try:
+        from core.project.project import ProjectManager
+        project = ProjectManager().load(pinned)
+        if project is None:
+            logger.warning(
+                "lifecycle start %s: project '%s' could not be loaded "
+                "for vetting (missing, unreadable, or corrupt registry "
+                "entry); keeping the pin — the lifecycle helper will "
+                "adjudicate", command,
+                sanitise_for_terminal(pinned, max_len=120))
+            return pinned
+        from core.run.output import target_matches_project
+        if target_matches_project(str(target), pinned,
+                                  project.target, command=command):
+            return pinned
+        project_target: str = project.target
+    except Exception:  # noqa: BLE001 — vet unavailable: not a verdict
+        logger.warning(
+            "lifecycle start %s: project '%s' could not be vetted; "
+            "keeping the pin — the lifecycle helper will adjudicate",
+            command, sanitise_for_terminal(pinned, max_len=120))
+        logger.debug("lifecycle start %s: pin vet failed for %r",
+                     command, pinned, exc_info=True)
+        return pinned
+    from core.run.pin import ARGV_NONE
+    logger.warning(
+        "lifecycle start %s: not threading project pin %r — child "
+        "target %s is outside the project's target (%s); starting the "
+        "child standalone (projectless). Project placement and trust "
+        "markers do not apply to a target outside the project.",
+        command, pinned,
+        sanitise_for_terminal(str(target), max_len=300),
+        sanitise_for_terminal(project_target, max_len=300))
+    return ARGV_NONE
+
+
+def _start_failure_detail(proc: subprocess.CompletedProcess) -> str:
+    """One-line, sanitised failure detail from a nonzero helper exit.
+
+    The helper's contract is a single ``ERROR: ...`` stderr line;
+    prefer it, fall back to the last non-empty stderr line, then to
+    the bare exit code. Helper stderr interpolates target paths and
+    project names (attacker-influenceable on hostile checkouts), so
+    the line is escaped and bounded per the log-sanitisation contract
+    before it reaches a report field.
+    """
+    from core.security.log_sanitisation import sanitise_for_terminal
+
+    lines = [ln.strip() for ln in (proc.stderr or "").splitlines()
+             if ln.strip()]
+    detail = next((ln for ln in lines if ln.startswith("ERROR:")),
+                  lines[-1] if lines else "")
+    if not detail:
+        return f"helper exited {proc.returncode} with no stderr"
+    return sanitise_for_terminal(detail, max_len=300)
+
+
 def start_lifecycle(command: str, target: Path,
-                    parent_run_dir: Path | None = None) -> Path | None:
+                    parent_run_dir: Path | None = None) -> LifecycleStart:
     """Start a new lifecycle-managed run dir.
 
-    Returns the OUTPUT_DIR path on success, or None if the helper failed
-    or its output couldn't be parsed.
+    Returns a :class:`LifecycleStart`: ``run_dir`` holds the
+    OUTPUT_DIR path on success and None if the helper failed or its
+    output couldn't be parsed; on failure ``error`` carries the
+    sanitised one-line detail so callers can record WHY (the bare
+    "lifecycle start failed" constant hid a deterministic
+    target-match refusal from the operator and the run report).
 
     ``parent_run_dir`` names the lifecycle run dir of the PARENT phase
     (the /audit or /agentic run this dispatch is a child pass of). The
@@ -569,6 +680,13 @@ def start_lifecycle(command: str, target: Path,
                         command, pin.project, parent_run_dir)
                 pinned = pin.project if pin.project is not None \
                     else ARGV_NONE
+        if pinned is not None and pinned != ARGV_NONE:
+            # Vet the pin against the CHILD's target before threading:
+            # a project whose registered target does not contain the
+            # child target deterministically refuses the start (the
+            # helper's target-match gate), which killed the post-pass
+            # outright. See _vet_threaded_pin for the doctrine.
+            pinned = _vet_threaded_pin(pinned, target, command)
         if pinned is not None:
             argv += ["--project", pinned if pinned else ARGV_NONE]
             # The flag is harness-synthesized, not operator-typed: the
@@ -588,18 +706,23 @@ def start_lifecycle(command: str, target: Path,
             env=safe_env, check=False,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
+        from core.security.log_sanitisation import sanitise_for_terminal
         logger.warning("lifecycle start %s failed: %s", command, e)
-        return None
+        return LifecycleStart(
+            None,
+            "helper spawn failed: "
+            + sanitise_for_terminal(str(e), max_len=300))
     if proc.returncode != 0:
+        detail = _start_failure_detail(proc)
         logger.warning("lifecycle start %s returned %d: %s",
-                       command, proc.returncode, (proc.stderr or "")[:300])
-        return None
+                       command, proc.returncode, detail)
+        return LifecycleStart(None, detail)
     for line in reversed(proc.stdout.splitlines()):
         line = line.strip()
         if line.startswith("OUTPUT_DIR="):
-            return Path(line[len("OUTPUT_DIR="):]).resolve()
+            return LifecycleStart(Path(line[len("OUTPUT_DIR="):]).resolve())
     logger.warning("lifecycle start %s did not emit OUTPUT_DIR=", command)
-    return None
+    return LifecycleStart(None, "helper did not emit OUTPUT_DIR=")
 
 
 def complete_lifecycle(output_dir: Path) -> None:
@@ -876,11 +999,18 @@ def run_skill_dispatch(
 
     t0 = time.monotonic()
 
-    run_dir = start_lifecycle(command, target,
+    started = start_lifecycle(command, target,
                               parent_run_dir=parent_run_dir)
+    run_dir = started.run_dir
     if run_dir is None:
+        # Carry the helper's one-line detail (already sanitised at the
+        # start_lifecycle seam): the bare constant left the operator
+        # with no lead on WHY the child pass never started.
+        reason = "lifecycle start failed"
+        if started.error:
+            reason = f"{reason}: {started.error}"
         return SkillDispatchResult(ran=False,
-                                   skipped_reason="lifecycle start failed",
+                                   skipped_reason=reason,
                                    duration_s=time.monotonic() - t0)
 
     # Track whether the run reached a definitive end-state. If we exit
@@ -1192,6 +1322,7 @@ def run_skill_dispatch(
 
 __all__ = [
     "MAX_VALIDATE_FINDINGS",
+    "LifecycleStart",
     "SkillDispatchResult",
     "StageError",
     "build_checklist",

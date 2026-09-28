@@ -314,3 +314,115 @@ class TestUrlTargetCaseInsensitiveHost(unittest.TestCase):
             _check_target_mismatch(
                 "https://example.com/Repo", "p",
                 "https://example.com/repo")
+
+
+class TestTargetMatchesProjectPredicate(unittest.TestCase):
+    """target_matches_project must answer exactly what the gate
+    enforces — the dispatcher's pin vet trusts it, and a predicate
+    that drifts (a naive resolved-prefix ``startswith``, symlink or
+    URL-normalisation divergence) silently demotes healthy pins or
+    threads doomed ones. Every case asserts the predicate against the
+    gate itself AND against the expected verdict, over exactly the
+    boundary shapes a prefix-string reimplementation gets wrong."""
+
+    @staticmethod
+    def _gate(target: str, project_target: str, command: str = "") -> bool:
+        from core.run.output import _check_target_mismatch
+        try:
+            _check_target_mismatch(target, "projx", project_target,
+                                   command=command)
+        except TargetMismatchError:
+            return False
+        return True
+
+    def _both(self, target: str, project_target: str,
+              command: str = "") -> bool:
+        from core.run.output import target_matches_project
+        verdict = target_matches_project(target, "projx", project_target,
+                                         command=command)
+        self.assertEqual(verdict,
+                         self._gate(target, project_target, command),
+                         "predicate diverged from the gate for "
+                         f"{target!r} vs {project_target!r}")
+        return verdict
+
+    def test_sibling_prefix_name_is_outside(self):
+        # /a/bc is NOT inside /a/b — component-wise containment, not
+        # string prefix. The shape a resolved-prefix startswith
+        # reimplementation gets wrong.
+        with TemporaryDirectory() as d:
+            proj = Path(d) / "target"
+            evil = Path(d) / "target-evil"
+            proj.mkdir()
+            evil.mkdir()
+            self.assertFalse(self._both(str(evil), str(proj)))
+
+    def test_exact_equality_is_inside(self):
+        with TemporaryDirectory() as d:
+            self.assertTrue(self._both(d, d))
+
+    def test_subdirectory_is_inside(self):
+        with TemporaryDirectory() as d:
+            sub = Path(d) / "src" / "parser"
+            self.assertTrue(self._both(str(sub), d))
+
+    def test_symlinked_target_resolves_into_project(self):
+        # The target rides in through a symlink whose destination is
+        # inside the project — both sides resolve, so it matches.
+        with TemporaryDirectory() as d:
+            proj = Path(d) / "proj"
+            (proj / "src").mkdir(parents=True)
+            link = Path(d) / "shortcut"
+            link.symlink_to(proj / "src")
+            self.assertTrue(self._both(str(link), str(proj)))
+
+    def test_symlink_escape_is_outside(self):
+        # A path lexically under the project dir that symlinks OUT of
+        # it must not match — resolution happens before containment.
+        with TemporaryDirectory() as d:
+            proj = Path(d) / "proj"
+            outside = Path(d) / "outside"
+            proj.mkdir()
+            outside.mkdir()
+            escape = proj / "vendored"
+            escape.symlink_to(outside)
+            self.assertFalse(self._both(str(escape), str(proj)))
+
+    def test_relative_target_resolves_against_cwd(self):
+        with TemporaryDirectory() as d:
+            proj = Path(d) / "proj"
+            (proj / "child").mkdir(parents=True)
+            old_cwd = os.getcwd()
+            os.chdir(proj)
+            try:
+                self.assertTrue(self._both("child", str(proj)))
+                self.assertFalse(
+                    self._both(os.path.join("..", "elsewhere"),
+                               str(proj)))
+            finally:
+                os.chdir(old_cwd)
+
+    def test_url_pair_match_is_host_case_insensitive(self):
+        # URL pairs never touch the filesystem: resolving
+        # "HTTPS://Example.COM" against the cwd (what a Path-based
+        # reimplementation would do) is meaningless.
+        self.assertTrue(self._both("HTTPS://Example.COM/repo",
+                                   "https://example.com/repo"))
+
+    def test_url_pair_mismatch_is_outside(self):
+        self.assertFalse(self._both("https://evil.example/repo",
+                                    "https://example.com/repo"))
+
+    def test_url_target_with_path_project_skips_the_check(self):
+        with TemporaryDirectory() as d:
+            self.assertTrue(self._both("https://example.com/app", d))
+
+    def test_fuzz_out_of_tree_is_warn_only(self):
+        # The gate's documented fuzz shape: out-of-tree binaries warn
+        # and proceed — the predicate must answer True, not demote.
+        with TemporaryDirectory() as d:
+            proj = Path(d) / "proj"
+            binary = Path(d) / "build" / "app"
+            proj.mkdir()
+            self.assertTrue(self._both(str(binary), str(proj),
+                                       command="fuzz"))

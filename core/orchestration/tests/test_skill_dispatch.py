@@ -1309,8 +1309,11 @@ class ParentPinThreadingTests(unittest.TestCase):
                process_project: str | None = None,
                containment: str | None = None,
                witness: tuple[bool, str | None, str | None] | None = None,
+               project_target: str | None = "/target",
+               project_missing: bool = False,
                ) -> list:
         from contextlib import ExitStack
+        from types import SimpleNamespace
 
         from core.orchestration.skill_dispatch import start_lifecycle
         captured: dict = {}
@@ -1318,6 +1321,24 @@ class ParentPinThreadingTests(unittest.TestCase):
         def dispatcher(cmd, *args, **kwargs):
             captured["argv"] = list(cmd)
             return _ok(stdout="OUTPUT_DIR=/nonexistent-run\n")
+
+        # Hermetic registry for the pin-target vet, modelling the REAL
+        # load() seams only: the pinned project's registered target is
+        # what the test declares ("/target" — the child target — by
+        # default, so pre-vet tests keep their matching shape);
+        # project_missing = load() returns None (the real load never
+        # raises for file-level failures — load_json strict=False
+        # funnels missing/unreadable/corrupt entries to None);
+        # project_target=None = the project loads with ``target: null``
+        # (the predicate then raises inside the vet).
+        class _FakeMgr:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def load(self, name: str):
+                if project_missing:
+                    return None
+                return SimpleNamespace(name=name, target=project_target)
 
         patches = [
             patch("core.orchestration.skill_dispatch.subprocess.run",
@@ -1332,6 +1353,7 @@ class ParentPinThreadingTests(unittest.TestCase):
             patch("core.run.pin._process_project", process_project),
             patch("core.run.pin._process_project_set",
                   process_project is not None),
+            patch("core.project.project.ProjectManager", _FakeMgr),
         ]
         if witness is not None:
             # Pin the ledger witness outcome (found, project, source)
@@ -1433,3 +1455,236 @@ class ParentPinThreadingTests(unittest.TestCase):
                                    witness=(True, "p1", "argv"))
             self.assertIn("--project", argv)
             self.assertEqual(argv[argv.index("--project") + 1], "p1")
+
+    def test_mismatching_parent_pin_demotes_to_standalone(self) -> None:
+        # Poisoned-pin shape: the parent marker pins a project whose
+        # registered target does NOT contain the child target (a
+        # --out parent records its ambient pin unvetted). Threading
+        # it verbatim would deterministically refuse the child start
+        # at the helper's target-match gate — the vet must demote to
+        # the explicit projectless pin, loudly.
+        with TemporaryDirectory() as tmp:
+            parent = self._parent(tmp, {"project": "p1",
+                                        "project_source": "symlink"})
+            with self.assertLogs("core.orchestration.skill_dispatch",
+                                 level="WARNING") as logs:
+                argv = self._start(parent_run_dir=parent,
+                                   witness=(True, "p1", "symlink"),
+                                   project_target="/elsewhere")
+            self.assertIn("--project", argv)
+            self.assertEqual(argv[argv.index("--project") + 1], "-")
+            joined = "\n".join(logs.output)
+            self.assertIn("not threading project pin", joined)
+            self.assertIn("'p1'", joined)
+
+    def test_mismatching_process_override_demotes_too(self) -> None:
+        # The same poisoned shape via the process-scoped override (a
+        # --project X --out parent keeps X set in-process): the child
+        # helper would refuse identically, so the vet applies to
+        # whatever pin is about to thread, regardless of source.
+        with self.assertLogs("core.orchestration.skill_dispatch",
+                             level="WARNING"):
+            argv = self._start(process_project="p2",
+                               project_target="/elsewhere")
+        self.assertEqual(argv[argv.index("--project") + 1], "-")
+
+    def test_child_target_inside_project_target_still_threads(self) -> None:
+        # Containment (not just equality) satisfies the vet — the
+        # same rule as the helper's gate.
+        with TemporaryDirectory() as tmp:
+            parent = self._parent(tmp, {"project": "p1",
+                                        "project_source": "argv"})
+            argv = self._start(parent_run_dir=parent,
+                               witness=(True, "p1", "argv"),
+                               project_target="/")
+            self.assertEqual(argv[argv.index("--project") + 1], "p1")
+
+    def test_vetting_failure_keeps_the_pin(self) -> None:
+        # Unknown arm, exception shape: the project loads but the
+        # target-match predicate raises (a registry entry with
+        # ``target: null`` TypeErrors inside the gate). Not a verdict
+        # on the target — keep the pin; the helper's own gate is the
+        # backstop and its refusal is recorded. The real
+        # ProjectManager.load never raises for file-level failures
+        # (load_json strict=False funnels them to None), so the raise
+        # seam is exactly in-vet crashes like this one.
+        with TemporaryDirectory() as tmp:
+            parent = self._parent(tmp, {"project": "p1",
+                                        "project_source": "argv"})
+            with self.assertLogs("core.orchestration.skill_dispatch",
+                                 level="WARNING") as logs:
+                argv = self._start(parent_run_dir=parent,
+                                   witness=(True, "p1", "argv"),
+                                   project_target=None)
+            self.assertEqual(argv[argv.index("--project") + 1], "p1")
+            joined = "\n".join(logs.output)
+            self.assertIn("could not be vetted", joined)
+            self.assertIn("keeping the pin", joined)
+            self.assertNotIn("outside the project's target", joined)
+
+    def test_missing_project_pin_is_kept_for_the_helper(self) -> None:
+        # Unknown arm, load-returns-None shape: a missing, unreadable,
+        # or corrupt registry entry all funnel to load() -> None
+        # (load_json strict=False). That is not a mismatch verdict —
+        # demoting would strip project placement from a healthy
+        # pinned run on a transient read error. Keep the pin: the
+        # helper's gate adjudicates ms later and its refusal now
+        # rides back as the recorded skip detail.
+        with TemporaryDirectory() as tmp:
+            parent = self._parent(tmp, {"project": "p1",
+                                        "project_source": "argv"})
+            with self.assertLogs("core.orchestration.skill_dispatch",
+                                 level="WARNING") as logs:
+                argv = self._start(parent_run_dir=parent,
+                                   witness=(True, "p1", "argv"),
+                                   project_missing=True)
+            self.assertEqual(argv[argv.index("--project") + 1], "p1")
+            joined = "\n".join(logs.output)
+            self.assertIn("could not be loaded for vetting", joined)
+            self.assertIn("keeping the pin", joined)
+            self.assertNotIn("outside the project's target", joined)
+
+    def test_demotion_warning_is_escaped_and_bounded(self) -> None:
+        # The demotion warning interpolates the child target and the
+        # project's registered target — attacker-influenceable
+        # strings (checkout dir names). Hostile bytes must never
+        # reach the log stream raw: ESC would drive the terminal,
+        # a newline forges log lines, a bidi override reorders what
+        # the operator reads, and an unbounded path floods the
+        # terminal. Escaped forms only, bounded.
+        from types import SimpleNamespace
+
+        from core.orchestration.skill_dispatch import _vet_threaded_pin
+        hostile_target = ("/tmp/evil\x1b[2J\ninjected line\u202egnp"
+                          + "A" * 4000)
+        hostile_proj_target = "/proj\x1b]0;t\x07dir" + "B" * 4000
+
+        class _Mgr:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def load(self, name: str):
+                return SimpleNamespace(name=name,
+                                       target=hostile_proj_target)
+
+        with patch("core.project.project.ProjectManager", _Mgr), \
+             self.assertLogs("core.orchestration.skill_dispatch",
+                             level="WARNING") as logs:
+            pin = _vet_threaded_pin("p1", Path(hostile_target),
+                                    "validate")
+        self.assertEqual(pin, "-")
+        demotions = [rec for rec in logs.output
+                     if "not threading project pin" in rec]
+        self.assertEqual(len(demotions), 1)
+        rec = demotions[0]
+        self.assertNotIn("\x1b", rec)
+        self.assertNotIn("\x07", rec)
+        self.assertNotIn("\u202e", rec)
+        # The injected newline must not mint a second log line.
+        self.assertNotIn("\n", rec)
+        self.assertIn("\\x1b", rec)
+        # Both %s values bounded (300 + elision marker each) — the
+        # 4000-char hostile components must not ride through.
+        self.assertIn("chars]", rec)
+        self.assertLess(len(rec), 1000)
+
+
+class StartLifecycleFailureDetailTests(unittest.TestCase):
+    """start_lifecycle's failure contract: LifecycleStart.error carries
+    a one-line, escaped, bounded detail — helper stderr interpolates
+    target paths and project names, so raw bytes must never reach the
+    skip record."""
+
+    def _start(self, dispatcher):
+        from core.orchestration.skill_dispatch import start_lifecycle
+        with patch("core.orchestration.skill_dispatch.subprocess.run",
+                   side_effect=dispatcher), \
+             patch("core.run.pin._process_project", None), \
+             patch("core.run.pin._process_project_set", False), \
+             self.assertLogs("core.orchestration.skill_dispatch",
+                             level="WARNING"):
+            return start_lifecycle("validate", Path("/target"))
+
+    def test_error_line_is_extracted(self) -> None:
+        stderr = ("usage noise\n"
+                  "ERROR: target /t is outside project p (/pt)\n"
+                  "  A project tracks one target.\n")
+        result = self._start(
+            lambda *a, **k: _ok(returncode=1, stderr=stderr))
+        self.assertIsNone(result.run_dir)
+        self.assertEqual(
+            result.error, "ERROR: target /t is outside project p (/pt)")
+
+    def test_detail_is_escaped_and_bounded(self) -> None:
+        hostile = "ERROR: target /t\x1b[2J\x07 " + "A" * 4000
+        result = self._start(
+            lambda *a, **k: _ok(returncode=1, stderr=hostile))
+        self.assertIsNone(result.run_dir)
+        self.assertNotIn("\x1b", result.error)
+        self.assertNotIn("\x07", result.error)
+        self.assertIn("\\x1b", result.error)
+        self.assertLess(len(result.error), 400)
+        self.assertIn("chars]", result.error)  # explicit elision marker
+        self.assertNotIn("\n", result.error)
+
+    def test_no_stderr_reports_exit_code(self) -> None:
+        result = self._start(lambda *a, **k: _ok(returncode=7))
+        self.assertIsNone(result.run_dir)
+        self.assertEqual(result.error, "helper exited 7 with no stderr")
+
+    def test_missing_sentinel_reports_it(self) -> None:
+        result = self._start(
+            lambda *a, **k: _ok(returncode=0, stdout="no sentinel\n"))
+        self.assertIsNone(result.run_dir)
+        self.assertEqual(result.error, "helper did not emit OUTPUT_DIR=")
+
+    def test_success_has_no_error(self) -> None:
+        from core.orchestration.skill_dispatch import start_lifecycle
+        with patch("core.orchestration.skill_dispatch.subprocess.run",
+                   side_effect=lambda *a, **k: _ok(
+                       stdout="OUTPUT_DIR=/nonexistent-run\n")), \
+             patch("core.run.pin._process_project", None), \
+             patch("core.run.pin._process_project_set", False):
+            result = start_lifecycle("validate", Path("/target"))
+        self.assertEqual(result.run_dir, Path("/nonexistent-run"))
+        self.assertIsNone(result.error)
+
+    def test_spawn_failure_detail_is_sanitised(self) -> None:
+        def _boom(*a, **k):
+            raise OSError("exec\x1bfailed")
+        result = self._start(_boom)
+        self.assertIsNone(result.run_dir)
+        self.assertTrue(result.error.startswith("helper spawn failed: "))
+        self.assertNotIn("\x1b", result.error)
+
+    def test_dispatch_skip_reason_carries_the_detail(self) -> None:
+        # End of the seam: run_skill_dispatch's skip record appends
+        # the helper detail to the stable constant prefix.
+        with TemporaryDirectory() as tmp:
+            def dispatcher(cmd, *args, **kwargs):
+                return _ok(returncode=1,
+                           stderr="ERROR: target /t is outside "
+                                  "project p (/pt)\n")
+            with patch(
+                    "core.orchestration.skill_dispatch.subprocess.run",
+                    side_effect=dispatcher), \
+                 patch("core.orchestration.skill_dispatch."
+                       "run_untrusted_networked",
+                       side_effect=dispatcher), \
+                 patch("core.run.pin._process_project", None), \
+                 patch("core.run.pin._process_project_set", False), \
+                 patch.dict("os.environ", _FIRST_PARTY_PROVIDER_ENV), \
+                 self.assertLogs("core.orchestration.skill_dispatch",
+                                 level="WARNING"):
+                result = run_skill_dispatch(
+                    command="validate", target=Path(tmp),
+                    tools="Read", budget_usd="1.00", timeout_s=60,
+                    caller_label="test-dispatch", log_label="test pass",
+                    build_prompt=lambda d: "prompt",
+                    claude_bin="/fake/claude",
+                )
+        self.assertFalse(result.ran)
+        self.assertEqual(
+            result.skipped_reason,
+            "lifecycle start failed: "
+            "ERROR: target /t is outside project p (/pt)")

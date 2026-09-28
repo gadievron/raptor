@@ -1759,10 +1759,14 @@ def run_audit_postpass(args: argparse.Namespace, target: Path, out_dir: Path) ->
         # the audit run lands in the same project (the child stub
         # otherwise re-resolves ambiently and races mid-run switches
         # of the machine-wide default).
-        audit_dir = start_lifecycle("audit", target,
-                                    parent_run_dir=out_dir)
+        started = start_lifecycle("audit", target,
+                                  parent_run_dir=out_dir)
+        audit_dir = started.run_dir
         if audit_dir is None:
-            phase["skipped_reason"] = "lifecycle start failed"
+            reason = "lifecycle start failed"
+            if started.error:
+                reason = f"{reason}: {started.error}"
+            phase["skipped_reason"] = reason
             return phase
         phase["audit_dir"] = str(audit_dir)
 

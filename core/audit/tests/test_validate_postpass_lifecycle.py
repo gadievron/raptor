@@ -129,7 +129,7 @@ def seam(tmp_path, monkeypatch):
         _fake_cc_dispatch)
 
     return SimpleNamespace(code=code, proj_out=proj_out, parent=parent,
-                           out_base=out_base)
+                           out_base=out_base, projects_dir=projects_dir)
 
 
 def _finding_result():
@@ -188,9 +188,86 @@ class TestPostpassReachesRunningValidate:
 
         record = _postpass_record(seam.parent)
         assert record["ran"] is False
-        assert record["skipped_reason"] == "lifecycle start failed"
+        # The skip record carries the helper's one-line refusal detail
+        # — the bare constant left the operator with no lead on WHY.
+        reason = record["skipped_reason"]
+        assert reason.startswith("lifecycle start failed: ERROR: target ")
+        assert "is outside project projbeta" in reason
+        assert "\n" not in reason
         assert record["validate_dir"] is None
         # The follow-up command still reaches the operator.
+        assert str(record["followup_command"]).startswith("/validate ")
+
+    def test_poisoned_parent_pin_starts_standalone(self, seam):
+        # A parent started with --out records its AMBIENT pin even
+        # when that project's registered target does not contain the
+        # parent's own target (get_output_dir's --out arm warns and
+        # proceeds) — the marker then pins a project the target was
+        # never inside. Threading that pin verbatim made the child
+        # helper's target-match gate refuse the start
+        # deterministically ("target ... is outside project ...");
+        # the /validate post-pass of an exhaustive audit run skipped
+        # with the bare "lifecycle start failed". The dispatcher must
+        # vet the pin against the CHILD's target and start the child
+        # standalone instead — outside the project's target, project
+        # placement and trust markers do not apply.
+        _write_run_marker(seam.parent, command="audit", target=seam.code,
+                          project="projbeta")
+        from core.audit.validate import validate_findings
+        validate_findings(_finding_result(), target_path=seam.code,
+                          out_dir=seam.parent)
+
+        record = _postpass_record(seam.parent)
+        assert record["ran"] is True, record.get("skipped_reason")
+        validate_dir = Path(record["validate_dir"])
+        # Standalone run: under the out base — never a refusal, never
+        # a landing inside the mismatching project.
+        assert validate_dir.parent == seam.out_base
+        meta = json.loads(
+            (validate_dir / ".raptor-run.json").read_text(
+                encoding="utf-8"))
+        assert meta["command"] == "validate"
+        assert meta["status"] == "completed"
+        assert meta.get("project") is None
+        assert (validate_dir / "validation-report.md").is_file()
+
+    def test_corrupt_registry_keeps_pin_and_records_the_refusal(
+            self, seam, monkeypatch, caplog):
+        # Unknown vet arm, end-to-end: the pin is HEALTHY (projalpha's
+        # registered target contains the child target) but the
+        # project's registry entry is corrupt JSON at child-start
+        # time. The pin rides the process-scoped ``--project``
+        # override — the only route that reaches the vet with a
+        # corrupt registry: the parent-marker route already drops
+        # missing/unparseable projects at pin RESOLUTION
+        # (``resolve_witnessed_run_pin``'s registry check demotes to
+        # authoritatively projectless). The vet cannot answer
+        # (load() -> None, load_json strict=False) — the pin must
+        # thread UNCHANGED and the helper's own gate adjudicates: it
+        # refuses ("--project: project ... does not exist") and that
+        # refusal rides back into the skip record. Same placement
+        # outcome as base, but the operator now sees the real error
+        # instead of the bare constant — and a vet that demoted here
+        # instead would silently strip project placement from this
+        # healthy pin.
+        monkeypatch.setattr("core.run.pin._process_project", "projalpha")
+        monkeypatch.setattr("core.run.pin._process_project_set", True)
+        (seam.projects_dir / "projalpha.json").write_text(
+            '{"name": "projalpha", "target":', encoding="utf-8")
+        from core.audit.validate import validate_findings
+        validate_findings(_finding_result(), target_path=seam.code,
+                          out_dir=seam.parent)
+
+        assert "could not be loaded for vetting" in caplog.text
+        assert "keeping the pin" in caplog.text
+        record = _postpass_record(seam.parent)
+        assert record["ran"] is False
+        reason = record["skipped_reason"]
+        assert reason.startswith("lifecycle start failed: ERROR: ")
+        assert "projalpha" in reason
+        assert "does not exist" in reason
+        assert "\n" not in reason
+        assert record["validate_dir"] is None
         assert str(record["followup_command"]).startswith("/validate ")
 
     def test_projectless_parent_threads_the_explicit_none(self, seam):

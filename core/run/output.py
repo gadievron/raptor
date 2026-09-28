@@ -423,3 +423,22 @@ def _check_target_mismatch(target_path: str, project_name: str,
         f"  Or clear this session's project: /project none"
     )
     raise TargetMismatchError(msg)
+
+
+def target_matches_project(target_path: str, project_name: str,
+                           project_target: str, command: str = "") -> bool:
+    """Predicate form of the project target-match gate.
+
+    True when *target_path* would pass ``_check_target_mismatch`` for
+    the named project (inside/equal to the project target, a matching
+    URL pair, or one of the gate's documented warn-only shapes). For
+    callers that need to VET a candidate pin before threading it —
+    the gate itself refuses a start; this only answers whether it
+    would.
+    """
+    try:
+        _check_target_mismatch(target_path, project_name, project_target,
+                               command=command)
+    except TargetMismatchError:
+        return False
+    return True
