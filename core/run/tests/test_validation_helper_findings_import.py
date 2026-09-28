@@ -213,9 +213,12 @@ class TestDarkImportPolicy:
     def test_include_dark_restores_candidacy(self, tmp_path, capsys):
         mod = _load_helper()
         src = tmp_path / "findings-graded.json"
+        # Distinct sinks (different lines): identical-sink rows are
+        # import-dedup's business (see the exploitability_validation
+        # dedup tests) — this test pins the dark-candidacy contract.
         src.write_text(json.dumps({"findings": [
             _graded("EXT-1", "finding"),
-            _graded("EXT-3", "dark"),
+            _graded("EXT-3", "dark", line=40),
         ]}))
         dest = tmp_path / "findings.json"
         mod._import_findings_file(src, dest, target="/t",

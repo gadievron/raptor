@@ -541,6 +541,34 @@ def _remove_stale_import_marker(dest_dir: Path) -> None:
               f"special?)", file=sys.stderr)
 
 
+def _remove_stale_dedup_report(dest_dir: Path) -> None:
+    """Remove a dedup-report artifact that would outlive its inputs.
+
+    A re-import that dedups nothing — or a sweep run — into the same
+    ``--out`` must not leave the PREVIOUS import's dedup report on
+    disk: the validation report reads the file and would render a
+    phantom fan-out for findings the fresh import never collapsed.
+    Same regular-file-only guard as
+    :func:`_remove_stale_witness_backlog`: a planted special is left
+    alone with a loud note, never operated through.
+    """
+    import stat as _stat_mod
+    from packages.exploitability_validation.import_dedup import (
+        DEDUP_REPORT_FILENAME,
+    )
+    path = Path(dest_dir) / DEDUP_REPORT_FILENAME
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return
+    if _stat_mod.S_ISREG(st.st_mode):
+        path.unlink(missing_ok=True)
+    else:
+        print(f"  ⚠️  {DEDUP_REPORT_FILENAME} is not a regular file "
+              f"(mode=0o{st.st_mode:o}) — left in place (planted "
+              f"special?)", file=sys.stderr)
+
+
 def _route_dark_to_witness_backlog(
     container: dict, dest_dir: Path, source_name: str,
 ) -> int:
@@ -728,24 +756,28 @@ def _import_findings_file(
 
     src = Path(findings_path)
 
-    def _write_import_marker(count: int, dark_routed: int = 0) -> None:
+    def _write_import_marker(count: int, dark_routed: int = 0,
+                             deduped: int = 0) -> None:
         # Durable findings-driven marker: the container itself is
         # rebuilt by the stage-A merge, so mode detection cannot ride
         # a top-level container key. The report generator reads this
         # to suppress sweep-shaped coverage stats ("Functions checked
         # 0/N") that are meaningless for a findings-driven run.
-        # ``dark_routed`` is additive (readers tolerate extra keys).
+        # ``dark_routed`` / ``deduped`` are additive (readers tolerate
+        # extra keys).
         save_json(dest.parent / "findings-import.json", {
             "mode": "findings",
             "source_file": src.name,
             "imported": count,
             "dark_routed": dark_routed,
+            "deduped": deduped,
         })
 
     container, shape_note = _coerce_findings_container(
         load_json(src), target_path=target)
     if container is None:
         shutil.copy2(src, dest)
+        _remove_stale_dedup_report(dest.parent)
         _write_import_marker(0)
         print(f"  ⚠️  {src.name}: no recognisable findings/variants "
               f"shape — copied verbatim", file=sys.stderr)
@@ -810,8 +842,53 @@ def _import_findings_file(
     if mapped:
         summary = ", ".join(f"{k}: {v}" for k, v in sorted(mapped.items()))
         print(f"  Mapped import fields — {summary}")
+
+    # Same-sink/same-vector dedup AFTER id normalisation (final
+    # FIND-<n> ids anchor the audit trail) and field mapping (the
+    # canonical vuln_type is part of the sink identity). Provable
+    # duplicates would each pay the full stage A→F cost; unsure rows
+    # are KEPT and flagged (conservative by contract). Every decision
+    # — drop and keep-unsure alike — lands in dedup-report.json;
+    # either way the PREVIOUS import's report must not outlive its
+    # inputs (fresh-write semantics, matching the witness backlog).
+    deduped = 0
+    from packages.exploitability_validation.import_dedup import (
+        DEDUP_REPORT_FILENAME,
+        dedup_imported_findings,
+    )
+    dedup_report, dedup_stats = dedup_imported_findings(container, src.name)
+    if dedup_report is not None:
+        # Loud-and-replace on a planted special (same posture as the
+        # witness backlog writer: _save_artifact's tempfile+rename
+        # never opens the destination).
+        try:
+            import stat as _stat_mod
+            st = os.lstat(dest.parent / DEDUP_REPORT_FILENAME)
+            if not _stat_mod.S_ISREG(st.st_mode):
+                print(f"  ⚠️  replacing non-regular {DEDUP_REPORT_FILENAME} "
+                      f"(mode=0o{st.st_mode:o} — planted special?)",
+                      file=sys.stderr)
+        except OSError:
+            pass
+        _save_artifact(dest.parent / DEDUP_REPORT_FILENAME, dedup_report)
+        deduped = dedup_stats["dropped"]
+        if deduped:
+            print(f"  Import dedup: {deduped} duplicate finding(s) "
+                  f"collapsed into {dedup_stats['clusters']} canonical "
+                  f"finding(s) — same sink + same vector; each "
+                  f"canonical verdict fans out to its duplicates "
+                  f"({DEDUP_REPORT_FILENAME})")
+        if dedup_stats["kept_unsure"]:
+            print(f"  Import dedup: {dedup_stats['kept_unsure']} "
+                  f"same-sink finding(s) KEPT (vector not provably "
+                  f"identical) — flagged potential_dup "
+                  f"({DEDUP_REPORT_FILENAME})")
+    else:
+        _remove_stale_dedup_report(dest.parent)
+
     _save_artifact(dest, container)
-    _write_import_marker(len(container["findings"]), dark_routed)
+    _write_import_marker(len(container["findings"]), dark_routed,
+                         deduped=deduped)
     print(f"Pre-existing findings: {len(container['findings'])} "
           f"from {src.name}")
 
@@ -4048,6 +4125,7 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
             # stats and a phantom routed count.
             _remove_stale_import_marker(out_dir)
             _remove_stale_witness_backlog(out_dir)
+            _remove_stale_dedup_report(out_dir)
 
         # Durable bridge opt-out marker, rewritten to THIS
         # invocation's truth BOTH ways: later stage boundaries re-run
