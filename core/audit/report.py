@@ -960,13 +960,27 @@ def _load_review_state(out_dir: Path) -> dict[str, Any]:
         # review subjects, and the coarse collapse made a reviewed
         # prototype stand in for its unreviewed body in every
         # report-side count.
+        #
+        # Mechanical echoes collapse in their OWN map: decomp-sweep /
+        # consistency-census rows are journalled AFTER the review
+        # loop, so a single latest-per-site map let a later
+        # mechanical echo shadow the LLM verdict at the same site —
+        # a binary-target run's report counted its LLM-suspicious
+        # and errored reviews as zero because sweep echoes outran
+        # them on timestamp. Every stats consumer already excludes
+        # mechanical rows from verdict authority
+        # (_apply_journal_verdict_overrides, _count_remaining_gaps);
+        # the split keeps both records visible without either
+        # evicting the other.
         best: dict[tuple, Any] = {}
+        best_mech: dict[tuple, Any] = {}
         for e in load_entries(out_dir):
+            bucket = best_mech if _is_mechanical_echo(e) else best
             k = (e.file, e.function, e.line_start or 0)
-            prev = best.get(k)
+            prev = bucket.get(k)
             if prev is None or e.ts > prev.ts:
-                best[k] = e
-        entries = best
+                bucket[k] = e
+        entries = list(best.values()) + list(best_mech.values())
     except Exception:  # noqa: BLE001
         return {"functions_analysed": []}
     if not entries:
@@ -974,7 +988,7 @@ def _load_review_state(out_dir: Path) -> dict[str, Any]:
 
     functions: list[dict[str, Any]] = []
     files_examined: set = set()
-    for entry in entries.values():
+    for entry in entries:
         functions.append({
             "file": entry.file,
             "function": entry.function,
