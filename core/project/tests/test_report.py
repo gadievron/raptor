@@ -17,6 +17,17 @@ from core.project.report import (
 from core.run import complete_run, start_run
 
 
+import pytest
+
+@pytest.fixture(autouse=True)
+def _user_state_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """User registries stay out of the real home: the root-conftest
+    layer doing this is stripped from release extracts (conftest.py
+    is export-ignore), so the pin must travel in-file."""
+    from core.testing.state_isolation import pin_user_state_dirs
+    pin_user_state_dirs(monkeypatch, tmp_path)
+
+
 def _sca_row(name, *, severity="high", escalation_reasons=None):
     sca = {"kind": "slopsquat_suspect", "ecosystem": "npm", "name": name}
     if escalation_reasons is not None:

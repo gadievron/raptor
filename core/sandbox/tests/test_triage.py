@@ -10,6 +10,17 @@ from core.sandbox import summary as summary_mod
 from core.sandbox import triage as triage_mod
 
 
+from pathlib import Path
+
+@pytest.fixture(autouse=True)
+def _user_state_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """User registries stay out of the real home: the root-conftest
+    layer doing this is stripped from release extracts (conftest.py
+    is export-ignore), so the pin must travel in-file."""
+    from core.testing.state_isolation import pin_user_state_dirs
+    pin_user_state_dirs(monkeypatch, tmp_path)
+
+
 def _write_summary(tmp_path, denials, total_denials=None):
     """Hand-write a sandbox-summary.json for cases the real writer API
     can't easily produce (specific syscall/marker permutations)."""

@@ -28,6 +28,15 @@ MODELS = ("model-a", "model-b", "model-c")
 RUN1_COSTS = {"model-a": 1.0, "model-b": 2.0, "model-c": 0.75}
 
 
+@pytest.fixture(autouse=True)
+def _user_state_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """User registries stay out of the real home: the root-conftest
+    layer doing this is stripped from release extracts (conftest.py
+    is export-ignore), so the pin must travel in-file."""
+    from core.testing.state_isolation import pin_user_state_dirs
+    pin_user_state_dirs(monkeypatch, tmp_path)
+
+
 def _load_shim():
     loader = SourceFileLoader("raptor_understand_resume_e2e", str(LIBEXEC))
     spec = importlib.util.spec_from_loader(loader.name, loader)

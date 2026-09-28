@@ -21,6 +21,17 @@ from core.project.cli import (
 )
 
 
+import pytest
+
+@pytest.fixture(autouse=True)
+def _user_state_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """User registries stay out of the real home: the root-conftest
+    layer doing this is stripped from release extracts (conftest.py
+    is export-ignore), so the pin must travel in-file."""
+    from core.testing.state_isolation import pin_user_state_dirs
+    pin_user_state_dirs(monkeypatch, tmp_path)
+
+
 class _FakeProject:
     """Minimal stand-in: _print_findings only calls get_run_dirs()."""
 

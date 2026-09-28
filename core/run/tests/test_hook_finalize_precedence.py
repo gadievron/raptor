@@ -64,6 +64,17 @@ SESSION_PID = 99999
 _AGED_TS = "2026-05-03T12:00:00+00:00"
 
 
+import pytest
+
+@pytest.fixture(autouse=True)
+def _user_state_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """User registries stay out of the real home: the root-conftest
+    layer doing this is stripped from release extracts (conftest.py
+    is export-ignore), so the pin must travel in-file."""
+    from core.testing.state_isolation import pin_user_state_dirs
+    pin_user_state_dirs(monkeypatch, tmp_path)
+
+
 def _make_running_run(parent: Path, name: str, command: str = "scan",
                       session_pid: int = SESSION_PID,
                       tool_pid: int = 11111,

@@ -26,6 +26,17 @@ from core.audit.resume import (
 from core.coverage.journal import ReviewJournalEntry, append_entry, now_iso
 
 
+import pytest
+
+@pytest.fixture(autouse=True)
+def _user_state_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """User registries stay out of the real home: the root-conftest
+    layer doing this is stripped from release extracts (conftest.py
+    is export-ignore), so the pin must travel in-file."""
+    from core.testing.state_isolation import pin_user_state_dirs
+    pin_user_state_dirs(monkeypatch, tmp_path)
+
+
 def _journal(out_dir: Path, file: str, function: str, *,
              verdict: str = "clean", source_hash: str = "",
              line_start: int = 1, line_end: int | None = None,

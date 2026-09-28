@@ -32,6 +32,15 @@ import pytest
 _RAPTOR_ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.fixture(autouse=True)
+def _user_state_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """User registries stay out of the real home: the root-conftest
+    layer doing this is stripped from release extracts (conftest.py
+    is export-ignore), so the pin must travel in-file."""
+    from core.testing.state_isolation import pin_user_state_dirs
+    pin_user_state_dirs(monkeypatch, tmp_path)
+
+
 def _import_agentic():
     if str(_RAPTOR_ROOT) not in sys.path:
         sys.path.insert(0, str(_RAPTOR_ROOT))
@@ -594,7 +603,12 @@ class TestCliEntryBackstop:
         # env credential pair outranks the HOME redirect, so pop it
         # too. CLAUDECODE keeps the session-bound worker-stamp lane
         # via the getppid fallback when no claude ancestor is
-        # walkable (CI).
+        # walkable (CI). XDG_DATA_HOME likewise outranks the HOME
+        # redirect wherever user state is XDG-anchored — the
+        # $XDG_DATA_HOME/raptor/*.key per-purpose MAC key files fall
+        # back to $HOME/.local/share only when it is unset — so drop
+        # the whole XDG family too: the scratch HOME must be the only
+        # user-state root the child can resolve.
         home = tmp_path / "home"
         home.mkdir()
         env = dict(os.environ)
@@ -602,6 +616,9 @@ class TestCliEntryBackstop:
         env["CLAUDECODE"] = "1"
         env.pop("RAPTOR_SESSION_PID", None)
         env.pop("RAPTOR_SESSION_TOKEN", None)
+        for _xdg in ("XDG_DATA_HOME", "XDG_CACHE_HOME",
+                     "XDG_CONFIG_HOME", "XDG_STATE_HOME"):
+            env.pop(_xdg, None)
         proc = subprocess.run(
             [sys.executable, "-c", script],
             cwd=_RAPTOR_ROOT, capture_output=True, text=True,
