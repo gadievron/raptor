@@ -588,9 +588,21 @@ class ClientShards(Generic[_PooledT]):
                 # Invariant: at least one selectable shard. Every
                 # live slot is draining with holds still in flight —
                 # provision fresh rather than block the relay or ride
-                # a connection already condemned.
-                self._slots.append(_Shard(self._build()))
-                index = len(self._slots) - 1
+                # a connection already condemned. Reuse a tombstoned
+                # slot when one exists so repeated drain storms keep
+                # the slot list at its high-water mark: a None slot is
+                # safe to reoccupy — tombstoning requires
+                # in_flight == 0, and every release/report for the old
+                # occupant lands before its slot is ever cleared.
+                index = next(
+                    (i for i, s in enumerate(self._slots) if s is None),
+                    None,
+                )
+                if index is None:
+                    self._slots.append(_Shard(self._build()))
+                    index = len(self._slots) - 1
+                else:
+                    self._slots[index] = _Shard(self._build())
             shard = self._slots[index]
             if shard is None:  # pragma: no cover — candidates are live
                 raise RuntimeError("selected shard slot is empty")

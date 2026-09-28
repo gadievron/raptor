@@ -756,6 +756,30 @@ class TestClientShardsLifecycle:
         finally:
             shards.close()
 
+    def test_all_draining_reuses_tombstoned_slots(self):
+        # Slot-list bound: the all-draining provision must reuse a
+        # tombstoned (None) slot when one exists instead of appending,
+        # so repeated drain storms leave the list at its high-water
+        # mark rather than growing it by one dead slot per episode.
+        shards = self._shards(1, failure_threshold=1)
+        try:
+            fresh = None
+            for _ in range(4):
+                held, held_index = shards.acquire()
+                shards.report_failure(held_index)  # threshold: draining
+                fresh, fresh_index = shards.acquire()  # all-draining
+                shards.release(held_index)  # condemned shard retires
+                shards.release(fresh_index)
+            # Steady state per episode is one live shard plus one
+            # tombstone — never one tombstone PER episode.
+            assert len(shards._slots) == 2
+            assert len(shards) == 1
+            assert fresh is not None
+            assert fresh in shards.clients
+            assert not fresh.is_closed
+        finally:
+            shards.close()
+
 
 class TestClientShardsRetire:
     """Graceful supersession (the proxy-env rebuild seam):
