@@ -739,6 +739,9 @@
     "kwargs:missing_module_attr:packages/llm_analysis/tests/test_dataflow_validation.py:packages.llm_analysis.dataflow_validation.update": {
       "note": "checker false positive: 'dv' at the flagged site is a local dict literal (dv.update(dv_extra) is dict.update); other test functions in the same file import the module 'as dv', which the resolver latched onto"
     },
+    "kwargs:missing_required:core/sandbox/tests/test_supervised.py:core.sandbox.supervised:spawn_supervised:on_parent_death": {
+      "note": "deliberate negative test: test_on_parent_death_is_required_keyword_without_default calls spawn_supervised without on_parent_death inside pytest.raises(TypeError) to pin the deliberate no-default contract (the caller must own the fate decision explicitly)"
+    },
     "kwargs:missing_required:packages/exploitability_validation/tests/test_witness_stage.py:packages.exploitability_validation.witness_stage:run_witness_stage:run_dir": {
       "note": "deliberate negative test: test_run_dir_is_required calls run_witness_stage without run_dir inside pytest.raises(TypeError, match='run_dir') to pin that the provenance binding stays the caller's explicit choice"
     },

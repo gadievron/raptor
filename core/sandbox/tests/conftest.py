@@ -332,6 +332,11 @@ def _sandbox_state_guard():
         # test_pidns_proc_mount.py seeds the cache to exercise the
         # once-per-process WARNING and the per-run posture stamp.
         "_pidns_fresh_proc_cache", "_pidns_proc_mount_unavailable_warned",
+        # Supervised pid-ns tier probe cache — test_supervised.py seeds
+        # and flips it (probe-count assertions, runtime-refusal flip);
+        # a leaked False would silently reroute every later
+        # spawn_supervised test onto the group tier.
+        "_pidns_supervision_cache",
     ]
     saved = {name: getattr(mod, name) for name in state_names}
     # Snapshot+restore the speculative-failure cache as a deep copy
