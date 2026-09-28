@@ -623,7 +623,53 @@ class TestMultiTurnGuard(unittest.TestCase):
 
 
 class TestE2EHookScript(unittest.TestCase):
-    """Run the actual hook script as a subprocess."""
+    """Run the actual hook script as a subprocess.
+
+    The event-mode smoke tests spawn the hook hermetically: with an
+    inherited environment, a run from inside a live claude session
+    resolved THAT session and swept its real run ledger and real
+    ``out/`` — ``session-end`` fails every running run of the session
+    (``abandon_sweep``), ``stop`` can stamp ``hook_finalize``
+    completions, and ``tool-failure`` drops failure markers into real
+    run directories.
+    """
+
+    @staticmethod
+    def _hermetic_invocation(tmp: Path) -> tuple[list[str], dict[str, str]]:
+        """A byte-identical hook copy rooted in *tmp* + a scrubbed env.
+
+        The hook finalises runs on two lanes the test must never
+        reach: the session run ledger under ``$HOME`` and the out-dir
+        scan (``$RAPTOR_OUT_DIR`` plus the unconditional
+        ``REPO_ROOT/out``, where ``REPO_ROOT`` derives from the
+        SCRIPT's own location — no env var moves it). A fresh HOME
+        (no registered sessions.d entry) with the session credential
+        pair popped empties the ledger lane; running a copy of the
+        script from *tmp* relocates ``REPO_ROOT/out`` to an empty tmp
+        tree — the subprocess twin of the in-process tests'
+        ``patch.object(_hook_mod, "REPO_ROOT", ...)``. PYTHONPATH
+        carries the real repo for the copy's imports, and
+        CLAUDECODE=1 satisfies the trust gate from the child's own
+        env rather than the invoking session's.
+        """
+        libexec = tmp / "libexec"
+        libexec.mkdir()
+        hook_copy = libexec / "raptor-lifecycle-hook"
+        hook_copy.write_bytes(HOOK_SCRIPT.read_bytes())
+        home = tmp / "home"
+        home.mkdir()
+        out_scan = tmp / "out-scan"
+        out_scan.mkdir()
+        env = dict(os.environ)
+        env["HOME"] = str(home)
+        env["RAPTOR_OUT_DIR"] = str(out_scan)
+        env["CLAUDECODE"] = "1"
+        env["RAPTOR_DIR"] = str(REPO_ROOT)
+        env["PYTHONPATH"] = os.pathsep.join(
+            p for p in (str(REPO_ROOT), env.get("PYTHONPATH")) if p)
+        env.pop("RAPTOR_SESSION_PID", None)
+        env.pop("RAPTOR_SESSION_TOKEN", None)
+        return [sys.executable, str(hook_copy)], env
 
     def test_invalid_arg_exits_nonzero(self):
         result = subprocess.run(
@@ -644,31 +690,38 @@ class TestE2EHookScript(unittest.TestCase):
         """In Claude Code env, stop runs without error."""
         if not os.environ.get("CLAUDECODE"):
             self.skipTest("Requires CLAUDECODE environment")
-        result = subprocess.run(
-            [sys.executable, str(HOOK_SCRIPT), "stop"],
-            capture_output=True, text=True,
-        )
-        self.assertEqual(result.returncode, 0)
+        with TemporaryDirectory() as tmp:
+            argv, env = self._hermetic_invocation(Path(tmp))
+            result = subprocess.run(
+                [*argv, "stop"],
+                capture_output=True, text=True, env=env, timeout=120,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_tool_failure_runs_in_claudecode(self):
         """In Claude Code env, tool-failure runs without error."""
         if not os.environ.get("CLAUDECODE"):
             self.skipTest("Requires CLAUDECODE environment")
-        result = subprocess.run(
-            [sys.executable, str(HOOK_SCRIPT), "tool-failure"],
-            capture_output=True, text=True, input=RAPTOR_BASH_FAILURE,
-        )
-        self.assertEqual(result.returncode, 0)
+        with TemporaryDirectory() as tmp:
+            argv, env = self._hermetic_invocation(Path(tmp))
+            result = subprocess.run(
+                [*argv, "tool-failure"],
+                capture_output=True, text=True, env=env, timeout=120,
+                input=RAPTOR_BASH_FAILURE,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_session_end_runs_in_claudecode(self):
         """In Claude Code env, session-end runs without error."""
         if not os.environ.get("CLAUDECODE"):
             self.skipTest("Requires CLAUDECODE environment")
-        result = subprocess.run(
-            [sys.executable, str(HOOK_SCRIPT), "session-end"],
-            capture_output=True, text=True,
-        )
-        self.assertEqual(result.returncode, 0)
+        with TemporaryDirectory() as tmp:
+            argv, env = self._hermetic_invocation(Path(tmp))
+            result = subprocess.run(
+                [*argv, "session-end"],
+                capture_output=True, text=True, env=env, timeout=120,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class TestSessionEndLivenessProof(unittest.TestCase):
