@@ -36,6 +36,7 @@ from core.analysis.gadget_oracle_precision import (  # noqa: E402
     CorpusReport,
     RowMeasurement,
     SyntheticCorpusDriver,
+    _CANONICAL_POP,
     aggregate,
     cross_tab_rows,
     regex_surface_census,
@@ -289,6 +290,13 @@ class TestRegexMethodListDrift:
         assert set(REGEX_ALIAS_TARGETS) == {
             m.lower() for m in go._SURFACE_CENSUS_NAMES}
         assert len(REGEX_ALIAS_TARGETS) == len(go._SURFACE_CENSUS_NAMES)
+
+    def test_canonical_pop_list_matches_oracle_census_set(self) -> None:
+        # The corpus generator emits canonical-case spellings; this pin
+        # keeps their casefolded membership equal to the oracle census
+        # set so the generated surface never drifts from the classifier.
+        assert {m.lower() for m in _CANONICAL_POP} == POP_SURFACE_METHODS
+        assert len(_CANONICAL_POP) == len(POP_SURFACE_METHODS)
 
 
 # ---------------------------------------------------------------------------
