@@ -2650,6 +2650,17 @@ def _make_request_handler(
             # Booking is not idempotent — the abort handler must know
             # whether the ok-path already settled this scanner.
             _usage_booked = False
+            # Provenance clock for the failure-path audit rows below:
+            # ``elapsed_s`` records monotonic seconds since the
+            # upstream send began, and ``response_started`` records
+            # whether the worker-facing response had begun (the same
+            # condition that selects the mid-stream abort path over
+            # the stamped 502). Together they let trail readers
+            # separate "relay belatedly noticing a worker that had
+            # already left" (long elapsed, response never started)
+            # from a genuine mid-response loss — flat rows made those
+            # indistinguishable.
+            upstream_sent_at = time.monotonic()
 
             def _note_stale_retry(exc: Exception) -> None:
                 # Written before the retry's outcome is known —
@@ -2665,6 +2676,16 @@ def _make_request_handler(
                     worker_label=rec.worker_label,
                     status="attempt",
                     reason=f"{type(exc).__name__} (fresh-connection retry)",
+                    # Same provenance shape as request.error. A retry
+                    # is pre-response by construction (the helper only
+                    # retries stream-open failures), so
+                    # response_started is always False here.
+                    extra={
+                        "response_started": False,
+                        "elapsed_s": round(
+                            time.monotonic() - upstream_sent_at, 3,
+                        ),
+                    },
                 ))
 
             try:
@@ -2832,6 +2853,15 @@ def _make_request_handler(
                     token_id=(rec.token_id or _short(rec.value)),
                     worker_label=rec.worker_label,
                     status="error", reason=type(exc).__name__,
+                    # Extra keys only — consumers filter rows by the
+                    # ``event`` field and tolerate additions (same
+                    # contract as request.dispatch's http_version).
+                    extra={
+                        "response_started": response_started,
+                        "elapsed_s": round(
+                            time.monotonic() - upstream_sent_at, 3,
+                        ),
+                    },
                 ))
                 if not response_started:
                     # Nothing on the wire yet — a clean HTTP error
