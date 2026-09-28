@@ -14800,7 +14800,8 @@ _STUDY_MAX_STALE_BATCHES = 3
 # marked the batch studied, and bought the next batch's failing calls
 # — observed live as hours of full-price zero-yield study calls after
 # the phase's own abort line. Three trips, all of which disable the
-# lane loudly (reviews continue without domain concepts):
+# lane loudly (no NEW concepts; reviews keep any already-extracted
+# domain model on disk):
 # * config-shaped (the phase says the same configuration re-buys the
 #   same failure) — disable on sight;
 # * consecutive whole-invocation failures — provider/corpus death;
@@ -16004,6 +16005,22 @@ def _study_consumer(
                 "seen_concepts": seen_concepts,
             },
         )
+    except Exception as exc:
+        # The loop's per-step shells catch what they can; anything
+        # escaping to here would otherwise kill the daemon thread
+        # with only a threading-excepthook traceback — the run then
+        # degrades SILENTLY, the exact failure _announce_study_disabled
+        # exists to make loud. Exception text can quote hostile
+        # target bytes: length up front (out-of-band authority),
+        # bounded, terminal-scrubbed.
+        from core.security.log_sanitisation import escape_nonprintable
+        logger.error("study-consumer: crashed", exc_info=True)
+        _msg = str(exc)
+        _announce_study_disabled(
+            f"study consumer crashed: {type(exc).__name__} "
+            f"({len(_msg)} chars): "
+            f"{escape_nonprintable(_msg[:200])}",
+        )
     finally:
         study_queue.signal_consumer_done()
 
@@ -16455,15 +16472,24 @@ def _study_consumer_loop(
                     from core.security.log_sanitisation import (
                         escape_nonprintable,
                     )
-                    # The TAIL, marked when elided: a Python child's
-                    # diagnosis (the traceback's final frame + error)
-                    # sits at the END of stderr — a head slice keeps
-                    # the banner and drops the one line that names
-                    # the failure.
+                    # The TAIL: a Python child's diagnosis (the
+                    # traceback's final frame + error) sits at the
+                    # END of stderr — a head slice keeps the banner
+                    # and drops the one line that names the failure.
+                    # The elision fact travels in the TRUSTED prefix
+                    # (a length count), never as an in-band marker:
+                    # hostile stderr can forge any marker text, and
+                    # log_sanitisation's contract wants authority
+                    # out-of-band.
                     _stderr = (prep_result.stderr or "").strip()
                     if len(_stderr) > 200:
-                        _stderr = "[… elided] " + _stderr[-200:]
-                    _stderr_tail = escape_nonprintable(_stderr)
+                        _stderr_tail = (
+                            f"stderr tail (last 200 of "
+                            f"{len(_stderr)} chars): "
+                            + escape_nonprintable(_stderr[-200:])
+                        )
+                    else:
+                        _stderr_tail = escape_nonprintable(_stderr)
                     _announce_study_disabled(
                         f"study-prep failed "
                         f"(exit {prep_result.returncode}): {_stderr_tail}",

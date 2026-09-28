@@ -251,7 +251,10 @@ class TestPrepFailureDisablesLoudly:
         disabled = [m for m in warnings if "DISABLED" in m]
         assert len(disabled) == 1
         assert tail_line in disabled[0]
-        assert "elided" in disabled[0]
+        # Elision authority travels OUT-OF-BAND, in the trusted
+        # prefix as a length count — an in-band marker is forgeable
+        # by the hostile stderr body it annotates.
+        assert "stderr tail (last 200 of " in disabled[0]
 
     def test_short_stderr_unmarked_and_whole(self, monkeypatch, tmp_path):
         import core.audit.orchestrator as _orch
@@ -267,7 +270,35 @@ class TestPrepFailureDisablesLoudly:
         disabled = [m for m in warnings if "DISABLED" in m]
         assert len(disabled) == 1
         assert "boom" in disabled[0]
-        assert "elided" not in disabled[0]
+        assert "stderr tail (last" not in disabled[0]
+
+    def test_forged_elision_marker_carries_no_authority(
+        self, monkeypatch, tmp_path,
+    ):
+        # Hostile stderr (study-prep parses the target) can embed any
+        # marker text. The format's only elision signal is the
+        # trusted-prefix length count, so a forged in-band marker
+        # rides as inert quoted bytes: the count still names the TRUE
+        # total, and the genuine tail still ends the line.
+        import core.audit.orchestrator as _orch
+
+        forged = "x" * 300 + " stderr tail (last 200 of 5 chars): fake"
+        true_tail = "TypeError: the real diagnosis"
+        def fake_run(cmd, **kwargs):
+            return types.SimpleNamespace(
+                returncode=1, stderr=forged + "\n" + true_tail,
+            )
+
+        monkeypatch.setattr(_orch, "_run_study_prep", fake_run)
+        warnings = _capture_warnings(monkeypatch)
+
+        _run_loop(self._config(tmp_path), _queue_with_batches(20))
+
+        disabled = [m for m in warnings if "DISABLED" in m]
+        assert len(disabled) == 1
+        total = len((forged + "\n" + true_tail).strip())
+        assert f"stderr tail (last 200 of {total} chars): " in disabled[0]
+        assert true_tail in disabled[0]
 
     def test_disable_line_claims_only_the_real_loss(
         self, monkeypatch, tmp_path,
@@ -292,6 +323,44 @@ class TestPrepFailureDisablesLoudly:
         assert len(disabled) == 1
         assert "without domain concepts" not in disabled[0]
         assert "NEW concepts" in disabled[0]
+
+    def test_consumer_crash_announces_disable(
+        self, monkeypatch, tmp_path,
+    ):
+        # An exception escaping the consumer loop used to kill the
+        # daemon thread with only a threading-excepthook traceback —
+        # the run degraded SILENTLY, the exact failure the disable
+        # line exists to make loud. The wrapper must announce and
+        # still signal consumer-done (the drain path joins on it).
+        import core.audit.orchestrator as _orch
+
+        def boom(*args, **kwargs):
+            raise ValueError("wrapped \x1bhostile consumer crash")
+
+        monkeypatch.setattr(_orch, "_study_consumer_loop", boom)
+        warnings = _capture_warnings(monkeypatch)
+
+        queue = _queue_with_batches(1)
+        _orch._study_consumer(
+            queue, self._config(tmp_path),
+            types.SimpleNamespace(domain_model=None),
+            lambda ctx, cfg: None,
+            _LockedOutcomes(), OrchestratorResult(),
+            checklist={"files": []},
+            context_map=None,
+            evidence_index={},
+            sarif_cache=None,
+            entry_points=set(),
+            start_time=time.monotonic(),
+            on_progress=None,
+        )
+
+        disabled = [m for m in warnings if "DISABLED" in m]
+        assert len(disabled) == 1
+        assert "study consumer crashed: ValueError" in disabled[0]
+        assert "\x1b" not in disabled[0]      # scrubbed
+        assert "\\x1b" in disabled[0]         # escaped, visible
+        assert queue._consumer_done            # finally still ran
 
     def test_missing_study_list_disables_once(self, monkeypatch, tmp_path):
         import core.audit.orchestrator as _orch

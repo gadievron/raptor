@@ -1553,7 +1553,8 @@ def main() -> int:
               file=sys.stderr)
         for item in remaining:
             # reading-list questions are LLM-authored free text.
-            q = sanitise_for_terminal(str(item.get("question", "")), max_len=100)
+            # present-but-null question: route like absent, not "None".
+            q = sanitise_for_terminal(str(item.get("question") or ""), max_len=100)
             print(f"  - {q}", file=sys.stderr)
 
     # Promotion and SAGE storage are durable-store WRITES — a failed
