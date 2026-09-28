@@ -28,7 +28,10 @@ Soundness contract (inherits the memo's, plus durability rules):
   may cause a sweep to be SKIPPED on bad data. A corrupt trail is
   additionally rotated aside (``.corrupt`` suffix) so the segment's
   fresh records start a clean file and the next resume is not poisoned
-  by the same bytes.
+  by the same bytes. The load open is ``O_NOFOLLOW | O_NONBLOCK`` with
+  a post-open regularity check, so a planted symlink or FIFO at the
+  trail path is refused into the same rotation — never followed,
+  never blocks the loader (which runs under the registry lock).
 * Writes are concurrent-writer safe by construction: every record is
   one fully-formed line appended via ``core.json.append_jsonl``
   (O_APPEND + single ``os.write`` — line-atomic for these record
@@ -102,6 +105,7 @@ _RESULT_FIELDS: tuple[str, ...] = (
 
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 
 def tool_checkpointable(tool: str) -> bool:
@@ -244,8 +248,19 @@ class SweepCheckpoint:
 
     def _load(self) -> None:
         try:
+            # O_NONBLOCK: the trail path lives in a run dir a sandboxed
+            # child holds (or held) write on, and an O_RDONLY open of a
+            # planted reader-less FIFO otherwise blocks forever — while
+            # this constructor runs under the registry lock, wedging
+            # every sweep worker behind it. With the flag the FIFO
+            # opens immediately and the post-open regularity check
+            # below rejects it into the corrupt-trail rotation (the
+            # same two-part defence as ``core.json.append_jsonl``'s
+            # write side; both flags are no-ops for the regular file
+            # every legitimate trail is).
             fd = os.open(
-                str(self._path), os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC,
+                str(self._path),
+                os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK,
             )
         except FileNotFoundError:
             return

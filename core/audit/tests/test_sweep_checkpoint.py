@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import subprocess
+import sys
+import textwrap
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -181,6 +185,52 @@ def test_schema_invalid_outcome_invalidates(
     rec["result"]["outcome"] = "error"  # never a valid persisted state
     trail.write_text(json.dumps(rec) + "\n")
     _assert_invalidated(tmp_path, caplog)
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo"), reason="platform lacks mkfifo",
+)
+def test_planted_fifo_neither_hangs_nor_loads(tmp_path: Path) -> None:
+    """A FIFO planted at the trail path must fail into the corrupt-
+    trail rotation, not block the constructor (which runs under the
+    registry lock — a hang there wedges every sweep worker).
+
+    Subprocess-based with a wall-clock timeout: an in-process
+    ``signal.alarm`` guard cannot prove this, because ``TimeoutError``
+    is an ``OSError`` subclass that ``_load``'s own handler would
+    swallow into a clean-looking invalidation.
+    """
+    os.mkfifo(tmp_path / CHECKPOINT_FILENAME)
+    repo = Path(sc.__file__).resolve().parents[2]
+    child = textwrap.dedent(
+        f"""
+        import os
+        import sys
+        sys.path.insert(0, {str(repo)!r})
+        os.environ["RAPTOR_DIR"] = {str(repo)!r}
+        os.environ["XDG_DATA_HOME"] = {str(tmp_path / "xdg")!r}
+        from pathlib import Path
+        from core.audit.sweep_checkpoint import (
+            CHECKPOINT_FILENAME, SweepCheckpoint,
+        )
+        run_dir = Path({str(tmp_path)!r})
+        cp = SweepCheckpoint(run_dir)
+        assert not cp._loaded
+        assert not (run_dir / CHECKPOINT_FILENAME).exists()
+        assert (run_dir / (CHECKPOINT_FILENAME + ".corrupt")).exists()
+        print("LOAD-COMPLETED")
+        """
+    )
+    proc = subprocess.run(  # noqa: S603 — own interpreter, literal argv
+        [sys.executable, "-c", child],
+        capture_output=True, text=True,
+        timeout=60,  # generous vs the failure mode being pinned: forever
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "LOAD-COMPLETED" in proc.stdout
+    # The other direction — a regular trail file loads and replays —
+    # is pinned by test_roundtrip_replays_on_fresh_instance.
 
 
 def test_rotation_makes_next_resume_clean(
