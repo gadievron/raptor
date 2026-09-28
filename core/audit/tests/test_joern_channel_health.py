@@ -105,19 +105,47 @@ class TestHalfOpenProbe:
         assert h.allow_dispatch()
         assert h.to_dict().get("recovered_once") is True
 
-    def test_probe_failure_seals_the_gate(self):
+    def test_probe_failure_widens_but_never_seals(self):
+        # BASE regression: one failed probe used to kill the channel
+        # for the rest of the run (probe_spent) — a restarted server
+        # was never picked up again.
         h = JoernChannelHealth(unhealthy_after=2)
         _trip(h)
         while not h.allow_dispatch():
             pass
         h.record_error("still restarting", key="a.c:probe")
         assert h.tripped
-        # No second probe for the run.
-        assert not any(
+        # Another probe MUST arrive — on the widened spacing, not
+        # never.
+        assert any(
             h.allow_dispatch() for _ in range(3 * REPROBE_AFTER_SKIPS)
         )
 
-    def test_second_trip_is_final(self):
+    def test_channel_recovery_after_failed_probe_resumes_dispatch(self):
+        # The observed failure mode: forwarder socket gone -> trip ->
+        # one probe fails -> socket restored -> the channel must come
+        # back instead of staying dead for a multi-day run.
+        h = JoernChannelHealth(unhealthy_after=2)
+        _trip(h)
+        while not h.allow_dispatch():
+            pass
+        h.record_error("connection failed", key="a.c:probe")
+        # "Socket restored" — the next scheduled probe completes.
+        granted = False
+        for _ in range(3 * REPROBE_AFTER_SKIPS):
+            if h.allow_dispatch():
+                granted = True
+                break
+        assert granted, "no re-probe after a failed probe"
+        h.record_success()
+        assert not h.tripped
+        assert h.allow_dispatch()
+        assert h.to_dict().get("recovered_once") is True
+
+    def test_second_trip_reenters_the_schedule(self):
+        # A recover -> re-trip cycle costs unhealthy_after real
+        # failures each time, so re-entering the probe schedule is
+        # bounded; sealing it forever is the one-shot defect again.
         h = JoernChannelHealth(unhealthy_after=2)
         _trip(h)
         while not h.allow_dispatch():
@@ -126,9 +154,205 @@ class TestHalfOpenProbe:
         assert not h.tripped
         _trip(h)
         assert h.tripped
-        assert not any(
+        assert any(
             h.allow_dispatch() for _ in range(3 * REPROBE_AFTER_SKIPS)
         )
+
+
+class TestReprobeBackoff:
+    """Two-direction pins for the re-probe schedule limits."""
+
+    @staticmethod
+    def _grant_gaps(h: JoernChannelHealth, calls: int) -> list[int]:
+        """Drive a dead-forever channel; return gaps between grants
+        (in allow_dispatch calls), failing every granted probe."""
+        gaps: list[int] = []
+        since = 0
+        for _ in range(calls):
+            since += 1
+            if h.allow_dispatch():
+                gaps.append(since)
+                since = 0
+                h.record_error("still dead", key="a.c:probe")
+        return gaps
+
+    def test_spacing_grows_by_backoff_factor_until_cap(self):
+        from core.audit.joern_health import (
+            REPROBE_BACKOFF_FACTOR,
+            REPROBE_MAX_SPACING,
+        )
+
+        h = JoernChannelHealth(unhealthy_after=2)
+        _trip(h)
+        gaps = self._grant_gaps(h, 3 * REPROBE_MAX_SPACING)
+        assert gaps[0] == REPROBE_AFTER_SKIPS
+        # Growth direction (factor not smaller): fixed spacing would
+        # probe a dead channel at the full base rate forever.
+        for prev, cur in zip(gaps, gaps[1:]):
+            if cur < REPROBE_MAX_SPACING:
+                assert cur == prev * REPROBE_BACKOFF_FACTOR
+            else:
+                assert cur == REPROBE_MAX_SPACING
+
+    def test_dead_channel_probe_cost_is_bounded(self):
+        # Cap not tighter: over N skips a dead channel costs at most
+        # a short growth burst plus one probe per cap window — each
+        # probe can hold a full client-side query timeout, so this is
+        # the burn bound.
+        from core.audit.joern_health import REPROBE_MAX_SPACING
+
+        h = JoernChannelHealth(unhealthy_after=2)
+        _trip(h)
+        n = 10_000
+        gaps = self._grant_gaps(h, n)
+        growth_probes = sum(1 for g in gaps if g < REPROBE_MAX_SPACING)
+        assert growth_probes <= 8
+        assert len(gaps) <= growth_probes + n // REPROBE_MAX_SPACING + 1
+        # Absolute ceiling, deliberately value-pinned: a cap that
+        # drifts DOWN to a degenerate value (e.g. collapsed to the
+        # base spacing — fixed base-rate probing forever) passes the
+        # relative shape checks above, so pin the concrete probe
+        # budget the current constants imply (4 growth probes plus
+        # one per cap window over the drive).
+        assert len(gaps) <= 35
+
+    def test_recovery_pickup_bounded_by_max_spacing(self):
+        # Cap not looser: after ANY number of failed probes the next
+        # probe is at most REPROBE_MAX_SPACING skips away, so a
+        # restored server is never dark longer than one cap window.
+        from core.audit.joern_health import REPROBE_MAX_SPACING
+
+        h = JoernChannelHealth(unhealthy_after=2)
+        _trip(h)
+        gaps = self._grant_gaps(h, 20 * REPROBE_MAX_SPACING)
+        assert gaps, "dead channel was never probed"
+        assert max(gaps) <= REPROBE_MAX_SPACING
+        # Steady state actually reaches the cap (the growth phase
+        # terminates instead of doubling forever).
+        assert gaps[-1] == REPROBE_MAX_SPACING
+
+    def test_recovery_rearms_at_escalated_base_not_widened_spacing(self):
+        # A genuine recovery (real round trip completed) re-arms the
+        # schedule at the escalated reset base: far below the previous
+        # outage's widened spacing (the next outage earns prompt
+        # pickup), but one escalation step above the first cycle's
+        # base (a flapper must not re-run the cheap start).
+        from core.audit.joern_health import (
+            REPROBE_BACKOFF_FACTOR,
+            REPROBE_MAX_SPACING,
+        )
+
+        h = JoernChannelHealth(unhealthy_after=2)
+        _trip(h)
+        # Widen the spacing with several failed probes.
+        self._grant_gaps(h, 8 * REPROBE_AFTER_SKIPS)
+        granted = False
+        for _ in range(2 * REPROBE_MAX_SPACING):
+            if h.allow_dispatch():
+                granted = True
+                break
+        assert granted, "no probe on the widened spacing"
+        h.record_success()
+        assert not h.tripped
+        _trip(h)
+        expected = min(
+            REPROBE_AFTER_SKIPS * REPROBE_BACKOFF_FACTOR,
+            REPROBE_MAX_SPACING,
+        )
+        grants = [h.allow_dispatch() for _ in range(expected)]
+        assert grants.count(True) == 1
+        assert grants.index(True) == expected - 1
+
+    def test_escalated_reset_base_caps_at_max_spacing(self):
+        # Escalation direction (never unbounded): after many
+        # recover -> re-trip cycles the reset base parks at the cap,
+        # so a backend that stops flapping is still probed within one
+        # cap window — never later.
+        from core.audit.joern_health import REPROBE_MAX_SPACING
+
+        h = JoernChannelHealth(unhealthy_after=2)
+        for _ in range(12):  # far past the geometric growth phase
+            _trip(h)
+            while not h.allow_dispatch():
+                pass
+            h.record_success()
+        _trip(h)
+        grants = [
+            h.allow_dispatch() for _ in range(REPROBE_MAX_SPACING + 5)
+        ]
+        assert grants.count(True) == 1
+        assert grants.index(True) == REPROBE_MAX_SPACING - 1
+
+    def test_first_outage_pickup_unchanged_by_escalation(self):
+        # Escalation's other direction: it applies only ACROSS
+        # recover -> re-trip cycles — the first outage of a run (the
+        # common, honest case) is still probed at the base spacing,
+        # never slower.
+        h = JoernChannelHealth(unhealthy_after=2)
+        _trip(h)
+        grants = [h.allow_dispatch() for _ in range(REPROBE_AFTER_SKIPS)]
+        assert grants.count(True) == 1
+        assert grants.index(True) == REPROBE_AFTER_SKIPS - 1
+
+    def test_flapping_backend_burn_converges_to_capped_rate(self):
+        # Adversarial flapper: answers exactly the half-open probes
+        # (re-opening the gate), fails every open-gate dispatch
+        # (rebuilding the streak).  With the reset base escalating
+        # per recovery, whole-run round trips stay under the ceiling
+        # implied by the escalation — at most unhealthy_after + 1 per
+        # cycle over the geometric growth cycles plus the capped
+        # cycles — instead of repeating the cheap base-spacing cycle
+        # forever (linear-in-N burn).  The paired direction is
+        # test_first_outage_pickup_unchanged_by_escalation above.
+        from core.audit.joern_health import (
+            REPROBE_BACKOFF_FACTOR,
+            REPROBE_MAX_SPACING,
+        )
+
+        h = JoernChannelHealth()  # production trip threshold
+        n = 10_000
+        round_trips = 0
+        key = 0
+        for _ in range(n):
+            if not h.allow_dispatch():
+                continue
+            round_trips += 1
+            if h.tripped:  # granted while tripped == half-open probe
+                h.record_success()
+            else:
+                key += 1
+                h.record_error("timed out", key=f"f{key}.c:fn")
+        growth_cycles = 0
+        base = REPROBE_AFTER_SKIPS
+        while base < REPROBE_MAX_SPACING:
+            growth_cycles += 1
+            base *= REPROBE_BACKOFF_FACTOR
+        max_cycles = growth_cycles + 1 + n // (
+            h.unhealthy_after + REPROBE_MAX_SPACING
+        )
+        assert round_trips <= (h.unhealthy_after + 1) * max_cycles
+
+    def test_granted_probes_are_not_counted_as_skips(self):
+        # skipped_dispatches feeds the report's "N dispatch(es)
+        # skipped after the trip" — verdicts issued WITHOUT the leg.
+        # A granted probe dispatches, so counting it as a skip
+        # over-states the loss by probes_attempted.
+        h = JoernChannelHealth(unhealthy_after=2)
+        _trip(h)
+        n = 4 * REPROBE_AFTER_SKIPS
+        for _ in range(n):
+            if h.allow_dispatch():
+                h.record_error("still dead", key="a.c:probe")
+        d = h.to_dict()
+        assert d["probes_attempted"] >= 2
+        assert d["skips_since_trip"] == n - d["probes_attempted"]
+
+    def test_probes_attempted_reaches_to_dict(self):
+        h = JoernChannelHealth(unhealthy_after=2)
+        _trip(h)
+        self._grant_gaps(h, 4 * REPROBE_AFTER_SKIPS)
+        d = h.to_dict()
+        assert d.get("probes_attempted", 0) >= 1
 
 
 class TestConfigHelpers:
@@ -333,6 +557,67 @@ class TestDispatchGating:
             )
         assert cfg.joern_health.tripped
         assert "timed out" in (cfg.joern_health.trip_reason or "")
+
+    def test_restored_server_resumes_dispatch_after_trip(
+        self, tmp_path, counters, monkeypatch,
+    ):
+        """End-to-end shape of the observed defect: server dies ->
+        gate trips -> server comes back -> the scheduled re-probe
+        must recover the channel and later hypotheses must dispatch
+        again (on BASE the failed first probe killed the channel for
+        the rest of the run)."""
+        cfg = _Cfg(tmp_path, unhealthy_after=3)
+        server_up = {"up": False}
+        calls: list[str] = []
+
+        def fake_live_query(
+            server, fn, sinks, timeout=30, errors_out=None, **kw,
+        ):
+            calls.append(fn)
+            if not server_up["up"]:
+                if errors_out is not None:
+                    errors_out.append(
+                        "connection failed: socket unavailable",
+                    )
+                return []
+            # Restored server answers with a flow — the completed
+            # round trip is what feeds record_success.
+            return ["flow"]
+
+        monkeypatch.setattr(orch, "_joern_live_query", fake_live_query)
+
+        def dispatch(fn: str) -> None:
+            _run_tool_chain(
+                self.CHAIN,
+                config=cfg,
+                file_path="src/a.c",
+                function_name=fn,
+                source="",
+                hypothesis=self.HYP,
+                tier_counters=counters,
+                joern_server=object(),
+            )
+
+        # Server down: trip, then burn the first probe too.
+        for i in range(3):
+            dispatch(f"down{i}")
+        assert cfg.joern_health.tripped
+        for i in range(REPROBE_AFTER_SKIPS):
+            dispatch(f"skip{i}")
+        assert cfg.joern_health.tripped  # first probe failed
+        # Server restored: the next scheduled probe must succeed and
+        # re-open dispatch for subsequent hypotheses.
+        server_up["up"] = True
+        for i in range(3 * REPROBE_AFTER_SKIPS):
+            dispatch(f"back{i}")
+            if not cfg.joern_health.tripped:
+                break
+        assert not cfg.joern_health.tripped, (
+            "channel never recovered after the server came back"
+        )
+        before = len(calls)
+        dispatch("post_recovery")
+        assert len(calls) == before + 1
 
     def test_cached_presweep_evidence_survives_trip(
         self, tmp_path, counters, monkeypatch,
@@ -567,6 +852,116 @@ class TestDiagnosticsAndReport:
         assert report["channel_health"]["joern"]["tripped"] is True
         assert "joern channel unhealthy" in report["summary"]
         assert "Skipped is not refuted" in report["summary"]
+
+    @staticmethod
+    def _tripped_record(**overrides) -> dict:
+        """Synthetic end-of-run record shaped like a real trip on an
+        exhaustive audit run of a large C codebase: the gate tripped
+        early and every later review skipped its joern leg."""
+        rec = {
+            "tripped": True,
+            "trip_reason": (
+                "8 consecutive dispatch failures across 8 functions "
+                "(last: connection failed: [Errno 2] No such file "
+                "or directory)"
+            ),
+            "consecutive_errors": 9,
+            "total_errors": 9,
+            "total_successes": 0,
+            "unhealthy_after": 8,
+            "skips_since_trip": 1091,
+            "probes_attempted": 5,
+        }
+        rec.update(overrides)
+        return rec
+
+    def test_channel_loss_reaches_completeness_and_summary(
+        self, tmp_path,
+    ):
+        """A run ending tripped with skips behind it must state the
+        loss loudly in completeness + summary, not only in the buried
+        channel_health block."""
+        from core.audit.report import generate_report
+
+        write_tier_diagnostics(
+            {"joern": TierCounters()}, tmp_path,
+            channel_health={"joern": self._tripped_record()},
+        )
+        report = generate_report(tmp_path)
+        loss = report["completeness"]["channel_loss"]
+        assert loss[0]["channel"] == "joern"
+        assert loss[0]["skipped_dispatches"] == 1091
+        assert "connection failed" in loss[0]["reason"]
+        summary = report["summary"]
+        assert "Validation channel lost" in summary
+        assert "1091" in summary
+        assert "Skipped is not refuted" in summary
+        assert "Remedy" in summary
+
+    def test_channel_loss_reason_is_rendered_inert(self, tmp_path):
+        """Trip reasons quote server/target-derived error bytes — the
+        completeness surfacing must escape non-printables per the
+        log-sanitisation contract: ESC/CSI and raw C1 controls become
+        their escaped forms, bidi overrides are stripped outright (the
+        prompt-envelope invisible-character class) \u2014 on every output
+        seam (completeness JSON, summary, rendered markdown)."""
+        from core.audit.report import generate_report, write_markdown_report
+
+        hostile = (
+            "8 failures (last: \x1b[2J\x9b2Jconnection \u202elost)"
+        )
+        escaped_pins = (
+            ("\x1b", "\\x1b"),  # ESC (CSI introducer)
+            ("\x9b", "\\x9b"),  # raw C1 CSI byte
+        )
+        rec = self._tripped_record(trip_reason=hostile)
+        write_tier_diagnostics(
+            {"joern": TierCounters()}, tmp_path,
+            channel_health={"joern": rec},
+        )
+        report = generate_report(tmp_path)
+        loss = report["completeness"]["channel_loss"][0]
+        md = write_markdown_report(report, tmp_path).read_text()
+        surfaces = (loss["reason"], report["summary"], md)
+        for raw, escaped in escaped_pins:
+            for surface in surfaces:
+                assert raw not in surface
+                assert escaped in surface
+        # Bidi RLO override (U+202E): inert by removal, with the
+        # surrounding text intact (proves the byte traversed the seam
+        # rather than the record never carrying it).
+        for surface in surfaces:
+            assert "\u202e" not in surface
+        assert "connection lost" in loss["reason"]
+
+    def test_channel_loss_absent_without_skips_or_trip(self, tmp_path):
+        from core.audit.report import generate_report
+
+        # Tripped at the very end (no dispatch skipped): the summary
+        # trip section still speaks, but no verdicts were issued
+        # without the leg — no completeness loss entry.
+        write_tier_diagnostics(
+            {"joern": TierCounters()}, tmp_path,
+            channel_health={
+                "joern": self._tripped_record(skips_since_trip=0),
+            },
+        )
+        report = generate_report(tmp_path)
+        assert "channel_loss" not in report["completeness"]
+
+        # Recovered before run end: the channel answered again — not
+        # a run-ending loss.
+        write_tier_diagnostics(
+            {"joern": TierCounters()}, tmp_path,
+            channel_health={
+                "joern": self._tripped_record(
+                    tripped=False, recovered_once=True,
+                    gated_spends=["taint_summaries"],
+                ),
+            },
+        )
+        report = generate_report(tmp_path)
+        assert "channel_loss" not in (report.get("completeness") or {})
 
     def test_report_quiet_when_untripped(self, tmp_path):
         from core.audit.report import generate_report
