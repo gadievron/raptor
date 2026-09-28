@@ -1181,8 +1181,18 @@ def _apply_journal_verdict_overrides(
 
     out: list[dict[str, Any]] = []
     for finding in findings:
+        # Journal rows carry the AS-REVIEWED checklist-item name; a
+        # finding whose attribution was corrected at the row seam
+        # (stamp_function_attribution) keeps that identity in
+        # claimed_function — join on it, or the corrected name
+        # orphans the row from its own review's verdict updates.
         sites = by_name.get(
-            (finding.get("file", ""), finding.get("function", "")), [],
+            (
+                finding.get("file", ""),
+                finding.get("claimed_function")
+                or finding.get("function", ""),
+            ),
+            [],
         )
         site = _match_journal_site(finding, sites)
         journal_verdict = site.get("status") if site else None

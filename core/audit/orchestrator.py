@@ -31149,7 +31149,17 @@ def _persist_findings(
     final unconditional re-persist converges the records on the
     verdict-refined value.
     """
+    from .findings import stamp_function_attribution
+    from .gaps import load_checklist
     from .tree_class import classify_tree_class
+
+    # Attribution chokepoint input: the row seam validates each
+    # outcome's function name against the checklist (a phantom
+    # extractor item can carry a CALLEE name — see
+    # resolve_function_attribution). Loaded once per persist; the
+    # journal/coverage layers keep the AS-REVIEWED name, only the
+    # export row is corrected.
+    checklist = load_checklist(config.out_dir) if config.out_dir else {}
 
     findings_dicts = []
     # Snapshot: the incremental-promotion tick calls this mid-loop
@@ -31195,6 +31205,9 @@ def _persist_findings(
             # in mid-run persists and in runs interrupted before the
             # post-loop confirmation pass.
             finding["provisional"] = True
+        stamp_function_attribution(
+            finding, checklist, target_path=config.target_path,
+        )
         findings_dicts.append(finding)
 
     if not findings_dicts and not (

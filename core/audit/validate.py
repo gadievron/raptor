@@ -637,6 +637,14 @@ def _emit_findings_json(
         FindingsContainer,
     )
 
+    from .findings import stamp_function_attribution
+    from .gaps import load_checklist
+
+    # Attribution chokepoint input (see resolve_function_attribution):
+    # outcome.function is the as-reviewed checklist-item name, which a
+    # phantom extractor item can set to a CALLEE at the finding line.
+    checklist = load_checklist(out_dir)
+
     findings: list[dict[str, Any]] = []
     for seq, (_, outcome) in enumerate(findings_outcomes, start=1):
         cwe = _extract_cwe(outcome)
@@ -655,13 +663,16 @@ def _emit_findings_json(
         if cwe:
             raw["cwe_id"] = cwe
         finding = Finding.from_dict(raw).to_dict()
+        stamp_function_attribution(
+            finding, checklist, target_path=target_path,
+        )
         # Audit-owned extras (not modelled by the canonical Finding).
         # tree_class rides along so the budget-capped selection
         # (truncate_findings_by_signal) can prefer production findings
         # on signal ties — a tag, never a filter.
         finding["tree_class"] = classify_tree_class(str(outcome.file or ""))
         finding["title"] = (outcome.hypothesis
-                            or f"Finding in {outcome.function}")
+                            or f"Finding in {finding.get('function') or outcome.function}")
         if outcome.hypothesis:
             finding["hypothesis"] = outcome.hypothesis
         if outcome.status == "dark":
