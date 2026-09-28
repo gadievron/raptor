@@ -47,9 +47,12 @@ ALLOWLIST: dict[tuple[str, str], str] = {
 
 #: Non-vacuity floors — the census must keep seeing the swept callers
 #: (2 gate calls internal to lifecycle.py, checker_synthesis, the
-#: audit pipeline, cve-env's provider resolution, raptor-llm-ask, and
-#: the five standalone libexec CLIs). A new caller raises the count;
-#: the floor only guards the census against going vacuous.
+#: audit pipeline, cve-env's provider resolution, raptor-llm-ask, the
+#: standalone libexec CLIs, and core.llm.session_fallback — which
+#: took over the validation helper's two former direct gate calls).
+#: A new caller raises the count; the floor only guards the census
+#: against going vacuous. Lower it ONLY when a caller demonstrably
+#: moved behind a swept wrapper, never to paper over a dropped call.
 _KNOWN_GATE_CALLS = 11
 _KNOWN_WRAPPER_CALLS = 10
 
