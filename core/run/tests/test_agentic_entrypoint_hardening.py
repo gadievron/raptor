@@ -158,6 +158,40 @@ class TestReplayReproduced:
 # ---------------------------------------------------------------------------
 
 
+def _tree_kill_took(pid: int) -> bool:
+    """True once *pid* is dead — including dead-but-unreaped.
+
+    When pytest itself runs as pid 1 (pid-namespace batches:
+    ``unshare -pf``), the SIGKILLed grandchild reparents to the TEST
+    PROCESS and lingers as a zombie no init will ever reap —
+    ``kill(pid, 0)`` succeeds on zombies, so the bare probe misread
+    a dead grandchild as a survivor. Reap the adoptee if it is ours,
+    then treat a readable Z state as dead. The probe stays a real
+    liveness check in both directions: a running (R/S) grandchild
+    still fails the test, and an UNREADABLE ``/proc`` (masked over,
+    non-procfs) proves nothing about death — kill-0 just succeeded,
+    so it reads ALIVE and the caller keeps polling. A pid that exits
+    between the two probes reads dead on the next iteration via
+    ProcessLookupError.
+    """
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except (ChildProcessError, OSError):
+        pass  # not our child (normal host run) — probe below decides
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    try:
+        with open(f"/proc/{pid}/stat", encoding="ascii",
+                  errors="replace") as fh:
+            stat = fh.read()
+    except OSError:
+        return False  # can't prove death — never a vacuous pass
+    # State is the first field after the comm's closing paren.
+    return stat.rpartition(")")[2].split()[:1] == ["Z"]
+
+
 @pytest.mark.skipif(not hasattr(os, "killpg"), reason="killpg unavailable")
 class TestKillProcessTree:
     def test_grandchild_is_reaped(self):
@@ -175,9 +209,7 @@ class TestKillProcessTree:
             proc.wait(timeout=5)
             # Give the kernel a beat to deliver the group SIGKILL.
             for _ in range(50):
-                try:
-                    os.kill(grandchild, 0)
-                except ProcessLookupError:
+                if _tree_kill_took(grandchild):
                     break
                 time.sleep(0.1)
             else:
