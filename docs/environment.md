@@ -206,6 +206,12 @@ These knobs are covered in full in [LLM Providers](llm.md)
 cost management. `models.json` entries beat every env knob for model
 selection.
 
+### Session-transport fallback
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RAPTOR_NO_SESSION_FALLBACK` | unset | Set to `1` (canonical boolean spellings, case-insensitive; unrecognised values warn and use the default) to disable the session-transport fallback (`core.llm.session_fallback`). When a standalone CLI's model chain is entirely dispatcher-only (Bedrock) and no `RAPTOR_LLM_SOCKET` route could be self-served, adopted seams (the `/validate` witness and rank stages) normally swap to the claudecode session transport after one notice line naming this variable — prompts then go to the `claude` CLI's backend instead of the configured provider route. With the knob set, the configured chain is kept as-is and every LLM call surfaces the provider's dispatcher-required refusal (the pre-fallback behaviour). The Bedrock provider guard is unaffected either way. |
+
 ### Claude Code transport (`RAPTOR_CC_*`)
 
 | Variable | Default | Purpose |
