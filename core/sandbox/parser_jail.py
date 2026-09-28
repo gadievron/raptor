@@ -366,9 +366,28 @@ class ParserJail:
             ready = self._read_ready_frame(parent_sock)
         except (_ProtocolError, OSError) as exc:
             parent_sock.close()
+            # Attribute the worker's fate before the unconditional
+            # kill+reap destroys it: a child that died pre-frame (its
+            # stderr is /dev/null and no frame ever arrived) is
+            # otherwise a bare "closed the socket" with zero forensic
+            # signal. EOF usually races the child's _exit by
+            # microseconds, so give it a short beat to become
+            # reapable; a genuinely wedged child (ready timeout) is
+            # still alive and says so.
+            try:
+                exit_status: "int | None" = proc.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                exit_status = None
             self._reap_locked(proc)
+            if exit_status is None:
+                exit_note = "worker was still alive; parent killed it"
+            elif exit_status < 0:
+                exit_note = f"worker died to signal {-exit_status}"
+            else:
+                exit_note = f"worker exited with code {exit_status}"
             raise ParserJailUnavailable(
-                f"parser worker failed confinement handshake: {exc}"
+                f"parser worker failed confinement handshake: {exc} "
+                f"({exit_note})"
             ) from exc
 
         if ready.get("ready") is not True:
@@ -379,6 +398,17 @@ class ParserJail:
             self._reap_locked(proc)
             raise ParserJailUnavailable(
                 f"parser worker refused to confine: {err_txt}")
+
+        rlimits_failed = ready.get("rlimits_failed")
+        if rlimits_failed:
+            # Child-supplied text: sanitise + bound before logging,
+            # same as the refusal-reason treatment above.
+            logger.warning(
+                "parser-jail: worker applied its rlimits only "
+                "partially — failed: %s (best-effort per limit; the "
+                "worker still runs with every limit that did apply)",
+                sanitise_for_terminal(str(rlimits_failed))[:_MAX_REASON_LEN],
+            )
 
         landlocked = ready.get("landlock") is True
         self._landlocked = landlocked
