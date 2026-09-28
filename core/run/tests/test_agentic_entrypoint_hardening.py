@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -36,6 +37,54 @@ def _import_agentic():
         sys.path.insert(0, str(_RAPTOR_ROOT))
     import raptor_agentic
     return raptor_agentic
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _audit_log_dir_in_tmp(
+        tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Redirect the audit-log file away from the real checkout.
+
+    ``RaptorConfig.LOG_DIR`` is file-anchored (``REPO_ROOT/out/logs``,
+    no env override) and the RaptorLogger singleton bakes a
+    ``raptor_*.jsonl`` file-handler path at initialisation — which the
+    root ``conftest.py`` import triggers before any fixture can run.
+    The in-process ``run_command_streaming`` tests here then emit
+    through that handler, appending an audit file into the real
+    checkout's ``out/logs`` on every pytest run. Contain both stages:
+    point LOG_DIR at a tmp dir (covers a not-yet-initialised
+    singleton), and repoint the already-baked AUDIT file handlers on
+    the "raptor" logger for the duration of this module. The close +
+    rebind is lossless for the audit handler only because its
+    ``_open`` is O_APPEND with ``delay=True`` reopen: it reopens from
+    ``baseFilename`` on the next emit without truncating. Sweep
+    strictly that handler class — pytest attaches its session
+    ``--log-file`` handler (mode ``"w"``) to every non-propagating
+    logger including this one, and stdlib ``FileHandler.emit`` never
+    reopens a closed mode-``"w"`` handler, so closing it would
+    silence the operator's ``--log-file`` for the rest of the run.
+    """
+    import logging as _logging
+
+    from core.config import RaptorConfig
+    from core.logging import _OwnerOnlyFileHandler
+    tmp_dir = tmp_path_factory.mktemp("audit-logs")
+    prev_log_dir = RaptorConfig.LOG_DIR
+    RaptorConfig.LOG_DIR = tmp_dir
+    handlers = [
+        h for h in _logging.getLogger("raptor").handlers
+        if isinstance(h, _OwnerOnlyFileHandler)
+    ]
+    saved = [(h, h.baseFilename) for h in handlers]
+    for h, base in saved:
+        h.close()
+        h.baseFilename = str(tmp_dir / Path(base).name)
+    try:
+        yield
+    finally:
+        RaptorConfig.LOG_DIR = prev_log_dir
+        for h, base in saved:
+            h.close()
+            h.baseFilename = base
 
 
 # ---------------------------------------------------------------------------
@@ -480,8 +529,18 @@ class TestCliEntryBackstop:
         script = (
             "import sys\n"
             f"sys.path.insert(0, {str(_RAPTOR_ROOT)!r})\n"
-            "import raptor_agentic as ra\n"
+            # RaptorConfig.LOG_DIR is file-anchored (REPO_ROOT/out/logs,
+            # no env override), and importing raptor_agentic instantiates
+            # the RaptorLogger singleton at module import — every run of
+            # this test otherwise appends a raptor_*.jsonl audit file
+            # into the real checkout's out/logs. Redirect LOG_DIR into
+            # the test tmp dir BEFORE that import; core.config itself
+            # does not instantiate the logger, so the override lands
+            # ahead of any file-handler path computation.
             "from pathlib import Path\n"
+            "from core.config import RaptorConfig\n"
+            f"RaptorConfig.LOG_DIR = Path({str(tmp_path / 'logs')!r})\n"
+            "import raptor_agentic as ra\n"
             f"out = Path({str(out)!r})\n"
             "def boom():\n"
             "    out.mkdir(parents=True, exist_ok=True)\n"
@@ -492,10 +551,29 @@ class TestCliEntryBackstop:
             "ra.main = boom\n"
             "ra._cli_entry()\n"
         )
+        # Hermetic session posture for the subprocess: the child's
+        # REAL start_run resolves the session itself, and with an
+        # inherited environment a run from inside a live claude
+        # session ledger-records this test run into that session's
+        # real ~/.local/share/raptor/sessions.d ledger — where the
+        # session's lifecycle Stop hook can race the test and
+        # finalize the run out from under it. A fresh HOME means no
+        # registered session entry, so ledger writes are refused; the
+        # env credential pair outranks the HOME redirect, so pop it
+        # too. CLAUDECODE keeps the session-bound worker-stamp lane
+        # via the getppid fallback when no claude ancestor is
+        # walkable (CI).
+        home = tmp_path / "home"
+        home.mkdir()
+        env = dict(os.environ)
+        env["HOME"] = str(home)
+        env["CLAUDECODE"] = "1"
+        env.pop("RAPTOR_SESSION_PID", None)
+        env.pop("RAPTOR_SESSION_TOKEN", None)
         proc = subprocess.run(
             [sys.executable, "-c", script],
             cwd=_RAPTOR_ROOT, capture_output=True, text=True,
-            timeout=120,
+            timeout=120, env=env,
         )
         assert proc.returncode != 0
         marker = json.loads(
