@@ -168,8 +168,9 @@ def _held_by_this_process(lock_path: Path) -> bool:
     )
 
 
-def run_lock_path(out_dir: Path) -> Path:
-    return Path(out_dir) / RUN_LOCK_NAME
+def run_lock_path(out_dir: Path,
+                  lock_name: str = RUN_LOCK_NAME) -> Path:
+    return Path(out_dir) / lock_name
 
 
 def _identity_fields() -> dict[str, str]:
@@ -302,9 +303,10 @@ def holder_liveness(holder: dict) -> tuple[str, str]:
     return "alive", f"pid {pid} is running and matches the stamp"
 
 
-def _live_holder_message(out_dir: Path, holder: dict) -> str:
+def _live_holder_message(out_dir: Path, holder: dict,
+                         subject: str = "audit") -> str:
     return (
-        f"audit run directory {out_dir} is owned by a live audit "
+        f"{subject} run directory {out_dir} is owned by a live {subject} "
         f"orchestrator ({describe_holder(holder)}) — refusing to start "
         "a second orchestrator on the same run: two orchestrators "
         "co-writing one run's journal and ledgers means double LLM "
@@ -312,7 +314,7 @@ def _live_holder_message(out_dir: Path, holder: dict) -> str:
         "exit (a SIGTERM-drained orchestrator keeps this lock through "
         "its salvage until it actually exits), or verify the holder "
         "pid before retrying — and if that pid is provably NOT an "
-        "audit orchestrator working this run directory (a forged or "
+        f"{subject} orchestrator working this run directory (a forged or "
         "wrong stamp), delete the lock file and retry. Only delete "
         "after verifying: removing the file under a genuinely live "
         "holder splits lockers across two inodes."
@@ -340,7 +342,8 @@ def _stamp(fd: int, operation: str) -> None:
                        "lives)", fd, exc_info=True)
 
 
-def _warn_proceeding_unlocked(lock_path: Path, exc: OSError) -> None:
+def _warn_proceeding_unlocked(lock_path: Path, exc: OSError,
+                              subject: str = "audit") -> None:
     # Fail direction argued both ways: refusing on a genuine cannot-
     # create would brick runs (and salvage-era resumes) on transient
     # lock-file trouble the run itself may survive, while proceeding
@@ -351,7 +354,7 @@ def _warn_proceeding_unlocked(lock_path: Path, exc: OSError) -> None:
     # unopenable entries do NOT come here — those fail closed (see
     # the planted-artifact split in acquire_run_lock).
     print(
-        f"warning: cannot create the audit run lock at {lock_path} "
+        f"warning: cannot create the {subject} run lock at {lock_path} "
         f"({exc.__class__.__name__}) — proceeding WITHOUT run-dir "
         "mutual exclusion; a concurrent orchestrator on this "
         "directory would not be refused",
@@ -359,9 +362,10 @@ def _warn_proceeding_unlocked(lock_path: Path, exc: OSError) -> None:
     )
 
 
-def _planted_artifact_message(lock_path: Path, detail: str) -> str:
+def _planted_artifact_message(lock_path: Path, detail: str,
+                              subject: str = "audit") -> str:
     return (
-        f"audit run lock path {lock_path} exists but is not an "
+        f"{subject} run lock path {lock_path} exists but is not an "
         f"openable regular file ({detail}) — refusing to proceed: a "
         "planted symlink, directory, or special file here can "
         "capture the lock onto a foreign inode or disable the run's "
@@ -391,11 +395,19 @@ def _prior_run_terminal(out_dir: Path) -> bool:
         and status != STATUS_RUNNING
 
 
-def acquire_run_lock(out_dir: Path, operation: str) -> RunLockHandle:
+def acquire_run_lock(out_dir: Path, operation: str, *,
+                     lock_name: str = RUN_LOCK_NAME,
+                     subject: str = "audit") -> RunLockHandle:
     """Acquire the exclusive orchestrator lock on *out_dir* for the
     rest of this process's lifetime. Raises :class:`AuditRunLocked`
     (callers print and exit non-zero — never a silent queue) when the
     directory is, or may be, owned by another live orchestrator.
+
+    ``lock_name``/``subject`` let a NON-audit orchestrator family
+    (the engagement supervisor) reuse this discipline on its own lock
+    file with its own refusal wording — the defaults reproduce the
+    audit behaviour byte-for-byte, and two families with distinct
+    lock names never contend with each other by construction.
 
     Decision table:
 
@@ -421,11 +433,11 @@ def acquire_run_lock(out_dir: Path, operation: str) -> RunLockHandle:
     residual, same shape as the session ledger's off-Linux stamps).
     """
     out_dir = Path(out_dir)
-    lock_path = run_lock_path(out_dir)
+    lock_path = run_lock_path(out_dir, lock_name)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        _warn_proceeding_unlocked(lock_path, exc)
+        _warn_proceeding_unlocked(lock_path, exc, subject)
         return RunLockHandle(-1, lock_path)
     # O_NOFOLLOW: the lock path lives in a run directory other
     # principals can write — a planted symlink would otherwise
@@ -459,9 +471,10 @@ def acquire_run_lock(out_dir: Path, operation: str) -> RunLockHandle:
                 _planted_artifact_message(
                     lock_path,
                     f"open refused: {exc.strerror or exc.__class__.__name__}",
+                    subject,
                 )
             ) from None
-        _warn_proceeding_unlocked(lock_path, exc)
+        _warn_proceeding_unlocked(lock_path, exc, subject)
         return RunLockHandle(-1, lock_path)
     # fstat on the OPEN fd (no TOCTOU): O_NOFOLLOW only guards the
     # final component's symlink case — a hard-linked device or a FIFO
@@ -473,7 +486,8 @@ def acquire_run_lock(out_dir: Path, operation: str) -> RunLockHandle:
     if st_mode is None or not stat.S_ISREG(st_mode):
         os.close(fd)
         raise AuditRunLocked(
-            _planted_artifact_message(lock_path, "not a regular file"))
+            _planted_artifact_message(lock_path, "not a regular file",
+                                      subject))
     # Self-held detection BEFORE any stamp bytes are read, from the
     # process-local handle registry only: the stamp is forgeable file
     # content, so "pid + starttime match ours" proves nothing — a
@@ -497,7 +511,8 @@ def acquire_run_lock(out_dir: Path, operation: str) -> RunLockHandle:
             holder = read_holder(lock_path)
             os.close(fd)
             raise AuditRunLocked(
-                _live_holder_message(out_dir, holder), holder) from None
+                _live_holder_message(out_dir, holder, subject),
+                holder) from None
     # flock held (or no fcntl): adjudicate whatever stamp is behind it.
     prior = read_holder(lock_path)
     stale_bytes = False
@@ -514,15 +529,15 @@ def acquire_run_lock(out_dir: Path, operation: str) -> RunLockHandle:
             # the documented alive-stamp fail direction (refuse).
             _release_fd(fd)
             raise AuditRunLocked(
-                _live_holder_message(out_dir, prior), prior)
+                _live_holder_message(out_dir, prior, subject), prior)
         if verdict == "indeterminate":
             _release_fd(fd)
             raise AuditRunLocked(
-                f"audit run lock {lock_path} names a holder whose "
+                f"{subject} run lock {lock_path} names a holder whose "
                 f"liveness cannot be verified "
                 f"({describe_holder(prior)}; {reason}) — failing "
                 "closed rather than risk a second live orchestrator "
-                "on this run. If you have verified that no audit "
+                f"on this run. If you have verified that no {subject} "
                 "orchestrator is running against this directory, "
                 "delete the lock file and retry.",
                 prior,
@@ -531,12 +546,12 @@ def acquire_run_lock(out_dir: Path, operation: str) -> RunLockHandle:
             # Concluded run's leftover stamp — the normal end state of
             # every directory reuse, not a diagnostic event.
             logger.debug(
-                "reclaiming stale audit run lock on %s (%s; %s)",
-                out_dir, describe_holder(prior), reason,
+                "reclaiming stale %s run lock on %s (%s; %s)",
+                subject, out_dir, describe_holder(prior), reason,
             )
         else:
             print(
-                f"reclaiming stale audit run lock on {out_dir} "
+                f"reclaiming stale {subject} run lock on {out_dir} "
                 f"({describe_holder(prior)}; {reason})",
                 file=sys.stderr,
             )
