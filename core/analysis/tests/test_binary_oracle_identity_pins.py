@@ -323,3 +323,194 @@ class TestPinStillHoldsDeviceHalf:
         with open(b, "rb") as fh:
             fh.read()  # position at EOF like the held witness fd
             assert _pin_still_holds(fh, b, pin) is False
+
+
+class TestWitnessedMissingNarrowsQuantifier:
+    """Deleting a witnessed store binary is a NO-RACE move available
+    to the same run-dir-write attacker the witness exists to stop.
+    The load seam still SKIPS it — demote-not-
+    refuse, there is nothing to classify — but the skip must be
+    ACCOUNTED: the missing path rides the identity channel as a None
+    pin, joins the demotion set, and every SURVIVING record drops
+    ``suppression_grade``: the "absent from EVERY declared binary"
+    quantifier no longer holds once a witnessed member vanished (the
+    same posture as a floor drop of a sibling)."""
+
+    @staticmethod
+    def _load(binaries, witnesses):
+        from types import SimpleNamespace
+
+        from core.analysis.binary_oracle_cli import _project_binaries
+
+        proj = SimpleNamespace(binaries=binaries,
+                               binary_witnesses=witnesses)
+
+        class _Mgr:
+            def load(self, name):
+                return proj
+
+        identity: dict = {}
+        with patch("core.project.project.ProjectManager", _Mgr), \
+             patch("core.project.trust._context_project_name",
+                   return_value="p"):
+            paths, _ = _project_binaries(identity_out=identity)
+        return paths, identity
+
+    @staticmethod
+    def _setup(tmp_path):
+        a = tmp_path / "app_a.debug"
+        a.write_bytes(b"\x7fELF" + b"\x00" * 28)
+        b2 = tmp_path / "app_b.debug"
+        b2.write_bytes(b"\x7fELF" + b"\x01" * 28)
+        ka, kb = str(a.resolve()), str(b2.resolve())
+        wit = {ka: sha256_file(a), kb: sha256_file(b2)}
+        return a, b2, ka, kb, wit
+
+    @staticmethod
+    def _inventory():
+        return {"files": [{"path": "src/a.c", "language": "c",
+                           "items": [{"kind": "function",
+                                      "name": "victim_fn",
+                                      "metadata": {}}]}]}
+
+    @staticmethod
+    def _classify_for(a_key):
+        # victim_fn is ABSENT in binary A but ALIVE in binary B.
+        def classify(names, bp):
+            if str(bp) == a_key:
+                return {"victim_fn": BinaryOracleWitness(
+                    "absent", "aa" * 20, str(bp))}
+            return {"victim_fn": BinaryOracleWitness(
+                "symbol_present", "bb" * 20, str(bp), 4096)}
+        return classify
+
+    def test_both_present_keep_full_authority(self, tmp_path):
+        # Direction 2 (no overreach): with every witnessed binary
+        # present and verified, nothing demotes and authority stays.
+        from core.analysis.binary_oracle import extract_verdicts
+        a, b2, ka, kb, wit = self._setup(tmp_path)
+        paths, identity = self._load([ka, kb], wit)
+        assert len(paths) == 2
+        inv = self._inventory()
+        with patch(_CLASSIFY, side_effect=self._classify_for(ka)):
+            enrich_inventory_with_binary_oracle(
+                inv, paths, identity_pins=identity)
+        summary = inv["binary_oracle"]
+        assert summary["any_identity_demoted"] is False
+        assert summary["earns_suppression"] is True
+        # alive-in-any wins: no absent verdict for the live function.
+        assert extract_verdicts(inv).get("victim_fn") == (
+            "symbol_present")
+
+    def test_deleting_the_alive_binary_cannot_mint_authoritative_absent(
+            self, tmp_path):
+        # Direction 1 (the launder killed): rm the binary where the
+        # function is ALIVE; the survivor's ``absent`` must not earn
+        # suppression over the narrowed set.
+        from core.analysis.binary_oracle import extract_verdicts
+        a, b2, ka, kb, wit = self._setup(tmp_path)
+        b2.unlink()  # the attacker's no-race move
+        paths, identity = self._load([ka, kb], wit)
+        # Demote-not-refuse: the survivor still loads and enriches...
+        assert paths == [a.resolve()]
+        # ...and the narrowed set is accounted on the identity channel.
+        assert kb in identity and identity[kb] is None
+        inv = self._inventory()
+        with patch(_CLASSIFY, side_effect=self._classify_for(ka)):
+            enrich_inventory_with_binary_oracle(
+                inv, paths, identity_pins=identity)
+        summary = inv["binary_oracle"]
+        assert summary["any_identity_demoted"] is True
+        assert kb in summary["identity_demoted"]
+        assert summary["earns_suppression"] is False
+        item = inv["files"][0]["items"][0]
+        entries = item["metadata"]["binary_oracle"]["binaries"]
+        assert entries
+        assert all(e["suppression_grade"] is False for e in entries)
+        assert absent_earns_suppression(entries) is False
+        # The chokepoint-facing flat view must not carry the absent.
+        assert "victim_fn" not in extract_verdicts(inv)
+
+
+class TestPresentDemotedSiblingNoOverreach:
+    """The no-overreach direction around ``witness_missing``: a
+    PRESENT identity-demoted sibling must NOT strip the verified
+    survivor's per-record grade. Its hint-tier evidence still
+    contributes (alive-in-any defeats absence), unlike a MISSING
+    member whose evidence vanished with it — only the missing flavor
+    narrows the every-binary quantifier for the survivors."""
+
+    def test_present_demoted_sibling_keeps_survivor_grade(
+            self, tmp_path):
+        a = tmp_path / "app_a.debug"
+        a.write_bytes(b"\x7fELF" + b"\x00" * 28)
+        b2 = tmp_path / "app_b.debug"
+        b2.write_bytes(b"\x7fELF" + b"\x11" * 28)
+        ka, kb = str(a.resolve()), str(b2.resolve())
+        st = os.stat(a)
+        pins = {ka: (st.st_dev, st.st_ino, st.st_size, sha256_file(a)),
+                kb: None}  # B is PRESENT but demoted at load
+
+        inv = {"files": [{"path": "s.c", "language": "c", "items": [
+            {"kind": "function", "name": "fn", "metadata": {}}]}]}
+
+        def classify(names, bp):
+            return {"fn": BinaryOracleWitness(
+                "symbol_present", "aa" * 20, str(bp), 4096)}
+
+        with patch(_CLASSIFY, side_effect=classify):
+            enrich_inventory_with_binary_oracle(
+                inv, [Path(ka), Path(kb)], identity_pins=pins)
+        entries = (inv["files"][0]["items"][0]["metadata"]
+                   ["binary_oracle"]["binaries"])
+        by_bp = {e["path"]: e for e in entries}
+        # The demoted sibling loses its grade...
+        assert by_bp[kb]["suppression_grade"] is False
+        # ...but the verified survivor KEEPS per-record authority.
+        assert by_bp[ka]["suppression_grade"] is True
+
+
+class TestPinnedDeletedAfterLoad:
+    """The same deletion, one seam later: the pin VERIFIED at load
+    (tuple pin, binary present), and the attacker deletes the binary
+    in the load→enrichment window — seconds to minutes in a real run.
+    Enrichment's ``is_file()`` usability filter then drops the path
+    before classification, so it is neither analysed nor a ``None``
+    pin: without accounting, the survivor's ``absent`` quantifies
+    over a silently narrowed set and mints full suppression
+    authority. A pinned path can only be pinned because it was
+    DECLARED for analysis, so pinned-but-not-analysed always means a
+    witnessed member vanished — it must join the demotion set exactly
+    like the load-time-missing flavor."""
+
+    _H = TestWitnessedMissingNarrowsQuantifier
+
+    def test_deleting_a_pinned_binary_after_load_cannot_mint_absent(
+            self, tmp_path):
+        from core.analysis.binary_oracle import extract_verdicts
+        a, b2, ka, kb, wit = self._H._setup(tmp_path)
+        # Load with BOTH binaries present: the witness verifies and
+        # both pins come back as tuples.
+        paths, identity = self._H._load([ka, kb], wit)
+        assert len(paths) == 2
+        assert identity[ka] is not None and identity[kb] is not None
+        # The attacker's no-race move lands AFTER the load seam.
+        b2.unlink()
+        inv = self._H._inventory()
+        with patch(_CLASSIFY,
+                   side_effect=self._H._classify_for(ka)):
+            enrich_inventory_with_binary_oracle(
+                inv, paths, identity_pins=identity)
+        summary = inv["binary_oracle"]
+        # The vanished member is accounted on the identity channel...
+        assert summary["any_identity_demoted"] is True
+        assert kb in summary["identity_demoted"]
+        assert summary["earns_suppression"] is False
+        # ...and every SURVIVING record loses suppression authority.
+        item = inv["files"][0]["items"][0]
+        entries = item["metadata"]["binary_oracle"]["binaries"]
+        assert entries
+        assert all(e["suppression_grade"] is False for e in entries)
+        assert absent_earns_suppression(entries) is False
+        # The chokepoint-facing flat view must not carry the absent.
+        assert "victim_fn" not in extract_verdicts(inv)

@@ -675,14 +675,18 @@ class TestProjectBinaryWitnessGate:
         assert paths == [b.resolve()]
         assert identity == {key: None}
 
-    def test_witnessed_but_missing_still_skipped(self, tmp_path):
-        # ENOENT is not a plant — a deleted artifact stays skipped
-        # (same as pre-fix), never loaded or demoted.
+    def test_witnessed_but_missing_skips_but_accounts(self, tmp_path):
+        # ENOENT is not a plant — a deleted artifact stays SKIPPED
+        # (nothing to classify, the run continues) — but the skip is
+        # accounted: deleting a witnessed binary silently narrows the
+        # "absent from every declared binary" quantifier, so the
+        # missing path must ride the identity channel as a None
+        # pin.
         key = str((tmp_path / "gone.debug").resolve())
         identity: dict = {}
         assert self._load([key], {key: "0" * 64},
                           identity=identity) == []
-        assert identity == {}
+        assert identity == {key: None}
 
     def test_legacy_unwitnessed_is_enrichment_only(self, tmp_path):
         # Pre-witness store entries still load (no forced re-buy of

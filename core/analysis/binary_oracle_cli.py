@@ -429,11 +429,29 @@ def _project_binaries(
                 fh = open_regular(raw, "rb")
                 if fh is None:
                     if not os.path.lexists(raw):
+                        # Nothing at the slot: skip the entry (there
+                        # is nothing to classify; the run continues —
+                        # demote-not-refuse), but ACCOUNT for the
+                        # skip. Deleting a witnessed binary is a
+                        # no-race move that silently narrows the
+                        # "absent from EVERY declared binary"
+                        # quantifier — a function alive only in the
+                        # deleted binary would combine to ``absent``
+                        # over the survivors — so the missing path
+                        # rides the identity channel as a ``None``
+                        # pin and the enrichment strips the
+                        # survivors' suppression authority.
+                        p = raw.resolve()
                         logger.warning(
                             "binary-oracle: project binary %s is "
-                            "missing/unreadable — refusing for this "
-                            "run (re-add with /project binary add "
-                            "once rebuilt)", raw)
+                            "missing — skipped, and the declared "
+                            "witness set is narrowed: absent "
+                            "verdicts from the remaining binaries "
+                            "will not suppress for this run (re-add "
+                            "with /project binary add once rebuilt)",
+                            p)
+                        if identity_out is not None:
+                            identity_out[str(p)] = None
                         continue
                     # The slot is occupied but refused an fd-honest
                     # open (symlink or special file at the stored

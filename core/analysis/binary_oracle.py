@@ -1343,6 +1343,27 @@ def enrich_inventory_with_binary_oracle(
     _pins: dict[str, tuple[int, int, int, str] | None] = dict(
         identity_pins or {})
     identity_demoted: set[str] = set()
+    # A pinned path that is not among the analysed binaries is a
+    # witnessed project-store binary that went MISSING (deleted from
+    # its slot — a no-race move for the same run-dir-write attacker
+    # the witness exists to stop). Two flavors reach here:
+    #   - missing AT LOAD: the load seam recorded a ``None`` pin;
+    #   - deleted AFTER a verified load (tuple pin) — the
+    #     ``is_file()`` usability filter above silently dropped the
+    #     path before classification.
+    # Both are pinned-but-not-analysed, and that is the whole test: a
+    # pin exists only because the path was DECLARED for analysis, so
+    # not-analysed can only mean the member vanished. The entry is
+    # skipped, not classified, but the skip narrows the "absent from
+    # EVERY declared binary" quantifier: a function alive only in the
+    # deleted binary would combine to ``absent`` over the survivors.
+    # Account for it like a floor drop of a sibling — the missing
+    # path joins the demotion set (summary accounting) and every
+    # SURVIVING record drops ``suppression_grade`` below.
+    # Demote-not-refuse: enrichment continues at hint tier.
+    _analysed = {str(bp) for bp in binary_paths}
+    witness_missing = {k for k in _pins if k not in _analysed}
+    identity_demoted |= witness_missing
     per_binary: list[tuple[Path, str, dict[str, BinaryOracleWitness]]] = []
     for bp in binary_paths:
         key = str(bp)
@@ -1542,7 +1563,14 @@ def enrich_inventory_with_binary_oracle(
         demotion channels stripped."""
         return (str(bp) not in _no_suppress
                 and str(bp) not in identity_demoted
-                and not any_floor_dropped)
+                and not any_floor_dropped
+                # A witnessed sibling MISSING (at load, or deleted
+                # after a verified load and dropped by the usability
+                # filter) narrows the every-binary quantifier for
+                # every survivor, exactly like a floor drop (a
+                # PRESENT demoted sibling does not: its hint-tier
+                # evidence still defeats absence via alive-in-any).
+                and not witness_missing)
     for fi, ii, name in targets:
         per_binary_entries: list[dict[str, object]] = []
         for bp, build_id, verdicts in per_binary:
