@@ -58,7 +58,7 @@ _SRC = textwrap.dedent('''\
 
 
 @pytest.fixture()
-def prep_with_routes(tmp_path):
+def prep_with_routes(tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir()
     (target / "webapp.py").write_text(_SRC)
@@ -80,6 +80,7 @@ def prep_with_routes(tmp_path):
     )
     assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
 
+    from core.audit import orchestrator as orch
     from core.audit.orchestrator import (
         OrchestratorConfig,
         _compute_audit_prep,
@@ -93,6 +94,21 @@ def prep_with_routes(tmp_path):
         include_stale=False,
         enable_session_context=False,
         propagate_constraints=False,
+    )
+    # The L10 route-family seam is under test — peer groups form in
+    # their own prep phase BEFORE (and independent of) the
+    # mechanical-detector pass, which is incidental substrate here:
+    # sandboxed Coccinelle runs on spatch-equipped hosts plus the
+    # detector-cache import-closure fingerprint (an AST walk over
+    # every module reachable from the detector entry points), the
+    # bulk of this fixture's setup and enough to trip the
+    # default-tier duration guard on a loaded CI runner. Full
+    # variadic signature + the real (dict, set) return contract (the
+    # test_consistency_wiring idiom) — a wrong-shaped stub would die
+    # inside the phase's blanket except and pass by swallowed crash.
+    monkeypatch.setattr(
+        orch, "_run_mechanical_detectors",
+        lambda *args, **kwargs: ({}, set()),
     )
     prep = _compute_audit_prep(config)
     assert prep is not None

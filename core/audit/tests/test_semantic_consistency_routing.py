@@ -96,6 +96,7 @@ def prep_result(tmp_path_factory):
 
     from unittest import mock
 
+    from core.audit import orchestrator as orch
     from core.audit.capabilities import AuditCapabilities
     from core.audit.orchestrator import (
         OrchestratorConfig,
@@ -135,17 +136,36 @@ def prep_result(tmp_path_factory):
         dwarf_available=False,
         angr=False,
     )
-    with mock.patch(
-        "core.audit.capabilities.probe_capabilities",
-        return_value=no_caps,
-    ), mock.patch(
-        # run_joern_pre_sweep's own availability gate (independent of
-        # the capability probe): without this, hosts with joern on
-        # PATH pay a doomed JVM CPG build inside the fixture.
-        "packages.joern.prereqs.is_available",
-        return_value=False,
-    ):
-        prep = _compute_audit_prep(config)
+    # The wiring under test (source-map hydration →
+    # check_semantic_consistency → mechanical-findings routing) runs
+    # entirely OUTSIDE the mechanical-detector pass: the check fires
+    # in its own prep phase before it, and its findings merge into
+    # the channel dict (and mechanical-findings.json) after it. The
+    # pass itself is incidental substrate — with tools pinned absent
+    # its remaining cost is the detector-cache import-closure
+    # fingerprint, an AST walk over every module reachable from the
+    # detector entry points and the bulk of this fixture's 10s+ CI
+    # setups. Manual patch/restore because module-scoped fixtures
+    # cannot take the function-scoped monkeypatch; full variadic
+    # signature + the real (dict, set) return contract (the
+    # test_consistency_wiring idiom) — a wrong-shaped stub would die
+    # inside the phase's blanket except and pass by swallowed crash.
+    _real_mechanical = orch._run_mechanical_detectors
+    orch._run_mechanical_detectors = lambda *args, **kwargs: ({}, set())
+    try:
+        with mock.patch(
+            "core.audit.capabilities.probe_capabilities",
+            return_value=no_caps,
+        ), mock.patch(
+            # run_joern_pre_sweep's own availability gate (independent of
+            # the capability probe): without this, hosts with joern on
+            # PATH pay a doomed JVM CPG build inside the fixture.
+            "packages.joern.prereqs.is_available",
+            return_value=False,
+        ):
+            prep = _compute_audit_prep(config)
+    finally:
+        orch._run_mechanical_detectors = _real_mechanical
     assert prep is not None, "prep returned None (checklist missing?)"
     return prep, out
 
