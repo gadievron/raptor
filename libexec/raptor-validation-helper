@@ -477,15 +477,18 @@ def _coerce_findings_container(
 # post-pass cannot drift on what counts as a dark row.
 
 
-#: Sites listed per witness-backlog cluster. Counts stay exact — the
-#: cap bounds only the per-site listing (imports can be arbitrarily
-#: large and the backlog is a routing artifact, not a findings store).
+#: Sites listed per witness-backlog cluster. An oversize class is
+#: CHUNKED into same-class clusters of this size — never truncated:
+#: the backlog is the drain's only row source, so every routed site
+#: identity must be listed (the overall listing stays bounded by
+#: ``_BACKLOG_CLUSTER_CAP`` × this).
 _BACKLOG_SITES_PER_CLUSTER = 50
 
-#: Clusters listed in the backlog artifact. Cluster classes derive
-#: from attacker-influenced fields (cwe_id / vuln_type free text), so
-#: a hostile import can mint one cluster per row — the listing is
-#: bounded, the ``total`` stays exact, and truncation is flagged.
+#: Clusters listed in the backlog artifact (chunks included). Cluster
+#: classes derive from attacker-influenced fields (cwe_id / vuln_type
+#: free text), so a hostile import can mint one cluster per row — the
+#: listing stays bounded (at most cap × sites-per-cluster listed
+#: sites), the ``total`` stays exact, and truncation is flagged.
 _BACKLOG_CLUSTER_CAP = 100
 
 
@@ -667,17 +670,22 @@ def _route_dark_to_witness_backlog(
     grouped: dict[str, list[dict]] = {}
     for f in dark:
         grouped.setdefault(_cluster_class(f), []).append(f)
-    clusters = []
+    clusters: list[dict] = []
     for cls, rows in sorted(
             grouped.items(), key=lambda kv: (-len(kv[1]), kv[0])):
-        cluster = {
-            "class": cls,
-            "count": len(rows),
-            "sites": [_site(f) for f in rows[:_BACKLOG_SITES_PER_CLUSTER]],
-        }
-        if len(rows) > _BACKLOG_SITES_PER_CLUSTER:
-            cluster["sites_truncated"] = True
-        clusters.append(cluster)
+        # Chunk, never truncate: an oversize class becomes several
+        # same-class clusters of <= _BACKLOG_SITES_PER_CLUSTER sites,
+        # so no site identity is dropped from the artifact (the drain
+        # consumer dedups by site identity and iterates clusters
+        # agnostically, so same-class chunks are safe). Each chunk's
+        # count is its own listing — counts stay exact per cluster.
+        for start in range(0, len(rows), _BACKLOG_SITES_PER_CLUSTER):
+            chunk = rows[start:start + _BACKLOG_SITES_PER_CLUSTER]
+            clusters.append({
+                "class": cls,
+                "count": len(chunk),
+                "sites": [_site(f) for f in chunk],
+            })
 
     backlog = {
         "source_file": source_name,
@@ -692,7 +700,7 @@ def _route_dark_to_witness_backlog(
     }
     if len(clusters) > _BACKLOG_CLUSTER_CAP:
         backlog["clusters_truncated"] = True
-        backlog["cluster_classes_total"] = len(clusters)
+        backlog["cluster_classes_total"] = len(grouped)
 
     # Loud-and-replace on a planted special: _save_artifact's atomic
     # tempfile+rename never opens the destination (no FIFO hang, no

@@ -263,7 +263,11 @@ class TestDarkImportPolicy:
         saved = load_json(dest)
         assert len(saved["findings"]) == 1
 
-    def test_cluster_site_listing_capped_counts_exact(self, tmp_path):
+    def test_oversize_class_chunked_no_identity_dropped(self, tmp_path):
+        # An oversize class is chunked into same-class clusters of
+        # <= _BACKLOG_SITES_PER_CLUSTER sites — every routed identity
+        # is listed (the backlog is the drain's ONLY row source, so a
+        # dropped listing is an undrainable row).
         mod = _load_helper()
         cap = mod._BACKLOG_SITES_PER_CLUSTER
         rows = [_graded(f"EXT-{i}", "dark", function=f"fn{i}")
@@ -273,10 +277,63 @@ class TestDarkImportPolicy:
         mod._import_findings_file(src, tmp_path / "findings.json",
                                   target="/t")
         backlog = load_json(tmp_path / "witness-backlog.json")
-        cluster = backlog["clusters"][0]
-        assert cluster["count"] == cap + 5      # counts stay honest
-        assert len(cluster["sites"]) == cap     # listing bounded
-        assert cluster["sites_truncated"] is True
+        assert backlog["total"] == cap + 5
+        clusters = backlog["clusters"]
+        assert [c["class"] for c in clusters] == ["CWE-287", "CWE-287"]
+        assert [len(c["sites"]) for c in clusters] == [cap, 5]
+        # Per-chunk counts are exact and no chunk claims truncation.
+        assert all(c["count"] == len(c["sites"]) for c in clusters)
+        assert not any("sites_truncated" in c for c in clusters)
+        listed = {s["id"] for c in clusters for s in c["sites"]}
+        assert listed == {f"EXT-{i}" for i in range(cap + 5)}
+
+    def test_chunked_listing_stays_within_consumer_read_bounds(
+            self, tmp_path):
+        # 4× the chunk size in one class: every chunk must stay within
+        # the drain consumer's per-cluster read cap so no listed site
+        # is silently unread on the other side.
+        from core.audit.backlog_drain import (
+            _MAX_SITES_PER_CLUSTER_READ,
+            load_backlog,
+        )
+        mod = _load_helper()
+        cap = mod._BACKLOG_SITES_PER_CLUSTER
+        n = cap * 4
+        rows = [_graded(f"EXT-{i}", "dark", function=f"fn{i}")
+                for i in range(n)]
+        src = tmp_path / "findings-graded.json"
+        src.write_text(json.dumps({"findings": rows}))
+        mod._import_findings_file(src, tmp_path / "findings.json",
+                                  target="/t")
+        backlog = load_json(tmp_path / "witness-backlog.json")
+        assert all(len(c["sites"]) <= _MAX_SITES_PER_CLUSTER_READ
+                   for c in backlog["clusters"])
+        # Round-trip through the real consumer intake: every identity
+        # produced is a drainable row.
+        _artifact, loaded, malformed = load_backlog(tmp_path)
+        assert malformed == []
+        assert len(loaded) == n
+        assert {r.id for r in loaded} == {f"EXT-{i}" for i in range(n)}
+
+    def test_chunk_overflow_past_cluster_cap_stays_flagged(
+            self, tmp_path, monkeypatch):
+        # Chunking is still bounded: past _BACKLOG_CLUSTER_CAP chunks
+        # the listing is cut and flagged (counts stay exact), so a
+        # hostile import cannot bloat the artifact through one class.
+        mod = _load_helper()
+        monkeypatch.setattr(mod, "_BACKLOG_SITES_PER_CLUSTER", 2)
+        monkeypatch.setattr(mod, "_BACKLOG_CLUSTER_CAP", 3)
+        rows = [_graded(f"EXT-{i}", "dark", function=f"fn{i}")
+                for i in range(10)]
+        src = tmp_path / "findings-graded.json"
+        src.write_text(json.dumps({"findings": rows}))
+        mod._import_findings_file(src, tmp_path / "findings.json",
+                                  target="/t")
+        backlog = load_json(tmp_path / "witness-backlog.json")
+        assert backlog["total"] == 10               # counts stay honest
+        assert len(backlog["clusters"]) == 3        # listing bounded
+        assert backlog["clusters_truncated"] is True
+        assert backlog["cluster_classes_total"] == 1
 
 
 class TestImportReadjudicationCrossCheck:
