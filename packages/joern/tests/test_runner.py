@@ -835,6 +835,23 @@ class TestCPGCaching:
         # safe, never stale).
         assert _target_content_hash(tmp_path) != h1
 
+    def test_content_hash_filename_cannot_forge_another_tree(self, tmp_path):
+        # ':' and '\n' are legal in POSIX filenames: a single file
+        # whose NAME embeds another tree's "path:digest" line must not
+        # collide with that tree's key — a collision would serve one
+        # tree's cached CPG for the other.
+        import hashlib as hashlib_mod
+        body = b"int f(void) { return 0; }\n"
+        honest = tmp_path / "honest"
+        honest.mkdir()
+        (honest / "a.c").write_bytes(b"int a;\n")
+        (honest / "b.c").write_bytes(body)
+        digest_a = hashlib_mod.sha256(b"int a;\n").hexdigest()
+        forged = tmp_path / "forged"
+        forged.mkdir()
+        (forged / f"a.c:{digest_a}\nb.c").write_bytes(body)
+        assert _target_content_hash(honest) != _target_content_hash(forged)
+
     def test_content_hash_skips_non_regular_files(self, tmp_path):
         # A symlink to a device (git-committable) or a FIFO named
         # like source must be skipped, not opened — reading either

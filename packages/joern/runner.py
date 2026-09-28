@@ -1458,10 +1458,19 @@ def _target_content_hash(target: Path, *, exclude_dirs=()) -> str:
             except OSError:
                 continue
             entries.append(
-                f"{p.relative_to(target)}:{digest.hexdigest()}")
+                (str(p.relative_to(target)), digest.hexdigest()))
     entries.sort()
     h = hashlib.sha256()
-    h.update("\n".join(entries).encode())
+    for rel, hexdigest in entries:
+        # Length-prefix the path: ':' and '\n' are legal in POSIX
+        # filenames, so joining "path:digest" lines lets two distinct
+        # trees serialise to identical bytes (a filename crafted to
+        # embed the separator and a sibling's line). The digest is
+        # fixed-width hex, so only the path needs the prefix.
+        rel_b = rel.encode()
+        h.update(len(rel_b).to_bytes(8, "big"))
+        h.update(rel_b)
+        h.update(hexdigest.encode())
     return h.hexdigest()[:16]
 
 
