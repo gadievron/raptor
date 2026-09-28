@@ -21,11 +21,34 @@ from __future__ import annotations
 
 import json
 import signal
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from packages.joern import lifecycle
 from packages.joern.server import JoernServer
+
+
+def _proven_dead_pid() -> int:
+    """A pid that is certainly DEAD: spawn a child and fully reap it.
+
+    The port-only match rule fires ONLY when the recorded old-server
+    pid is dead, so a test of that rule must seed a pid whose death is
+    guaranteed, not assumed. A hardcoded low constant (previously 111)
+    is dead only by luck: inside a pid namespace the low pid range
+    fills with xdist workers and their children, the constant comes up
+    ALIVE, and the port match is refused — exactly what the rule is
+    supposed to do to a live stranger — failing the test with no
+    product regression. Reaping our own child hands back a pid the
+    kernel has just freed and (with sequential pid allocation) will
+    not reissue in the instants before the state is read. It must
+    stay a REAL retired pid rather than an out-of-range constant so
+    the rule's ``_pid_alive`` probe exercises its genuine
+    dead-process answer, not an invalid-argument path.
+    """
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    return proc.pid
 
 
 class _StateDirFixture:
@@ -145,8 +168,9 @@ class TestNoteServerReplaced(_StateDirFixture):
         """A lifecycle-reused handle never knew the old pid — the
         port match must still update the state (the exact
         duplicate-JVM-unreleasable case)."""
-        self._seed({"pid": 111, "port": 8800, "refcount": 1,
-                    "auth_user": "raptor", "auth_password": "old-cred"})
+        self._seed({"pid": _proven_dead_pid(), "port": 8800,
+                    "refcount": 1, "auth_user": "raptor",
+                    "auth_password": "old-cred"})
         with patch.object(lifecycle, "_read_comm", return_value="java"):
             lifecycle.note_server_replaced(
                 old_pid=None, old_port=8800, srv=self._srv())
