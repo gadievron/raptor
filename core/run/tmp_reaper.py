@@ -121,6 +121,11 @@ _DIR_PREFIXES = (
     # (removed on stop(); survives when the parent dies or a worker
     # hangs past the join grace).
     "raptor-ghidra-",
+    # eBPF ISA-probe object-build scratch (packages/ghidra/
+    # ebpf_probe.py TemporaryDirectory); cleaned up in the probe's
+    # finally, so survival past the floor means the process died
+    # mid-probe (SIGKILL/OOM skip the cleanup).
+    "raptor-ebpf-probe-",
     # Per-session pytest temp containment (root conftest.py): the test
     # session points TMPDIR/tempfile.tempdir at one scratch dir so raw
     # tempfile call sites in tests and code under test land inside it.
