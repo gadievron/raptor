@@ -270,9 +270,12 @@ class TestMacTiers:
         assert entry.body == "" and entry.body_offload
         assert journal_mac.entry_provenance(entry) == "unstamped"
 
-    def test_tampered_row_keeps_original_token_and_tier(
+    def test_edited_row_lands_unstamped_never_fake_stamped(
         self, tmp_path: Path,
     ) -> None:
+        # Under verify-before-write the merge strips a token that no
+        # longer verifies over the row being persisted — the edited
+        # row lands honest-unstamped, never carrying a fake stamp.
         project = tmp_path / "project"
         run = project / "run1"
         run.mkdir(parents=True)
@@ -284,8 +287,8 @@ class TestMacTiers:
         merge_into_index(project, run)
         (entry,) = load_index_full(project).values()
         assert entry.body == "" and entry.body_offload
-        assert journal_mac.entry_provenance(entry) == "tampered"
-        assert entry.integrity == row["integrity"]
+        assert journal_mac.entry_provenance(entry) == "unstamped"
+        assert entry.integrity is None
 
     def test_edge_rows_keep_verifying_for_edge_suppression(
         self, tmp_path: Path,

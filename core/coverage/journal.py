@@ -3016,6 +3016,27 @@ def _row_ts(row: Any) -> str:
     return ts if isinstance(ts, str) else ""
 
 
+def _row_provenance_ok(row: Any) -> bool:
+    """True when a raw row carries a token that verifies over the
+    row's own content — i.e. the exact dict a fold would read back.
+
+    Replacement authority for the merge's same-``ts`` repair
+    tie-break: verification requires THIS install's MAC key, so a
+    planted row (archive import, hand-edited index) can never satisfy
+    it. Tokenless and non-dict rows read False — no valid token, no
+    replacement authority, and no repair TARGET status either (see
+    the merge loop: only a verifying incoming row may replace, and
+    only a non-verifying stored row may be replaced).
+    """
+    from core.coverage import journal_mac
+    if not isinstance(row, dict):
+        return False
+    token = row.get(journal_mac.TOKEN_KEY)
+    if not isinstance(token, str) or not token:
+        return False
+    return journal_mac.verify_row(row, token)
+
+
 def rehome_legacy_keys(index: dict[str, Any]) -> int:
     """Re-home rows whose on-disk key predates the current
     ``index_key`` format (span suffix, producer segment, and any
@@ -3353,6 +3374,20 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
                 "journal index: re-homed %d legacy-format key(s)", rehomed,
             )
 
+        from core.coverage import journal_mac
+
+        # A transient MAC-key outage (unreadable or wrongly-
+        # permissioned key file, a different XDG_DATA_HOME) makes
+        # EVERY verify fail without saying anything about the rows —
+        # stripping then would durably unstamp honest tokens that
+        # verify the moment the key is back. Under an unusable key
+        # the merge carries tokens verbatim (the pre-rule posture,
+        # which self-heals on restore); folds already demote
+        # unverifiable rows transiently and safely.
+        key_ok = journal_mac.key_usable()
+
+        stripped = 0
+        healed = 0
         # Each merged key remembers the PRE-RUN value it displaced so
         # the byte-eviction arm below can RESTORE it: an evicted
         # incoming identity reaches the index as an aggregate, and the
@@ -3363,6 +3398,26 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
         merged_rows: dict[str, list[Any]] = {}
         for entry in run_entries:
             key = entry.index_key
+            row = entry.to_dict()
+            token = row.get(journal_mac.TOKEN_KEY)
+            if key_ok and token and not journal_mac.verify_row(row, token):
+                # A token is persisted ONLY with content it verifies
+                # over. The dataclass round-trip above is lossy for
+                # any journal field this checkout's schema does not
+                # know (version skew: a newer writer stamped a field —
+                # e.g. the slim-clean ``body_offload`` pointer — that
+                # an older merge silently drops), and a token carried
+                # verbatim over the reduced row makes every future
+                # fold read an HONEST row as tampered, permanently
+                # revoking its verdict-reuse authority. Strip the
+                # token instead: the row lands in the honest unstamped
+                # tier (exact-hash fold credit, no verdict reuse) —
+                # the same tier a failing token demotes to, minus the
+                # false tamper attribution and with repair possible
+                # (a later skew-free merge's verifying copy replaces
+                # it via the same-``ts`` tie-break below).
+                row.pop(journal_mac.TOKEN_KEY, None)
+                stripped += 1
             existing = index.get(key)
             if existing is None or entry.ts > _row_ts(existing):
                 slot = merged_rows.get(key)
@@ -3371,8 +3426,50 @@ def merge_into_index(project_dir: Path, run_dir: Path) -> int:
                 else:
                     slot[0] = entry
                     slot[2] += 1
-                index[key] = entry.to_dict()
+                index[key] = row
                 merged += 1
+            elif (entry.ts == _row_ts(existing)
+                    and _row_provenance_ok(row)
+                    and not _row_provenance_ok(existing)):
+                # Same-``ts`` repair tie-break. Strict latest-wins
+                # kept a broken stored copy forever: a row whose
+                # stamped field was dropped by a version-skewed merge
+                # ties on ``ts`` with the intact run-journal row, so
+                # the index could never heal from its own source of
+                # truth. A row that verifies under this install's key
+                # replaces a same-key, same-``ts`` copy that does not
+                # (absent or failing token). Never fires across
+                # timestamps — history is not rewound — and never
+                # replaces a verifying row. Healed keys register in
+                # ``merged_rows`` with the same slot discipline so the
+                # byte-eviction arm restores their pre-run priors too.
+                slot = merged_rows.get(key)
+                if slot is None:
+                    merged_rows[key] = [entry, existing, 1]
+                else:
+                    slot[0] = entry
+                    slot[2] += 1
+                index[key] = row
+                healed += 1
+                merged += 1
+
+        if stripped:
+            logger.warning(
+                "journal: %d row(s) from %s carry a provenance token "
+                "that does not verify over the merged row shape — "
+                "token stripped, row(s) indexed unstamped (version "
+                "skew: a reader on this checkout dropped a stamped "
+                "field it does not know — or a foreign or edited "
+                "token; exact-hash fold credit only until a "
+                "skew-free merge re-projects them)",
+                stripped, run_dir,
+            )
+        if healed:
+            logger.info(
+                "journal index: repaired %d row(s) whose stored copy "
+                "failed provenance — replaced by the run journal's "
+                "verifying copy at the same timestamp", healed,
+            )
 
         # Slim at the write boundary — incoming rows AND any fat rows
         # an earlier writer left behind (the merge rewrites the whole
