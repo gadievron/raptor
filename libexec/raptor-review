@@ -1412,6 +1412,162 @@ def cmd_coverage(args):
     print(f"\n  {len(all_files)} file(s) with coverage data.")
 
 
+def _collect_toolrun_rows(out_dir: Path) -> tuple[list[dict], str]:
+    """Per-item tool/gate engagement rows for one run.
+
+    Sources, in the shapes their writers produce:
+
+    * ``refutation_gate_engagement`` audit-log rows — per-gate
+      ``{"gate", "engaged", "blocked_on"}`` records. The trail keeps
+      append order, so the LAST row per (key, phase) speaks for that
+      site — a gate that eventually engaged must not keep reporting
+      its stale block.
+    * ``substrate_skip`` audit-log rows — tool + reason for channels
+      that never looked at the site (target language outside the
+      tier's model).
+    * review-journal ``tools_skipped`` — channels the review-time
+      dispatch recorded as skipped; the journal row does not carry a
+      per-tool reason, so the row says where the record lives.
+
+    Returns ``(rows, disclosure_note)`` — each row is
+    ``{"file", "function", "kind", "channel", "status", "reason",
+    "phase"}`` with status engaged | blocked | skipped; the note
+    names anything the audit-log byte budgets kept out ("" when the
+    load was complete).
+    """
+    rows: list[dict] = []
+    note = ""
+    try:
+        from core.audit.record import load_audit_log_disclosed
+        log_rows, disclosure = load_audit_log_disclosed(out_dir)
+        note = disclosure.reason
+    except Exception:  # noqa: BLE001 — layer loaders degrade gracefully when absent
+        log_rows = []
+    gate_rows: dict[tuple, dict] = {}
+    skip_seen: set[tuple] = set()
+    for row in log_rows:
+        if not isinstance(row, dict):
+            continue
+        action = row.get("action")
+        if action == "refutation_gate_engagement":
+            # Last row per (site key, phase) wins — append order.
+            gate_rows[(str(row.get("key", "")),
+                       str(row.get("phase", "")))] = row
+        elif action == "substrate_skip":
+            dedupe = (str(row.get("key", "")), str(row.get("tool", "")),
+                      str(row.get("reason", "")))
+            if dedupe in skip_seen:
+                continue
+            skip_seen.add(dedupe)
+            rows.append({
+                "file": str(row.get("file", "") or ""),
+                "function": str(row.get("function", "") or ""),
+                "kind": "tool",
+                "channel": str(row.get("tool", "") or ""),
+                "status": "skipped",
+                "reason": str(row.get("reason", "") or ""),
+                "phase": "",
+            })
+    for (_key, phase), row in gate_rows.items():
+        gates = row.get("gates")
+        for rec in gates if isinstance(gates, list) else []:
+            if not isinstance(rec, dict):
+                continue
+            engaged = bool(rec.get("engaged"))
+            rows.append({
+                "file": str(row.get("file", "") or ""),
+                "function": str(row.get("function", "") or ""),
+                "kind": "gate",
+                "channel": str(rec.get("gate", "") or ""),
+                "status": "engaged" if engaged else "blocked",
+                "reason": "" if engaged
+                          else str(rec.get("blocked_on") or "unknown"),
+                "phase": phase,
+            })
+    # Journal-recorded review-time skips: latest row per site that
+    # carries the (additive) tools_skipped field.
+    latest_skips: dict = {}
+    for e in _load_journal_entries(out_dir):
+        if not getattr(e, "tools_skipped", None):
+            continue
+        prev = latest_skips.get(e.key)
+        if prev is None or e.ts > prev.ts:
+            latest_skips[e.key] = e
+    for e in latest_skips.values():
+        for tool in e.tools_skipped or []:
+            rows.append({
+                "file": e.file,
+                "function": e.function,
+                "kind": "tool",
+                "channel": str(tool),
+                "status": "skipped",
+                "reason": "review-time dispatch skip "
+                          "(journal tools_skipped)",
+                "phase": "",
+            })
+    rows.sort(key=lambda r: (r["file"], r["function"], r["kind"],
+                             r["channel"], r["phase"]))
+    return rows, note
+
+
+def cmd_tools(args) -> None:
+    """Per-function tool/gate engagement: what could not run and why."""
+    out_dir = _resolve_out_dir(args)
+    if not out_dir:
+        print("  No output directory found. Run an audit first.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    rows, note = _collect_toolrun_rows(out_dir)
+
+    if getattr(args, "raw", False):
+        print(json.dumps(rows, indent=2, ensure_ascii=True))
+        return
+
+    if not rows:
+        print("  No tool/gate engagement records in this run.")
+        print("  (Sources: refutation_gate_engagement / substrate_skip "
+              "rows in .audit-log.jsonl, tools_skipped in the review "
+              "journal.)")
+        return
+
+    # Functions with at least one could-not-run channel get the
+    # per-item listing (their engaged gates stay visible for
+    # contrast); fully-engaged functions are summarised as a count so
+    # a healthy run is one line, not a wall.
+    by_func: dict[tuple, list[dict]] = {}
+    for r in rows:
+        by_func.setdefault((r["file"], r["function"]), []).append(r)
+    affected = {
+        k: v for k, v in by_func.items()
+        if any(r["status"] != "engaged" for r in v)
+    }
+    clean = len(by_func) - len(affected)
+
+    blocked = sum(1 for r in rows if r["status"] == "blocked")
+    skipped = sum(1 for r in rows if r["status"] == "skipped")
+    print(f"  {len(affected)} function(s) with channels that could "
+          f"not run ({blocked} blocked gate(s), {skipped} skipped "
+          "tool(s))")
+    if note:
+        print(f"  ⚠️ audit trail partially read: {_line(note)}")
+    for (file, function), items in sorted(affected.items()):
+        print()
+        print(f"  {_line(file)}:{_line(function, max_chars=80)}")
+        for r in items:
+            channel = _line(r["channel"], max_chars=40)
+            status = _line(r["status"], max_chars=10)
+            reason = _line(r["reason"], max_chars=120)
+            phase = _line(r["phase"], max_chars=20)
+            tail = f"  [{phase}]" if phase else ""
+            print(f"    {r['kind']:<4} {channel:<24} {status:<8} "
+                  f"{reason}{tail}")
+    if clean:
+        print()
+        print(f"  {clean} function(s) with every recorded gate "
+              "engaged (not listed; --raw has the full rows).")
+
+
 def cmd_compact(args) -> None:
     """Compact the project journal index.
 
@@ -2346,6 +2502,11 @@ def main():
 
     sub.add_parser("compact", parents=[common], help="Compact project journal index")
 
+    sub.add_parser(
+        "tools", parents=[common],
+        help="Per-function tool/gate engagement — what could not "
+             "run and why")
+
     p_cov = sub.add_parser("coverage", parents=[common], help="Mechanical tool coverage")
     p_cov.add_argument("file", nargs="?", default=None)
 
@@ -2391,8 +2552,8 @@ def main():
 
     known_commands = {
         "show", "findings", "gaps", "history", "stats", "notes",
-        "note", "edit", "stale", "compact", "coverage", "diff", "live",
-        "edges", "verdict", "digest",
+        "note", "edit", "stale", "compact", "coverage", "tools",
+        "diff", "live", "edges", "verdict", "digest",
     }
     argv_rest = sys.argv[1:]
     first_positional = _first_positional(argv_rest)
@@ -2417,6 +2578,7 @@ def main():
         "stale": cmd_stale,
         "compact": cmd_compact,
         "coverage": cmd_coverage,
+        "tools": cmd_tools,
         "diff": cmd_diff,
         "live": cmd_live,
         "edges": cmd_edges,
