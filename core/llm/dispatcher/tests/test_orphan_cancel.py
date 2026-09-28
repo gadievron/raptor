@@ -446,6 +446,7 @@ class TestCancelGuardIsStructural:
             ) == "flag_only"
 
 
+@pytest.mark.upstream_forward
 class TestOrphanCancel:
 
     def test_worker_disconnect_mid_stream_cancels_upstream(
@@ -580,6 +581,7 @@ class TestOrphanCancel:
             d.shutdown()
 
 
+@pytest.mark.upstream_forward
 class TestAcquireFailureRetiresWatcher:
     """The watcher thread starts before the shard acquire; an acquire
     that raises (the pool is closed in a shutdown race) exits the

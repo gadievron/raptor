@@ -103,6 +103,66 @@ def _af_unix_safe_tmp(monkeypatch) -> Iterator[None]:
         shutil.rmtree(short_tmp, ignore_errors=True)
 
 
+# Optional-dep (h2) hermeticity: tests marked ``upstream_forward``
+# drive a real relayed request through the dispatcher's
+# upstream-forwarding leg. That leg builds its httpx clients with
+# ``http2=http2_enabled()``, and when the operator has opted into
+# HTTP/2 (RAPTOR_HTTP2) the h2 probe behind that flag runs INSIDE
+# the relay thread on first forward: on a runner where the ``h2``
+# package is unavailable (hidden by a lean-environment meta_path
+# blocker, or present-but-broken so ``find_spec``/``import h2``
+# raises) the relay thread dies mid-request and the client side of
+# the test fails with a RemoteProtocolError — an error, where a
+# missing OPTIONAL dependency must produce a skip.
+#
+# The gate is CONDITIONAL on the opt-in, in both directions:
+#
+# * opted in + h2 unavailable → skip (reason names h2). Running
+#   would error inside the server thread, never a clean failure.
+# * no opt-in → run, even with h2 absent. ``http2_enabled()``
+#   returns False before ever touching h2, the leg speaks HTTP/1.1,
+#   and CI runners — which deliberately do not install h2
+#   (requirements.txt ships the pin commented out) — must keep
+#   their full relay coverage. An unconditional importorskip here
+#   would silently drop all marked tests from every CI lane.
+#
+# The truthy set below mirrors core.llm.http_pool.http2_enabled()'s
+# env parse (the operator contract documented in docs/llm.md); we
+# cannot call http2_enabled() itself because it deliberately
+# reports False for exactly the opted-in-but-h2-missing case this
+# gate exists to intercept. If http2_enabled() grows a new truthy
+# spelling, add it here; if a value is retired, drop it here.
+_HTTP2_OPT_IN_VALUES = ("1", "true", "yes", "on")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "upstream_forward: the test relays a real request through the "
+        "dispatcher's upstream-forwarding leg (whose client "
+        "construction probes/imports the optional 'h2' package when "
+        "HTTP/2 is opted in via RAPTOR_HTTP2) — skipped when the "
+        "opt-in is set but h2 is unavailable",
+    )
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    if item.get_closest_marker("upstream_forward") is None:
+        return
+    opted_in = os.environ.get(
+        "RAPTOR_HTTP2", "",
+    ).strip().lower() in _HTTP2_OPT_IN_VALUES
+    if not opted_in:
+        return
+    pytest.importorskip(
+        "h2",
+        reason="HTTP/2 opted in (RAPTOR_HTTP2) but the optional 'h2' "
+               "package is unavailable — the dispatcher "
+               "upstream-forwarding leg this test relays through "
+               "cannot be built",
+    )
+
+
 @pytest.fixture
 def operator_proxy_env(monkeypatch):
     """Opt-back-in for tests that reach REAL external upstreams

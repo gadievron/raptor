@@ -130,6 +130,10 @@ def _worker_token(d: LLMDispatcher) -> str:
     return token
 
 
+# Every test here relays through the dispatcher's real
+# upstream-forwarding leg (conftest gate skips the class when
+# HTTP/2 is opted in but the optional h2 package is unavailable).
+@pytest.mark.upstream_forward
 class TestChildLedgerOnVetoedDeath:
 
     def test_one_booking_and_reservation_released(

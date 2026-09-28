@@ -126,6 +126,7 @@ class TestChildPathAllowlist:
         spend = d.child_spend(info["token_id"]) or {}
         assert not spend.get("spent_usd")
 
+    @pytest.mark.upstream_forward
     def test_messages_path_still_allowed(self, dispatcher):
         d, upstream = dispatcher
         token, _info = d.allocate_child(
@@ -142,6 +143,7 @@ class TestChildPathAllowlist:
             assert resp2.status_code == 200, resp2.text
         assert len(upstream.requests) == 2
 
+    @pytest.mark.upstream_forward
     def test_count_tokens_path_still_allowed(self, dispatcher):
         d, upstream = dispatcher
         token, _info = d.allocate_child(
@@ -157,6 +159,7 @@ class TestChildPathAllowlist:
             "/v1/messages/count_tokens",
         )
 
+    @pytest.mark.upstream_forward
     def test_worker_tokens_unaffected(self, dispatcher):
         # The path pin scopes CHILD tokens; full-power worker tokens
         # keep their existing surface (they never ride the child

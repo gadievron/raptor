@@ -310,6 +310,7 @@ def _make_dispatcher(fake_creds, tmp_path, upstream) -> LLMDispatcher:
     return d
 
 
+@pytest.mark.upstream_forward
 class TestIdentityEncodingForced:
     """Child-token requests must reach the upstream with exactly ONE
     accept-encoding header, value identity — regardless of the case

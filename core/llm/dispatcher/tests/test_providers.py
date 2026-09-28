@@ -112,6 +112,7 @@ def _post_via_dispatcher(d: LLMDispatcher, token: str, path: str, body: bytes,
         })
 
 
+@pytest.mark.upstream_forward
 class TestAnthropicProvider:
 
     def test_x_api_key_injected_dummy_stripped(self, all_providers_creds, tmp_path):
@@ -165,6 +166,7 @@ class TestAnthropicProvider:
             d.shutdown()
 
 
+@pytest.mark.upstream_forward
 class TestOpenAIProvider:
 
     def test_authorization_bearer_injected(self, all_providers_creds, tmp_path):
@@ -192,6 +194,7 @@ class TestOpenAIProvider:
             d.shutdown()
 
 
+@pytest.mark.upstream_forward
 class TestGeminiProvider:
 
     def test_x_goog_api_key_injected_dummy_stripped(self, all_providers_creds, tmp_path):
@@ -294,6 +297,7 @@ _BEARER_PROVIDERS = [
 
 
 @pytest.mark.parametrize("provider,path_tail,expected_key", _BEARER_PROVIDERS)
+@pytest.mark.upstream_forward
 def test_bearer_provider_authorization_injected(
     all_providers_creds, tmp_path, provider, path_tail, expected_key,
 ):
@@ -326,6 +330,7 @@ def test_bearer_provider_authorization_injected(
         d.shutdown()
 
 
+@pytest.mark.upstream_forward
 class TestReplicateProvider:
 
     def test_token_prefix_injected_dummy_stripped(
@@ -358,6 +363,7 @@ class TestReplicateProvider:
             d.shutdown()
 
 
+@pytest.mark.upstream_forward
 class TestAzureOpenAIProvider:
 
     def test_api_key_header_injected_dummy_stripped(

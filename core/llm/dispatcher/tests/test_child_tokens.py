@@ -283,6 +283,7 @@ def _wait_reservation_released(
 
 class TestMintAndDispatch:
 
+    @pytest.mark.upstream_forward
     def test_child_token_round_trip_and_booking(self, fake_creds, tmp_path):
         upstream = _Upstream("json")
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
@@ -315,6 +316,7 @@ class TestMintAndDispatch:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_streamed_response_books_from_final_usage_frame(
         self, fake_creds, tmp_path,
     ):
@@ -337,6 +339,7 @@ class TestMintAndDispatch:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_streamed_abort_books_what_upstream_reported(
         self, fake_creds, tmp_path,
     ):
@@ -417,6 +420,7 @@ class TestEnforcement:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_allowlist_matches_across_id_spellings(
         self, fake_creds, tmp_path,
     ):
@@ -436,6 +440,7 @@ class TestEnforcement:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_budget_exhaustion_refuses_before_forward(
         self, fake_creds, tmp_path,
     ):
@@ -502,6 +507,7 @@ class TestEnforcement:
 
 class TestReservationIsACap:
 
+    @pytest.mark.upstream_forward
     def test_huge_declared_max_tokens_refused_at_admission(
         self, fake_creds, tmp_path,
     ):
@@ -533,6 +539,7 @@ class TestReservationIsACap:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_booked_spend_at_budget_refuses_next_admission(
         self, fake_creds, tmp_path,
     ):
@@ -562,6 +569,7 @@ class TestReservationIsACap:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_count_tokens_exempt_from_reservation_ceiling(
         self, fake_creds, tmp_path,
     ):
@@ -708,6 +716,7 @@ class TestReservationIsACap:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_release_returns_captured_amount_after_knob_lowered(
         self, fake_creds, tmp_path, monkeypatch,
     ):
@@ -770,6 +779,7 @@ class TestReservationIsACap:
 
 class TestLifecycle:
 
+    @pytest.mark.upstream_forward
     def test_expiry_enforced_and_spend_survives(self, fake_creds, tmp_path):
         upstream = _Upstream("json")
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
@@ -829,6 +839,7 @@ class TestLifecycle:
         finally:
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_child_rows_use_public_token_id_not_secret_prefix(
             self, fake_creds, tmp_path):
         """Every audit row a child request produces joins on the
@@ -871,6 +882,7 @@ class TestLifecycle:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_audit_never_contains_token_value(self, fake_creds, tmp_path):
         upstream = _Upstream("json")
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
@@ -1003,6 +1015,7 @@ class TestMintValidationHardening:
 
 class TestPlanes:
 
+    @pytest.mark.upstream_forward
     def test_tcp_plane_serves_child_tokens(self, fake_creds, tmp_path):
         upstream = _Upstream("json")
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
@@ -1072,6 +1085,7 @@ class TestPlanes:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_admin_endpoints_with_worker_token_over_uds(
         self, fake_creds, tmp_path,
     ):
@@ -1117,6 +1131,7 @@ class TestPlanes:
             )
         assert time.monotonic() - t0 < 5.0  # fail fast, not a hang
 
+    @pytest.mark.upstream_forward
     def test_loopback_admin_op_returns_usable_shared_port(
         self, fake_creds, tmp_path,
     ):
@@ -1172,6 +1187,7 @@ class TestPlanes:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_mint_request_budget_travels_and_enforces(
         self, fake_creds, tmp_path,
     ):
@@ -1224,6 +1240,7 @@ class TestAnthropicSDKDialect:
             }).encode(),
         )
 
+    @pytest.mark.upstream_forward
     def test_x_api_key_dialect_books_once_and_releases_reservation(
         self, fake_creds, tmp_path,
     ):

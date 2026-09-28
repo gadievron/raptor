@@ -115,6 +115,7 @@ class _CannedUpstream:
 
 class TestUpstreamStateHeader:
 
+    @pytest.mark.upstream_forward
     def test_relayed_head_is_stamped_response_started(
         self, fake_creds, tmp_path,
     ):
@@ -133,6 +134,7 @@ class TestUpstreamStateHeader:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_pre_response_502_is_stamped_pre_response(
         self, fake_creds, tmp_path,
     ):
@@ -151,6 +153,7 @@ class TestUpstreamStateHeader:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_upstream_copy_of_the_header_cannot_impersonate(
         self, fake_creds, tmp_path,
     ):
@@ -170,6 +173,7 @@ class TestUpstreamStateHeader:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_relayed_error_head_carries_no_stamp(
         self, fake_creds, tmp_path,
     ):
@@ -189,6 +193,7 @@ class TestUpstreamStateHeader:
             upstream.shutdown()
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_spoofed_stamp_on_error_head_is_stripped(
         self, fake_creds, tmp_path,
     ):

@@ -147,6 +147,7 @@ class TestBodyLimits:
         finally:
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_provider_body_under_cap_accepted(
         self, fake_creds, tmp_path, monkeypatch,
     ):
@@ -264,6 +265,7 @@ class TestChildBudgetReservation:
         finally:
             d.shutdown()
 
+    @pytest.mark.upstream_forward
     def test_reservation_released_after_forwarded_request(
         self, fake_creds, tmp_path,
     ):

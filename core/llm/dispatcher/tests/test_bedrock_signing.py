@@ -167,6 +167,7 @@ _RUNTIME_INVOKE_RESPONSE = {
 }
 
 
+@pytest.mark.upstream_forward
 def test_runtime_bearer_invoke_path(upstream, tmp_path):
     """Worker addresses ``/bedrock/runtime/v1/messages``; dispatcher
     rewrites to ``/model/<id>/invoke``, fills in ``anthropic_version``,
@@ -210,6 +211,7 @@ def test_runtime_bearer_invoke_path(upstream, tmp_path):
 
 
 @needs_botocore
+@pytest.mark.upstream_forward
 def test_runtime_sigv4_invoke_path(upstream, tmp_path):
     """Same runtime path with SigV4 auth instead of bearer."""
     endpoint, captured = upstream
@@ -355,6 +357,7 @@ def test_mantle_rejects_unknown_path(upstream, tmp_path):
         d.shutdown()
 
 
+@pytest.mark.upstream_forward
 def test_anthropic_version_null_overwritten(upstream, tmp_path):
     """A worker (or operator) supplying ``anthropic_version: null`` —
     common JSON-templating typo — must NOT be forwarded verbatim.
@@ -409,6 +412,7 @@ def test_runtime_targets_bedrock_runtime_host(tmp_path, monkeypatch):
 
 
 @needs_botocore
+@pytest.mark.upstream_forward
 def test_messages_sigv4_forward(upstream, tmp_path):
     """A SigV4-signed Messages request: model + messages forwarded
     verbatim, path prefixed with ``/anthropic`` (``/v1/messages`` →
@@ -464,6 +468,7 @@ def test_messages_sigv4_forward(upstream, tmp_path):
 
 
 @needs_botocore
+@pytest.mark.upstream_forward
 def test_messages_signature_matches_wire_request(
     upstream, tmp_path, monkeypatch,
 ):
@@ -521,6 +526,7 @@ def test_messages_signature_matches_wire_request(
     assert check.headers["Authorization"] == req["headers"]["authorization"]
 
 
+@pytest.mark.upstream_forward
 def test_anthropic_sdk_roundtrip(upstream, tmp_path):
     """The strongest CI-friendly E2E: the real Anthropic SDK, pointed at
     ``/bedrock`` via :func:`make_bedrock_client`, gets a parsed Message
@@ -557,6 +563,7 @@ def test_anthropic_sdk_roundtrip(upstream, tmp_path):
         d.shutdown()
 
 
+@pytest.mark.upstream_forward
 def test_streaming_messages_passes_through(upstream, tmp_path):
     """``stream=true`` is forwarded verbatim — Mantle supports SSE
     natively via the standard Anthropic streaming protocol.  The
@@ -593,6 +600,7 @@ def test_streaming_messages_passes_through(upstream, tmp_path):
     assert sent["stream"] is True   # forwarded verbatim
 
 
+@pytest.mark.upstream_forward
 def test_count_tokens_path_forwarded(upstream, tmp_path):
     """The dispatcher forwards arbitrary paths under ``/bedrock/`` with
     the ``/anthropic`` prefix — not just ``/v1/messages``.
@@ -623,6 +631,7 @@ def test_count_tokens_path_forwarded(upstream, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.upstream_forward
 def test_anthropic_version_injected_when_missing(upstream, tmp_path):
     """Mantle inherits Bedrock InvokeModel's ``anthropic_version``
     requirement (``"bedrock-2023-05-31"``).  The Anthropic SDK doesn't
@@ -649,6 +658,7 @@ def test_anthropic_version_injected_when_missing(upstream, tmp_path):
     assert sent["anthropic_version"] == "bedrock-2023-05-31"
 
 
+@pytest.mark.upstream_forward
 def test_anthropic_version_operator_value_preserved(upstream, tmp_path):
     """An operator who deliberately set a different ``anthropic_version``
     (e.g. a future-dated schema version) should see their value
@@ -680,6 +690,7 @@ def test_anthropic_version_operator_value_preserved(upstream, tmp_path):
     assert sent["anthropic_version"] == "bedrock-2099-12-31"
 
 
+@pytest.mark.upstream_forward
 def test_messages_bearer_auth(upstream, tmp_path):
     """Bedrock API-key path: a static ``Authorization: Bearer`` header,
     no SigV4, no botocore — body and path forwarded verbatim.  Mirrors
@@ -722,6 +733,7 @@ def test_messages_bearer_auth(upstream, tmp_path):
     assert sent["anthropic_version"] == "bedrock-2023-05-31"
 
 
+@pytest.mark.upstream_forward
 def test_bedrock_bearer_precedence_over_sigv4(upstream, tmp_path):
     """When both a bearer token and SigV4 keys are present, bearer wins
     (matching the AWS SDKs) — proven by the absence of a SigV4 date and
@@ -1330,6 +1342,7 @@ def test_signer_cache_is_per_profile(monkeypatch):
 
 
 @needs_botocore
+@pytest.mark.upstream_forward
 def test_per_model_profile_forces_sigv4_over_bearer(upstream, tmp_path):
     """An entry-pinned profile signs with SigV4 even when a bearer
     token is present — the pin chooses the identity; bearer has none."""
@@ -1368,6 +1381,7 @@ def test_per_model_profile_forces_sigv4_over_bearer(upstream, tmp_path):
 
 
 @needs_botocore
+@pytest.mark.upstream_forward
 def test_expired_bearer_falls_back_to_sigv4(upstream, tmp_path):
     """An expired JWT bearer with a resolvable SigV4 chain signs with
     the chain (one warning) instead of hard-401ing while healthy

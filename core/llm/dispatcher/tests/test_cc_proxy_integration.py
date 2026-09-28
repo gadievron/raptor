@@ -33,9 +33,14 @@ from core.llm.dispatcher.server import LLMDispatcher
 
 _CLAUDE = shutil.which("claude")
 
-pytestmark = pytest.mark.skipif(
-    _CLAUDE is None, reason="claude CLI not installed",
-)
+pytestmark = [
+    pytest.mark.skipif(_CLAUDE is None, reason="claude CLI not installed"),
+    # Every test here round-trips a real relay through the
+    # dispatcher's upstream-forwarding leg (conftest gate skips the
+    # module when HTTP/2 is opted in but the optional h2 package is
+    # unavailable).
+    pytest.mark.upstream_forward,
+]
 
 _SMOKE_MODEL = "anthropic.claude-opus-4-8"
 

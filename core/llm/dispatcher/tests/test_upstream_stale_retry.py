@@ -118,6 +118,7 @@ def _wait_audit(d: LLMDispatcher, event: str, timeout: float = 5.0) -> list[dict
     return []
 
 
+@pytest.mark.upstream_forward
 class TestUpstreamStaleRetry:
 
     def test_half_open_reuse_recovers_transparently(

@@ -158,6 +158,7 @@ class _SlowDrainUpstream:
         self._server.server_close()
 
 
+@pytest.mark.upstream_forward
 class TestClientLegWriteTimeout:
     """A stalled reader must abort the relay like RelayLimitExceeded —
     aborted usage booked, reservation released — instead of pinning

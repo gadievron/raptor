@@ -158,6 +158,7 @@ class TestLayer3TokenAuth:
         assert r.status_code == 401
         assert "unknown token" in r.text
 
+    @pytest.mark.upstream_forward
     def test_request_with_valid_token_passes_token_check(
         self, dispatcher, operator_proxy_env,
     ):
@@ -192,6 +193,7 @@ class TestLayer3TokenAuth:
 
 class TestLayer4TokenLifecycle:
 
+    @pytest.mark.upstream_forward
     def test_token_budget_exhaustion(self, fake_creds, tmp_path):
         # Budget enforcement is gate logic — must not depend on the
         # real anthropic.com upstream (CI may have no network).
@@ -386,6 +388,7 @@ class TestLayer4TokenLifecycle:
                       headers={_TOKEN_HEADER: token})
         assert r.status_code == 405
 
+    @pytest.mark.upstream_forward
     def test_client_auth_renews_proactively(self, fake_creds, tmp_path):
         """The worker-side httpx client re-arms the token before each
         request when inside the renewal margin (ttl <= 2x margin floor
@@ -547,6 +550,7 @@ class TestLayer4TokenLifecycle:
             assert len(warnings) == 1
 
     @pytest.mark.slow
+    @pytest.mark.upstream_forward
     def test_client_renewal_outlives_original_ttl(self, fake_creds, tmp_path):
         """End-to-end regression for the incident class: a worker that
         keeps dispatching PAST the original TTL keeps a live token
@@ -679,6 +683,7 @@ class _CaptiveUpstream:
         self._server.server_close()
 
 
+@pytest.mark.upstream_forward
 class TestE2ECredentialIsolation:
     """Drive a real httpx client through the UDS, with the
     dispatcher's upstream rewritten to a captive HTTP server, and
@@ -785,6 +790,7 @@ class TestE2ECredentialIsolation:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.upstream_forward
 class TestRealAnthropicSDKThroughDispatcher:
     """The strongest in-process E2E: a real ``anthropic.Anthropic``
     SDK client built via ``make_anthropic_client`` makes a request,
@@ -910,6 +916,7 @@ class TestRealAnthropicSDKThroughDispatcher:
         return do_POST
 
 
+@pytest.mark.upstream_forward
 class TestSubprocessE2E:
     """The fullest end-to-end: spawn a real subprocess via
     ``spawn_worker``, have it import the stock anthropic SDK, make a
@@ -1100,6 +1107,7 @@ class TestChildPlaneSocket:
                        headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 403
 
+    @pytest.mark.upstream_forward
     def test_child_token_dispatches_on_child_plane(self, fake_creds, tmp_path):
         """The reduced plane still serves its purpose: a scoped child
         token's model call forwards upstream."""
@@ -1286,6 +1294,7 @@ class _GzipCaptiveUpstream:
         self._server.server_close()
 
 
+@pytest.mark.upstream_forward
 class TestE2EResponseEncodingPreserved:
     """Regression: the dispatcher used to strip ``Content-Encoding``
     from upstream responses while forwarding the still-compressed

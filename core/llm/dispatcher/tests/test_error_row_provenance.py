@@ -29,6 +29,11 @@ from core.llm.dispatcher.server import (
 )
 from core.llm.tests.mock_upstream import MockUpstream
 
+# Every test here relays through the dispatcher's real
+# upstream-forwarding leg (conftest gate skips the module when
+# HTTP/2 is opted in but the optional h2 package is unavailable).
+pytestmark = pytest.mark.upstream_forward
+
 
 @pytest.fixture
 def fake_creds() -> CredentialStore:

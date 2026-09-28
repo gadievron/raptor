@@ -358,6 +358,7 @@ class TestTimeoutSelection:
         assert timeout.read == 60.0
 
 
+@pytest.mark.upstream_forward
 class TestRelayWiring:
     """The relay passes the per-request window to the shard client."""
 
@@ -428,6 +429,7 @@ class TestRelayWiring:
         assert timeout.read == 33.0
 
 
+@pytest.mark.upstream_forward
 class TestWatchdogTrips:
     # Genuine cost, slow tier: each trip test holds a real wedge for
     # the stall window before the watchdog fires, and the window is
