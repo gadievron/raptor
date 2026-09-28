@@ -180,7 +180,14 @@ def run_fail_open_census(
         context_map=context_map,
     )
     leads: list[dict[str, Any]] = []
-    for file_path, source in sorted(source_texts.items()):
+    from .heartbeat import Heartbeat
+    hb = Heartbeat(out_dir, "fail_open_census")
+    for visited, (file_path, source) in enumerate(
+        sorted(source_texts.items()),
+    ):
+        # Throttled + best-effort inside — progress visibility for a
+        # census that can grind large trees with no run-dir writes.
+        hb.beat(done=visited, total=len(source_texts))
         if time.monotonic() - t0 > budget_s:
             telemetry["budget_exceeded"] = True
             break

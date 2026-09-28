@@ -2168,9 +2168,14 @@ def run_orchestrator(
     joern_presweep_activity = [time.monotonic()]
     joern_presweep_abort = _threading.Event()
     if not config.target_path.is_file():
+        from .heartbeat import Heartbeat
+        _presweep_hb = Heartbeat(config.out_dir, "joern_presweep")
 
         def _presweep_progress(msg: str) -> None:
             joern_presweep_activity[0] = time.monotonic()
+            # Throttled + best-effort inside — progress visibility for
+            # a pre-sweep that can otherwise run hours writing nothing.
+            _presweep_hb.beat(detail=msg)
             if on_progress:
                 on_progress(-1, 0, ReviewOutcome(
                     file="", function="", status="clean", body=msg,
@@ -26202,11 +26207,15 @@ def _resweep_zero_dispatch_suspicious(
     )
     pass_start = time.monotonic()
     swept = 0
+    attempted = 0
     swept_lock = _threading.Lock()
     stop = _threading.Event()
+    from .heartbeat import Heartbeat
+    _hb = Heartbeat(config.out_dir, "zero_dispatch_resweep")
+    _hb.beat(done=0, total=len(candidates))
 
     def _sweep_one(item: tuple[int, ReviewOutcome]) -> None:
-        nonlocal swept
+        nonlocal swept, attempted
         _i, outcome = item
         if stop.is_set():
             return
@@ -26328,6 +26337,11 @@ def _resweep_zero_dispatch_suspicious(
                 outcome.file, outcome.function, exc_info=True,
             )
         finally:
+            with swept_lock:
+                attempted += 1
+                _done = attempted
+            # Throttled + best-effort inside; safe from worker threads.
+            _hb.beat(done=_done, total=len(candidates))
             if config.out_dir:
                 # O_APPEND line-atomic — safe from worker threads.
                 append_audit_log(config.out_dir, record)
@@ -26409,6 +26423,19 @@ def _promote_suspicious(
     if joern_server is not None:
         workers = min(workers, _JOERN_PASS_MAX_WORKERS)
 
+    from .heartbeat import Heartbeat
+    _hb = Heartbeat(config.out_dir, "sweep_promotion")
+    _hb.beat(done=0, total=len(candidates))
+    _hb_done = [0]
+    _hb_lock = _threading.Lock()
+
+    def _hb_tick() -> None:
+        # Throttled + best-effort inside; safe from worker threads.
+        with _hb_lock:
+            _hb_done[0] += 1
+            _done = _hb_done[0]
+        _hb.beat(done=_done, total=len(candidates))
+
     if workers <= 1 or len(candidates) <= 1:
         for i, outcome in candidates:
             _promote_suspicious_one(
@@ -26418,20 +26445,24 @@ def _promote_suspicious(
                 joern_server=joern_server,
                 mechanical_findings=mechanical_findings,
             )
+            _hb_tick()
         return
 
     synthesis_queue: list[tuple[int, ReviewOutcome, str, str, str]] = []
 
     def _one(item: tuple[int, ReviewOutcome]) -> None:
         i, outcome = item
-        _promote_suspicious_one(
-            result, config, i, outcome,
-            sarif_cache=sarif_cache,
-            checklist=checklist,
-            joern_server=joern_server,
-            mechanical_findings=mechanical_findings,
-            synthesis_queue=synthesis_queue,
-        )
+        try:
+            _promote_suspicious_one(
+                result, config, i, outcome,
+                sarif_cache=sarif_cache,
+                checklist=checklist,
+                joern_server=joern_server,
+                mechanical_findings=mechanical_findings,
+                synthesis_queue=synthesis_queue,
+            )
+        finally:
+            _hb_tick()
 
     from core.llm.concurrency import run_parallel
 

@@ -694,6 +694,7 @@ def build_field_census(
     budget_s: float = CENSUS_BUDGET_S,
     max_fields: int = MAX_CENSUS_FIELDS,
     max_sites_per_field: int = MAX_SITES_PER_FIELD,
+    out_dir: Path | str | None = None,
 ) -> FieldCensus:
     """Build the whole-target field-access census.
 
@@ -720,7 +721,12 @@ def build_field_census(
             return True
         return len(name) >= _MIN_FIELD_LEN and name not in _NOISE_FIELDS
 
-    for file_path in sorted(source_texts):
+    from .heartbeat import Heartbeat
+    hb = Heartbeat(out_dir, "field_census")
+    for visited, file_path in enumerate(sorted(source_texts)):
+        # Throttled + best-effort inside — liveness signal while the
+        # census parses a large tree with no other run-dir writes.
+        hb.beat(done=visited, total=len(source_texts))
         if time.monotonic() - t0 > budget_s:
             telemetry["budget_exceeded"] = True
             break
@@ -851,8 +857,11 @@ def build_field_census_cached(
                     len(census.fields), len(census.functions),
                 )
                 return census
+    # out_dir rides explicitly (heartbeat destination), never through
+    # **kwargs: it must not perturb the cache fingerprint above.
     census = build_field_census(
-        source_texts, priority_fields=priority_fields, **kwargs,
+        source_texts, priority_fields=priority_fields, out_dir=out_dir,
+        **kwargs,
     )
     if (
         out_dir is not None
