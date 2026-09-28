@@ -11,6 +11,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
+from core.source import open_regular
+
 from .schema import SCHEMA_VERSION
 
 GRAPH_FILENAME = "raptor.graph.sqlite"
@@ -183,23 +185,104 @@ class GraphStoreUnsafeError(RuntimeError):
     """
 
 
+def _unsafe(path: Path, why: str) -> GraphStoreUnsafeError:
+    from core.security.log_sanitisation import sanitise_for_terminal
+
+    return GraphStoreUnsafeError(
+        f"refusing graph store at "
+        f"{sanitise_for_terminal(str(path))}: {why}"
+    )
+
+
+def _verify_connected_identity(
+    conn: sqlite3.Connection,
+    path: Path,
+    pinned: os.stat_result | None,
+) -> None:
+    """Refuse — before the first pragma write or migration — when
+    sqlite's own open landed on a different inode than the slot held.
+
+    The pre-open probe is fd-honest (``O_NOFOLLOW`` open + ``fstat``
+    on the OPENED fd) but ``sqlite3.connect`` re-opens BY NAME, so a
+    swap in the probe→connect window would still redirect the store.
+    ``PRAGMA database_list`` reports the fully-RESOLVED path of the
+    file the connection actually opened (symlinks resolved at sqlite's
+    open), which witnesses that open after the fact: compare its
+    inode identity against the probe's pin and refuse on mismatch.
+    A double-swap of the resolved TARGET between sqlite's open and the
+    stat here can still hide (sqlite's fd itself is unreachable from
+    Python) — that residual window is stated in the tests.
+
+    *pinned* is ``None`` on the fresh-create path (nothing existed at
+    probe time); the slot is then re-probed fd-honest and must match
+    what sqlite reports — a symlink planted between the ENOENT probe
+    and connect refuses here (``O_NOFOLLOW``), before the migration
+    writes any schema through the link.
+    """
+    row = conn.execute("PRAGMA database_list").fetchone()
+    opened = row[2] if row else ""
+    if not opened:
+        raise _unsafe(path, "sqlite reported no backing file for the "
+                            "connection")
+    try:
+        st_opened = os.stat(opened)
+    except OSError as exc:
+        raise _unsafe(
+            path, "the file sqlite opened is gone or unreadable "
+                  "(slot swapped between check and connect?)") from exc
+    if not stat.S_ISREG(st_opened.st_mode):
+        raise _unsafe(path, "sqlite opened a non-regular file")
+    if pinned is None:
+        probe = open_regular(path, "rb")
+        if probe is None:
+            raise _unsafe(
+                path, "not a regular file after create (symlink or "
+                      "special file planted at the DB slot)")
+        with probe:
+            pinned = os.fstat(probe.fileno())
+    if (st_opened.st_dev, st_opened.st_ino) != (
+            pinned.st_dev, pinned.st_ino):
+        raise _unsafe(
+            path, "sqlite opened a different file than the DB slot "
+                  "held (slot swapped between check and connect)")
+
+
 def open_graph(path: Path) -> sqlite3.Connection:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Fd-honest probe of the slot (the shared read discipline,
+    # ``core.source.open_regular``): ``O_NOFOLLOW`` refuses a planted
+    # symlink without following it, ``O_NONBLOCK`` keeps a reader-less
+    # FIFO from hanging the open, and the ``fstat(S_ISREG)`` verdict
+    # is about the inode actually opened — not a by-name ``lstat``
+    # that a swap can invalidate between check and use.
+    fh = open_regular(path, "rb")
+    pinned: os.stat_result | None = None
+    if fh is None and os.path.lexists(path):
+        # Something occupies the slot but refused the fd-honest open.
+        # A symlink / special file is a plant — refuse. A regular but
+        # unreadable file keeps the pre-existing failure shape: fall
+        # through and let sqlite raise its own OperationalError.
+        try:
+            st = os.lstat(path)
+        except OSError:
+            st = None
+        if st is None or not stat.S_ISREG(st.st_mode):
+            raise _unsafe(
+                path, "not a regular file (symlink or special file "
+                      "planted at the DB slot)")
     try:
-        st = os.lstat(path)
-    except FileNotFoundError:
-        st = None  # Fresh store: sqlite creates the file below.
-    if st is not None and not stat.S_ISREG(st.st_mode):
-        from core.security.log_sanitisation import sanitise_for_terminal
-
-        msg = (
-            f"refusing graph store at "
-            f"{sanitise_for_terminal(str(path))}: not a regular file "
-            f"(symlink or special file planted at the DB slot)"
-        )
-        raise GraphStoreUnsafeError(msg)
-    conn = sqlite3.connect(path)
+        if fh is not None:
+            pinned = os.fstat(fh.fileno())
+        conn = sqlite3.connect(path)
+        try:
+            _verify_connected_identity(conn, path, pinned)
+        except BaseException:
+            conn.close()
+            raise
+    finally:
+        if fh is not None:
+            fh.close()
     conn.row_factory = sqlite3.Row
     conn.execute(f"PRAGMA busy_timeout={int(_BUSY_TIMEOUT_MS)}")
     conn.execute("PRAGMA foreign_keys=ON")
