@@ -565,6 +565,12 @@ _REPORT_WRITER_FILES = (
     # terminal summary — sanitise_for_terminal grade via its _esc()
     # helper.
     "core/engagement/report.py",
+    # Engagement supervisor: interim report + terminal park/pause
+    # lines interpolate ledger reasons, artifact ids and residual
+    # details that originate in a hostile install tree. Report +
+    # terminal writer — sanitise_for_terminal grade via its _esc()
+    # helper.
+    "core/engagement/supervise.py",
     "core/llm/multi_model/replay.py",
     "core/progress/__init__.py",
     "core/project/cli.py",
