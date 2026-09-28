@@ -8,14 +8,27 @@ file is the executed ground truth for the two shipped families.
 Every case is a KNOWN truth of the PHP builtins + sink-context
 parsing rules; a failure here means the witness would mint wrong
 verdicts on real targets.
+
+Runtime-degradation discipline: under concurrent test load the
+resolved tier itself can fail to carry a probe (the parent-side
+witness deadline, a docker client that cannot be spawned) — the
+product honestly reports that run as outcome ``error``, which is a
+statement about THIS host right now, not about the PHP ground truth
+pinned here. Those transport shapes skip with the reason
+(``_skip_if_runtime_degraded``); every product-classified error and
+every verdict on a healthy runtime keeps its exact assertion.
 """
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
+
 import pytest
 
-from core.audit.sanwit import run_sanwit_check
+from core.audit.sanwit import SanwitResult, run_sanwit_check
 from core.audit.sanwit._execute import (
+    ExecOutcome,
     RuntimeUnavailable,
     resolve_php_runtime,
 )
@@ -38,6 +51,52 @@ def _check(hypothesis: str, source: str, cwe: str):
     )
 
 
+# Reason shapes minted ONLY by the execution transport
+# (core.audit.sanwit._execute) when the runtime fails to carry the
+# probe at all: the parent-side witness deadline (both tiers — the
+# probe itself is milliseconds of PHP work, so on this matrix a
+# deadline hit means the runtime, not the chain), a client that
+# could not be spawned or read (Popen/pipe OSError), the pre-exec
+# chmod of the bind-mounted script dir, and docker's reserved exit
+# code 125 ("docker run itself failed" — the generated probe only
+# ever exits 0, 3, or a PHP fatal code, never 125). Every OTHER
+# error shape describes what the executed probe DID (per-payload
+# indeterminacy, unparseable/unauthenticated output, the stdout
+# cap, any other exit code) and stays a hard failure here.
+#
+# The transport/product partition above is docker-tier-true only:
+# on the native tier just the deadline spelling is transport-only —
+# the native arm's broad "execution failed: <Exc>" catch also wraps
+# the dark_verify script-witness machinery (product code), so it is
+# deliberately NOT treated as degradation here.
+#
+# Anchoring: \Z, not $ — $ also matches before a trailing newline,
+# which would widen the deadline arm to suffixed spellings.
+_RUNTIME_DEGRADED_RE = re.compile(
+    r"witness timed out after \d+s\Z"
+    r"|docker execution failed: "
+    r"|chmod failed: "
+    r"|probe exited 125\b",
+)
+
+
+def _skip_if_runtime_degraded(res: SanwitResult) -> None:
+    """Skip (with the transport's reason) when the live runtime
+    degraded instead of carrying the probe. Same tier-guard idiom as
+    the module fixture's no-tier skip, one layer further down: the
+    tier resolved earlier but could not execute NOW. A product
+    regression that misclassifies on a healthy runtime — including
+    one that mints outcome ``error`` for a reason the transport
+    never produces — still fails the exact assertions that follow.
+    """
+    if (
+        res.outcome == "error"
+        and res.rule_id == "sanwit:error"
+        and _RUNTIME_DEGRADED_RE.match(res.reason or "")
+    ):
+        pytest.skip(f"live witness runtime degraded: {res.reason}")
+
+
 class TestShellFamilyGroundTruth:
     def test_escapeshellcmd_argument_injection(self, runtime):
         """The founding case: escaping LOOKS applied, but a space
@@ -50,6 +109,7 @@ class TestShellFamilyGroundTruth:
             "}",
             "CWE-88",
         )
+        _skip_if_runtime_degraded(res)
         assert res.outcome == "confirmed"
         assert res.rule_id == "sanwit:insufficient:shell-command"
         ids = {e["payload_id"] for e in res.exhibits}
@@ -67,6 +127,7 @@ class TestShellFamilyGroundTruth:
             "}",
             "CWE-78",
         )
+        _skip_if_runtime_degraded(res)
         assert res.outcome == "inconclusive"
         assert res.rule_id == "sanwit:sufficient:shell-command"
         assert "corpus-bounded" in res.reason
@@ -86,6 +147,7 @@ class TestShellFamilyGroundTruth:
             "}",
             "CWE-78",
         )
+        _skip_if_runtime_degraded(res)
         assert res.outcome == "confirmed"
         assert res.rule_id == "sanwit:insufficient:shell-squote"
 
@@ -103,6 +165,7 @@ class TestShellFamilyGroundTruth:
             "}",
             "CWE-78",
         )
+        _skip_if_runtime_degraded(res)
         assert res.outcome == "confirmed"
         ids = {e["payload_id"] for e in res.exhibits}
         assert ids & {"semi", "pipe", "space-arg"}
@@ -119,6 +182,7 @@ class TestHtmlFamilyGroundTruth:
             "}",
             "CWE-79",
         )
+        _skip_if_runtime_degraded(res)
         assert res.outcome == "confirmed"
         assert res.rule_id == "sanwit:insufficient:html-attr-squote"
         first = res.exhibits[0]
@@ -134,6 +198,7 @@ class TestHtmlFamilyGroundTruth:
             "}",
             "CWE-79",
         )
+        _skip_if_runtime_degraded(res)
         assert res.outcome == "inconclusive"
         assert res.rule_id == "sanwit:sufficient:html-attr-squote"
 
@@ -149,6 +214,7 @@ class TestHtmlFamilyGroundTruth:
             "}",
             "CWE-79",
         )
+        _skip_if_runtime_degraded(res)
         assert res.outcome == "inconclusive"
         assert res.rule_id == "sanwit:sufficient:html-attr-squote"
         assert res.chain == ["htmlspecialchars({DATA},ENT_QUOTES|ENT_HTML5)"]
@@ -162,6 +228,7 @@ class TestHtmlFamilyGroundTruth:
             "}",
             "CWE-79",
         )
+        _skip_if_runtime_degraded(res)
         assert res.outcome == "inconclusive"
         assert res.rule_id == "sanwit:sufficient:html-text"
 
@@ -175,6 +242,7 @@ class TestHtmlFamilyGroundTruth:
             "}",
             "CWE-79",
         )
+        _skip_if_runtime_degraded(res)
         assert res.outcome == "confirmed"
         assert res.rule_id == "sanwit:insufficient:html-attr-unquoted"
 
@@ -441,6 +509,244 @@ class TestReceiptScoping:
             "}",
             "CWE-88",
         )
+        _skip_if_runtime_degraded(res)
         version = res.interpreter.get("version", "")
         assert version and version[0].isdigit()
         assert res.interpreter.get("tier") in ("native", "docker")
+
+
+def _error_result(reason: str) -> SanwitResult:
+    return SanwitResult(
+        tool="sanwit", file_path="web/a.php", function_name="f",
+        outcome="error", verdict="error", rule_id="sanwit:error",
+        reason=reason,
+    )
+
+
+class TestRuntimeDegradedGuard:
+    """The degraded-runtime skip guard, both directions — HERMETIC
+    (no PHP, no docker daemon; no ``runtime`` fixture), so the
+    guard's own contract is enforced on every host, including the
+    ones where the live matrix skips."""
+
+    def _stub(
+        self, monkeypatch: pytest.MonkeyPatch, outcome: ExecOutcome,
+    ) -> None:
+        """Pin resolution + execution at the module seam (the
+        sibling test_sanwit_channel.py idiom) so the real live-test
+        bodies run against an injected transport outcome."""
+        from core.audit.sanwit import _execute as ex
+
+        rt = ex.PhpRuntime(
+            tier="docker", version="8.3.0",
+            docker_path="/usr/bin/docker", image=ex.DOCKER_IMAGE,
+        )
+        monkeypatch.setattr(
+            ex, "resolve_php_runtime", lambda refresh=False: rt,
+        )
+        monkeypatch.setattr(
+            ex, "execute_probe", lambda *a, **k: outcome,
+        )
+
+    @staticmethod
+    def _fail_on_skip(call: Callable[[], None]) -> None:
+        """No-skip-direction fence: an unexpected ``pytest.skip``
+        raised by the code under test would otherwise propagate as
+        SKIPPED — straight through ``pytest.raises``, which re-raises
+        it — and the test would pass silently, the exact masking this
+        class exists to rule out. An unexpected skip is a hard
+        failure."""
+        try:
+            call()
+        except pytest.skip.Exception as exc:
+            pytest.fail(
+                f"guard skipped a product-visible shape: {exc}",
+            )
+
+    def test_degraded_transport_skips_the_live_assertions(
+        self, monkeypatch,
+    ) -> None:
+        """Direction one: the transport-deadline shape turns the
+        ground-truth hard failure into a skip naming the reason."""
+        from core.audit.sanwit import _execute as ex
+
+        self._stub(monkeypatch, ex.ExecOutcome(
+            ok=False,
+            reason=f"witness timed out after {ex.DOCKER_TIMEOUT_S}s",
+        ))
+        with pytest.raises(
+            pytest.skip.Exception, match="runtime degraded",
+        ):
+            TestShellFamilyGroundTruth(
+            ).test_escapeshellarg_command_position_sufficient(
+                runtime=None,
+            )
+
+    def test_product_misclassification_still_fails(
+        self, monkeypatch,
+    ) -> None:
+        """Direction two: on a HEALTHY runtime (execution succeeded)
+        a product regression that lands in outcome ``error`` — here
+        unauthenticated probe output — must still fail the exact
+        ground-truth assertion, never skip."""
+        from core.audit.sanwit import _execute as ex
+
+        self._stub(monkeypatch, ex.ExecOutcome(
+            ok=True, stdout="not the probe's authenticated json",
+        ))
+
+        def body() -> None:
+            with pytest.raises(AssertionError):
+                TestShellFamilyGroundTruth(
+                ).test_escapeshellarg_command_position_sufficient(
+                    runtime=None,
+                )
+
+        self._fail_on_skip(body)
+
+    @pytest.mark.parametrize("reason", [
+        "witness timed out after 90s",   # docker-tier deadline
+        "witness timed out after 30s",   # native-tier deadline
+        "docker execution failed: FileNotFoundError",
+        "docker execution failed: OSError",
+        "chmod failed: PermissionError",
+        "probe exited 125: docker: error response from daemon",
+    ])
+    def test_transport_reasons_skip(self, reason: str) -> None:
+        with pytest.raises(
+            pytest.skip.Exception, match="runtime degraded",
+        ):
+            _skip_if_runtime_degraded(_error_result(reason))
+
+    @pytest.mark.parametrize("reason", [
+        # Adjudication of what the probe DID — product territory.
+        "chain execution indeterminate for 2/6 payloads — "
+        "sufficiency cannot be adjudicated",
+        "unauthenticated/unparseable probe output: no JSON document "
+        "in probe output",
+        "probe stdout exceeded the 65536-byte cap — terminated, "
+        "indeterminate",
+        "probe exited 255: PHP Fatal error",
+        "probe exited 3",       # the probe's own bad-payload exit
+        "probe exited 1",
+        # Prefix look-alikes that are NOT the transport shapes.
+        "witness timed out after 90s of deliberation",
+        "witness timed out after 90s\n",  # \Z: trailing newline out
+        "probe exited 1255",
+    ])
+    def test_product_error_reasons_do_not_skip(
+        self, reason: str,
+    ) -> None:
+        self._fail_on_skip(
+            lambda: _skip_if_runtime_degraded(_error_result(reason)),
+        )
+
+    def test_non_error_outcomes_never_skip(self) -> None:
+        """The guard keys on the full error identity, not the reason
+        text alone: a classified verdict whose reason merely QUOTES a
+        transport phrase passes through to its assertions."""
+        res = SanwitResult(
+            tool="sanwit", file_path="web/a.php", function_name="f",
+            outcome="confirmed", verdict="insufficient",
+            rule_id="sanwit:insufficient:shell-command",
+            reason="witness timed out after 90s",
+        )
+        self._fail_on_skip(lambda: _skip_if_runtime_degraded(res))
+
+    def test_guard_matches_the_reason_the_transport_mints(
+        self, monkeypatch,
+    ) -> None:
+        """Anti-drift pin: the deadline reason the guard keys on is
+        the one ``_run_capped_pipes`` actually produces (a real
+        client process, no docker — the deadline shrunk to keep the
+        pin cheap)."""
+        from core.audit.sanwit import _execute as ex
+
+        monkeypatch.setattr(ex, "DOCKER_TIMEOUT_S", 1)
+        out = ex._run_capped_pipes(
+            ["/bin/sleep", "30"], env=ex._safe_env(),
+        )
+        assert not out.ok
+        assert _RUNTIME_DEGRADED_RE.match(out.reason), out.reason
+
+    def test_guard_matches_the_spawn_failure_reason(
+        self, tmp_path,
+    ) -> None:
+        """Anti-drift pin for the client-spawn shape (Popen OSError
+        inside the transport)."""
+        from core.audit.sanwit import _execute as ex
+
+        out = ex._run_capped_pipes(
+            [str(tmp_path / "no-such-client")], env=ex._safe_env(),
+        )
+        assert not out.ok
+        assert _RUNTIME_DEGRADED_RE.match(out.reason), out.reason
+
+    # Every live body that runs a `_check`, enumerated: adding a new
+    # live check test WITHOUT the guard (or without extending this
+    # set) must be a deliberate decision, never a silent gap.
+    _GUARDED_LIVE_TESTS: frozenset[str] = frozenset({
+        "test_escapeshellcmd_argument_injection",
+        "test_escapeshellarg_command_position_sufficient",
+        "test_escapeshellarg_inside_single_quotes_breaks_out",
+        "test_stripslashes_after_escapeshellcmd_ordering_bug",
+        "test_ent_compat_leaves_single_quote",
+        "test_ent_quotes_single_quote_sufficient",
+        "test_ent_quotes_html5_flag_combination",
+        "test_any_flag_variant_sufficient_for_text_context",
+        "test_unquoted_attribute_always_breaks",
+        "test_interpreter_version_recorded",
+    })
+
+    def test_every_check_site_carries_the_guard(self) -> None:
+        """Structural fence: the hermetic direction tests route ONE
+        live body through the guard; nothing else would notice the
+        guard dropped from the other nine. Parse this file and pin
+        the placement — every `_check` site is followed by
+        `_skip_if_runtime_degraded` before its first assert, and the
+        set of guarded bodies is exactly the enumeration above."""
+        import ast
+        from pathlib import Path
+
+        def calls(stmt: ast.stmt, name: str) -> bool:
+            return any(
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Name)
+                and n.func.id == name
+                for n in ast.walk(stmt)
+            )
+
+        tree = ast.parse(
+            Path(__file__).read_text(encoding="utf-8"),
+        )
+        seen: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            check_at = [
+                i for i, stmt in enumerate(node.body)
+                if calls(stmt, "_check")
+            ]
+            if not check_at:
+                continue
+            seen.add(node.name)
+            guard_at = [
+                i for i, stmt in enumerate(node.body)
+                if calls(stmt, "_skip_if_runtime_degraded")
+            ]
+            assert guard_at, (
+                f"{node.name} runs a live check without "
+                "_skip_if_runtime_degraded"
+            )
+            assert min(guard_at) > max(check_at), (
+                f"{node.name}: the guard must run AFTER the check"
+            )
+            assert_at = [
+                i for i, stmt in enumerate(node.body)
+                if isinstance(stmt, ast.Assert)
+            ]
+            assert not assert_at or min(guard_at) < min(assert_at), (
+                f"{node.name}: the guard must run before the first "
+                "ground-truth assert"
+            )
+        assert seen == self._GUARDED_LIVE_TESTS

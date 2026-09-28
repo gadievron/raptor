@@ -9,10 +9,12 @@ no sandbox. The live matrix lives in test_sanwit_live.py.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import re
 import threading
+from collections.abc import Iterator
 from types import SimpleNamespace
 
 import pytest
@@ -1060,6 +1062,24 @@ class TestDockerCaptureBounds:
         assert f"fsize={sanwit_execute._DOCKER_FSIZE_LIMIT}" in joined
         assert "--network=none" in args
 
+    def test_script_dir_mount_is_readonly_in_args(self) -> None:
+        # The execution-only bind mount, pinned token-exact: a fault
+        # in this one argv element (a bad mode, a reshaped
+        # src:dst:mode triple) makes docker refuse every probe run
+        # with its reserved exit code 125 — which the live matrix
+        # reads as a degraded runtime and skips — while the shim
+        # client used by the rest of this file never validates argv.
+        # This pin is the hermetic fail-loud fence for the mount
+        # shape.
+        args = sanwit_execute._docker_base_args("/usr/bin/docker", "/s")
+        assert args.count("-v") == 1
+        assert args[args.index("-v") + 1] == "/s:/s:ro"
+        # The mount is execution-only: version-probe args (no script
+        # dir) must not carry one.
+        assert "-v" not in sanwit_execute._docker_base_args(
+            "/usr/bin/docker",
+        )
+
     def _shim_runtime(self, tmp_path, script: str):
         # A docker-client stand-in: the capture loop's subject is the
         # HOST-side client process (the container's rlimits cannot
@@ -1343,13 +1363,34 @@ class TestOrphanContainment:
         )
         return child.stdout.strip()
 
+    @contextlib.contextmanager
+    def _live_pid(self) -> Iterator[int]:
+        # A pid that is POSITIVELY alive for the duration of the
+        # sweep: a spawned child, never a sentinel pid. Pid 1 in
+        # particular is forbidden here — inside a pid namespace THIS
+        # test process can itself run as pid 1 (a shell
+        # exec-optimizes the last command of ``sh -c``), and a pid-1
+        # row then collides with the sweep's own-pid self-skip, so
+        # the test would exercise (or silently pass through) the
+        # wrong branch of the decision ladder.
+        import subprocess as sp
+        import sys as _sys
+
+        child = sp.Popen(
+            [_sys.executable, "-c", "import time; time.sleep(60)"],
+        )
+        try:
+            yield child.pid
+        finally:
+            child.kill()
+            child.wait()
+
     def test_sweep_reaps_only_positively_dead_owners(
         self, tmp_path, monkeypatch,
     ):
         dead_pid = self._dead_pid()
         live_pid = os.getpid()
         live_start = sanwit_execute.proc_starttime(live_pid)
-        init_start = sanwit_execute.proc_starttime(1)
         containers = {
             "a" * 64: self._labels(dead_pid, "123456"),   # -> reap
             "b" * 64: self._labels(str(live_pid), str(live_start)),
@@ -1357,18 +1398,23 @@ class TestOrphanContainment:
             "e" * 64: self._labels("notapid", "123"),  # malformed
             "f" * 64: json.dumps({"com.example": "x"}),  # foreign
         }
-        if init_start is not None:
-            # A live pid whose starttime CANNOT match the label: the
-            # labelled owner's pid was recycled — death evidence.
-            containers["c" * 64] = self._labels("1", f"{init_start}9")
-        shim, calls = self._sweep_shim(
-            tmp_path, containers, extra_ps_lines=["ZZZ", ""],
-        )
-        self._run_sweep(monkeypatch, shim)
+        with self._live_pid() as recycled_pid:
+            recycled_start = sanwit_execute.proc_starttime(recycled_pid)
+            if recycled_start is not None:
+                # A live pid whose starttime CANNOT match the label:
+                # the labelled owner's pid was recycled — death
+                # evidence.
+                containers["c" * 64] = self._labels(
+                    str(recycled_pid), f"{recycled_start}9",
+                )
+            shim, calls = self._sweep_shim(
+                tmp_path, containers, extra_ps_lines=["ZZZ", ""],
+            )
+            self._run_sweep(monkeypatch, shim)
         got = calls.read_text() if calls.exists() else ""
         assert f"kill {'a' * 64}" in got
         assert f"rm -f {'a' * 64}" in got
-        if init_start is not None:
+        if recycled_start is not None:
             assert f"rm -f {'c' * 64}" in got
         for skipped in ("b", "d", "e", "f"):
             assert skipped * 64 not in got
@@ -1422,15 +1468,19 @@ class TestOrphanContainment:
     def test_sweep_leaves_a_live_verified_owner_alone(
         self, tmp_path, monkeypatch,
     ):
-        # pid 1 with its REAL starttime: alive and identity-verified
-        # (not our own pid, so this exercises the liveness branch,
-        # not the own-pid skip).
-        init_start = sanwit_execute.proc_starttime(1)
-        if init_start is None:
-            pytest.skip("no readable /proc/1/stat on this host")
-        containers = {"f" * 64: self._labels("1", str(init_start))}
-        shim, calls = self._sweep_shim(tmp_path, containers)
-        self._run_sweep(monkeypatch, shim)
+        # A live pid with its REAL starttime: alive and
+        # identity-verified. A spawned child, never our own pid and
+        # never pid 1 (see _live_pid), so this exercises the
+        # liveness branch, not the own-pid skip.
+        with self._live_pid() as owner_pid:
+            owner_start = sanwit_execute.proc_starttime(owner_pid)
+            if owner_start is None:
+                pytest.skip("no readable /proc on this host")
+            containers = {
+                "f" * 64: self._labels(str(owner_pid), str(owner_start)),
+            }
+            shim, calls = self._sweep_shim(tmp_path, containers)
+            self._run_sweep(monkeypatch, shim)
         assert not calls.exists()
 
     def test_hostile_digit_labels_skip_without_crashing(
