@@ -896,6 +896,56 @@ requested profile cannot engage. The operator resolves it explicitly
 
 ---
 
+## Supervised process trees (not a sandbox)
+
+RAPTOR sometimes needs a long-running helper -- an analysis server, a
+JVM, a tool daemon -- that must reliably disappear when it is stopped
+or when the RAPTOR process that owns it dies, taking every descendant
+it spawned with it. `core.sandbox.supervised.spawn_supervised()` is
+that primitive: a teardown domain, **not a security boundary**.
+
+A supervised tree gets **no confinement of any kind** -- no Landlock,
+no seccomp, no filesystem or network policy. The helper runs with the
+caller's full ambient authority. Anything untrusted belongs under the
+sandbox profiles above, never under supervision alone.
+
+Two tiers, selected automatically:
+
+- **pidns** -- the tree runs in its own PID namespace with a minimal
+  init process. Stopping the tree, or the owner's death (in `kill`
+  mode), collapses the namespace: the kernel itself guarantees no
+  descendant survives, including double-forked daemons. Optionally a
+  private network namespace (loopback only) can be added. Namespace
+  setup writes the deny-setgroups sequence and identity uid/gid maps
+  (`_ns_setup`), so the tree's effective uid is always mapped in its
+  user namespace: workloads inside may themselves create nested
+  namespaces where host policy allows -- an unmapped euid would make
+  a nested `unshare(CLONE_NEWUSER)` fail with EPERM.
+- **group** -- on hosts where unprivileged user namespaces are
+  restricted, the same call degrades -- loudly (a logged warning
+  names the refusal and the weaker teardown scope), never a crash --
+  to a plain process group with parent-death kill: the exact posture
+  RAPTOR tool spawns already had, so nothing gets worse. This tier's
+  honest gap: a descendant that leaves the process group (setsid, a
+  double-forked daemon) is invisible to group-scoped teardown and
+  survives it. Callers that need the namespace guarantee pass
+  `pid_ns="require"`, which refuses instead of degrading.
+
+Every spawn states its fate explicitly: `on_parent_death="kill"` ties
+the tree's lifetime to the owning process; `"survive"` lets it outlive
+the owner (for shared servers that later runs reattach to). Teardown
+is verified, never assumed -- on the pidns tier a stop call returns
+only once the kernel has proven the tree empty; on the group tier the
+proof is scoped to the process group (see the gap above). On either
+tier, a stop that cannot prove its claim reports an error and leaves
+the handle retryable.
+
+Because supervision is not a sandbox, it appears in none of the
+profile or containment-floor tables above, and no consent surface
+applies to it.
+
+---
+
 ## Toolchain env for builds
 
 Environment sanitisation deliberately strips language-specific vars
