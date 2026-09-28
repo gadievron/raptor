@@ -3,9 +3,11 @@
 import unittest
 
 from core.security.log_sanitisation import (
+    EXCERPT_MAX_LEN,
     _escape_char,
     escape_nonprintable,
     has_nonprintable,
+    sanitise_excerpt,
     sanitise_for_terminal,
 )
 
@@ -233,6 +235,43 @@ class SanitiseForTerminalTests(unittest.TestCase):
         self.assertEqual(sanitise_for_terminal("b" * 256), "b" * 256)
         self.assertEqual(sanitise_for_terminal("b" * 100, max_len=100),
                          "b" * 100)
+
+
+class SanitiseExcerptTests(unittest.TestCase):
+    def test_under_cap_passes_through_byte_exact(self):
+        # Regression contract, passing direction: a legitimate value
+        # under the bound is embedded byte-exact — no marker, no
+        # escaping artefacts.
+        self.assertEqual(sanitise_excerpt("FIND-0042"), "FIND-0042")
+        self.assertEqual(sanitise_excerpt("b" * EXCERPT_MAX_LEN),
+                         "b" * EXCERPT_MAX_LEN)
+
+    def test_over_cap_is_elided_with_explicit_marker(self):
+        # Regression contract, eliding direction: an over-cap value is
+        # truncated at the default bound with the explicit marker.
+        out = sanitise_excerpt("a" * (EXCERPT_MAX_LEN + 900))
+        self.assertEqual(out,
+                         "a" * EXCERPT_MAX_LEN + "...[+900 chars]")
+
+    def test_escapes_nonprintables_before_bounding(self):
+        out = sanitise_excerpt("evil\x1b]0;spoof\x07id")
+        self.assertNotIn("\x1b", out)
+        self.assertIn("\\x1b", out)
+
+    def test_escape_burst_capped_at_escaped_length(self):
+        # Order pin: escape FIRST, then bound. The ESCAPED rendering is
+        # what gets capped, so an escape burst can never blow the
+        # output past cap + marker, and the ``+N`` marker counts
+        # post-escape characters (each ESC renders as 4 chars).
+        out = sanitise_excerpt("\x1b" * 2000)
+        self.assertEqual(
+            out,
+            "\\x1b" * (EXCERPT_MAX_LEN // 4)
+            + f"...[+{2000 * 4 - EXCERPT_MAX_LEN} chars]")
+
+    def test_non_string_values_are_stringified(self):
+        self.assertEqual(sanitise_excerpt(42), "42")
+        self.assertEqual(sanitise_excerpt(None), "None")
 
 
 if __name__ == "__main__":
