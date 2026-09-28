@@ -602,17 +602,39 @@ def test_device_rules_carry_truncate_from_abi_3(tmp_path: Path,
 # functional self-test child: every failure shape reports BROKEN (0)
 # ---------------------------------------------------------------------------
 # _run_selftest_in_child's verdict byte decides whether the whole
-# process treats Landlock as usable. The success arm requires BOTH
-# probes to be EACCES-denied; every error/anomaly arm must report 0
-# ("broken / cannot verify") — a 1 on any error path is a fail-open
-# probe: the sandbox would claim enforcement nobody verified.
+# process treats Landlock as usable. The success arm requires the
+# WHOLE worker-shaped install to succeed (full-mask create, add_rule,
+# prctl, restrict_self), the two outside-the-grant probes to be
+# EACCES-denied AND the inside-the-grant read to succeed; every
+# error/anomaly arm must report 0 ("broken / cannot verify") — a 1 on
+# any error path is a fail-open probe: the sandbox would claim
+# enforcement nobody verified.
+
+# Any positive ABI works for the fake-libc tests (the masks only
+# change which bits ride the recorded attr, pinned separately below).
+_SELFTEST_ABI = 3
+
+
+def _selftest_artifacts(tmp_path: Path) -> "tuple[str, str, str]":
+    """probe file + grant dir/file, in the parent-made shape
+    (_landlock_functional_self_test creates these pre-fork)."""
+    probe = tmp_path / "probe"
+    probe.write_text("x")
+    grant_dir = tmp_path / "grant"
+    grant_dir.mkdir()
+    grant_file = grant_dir / "readable"
+    grant_file.write_text("x")
+    return str(probe), str(grant_dir), str(grant_file)
 
 
 class _SelftestLibc:
     def __init__(self, *, create_fail: bool = False,
-                 restrict_ret: int = 0) -> None:
+                 add_rule_ret: int = 0, restrict_ret: int = 0,
+                 prctl_ret: int = 0) -> None:
         self._create_fail = create_fail
+        self._add_rule_ret = add_rule_ret
         self._restrict_ret = restrict_ret
+        self._prctl_ret = prctl_ret
 
     def syscall(self, nr: int, *args: Any) -> int:
         if nr == ll._SYS_LANDLOCK_CREATE:
@@ -620,25 +642,27 @@ class _SelftestLibc:
                 return -1
             import os as _os
             return _os.open("/dev/null", _os.O_RDONLY)
+        if nr == ll._SYS_LANDLOCK_ADD_RULE:
+            return self._add_rule_ret
         if nr == ll._SYS_LANDLOCK_RESTRICT:
             return self._restrict_ret
         raise AssertionError(f"unexpected syscall {nr}")
 
     def prctl(self, *args: Any) -> int:
-        return 0
+        return self._prctl_ret
 
 
-def _probe_open_patch(monkeypatch: pytest.MonkeyPatch,
+def _probe_open_patch(monkeypatch: pytest.MonkeyPatch, probe_path: str,
                       wronly: Any, rdonly: Any) -> None:
-    """Intercept the self-test's two probe opens (exact O_WRONLY /
-    O_RDONLY flags on the mkstemp path); everything else passes
-    through — mkstemp's own O_CREAT|O_EXCL open included."""
+    """Intercept the self-test's two outside-the-grant probe opens
+    (exact O_WRONLY / O_RDONLY flags on *probe_path*); everything else
+    — the O_PATH grant-dir open and the grant-file read included —
+    passes through."""
     import os as _os
     real_open = _os.open
-    pfx = "/tmp/.raptor_landlock_selftest_"
 
     def fake_open(path: Any, flags: int, *a: Any, **kw: Any) -> int:
-        if isinstance(path, str) and path.startswith(pfx):
+        if path == probe_path:
             if flags == _os.O_WRONLY:
                 if isinstance(wronly, Exception):
                     raise wronly
@@ -652,71 +676,129 @@ def _probe_open_patch(monkeypatch: pytest.MonkeyPatch,
     monkeypatch.setattr(_os, "open", fake_open)
 
 
-def test_selftest_confirms_only_when_both_probes_denied(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    _probe_open_patch(monkeypatch,
+def test_selftest_confirms_only_when_probes_deny_and_grant_reads(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    probe, grant_dir, grant_file = _selftest_artifacts(tmp_path)
+    _probe_open_patch(monkeypatch, probe,
                       wronly=PermissionError(13, "denied"),
                       rdonly=PermissionError(13, "denied"))
-    assert ll._run_selftest_in_child(_SelftestLibc()) == 1
+    assert ll._run_selftest_in_child(
+        _SelftestLibc(), _SELFTEST_ABI, probe, grant_dir,
+        grant_file) == 1
 
 
 def test_selftest_reports_broken_when_nothing_enforces(
-        ) -> None:
+        tmp_path: Path) -> None:
     # Fake libc "succeeds" at every syscall but restricts nothing —
     # the "looks green but isn't enforcing" kernel. Both probe opens
     # succeed; verdict must be 0.
-    assert ll._run_selftest_in_child(_SelftestLibc()) == 0
+    probe, grant_dir, grant_file = _selftest_artifacts(tmp_path)
+    assert ll._run_selftest_in_child(
+        _SelftestLibc(), _SELFTEST_ABI, probe, grant_dir,
+        grant_file) == 0
 
 
 def test_selftest_reports_broken_when_only_write_denied(
-        monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # READ_FILE silently broken (e.g. bit-value drift) while
     # WRITE_FILE still enforces: verdict 0.
-    _probe_open_patch(monkeypatch,
+    probe, grant_dir, grant_file = _selftest_artifacts(tmp_path)
+    _probe_open_patch(monkeypatch, probe,
                       wronly=PermissionError(13, "denied"),
                       rdonly=None)
-    assert ll._run_selftest_in_child(_SelftestLibc()) == 0
+    assert ll._run_selftest_in_child(
+        _SelftestLibc(), _SELFTEST_ABI, probe, grant_dir,
+        grant_file) == 0
+
+
+def test_selftest_reports_broken_when_grant_read_denied(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Everything-denied is NOT capability: a domain that denies even
+    # the granted subtree means add_rule did not register — verdict 0.
+    probe, grant_dir, grant_file = _selftest_artifacts(tmp_path)
+    _probe_open_patch(monkeypatch, probe,
+                      wronly=PermissionError(13, "denied"),
+                      rdonly=PermissionError(13, "denied"))
+    import os as _os
+    _os.unlink(grant_file)  # grant read now fails -> broken
+    assert ll._run_selftest_in_child(
+        _SelftestLibc(), _SELFTEST_ABI, probe, grant_dir,
+        grant_file) == 0
 
 
 def test_selftest_error_paths_all_report_broken(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import errno as _errno
+
+    probe, grant_dir, grant_file = _selftest_artifacts(tmp_path)
+    args = (_SELFTEST_ABI, probe, grant_dir, grant_file)
+    # libc missing (pre-fork resolution failed)
+    assert ll._run_selftest_in_child(None, *args) == 0
+    # ruleset creation fails
+    assert ll._run_selftest_in_child(
+        _SelftestLibc(create_fail=True), *args) == 0
+    # add_rule fails — FATAL in the probe (a supervisor filtering
+    # add_rule must not be certified capable)
+    assert ll._run_selftest_in_child(
+        _SelftestLibc(add_rule_ret=-1), *args) == 0
+    # the O_PATH grant-dir open fails
+    assert ll._run_selftest_in_child(
+        _SelftestLibc(), _SELFTEST_ABI, probe,
+        str(tmp_path / "missing"), grant_file) == 0
+    # prctl(NO_NEW_PRIVS) fails
+    assert ll._run_selftest_in_child(
+        _SelftestLibc(prctl_ret=-1), *args) == 0
+    # restrict_self fails
+    assert ll._run_selftest_in_child(
+        _SelftestLibc(restrict_ret=-1), *args) == 0
+    # probe-1 fails with a NON-permission error (probe broken, not
+    # enforcement confirmed)
+    _probe_open_patch(monkeypatch, probe,
+                      wronly=OSError(_errno.EIO, "io"), rdonly=None)
+    assert ll._run_selftest_in_child(_SelftestLibc(), *args) == 0
+    # probe-2 fails with a non-permission error after a clean
+    # probe-1 denial
+    _probe_open_patch(monkeypatch, probe,
+                      wronly=PermissionError(13, "denied"),
+                      rdonly=OSError(_errno.EIO, "io"))
+    assert ll._run_selftest_in_child(_SelftestLibc(), *args) == 0
+
+
+def test_selftest_artifact_failures_report_false_and_clean_up(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Artifact creation lives in the PARENT wrapper now (the
+    restricted child cannot unlink its own droppings under the full
+    write mask): a failing mkstemp/mkdtemp reports False, and no
+    artifact stub survives any failure. The leftover check is keyed
+    on a PRIVATE per-test artifact dir (the wrapper honours TMPDIR
+    via tempfile.gettempdir()) — a shared-/tmp glob delta races
+    sibling xdist workers' transient real-probe artifacts, an
+    observed near-deterministic CI flake."""
     import os as _os
     import tempfile as _tempfile
 
-    # libc missing (pre-fork resolution failed)
-    assert ll._run_selftest_in_child(None) == 0
-    # ruleset creation fails
-    assert ll._run_selftest_in_child(
-        _SelftestLibc(create_fail=True)) == 0
-    # restrict_self fails
-    assert ll._run_selftest_in_child(
-        _SelftestLibc(restrict_ret=-1)) == 0
-    # probe-1 fails with a NON-permission error (probe broken, not
-    # enforcement confirmed)
-    _probe_open_patch(monkeypatch,
-                      wronly=OSError(_errno.EIO, "io"), rdonly=None)
-    assert ll._run_selftest_in_child(_SelftestLibc()) == 0
-    # probe-2 fails with a non-permission error after a clean
-    # probe-1 denial
-    _probe_open_patch(monkeypatch,
-                      wronly=PermissionError(13, "denied"),
-                      rdonly=OSError(_errno.EIO, "io"))
-    assert ll._run_selftest_in_child(_SelftestLibc()) == 0
-    monkeypatch.undo()
-    # mkstemp itself fails
-    monkeypatch.setattr(_tempfile, "mkstemp",
-                        mock.Mock(side_effect=OSError(28, "nospace")))
-    assert ll._run_selftest_in_child(_SelftestLibc()) == 0
-    monkeypatch.undo()
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    monkeypatch.setattr(_tempfile, "gettempdir",
+                        lambda: str(artifact_dir))
+    with mock.patch.object(_tempfile, "mkstemp",
+                           side_effect=OSError(28, "nospace")):
+        assert ll._landlock_functional_self_test(_SELFTEST_ABI) is False
+    # mkstemp succeeds, mkdtemp fails: the probe file must be cleaned
+    with mock.patch.object(_tempfile, "mkdtemp",
+                           side_effect=OSError(28, "nospace")):
+        assert ll._landlock_functional_self_test(_SELFTEST_ABI) is False
     # the probe-file write fails (read-only fd stands in for ENOSPC)
     stub = tmp_path / "stub"
     stub.write_text("")
-    monkeypatch.setattr(
-        _tempfile, "mkstemp",
-        mock.Mock(return_value=(_os.open(stub, _os.O_RDONLY),
-                                str(stub))))
-    assert ll._run_selftest_in_child(_SelftestLibc()) == 0
+    with mock.patch.object(
+            _tempfile, "mkstemp",
+            return_value=(_os.open(stub, _os.O_RDONLY), str(stub))):
+        assert ll._landlock_functional_self_test(_SELFTEST_ABI) is False
+    # Exact-keyed leftover check: only THIS test writes into
+    # artifact_dir, so any surviving entry is this wrapper's leak.
+    assert sorted(artifact_dir.iterdir()) == []
+    assert not stub.exists()  # arm-3 probe file unlinked by the finally
 
 
 def test_unsupported_arch_reports_unavailable(
@@ -732,12 +814,17 @@ def test_unsupported_arch_reports_unavailable(
         assert ll._get_landlock_abi() == 0
 
 
-def test_selftest_ruleset_handles_exactly_write_and_read(
-        ) -> None:
-    """The functional self-test's ruleset must handle exactly
-    WRITE_FILE|READ_FILE on the fs axis and NOTHING on the net axis —
-    a stray net bit would EINVAL ruleset creation on pre-net (ABI < 4)
-    kernels and flip perfectly healthy hosts to 'Landlock broken'."""
+@pytest.mark.parametrize("abi", [1, 4, 8])
+def test_selftest_ruleset_is_the_full_worker_shape(
+        abi: int, tmp_path: Path) -> None:
+    """The functional self-test's ruleset must be the SAME shape the
+    enforcement closure installs — the ABI-gated write mask + read +
+    EXECUTE on the fs axis, the ABI-gated net and scope masks, passed
+    with the full struct size. A smaller/older-ABI probe shape passes
+    in environments that refuse the closure's real install (the
+    probe/install-disagreement storm); the ABI gates still keep a
+    stray net bit off pre-net (ABI < 4) kernels, where it would
+    EINVAL ruleset creation and flip healthy hosts to 'broken'."""
     seen: dict[str, int] = {}
 
     class _Recorder(_SelftestLibc):
@@ -746,17 +833,22 @@ def test_selftest_ruleset_handles_exactly_write_and_read(
                 attr = args[0]._obj
                 seen["fs"] = attr.handled_access_fs
                 seen["net"] = attr.handled_access_net
+                seen["scoped"] = attr.scoped
+                seen["size"] = args[1]
             return super().syscall(nr, *args)
 
-    ll._run_selftest_in_child(_Recorder())
-    if _LANDLOCK_H.exists():
-        h = _header_defines(_LANDLOCK_H)
-        expected_fs = (h["LANDLOCK_ACCESS_FS_WRITE_FILE"]
-                       | h["LANDLOCK_ACCESS_FS_READ_FILE"])
-    else:
-        expected_fs = (1 << 1) | (1 << 2)
-    assert seen["fs"] == expected_fs
-    assert seen["net"] == 0
+    probe, grant_dir, grant_file = _selftest_artifacts(tmp_path)
+    ll._run_selftest_in_child(_Recorder(), abi, probe, grant_dir,
+                              grant_file)
+    assert seen["fs"] == (ll._write_mask_for_abi(abi) | ll._read_mask()
+                          | ll._LL_EXECUTE)
+    assert seen["net"] == ll._net_mask_for_abi(abi)
+    assert seen["scoped"] == ll._scoped_mask_for_abi(abi)
+    assert seen["size"] == ctypes.sizeof(ll._RulesetAttr)
+    if abi < 4:
+        assert seen["net"] == 0
+    if abi < 6:
+        assert seen["scoped"] == 0
 
 
 def test_selftest_fork_bookkeeping_failures_report_false(
@@ -769,7 +861,7 @@ def test_selftest_fork_bookkeeping_failures_report_false(
 
     monkeypatch.setattr(_os, "fork",
                         mock.Mock(side_effect=OSError(11, "again")))
-    assert ll._landlock_functional_self_test() is False
+    assert ll._landlock_functional_self_test(_SELFTEST_ABI) is False
     monkeypatch.undo()
 
     # Parent lane with no real child (fake pid): the write end closes
@@ -777,11 +869,11 @@ def test_selftest_fork_bookkeeping_failures_report_false(
     # matters here: treating the parent as the child would apply a
     # REAL Landlock ruleset to this very process and _exit it.
     monkeypatch.setattr(_os, "fork", mock.Mock(return_value=2**22 + 1))
-    assert ll._landlock_functional_self_test() is False
+    assert ll._landlock_functional_self_test(_SELFTEST_ABI) is False
     monkeypatch.undo()
 
     # Parent-side read error → False (and the child is still reaped).
     monkeypatch.setattr(_os, "fork", mock.Mock(return_value=2**22 + 1))
     monkeypatch.setattr(_os, "read",
                         mock.Mock(side_effect=OSError(5, "io")))
-    assert ll._landlock_functional_self_test() is False
+    assert ll._landlock_functional_self_test(_SELFTEST_ABI) is False

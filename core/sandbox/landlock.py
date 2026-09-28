@@ -50,6 +50,96 @@ _SYS_LANDLOCK_RESTRICT = 446
 # Linux prctl(2) constants — UAPI-stable. Ref: include/uapi/linux/prctl.h.
 _PR_SET_NO_NEW_PRIVS = 38
 
+# ---- Landlock UAPI shape (single source of truth) ----
+# Access bits, rule types, and struct layouts from
+# /usr/include/linux/landlock.h. Defined ONCE at module level and used
+# by BOTH the availability probe (functional self-test) and the
+# enforcement closure (_make_landlock_preexec): the probe's whole
+# point is to predict whether the closure's install will succeed, so
+# the two must be constructed from the same shape — a probe that
+# creates a smaller/older-ABI ruleset than the install can pass in an
+# environment (e.g. a seccomp supervisor filtering on syscall
+# arguments) where the real install then fails.
+_LL_EXECUTE = 1 << 0
+_LL_WRITE_FILE = 1 << 1
+_LL_READ_FILE = 1 << 2
+_LL_READ_DIR = 1 << 3
+_LL_REMOVE_DIR = 1 << 4
+_LL_REMOVE_FILE = 1 << 5
+_LL_MAKE_CHAR = 1 << 6
+_LL_MAKE_DIR = 1 << 7
+_LL_MAKE_REG = 1 << 8
+_LL_MAKE_SOCK = 1 << 9
+_LL_MAKE_FIFO = 1 << 10
+_LL_MAKE_BLOCK = 1 << 11
+_LL_MAKE_SYM = 1 << 12
+_LL_REFER = 1 << 13      # ABI v2+ (kernel 5.19) — rename/link across dirs
+_LL_TRUNCATE = 1 << 14   # ABI v3+ (kernel 6.2)
+_LL_IOCTL_DEV = 1 << 15  # ABI v5+ (kernel 6.10) — ioctl on device files
+
+# Network (ABI v4+, kernel 6.7) and scoping (ABI v6+, kernel 6.12).
+_LL_NET_CONNECT_TCP = 1 << 1
+_LL_SCOPE_ABSTRACT_UNIX_SOCKET = 1 << 0
+_LL_SCOPE_SIGNAL = 1 << 1
+
+_LL_RULE_PATH_BENEATH = 1
+_LL_RULE_NET_PORT = 2
+
+
+class _RulesetAttr(ctypes.Structure):
+    # Always includes handled_access_net and scoped even on older ABIs.
+    # Landlock's forward-compat design accepts extra zero bytes in the
+    # struct — the kernel uses the struct size passed to create_ruleset
+    # to determine which fields are present.
+    _fields_ = [
+        ("handled_access_fs", ctypes.c_uint64),
+        ("handled_access_net", ctypes.c_uint64),
+        ("scoped", ctypes.c_uint64),
+    ]
+
+
+class _PathBeneathAttr(ctypes.Structure):
+    _fields_ = [
+        ("allowed_access", ctypes.c_uint64),
+        ("parent_fd", ctypes.c_int),
+    ]
+
+
+class _NetPortAttr(ctypes.Structure):
+    _fields_ = [
+        ("allowed_access", ctypes.c_uint64),
+        ("port", ctypes.c_uint64),
+    ]
+
+
+def _write_mask_for_abi(abi: int) -> int:
+    """The full ABI-gated write mask (see the REMOVE_* rationale at the
+    _make_landlock_preexec call site)."""
+    mask = (_LL_WRITE_FILE | _LL_REMOVE_DIR | _LL_REMOVE_FILE |
+            _LL_MAKE_CHAR | _LL_MAKE_DIR | _LL_MAKE_REG | _LL_MAKE_SOCK |
+            _LL_MAKE_FIFO | _LL_MAKE_BLOCK | _LL_MAKE_SYM)
+    if abi >= 2:
+        mask |= _LL_REFER   # Block rename/link across directories
+    if abi >= 3:
+        mask |= _LL_TRUNCATE
+    if abi >= 5:
+        mask |= _LL_IOCTL_DEV
+    return mask
+
+
+def _read_mask() -> int:
+    return _LL_READ_FILE | _LL_READ_DIR
+
+
+def _net_mask_for_abi(abi: int) -> int:
+    return _LL_NET_CONNECT_TCP if abi >= 4 else 0
+
+
+def _scoped_mask_for_abi(abi: int) -> int:
+    if abi >= 6:
+        return _LL_SCOPE_ABSTRACT_UNIX_SOCKET | _LL_SCOPE_SIGNAL
+    return 0
+
 
 def check_landlock_available() -> bool:
     """Check if Landlock filesystem isolation is available AND functional.
@@ -58,14 +148,22 @@ def check_landlock_available() -> bool:
       1. Ask the kernel for the ABI version via the standard probe call.
          Returns a positive integer on success (the ABI version), negative
          on failure.
-      2. Functional self-test: fork a child, install a minimal Landlock
-         ruleset handling WRITE_FILE and READ_FILE with NO allowed
-         paths, and verify that reopening a fresh /tmp probe file for
-         write AND for read are both blocked (EACCES). Catches silent
-         breakage like wrong UAPI bit values or
-         kernel quirks where restrict_self returns 0 but no restrictions
-         actually apply. A "looks green but isn't enforcing" bug is
-         strictly worse than "explicitly unavailable".
+      2. Functional self-test: fork a child and walk the ENTIRE install
+         sequence the enforcement closure (_make_landlock_preexec) will
+         later run, in the same shape — the full 3-field ruleset attr
+         with the ABI-gated fs/net/scope masks, at least one
+         path_beneath add_rule, prctl(NO_NEW_PRIVS), restrict_self —
+         then verify enforcement both ways (denied outside the grant,
+         allowed inside it). ANY failure — EPERM, EOPNOTSUPP, ENOSYS,
+         a supervisor (seccomp/ptrace/hypervisor) filtering on syscall
+         arguments, wrong UAPI bit values, a kernel quirk where
+         restrict_self returns 0 but nothing is enforced — means the
+         real install would fail or silently not enforce, so the
+         answer is "not capable" and callers take their degraded tier
+         up front. A probe that exercises LESS than the install (the
+         historic 2-field/no-rule shape) reports capable in
+         environments where the install then fails, turning a
+         clean degradation into a hard fail-closed storm.
 
     Both steps must pass for Landlock to be considered usable. Result is
     cached for the process — self-test runs once.
@@ -102,14 +200,17 @@ def check_landlock_available() -> bool:
         # child because Landlock is a one-way restriction on the current
         # task — applying it here would irreversibly restrict the RAPTOR
         # Python process.
-        if not _landlock_functional_self_test():
+        if not _landlock_functional_self_test(abi):
             logger.error(
-                "Sandbox: Landlock syscalls succeed but self-test shows "
-                "restrictions are NOT enforced — treating as unavailable. "
-                "This typically indicates wrong UAPI bit values or a "
-                "kernel quirk. Landlock protection is SILENTLY BROKEN; "
-                "do not rely on filesystem write restrictions until this "
-                "is resolved."
+                "Sandbox: Landlock ABI probe succeeds but the "
+                "end-to-end self-test (full-shape ruleset create + "
+                "add_rule + restrict_self + enforcement check) failed — "
+                "treating as unavailable. Either something between "
+                "RAPTOR and the kernel (a seccomp/ptrace supervisor, a "
+                "container runtime) blocks part of the install "
+                "sequence, or enforcement is silently broken (wrong "
+                "UAPI bit values / kernel quirk). Do not rely on "
+                "Landlock restrictions until this is resolved."
             )
             state._landlock_cache = -1
             return False
@@ -119,31 +220,39 @@ def check_landlock_available() -> bool:
         return True
 
 
-def _landlock_functional_self_test() -> bool:
-    """Verify Landlock actually enforces restrictions on this kernel.
+def _landlock_functional_self_test(abi: int) -> bool:
+    """Verify the REAL install sequence works and enforces on this host.
 
-    Runs in a forked child: installs a Landlock ruleset that restricts
-    WRITE_FILE and READ_FILE with NO allowed paths, then attempts to
-    reopen a known writable path (a fresh mkstemp file under /tmp,
-    prefix ``.raptor_landlock_selftest_``, random suffix) for write and
-    for read. If Landlock is functional, both opens must fail with
-    EACCES. Returns True when enforcement is confirmed.
+    Runs in a forked child: performs the same install the enforcement
+    closure (_make_landlock_preexec) performs — full 3-field ruleset
+    attr carrying the ABI-gated fs/net/scope masks, one path_beneath
+    add_rule (a read+exec grant on a fresh probe directory, the same
+    rule shape as the closure's readable-path grants), prctl
+    NO_NEW_PRIVS, restrict_self — then verifies enforcement BOTH ways:
+    reopening a probe file outside the grant for write and for read
+    must fail (EACCES), reading the granted file must succeed (proving
+    the add_rule registered, not merely that everything is broken
+    shut). Returns True only when the whole sequence succeeds AND
+    enforcement is confirmed.
 
     Why this design:
       - Fork so the parent (RAPTOR) stays unrestricted.
-      - Use WRITE_FILE (bit 1) — the kernel's most stable Landlock
-        semantic, present since ABI v1. If WRITE_FILE is broken,
-        everything else is broken too. READ_FILE is probed as well
-        (see _run_selftest_in_child).
-      - Test open(O_WRONLY) on a fresh path — we create the file
-        (mkstemp, pre-Landlock), set Landlock, then try to reopen.
-        Open should return -1
-        with EACCES when enforced; any other outcome signals breakage.
+      - Same-shape install: the probe exists to predict the closure's
+        install. Any environment that interferes with part of the
+        sequence the historic minimal probe didn't exercise (24-byte
+        attr create, add_rule, the net/scope fields) produced
+        "probe capable, install fails" — a fail-closed storm where a
+        consented degraded tier was the correct outcome.
+      - Probe artifacts (file + grant dir) are created HERE in the
+        parent and cleaned up here too: the full write mask handles
+        REMOVE_FILE/REMOVE_DIR, so the restricted child cannot unlink
+        its own droppings.
       - Parent reaps the child via waitpid, not via subprocess module —
         we want minimal dependencies during startup.
     """
     import os
-    import warnings
+    import shutil
+    import tempfile
 
     # libc resolved HERE, pre-fork: find_library("c") can shell out
     # to /sbin/ldconfig, and spawning a subprocess from the forked
@@ -157,14 +266,80 @@ def _landlock_functional_self_test() -> bool:
     except Exception:  # noqa: BLE001 — any libc-load failure means the test cannot run; fail closed to unavailable
         libc = None
 
+    # Probe artifacts, created PRE-fork in the parent (tempfile.mkstemp
+    # gives atomic O_EXCL|O_CREAT creation on an unpredictable path —
+    # a predictable-path O_CREAT|O_TRUNC open here would be a
+    # symlink-TOCTOU against a same-user planter) and removed in the
+    # parent's finally below: the child's full write mask handles
+    # REMOVE_FILE/REMOVE_DIR, so post-restrict the child cannot clean
+    # up after itself. The artifact dir is tempfile.gettempdir(), NOT
+    # a hardcoded "/tmp": it honours TMPDIR, so a host whose /tmp is
+    # unwritable/full doesn't lose the whole Landlock tier (point
+    # TMPDIR elsewhere), and tests can key their leftover-artifact
+    # checks on a private dir instead of racing sibling processes'
+    # concurrent probes in a shared namespace.
+    #   probe_path — a file OUTSIDE any grant: reopening it for write
+    #     and for read after restrict_self must fail.
+    #   grant_dir/grant_file — the subtree granted via add_rule:
+    #     reading grant_file after restrict_self must SUCCEED.
+    probe_path: "str | None" = None
+    grant_dir: "str | None" = None
+    try:
+        try:
+            fd, probe_path = tempfile.mkstemp(
+                prefix=".raptor_landlock_selftest_",
+                dir=tempfile.gettempdir())
+            try:
+                os.write(fd, b"x")
+            finally:
+                os.close(fd)
+            grant_dir = tempfile.mkdtemp(
+                prefix=".raptor_landlock_selftest_grant_",
+                dir=tempfile.gettempdir())
+            grant_file = os.path.join(grant_dir, "readable")
+            fd = os.open(grant_file,
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                os.write(fd, b"x")
+            finally:
+                os.close(fd)
+        except OSError:
+            return False
+        return _fork_and_run_selftest(
+            libc, abi, probe_path, grant_dir, grant_file)
+    finally:
+        if probe_path is not None:
+            try:
+                os.unlink(probe_path)
+            except OSError:
+                pass
+        if grant_dir is not None:
+            shutil.rmtree(grant_dir, ignore_errors=True)
+
+
+def _fork_and_run_selftest(libc: "ctypes.CDLL | None", abi: int,
+                           probe_path: str, grant_dir: str,
+                           grant_file: str) -> bool:
+    """Fork bookkeeping for the self-test: pipe, fork, verdict byte, reap."""
+    import os
+    import warnings
+
     r, w = os.pipe()
     try:
         # Suppress Python 3.12+ DeprecationWarning about multi-threaded
-        # fork(). Our post-fork code is fork-safe: the child only does
-        # bare syscalls (Landlock test, _exit), no Python objects, no
-        # GIL acquisition, no malloc-arena access. The standard guidance
-        # ("use multiprocessing.spawn") doesn't apply — we need raw
-        # fork to keep the test minimal-dependency at startup.
+        # fork(). The hazard the warning targets is a forked child
+        # blocking on a lock some OTHER thread held at fork time. The
+        # child here narrows that exposure rather than eliminating it:
+        # it DOES run Python (ctypes struct construction allocates,
+        # and os.fork runs CPython's at-fork handlers), but it takes
+        # no new imports, resolves no libraries (libc arrived
+        # pre-fork), and touches no logging/threading machinery before
+        # os._exit. A child that dies anyway surfaces as pipe EOF →
+        # DEGRADED (fail-safe); a child that wedges blocks the
+        # parent's verdict read (pre-existing shape — hang, never a
+        # false 'available'). The standard guidance
+        # ("use multiprocessing.spawn") would drag a full interpreter
+        # bootstrap into the availability probe.
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore", category=DeprecationWarning,
@@ -194,7 +369,8 @@ def _landlock_functional_self_test() -> bool:
         # and correctly reports Landlock unavailable (fail-safe).
         try:
             os.close(r)
-            result_code = _run_selftest_in_child(libc)
+            result_code = _run_selftest_in_child(
+                libc, abi, probe_path, grant_dir, grant_file)
             os.write(w, bytes([result_code]))
             os.close(w)
         except BaseException:  # noqa: BLE001 — post-fork child must never unwind
@@ -223,113 +399,103 @@ def _landlock_functional_self_test() -> bool:
             pass
 
 
-def _run_selftest_in_child(libc: ctypes.CDLL | None) -> int:
-    """Run the Landlock enforcement test in the forked child.
+def _run_selftest_in_child(libc: "ctypes.CDLL | None", abi: int,
+                           probe_path: str, grant_dir: str,
+                           grant_file: str) -> int:
+    """Run the end-to-end Landlock install + enforcement test.
 
-    Returns 1 on confirmed enforcement, 0 on failure/breakage.
-    Tests BOTH WRITE_FILE and READ_FILE — if either is silently broken
-    (e.g. bit-value drift that matches a different kernel constant),
-    the test fails. Kept as a separate function so the child's logic is
-    isolated from the fork bookkeeping.
+    Executes in the forked child (kept separate from the fork
+    bookkeeping): the SAME install sequence _make_landlock_preexec's
+    closure performs, built from the same module-level shape — the
+    full-mask 3-field ruleset attr, one path_beneath read+exec rule
+    (the closure's readable-directory grant shape), NO_NEW_PRIVS,
+    restrict_self — then the enforcement checks. Returns 1 on
+    confirmed end-to-end capability, 0 on ANY failure. Fork-safe:
+    bare syscalls on pre-resolved handles and paths only — libc was
+    resolved PRE-fork (find_library can shell out to ldconfig, the
+    banned fork-storm pattern), the probe artifacts were created
+    pre-fork by the parent.
     """
     import os
-    import tempfile
-    # Use tempfile.mkstemp for atomic O_EXCL|O_CREAT creation on an
-    # unpredictable path. The earlier approach (os.open on a per-pid
-    # path with O_CREAT|O_TRUNC, no O_EXCL) was a symlink-TOCTOU: a
-    # same-user attacker who pre-planted /tmp/.raptor_landlock_selftest_
-    # <expected_pid> as a symlink to any user-writable file would get
-    # that file truncated and have "x" written to it when the self-test
-    # ran. mkstemp picks a random suffix AND opens with O_EXCL, so an
-    # existing path (file or symlink) causes fresh retry until unique.
-    try:
-        fd, test_path = tempfile.mkstemp(
-            prefix=".raptor_landlock_selftest_", dir="/tmp"
-        )
-    except OSError:
-        return 0
-    # Split the mkstemp/write sequence so a failing write closes the fd
-    # AND unlinks the stub. Without this, ENOSPC or a transient I/O
-    # error during write would leave behind both an open fd (until gc)
-    # and a /tmp/.raptor_landlock_selftest_* stub.
-    try:
-        os.write(fd, b"x")
-    except OSError:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        _cleanup(test_path)
-        return 0
-    try:
-        os.close(fd)
-    except OSError:
-        pass
 
-    # libc was resolved PRE-FORK by _landlock_functional_self_test —
-    # this function runs in the forked child, where find_library's
-    # possible ldconfig shell-out is the banned fork-storm pattern.
     if libc is None:
-        _cleanup(test_path)
         return 0
 
-    class RulesetAttr(ctypes.Structure):
-        _fields_ = [("handled_access_fs", ctypes.c_uint64),
-                    ("handled_access_net", ctypes.c_uint64)]
-
-    # Bits per the UAPI header — if either drifts, the self-test will
-    # detect the failed enforcement and we'll flag Landlock broken.
-    WRITE_FILE = 1 << 1
-    READ_FILE = 1 << 2
-    attr = RulesetAttr(handled_access_fs=WRITE_FILE | READ_FILE,
-                       handled_access_net=0)
-    fd = libc.syscall(_SYS_LANDLOCK_CREATE, ctypes.byref(attr),
-                      ctypes.sizeof(attr), 0)
-    if fd < 0:
-        _cleanup(test_path)
+    # Worker-shaped ruleset: everything the enforcement closure can
+    # handle on this ABI, in the closure's own struct. handled fs =
+    # the ABI-gated write mask + read mask + EXECUTE (the
+    # restrict-reads posture — the strictest shape a consumer
+    # requests, used verbatim by e.g. the parser-jail worker); net =
+    # CONNECT_TCP on ABI>=4 (the deny-all-TCP / port-allowlist lanes);
+    # scoped = signal + abstract-unix isolation on ABI>=6.
+    attr = _RulesetAttr(
+        handled_access_fs=(_write_mask_for_abi(abi) | _read_mask()
+                           | _LL_EXECUTE),
+        handled_access_net=_net_mask_for_abi(abi),
+        scoped=_scoped_mask_for_abi(abi),
+    )
+    ruleset_fd = libc.syscall(_SYS_LANDLOCK_CREATE, ctypes.byref(attr),
+                              ctypes.sizeof(attr), 0)
+    if ruleset_fd < 0:
         return 0
 
-    # Apply restrictions with NO allowed paths — any write or read
-    # should be denied.
-    libc.prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
-    ret = libc.syscall(_SYS_LANDLOCK_RESTRICT, fd, 0)
-    os.close(fd)
-    if ret < 0:
-        _cleanup(test_path)
-        return 0
-
-    # Probe 1: open for write — must fail with EACCES.
+    # One path_beneath rule in the closure's readable-directory shape:
+    # read+exec on grant_dir. An add_rule failure is FATAL here — in
+    # the closure a failed rule merely drops one grant under the
+    # global deny, but the probe exists to certify the whole install
+    # channel; a supervisor that filters add_rule would otherwise be
+    # certified capable and then cripple every real install.
     try:
-        fd = os.open(test_path, os.O_WRONLY)
+        dir_fd = os.open(grant_dir, os.O_PATH)
+    except OSError:
+        os.close(ruleset_fd)
+        return 0
+    rule = _PathBeneathAttr(
+        allowed_access=_read_mask() | _LL_EXECUTE, parent_fd=dir_fd)
+    ret = libc.syscall(_SYS_LANDLOCK_ADD_RULE, ruleset_fd,
+                       _LL_RULE_PATH_BENEATH, ctypes.byref(rule), 0)
+    os.close(dir_fd)
+    if ret < 0:
+        os.close(ruleset_fd)
+        return 0
+
+    if libc.prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0:
+        os.close(ruleset_fd)
+        return 0
+    ret = libc.syscall(_SYS_LANDLOCK_RESTRICT, ruleset_fd, 0)
+    os.close(ruleset_fd)
+    if ret < 0:
+        return 0
+
+    # Enforcement probe 1: write outside the grant — must be denied.
+    try:
+        fd = os.open(probe_path, os.O_WRONLY)
         os.close(fd)
-        _cleanup(test_path)
         return 0        # Write succeeded = WRITE_FILE enforcement broken.
     except PermissionError:
         pass
     except OSError:
-        _cleanup(test_path)
         return 0
 
-    # Probe 2: open for read — must also fail with EACCES.
+    # Enforcement probe 2: read outside the grant — must be denied.
     try:
-        fd = os.open(test_path, os.O_RDONLY)
+        fd = os.open(probe_path, os.O_RDONLY)
         os.close(fd)
-        _cleanup(test_path)
         return 0        # Read succeeded = READ_FILE enforcement broken.
     except PermissionError:
-        _cleanup(test_path)
-        return 1        # Both correctly blocked — enforcement confirmed.
+        pass
     except OSError:
-        _cleanup(test_path)
         return 0
 
-
-def _cleanup(path: str) -> None:
-    import os
+    # Enforcement probe 3: read INSIDE the grant — must succeed.
+    # Proves the add_rule registered and grants are honoured, not
+    # merely that the domain denies everything.
     try:
-        os.unlink(path)
+        fd = os.open(grant_file, os.O_RDONLY)
+        os.close(fd)
     except OSError:
-        pass
+        return 0
+    return 1
 
 
 def _get_landlock_abi() -> int:
@@ -630,16 +796,19 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
     SYS_add_rule = _SYS_LANDLOCK_ADD_RULE
     SYS_restrict = _SYS_LANDLOCK_RESTRICT
 
-    RULE_PATH_BENEATH = 1
+    RULE_PATH_BENEATH = _LL_RULE_PATH_BENEATH
 
-    # Landlock access bits from /usr/include/linux/landlock.h. These
-    # MUST match the kernel's LANDLOCK_ACCESS_FS_* ordering exactly:
-    # the kernel reads handled_access_fs as a bitmask, and a wrong bit
-    # means we restrict a different operation than we intended. Previous
-    # versions of this file had bits shifted by 2 from EXECUTE onwards
-    # — reads were never restricted (READ_FILE was miscoded as EXECUTE)
-    # and MAKE_SYM was never restricted (shifted off the end of the
-    # write mask). Verified against the uapi header on kernel 6.x.
+    # Landlock access bits from /usr/include/linux/landlock.h, shared
+    # module-level with the availability probe's self-test (which must
+    # install the SAME shape this closure will — see the shape block
+    # at the top of the module). They MUST match the kernel's
+    # LANDLOCK_ACCESS_FS_* ordering exactly: the kernel reads
+    # handled_access_fs as a bitmask, and a wrong bit means we restrict
+    # a different operation than we intended. Previous versions of this
+    # file had bits shifted by 2 from EXECUTE onwards — reads were
+    # never restricted (READ_FILE was miscoded as EXECUTE) and MAKE_SYM
+    # was never restricted (shifted off the end of the write mask).
+    # Verified against the uapi header on kernel 6.x.
     # EXECUTE (ABI v1, kernel 5.13 — no ABI gate needed beyond Landlock
     # availability) is handled ONLY under restrict_reads (the untrusted
     # / strict posture): exec is then granted exactly where the read
@@ -659,22 +828,10 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
     # unlinked files inherit their directory's hierarchy and ARE
     # covered, verified live) and decouples exec-denial from the read
     # mask.
-    EXECUTE = 1 << 0
-    WRITE_FILE = 1 << 1
-    READ_FILE = 1 << 2
-    READ_DIR = 1 << 3
-    REMOVE_DIR = 1 << 4
-    REMOVE_FILE = 1 << 5
-    MAKE_CHAR = 1 << 6
-    MAKE_DIR = 1 << 7
-    MAKE_REG = 1 << 8
-    MAKE_SOCK = 1 << 9
-    MAKE_FIFO = 1 << 10
-    MAKE_BLOCK = 1 << 11
-    MAKE_SYM = 1 << 12
-    REFER = 1 << 13      # ABI v2+ (kernel 5.19) — rename/link across dirs
-    TRUNCATE = 1 << 14   # ABI v3+ (kernel 6.2)
-    IOCTL_DEV = 1 << 15  # ABI v5+ (kernel 6.10) — ioctl on device files
+    EXECUTE = _LL_EXECUTE
+    WRITE_FILE = _LL_WRITE_FILE
+    READ_FILE = _LL_READ_FILE
+    TRUNCATE = _LL_TRUNCATE
 
     # REMOVE_DIR / REMOVE_FILE are handled: deletion is only permitted
     # where writing already is (the writable-path grants include the
@@ -696,20 +853,13 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
     # and continues).
     # Build mask based on ABI version to avoid EINVAL on older kernels.
     # Ref: https://tuxownia.pl/en/blog/linux-landlock-sandboxing-without-root/
+    # Delegates to the module-level shape helpers the availability
+    # probe's self-test installs from too.
     def _build_write_mask():
-        mask = (WRITE_FILE | REMOVE_DIR | REMOVE_FILE | MAKE_CHAR |
-                MAKE_DIR | MAKE_REG | MAKE_SOCK | MAKE_FIFO |
-                MAKE_BLOCK | MAKE_SYM)
-        if _get_landlock_abi() >= 2:
-            mask |= REFER   # Block rename/link across directories
-        if _get_landlock_abi() >= 3:
-            mask |= TRUNCATE
-        if _get_landlock_abi() >= 5:
-            mask |= IOCTL_DEV
-        return mask
+        return _write_mask_for_abi(_get_landlock_abi())
 
     def _build_read_mask():
-        return READ_FILE | READ_DIR
+        return _read_mask()
 
     # Read-granted trees that do NOT get the EXECUTE grant under
     # restrict_reads. Nothing legitimately execs from /proc or /sys,
@@ -726,39 +876,14 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
                    for p in _NOEXEC_READ_GRANTS)
 
     # Landlock network constants (ABI v4+, kernel 6.7)
-    LANDLOCK_ACCESS_NET_CONNECT_TCP = 1 << 1
-    RULE_NET_PORT = 2
+    LANDLOCK_ACCESS_NET_CONNECT_TCP = _LL_NET_CONNECT_TCP
+    RULE_NET_PORT = _LL_RULE_NET_PORT
 
-    # Landlock scoping constants (ABI v6+, kernel 6.12). Scoping is
-    # domain-level, not per-path/per-port: a scoped sandbox can't send
-    # signals to or connect abstract Unix sockets to processes OUTSIDE
-    # its Landlock domain. No rules needed — just declare the scope bits
-    # in the ruleset and restrict_self applies them.
-    LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET = 1 << 0
-    LANDLOCK_SCOPE_SIGNAL = 1 << 1
-
-    class RulesetAttr(ctypes.Structure):
-        # Always includes handled_access_net and scoped even on older
-        # ABIs. Landlock's forward-compat design accepts extra zero
-        # bytes in the struct — the kernel uses the struct size passed
-        # to create_ruleset to determine which fields are present.
-        _fields_ = [
-            ("handled_access_fs", ctypes.c_uint64),
-            ("handled_access_net", ctypes.c_uint64),
-            ("scoped", ctypes.c_uint64),
-        ]
-
-    class PathBeneathAttr(ctypes.Structure):
-        _fields_ = [
-            ("allowed_access", ctypes.c_uint64),
-            ("parent_fd", ctypes.c_int),
-        ]
-
-    class NetPortAttr(ctypes.Structure):
-        _fields_ = [
-            ("allowed_access", ctypes.c_uint64),
-            ("port", ctypes.c_uint64),
-        ]
+    # Struct layouts shared module-level with the probe's self-test —
+    # same forward-compat rationale (see _RulesetAttr).
+    RulesetAttr = _RulesetAttr
+    PathBeneathAttr = _PathBeneathAttr
+    NetPortAttr = _NetPortAttr
 
     paths = list(writable_paths)  # capture for closure
     ports = list(allowed_tcp_ports) if allowed_tcp_ports else None
@@ -805,10 +930,8 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
         if ((ports is not None or deny_all_tcp_connect) and _abi >= 4)
         else 0
     )
-    _scoped = 0
-    if _abi >= 6:
-        _scoped = LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL
-    elif _abi >= 1:
+    _scoped = _scoped_mask_for_abi(_abi)
+    if not _scoped and _abi >= 1:
         # Every other ABI-gated feature announces itself when it
         # degrades; scoping silently no-oping left operators on
         # ABI 4-5 kernels believing abstract-unix-socket + signal

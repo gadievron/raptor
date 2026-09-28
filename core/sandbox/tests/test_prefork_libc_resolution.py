@@ -15,6 +15,7 @@ import ast
 import inspect
 import sys as _sys
 import textwrap
+from unittest import mock
 
 import pytest
 
@@ -80,24 +81,37 @@ class TestLandlockSelftestChild:
         assert "find_library" not in called
         assert "CDLL" not in called
 
-    def test_none_handle_reports_broken_and_cleans_up(self):
-        import glob
-        before = set(glob.glob("/tmp/.raptor_landlock_selftest_*"))
-        assert landlock._run_selftest_in_child(None) == 0
-        # The mkstemp stub must not survive the early-out. Compare
-        # against the pre-call snapshot: concurrent self-tests in
-        # other processes may own stubs of their own.
-        after = set(glob.glob("/tmp/.raptor_landlock_selftest_*"))
-        assert after - before == set()
+    def test_none_handle_reports_broken_and_cleans_up(self, tmp_path):
+        import tempfile
+        # The child touches nothing on the None-handle early-out (the
+        # probe artifacts are the PARENT wrapper's to create and
+        # clean; see test_landlock_policy_pins for that pin).
+        assert landlock._run_selftest_in_child(
+            None, 1, str(tmp_path / "probe"), str(tmp_path),
+            str(tmp_path / "readable")) == 0
+        # And the parent wrapper leaves no artifact stub behind when
+        # the child lane reports broken. Keyed on a PRIVATE per-test
+        # artifact dir (the wrapper honours TMPDIR via
+        # tempfile.gettempdir()): a shared-/tmp glob delta races
+        # sibling xdist workers' transient real-probe artifacts.
+        artifact_dir = tmp_path / "artifacts"
+        artifact_dir.mkdir()
+        with mock.patch.object(tempfile, "gettempdir",
+                               return_value=str(artifact_dir)), \
+             mock.patch.object(landlock, "_run_selftest_in_child",
+                               lambda *a: 0):
+            assert landlock._landlock_functional_self_test(1) is False
+        assert sorted(artifact_dir.iterdir()) == []
 
     def test_parent_resolved_handle_reaches_forked_child(self, monkeypatch):
         # The verdict byte is the only channel out of the forked
         # child: report enforcement iff the pre-fork handle arrived.
         monkeypatch.setattr(
             landlock, "_run_selftest_in_child",
-            lambda libc: 1 if libc is not None else 0,
+            lambda libc, abi, probe_path, grant_dir, grant_file:
+                1 if libc is not None else 0,
         )
-        assert landlock._landlock_functional_self_test() is True
+        assert landlock._landlock_functional_self_test(1) is True
 
 
 class TestPreexecLibcCache:
