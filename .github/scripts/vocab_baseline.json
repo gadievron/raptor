@@ -38,17 +38,17 @@
   "core/analysis/gadget_oracle.py::_EXEC_SINKS": {
     "count": 10,
     "kind": "literal",
-    "note": "closed PHP-language taxonomy: builtin code-execution functions (exec/system/eval family) — fixed by the PHP runtime, not a learned per-target vocabulary; per-target sink vocabulary stays the study loop's job (see the SEED-tier comment at the definition)"
+    "note": "closed PHP-language taxonomy: builtin code-execution functions (exec/system/eval family) \u2014 fixed by the PHP runtime, not a learned per-target vocabulary; per-target sink vocabulary stays the study loop's job (see the SEED-tier comment at the definition)"
   },
   "core/analysis/gadget_oracle.py::_FILE_SINKS": {
     "count": 11,
     "kind": "literal",
-    "note": "closed PHP-language taxonomy: builtin filesystem-effect functions (unlink/fopen family) — fixed by the PHP runtime, not a learned per-target vocabulary; per-target sink vocabulary stays the study loop's job (see the SEED-tier comment at the definition)"
+    "note": "closed PHP-language taxonomy: builtin filesystem-effect functions (unlink/fopen family) \u2014 fixed by the PHP runtime, not a learned per-target vocabulary; per-target sink vocabulary stays the study loop's job (see the SEED-tier comment at the definition)"
   },
   "core/analysis/gadget_oracle.py::_PROPAGATORS": {
     "count": 14,
     "kind": "literal",
-    "note": "closed PHP-language taxonomy: builtin string-shape propagators (sprintf/implode family) for the oracle's direct-flow taint modelling — fixed by the PHP runtime, not a learned per-target vocabulary"
+    "note": "closed PHP-language taxonomy: builtin string-shape propagators (sprintf/implode family) for the oracle's direct-flow taint modelling \u2014 fixed by the PHP runtime, not a learned per-target vocabulary"
   },
   "core/analysis/gadget_oracle.py::_coerce_chain": {
     "count": 13,
@@ -58,7 +58,7 @@
   "core/analysis/gadget_oracle.py::scan_tree": {
     "count": 13,
     "kind": "literal",
-    "note": "schema-key manifest for the artifact's completeness census (parse/read/symlink/special-file counters the qualifier renders) — persistence keys in lockstep with census_qualifier and the consumer tests, not a name vocabulary"
+    "note": "schema-key manifest for the artifact's completeness census (parse/read/symlink/special-file counters the qualifier renders) \u2014 persistence keys in lockstep with census_qualifier and the consumer tests, not a name vocabulary"
   },
   "core/analysis/peer_groups.py::_NON_DISTINCTIVE_TYPES": {
     "count": 156,
@@ -70,7 +70,7 @@
     "kind": "alternation"
   },
   "core/analysis/reach_audit.py::_STAGE_VERDICTS": {
-    "count": 13,
+    "count": 14,
     "kind": "literal",
     "note": "closed verdict-tag taxonomy, not a function-name vocabulary: the exact strings the PRECEDENCE stage functions in the same module can return, kept as an explicit literal so the reach_witness drift guard's premise is non-circular (deriving the emitted set from _DEAD/_LIVE let an unmapped verdict fall to the uncertain fail-safe unnoticed). Grows only when a new classifier stage lands beside it."
   },
@@ -280,6 +280,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "core/audit/boundary_unit.py::d": {
+    "count": 11,
+    "kind": "literal",
+    "note": "deviation-record serializer field keys (conforming, cwe, deviant, ...) consumed verbatim by the prepass fold \u2014 a serialization schema like consistency_dimensions.py::d, not a learned name vocabulary"
+  },
   "core/audit/caller_contract.py::digest": {
     "count": 10,
     "kind": "literal",
@@ -399,11 +404,6 @@
     "count": 10,
     "kind": "literal"
   },
-  "core/audit/boundary_unit.py::d": {
-    "count": 11,
-    "kind": "literal",
-    "note": "deviation-record serializer field keys (conforming, cwe, deviant, ...) consumed verbatim by the prepass fold — a serialization schema like consistency_dimensions.py::d, not a learned name vocabulary"
-  },
   "core/audit/consistency_dimensions.py::d": {
     "count": 11,
     "kind": "literal",
@@ -413,16 +413,6 @@
     "count": 15,
     "kind": "literal",
     "note": "framework-internal enum/namespace vocabulary (not target API names)"
-  },
-  "core/audit/guard_predicate.py::d": {
-    "count": 11,
-    "kind": "literal",
-    "note": "deviation-record serializer field keys consumed verbatim by the prepass fold and the adjudication detour — a serialization schema like consistency_dimensions.py::d, not a learned name vocabulary"
-  },
-  "core/audit/path_symmetry.py::d": {
-    "count": 12,
-    "kind": "literal",
-    "note": "deviation-record serializer field keys (counterpart, counterpart_has, ...) consumed verbatim by the prepass fold — a serialization schema like consistency_dimensions.py::d, not a learned name vocabulary"
   },
   "core/audit/consistency_verify.py::_HYPOTHESIS_STOPWORDS": {
     "count": 48,
@@ -462,7 +452,7 @@
     "kind": "literal"
   },
   "core/audit/cost_tracker.py::_KNOWN_PHASES": {
-    "count": 15,
+    "count": 16,
     "kind": "literal"
   },
   "core/audit/cross_function_verify.py::_VERIFIER_DISPATCH": {
@@ -486,7 +476,7 @@
     "kind": "literal"
   },
   "core/audit/cwe_dispatch.py::CWE_TO_TOOL_DISPATCH": {
-    "count": 11,
+    "count": 10,
     "kind": "literal"
   },
   "core/audit/dark_verify/_execute.py::_DANGEROUS_INTERP_FUNCS": {
@@ -517,12 +507,12 @@
   "core/audit/decomp_sweep.py::record": {
     "count": 11,
     "kind": "literal",
-    "note": "per-finding record shape inside decomp-sweep.json (fid/address join fields + escaped match text) — JSON schema keys, not a name vocabulary; same class as the baselined manifest/context-map to_dict shapes"
+    "note": "per-finding record shape inside decomp-sweep.json (fid/address join fields + escaped match text) \u2014 JSON schema keys, not a name vocabulary; same class as the baselined manifest/context-map to_dict shapes"
   },
   "core/audit/decomp_sweep.py::sweep_record": {
     "count": 17,
     "kind": "literal",
-    "note": "decomp-sweep.json artifact summary shape (counts + record lists + loud-skip fields) — JSON schema keys, not a name vocabulary; same class as the baselined manifest/context-map to_dict shapes"
+    "note": "decomp-sweep.json artifact summary shape (counts + record lists + loud-skip fields) \u2014 JSON schema keys, not a name vocabulary; same class as the baselined manifest/context-map to_dict shapes"
   },
   "core/audit/defassign.py::_ALLOWED_STATEMENTS": {
     "count": 12,
@@ -547,17 +537,17 @@
   "core/audit/disasm_xcheck.py::_CALLEE_STOPWORDS": {
     "count": 22,
     "kind": "literal",
-    "note": "English prose-noise filter for callee-name extraction from claim text (pronouns/keywords/generic nouns the name( and call-to shapes capture) — a natural-language noise filter, not a project-API vocabulary; nothing here is learnable from a target, and a miss only adds a junk candidate the address/symbol resolution then fails to match"
+    "note": "English prose-noise filter for callee-name extraction from claim text (pronouns/keywords/generic nouns the name( and call-to shapes capture) \u2014 a natural-language noise filter, not a project-API vocabulary; nothing here is learnable from a target, and a miss only adds a junk candidate the address/symbol resolution then fails to match"
   },
   "core/audit/disasm_xcheck.py::_PREFIX_TOKENS": {
     "count": 18,
     "kind": "literal",
-    "note": "x86 instruction-prefix tokens objdump renders as the first mnemonic-column word (rep/bnd/lock/segment overrides) — ISA facts folded away at the parse seam so the real mnemonic drives control-flow classification; a miss leaves the prefix as the mnemonic, which classifies as a fall-through and weakens refute-grade reachability toward the unsafe direction, so additions here are refute-lane soundness fixes, not vocabulary growth"
+    "note": "x86 instruction-prefix tokens objdump renders as the first mnemonic-column word (rep/bnd/lock/segment overrides) \u2014 ISA facts folded away at the parse seam so the real mnemonic drives control-flow classification; a miss leaves the prefix as the mnemonic, which classifies as a fall-through and weakens refute-grade reachability toward the unsafe direction, so additions here are refute-lane soundness fixes, not vocabulary growth"
   },
   "core/audit/disasm_xcheck.py::_WRITE_MNEMONICS": {
     "count": 31,
     "kind": "literal",
-    "note": "x86-64 destination-writing mnemonic allowlist for the disasm cross-check's write predicates — ISA facts, not a learned name vocabulary; a miss yields None in BOTH lanes (fail-safe toward inconclusive at the claimed site) and can only shrink the sibling-differential intersection, which the arg1-signal guard bounds; additions are safety-improving in both directions"
+    "note": "x86-64 destination-writing mnemonic allowlist for the disasm cross-check's write predicates \u2014 ISA facts, not a learned name vocabulary; a miss yields None in BOTH lanes (fail-safe toward inconclusive at the claimed site) and can only shrink the sibling-differential intersection, which the arg1-signal guard bounds; additions are safety-improving in both directions"
   },
   "core/audit/disasm_xcheck.py::to_dict": {
     "count": 11,
@@ -579,12 +569,12 @@
     "kind": "literal"
   },
   "core/audit/evidence_grade.py::_DETECTION_CLASSIFIER_MODULES": {
-    "count": 10,
+    "count": 12,
     "kind": "literal",
     "note": "registry of evidence-channel keys -> classifier module paths (code registry, not a target-API name vocabulary; grows one entry per new evidence channel)"
   },
   "core/audit/evidence_grade.py::_TOOL_NAMESPACES": {
-    "count": 24,
+    "count": 27,
     "kind": "literal",
     "note": "framework-internal enum/namespace vocabulary (not target API names); grew to 13 with the five-channel programme's resource_bounds/release_order/protocol_state namespaces"
   },
@@ -641,6 +631,11 @@
     "kind": "literal",
     "note": "Go predeclared type identifiers (bool, byte, ... uintptr, comparable) \u2014 a closed language-spec enumeration the goroutine-isolation walk treats as freely mentionable, like the callsite-consistency keyword entries; not a learnable function-name vocabulary"
   },
+  "core/audit/guard_predicate.py::d": {
+    "count": 11,
+    "kind": "literal",
+    "note": "deviation-record serializer field keys consumed verbatim by the prepass fold and the adjudication detour \u2014 a serialization schema like consistency_dimensions.py::d, not a learned name vocabulary"
+  },
   "core/audit/integer_truncation_checker.py::_WIDE_TYPES": {
     "count": 17,
     "kind": "literal",
@@ -657,9 +652,9 @@
     "kind": "literal"
   },
   "core/audit/joern_backend.py::_status": {
-    "count": 10,
+    "count": 15,
     "kind": "literal",
-    "note": "joern-cpg-status.json record field keys (failed, phase, retried, first_heap_mb, ...) — a serialization schema the report summary consumes verbatim, not an API vocabulary"
+    "note": "joern-cpg-status.json record field keys (failed, phase, retried, first_heap_mb, ...) \u2014 a serialization schema the report summary consumes verbatim, not an API vocabulary"
   },
   "core/audit/joern_verify.py::_STOP_WORDS": {
     "count": 42,
@@ -780,7 +775,7 @@
     "note": "audit-log demotion record field names (framework record keys, not target API names)"
   },
   "core/audit/orchestrator.py::_make_tier_counters": {
-    "count": 36,
+    "count": 43,
     "kind": "literal"
   },
   "core/audit/orchestrator.py::_post_loop_receipt_rescue": {
@@ -796,6 +791,11 @@
     "count": 14,
     "kind": "literal"
   },
+  "core/audit/path_symmetry.py::d": {
+    "count": 12,
+    "kind": "literal",
+    "note": "deviation-record serializer field keys (counterpart, counterpart_has, ...) consumed verbatim by the prepass fold \u2014 a serialization schema like consistency_dimensions.py::d, not a learned name vocabulary"
+  },
   "core/audit/pattern_completeness.py::exclusion_hints": {
     "count": 10,
     "kind": "literal"
@@ -803,7 +803,7 @@
   "core/audit/peer_evidence.py::d": {
     "count": 12,
     "kind": "literal",
-    "note": "PeerEvidence receipt serializer key manifest (persistence schema keys, not a learned name vocabulary; grown by the lead-strength score key — reviewed)"
+    "note": "PeerEvidence receipt serializer key manifest (persistence schema keys, not a learned name vocabulary; grown by the lead-strength score key \u2014 reviewed)"
   },
   "core/audit/pipeline.py::HYPOTHESIS_CLASS_KW": {
     "count": 11,
@@ -952,11 +952,11 @@
     "note": "framework-internal enum/namespace vocabulary (not target API names)"
   },
   "core/audit/sandbox_policy.py::_LLM_PHASES": {
-    "count": 61,
+    "count": 63,
     "kind": "literal"
   },
   "core/audit/sandbox_policy.py::_TOOL_POLICIES": {
-    "count": 13,
+    "count": 14,
     "kind": "literal"
   },
   "core/audit/sibling_analysis.py::_STRONG_SANITIZERS": {
@@ -1143,7 +1143,7 @@
   "core/concepts/token_map.py::_PHP_KEYWORDS": {
     "count": 31,
     "kind": "literal",
-    "note": "closed PHP language-keyword taxonomy: identifiers the PHP-lite lexer excludes from call-event extraction because the language grammar reserves them (control flow, constructs, include forms) — language keywords, not a learned name vocabulary (the learned vocabulary is DomainModel.token_checks; TOKEN_SEED_RE is the <=9-name discovery seed)"
+    "note": "closed PHP language-keyword taxonomy: identifiers the PHP-lite lexer excludes from call-event extraction because the language grammar reserves them (control flow, constructs, include forms) \u2014 language keywords, not a learned name vocabulary (the learned vocabulary is DomainModel.token_checks; TOKEN_SEED_RE is the <=9-name discovery seed)"
   },
   "core/config/__init__.py::DANGEROUS_ENV_VARS": {
     "count": 72,
@@ -1165,7 +1165,7 @@
     "note": "subprocess env allowlist (infrastructure env-var names, not a learned name vocabulary); grew by the RAPTOR_SANITIZER_CUT* transport family"
   },
   "core/config/__init__.py::TARGET_ENV_STRIP_SET": {
-    "count": 14,
+    "count": 15,
     "kind": "literal",
     "note": "target-facing env strip set (trust markers, session credential, framework-identity tells incl. the RAPTOR_SANITIZER_CUT* transport family) - infrastructure env-var names, not a learned name vocabulary; crossed the seed threshold when the sanitizer-cut transport joined"
   },
@@ -1200,7 +1200,7 @@
     "note": "closed record schema, not a name vocabulary: the checkpoint hysteresis state record written to the run dir (the exact fields _load_state validates on read; the two sides must stay in lockstep)"
   },
   "core/coverage/registry.py::_REGISTRY": {
-    "count": 25,
+    "count": 26,
     "kind": "literal"
   },
   "core/coverage/store_summary.py::store_view": {
@@ -1242,19 +1242,19 @@
     "kind": "literal"
   },
   "core/engagement/chain_elf.py::build_verdict": {
-      "count": 12,
-      "kind": "literal",
-      "note": "fixed verdict-record schema keys for the engagement chain (engage-chain-verdict/1: policy depth, reached depth, degradation reasons, capability tier, journal counts, journal floor) — a persistence schema shape pinned by core/engagement/tests/test_chain_elf.py, not a learned name vocabulary"
+    "count": 12,
+    "kind": "literal",
+    "note": "fixed verdict-record schema keys for the engagement chain (engage-chain-verdict/1: policy depth, reached depth, degradation reasons, capability tier, journal counts, journal floor) \u2014 a persistence schema shape pinned by core/engagement/tests/test_chain_elf.py, not a learned name vocabulary"
   },
   "core/engagement/ledger.py::_base_row": {
     "count": 14,
     "kind": "literal",
-    "note": "artifact-row persistence schema keys for the engagement ledger document (class/tier/identity/links/exposure/status slots documented in the module docstring) — storage schema keys, not a learned name vocabulary"
+    "note": "artifact-row persistence schema keys for the engagement ledger document (class/tier/identity/links/exposure/status slots documented in the module docstring) \u2014 storage schema keys, not a learned name vocabulary"
   },
   "core/engagement/ledger.py::doc": {
     "count": 10,
     "kind": "literal",
-    "note": "top-level ledger.json document schema keys (schema_version/caps/rows/reverse_needed/collisions/residuals) — storage schema keys, not a learned name vocabulary"
+    "note": "top-level ledger.json document schema keys (schema_version/caps/rows/reverse_needed/collisions/residuals) \u2014 storage schema keys, not a learned name vocabulary"
   },
   "core/env/build.py::_validate_aux_name": {
     "count": 17,
@@ -1287,17 +1287,17 @@
   "core/inventory/call_graph.py::_CONDITIONAL_NODES": {
     "count": 16,
     "kind": "literal",
-    "note": "closed tree-sitter-php grammar node-type taxonomy: the branch/loop/try/ternary constructs whose enclosure marks a PHP include/define edge conditional (conservative in the guarantee direction) — grammar node names, not a learned name vocabulary"
-  },
-  "core/inventory/call_graph.py::_SIDE_EFFECT_NODES": {
-    "count": 14,
-    "kind": "literal",
-    "note": "closed tree-sitter-php grammar node-type taxonomy: the expression kinds that EXECUTE when their statement runs (calls, assignments, nested includes, backticks, parse errors) — a prologue-inert wrapper carrying one is not inert; grammar node names, not a learned name vocabulary"
+    "note": "closed tree-sitter-php grammar node-type taxonomy: the branch/loop/try/ternary constructs whose enclosure marks a PHP include/define edge conditional (conservative in the guarantee direction) \u2014 grammar node names, not a learned name vocabulary"
   },
   "core/inventory/call_graph.py::_PROLOGUE_INERT_STMTS": {
     "count": 11,
     "kind": "literal",
-    "note": "closed tree-sitter-php grammar node-type taxonomy: the declaration/definition statement kinds that keep the direct-access-guard prologue open (anything executable closes guard eligibility, defeating planted dead/bottom-of-file guards) — grammar node names, not a learned name vocabulary"
+    "note": "closed tree-sitter-php grammar node-type taxonomy: the declaration/definition statement kinds that keep the direct-access-guard prologue open (anything executable closes guard eligibility, defeating planted dead/bottom-of-file guards) \u2014 grammar node names, not a learned name vocabulary"
+  },
+  "core/inventory/call_graph.py::_SIDE_EFFECT_NODES": {
+    "count": 14,
+    "kind": "literal",
+    "note": "closed tree-sitter-php grammar node-type taxonomy: the expression kinds that EXECUTE when their statement runs (calls, assignments, nested includes, backticks, parse errors) \u2014 a prologue-inert wrapper carrying one is not inert; grammar node names, not a learned name vocabulary"
   },
   "core/inventory/dead_scope.py::_C_NOT_FUNC_NAMES": {
     "count": 37,
@@ -1321,15 +1321,15 @@
     "note": "Closed ISO C (through C23) + ISO C++ keyword enumeration refused as function names at the C-family name-recognition seams; not a learnable API vocabulary. Same class as lifetime_witness.py::_C_KEYWORDS.",
     "reviewed": "2026-09-26"
   },
-  "core/inventory/extractors.py::_CONTROL_FLOW_NAMES": {
-    "count": 10,
-    "kind": "literal",
-    "note": "Closed control-flow keyword subset refused as function names at the language-agnostic generic-fallback seam (statement headers like `} else if (x) {` match the definition pattern); deliberately NOT the full C/C++ reserved vocabulary — C-only reserved words are ordinary identifiers in generic-lane languages. Not a learnable API vocabulary.",
-    "reviewed": "2026-09-26"
-  },
   "core/inventory/extractors.py::_CLASS_TYPES": {
     "count": 16,
     "kind": "literal"
+  },
+  "core/inventory/extractors.py::_CONTROL_FLOW_NAMES": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed control-flow keyword subset refused as function names at the language-agnostic generic-fallback seam (statement headers like `} else if (x) {` match the definition pattern); deliberately NOT the full C/C++ reserved vocabulary \u2014 C-only reserved words are ordinary identifiers in generic-lane languages. Not a learnable API vocabulary.",
+    "reviewed": "2026-09-26"
   },
   "core/inventory/extractors.py::_C_INERT_INIT_TYPES": {
     "count": 19,
@@ -1434,7 +1434,7 @@
     "kind": "alternation"
   },
   "core/json/__init__.py::_LAZY_EXPORTS": {
-    "count": 18,
+    "count": 19,
     "kind": "literal",
     "note": "PEP 562 lazy re-export map (public name -> submodule attribute), not a domain vocabulary; grows only when core.json gains public API surface"
   },
@@ -1455,15 +1455,15 @@
     "count": 10,
     "kind": "literal"
   },
-  "core/llm/concurrency.py::LLM_RUN_COMMANDS": {
-    "count": 11,
-    "kind": "literal",
-    "note": "allowlist of RAPTOR's own run-lifecycle command names that hold LLM quota mid-run (the sibling-observation classifier; includes forward-compat members that cannot occur on the ledger yet — rationale inline), not a learned name vocabulary; same class as core/run/provenance.py::_DETERMINISTIC_COMMANDS"
-  },
   "core/llm/coerce.py::_KNOWN_LANG_TAGS": {
     "count": 38,
     "kind": "literal",
     "note": "closed fence-language taxonomy (which leading tokens count as a markdown code-fence language tag when stripping single-line fences), not a learned name vocabulary; same class as core/inventory/extractors.py::_SLASH_COMMENT_LANGS"
+  },
+  "core/llm/concurrency.py::LLM_RUN_COMMANDS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "allowlist of RAPTOR's own run-lifecycle command names that hold LLM quota mid-run (the sibling-observation classifier; includes forward-compat members that cannot occur on the ledger yet \u2014 rationale inline), not a learned name vocabulary; same class as core/run/provenance.py::_DETERMINISTIC_COMMANDS"
   },
   "core/llm/dispatcher/auth.py::__init__": {
     "count": 19,
@@ -1537,7 +1537,7 @@
   "core/orchestration/binary_study_bridge.py::_CONCEPT_STOPWORDS": {
     "count": 26,
     "kind": "literal",
-    "note": "English log-noise stopwords filtering anchor-stem concept derivation (generic words like error/failed/unknown carry no format or domain signal) — a natural-language noise filter, not a project-API name vocabulary; nothing here is learnable from a target"
+    "note": "English log-noise stopwords filtering anchor-stem concept derivation (generic words like error/failed/unknown carry no format or domain signal) \u2014 a natural-language noise filter, not a project-API name vocabulary; nothing here is learnable from a target"
   },
   "core/orchestration/context_map_sinks.py::exec_targets": {
     "count": 15,
@@ -1587,11 +1587,11 @@
     "kind": "literal"
   },
   "core/project/project.py::to_dict": {
-    "count": 14,
+    "count": 15,
     "kind": "literal"
   },
   "core/project/report.py::generate_project_report": {
-    "count": 10,
+    "count": 11,
     "kind": "literal"
   },
   "core/recall/cvefix_manifest.py::fp_twin": {
@@ -1714,6 +1714,10 @@
     "kind": "literal",
     "note": "pinned proxy event-result enum, drift-pinned by the structural test in test_audit_filter.py \u2014 a fixed taxonomy, not learnable vocabulary"
   },
+  "core/sandbox/proxy.py::__init__": {
+    "count": 17,
+    "kind": "literal"
+  },
   "core/sandbox/proxy.py::event": {
     "count": 11,
     "kind": "literal",
@@ -1775,15 +1779,15 @@
     "kind": "literal"
   },
   "core/schema_constants/__init__.py::VULN_TYPES": {
-    "count": 25,
+    "count": 27,
     "kind": "literal"
   },
   "core/schema_constants/__init__.py::VULN_TYPE_ALIASES": {
-    "count": 74,
+    "count": 76,
     "kind": "literal"
   },
   "core/schema_constants/__init__.py::VULN_TYPE_TO_CWE": {
-    "count": 24,
+    "count": 26,
     "kind": "literal"
   },
   "core/security/cc_trust.py::_COMPREHENSIVE_DANGEROUS_ENV_VARS": {
@@ -1843,7 +1847,7 @@
     "note": "detector vocabulary, not a learned name set: the field names whose values carry LLM/tool output in run artifacts \u2014 grown by the mechanism-spec widening, each name backed by a live writer lane and pinned by mutation fixtures in test_report_writer_audit"
   },
   "core/security/report_writer_audit.py::_SANITISERS": {
-    "count": 38,
+    "count": 39,
     "kind": "literal",
     "note": "recognised-sanitiser vocabulary for the writer audit; every local definition of these names must build on a canonical sanitiser (enforced by the name-shadow arm)"
   },
@@ -1865,10 +1869,35 @@
     "count": 24,
     "kind": "literal"
   },
+  "core/taint/emission.py::_scan_finding": {
+    "count": 13,
+    "kind": "literal",
+    "note": "scan-shaped finding dict field names (the parse_sarif_findings key shape: finding_id/rule_id/startLine/dataflow_path/...), not name vocabulary \u2014 same class as the engine/paths to_dict entries"
+  },
+  "core/taint/emission.py::result": {
+    "count": 11,
+    "kind": "literal",
+    "note": "SARIF result properties serialization field names (detection_tier/path_tier/spec_tier/killed_origins/...), not name vocabulary \u2014 same class as the engine/paths to_dict entries"
+  },
+  "core/taint/engine.py::to_dict": {
+    "count": 10,
+    "kind": "literal",
+    "note": "candidate record serialization field names (taint_class/source/sink/hops/steps/alternatives/killed_origins/...), not name vocabulary \u2014 same class as the summaries to_dict entry"
+  },
   "core/taint/mad_rows.py::to_dict": {
     "count": 15,
     "kind": "literal",
     "note": "serializer field manifest for the taint-mad-augmentation.json record cell (persistence schema keys mirroring the AugmentationCell dataclass fields, not a learned name vocabulary; the sink/source/CWE vocabularies inside the values come from the taint packs and IRIS)"
+  },
+  "core/taint/paths.py::to_dict": {
+    "count": 14,
+    "kind": "literal",
+    "note": "step record serialization field names (the codeFlows step contract: file/line spans, tier/tags/sanitizers, excerpt fields), not name vocabulary \u2014 same class as the summaries to_dict entry"
+  },
+  "core/taint/summaries.py::to_dict": {
+    "count": 17,
+    "kind": "literal",
+    "note": "summary serialization field names (FunctionSummary.to_dict JSON keys, shape-validated on cache load), not name vocabulary \u2014 same class as the finding-dict field-name entries"
   },
   "core/testing/git_hermeticity.py::GIT_ENV_STRIP": {
     "count": 18,
@@ -1912,31 +1941,6 @@
     "kind": "literal",
     "note": "persistence schema keys of one disclosure-backlog pointer record - a JSON record shape, not a function-name vocabulary"
   },
-  "core/taint/summaries.py::to_dict": {
-    "count": 17,
-    "kind": "literal",
-    "note": "summary serialization field names (FunctionSummary.to_dict JSON keys, shape-validated on cache load), not name vocabulary \u2014 same class as the finding-dict field-name entries"
-  },
-  "core/taint/engine.py::to_dict": {
-    "count": 10,
-    "kind": "literal",
-    "note": "candidate record serialization field names (taint_class/source/sink/hops/steps/alternatives/killed_origins/...), not name vocabulary \u2014 same class as the summaries to_dict entry"
-  },
-  "core/taint/paths.py::to_dict": {
-    "count": 14,
-    "kind": "literal",
-    "note": "step record serialization field names (the codeFlows step contract: file/line spans, tier/tags/sanitizers, excerpt fields), not name vocabulary \u2014 same class as the summaries to_dict entry"
-  },
-  "core/taint/emission.py::result": {
-    "count": 11,
-    "kind": "literal",
-    "note": "SARIF result properties serialization field names (detection_tier/path_tier/spec_tier/killed_origins/...), not name vocabulary \u2014 same class as the engine/paths to_dict entries"
-  },
-  "core/taint/emission.py::_scan_finding": {
-    "count": 13,
-    "kind": "literal",
-    "note": "scan-shaped finding dict field names (the parse_sarif_findings key shape: finding_id/rule_id/startLine/dataflow_path/...), not name vocabulary \u2014 same class as the engine/paths to_dict entries"
-  },
   "core/trajectories/test_store.py::base": {
     "count": 10,
     "kind": "literal"
@@ -1944,18 +1948,18 @@
   "core/tuning/__init__.py::_AUTO_RESOLVERS": {
     "count": 10,
     "kind": "literal",
-    "note": "closed tuning-key registry: maps the /tune config keys that accept \"auto\" to their host-detection resolvers — RAPTOR's own operator-facing configuration surface, the same closed taxonomy as the sibling _DEFAULTS/_KEY_COMMENTS/_VALID_KEYS entries, not a learned name vocabulary"
+    "note": "closed tuning-key registry: maps the /tune config keys that accept \"auto\" to their host-detection resolvers \u2014 RAPTOR's own operator-facing configuration surface, the same closed taxonomy as the sibling _DEFAULTS/_KEY_COMMENTS/_VALID_KEYS entries, not a learned name vocabulary"
   },
   "core/tuning/__init__.py::_DEFAULTS": {
-    "count": 13,
+    "count": 15,
     "kind": "literal"
   },
   "core/tuning/__init__.py::_KEY_COMMENTS": {
-    "count": 16,
+    "count": 18,
     "kind": "literal"
   },
   "core/tuning/__init__.py::_VALID_KEYS": {
-    "count": 16,
+    "count": 18,
     "kind": "literal"
   },
   "core/understand_graph/queries.py::_DANGEROUS": {
@@ -1979,20 +1983,20 @@
     "note": "graph schema node-kind enum (entry_point/sink/function/...) \u2014 fixed taxonomy for the understand graph, not target API names"
   },
   "libexec/raptor-audit::_run_config_from_args": {
-    "count": 39,
+    "count": 43,
     "kind": "literal",
     "note": "serialised run-option field names for audit-run-config.json (same-run resume contract) - CLI flag surface, not a name vocabulary"
   },
   "libexec/raptor-audit::dispatch": {
-    "count": 12,
+    "count": 15,
     "kind": "literal"
   },
   "libexec/raptor-review::dispatch": {
-    "count": 14,
+    "count": 16,
     "kind": "literal"
   },
   "libexec/raptor-review::known_commands": {
-    "count": 14,
+    "count": 16,
     "kind": "literal"
   },
   "libexec/raptor-run-feasibility::main": {
@@ -2004,7 +2008,7 @@
     "kind": "literal"
   },
   "libexec/raptor-seatbelt-shim::_strip": {
-    "count": 16,
+    "count": 17,
     "kind": "literal",
     "note": "target environment-strip tuple mirrored from core.config.TARGET_ENV_STRIP_SET for the isolated macOS shim, not a learned name vocabulary"
   },
@@ -2070,7 +2074,7 @@
     "kind": "literal"
   },
   "libexec/raptor-study-prep::out_data": {
-    "count": 11,
+    "count": 14,
     "kind": "literal"
   },
   "libexec/raptor-understand::payload": {
@@ -2085,10 +2089,10 @@
   "packages/binary_analysis/_symbols.py::_UNDERSCORE_SIGNIFICANT": {
     "count": 10,
     "kind": "literal",
-    "note": "identity-underscore exemption list for the symbol normaliser — names whose leading underscore is the export's real spelling (libc _exit/_setjmp family plus the Windows CRT/SEH underscored exports), so stripping would conflate or orphan them; a curated normalisation contract that grows only with catalog pins, not a learned name vocabulary"
+    "note": "identity-underscore exemption list for the symbol normaliser \u2014 names whose leading underscore is the export's real spelling (libc _exit/_setjmp family plus the Windows CRT/SEH underscored exports), so stripping would conflate or orphan them; a curated normalisation contract that grows only with catalog pins, not a learned name vocabulary"
   },
   "packages/binary_analysis/cli.py::_COMMANDS": {
-    "count": 11,
+    "count": 13,
     "kind": "literal"
   },
   "packages/binary_analysis/corpus_profile.py::profile_corpus": {
@@ -2130,7 +2134,7 @@
     "kind": "literal"
   },
   "packages/binary_analysis/investigation.py::build_investigation": {
-    "count": 20,
+    "count": 21,
     "kind": "literal"
   },
   "packages/binary_analysis/macho.py::to_dict": {
@@ -2138,7 +2142,7 @@
     "kind": "literal"
   },
   "packages/binary_analysis/manifest.py::to_dict": {
-    "count": 19,
+    "count": 23,
     "kind": "literal"
   },
   "packages/binary_analysis/parser_boundary.py::extract_parser_boundaries": {
@@ -2163,7 +2167,7 @@
     "kind": "literal"
   },
   "packages/binary_analysis/pipeline.py::_context_map": {
-    "count": 33,
+    "count": 37,
     "kind": "literal"
   },
   "packages/binary_analysis/pipeline.py::_decompilation_artifact": {
@@ -2199,7 +2203,7 @@
     "kind": "literal"
   },
   "packages/binary_analysis/radare2_understand.py::to_dict": {
-    "count": 24,
+    "count": 28,
     "kind": "literal"
   },
   "packages/binary_analysis/runtime_evidence.py::load_runtime_evidence": {
@@ -2393,7 +2397,7 @@
     "note": "host tool binary-name registry keyed to install advice (mirrors the RaptorConfig.TOOL_DEPS binaries), operator environment guidance, not target API vocabulary"
   },
   "packages/describe/report.py::doc": {
-    "count": 19,
+    "count": 20,
     "kind": "literal"
   },
   "packages/exploit_feasibility/analyzer.py::input_funcs": {
@@ -2488,8 +2492,28 @@
     "kind": "literal"
   },
   "packages/exploitability_validation/agentic.py::finding": {
-    "count": 15,
+    "count": 18,
     "kind": "literal"
+  },
+  "packages/exploitability_validation/binary_substrate.py::_checklist_from_sidecar": {
+    "count": 13,
+    "kind": "literal",
+    "note": "checklist.json artifact field manifest (the build_binary_checklist / build_inventory output shape mirrored for the degraded sidecar-only inventory) \u2014 persistence schema keys, not a learned name vocabulary"
+  },
+  "packages/exploitability_validation/binary_substrate.py::build_binary_target_checklist": {
+    "count": 13,
+    "kind": "literal",
+    "note": "the checklist 'substrate' block field manifest (provenance record keys the report and downstream stages read) \u2014 persistence schema keys, not a learned name vocabulary"
+  },
+  "packages/exploitability_validation/binary_substrate.py::entry": {
+    "count": 11,
+    "kind": "literal",
+    "note": "attack-paths.json entry field manifest (ATTACK_PATH_SCHEMA keys, mirrors understand_bridge._trace_to_attack_path) \u2014 persistence schema keys, not a learned name vocabulary"
+  },
+  "packages/exploitability_validation/binary_substrate.py::record": {
+    "count": 10,
+    "kind": "literal",
+    "note": "binary-substrate.json discovery-receipt field manifest (selection + identity-verification facts, incl. sha_verified) \u2014 persistence schema keys, not a learned name vocabulary"
   },
   "packages/exploitability_validation/orchestrator.py::STATUS_DISPLAY": {
     "count": 19,
@@ -2511,8 +2535,13 @@
     "count": 11,
     "kind": "literal"
   },
+  "packages/exploitability_validation/schemas.py::CHECKLIST_SCHEMA": {
+    "count": 12,
+    "kind": "literal",
+    "note": "JSON-schema property-name manifest for checklist.json items (source line anchors + binary address anchors) \u2014 schema keys, not a learned name vocabulary"
+  },
   "packages/exploitability_validation/schemas.py::FINDING_SCHEMA": {
-    "count": 49,
+    "count": 52,
     "kind": "literal"
   },
   "packages/exploitability_validation/schemas.py::HYPOTHESIS_SCHEMA": {
@@ -2687,7 +2716,7 @@
     "kind": "literal"
   },
   "packages/openant/forecast.py::result": {
-    "count": 10,
+    "count": 11,
     "kind": "literal",
     "note": "forecast result-document field names (an artifact schema the report embeds), not a learned name vocabulary"
   },
@@ -2925,7 +2954,7 @@
     "kind": "literal"
   },
   "packages/semgrep/models.py::to_dict": {
-    "count": 10,
+    "count": 11,
     "kind": "literal"
   },
   "packages/source_intel/adapter.py::_DYNAMIC_ALLOCATORS_PATTERN": {
@@ -3096,30 +3125,5 @@
     "kind": "literal",
     "note": "Autonomous-run summary dict: counter + provenance KEYS written to the analysis-summary JSON (persistence schema keys, not a name vocabulary); root-module universe addition.",
     "reviewed": "2026-09-21"
-  },
-  "packages/exploitability_validation/binary_substrate.py::_checklist_from_sidecar": {
-    "count": 13,
-    "kind": "literal",
-    "note": "checklist.json artifact field manifest (the build_binary_checklist / build_inventory output shape mirrored for the degraded sidecar-only inventory) \u2014 persistence schema keys, not a learned name vocabulary"
-  },
-  "packages/exploitability_validation/binary_substrate.py::build_binary_target_checklist": {
-    "count": 13,
-    "kind": "literal",
-    "note": "the checklist 'substrate' block field manifest (provenance record keys the report and downstream stages read) \u2014 persistence schema keys, not a learned name vocabulary"
-  },
-  "packages/exploitability_validation/binary_substrate.py::entry": {
-    "count": 11,
-    "kind": "literal",
-    "note": "attack-paths.json entry field manifest (ATTACK_PATH_SCHEMA keys, mirrors understand_bridge._trace_to_attack_path) \u2014 persistence schema keys, not a learned name vocabulary"
-  },
-  "packages/exploitability_validation/schemas.py::CHECKLIST_SCHEMA": {
-    "count": 12,
-    "kind": "literal",
-    "note": "JSON-schema property-name manifest for checklist.json items (source line anchors + binary address anchors) \u2014 schema keys, not a learned name vocabulary"
-  },
-  "packages/exploitability_validation/binary_substrate.py::record": {
-    "count": 10,
-    "kind": "literal",
-    "note": "binary-substrate.json discovery-receipt field manifest (selection + identity-verification facts, incl. sha_verified) \u2014 persistence schema keys, not a learned name vocabulary"
   }
 }
