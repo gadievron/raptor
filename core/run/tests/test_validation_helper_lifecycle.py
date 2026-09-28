@@ -88,6 +88,37 @@ class TestBridgeConfigMarker:
         assert load_json(out / "bridge-config.json") == {"no_bridge": False}
 
 
+class TestStage0ConsentRecord:
+    """Stage 0 persists the explicit consent tri-states as the MAC'd
+    run record (and removes a stale one on a no-flags run), through
+    the real CLI path."""
+
+    def test_explicit_flags_persist_verified_record(self, tmp_path,
+                                                    monkeypatch):
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        result, out = _run_stage0(tmp_path, "--no-dynamic", "--build")
+        assert result.returncode == 0, result.stderr
+        from packages.exploitability_validation.trust_consent import (
+            load_consent,
+        )
+        rec = load_consent(out)
+        assert rec is not None
+        assert (rec.dynamic, rec.build) == (False, True)
+
+    def test_no_flags_run_removes_stale_record(self, tmp_path,
+                                               monkeypatch):
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        result, out = _run_stage0(tmp_path, "--no-dynamic")
+        assert result.returncode == 0, result.stderr
+        assert (out / "trust-consent.json").exists()
+        # A later stage 0 on the same out dir WITHOUT flags must not
+        # leave the previous run's denial looking current (same
+        # rewrite-both-ways doctrine as bridge-config above).
+        result, out = _run_stage0(tmp_path)
+        assert result.returncode == 0, result.stderr
+        assert not (out / "trust-consent.json").exists()
+
+
 class TestWitnessExecutionGate:
 
     def test_gate_receives_run_target_and_run_dir(self, tmp_path,

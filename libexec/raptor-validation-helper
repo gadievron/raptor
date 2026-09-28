@@ -3164,16 +3164,65 @@ def _write_poc_file(wdir, data, binary, run_stamp, index):
     return poc_path
 
 
-def _dynamic_refusal_detail(res) -> str:
+def _effective_stage_consent(
+    workdir: "str | Path", dynamic: "bool | None", build: "bool | None",
+) -> "tuple[bool | None, bool | None, str | None]":
+    """Merge THIS invocation's tri-state consent flags with the
+    stage-0 persisted record (``trust_consent.load_consent``):
+    per-invocation flags win, then a VERIFIED stage-0 record decides
+    the channels the invocation left at ``None``, then ``None``
+    stands (project markers decide at the gates). Returns
+    ``(dynamic, build, dynamic_source)`` where *dynamic_source* is
+    ``"flag"`` / ``"stage-0"`` / ``None`` for refusal-message
+    provenance. An unusable record already warned inside
+    ``load_consent`` and carries no authority — grants AND denials
+    both need the verified stamp."""
+    dynamic_source = "flag" if dynamic is not None else None
+    if dynamic is not None and build is not None:
+        return dynamic, build, dynamic_source
+    try:
+        from packages.exploitability_validation.trust_consent import (
+            load_consent,
+        )
+    except ImportError:
+        return dynamic, build, dynamic_source
+    rec = load_consent(Path(workdir))
+    if rec is None:
+        return dynamic, build, dynamic_source
+    applied = []
+    if dynamic is None and rec.dynamic is not None:
+        dynamic = rec.dynamic
+        dynamic_source = "stage-0"
+        applied.append(f"dynamic={'granted' if dynamic else 'denied'}")
+    if build is None and rec.build is not None:
+        build = rec.build
+        applied.append(f"build={'granted' if build else 'denied'}")
+    if applied:
+        # Consent state must never be invisible: one line naming the
+        # channels the stage-0 record decided for this invocation.
+        print(f"  Stage-0 consent record applied: {', '.join(applied)} "
+              "(explicit flags persisted at stage 0; this invocation "
+              "passed none)")
+    return dynamic, build, dynamic_source
+
+
+def _dynamic_refusal_detail(
+    res: "core.project.trust.TrustResolution",
+    dynamic_source: "str | None" = None,
+) -> str:
     """Operator-facing provenance clause for a dynamic-trust refusal:
     names WHICH project answered and through WHICH resolution layer
     (run-pin vs ambient session), so a refusal caused by the wrong
     project being consulted is diagnosable from the skip line alone.
-    *res* is a ``core.project.trust.TrustResolution``. The project
-    name can originate from the run-dir pin marker (target-writable
-    during execution windows), so it is terminal-sanitised."""
+    *res* is a ``core.project.trust.TrustResolution``;
+    *dynamic_source* is ``_effective_stage_consent``'s provenance for
+    an explicit denial. The project name can originate from the
+    run-dir pin marker (target-writable during execution windows), so
+    it is terminal-sanitised."""
     layer = "run-pin" if res.layer == "run-pin" else "ambient session"
     if res.source == "explicit":
+        if dynamic_source == "stage-0":
+            return "denied by the stage-0 persisted --no-dynamic"
         return "denied by explicit flag"
     name = _sft(str(res.project), max_len=120) if res.project else None
     if res.source == "marker-target-mismatch":
@@ -3184,7 +3233,8 @@ def _dynamic_refusal_detail(res) -> str:
     return f"no project governs this run ({layer} resolution)"
 
 
-def _run_auto_sink_watch(workdir, target, data, dynamic=None):
+def _run_auto_sink_watch(workdir, target, data, dynamic=None,
+                         dynamic_source=None):
     """Stage E auto sink-watch: run the findings' own sink list against
     the matched binaries under frida, then fold the runtime evidence
     back into attack-paths.json.
@@ -3233,8 +3283,8 @@ def _run_auto_sink_watch(workdir, target, data, dynamic=None):
         print(
             f"  Auto sink-watch: {len(specs)} watchable sink(s) skipped "
             f"— dynamic execution not granted "
-            f"({_dynamic_refusal_detail(res)}; pass --dynamic or set "
-            "the project 'dynamic' trust marker)"
+            f"({_dynamic_refusal_detail(res, dynamic_source)}; pass "
+            "--dynamic or set the project 'dynamic' trust marker)"
         )
         return
 
@@ -3304,7 +3354,8 @@ def _run_auto_sink_watch(workdir, target, data, dynamic=None):
                                    extra_targets=watched)
 
 
-def _run_witness_execution(workdir, target, data, dynamic=None):
+def _run_witness_execution(workdir, target, data, dynamic=None,
+                           dynamic_source=None):
     """Stage E witness execution (P9) — dark-verify oracle for /validate.
 
     Gate: ``core.project.trust.resolve_dynamic_validation`` — explicit
@@ -3343,8 +3394,8 @@ def _run_witness_execution(workdir, target, data, dynamic=None):
         print(
             f"  Witness execution: {len(eligible)} eligible finding(s) "
             f"skipped — dynamic execution not granted "
-            f"({_dynamic_refusal_detail(res)}; pass --dynamic or "
-            "set the project 'dynamic' trust marker)"
+            f"({_dynamic_refusal_detail(res, dynamic_source)}; pass "
+            "--dynamic or set the project 'dynamic' trust marker)"
         )
         return
 
@@ -3427,6 +3478,14 @@ def prepare_E(workdir, target=None, dynamic=None, build=None,
               mitigation_matrix=False, build_command=None):
     _apply_stage_file(workdir, "D")
 
+    # Stage-0 consent reload (mirrors the sanitizer-cut reload in
+    # main()): the orchestrated stage-E invocation passes no consent
+    # flags, so the explicit --dynamic/--no-dynamic/--build/--no-build
+    # the operator gave stage 0 governs here — this invocation's own
+    # flags still win, and only a MAC-verified record speaks.
+    dynamic, build, dynamic_source = _effective_stage_consent(
+        workdir, dynamic, build)
+
     # D/E boundary: the attack paths Stage B materialised (and C/D
     # settled) exist now — re-run the audit bridge's path enrichment
     # so Stage E sees the constraints the Stage-0 pass loaded before
@@ -3502,13 +3561,15 @@ def prepare_E(workdir, target=None, dynamic=None, build=None,
         print("  No --target provided, skipping binary discovery")
 
     # --- Auto sink-watch (frida; gated on dynamic trust) ---
-    _run_auto_sink_watch(workdir, target, data, dynamic=dynamic)
+    _run_auto_sink_watch(workdir, target, data, dynamic=dynamic,
+                         dynamic_source=dynamic_source)
 
     # --- Symbolic witness synthesis (angr; mechanical, no LLM) ---
     _run_symbolic_witnesses(workdir, data, dynamic=dynamic, target=target)
 
     # --- Witness execution (dark-verify oracle, gated on dynamic trust) ---
-    _run_witness_execution(workdir, target, data, dynamic=dynamic)
+    _run_witness_execution(workdir, target, data, dynamic=dynamic,
+                           dynamic_source=dynamic_source)
 
 
 def _run_symbolic_witnesses(workdir, data, dynamic=None, target=None):
@@ -4111,9 +4172,12 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
     """Stage 0: start lifecycle, build checklist, bridge understand output.
 
     ``dynamic`` / ``build`` are the tri-state per-run consent flags
-    (None = the project trust marker decides) — stage 0 only READS
-    them, for the capability preflight's warning; the stage-E gates
-    re-resolve independently.
+    (None = the project trust marker decides). Stage 0 feeds them to
+    the capability preflight's warning AND persists them as the
+    MAC-stamped run consent record
+    (``trust_consent.persist_consent``) — the orchestrated stage-E
+    invocation passes no flags, so without the record an explicit
+    stage-0 grant or denial silently degraded to marker resolution.
     """
     if not target:
         print("ERROR: --target is required for stage 0", file=sys.stderr)
@@ -4197,6 +4261,20 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
                 run_dir=str(out_dir), export_env=True,
             )
             sanitizer_cut_config.persist(str(out_dir))
+
+        # Persist the stage-0 execution consent for the stage-E gates
+        # (same reload pattern as the sanitizer-cut mode above, but
+        # MAC-stamped: the run dir is target-writable during build /
+        # witness windows and this record carries execution consent).
+        # Fresh-or-absent inside persist_consent: a no-flags run
+        # REMOVES any stale record, so it runs unconditionally.
+        # Never raises — consent transport must not fail stage 0; a
+        # key problem warns loudly and later stages fall back to
+        # marker resolution against the run pin.
+        from packages.exploitability_validation.trust_consent import (
+            persist_consent,
+        )
+        persist_consent(out_dir, dynamic=dynamic, build=build)
 
         # Snapshot understand hashes before the rebuild overwrites checklist.json.
         # In the shared --out case (tier 1), the understand run's checklist is in
