@@ -302,6 +302,25 @@ class TestDomainModelContext:
             tmp_path, "any.c", "any_func")
         assert block is None
 
+    def test_injection_survives_poisoned_study_artifacts(self, dm_dir):
+        """Briefing-side injection is a pure disk read of
+        domain-model.json — a broken study SUBSYSTEM (here: the run's
+        reading-list.json poisoned with present-but-null fields, the
+        shape that crashed study-prep and disabled the study consumer)
+        must not starve reviews of the already-extracted model."""
+        (dm_dir / "reading-list.json").write_text(json.dumps({
+            "items": [{
+                "id": "study_unresolved_x.deadbeef1234",
+                "question": "q?", "source_command": "/understand --study",
+                "source_file": None, "context": None,
+                "resolved": False, "resolution": "identifier",
+            }],
+        }), encoding="utf-8")
+        block = domain_model_context(
+            dm_dir, "crypto/algif_aead.c", "_aead_recvmsg")
+        assert block is not None
+        assert "sg_page_ownership" in block
+
     def test_includes_invariants(self, dm_dir):
         block = domain_model_context(
             dm_dir, "crypto/algif_aead.c", "_aead_recvmsg",

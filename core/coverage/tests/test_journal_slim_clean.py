@@ -516,6 +516,26 @@ class TestStalenessGateContract:
         assert reason is not None and reason.startswith(
             "context offloaded")
 
+    def test_absent_domain_model_never_blocks_reuse(
+        self, tmp_path: Path,
+    ) -> None:
+        """A degraded run (study subsystem disabled or the model
+        otherwise unavailable → ``domain_ctx=None``) must not throw
+        away good verdicts: the same entry that reads stale WITH a
+        changed model keeps its $0 reuse when there is no model to
+        diff against — absence of new knowledge is not new
+        knowledge."""
+        from core.audit.gaps import _reuse_ineligibility
+        append_entry(tmp_path, _entry(1))
+        (orig,) = load_entries(tmp_path)
+        assert self._gate(orig) is not None   # stale WITH the ctx
+        assert _reuse_ineligibility(
+            orig, orig.key,
+            current_strategies_fn=self._strategies,
+            current_model=None,
+            domain_ctx=None,
+        ) is None
+
     def test_matching_hash_never_touches_the_sidecar(
         self, tmp_path: Path,
     ) -> None:
