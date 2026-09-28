@@ -15,6 +15,7 @@ raptor-run-lifecycle is a logging stub, with python3 PATH-stubbed.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import signal
@@ -110,6 +111,78 @@ def _proc_state(pid: int) -> str | None:
     return stat_text[stat_text.rfind(")") + 2:].split()[0]
 
 
+def _read_pid(path: Path) -> int | None:
+    """Pid recorded in *path*, or None while the file is unusable as
+    a readiness signal.
+
+    ``echo $! > file`` is two observable steps — create/truncate,
+    then write — so a reader gating on file EXISTENCE alone can catch
+    the file created but still empty and crash on ``int("")``.
+    Readiness is therefore CONTENT: a pid only comes back once the
+    file holds a complete int-parseable value.
+    """
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _reap_stub_tree(proc: subprocess.Popen, pid_file: Path) -> None:
+    """Best-effort janitor for the spawned wrapper tree, registered
+    right after the spawn so a failing assertion (or any other
+    exception exit) cannot leak the stub processes (wrapper →
+    python3 stub → sleep grandchild).
+
+    Verified pids only: the roots are the live ``Popen`` handle's pid
+    and the stub-recorded grandchild pid, descendants come from a
+    ``pgrep -P`` walk of those roots, nothing with pid <= 1 is ever
+    signaled, and every kill is gated on a kill-0 liveness probe
+    immediately before it.
+    """
+    pids: list[int] = []
+    if proc.pid is not None and proc.pid > 1:
+        pids.append(proc.pid)
+    recorded = _read_pid(pid_file)
+    if recorded is not None and recorded > 1 and recorded not in pids:
+        pids.append(recorded)
+    # Collect the whole tree BEFORE killing anything: killing a parent
+    # first would orphan still-running children before pgrep sees them.
+    seen = set(pids)
+    frontier = list(pids)
+    while frontier:
+        parent = frontier.pop()
+        res = subprocess.run(
+            ["pgrep", "-P", str(parent)],
+            capture_output=True, text=True, check=False,
+        )
+        for token in res.stdout.split():
+            try:
+                child = int(token)
+            except ValueError:
+                continue
+            if child > 1 and child not in seen:
+                seen.add(child)
+                pids.append(child)
+                frontier.append(child)
+    for pid in pids:
+        if pid <= 1:
+            continue
+        try:
+            os.kill(pid, 0)  # liveness gate: only verified-live pids
+        except OSError:
+            continue
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=10)
+
+
 class TestGracefulSignalDisposition:
     def test_sigterm_with_clean_child_exit_completes(self, tmp_path):
         """Child exits 0 on TERM (graceful duration-bounded capture)
@@ -174,7 +247,7 @@ class TestGracefulSignalDisposition:
 @pytest.mark.skipif(shutil.which("setsid") is None,
                     reason="setsid required for group kill")
 class TestProcessGroupKill:
-    def test_grandchild_killed_on_sigterm(self, tmp_path):
+    def test_grandchild_killed_on_sigterm(self, tmp_path, request):
         """SIGTERM to the wrapper must reach the child's descendants
         (the instrumented target), not just the direct child."""
         root = _make_fake_tree(tmp_path, "raptor-frida")
@@ -193,8 +266,17 @@ class TestProcessGroupKill:
             env=env, cwd=str(tmp_path),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        assert _wait_for(pid_file.is_file), "grandchild never started"
-        grandchild = int(pid_file.read_text().strip())
+        # Registered before the first assertion: an assertion or
+        # exception exit must reap the tree, not leak it.
+        request.addfinalizer(lambda: _reap_stub_tree(proc, pid_file))
+        # Readiness = pid-file CONTENT, not existence: `echo $! > f`
+        # creates the file before writing it, and reading the empty
+        # window raised int("") — ValueError under load.
+        assert _wait_for(lambda: _read_pid(pid_file) is not None), (
+            "grandchild never started"
+        )
+        grandchild = _read_pid(pid_file)
+        assert grandchild is not None
         assert _pid_alive(grandchild)
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=30)
