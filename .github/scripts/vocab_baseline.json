@@ -40,6 +40,16 @@
     "kind": "literal",
     "note": "closed grammar-node-type taxonomy: the tree-sitter-java node kinds the CFG builder keys refusal/scope tables on; every entry is asserted producible by the installed grammar (core/analysis/tests/test_cfg_node_tables.py) \u2014 grammar structure names, not a learned name vocabulary"
   },
+  "core/analysis/gadget_oracle.py::POP_SURFACE_METHODS": {
+    "count": 14,
+    "kind": "literal",
+    "note": "closed PHP-language taxonomy: the unserialize-lifecycle magic-method trigger surface (casefolded \u2014 PHP resolves method names case-insensitively), fixed by the PHP engine, not a learned per-target vocabulary; deliberately BROADER than the chain-finding tables so a method the flow model cannot trace still blocks suppression, and __construct is deliberately absent (constructors never run on unserialize) \u2014 see the census-set comment at the definition"
+  },
+  "core/analysis/gadget_oracle.py::_CENSUS_CALL_NAMES": {
+    "count": 10,
+    "kind": "literal",
+    "note": "closed PHP-language taxonomy: the builtin autoload/eval/callable-dispatch family the call census dispatches on (unserialize, spl_autoload_register, ini_set, call_user_func, ...) \u2014 fixed by the PHP runtime, not a learned per-target vocabulary; doubles as the use-function rewrite allowlist, which only ever rewrites TOWARD a family spelling (over-block, the safe error)"
+  },
   "core/analysis/gadget_oracle.py::_EXEC_SINKS": {
     "count": 10,
     "kind": "literal",
@@ -49,6 +59,11 @@
     "count": 11,
     "kind": "literal",
     "note": "closed PHP-language taxonomy: builtin filesystem-effect functions (unlink/fopen family) \u2014 fixed by the PHP runtime, not a learned per-target vocabulary; per-target sink vocabulary stays the study loop's job (see the SEED-tier comment at the definition)"
+  },
+  "core/analysis/gadget_oracle.py::_INTERNAL_BASE_CLASSES": {
+    "count": 24,
+    "kind": "literal",
+    "note": "closed PHP-language taxonomy: engine-internal base classes (stdClass, the core throwable hierarchy, the SPL exception family \u2014 php.net class reference) whose method bodies are engine C code, so an extends naming one can never pull in-tree trigger code into the child; anything NOT listed fails closed to unresolved-parents, so a miss only withholds the earned-absence tier \u2014 language facts, not a learned per-target vocabulary"
   },
   "core/analysis/gadget_oracle.py::_PROPAGATORS": {
     "count": 14,
@@ -61,9 +76,29 @@
     "note": "schema-key manifest for the bounded re-coercion of one gadget-chain row from untrusted run-dir JSON (persistence keys in lockstep with the scan_tree chain shape, not a name vocabulary)"
   },
   "core/analysis/gadget_oracle.py::scan_tree": {
-    "count": 13,
+    "count": 15,
     "kind": "literal",
-    "note": "schema-key manifest for the artifact's completeness census (parse/read/symlink/special-file counters the qualifier renders) \u2014 persistence keys in lockstep with census_qualifier and the consumer tests, not a name vocabulary"
+    "note": "schema-key manifest for the artifact's completeness census (parse/read/symlink/special-file counters the qualifier renders; grown by the unresolved_parent_count and walk_skipped_dirs_with_php_count fail-closed counters \u2014 reviewed) \u2014 persistence keys in lockstep with census_qualifier and the consumer tests, not a name vocabulary"
+  },
+  "core/analysis/gadget_oracle_precision.py::REGEX_POP_METHODS": {
+    "count": 14,
+    "kind": "literal",
+    "note": "the independent regex ground-truth arm's OWN copy of the POP magic-method surface \u2014 deliberately duplicated from gadget_oracle.POP_SURFACE_METHODS rather than imported so the two censuses stay independent implementations, with a unit test pinning the two sets equal; PHP-engine taxonomy, not a learned per-target vocabulary"
+  },
+  "core/analysis/gadget_oracle_precision.py::_CANONICAL_POP": {
+    "count": 14,
+    "kind": "literal",
+    "note": "canonical-case spellings of the same closed POP magic-method set, used by the synthetic corpus generator to emit source text \u2014 mirrors POP_SURFACE_METHODS (casefolded membership pinned equal by the drift test beside the REGEX_POP_METHODS pin, core/analysis/tests/test_gadget_oracle_precision.py); PHP-engine taxonomy, not a learned per-target vocabulary"
+  },
+  "core/analysis/gadget_oracle_precision.py::aggregate": {
+    "count": 11,
+    "kind": "literal",
+    "note": "cross-corpus aggregate report field names (false-absence totals, rule-of-three upper bound, tier-fire and chain-recall counters) \u2014 the measurement artifact's JSON schema keys, not a name vocabulary; same class as the baselined manifest/to_dict shapes"
+  },
+  "core/analysis/gadget_oracle_precision.py::to_dict": {
+    "count": 20,
+    "kind": "literal",
+    "note": "per-corpus precision-report serializer field names (tier counts, cross-tab, false-absence and recall counters) \u2014 JSON schema keys the consumer tests read verbatim from the report artifact (the cross-corpus aggregate folds the same-named dataclass attributes, not this emitted dict), not a name vocabulary; same class as binary_oracle_precision.py::to_dict"
   },
   "core/analysis/peer_groups.py::_NON_DISTINCTIVE_TYPES": {
     "count": 156,
