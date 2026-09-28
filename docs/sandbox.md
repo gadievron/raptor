@@ -1066,6 +1066,35 @@ The egress proxy allowlist needs the full set of GHCR hosts:
 
 ---
 
+## Namespace supervision outside the sandbox
+
+The sandbox is not RAPTOR's only namespace user. The Joern analysis
+server boots inside its own private network namespace (its TCP port
+and per-boot credential are reachable only through a unix socket the
+forwarder owns), and on hosts that allow it the same single unshare
+call also creates a pid namespace: the forwarder then supervises the
+whole server tree, so one verified kill of one process tears down the
+JVM and every helper with kernel-guaranteed delivery instead of
+process-group enumeration.
+
+This is process-tree containment for one of RAPTOR's own trusted
+services, not the security sandbox this document describes — no
+Landlock, seccomp, or filesystem confinement applies to the Joern
+server through it.
+
+Capability degradation is automatic and visible, never fatal: the
+kernel is probed before the tier engages (the verdict is cached for
+the process's lifetime and re-probed only after a runtime refusal);
+a pid-namespace refusal (common under
+the same AppArmor userns gating covered in
+[Troubleshooting](#troubleshooting)) degrades that server to
+process-group supervision; and every boot logs one posture line
+(`Joern server supervision tier: pidns` or `group`) naming the tier
+actually achieved — plus the refusal reason when a runtime refusal
+forced the degrade.
+
+---
+
 ## Related documentation
 
 - [Commands reference](commands.md) -- CLI flags (`--sandbox`,
