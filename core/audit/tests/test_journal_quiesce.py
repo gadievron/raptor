@@ -316,6 +316,62 @@ class TestQuiescerCadence:
         assert len(advisories) == 1
 
 
+class TestQuiescerConstants:
+    """Two-direction regression tests for the quiesce-side cadence
+    constants: each bound names the failure mode crossing it would
+    reintroduce (see the constants' inline rationale comments in
+    ``core.audit.journal_quiesce``)."""
+
+    def test_eval_interval_bounds(self) -> None:
+        # Lower: below this the loop-head poll stats the shard set at
+        # effectively per-dispatch cadence of a hot serial loop — the
+        # cost the interval exists to amortise.
+        assert quiesce_mod._QUIESCE_EVAL_INTERVAL_S >= 10.0
+        # Upper: the journal overshoots a fired trigger by one whole
+        # interval of appends; the trigger's margin below the roll
+        # threshold is sized to absorb only a bounded interval.
+        assert quiesce_mod._QUIESCE_EVAL_INTERVAL_S <= 300.0
+
+    def test_drain_bound_bounds(self) -> None:
+        # Lower: must outlast the longest sanctioned single review
+        # (a full-context review with tool chains runs minutes) — a
+        # shorter bound abandons the quiesce whenever one
+        # slow-but-live review is in flight, pushing every checkpoint
+        # back to segment boundaries (the mid-segment wall this
+        # exists to remove).
+        assert quiesce_mod._QUIESCE_DRAIN_BOUND_S >= 600.0
+        # Upper: dispatch stays stopped behind a wedged review for
+        # the whole bound (workers idle, spend paused) — the cap
+        # keeps a wedge's cost to one review-length pause.
+        assert quiesce_mod._QUIESCE_DRAIN_BOUND_S <= 1800.0
+        # Consumers read the class attribute; it mirrors the module
+        # constant.
+        assert (JournalCheckpointQuiescer.drain_bound_s
+                == quiesce_mod._QUIESCE_DRAIN_BOUND_S)
+
+    def test_retry_cooldown_bounds(self) -> None:
+        # Lower: a cooldown under the evaluation cadence re-runs the
+        # drain dance straight into the same slow review (stop-start
+        # dispatch thrash).
+        assert (quiesce_mod._QUIESCE_RETRY_COOLDOWN_S
+                >= quiesce_mod._QUIESCE_EVAL_INTERVAL_S)
+        # Upper: past the drain bound the journal keeps growing past
+        # an already-fired trigger with the roll threshold
+        # approaching.
+        assert (quiesce_mod._QUIESCE_RETRY_COOLDOWN_S
+                <= quiesce_mod._QUIESCE_DRAIN_BOUND_S)
+
+    def test_advisory_repeat_bounds(self) -> None:
+        # Lower: at or near the evaluation cadence a standing
+        # hysteresis state turns into a log flood — the spacing must
+        # cover many evaluations per advisory line.
+        assert (quiesce_mod._ADVISORY_REPEAT_S
+                >= 10 * quiesce_mod._QUIESCE_EVAL_INTERVAL_S)
+        # Upper: past an hour a live tail loses sight of a journal
+        # pinned over threshold.
+        assert quiesce_mod._ADVISORY_REPEAT_S <= 3600.0
+
+
 class _FakeStudyQueue:
     """Records the park-protocol calls the quiescer makes."""
 

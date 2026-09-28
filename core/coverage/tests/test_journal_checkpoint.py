@@ -169,6 +169,23 @@ class TestTrigger:
         assert trigger_bytes() == 650
         assert rearm_bytes() == 100
 
+    def test_exact_threshold_boundary_two_directions(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        # The trigger is strictly-over: a largest shard at EXACTLY
+        # the threshold must NOT fire (`size <= threshold` is the
+        # no-fire arm — the trigger's headroom margin is measured
+        # from strictly past it), one byte over must. The evaluation
+        # is stat-only, so raw bytes pin the boundary exactly.
+        monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_BYTES", 1000)
+        path = _journal_path(tmp_path)
+        path.write_bytes(b"x" * trigger_bytes())
+        d = evaluate_trigger(tmp_path)
+        assert not d.fire and not d.advisory
+        assert "under threshold" in d.reason
+        path.write_bytes(b"x" * (trigger_bytes() + 1))
+        assert evaluate_trigger(tmp_path).fire
+
 
 class TestConstants:
     """Two-direction regression tests: each bound names the failure
@@ -457,6 +474,46 @@ class TestHysteresis:
         assert not list(tmp_path.glob(JOURNAL_FILENAME + ".pre-*"))
         assert not (tmp_path / CHECKPOINT_STATE_FILENAME).exists()
         assert evaluate_trigger(tmp_path).fire
+
+    def test_effectiveness_floor_exact_equality_is_effective(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        # The floor is INCLUSIVE (`freed_fraction >=` the constant):
+        # a checkpoint freeing exactly the floor fraction counts as
+        # effective — the state record must not arm the advisory.
+        # (The exclusive direction — strictly under the floor goes
+        # advisory — is pinned by
+        # test_ineffective_checkpoint_goes_advisory.)
+        # Fraction() gives before/freed integers whose float ratio
+        # reproduces the floor's double bit-exactly, whatever its
+        # value.
+        from fractions import Fraction
+
+        from core.coverage.journal_compact import CompactStats
+
+        _incompressible_run(tmp_path, n=8)
+        _arm_trigger(tmp_path, monkeypatch)
+        floor = Fraction(jc._CHECKPOINT_MIN_FREED_FRACTION)
+        before, freed = floor.denominator, floor.numerator
+        assert freed / before == jc._CHECKPOINT_MIN_FREED_FRACTION
+
+        def _exact_floor_compact(out_dir, **kwargs):
+            return CompactStats(
+                journal_path=str(_journal_path(tmp_path)),
+                backup_path=str(
+                    tmp_path / (JOURNAL_FILENAME + ".pre-supersede")),
+                rows_before=10, rows_after=9,
+                bytes_before=before, bytes_after=before - freed,
+            )
+
+        monkeypatch.setattr(jc, "compact_journal", _exact_floor_compact)
+        outcome = checkpoint_journal(tmp_path, boundary="test")
+        assert outcome.fired
+        assert (outcome.freed_fraction
+                == jc._CHECKPOINT_MIN_FREED_FRACTION)
+        state = json.loads(
+            (tmp_path / CHECKPOINT_STATE_FILENAME).read_text())
+        assert state["effective"] is True
 
 
 class TestGuard:
