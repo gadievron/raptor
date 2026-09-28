@@ -10,6 +10,7 @@ prefixes (the coverage gap that let unlisted prefixes leak forever).
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 
@@ -66,8 +67,14 @@ class TestBasicLifecycle:
             sub.mkdir()
             (sub / "f").write_text("x")
             os.chmod(sub, 0o000)
-        os.chmod(sub, 0o755)  # allow the fixture's own teardown
-        assert p.exists() or not p.exists()  # no exception is the assertion
+        # Reaching here IS the assertion: cleanup swallowed whatever the
+        # unreadable subdir did to it. What that was is venue-dependent:
+        # an unprivileged run cannot descend into the 000 dir, so the
+        # survivor needs its mode back for the fixture's own teardown,
+        # while a user-namespace root (CAP_DAC_OVERRIDE over its own
+        # files) removes it outright and leaves nothing to restore.
+        with contextlib.suppress(FileNotFoundError):
+            os.chmod(sub, 0o755)
 
     def test_keep_transfers_ownership(self, tmp_root):
         with scratch_dir("raptor-scratch-test-", keep=True) as p:
