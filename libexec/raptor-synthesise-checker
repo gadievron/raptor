@@ -157,13 +157,15 @@ def main() -> int:
     # route every LLM call fails, and llm_callable's broad except
     # would silently turn that transport misconfiguration into "no
     # rule passed positive control". No-op when a route exists or
-    # none is needed.
+    # none is needed. run_dir places the dispatcher's L5 audit JSONL
+    # in this run's output directory instead of the in-memory default.
     try:
         from core.llm.dispatcher.lifecycle import ensure_route_for_client
     except ImportError:  # no dispatcher machinery, no route to serve
         pass
     else:
-        ensure_route_for_client(client, "raptor-synthesise-checker")
+        ensure_route_for_client(
+            client, "raptor-synthesise-checker", run_dir=out_dir)
 
     def llm_callable(prompt, schema, system_prompt):
         try:

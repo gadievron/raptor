@@ -2253,11 +2253,13 @@ def _llm_seed_concepts_from_names(
     semantic_concepts: list[str],
     all_names: list[str],
     model: str | None = None,
+    run_dir: Path | None = None,
 ) -> list[str]:
     """Ask LLM to map semantic concepts to concrete identifiers.
 
     Takes an in-memory name list and returns identifier strings that the
-    LLM considers relevant to the given concepts.
+    LLM considers relevant to the given concepts. ``run_dir`` rides
+    through to the dispatcher gate (L5 audit-log placement).
     """
     if not all_names:
         return []
@@ -2290,7 +2292,8 @@ def _llm_seed_concepts_from_names(
             from core.llm.dispatcher.lifecycle import (
                 ensure_route_for_client,
             )
-            ensure_route_for_client(client, "raptor-study-prep")
+            ensure_route_for_client(client, "raptor-study-prep",
+                                    run_dir=run_dir)
     except Exception:  # noqa: BLE001 - seeding is best-effort
         print("study-prep: WARNING: no LLM available for concept seeding",
               file=sys.stderr)
@@ -2333,6 +2336,7 @@ def _llm_seed_concepts(
     semantic_concepts: list[str],
     study_list_path: Path,
     model: str | None = None,
+    run_dir: Path | None = None,
 ) -> list[str]:
     """Wrapper: reads names from study-list.json, then delegates to _from_names."""
     if not study_list_path.is_file():
@@ -2341,7 +2345,8 @@ def _llm_seed_concepts(
     if not isinstance(data, dict):
         return []
     all_names = sorted({item["name"] for item in data.get("items", [])})
-    return _llm_seed_concepts_from_names(semantic_concepts, all_names, model=model)
+    return _llm_seed_concepts_from_names(semantic_concepts, all_names,
+                                         model=model, run_dir=run_dir)
 
 
 def _discover_docs(
@@ -3213,7 +3218,9 @@ def main() -> None:
             print("study-prep: no prior study-list.json — will seed concepts "
                   "from in-memory items after extraction", file=sys.stderr)
         else:
-            seeded = _llm_seed_concepts(semantic_concepts, study_list_path, model=parsed.model)
+            seeded = _llm_seed_concepts(semantic_concepts, study_list_path,
+                                        model=parsed.model,
+                                        run_dir=output_dir)
             if seeded:
                 identifiers.extend(seeded)
                 _deferred_concepts = []
@@ -3389,7 +3396,8 @@ def main() -> None:
     if _deferred_concepts and items:
         all_item_names = sorted({it.name for it in items})
         seeded = _llm_seed_concepts_from_names(
-            _deferred_concepts, all_item_names, model=parsed.model)
+            _deferred_concepts, all_item_names, model=parsed.model,
+            run_dir=output_dir)
         if seeded:
             identifiers.extend(seeded)
             print(f"study-prep: deferred concept seeding: {len(seeded)} identifiers "
@@ -3689,7 +3697,8 @@ def main() -> None:
     if bridge_concepts and items and not identifiers:
         all_item_names = sorted({it.name for it in items})
         seeded = _llm_seed_concepts_from_names(
-            bridge_concepts, all_item_names, model=parsed.model)
+            bridge_concepts, all_item_names, model=parsed.model,
+            run_dir=output_dir)
         if seeded:
             for name in seeded:
                 if name not in bridge_names:

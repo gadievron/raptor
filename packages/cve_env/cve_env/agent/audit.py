@@ -189,6 +189,25 @@ class AuditWriter:
         """Directory for this run's traces (``root/run_id/``)."""
         return self._root / self._run_id
 
+    def ensure_run_root(self) -> Path:
+        """Create (and mode-restrict) the run directory, returning it.
+
+        ``write()`` calls this lazily before every append; callers that
+        need the directory to exist EARLIER than the first entry (the
+        dispatcher gate only places its L5 audit log in a run directory
+        that already exists) call it directly.
+
+        Security: the run dir is restricted to the owner (0700) — it
+        holds the full agentic transcript. The chmod is best-effort: it
+        can fail on exotic filesystems and must not abort the run (the
+        fail-loud contract is about writing the trace, not its mode).
+        """
+        root = self.run_root
+        root.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.chmod(root, 0o700)
+        return root
+
     def write(self, *, cve_id: str, entry: AuditEntry) -> Path:
         r"""Append one :class:`AuditEntry` to the CVE's trace.
 
@@ -201,13 +220,7 @@ class AuditWriter:
         concurrent reader without waiting on Python's I/O buffer.
         """
         path = self._path_for(cve_id=cve_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Security: restrict the run dir to the owner (0700) — it holds the full
-        # agentic transcript. Best-effort: chmod can fail on exotic filesystems
-        # and must not abort the run (the fail-loud contract is about writing the
-        # trace, not its mode).
-        with contextlib.suppress(OSError):
-            os.chmod(path.parent, 0o700)
+        self.ensure_run_root()
         payload: dict[str, object] = {
             "run_id": self._run_id,
             "cve_id": cve_id,

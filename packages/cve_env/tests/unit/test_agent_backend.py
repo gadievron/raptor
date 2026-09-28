@@ -245,7 +245,7 @@ def test_resolve_provider_self_serves_dispatcher_for_bedrock(
     monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
     monkeypatch.setattr(
         "core.llm.dispatcher.lifecycle.ensure_route_for_model_configs",
-        lambda mcs, *, label: ensured.append(
+        lambda mcs, *, label, run_dir=None: ensured.append(
             f"{mcs[0].provider}:{mcs[0].model_name}:{label}"),
     )
     with patch("cve_env.agent.core_loop.create_provider",

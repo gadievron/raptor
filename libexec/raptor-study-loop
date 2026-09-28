@@ -359,10 +359,13 @@ _OVERVIEW_HEADER_EXTENSIONS = frozenset((".h", ".hpp", ".hxx"))
 def _overview_from_directory(
     target: Path,
     model: str | None = None,
+    run_dir: Path | None = None,
 ) -> tuple[list[str], list[str], str, str]:
     """Cheap inventory: file names + header types + one LLM call.
 
     Returns (identifiers, concepts, summary, subject_title).
+    ``run_dir`` rides through to the dispatcher gate (L5 audit-log
+    placement).
     """
     # The target may be a single file (per the CLI help) — rglob on a
     # non-directory yields nothing, so handle it explicitly.
@@ -449,7 +452,8 @@ def _overview_from_directory(
             client = LLMClient(pinned_model=model)
         else:
             client = get_client()
-        _ensure_llm_dispatcher(client, "raptor-study-loop")
+        _ensure_llm_dispatcher(client, "raptor-study-loop",
+                               run_dir=run_dir)
     except Exception:  # noqa: BLE001 - overview is best-effort
         print("study-loop: WARNING: no LLM available for overview",
               file=sys.stderr)
@@ -584,11 +588,13 @@ _SYNTHESIS_SCHEMA = {
 def _synthesise_overview(
     dm_data: dict,
     model: str | None,
+    run_dir: Path | None = None,
 ) -> tuple[str, str, str, dict | None]:
     """Generate subject_title + overview + trust_summary + architecture.
 
     Returns (subject_title, overview_summary, trust_summary, architecture).
-    Falls back to ("", "", "", None) on any failure.
+    Falls back to ("", "", "", None) on any failure. ``run_dir`` rides
+    through to the dispatcher gate (L5 audit-log placement).
     """
     concepts = dm_data.get("concepts", [])
     invariants = dm_data.get("invariants", [])
@@ -640,7 +646,8 @@ def _synthesise_overview(
             client = LLMClient(pinned_model=model)
         else:
             client = get_client()
-        _ensure_llm_dispatcher(client, "raptor-study-loop")
+        _ensure_llm_dispatcher(client, "raptor-study-loop",
+                               run_dir=run_dir)
     except Exception:  # noqa: BLE001 - synthesis is best-effort
         return "", "", "", None
     if client is None:
@@ -1140,19 +1147,22 @@ def _render_seed_table(output_dir: Path) -> list[str]:
 
 
 
-def _ensure_llm_dispatcher(client, label: str) -> None:
+def _ensure_llm_dispatcher(client, label: str,
+                           run_dir: Path | None = None) -> None:
     """Self-serve the in-process LLM dispatcher for Bedrock-routed
     models — delegates to the shared gate
     (core.llm.dispatcher.lifecycle.ensure_route_for_client, which
     never raises). Kept as a local name: it is this script's test
     seam, and the lazy import keeps dispatcher machinery off the
-    no-LLM startup path.
+    no-LLM startup path. ``run_dir`` places the dispatcher's L5 audit
+    JSONL in the run's output directory instead of the in-memory
+    default.
     """
     try:
         from core.llm.dispatcher.lifecycle import ensure_route_for_client
     except ImportError:  # no dispatcher machinery, no route to serve
         return
-    ensure_route_for_client(client, label)
+    ensure_route_for_client(client, label, run_dir=run_dir)
 
 
 def main() -> int:
@@ -1252,7 +1262,8 @@ def main() -> int:
         print("study-loop: no identifier/concept given — running overview",
               file=sys.stderr)
         overview_idents, overview_concepts, overview_summary, overview_title = (
-            _overview_from_directory(target, model=parsed.model)
+            _overview_from_directory(target, model=parsed.model,
+                                     run_dir=output_dir)
         )
         if not overview_idents and not overview_concepts:
             print(
@@ -1476,7 +1487,8 @@ def main() -> int:
             )
             if needs_synthesis:
                 syn_title, syn_overview, syn_trust, syn_arch = (
-                    _synthesise_overview(dm_data, parsed.model)
+                    _synthesise_overview(dm_data, parsed.model,
+                                         run_dir=output_dir)
                 )
                 if syn_title:
                     dm_data["subject_title"] = syn_title

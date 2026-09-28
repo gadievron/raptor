@@ -269,3 +269,19 @@ def test_audit_files_are_owner_only(tmp_path: Path) -> None:
     jsonl = run_dir / "CVE-SEC-3.jsonl"
     assert stat.S_IMODE(run_dir.stat().st_mode) == 0o700, "run dir must be 0700"
     assert stat.S_IMODE(jsonl.stat().st_mode) == 0o600, "audit file must be 0600"
+
+
+def test_ensure_run_root_creates_owner_only_dir(tmp_path: Path) -> None:
+    """Callers that need the run dir BEFORE the first entry (dispatcher
+    L5 audit-log placement) get the same directory + mode contract
+    ``write()`` applies lazily."""
+    writer = AuditWriter(run_id="run-1", root=tmp_path / "agentic")
+    root = writer.ensure_run_root()
+    assert root == tmp_path / "agentic" / "run-1"
+    assert root.is_dir()
+    assert (root.stat().st_mode & 0o777) == 0o700
+    # Idempotent, and write() still lands entries in the same dir.
+    assert writer.ensure_run_root() == root
+    path = writer.write(cve_id="CVE-2020-0001",
+                        entry=AuditEntry(turn=1, status="llm_turn"))
+    assert path.parent == root

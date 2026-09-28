@@ -71,19 +71,22 @@ def _write_spend_record(client: Any, output_dir: Path) -> None:
 
 
 
-def _ensure_llm_dispatcher(client, label: str) -> None:
+def _ensure_llm_dispatcher(client, label: str,
+                           run_dir: Path | None = None) -> None:
     """Self-serve the in-process LLM dispatcher for Bedrock-routed
     models — delegates to the shared gate
     (core.llm.dispatcher.lifecycle.ensure_route_for_client, which
     never raises). Kept as a local name: it is this script's test
     seam, and the lazy import keeps dispatcher machinery off the
-    no-LLM startup path.
+    no-LLM startup path. ``run_dir`` places the dispatcher's L5 audit
+    JSONL in the run's output directory instead of the in-memory
+    default.
     """
     try:
         from core.llm.dispatcher.lifecycle import ensure_route_for_client
     except ImportError:  # no dispatcher machinery, no route to serve
         return
-    ensure_route_for_client(client, label)
+    ensure_route_for_client(client, label, run_dir=run_dir)
 
 
 def main() -> int:
@@ -173,7 +176,7 @@ def main() -> int:
     # Both client paths need the route bootstrap: the default config
     # can resolve to a dispatcher-only (Bedrock-routed) primary model
     # just as easily as an explicit --model pin.
-    _ensure_llm_dispatcher(client, "raptor-study-run")
+    _ensure_llm_dispatcher(client, "raptor-study-run", run_dir=output_dir)
 
     if parsed.max_cost is not None:
         # The client enforces config.max_cost_per_scan live on every

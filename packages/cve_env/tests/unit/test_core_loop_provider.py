@@ -42,3 +42,35 @@ def test_no_first_party_auth_falls_back_to_claudecode(
 ) -> None:
     core_loop._resolve_provider("claude-sonnet-4-6")
     assert _capture_provider["mc"].provider == "claudecode"
+
+
+def test_run_dir_threads_to_the_dispatcher_gate(
+    _capture_provider, monkeypatch, tmp_path
+) -> None:
+    """``run_dir`` rides through to the shared gate so the dispatcher's
+    L5 audit JSONL lands beside the run's own traces."""
+    import core.llm.dispatcher.lifecycle as lifecycle
+
+    calls: list = []
+    monkeypatch.setattr(
+        lifecycle,
+        "ensure_route_for_model_configs",
+        lambda configs, **kw: calls.append(kw),
+    )
+    core_loop._resolve_provider("claude-sonnet-4-6", run_dir=tmp_path)
+    assert calls and calls[0]["run_dir"] == tmp_path
+
+
+def test_no_run_dir_keeps_in_memory_fallback(
+    _capture_provider, monkeypatch
+) -> None:
+    import core.llm.dispatcher.lifecycle as lifecycle
+
+    calls: list = []
+    monkeypatch.setattr(
+        lifecycle,
+        "ensure_route_for_model_configs",
+        lambda configs, **kw: calls.append(kw),
+    )
+    core_loop._resolve_provider("claude-sonnet-4-6")
+    assert calls and calls[0]["run_dir"] is None

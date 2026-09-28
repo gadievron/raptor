@@ -44,7 +44,7 @@ class TestStudyRunMaxCost:
             sys.modules, "packages.llm_analysis",
             _fake_llm_module(client))
         monkeypatch.setattr(mod, "_ensure_llm_dispatcher",
-                            lambda c, label: None)
+                            lambda c, label, run_dir=None: None)
         monkeypatch.setattr(
             mod, "run_study",
             lambda *a, **k: SimpleNamespace(
@@ -121,7 +121,7 @@ class TestStudyRunMaxCost:
             sys.modules, "packages.llm_analysis",
             _fake_llm_module(client))
         monkeypatch.setattr(mod, "_ensure_llm_dispatcher",
-                            lambda c, label: None)
+                            lambda c, label, run_dir=None: None)
 
         def _boom(*a, **k):
             msg = "all batches failed"
