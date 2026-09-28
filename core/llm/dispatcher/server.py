@@ -634,9 +634,11 @@ _STALE_REUSE_ERRORS = (httpx.RemoteProtocolError, httpx.ReadError)
 # errors: double-billing / failover-delay), this one decides what
 # counts as evidence the shard's client needs a drain-shaped rebuild.
 # Counting is further gated at the relay: watcher-induced aborts
-# (the dispatcher shut the upstream socket itself) and failures on
-# the stale-retry's one-shot client are evidence about something
-# other than the shard, so they stay neutral. Worker-side failures
+# (the dispatcher shut the upstream socket itself) are evidence
+# about the worker, not the shard, so they stay neutral, and a
+# relay that took the transparent stale retry strikes exactly once
+# — at the retry (the stale death was the shard's), never again for
+# the one-shot client's own outcome. Worker-side failures
 # (WorkerDisconnected, RelayLimitExceeded, wfile OSErrors) are plain
 # OSError shapes and never match this tuple.
 _SHARD_HEALTH_ERRORS: tuple[type[Exception], ...] = (
@@ -3022,17 +3024,27 @@ def _make_request_handler(
             # from a genuine mid-response loss — flat rows made those
             # indistinguishable.
             upstream_sent_at = time.monotonic()
-            # Shard-health provenance: after a stale-reuse retry the
-            # response rides the retry's one-shot client, so neither
-            # a subsequent success nor a subsequent failure says
-            # anything about the SHARD's connections — the shard's
-            # consecutive-failure counter only moves on evidence
-            # about its own client (see _SHARD_HEALTH_ERRORS).
+            # Shard-health provenance: the stale-reuse death that
+            # triggers the transparent retry happened on the SHARD's
+            # own client, so it is one strike toward the drain
+            # threshold even when the retry recovers — a shard whose
+            # idle pool keeps getting condemned within the retry
+            # ceiling pays a one-shot fresh connection per relay and
+            # needs the drain repair, not masking. From the retry on,
+            # the response rides the one-shot client, so the retry's
+            # OUTCOME stays neutral both ways: a success must not
+            # reset the counter (falsely acquitting the shard whose
+            # own open just failed) and a failure must not strike a
+            # second time for one relay (see _SHARD_HEALTH_ERRORS).
             _stale_retried = False
 
             def _note_stale_retry(exc: Exception) -> None:
                 nonlocal _stale_retried
                 _stale_retried = True
+                # The strike for the shard's own stale death. The
+                # _stale_retried gates below keep the one-shot's
+                # outcome from adding or erasing evidence on top.
+                shards.report_failure(shard_index)
                 # Written before the retry's outcome is known —
                 # status "attempt", never "ok" (the next dispatch/
                 # error row carries the outcome). The row keeps the
@@ -3288,8 +3300,9 @@ def _make_request_handler(
                     # Clean drain on the shard's own client: reset
                     # its consecutive-failure counter. Skipped after
                     # a stale-reuse retry — that success rode the
-                    # one-shot client and would falsely acquit a
-                    # shard whose own open just failed.
+                    # one-shot client and would erase the strike the
+                    # retry just recorded, falsely acquitting a
+                    # shard whose own open failed.
                     shards.report_success(shard_index)
                 dispatcher._audit(AuditEvent(
                     ts=time.time(), event="request.dispatch",
@@ -3313,9 +3326,11 @@ def _make_request_handler(
                     and isinstance(exc, _SHARD_HEALTH_ERRORS)
                 ):
                     # Transport death on the shard's own client (not
-                    # the retry one-shot, not the watcher shutting
-                    # the socket down itself): one strike toward the
-                    # drain-and-rebuild threshold.
+                    # the watcher shutting the socket down itself):
+                    # one strike toward the drain-and-rebuild
+                    # threshold. A stale-retried relay already struck
+                    # at the retry, so its one-shot's failure adds
+                    # nothing here.
                     shards.report_failure(shard_index)
                 if scanner is not None and not _usage_booked:
                     # Aborted mid-stream — book what the upstream

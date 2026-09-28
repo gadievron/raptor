@@ -15,6 +15,7 @@ Hermetic — captive loopback upstream, no LLM, no network.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -254,5 +255,190 @@ class TestUpstreamStaleRetry:
             # Processed exactly once — no transparent re-send.
             assert upstream.counters()["requests_processed"] == 1
         finally:
+            upstream.shutdown()
+            d.shutdown()
+
+
+class TestStaleRetryShardEvidence:
+    """A stale-reuse death that triggers the transparent retry is
+    evidence about the SHARD's own connections: one strike toward the
+    drain threshold, even when the retry recovers. Pre-change a shard
+    whose idle pool kept getting condemned within the retry ceiling
+    never drained — every relay on it silently paid a one-shot fresh
+    connection while the failure counter stayed at zero. The retry's
+    OUTCOME stays neutral both ways: a recovered relay must not reset
+    the counter, and a failed one-shot must not strike twice."""
+
+    @pytest.fixture(autouse=True)
+    def _single_shard_env(self, monkeypatch):
+        # HTTP/2 off + no shard override -> one shard, so the shard
+        # under test is the only one relays can ride (hermetic
+        # against ambient tuning).
+        monkeypatch.delenv("RAPTOR_HTTP2", raising=False)
+        monkeypatch.delenv("RAPTOR_HTTP2_SHARDS", raising=False)
+        monkeypatch.delenv("RAPTOR_HTTP2_SHARD_MAX_AGE_S", raising=False)
+
+    @staticmethod
+    def _sole_shard_client(d: LLMDispatcher) -> httpx.Client:
+        clients = d._upstream_client_shards().clients
+        assert len(clients) == 1
+        return clients[0]
+
+    @staticmethod
+    def _condemn_while(monkeypatch, client: httpx.Client, state: dict) -> None:
+        """While ``state['fail']`` holds, the shard client's stream
+        open dies the stale-reuse death (a read-class error raised
+        immediately, well inside the retry ceiling); otherwise the
+        real stream serves. The retry's one-shot client is built
+        fresh and reaches the captive upstream unharmed."""
+        real_stream = httpx.Client.stream.__get__(client)
+
+        @contextlib.contextmanager
+        def stale_or_real(method, url, **kwargs):
+            if state["fail"]:
+                raise httpx.ReadError("stale reuse")
+            with real_stream(method, url, **kwargs) as up:
+                yield up
+
+        monkeypatch.setattr(client, "stream", stale_or_real)
+
+    def _wait_rebuilt(self, d: LLMDispatcher, old: httpx.Client) -> None:
+        """The drained shard is retired at release, which can lag the
+        worker-visible response by a beat."""
+        deadline = time.monotonic() + 5.0
+        while (
+            self._sole_shard_client(d) is old
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.05)
+
+    def test_recovered_stale_death_still_strikes(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        """Retry success must not mask the strike: at threshold 1 a
+        single stale-retried death drains and rebuilds the shard even
+        though the worker saw a clean 200."""
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "1")
+        upstream = MockUpstream("keepalive")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token = _worker_token(d)
+            pooled = self._sole_shard_client(d)
+            self._condemn_while(monkeypatch, pooled, {"fail": True})
+            assert _post(d, token).status_code == 200
+            assert _wait_audit(d, "request.retry")
+            assert not _audit_events(d, "request.error")
+            self._wait_rebuilt(d, pooled)
+            rebuilt = self._sole_shard_client(d)
+            assert rebuilt is not pooled
+            assert pooled.is_closed
+            assert not rebuilt.is_closed
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_consecutive_stale_deaths_drain_at_threshold(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        """Strikes accumulate across relays: below the threshold the
+        shard stays in rotation, at it the shard drains — the shape
+        whose idle pool keeps getting condemned finally gets the
+        drain repair instead of paying a one-shot per relay."""
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "2")
+        upstream = MockUpstream("keepalive")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token = _worker_token(d)
+            pooled = self._sole_shard_client(d)
+            self._condemn_while(monkeypatch, pooled, {"fail": True})
+
+            assert _post(d, token).status_code == 200  # strike one
+            assert self._sole_shard_client(d) is pooled
+            assert not pooled.is_closed
+
+            assert _post(d, token).status_code == 200  # strike two
+            self._wait_rebuilt(d, pooled)
+            assert self._sole_shard_client(d) is not pooled
+            assert pooled.is_closed
+            assert len(_audit_events(d, "request.retry")) == 2
+            assert not _audit_events(d, "request.error")
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_clean_completion_still_resets_after_stale_strike(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        """Reset-on-clean is untouched: a clean completion on the
+        shard's OWN client between two stale-retried deaths keeps the
+        count below a threshold of 2, so the shard survives where the
+        consecutive test above drains."""
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "2")
+        upstream = MockUpstream("keepalive")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token = _worker_token(d)
+            pooled = self._sole_shard_client(d)
+            state = {"fail": True}
+            self._condemn_while(monkeypatch, pooled, state)
+
+            assert _post(d, token).status_code == 200  # strike one
+            state["fail"] = False
+            assert _post(d, token).status_code == 200  # clean: reset
+            state["fail"] = True
+            assert _post(d, token).status_code == 200  # strike one again
+
+            # A lagging release is the only async step; give it a
+            # beat, then pin that no drain happened.
+            time.sleep(0.5)
+            assert self._sole_shard_client(d) is pooled
+            assert not pooled.is_closed
+            assert len(_audit_events(d, "request.retry")) == 2
+            assert not _audit_events(d, "request.error")
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_oneshot_failure_never_strikes_twice(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        """One relay strikes at most once: a stale-retried relay
+        whose one-shot fresh client ALSO fails already struck at the
+        retry, so the one-shot's own transport death (the
+        _stale_retried gate on the exception path) must add nothing.
+        At threshold 2 a double strike from that single relay would
+        drain the shard."""
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "2")
+        upstream = MockUpstream("keepalive")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        oneshot = httpx.Client()
+        try:
+            token = _worker_token(d)
+            pooled = self._sole_shard_client(d)
+            self._condemn_while(monkeypatch, pooled, {"fail": True})
+
+            @contextlib.contextmanager
+            def dead_stream(method, url, **kwargs):
+                raise httpx.ReadError("one-shot dead too")
+                yield  # pragma: no cover
+
+            def dead_oneshot() -> httpx.Client:
+                return oneshot
+
+            monkeypatch.setattr(oneshot, "stream", dead_stream)
+            monkeypatch.setattr(d, "_fresh_upstream_client", dead_oneshot)
+
+            assert _post(d, token).status_code == 502
+            assert _wait_audit(d, "request.retry")
+            # A lagging release is the only async step; give it a
+            # beat, then pin: exactly one strike from this relay, so
+            # no drain at threshold 2.
+            time.sleep(0.5)
+            assert self._sole_shard_client(d) is pooled, (
+                "double strike: one relay drained the shard at threshold 2"
+            )
+            assert not pooled.is_closed
+        finally:
+            oneshot.close()
             upstream.shutdown()
             d.shutdown()

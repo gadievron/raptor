@@ -633,3 +633,45 @@ class TestAcquireFailureRetiresWatcher:
         finally:
             upstream.shutdown()
             d.shutdown()
+
+
+class TestWatcherAbortIsNotShardEvidence:
+    """A watcher-induced abort — the dispatcher shut the upstream
+    socket down itself because the WORKER left — is evidence about
+    the worker, not the shard, even though it surfaces in the relay
+    as a shard-health error class. At threshold 1 a single strike
+    would drain and rebuild the shard, so the shard surviving pins
+    the neutrality gate."""
+
+    def test_watcher_cancel_does_not_drain_the_shard(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setenv("RAPTOR_LLM_DISPATCHER_ORPHAN_POLL_S", "1")
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "1")
+        # One shard, so the relay under test provably rode the client
+        # being asserted on.
+        monkeypatch.delenv("RAPTOR_HTTP2", raising=False)
+        monkeypatch.delenv("RAPTOR_HTTP2_SHARDS", raising=False)
+        upstream = _CaptiveUpstream("sse_stall", stall_s=20.0)
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token = _worker_token(d)
+            shards = d._upstream_client_shards()
+            assert len(shards.clients) == 1
+            pooled = shards.clients[0]
+
+            s = _raw_worker_request(d, token)
+            assert _SSE_CHUNK_ONE in _recv_until(s, _SSE_CHUNK_ONE)
+            s.close()  # abandonment → the watcher shuts the upstream
+
+            errors = _wait_audit(d, "request.error", timeout=6.0)
+            assert errors
+            assert errors[0]["worker_disconnected"] is True
+            # Give the relay's release its beat, then pin: no drain,
+            # the shard client is still the one in rotation.
+            time.sleep(0.5)
+            assert shards.clients[0] is pooled
+            assert not pooled.is_closed
+        finally:
+            upstream.shutdown()
+            d.shutdown()
