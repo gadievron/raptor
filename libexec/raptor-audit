@@ -13,7 +13,8 @@ Subcommands:
     rules    — manage synthesized checker rules (Mode 2: save/list/run)
     report   — generate final summary
     feedback — import /validate results into the review journal
-    backlog  — witness-backlog consumer (list / drain / reimport dark rows)
+    backlog  — witness-backlog consumer (list / drain / reimport /
+               regrade dark rows)
     stale    — list annotations with stale source hashes
     ast      — extract function AST subtree and call targets
     critique — identify gaps in tool coverage
@@ -2907,21 +2908,25 @@ def cmd_backlog(args: argparse.Namespace) -> int:
     rule receipt + journal row) moves a row — the drain never mints
     verdicts. ``backlog reimport`` additively re-lists dark rows from
     a graded findings export (mechanical, no LLM spend) — the recovery
-    path for a listing the producer truncated on disk. Non-interactive
-    by design.
+    path for a listing the producer truncated on disk. ``backlog
+    regrade`` moves listed unclassified rows into concrete-CWE
+    clusters named by a grading overlay (mechanical, no LLM spend) —
+    site dicts and the drained ledger stay untouched; the destination
+    cluster class carries the whole effect. Non-interactive by design.
     """
     from core.audit.backlog_drain import (
         DEFAULT_MAX_DISPATCH,
         BacklogError,
         drain,
         rank,
+        regrade,
         reimport,
     )
 
     sub = getattr(args, "backlog_command", None)
-    if sub not in ("list", "drain", "reimport"):
-        print("error: usage: raptor-audit backlog {list|drain|reimport} "
-              "...", file=sys.stderr)
+    if sub not in ("list", "drain", "reimport", "regrade"):
+        print("error: usage: raptor-audit backlog "
+              "{list|drain|reimport|regrade} ...", file=sys.stderr)
         return 1
 
     run_dir = Path(args.out)
@@ -2947,6 +2952,44 @@ def cmd_backlog(args: argparse.Namespace) -> int:
               f"clusters: {rep.clusters_before} -> {rep.clusters_after}")
         if not rep.changed:
             print("  artifact unchanged (no new identities)")
+        return 0
+
+    if sub == "regrade":
+        try:
+            rep = regrade(run_dir, Path(args.overlay))
+        except BacklogError as exc:
+            print(f"error: {sanitise_for_terminal(str(exc), max_len=500)}",
+                  file=sys.stderr)
+            return 1
+        print(f"backlog regrade: {rep.overlay_rows} overlay row(s) in "
+              f"{sanitise_for_terminal(str(args.overlay), max_len=300)}")
+        print(f"  moved: {rep.moved}   unmatched: {rep.unmatched}   "
+              f"no-cwe: {rep.no_cwe}   "
+              f"malformed-cwe: {rep.malformed_cwe}   "
+              f"unusable: {rep.skipped_unusable}")
+        print(f"  listed: {rep.listed_before} -> {rep.listed_after} "
+              f"(a move never changes the listing)   "
+              f"clusters: {rep.clusters_before} -> {rep.clusters_after}")
+        for record in rep.rows:
+            # Row fields come from an agent-writable overlay — escape
+            # every value before it reaches the terminal.
+            bits = []
+            if "file" in record:
+                site = f"{record.get('file')}:{record.get('function')}" \
+                       f":{record.get('line')}"
+                bits.append(sanitise_for_terminal(site, max_len=200))
+            cwe = record.get("cwe")
+            if cwe:
+                bits.append(sanitise_for_terminal(str(cwe), max_len=40))
+            bits.append(str(record.get("disposition")))
+            reason = record.get("reason")
+            if reason:
+                bits.append(sanitise_for_terminal(str(reason), max_len=160))
+            print("  " + "  ".join(bits))
+        if rep.rows_truncated:
+            print("  … per-row listing truncated (counts above are exact)")
+        if not rep.changed:
+            print("  artifact unchanged (no listed unclassified match)")
         return 0
 
     study = Path(args.study_answers) if args.study_answers else None
@@ -4965,6 +5008,21 @@ def main() -> int:
     p_br.add_argument("--graded", required=True,
                       help="findings-graded.json (or equivalent graded "
                            "export) carrying the run's dark rows")
+    p_bg = backlog_sub.add_parser(
+        "regrade",
+        help="Move listed unclassified dark rows into concrete-CWE "
+             "clusters named by a grading overlay (mechanical, no LLM "
+             "spend) — site dicts and the drained ledger stay "
+             "untouched",
+    )
+    p_bg.add_argument("--out", required=True,
+                      help="Run directory containing witness-backlog.json")
+    p_bg.add_argument("--overlay", required=True,
+                      help="JSON grading overlay: rows of {id, file, "
+                           "function, line, title, cwe_id, "
+                           "justification} as a bare list or under a "
+                           "top-level \"rows\" key; rows without a "
+                           "well-formed cwe_id are counted and skipped")
 
     p_coverage = sub.add_parser(
         "coverage",

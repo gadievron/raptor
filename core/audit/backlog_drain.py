@@ -106,6 +106,12 @@ MAX_STUDY_BYTES = 8 * 1024 * 1024
 #: (matches the audit report's own graded-file read budget).
 MAX_GRADED_BYTES = 64 * 1024 * 1024
 
+#: Byte budget for a grading overlay handed to ``regrade``. An overlay
+#: row is one verdict per backlog site, so a legitimate overlay is
+#: strictly smaller than the backlog it grades — the backlog's own
+#: budget is a generous ceiling; anything larger is a planted file.
+MAX_OVERLAY_BYTES = MAX_BACKLOG_BYTES
+
 #: Flood discipline: a site that failed this many synthesis attempts
 #: across drains stays parked until an operator clears its counter —
 #: re-spending on the same refusing hypothesis every drain is how a
@@ -1130,6 +1136,262 @@ def reimport(run_dir: Path, graded_path: Path) -> ReimportReport:
     return report
 
 
+@dataclass
+class RegradeReport:
+    """Aggregate result of one ``regrade`` pass."""
+
+    overlay_rows: int = 0
+    no_cwe: int = 0
+    malformed_cwe: int = 0
+    skipped_unusable: int = 0
+    unmatched: int = 0
+    moved: int = 0
+    #: Site dicts relocated — ``moved`` plus every collapsed duplicate
+    #: listing that travelled with its primary.
+    sites_moved: int = 0
+    listed_before: int = 0
+    listed_after: int = 0
+    clusters_before: int = 0
+    clusters_after: int = 0
+    changed: bool = False
+    rows: list[dict[str, Any]] = field(default_factory=list)
+    rows_truncated: bool = False
+
+    def add_row(self, record: dict[str, Any]) -> None:
+        if len(self.rows) >= _MAX_REPORT_ROWS:
+            self.rows_truncated = True
+            return
+        self.rows.append(record)
+
+
+def _load_regrade_overlay(path: Path) -> list[Any]:
+    """Load a grading overlay for :func:`regrade` — bounded,
+    regular-file-only, loud on refusal (same artifact discipline as
+    :func:`_load_graded_findings`). Accepts a bare row list or a
+    ``{"rows": [...]}`` container."""
+    import os
+    import stat as _stat
+
+    path = Path(path)
+    try:
+        st = os.lstat(path)
+    except OSError as exc:
+        raise BacklogError(
+            f"overlay file {path} unreadable "
+            f"({exc.__class__.__name__}) — nothing to regrade"
+        ) from exc
+    if not _stat.S_ISREG(st.st_mode):
+        raise BacklogError(
+            f"overlay file {path} is not a regular file "
+            f"(mode=0o{st.st_mode:o}) — planted special? refusing"
+        )
+    from core.json import load_json
+    try:
+        data = load_json(path, strict=True, max_bytes=MAX_OVERLAY_BYTES)
+    except Exception as exc:
+        raise BacklogError(
+            f"overlay file unreadable/malformed/oversized: {exc}"
+        ) from exc
+    rows = data.get("rows") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        raise BacklogError(
+            f"overlay file {path} carries no row list — not a "
+            f"grading overlay"
+        )
+    return rows
+
+
+def regrade(run_dir: Path, overlay_path: Path) -> RegradeReport:
+    """Move listed ``unclassified`` dark rows into concrete-CWE
+    clusters named by a grading overlay (mechanical — no LLM spend).
+
+    The sanctioned re-grade surface for rows the producer could not
+    classify: an overlay row that names a well-formed CWE and matches
+    a listed unclassified site by identity ``(file, function, line,
+    title)`` — :func:`_site_identity`, the same coercions intake
+    applies, verbatim, no fuzzy matching — moves that site's dict into
+    a cluster of the overlay's CWE. A move, never a rewrite:
+
+    * the moved site dict is the SAME object, every key untouched
+      (``drain_attempts`` included) — the destination cluster's class
+      carries the whole semantic effect (:func:`plan_rows` reads it as
+      a declared cluster CWE, ``cwe_source="cluster"``); the overlay's
+      ``justification`` and ``id`` never enter the artifact;
+    * only sites whose every listing (collapsed duplicates included)
+      sits in an ``unclassified`` cluster move — an identity listed
+      under any concrete class never moves (a declared cluster CWE
+      outranks the overlay), and duplicates travel together or not at
+      all, so a re-run stays a no-op;
+    * the ``drained`` ledger is never touched and ``total`` is
+      unchanged (a move is not an add or a remove); an emptied source
+      cluster stays listed at ``count`` 0 — the same shape a fully
+      witnessed cluster is left in (:func:`_remove_site` never drops
+      clusters either);
+    * destination placement mirrors :func:`reimport`'s chunking:
+      append to an existing cluster of the same class key with room
+      under ``_SITES_PER_CLUSTER_WRITE``, else grow new clusters of at
+      most that many sites; a pass whose post-move cluster count
+      exceeds ``_MAX_CLUSTERS_READ`` refuses before writing (moved
+      rows would be unreadable at the next intake);
+    * the artifact is written only when at least one site moved — a
+      no-op regrade leaves the file byte-identical.
+
+    Per-overlay-row refusals (null/absent/empty ``cwe_id``; a
+    ``cwe_id`` that does not fullmatch the module's CWE shape; an
+    identity intake would refuse; an identity not listed unclassified
+    — which is what every already-regraded row looks like on a re-run)
+    are counted, skipped, and reported, never a crash: one bad row
+    must not deny the overlay.
+    """
+    run_dir = Path(run_dir)
+    _refuse_live_run(run_dir)
+    artifact, rows, _malformed = load_backlog(run_dir)
+    overlay = _load_regrade_overlay(overlay_path)
+
+    report = RegradeReport(
+        overlay_rows=len(overlay),
+        listed_before=len(rows),
+        clusters_before=len(artifact["clusters"]),
+    )
+    clusters: list[Any] = artifact["clusters"]
+    by_identity: dict[tuple[str, str, int, str], DarkRow] = {
+        (r.file, r.function, r.line, r.title): r for r in rows
+    }
+
+    def _sites_on_disk() -> int:
+        return sum(
+            len(c["sites"]) for c in clusters
+            if isinstance(c, dict) and isinstance(c.get("sites"), list)
+        )
+
+    sites_before = _sites_on_disk()
+
+    def _record(raw: Any, disposition: str,
+                **extra: Any) -> dict[str, Any]:
+        """A capped per-row report record — overlay fields are
+        agent-writable free text, so free-prose values are escaped
+        here and rendering sites escape again before the terminal."""
+        record: dict[str, Any] = {"disposition": disposition}
+        if isinstance(raw, dict):
+            record["id"] = sanitise_for_terminal(
+                _coerce_text(raw.get("id")), max_len=_ID_CAP)
+            record["file"] = _cap(raw.get("file"), _FILE_CAP)
+            record["function"] = _cap(raw.get("function"), _FUNCTION_CAP)
+            line = raw.get("line")
+            if isinstance(line, bool) or not isinstance(line, int) \
+                    or line < 0:
+                line = 0
+            record["line"] = line
+        record.update(extra)
+        return record
+
+    #: Per-class destination memo — re-scanned once the memoised
+    #: cluster fills to the write cap.
+    dest_cache: dict[str, dict[str, Any]] = {}
+
+    def _dest_cluster(cls: str) -> dict[str, Any]:
+        cached = dest_cache.get(cls)
+        if cached is not None \
+                and len(cached["sites"]) < _SITES_PER_CLUSTER_WRITE:
+            return cached
+        for cluster in clusters:
+            if not isinstance(cluster, dict) \
+                    or _class_key(cluster.get("class")) != cls:
+                continue
+            sites = cluster.get("sites")
+            if not isinstance(sites, list) \
+                    or len(sites) >= _SITES_PER_CLUSTER_WRITE:
+                continue
+            dest_cache[cls] = cluster
+            return cluster
+        fresh: dict[str, Any] = {"class": cls, "count": 0, "sites": []}
+        clusters.append(fresh)
+        dest_cache[cls] = fresh
+        return fresh
+
+    def _move_copy(copy: DarkRow, dest: dict[str, Any]) -> None:
+        # Source bookkeeping mirrors ``_remove_site`` — the sites list
+        # loses the object, an int count decrements — but never the
+        # artifact ``total``: the site stays listed, one cluster over.
+        src_sites = copy.cluster.get("sites")
+        if isinstance(src_sites, list):
+            copy.cluster["sites"] = [
+                s for s in src_sites if s is not copy.site
+            ]
+        count = copy.cluster.get("count")
+        if isinstance(count, int) and not isinstance(count, bool) \
+                and count > 0:
+            copy.cluster["count"] = count - 1
+        dest["sites"].append(copy.site)
+        dcount = dest.get("count")
+        if isinstance(dcount, int) and not isinstance(dcount, bool):
+            dest["count"] = dcount + 1
+
+    for raw in overlay:
+        if not isinstance(raw, dict):
+            report.skipped_unusable += 1
+            report.add_row(_record(
+                raw, "unusable", reason="overlay row is not an object"))
+            continue
+        cwe_raw = raw.get("cwe_id")
+        if cwe_raw is None or (isinstance(cwe_raw, str)
+                               and not cwe_raw.strip()):
+            report.no_cwe += 1
+            report.add_row(_record(raw, "no-cwe"))
+            continue
+        if not isinstance(cwe_raw, str) \
+                or not _CWE_RE.fullmatch(cwe_raw.strip()):
+            report.malformed_cwe += 1
+            report.add_row(_record(raw, "malformed-cwe"))
+            continue
+        cls = _class_key(cwe_raw.strip().upper())
+        identity = _site_identity({
+            "file": raw.get("file"),
+            "function": raw.get("function", ""),
+            "line": raw.get("line"),
+            "title": raw.get("title", ""),
+        })
+        if identity is None:
+            report.skipped_unusable += 1
+            report.add_row(_record(raw, "unusable"))
+            continue
+        row = by_identity.get(identity)
+        if row is None or any(
+                _class_key(c.cluster.get("class")) != "unclassified"
+                for c in (row, *row.dups)):
+            report.unmatched += 1
+            report.add_row(_record(raw, "unmatched", cwe=cls))
+            continue
+        for copy in (row, *row.dups):
+            _move_copy(copy, _dest_cluster(cls))
+            report.sites_moved += 1
+        del by_identity[identity]
+        report.moved += 1
+        report.add_row(_record(raw, "moved", cwe=cls))
+
+    report.listed_after = report.listed_before
+    report.clusters_after = len(clusters)
+
+    if report.sites_moved:
+        if len(clusters) > _MAX_CLUSTERS_READ:
+            raise BacklogError(
+                f"regrade would list {len(clusters)} clusters — past "
+                f"the consumer read bound ({_MAX_CLUSTERS_READ}); "
+                f"moved rows would be unreadable. Drain the queue "
+                f"down before regrading."
+            )
+        if _sites_on_disk() != sites_before:
+            raise BacklogError(
+                "regrade internal invariant broken: the artifact's "
+                "listed site count changed under a move-only pass — "
+                "refusing to write"
+            )
+        from core.json import save_json
+        save_json(run_dir / BACKLOG_FILENAME, artifact)
+        report.changed = True
+    return report
+
+
 def drain(
     run_dir: Path,
     target_path: Path,
@@ -1474,7 +1736,9 @@ __all__ = [
     "DrainReport",
     "MAX_BACKLOG_BYTES",
     "MAX_GRADED_BYTES",
+    "MAX_OVERLAY_BYTES",
     "MAX_ROW_ATTEMPTS",
+    "RegradeReport",
     "ReimportReport",
     "RowPlan",
     "drain",
@@ -1482,5 +1746,6 @@ __all__ = [
     "load_pending_questions",
     "plan_rows",
     "rank",
+    "regrade",
     "reimport",
 ]
