@@ -146,6 +146,19 @@ class TestREDatabase:
         assert db2.functions[0].name == "main"
         assert len(db2.xrefs) == 1
 
+    def test_wrong_typed_binary_path_collapses_to_none(self):
+        """A wrong-typed binary_path in an on-disk cache collapses to
+        absent (the planted-cache field discipline) instead of riding
+        into every Path(db.binary_path) consumer as a TypeError. Not
+        str-coerced: str(12345) would mint a fake path spelling where
+        None (identity unknown) is the truthful value."""
+        for junk in (12345, ["a"], {"x": 1}, True):
+            db = REDatabase.from_dict({"binary_path": junk})
+            assert db.binary_path is None, repr(junk)
+        assert REDatabase.from_dict(
+            {"binary_path": "/x/bin"}).binary_path == "/x/bin"
+        assert REDatabase.from_dict({}).binary_path is None
+
     def test_auto_named_ratio(self):
         db = _make_db("ghidra", funcs=[
             REFunction(name="main", address=0x1000, size=16, is_auto_named=False, source_tool="ghidra"),

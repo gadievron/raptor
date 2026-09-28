@@ -637,7 +637,16 @@ class REDatabase:
             )
         return cls(
             source_tool=str(d.get("source_tool", "")),
-            binary_path=d.get("binary_path"),
+            # Type-gated like the other planted-cache fields (junk
+            # collapses to absent, never rides into consumers): a
+            # wrong-typed binary_path in an on-disk cache otherwise
+            # surfaces as TypeError at every Path(db.binary_path)
+            # consumer. Not str-coerced — str(12345) would mint a
+            # fake path spelling where None (identity unknown) is
+            # the truthful value.
+            binary_path=(d.get("binary_path")
+                         if isinstance(d.get("binary_path"), str)
+                         else None),
             architecture=str(d.get("architecture", "")),
             functions=[REFunction.from_dict(f) for f in d.get("functions", [])],
             xrefs=[REXref.from_dict(x) for x in d.get("xrefs", [])],

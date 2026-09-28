@@ -250,7 +250,10 @@ class TestIdentityGate:
         calls: list = []
         record = self._sweep(out, out / "demo", calls)
         assert record["skipped"] is True
-        assert "foreign binary" in record["skip_reason"]
+        # find_redb's own identity gate now refuses the shared-parent
+        # foreign database upstream, so the sweep sees no database at
+        # all — same refusal, one layer earlier.
+        assert "no re-database" in record["skip_reason"]
         assert calls == []
         from core.coverage.journal import load_entries
         assert load_entries(out) == []
@@ -331,7 +334,9 @@ class TestIdentityGate:
         save_json(tmp_path / "re-database.json", data)
         record = self._sweep(tmp_path, target)
         assert record["skipped"] is True
-        assert "sha256" in record["skip_reason"]
+        # The stamp-mismatch refusal moved upstream into find_redb
+        # (skip toward rebuild), so the sweep sees no database at all.
+        assert "no re-database" in record["skip_reason"]
 
     def test_sha_stamp_match_passes(self, tmp_path):
         from core.hash import sha256_file

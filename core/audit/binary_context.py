@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,19 @@ logger = logging.getLogger(__name__)
 #: per-key in-flight collapse — concurrent review workers raced the
 #: previous bare dict's check-then-set into duplicate parses.
 _REDB_MEMO: "BoundedMemo[Any]" = BoundedMemo(32)
+
+#: Target-binary content hashes, keyed on (resolved path, mtime_ns,
+#: size). :func:`find_redb` runs once per reviewed function (via
+#: assemble_context and the deepen loop), and hashing a large target
+#: on every accept-path call re-paid the full read each time. The
+#: stat stamp in the key preserves the TOCTOU-at-find property: a
+#: binary swapped between calls (different mtime or size) misses the
+#: memo and re-hashes fresh. Residual (documented): a swap that
+#: preserves BOTH mtime_ns and size serves the stale hash for the
+#: rest of the run — that takes a deliberate timestamp-forging,
+#: size-preserving writer; the per-call rehash this memo retires
+#: (~one full target read per reviewed function) is the trade.
+_TARGET_SHA_MEMO: "BoundedMemo[str]" = BoundedMemo(32)
 
 #: One sandboxed GhidraServer per analysed binary, booted lazily the
 #: first time a checklist function has no cached decompilation and
@@ -151,19 +165,41 @@ def _project_for_binary(
     return None
 
 
-def find_redb(out_dir: Path | None, target_path: Path | None) -> Path | None:
+def find_redb(
+    out_dir: Path | None,
+    target_path: Path | None,
+    *,
+    validate: bool = True,
+) -> Path | None:
     """Locate the run's re-database.json.
 
     Search order: the run output directory, its parent (shared
     pipeline dirs), then the import cache convention for the target
     binary. Only RAPTOR-owned locations — never the scanned target's
     own directory.
+
+    Every existing candidate is identity-checked against
+    ``target_path`` before it is accepted (:func:`_accept_redb`):
+    the parent slot is SHARED by every run of a multi-binary
+    project, so the first existing file can be a database built for
+    a different binary, and accepting it builds the run's checklist
+    from the wrong function set. A wrong-binary or content-stale
+    candidate is skipped with a loud warning and the search
+    continues — fail toward rebuild, never a hard error.
+
+    ``validate=False`` keeps the historical existence-probe-only
+    behaviour (no content reads) for callers that only need a size
+    estimate and never authorize cache use (the checklist-build
+    timeout scaler).
     """
     import os
-    candidates: list[Path] = []
+    candidates: list[tuple[Path, str]] = []
     if out_dir:
-        candidates.append(Path(out_dir) / "re-database.json")
-        candidates.append(Path(out_dir).parent / "re-database.json")
+        # The run's own output dir is single-target by construction;
+        # its parent is the shared multi-binary project slot.
+        candidates.append((Path(out_dir) / "re-database.json", "run"))
+        candidates.append(
+            (Path(out_dir).parent / "re-database.json", "shared"))
     if target_path:
         # Anchor to the RAPTOR repo's out/ — a cwd-relative path
         # would resolve inside the scanned target's own directory
@@ -171,15 +207,226 @@ def find_redb(out_dir: Path | None, target_path: Path | None) -> Path | None:
         # entire derived database.
         raptor_dir = os.environ.get("RAPTOR_DIR")
         if raptor_dir:
-            candidates.append(
+            # Location derived from THIS target's stem — stem-keyed
+            # by construction.
+            candidates.append((
                 Path(raptor_dir) / "out"
                 / f"ghidra-import-{Path(target_path).stem}"
-                / "re-database.json"
-            )
-    for cand in candidates:
-        if cand.is_file():
+                / "re-database.json",
+                "stem-keyed",
+            ))
+
+    # The target's content hash is computed at most once per call,
+    # only when some candidate actually carries a stamp, and served
+    # from the stat-stamped memo across calls (find_redb runs per
+    # reviewed function).
+    sha_cell: list[str | None] = []
+
+    def _target_sha() -> str | None:
+        if not sha_cell:
+            sha_cell.append(_target_content_sha(Path(target_path)))
+        return sha_cell[0]
+
+    for cand, kind in candidates:
+        if not cand.is_file():
+            continue
+        if not validate or target_path is None:
+            return cand
+        if _accept_redb(cand, Path(target_path), kind, _target_sha):
             return cand
     return None
+
+
+def _target_content_sha(target: Path) -> str | None:
+    """The target binary's sha256, memoized on (resolved path,
+    mtime_ns, size).
+
+    ``None`` when the target cannot be statted or read — the caller
+    falls through to path/slot evidence. Failures are never memoized
+    (a transient read error must not poison later calls); see
+    :data:`_TARGET_SHA_MEMO` for the same-mtime+same-size residual.
+    """
+    try:
+        st = target.stat()
+        key = (str(target.resolve()), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    try:
+        from core.hash import sha256_file
+        sha, _cached = _TARGET_SHA_MEMO.get_or_compute(
+            key, lambda: sha256_file(target),
+        )
+    except OSError:
+        return None
+    return sha
+
+
+def _accept_redb(
+    cand: Path,
+    target: Path,
+    kind: str,
+    target_sha: Callable[[], str | None],
+) -> bool:
+    """Identity gate for one existing re-database.json candidate.
+
+    Evidence order:
+
+    1. **Content hash** — a recorded ``metadata.binary_sha256``
+       compared against the target file's current hash decides in
+       both directions: match accepts (regardless of recorded path
+       spelling — the binary merely moved), mismatch skips (binary
+       rebuilt in place, or a foreign cache).
+    2. **Path identity** — the recorded ``binary_path`` versus the
+       target (:func:`_same_recorded_binary`).
+    3. **Identity unknown** — the run's own dir (``kind="run"``) and
+       the ghidra-import cache (``kind="stem-keyed"``, its location
+       is derived from this target's stem) keep their historical
+       acceptance; the shared parent slot (``kind="shared"``) is
+       exactly where a foreign binary's cache lives and is never
+       accepted without verifiable identity.
+
+    An UNREADABLE candidate (malformed/oversized) is accepted:
+    identity is unknowable here and every consumer already owns a
+    load-error path for this exact file — the pre-validation
+    contract (hand the path back, let the caller's handling fire)
+    is the least surprising behaviour.
+    """
+    try:
+        db = load_redb(cand)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        # TypeError/AttributeError: a planted cache with wrong-TYPED
+        # fields (functions: 5, functions: [3], ...) raises these out
+        # of REDatabase.from_dict — the same unknowable-identity
+        # class as malformed JSON, and letting them escape violated
+        # the never-a-hard-error contract on every consumer path.
+        return True
+
+    def _skip(why: str) -> bool:
+        from core.security.log_sanitisation import escape_nonprintable
+        logger.warning(
+            "binary-cache: SKIPPING stale/foreign %s — %s (run target: "
+            "%s); falling through toward re-import",
+            # The candidate path is escaped too: the stem-keyed slot
+            # embeds the target-repo-chosen binary stem, so raw
+            # control bytes would ride into the operator's terminal.
+            escape_nonprintable(str(cand)[:300]), why,
+            escape_nonprintable(str(target)[:300]),
+        )
+        return False
+
+    # Type-gated (belt and braces with REDatabase.from_dict's own
+    # gate): a wrong-typed binary_path in a planted cache must fall
+    # to the identity-unknown slot rule, never into Path().
+    recorded = (
+        db.binary_path
+        if isinstance(db.binary_path, str) and db.binary_path
+        else None
+    )
+    meta = db.metadata if isinstance(db.metadata, dict) else {}
+    stamp = meta.get("binary_sha256")
+    if not (isinstance(stamp, str) and stamp):
+        stamp = None
+
+    if stamp and target.suffix != ".gpr" and target.is_file():
+        actual = target_sha()
+        if actual is not None:
+            if actual == stamp:
+                return True
+            return _skip(
+                "recorded binary_sha256 does not match the target's "
+                "current content (rebuilt or different binary)")
+
+    if recorded:
+        from core.security.log_sanitisation import escape_nonprintable
+        verdict = _same_recorded_binary(Path(recorded), target)
+        if verdict is True:
+            return True
+        if verdict is False:
+            return _skip(
+                "database records a different binary "
+                f"({escape_nonprintable(str(recorded)[:300])})")
+
+    if kind in ("run", "stem-keyed"):
+        return True
+    return _skip(
+        "no verifiable binary identity in a shared cache location")
+
+
+def _same_recorded_binary(recorded: Path, target: Path) -> bool | None:
+    """Is the database's recorded binary the run's target?
+
+    ``True``/``False`` when decidable; ``None`` when identity is
+    unknown — the target is not a regular file (run-dir spelling),
+    a ``.gpr`` whose recorded binary cannot be tied to an arbitrary
+    foreign name (an operator-named project legitimately differs
+    from its binary's name), or a recorded path that no longer
+    exists but shares the target's stem (moved binary and same-stem
+    foreign binary are indistinguishable by name alone).
+    """
+    import os
+    if target.suffix == ".gpr":
+        # Ghidra records executablePath = the ORIGINAL import source
+        # (never a path inside the project's .rep payload), so a
+        # recorded path merely contained under the .gpr's parent is
+        # NOT identity: that directory is routinely shared by several
+        # projects and their bundled binaries, and containment
+        # accepted a sibling project's binary. A stem match (raptor-
+        # created projects are named after their binary) is the only
+        # affirmative signal; anything else is UNKNOWN — the slot
+        # rule decides (an operator-named project legitimately
+        # differs from its binary's name, so unknown, not foreign).
+        return True if recorded.stem == target.stem else None
+    if not target.is_file():
+        return None
+    try:
+        if recorded.exists() and os.path.samefile(recorded, target):
+            return True
+    except OSError:
+        pass
+    try:
+        if recorded.resolve() == target.resolve():
+            return True
+    except OSError:
+        return None
+    if not recorded.exists():
+        # Recorded binary moved or deleted and no hash decided above:
+        # the name is the only signal left, and an equal name is NOT
+        # proof — a same-stem foreign binary's cache (built for a
+        # deleted /elsewhere/<stem>) is indistinguishable from the
+        # documented moved-binary case. Identity-UNKNOWN: the slot
+        # rule decides, so the run-local and stem-keyed slots keep
+        # the moved-binary acceptance while the shared slot refuses.
+        # A different stem is affirmatively foreign.
+        return None if recorded.stem == target.stem else False
+    return False
+
+
+def stamp_binary_sha256(doc: dict, binary_path: Path) -> None:
+    """Stamp the analysed binary's content hash into a re-database
+    document about to be written, so later cache hits on it are
+    hash-validatable (:func:`_accept_redb`). Best-effort: a missing
+    or unreadable binary, or a foreign metadata shape, leaves the
+    document unchanged.
+
+    Residual (documented): the hash is captured AFTER the import
+    that derived *doc* — a binary swapped mid-import gets the new
+    build's hash stamped over the old build's database, and a later
+    lookup of the swapped binary would accept it. Closing the window
+    means capturing the hash before the importer's first read and
+    threading it through every import lane (including the Ghidra
+    bridge, which is outside this helper); until then the stamp
+    narrows staleness to that import-duration window, it does not
+    eliminate it."""
+    try:
+        if not Path(binary_path).is_file():
+            return
+        meta = doc.setdefault("metadata", {})
+        if not isinstance(meta, dict):
+            return
+        from core.hash import sha256_file
+        meta["binary_sha256"] = sha256_file(Path(binary_path))
+    except OSError:
+        logger.debug("could not hash %s", binary_path, exc_info=True)
 
 
 #: re-database.json read ceiling. RAPTOR-written, but derived from a

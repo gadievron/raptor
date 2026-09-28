@@ -156,9 +156,13 @@ def scaled_checklist_build_timeout_s(
                     work_bytes += _tree_bytes(rep, ceiling_bytes)
             # A cached re-database.json is builder input too (the
             # binary route loads and inventories it before writing
-            # the checklist). find_redb stats a fixed candidate list
-            # — no content reads.
-            redb = find_redb(out_dir, target_path)
+            # the checklist). validate=False: existence probes only,
+            # no content reads — this is a size estimate, never a
+            # cache-use authorization, and if validation later
+            # rejects the candidate the builder re-imports (MORE
+            # work), so the unvalidated size stays a sound lower
+            # bound.
+            redb = find_redb(out_dir, target_path, validate=False)
             if redb is not None:
                 work_bytes += redb.stat().st_size
     except OSError:

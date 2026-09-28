@@ -64,3 +64,9 @@ def test_fallback_import_writes_via_atomic_chokepoint(
     written = json.loads(out_path.read_text())
     assert written["binary_path"] == str(binary)
     assert written["functions"][0]["name"] == "main"
+    # The fallback writer stamps the analysed binary's content hash
+    # so later cache hits are hash-validatable (find_redb's identity
+    # gate) — an unstamped fallback artifact would only ever be
+    # path-checkable.
+    from core.hash import sha256_file
+    assert written["metadata"]["binary_sha256"] == sha256_file(binary)

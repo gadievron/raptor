@@ -181,7 +181,13 @@ def _build_binary_checklist(target: Path, output_dir: Path) -> dict:
             db = import_binary_objdump(target)
         # Atomic write: a crash mid-write must not leave a torn
         # database that the next run half-reads.
-        save_json(output_dir / "re-database.json", db.to_dict())
+        from core.audit.binary_context import stamp_binary_sha256
+        doc = db.to_dict()
+        # Content-hash stamp (the bridge writer's discipline): later
+        # cache hits on this file are validated against the binary
+        # they are being used for, not just its path.
+        stamp_binary_sha256(doc, target)
+        save_json(output_dir / "re-database.json", doc)
 
     # A prior /understand --map of the binary enriches priority
     # scoring with entry-point and sink addresses.

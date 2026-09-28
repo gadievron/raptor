@@ -125,6 +125,71 @@ class TestChecklistWriteAtomic:
         assert read_checklist(out)["total_items"] == 0
 
 
+class TestFallbackWriterStamps:
+    def test_fallback_import_stamps_binary_sha256(
+            self, script_mod, monkeypatch, tmp_path: Path):
+        """The r2/objdump fallback writer stamps the analysed
+        binary's content hash into the document it writes, so later
+        cache hits are hash-validatable by find_redb's identity
+        gate."""
+        import core.inventory.binary_builder as binary_builder
+        import packages.ghidra.objdump_import as objdump_import
+        import packages.ghidra.r2_import as r2_import
+        from core.hash import sha256_file
+        from packages.ghidra.model import REDatabase, REFunction
+
+        out = tmp_path / "out"
+        out.mkdir()
+        target = tmp_path / "prog"
+        target.write_bytes(b"\x7fELF" + b"\0" * 12)
+        # Hermetic candidate chain: no stem-keyed slot probe.
+        monkeypatch.delenv("RAPTOR_DIR", raising=False)
+
+        db = REDatabase(
+            source_tool="objdump", binary_path=str(target),
+            architecture="x86:64",
+            functions=[REFunction(name="main", address=0x1000, size=16)],
+        )
+        monkeypatch.setattr(r2_import, "r2_available", lambda: False)
+        monkeypatch.setattr(
+            objdump_import, "import_binary_objdump", lambda b: db)
+        monkeypatch.setattr(
+            binary_builder, "build_binary_checklist",
+            lambda db, *, binary_path, include_auto_named, context_map:
+            {"total_items": 0, "binary_stats": {}})
+
+        script_mod._build_binary_checklist(target, out)
+        written = json.loads((out / "re-database.json").read_text())
+        assert written["metadata"]["binary_sha256"] == sha256_file(target)
+
+
+class TestPlantedCacheShapes:
+    def test_wrong_typed_binary_path_doc_completes(self, tmp_path: Path):
+        """End to end: a planted cache with a wrong-TYPED binary_path
+        must degrade per the identity gate's contract — the CLI
+        completes instead of dying rc=1 on an uncaught TypeError."""
+        import subprocess
+        import sys
+
+        out = tmp_path / "out"
+        out.mkdir()
+        target = tmp_path / "prog"
+        target.write_bytes(b"\x7fELF" + b"\0" * 12)
+        (out / "re-database.json").write_text(json.dumps({
+            "source_tool": "r2", "binary_path": 12345,
+            "functions": [], "metadata": {},
+        }))
+
+        env = {k: v for k, v in os.environ.items() if k != "RAPTOR_DIR"}
+        env["_RAPTOR_TRUSTED"] = "1"
+        cp = subprocess.run(
+            [sys.executable, str(SCRIPT), str(target), str(out)],
+            capture_output=True, text=True, env=env, timeout=120,
+        )
+        assert cp.returncode == 0, cp.stderr
+        assert (out / "checklist.json").is_file()
+
+
 class TestContextMapRead:
     def test_read_is_bounded(self, script_mod, monkeypatch,
                              tmp_path: Path):
