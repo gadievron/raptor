@@ -16,7 +16,10 @@ from __future__ import annotations
 import json
 import random
 import time
+from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -600,15 +603,47 @@ def test_fuzz_output_stays_serialisable(packs) -> None:
 # ── growth-ratio pin ─────────────────────────────────────────────────
 
 
-def _timed_propagate(n_chains: int, packs: PackSet) -> float:
-    texts, graph, routes = _chain_package(n_chains, 12, 6)
-    best = float("inf")
+def _cpu_timed_run(
+    texts: dict[str, str], graph: PackageCallGraph,
+    routes: RouteModels, packs: PackSet,
+    run: Callable[..., Any] = _run,
+) -> float:
+    start = time.process_time()
+    res = run(texts, graph, routes, packs)
+    elapsed = time.process_time() - start
+    assert res.candidates  # real propagation, not a degenerate run
+    return elapsed
+
+
+def _measured_growth_ratio(
+    packs: PackSet, run: Callable[..., Any] = _run,
+) -> float:
+    """THE measurement path for the growth-ratio rail: n=600 vs
+    n=1200 packages, CPU time (``time.process_time``), best-of-3
+    with the two sizes INTERLEAVED. The pin test and both rail
+    regression tests below all measure through here, so a change to
+    HOW the ratio is taken cannot silently detach the rail from its
+    two-direction regression proofs."""
+    small = _chain_package(50, 12, 6)     # 600 functions
+    large = _chain_package(100, 12, 6)    # 1200 functions
+    t_n = float("inf")
+    t_2n = float("inf")
     for _ in range(3):
-        start = time.perf_counter()
-        res = _run(texts, graph, routes, packs)
-        best = min(best, time.perf_counter() - start)
-        assert res.candidates  # real propagation, not a degenerate run
-    return best
+        t_n = min(t_n, _cpu_timed_run(*small, packs, run=run))
+        t_2n = min(t_2n, _cpu_timed_run(*large, packs, run=run))
+    assert t_n > 0
+    return t_2n / t_n
+
+
+#: The growth rail, shared by the pin test and BOTH rail regression
+#: tests below — all three asserts reference this one constant, so
+#: widening it is exactly what turns the trip test red and
+#: tightening it is what turns the immunity test red; the limit
+#: cannot drift in either direction without a failing test. 2.8
+#: keeps linear-with-overhead headroom: raising it hides
+#: super-linear blowups (a quadratic engine measures well above 3.5
+#: at these sizes), lowering it flakes on interpreter noise.
+_GROWTH_RAIL: float = 2.8
 
 
 def test_growth_ratio_pin_n_vs_2n(packs) -> None:
@@ -617,15 +652,84 @@ def test_growth_ratio_pin_n_vs_2n(packs) -> None:
     # small enough for CI, big enough that per-run constant overhead
     # does not swamp a super-linear term (the summary layer measured
     # exactly this — n=150 waved a real quadratic through; 600-class
-    # discriminates). 2.6 keeps linear-with-overhead headroom:
-    # raising it hides super-linear blowups, lowering it flakes on
-    # interpreter noise. Trend belt; the absolute worst-shape wall
-    # above is the load-bearing rail against large regressions.
-    t_n = _timed_propagate(50, packs)     # 600 functions
-    t_2n = _timed_propagate(100, packs)   # 1200 functions
-    assert t_n > 0
-    ratio = t_2n / t_n
-    assert ratio <= 2.8, f"super-linear growth: ratio {ratio:.2f}"
+    # discriminates). The engine is single-threaded and CPU-bound,
+    # so time.process_time() measures the work itself: a co-runner
+    # stealing the core on a loaded shared CI runner stretches wall
+    # clock, not this process's CPU seconds. Best-of-3 with the two
+    # sizes INTERLEAVED (A,B,A,B) so residual per-round noise
+    # (frequency ramps, GC) lands on both sizes instead of skewing
+    # one side of the ratio. The rail value and its both-directions
+    # rationale live with _GROWTH_RAIL above. Trend belt; the
+    # absolute worst-shape wall above is the load-bearing rail
+    # against large regressions.
+    ratio = _measured_growth_ratio(packs)
+    assert ratio <= _GROWTH_RAIL, (
+        f"super-linear growth: ratio {ratio:.2f}")
+
+
+# ── two-direction rail regression (churn-prone limit) ────────────────
+#
+# The rail (_GROWTH_RAIL) is churn-prone: raised, it stops catching
+# quadratic regressions; lowered, it flakes on interpreter noise.
+# Both directions are pinned as TESTS through the same measurement
+# path (_measured_growth_ratio) and the same shared constant, so the
+# rail cannot drift silently either way.
+
+
+_BURN_BASE_S = 0.05
+
+
+def _burn_cpu(seconds: float) -> None:
+    """Burn ~``seconds`` of CPU time: busy-spin against
+    ``time.process_time`` — the same clock the rail measures — so
+    the burn is host-speed independent and immune to wall stalls."""
+    deadline = time.process_time() + seconds
+    while time.process_time() < deadline:
+        pass
+
+
+def _synthetic_result() -> SimpleNamespace:
+    # Just enough shape for _cpu_timed_run's degenerate-run guard.
+    return SimpleNamespace(candidates=(object(),))
+
+
+def test_growth_ratio_rail_trips_on_quadratic_engine(packs) -> None:
+    # Trip direction: a quadratic engine MUST fail the rail. CPU
+    # burn scales with (n/600)**2, so the measured ratio sits at
+    # ~4.0. This fences rail widening ONLY because the assert below
+    # reads the same _GROWTH_RAIL constant the pin test asserts
+    # against: widening the shared constant past ~4.0 turns this
+    # test red. A separately hardcoded literal would fence nothing.
+    def quadratic(
+        texts: dict[str, str], graph: PackageCallGraph,
+        routes: RouteModels, _packs: PackSet,
+    ) -> SimpleNamespace:
+        _burn_cpu(_BURN_BASE_S * (len(graph.nodes) / 600) ** 2)
+        return _synthetic_result()
+
+    ratio = _measured_growth_ratio(packs, run=quadratic)
+    assert ratio > _GROWTH_RAIL, (
+        f"quadratic engine did not trip the rail: ratio {ratio:.2f}")
+
+
+def test_growth_ratio_rail_immune_to_wall_stalls(packs) -> None:
+    # Immunity direction: super-linear WALL stalls (the loaded-
+    # runner shape — a co-runner stealing the core) must NOT trip
+    # the rail, because the measurement is CPU time. Linear CPU
+    # plus a quadratic sleep; deterministic, because the assertion
+    # depends only on the CPU component.
+    def stalled(
+        texts: dict[str, str], graph: PackageCallGraph,
+        routes: RouteModels, _packs: PackSet,
+    ) -> SimpleNamespace:
+        n = len(graph.nodes)
+        _burn_cpu(_BURN_BASE_S * (n / 600))
+        time.sleep(0.05 * (n / 600) ** 2)
+        return _synthetic_result()
+
+    ratio = _measured_growth_ratio(packs, run=stalled)
+    assert ratio <= _GROWTH_RAIL, (
+        f"wall stall leaked into the CPU ratio: {ratio:.2f}")
 
 
 # ── wall budget under a stalled dependency ───────────────────────────
