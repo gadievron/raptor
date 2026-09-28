@@ -2820,6 +2820,300 @@ class TestPhase2TruncationRecovery:
         assert len(concepts) == 2
 
 
+class TestPhase2TruncationEscalation:
+    """One-shot output-cap escalation before the split ladder."""
+
+    _TRUNC_MSG = TestPhase2TruncationRecovery._TRUNC_MSG
+
+    class _CapSensitiveClient:
+        """Truncates whenever the batch's simulated output outgrows
+        the ``max_tokens`` the call requested; records
+        ``(n_items, max_tokens)`` per call. ``tokens_per_item`` is a
+        uniform int or a per-item-name mapping (unlisted names cost
+        1000 tokens). ``sse_ok`` (when not None) attaches a
+        ``primary_provider`` stub declaring the surface's stream
+        capability, as the provider layer does via ``_stream_sse_ok``.
+        ``claude-sonnet-5``: 128000 max_output, thinking shares the
+        output budget (so the standard study ceiling is 2x the text
+        budget)."""
+
+        model = "claude-sonnet-5"
+
+        def __init__(
+            self,
+            tokens_per_item: int | dict[str, int],
+            *,
+            sse_ok: bool | None = None,
+        ) -> None:
+            self.tokens_per_item = tokens_per_item
+            self.calls: list[tuple[int, int]] = []
+            if sse_ok is not None:
+                import types as _types
+                self.primary_provider = _types.SimpleNamespace(
+                    _stream_sse_ok=sse_ok,
+                )
+
+        def _output_tokens(self, names: set[str]) -> int:
+            if isinstance(self.tokens_per_item, dict):
+                return sum(
+                    self.tokens_per_item.get(n, 1000) for n in names
+                )
+            return len(names) * self.tokens_per_item
+
+        def generate_structured(self, prompt: str, schema, **kw):
+            import re as _re
+            names = set(_re.findall(r"\bfn\d+\b", prompt))
+            cap = kw["max_tokens"]
+            self.calls.append((len(names), cap))
+            if self._output_tokens(names) > cap:
+                raise RuntimeError(
+                    TestPhase2TruncationEscalation._TRUNC_MSG)
+            return ({"concepts": [
+                {"id": n, "description": f"desc {n}",
+                 "evidence": [{"type": "doc", "file": "x.c",
+                               "observation": "obs"}],
+                 "confidence": "inferred"} for n in sorted(names)],
+                "invariants": [], "contracts": []}, "raw")
+
+    def _items(self, n: int) -> list[StudyItem]:
+        return [StudyItem(id=f"i{k}", kind="function", name=f"fn{k}",
+                          file="x.c") for k in range(n)]
+
+    def _serial(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "core.llm.concurrency.derive_max_workers", lambda _m: 1)
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "16384")
+
+    def test_escalated_retry_short_circuits_the_split(
+        self, monkeypatch,
+    ):
+        """A batch that fits one escalation step up is retried once at
+        the escalated cap and never split — no half-size calls."""
+        self._serial(monkeypatch)
+        items = self._items(2)
+        # 2 x 20000 = 40000: over the 32768 standard ceiling, under
+        # the 49152 escalated one.
+        client = self._CapSensitiveClient(tokens_per_item=20000)
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=2)
+        assert sorted(c.id for c in concepts) == ["fn0", "fn1"]
+        assert client.calls == [(2, 32768), (2, 49152)]
+
+    def test_escalated_retry_truncation_falls_through_to_halving(
+        self, monkeypatch,
+    ):
+        """When the escalated retry ALSO truncates, the split ladder
+        engages exactly as before."""
+        self._serial(monkeypatch)
+        items = self._items(2)
+        # 2 x 30000 = 60000: over both ceilings; halves (30000) fit
+        # the standard one.
+        client = self._CapSensitiveClient(tokens_per_item=30000)
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=2)
+        assert sorted(c.id for c in concepts) == ["fn0", "fn1"]
+        assert client.calls == [
+            (2, 32768), (2, 49152), (1, 32768), (1, 32768),
+        ]
+
+    def test_no_escalation_when_cap_already_at_model_ceiling(
+        self, monkeypatch,
+    ):
+        """No escalated retry when the standard cap already sits at
+        the model's max_output — the split engages directly."""
+        monkeypatch.setattr(
+            "core.llm.concurrency.derive_max_workers", lambda _m: 1)
+        # claude-sonnet-4-6: 64000 max_output, non-thinking tier —
+        # with a 64000 text budget the standard cap IS the ceiling.
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "64000")
+        items = self._items(2)
+        client = self._CapSensitiveClient(tokens_per_item=40000)
+        client.model = "claude-sonnet-4-6"
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=2)
+        assert sorted(c.id for c in concepts) == ["fn0", "fn1"]
+        assert client.calls == [(2, 64000), (1, 64000), (1, 64000)]
+
+    def test_no_escalation_for_unknown_model(self, monkeypatch):
+        """Without a catalog max_output an over-ceiling request would
+        be rejected, not truncated — escalation stands down and the
+        pre-existing split path runs byte-for-byte."""
+        self._serial(monkeypatch)
+        items = self._items(2)
+        client = self._CapSensitiveClient(tokens_per_item=10000)
+        client.model = ""
+        # Unknown model: standard cap is the bare text budget.
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=2)
+        assert sorted(c.id for c in concepts) == ["fn0", "fn1"]
+        assert client.calls == [(2, 16384), (1, 16384), (1, 16384)]
+
+    def test_no_escalation_on_non_sse_surface(self, monkeypatch):
+        """A provider surface with no SSE support downgrades the
+        batch call to plain create, where an escalated generation
+        cannot finish inside the provider's non-streaming abort —
+        escalation stands down and the split engages directly, buying
+        no deterministic dead call at the escalated cap."""
+        self._serial(monkeypatch)
+        items = self._items(2)
+        client = self._CapSensitiveClient(
+            tokens_per_item=20000, sse_ok=False,
+        )
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=2)
+        assert sorted(c.id for c in concepts) == ["fn0", "fn1"]
+        # No (2, 49152) call: straight to the halves.
+        assert client.calls == [(2, 32768), (1, 32768), (1, 32768)]
+
+    def test_escalation_on_declared_sse_surface(self, monkeypatch):
+        """Capability twin: a surface explicitly declaring SSE keeps
+        the escalated short-circuit byte-for-byte."""
+        self._serial(monkeypatch)
+        items = self._items(2)
+        client = self._CapSensitiveClient(
+            tokens_per_item=20000, sse_ok=True,
+        )
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=2)
+        assert sorted(c.id for c in concepts) == ["fn0", "fn1"]
+        assert client.calls == [(2, 32768), (2, 49152)]
+
+    def test_stream_predicate_resolves_surface_capability(
+        self, monkeypatch,
+    ):
+        """``_batch_call_streams`` = module opt-in AND provider
+        ``_stream_sse_ok`` (fail-open like the provider layer when
+        the capability is undeclared or unresolvable)."""
+        import types as _types
+
+        from core.concepts import study
+        from core.concepts.study import _batch_call_streams
+        assert _batch_call_streams(None) is True
+        # No primary_provider on the client: opt-in stands.
+        assert _batch_call_streams(object()) is True
+        assert _batch_call_streams(_types.SimpleNamespace(
+            primary_provider=_types.SimpleNamespace(
+                _stream_sse_ok=False),
+        )) is False
+        sse_client = _types.SimpleNamespace(
+            primary_provider=_types.SimpleNamespace(
+                _stream_sse_ok=True),
+        )
+        assert _batch_call_streams(sse_client) is True
+        # Opt-in off wins over any capability.
+        monkeypatch.setattr(study, "_BATCH_CALLS_STREAM", False)
+        assert _batch_call_streams(sse_client) is False
+        assert _batch_call_streams(None) is False
+
+    def test_escalated_retry_transport_failure_keeps_split_path(
+        self, monkeypatch,
+    ):
+        """A non-truncation death of the opportunistic escalated retry
+        must not re-classify the batch: the first-hand truncation
+        stands and the split ladder still salvages the items."""
+        self._serial(monkeypatch)
+        items = self._items(2)
+
+        outer = self
+
+        class _TransportOnEscalation(self._CapSensitiveClient):
+            def generate_structured(self, prompt: str, schema, **kw):
+                if kw["max_tokens"] > 32768:
+                    self.calls.append((0, kw["max_tokens"]))
+                    raise RuntimeError("connection reset by peer")
+                return outer._CapSensitiveClient.generate_structured(
+                    self, prompt, schema, **kw)
+
+        client = _TransportOnEscalation(tokens_per_item=20000)
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=2)
+        assert sorted(c.id for c in concepts) == ["fn0", "fn1"]
+        assert client.calls == [
+            (2, 32768), (0, 49152), (1, 32768), (1, 32768),
+        ]
+
+    def test_budget_stop_during_escalated_retry_propagates(
+        self, monkeypatch,
+    ):
+        """A spend-cap trip DURING the escalated retry is phase-
+        terminal: it propagates out of the ladder untouched — never
+        absorbed into the split path (which would keep buying halves
+        after the budget is gone)."""
+        import pytest
+
+        from core.concepts.study import (
+            _PhaseBudgetExhausted,
+            _run_batch_splitting_on_truncation,
+        )
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "16384")
+        items = self._items(2)
+        outer = self
+
+        class _BudgetOnEscalation(self._CapSensitiveClient):
+            def generate_structured(self, prompt: str, schema, **kw):
+                if kw["max_tokens"] > 32768:
+                    from core.llm.client import LLMBudgetExceededError
+                    self.calls.append((0, kw["max_tokens"]))
+                    raise LLMBudgetExceededError("budget exceeded")
+                return outer._CapSensitiveClient.generate_structured(
+                    self, prompt, schema, **kw)
+
+        client = _BudgetOnEscalation(tokens_per_item=20000)
+        with pytest.raises(_PhaseBudgetExhausted):
+            _run_batch_splitting_on_truncation(
+                0, 1, items, [], "t/", "", client, None, None,
+            )
+        # Truncated initial call, budget-tripped escalation, and NOT
+        # one half-size call after the trip.
+        assert client.calls == [(2, 32768), (0, 49152)]
+
+    def test_escalated_wall_timeout_scales_with_the_ceiling(
+        self, monkeypatch,
+    ):
+        """The wall stretches proportionally past the standard 2x
+        ceiling (a healthy escalated retry must not be abandoned
+        mid-generation after billing) and never shrinks below the
+        standard wall."""
+        from core.concepts.study import _escalated_wall_timeout
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "16384")
+        assert _escalated_wall_timeout(49152) == 990  # 660 * 1.5
+        assert _escalated_wall_timeout(32768) == 660.0
+        assert _escalated_wall_timeout(1024) == 660.0
+
+    def test_max_batch_wall_bounds_every_attempt(self, monkeypatch):
+        """``_max_batch_wall_timeout`` is the escalated wall at the
+        multiplier's full stretch — no larger ceiling is ever
+        requested — and is text-budget-independent (the
+        multiplier-to-2x ratio cancels the budget)."""
+        from core.concepts.study import (
+            _escalated_wall_timeout,
+            _max_batch_wall_timeout,
+        )
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "16384")
+        assert _max_batch_wall_timeout() == 990
+        assert _max_batch_wall_timeout() >= _escalated_wall_timeout(
+            49152,
+        )
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "8192")
+        assert _max_batch_wall_timeout() == 990
+        # A zero text budget disables escalation; the standard wall
+        # is then the bound (and the ratio math is never divided by
+        # zero).
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "0")
+        assert _max_batch_wall_timeout() == 660.0
+
+    def test_escalation_multiplier_floor(self):
+        """< 3 makes escalation permanently dead on the tier it exists
+        for: the thinking tier's standard request ceiling is already
+        2x the text budget, so a 2x escalated cap sits AT the
+        standard ceiling and the stand-down guard suppresses every
+        retry — truncated batches on that tier go straight to the
+        costlier split ladder, always."""
+        from core.concepts.study import _TRUNCATION_ESCALATION_MULTIPLIER
+        assert _TRUNCATION_ESCALATION_MULTIPLIER >= 3
+
+    def test_escalation_multiplier_ceiling(self):
+        """> 4 reintroduces the abandoned-worker hazard: the escalated
+        wall scales with the ceiling, so past 4x a single hung retry
+        holds its slot for 20+ minutes — and a retry that still
+        truncates wastes that much more billed generation."""
+        from core.concepts.study import _TRUNCATION_ESCALATION_MULTIPLIER
+        assert _TRUNCATION_ESCALATION_MULTIPLIER <= 4
+
+
 class TestPhase2TruncationHonesty:
     """Split subtrees must not launder non-truncation failures."""
 

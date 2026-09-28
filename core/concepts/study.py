@@ -490,6 +490,41 @@ def _is_under_projects_base(directory: Path) -> bool:
 _DOC_MAX_BYTES = 8192
 _BATCH_WALL_TIMEOUT = 660  # seconds — abandon a hung API call.
 
+# Phase 2 batch calls opt into per-call streaming (SSE-capable
+# surfaces honour it, others degrade to plain create). This constant
+# is only the OPT-IN half of that decision: the provider layer
+# resolves the actual per-call mode as opt-in AND surface capability
+# (its ``_stream_sse_ok`` gate — a surface with no SSE support, e.g.
+# a non-streaming runtime API, silently downgrades the call to plain
+# create). The one-shot output-cap escalation below therefore keys on
+# the same RESOLVED decision (``_batch_call_streams``), not on this
+# flag alone: an escalated ceiling's worst-case generation time only
+# fits inside the provider's ~10-minute non-streaming abort when the
+# call actually streams.
+_BATCH_CALLS_STREAM = True
+
+
+def _batch_call_streams(llm_client: Any = None) -> bool:
+    """Whether a Phase 2 batch call will ACTUALLY stream.
+
+    The module opt-in (``_BATCH_CALLS_STREAM``) resolved against the
+    client's primary provider surface, mirroring the provider layer's
+    own per-call gate (stream opt-in AND ``_stream_sse_ok``, which
+    defaults True for surfaces that never declare). When no provider
+    is resolvable (no client, no ``primary_provider``, resolution
+    raises) the opt-in stands — the provider layer would apply the
+    same fail-open default for such a surface.
+    """
+    if not _BATCH_CALLS_STREAM:
+        return False
+    if llm_client is None:
+        return True
+    try:
+        provider = llm_client.primary_provider
+    except Exception:  # noqa: BLE001 — capability undeterminable
+        return True
+    return bool(getattr(provider, "_stream_sse_ok", True))
+
 # Per-call TEXT output budget for Phase 2 batch calls. Study
 # extraction is a structured task, not open-ended reasoning: a batch's
 # concepts fit comfortably in this budget, and capping it keeps
@@ -535,6 +570,14 @@ def _study_max_output_tokens(model_name: str | None = None) -> int:
 
     The env override sets the TEXT budget (it also sizes the batch
     ceiling below); the thinking headroom scales with it.
+
+    One exception to the too-HIGH wall math: the split ladder's
+    ONE-SHOT escalated retry (``_escalated_output_tokens``) may
+    request past this ceiling for a single already-truncated batch —
+    it stretches the wall timeout proportionally
+    (``_escalated_wall_timeout``) so the larger ceiling keeps the
+    same generation-rate headroom the 660s wall gives the standard
+    2x ceiling.
     """
     text = _study_text_output_tokens()
     if model_name:
@@ -545,6 +588,112 @@ def _study_max_output_tokens(model_name: str | None = None) -> int:
         except ImportError:
             pass
     return text
+
+
+# One-shot escalation step for a truncated batch, as a multiple of
+# the TEXT budget (``_study_text_output_tokens``): before the split
+# ladder halves a truncated batch, it retries the SAME batch once at
+# ``min(multiplier * text, model max_output)``. Both directions
+# hurt:
+# * Too LOW (< 3): on the thinking tier the standard request ceiling
+#   is already 2x the text budget, so a 2x escalated cap sits AT the
+#   standard ceiling and the stand-down guard below (escalated <=
+#   standard -> None) suppresses the retry permanently — escalation
+#   becomes dead code on exactly the tier whose truncations it exists
+#   to cure, and every truncated batch goes straight to the costlier
+#   split ladder.
+# * Too HIGH (> 4): the escalated wall timeout scales with the
+#   ceiling (``_escalated_wall_timeout``), so past 4x a single hung
+#   escalated call holds its worker slot for well over 20 minutes
+#   before being abandoned — and when the retry still truncates, the
+#   wasted call was that much longer and costlier.
+_TRUNCATION_ESCALATION_MULTIPLIER = 3
+
+
+def _escalated_output_tokens(
+    model_name: str, llm_client: Any = None,
+) -> int | None:
+    """One-shot escalated ``max_tokens`` for a truncated batch.
+
+    ``min(_TRUNCATION_ESCALATION_MULTIPLIER * text_budget, model
+    max_output)`` — or ``None`` whenever escalation cannot help and
+    the split ladder should engage directly: the batch call will not
+    actually stream (opt-in off, or the resolved provider surface has
+    no SSE and downgrades the call to plain create — where an
+    escalated generation cannot finish inside the provider's
+    non-streaming abort, making the retry a deterministic billed dead
+    call), the model is unknown (an over-ceiling request would be
+    rejected, not truncated), or the standard request ceiling already
+    sits at / above the escalated one (no headroom to buy).
+    """
+    if not _batch_call_streams(llm_client):
+        return None
+    if not model_name:
+        return None
+    try:
+        from core.llm.model_data import resolve_model_limits
+    except ImportError:
+        return None
+    limits = resolve_model_limits(model_name)
+    if not isinstance(limits, dict):
+        return None
+    try:
+        model_max = int(limits.get("max_output") or 0)
+    except (TypeError, ValueError):
+        return None
+    if model_max <= 0:
+        return None
+    escalated = min(
+        _TRUNCATION_ESCALATION_MULTIPLIER * _study_text_output_tokens(),
+        model_max,
+    )
+    if escalated <= _study_max_output_tokens(model_name):
+        return None
+    return escalated
+
+
+def _escalated_wall_timeout(escalated_tokens: int) -> float:
+    """Wall timeout for an escalated retry, scaled to its ceiling.
+
+    ``_BATCH_WALL_TIMEOUT`` is sized for the STANDARD request ceiling
+    (2x the text budget: ~500s worst-case generation at the observed
+    ~65 tok/s, inside the 660s wall — see
+    ``_study_max_output_tokens``). An escalated ceiling needs
+    proportionally more time or a healthy-but-slow retry is abandoned
+    here after its tokens were already billed; the standard wall
+    stays the floor so a ceiling clamped back to (or below) 2x keeps
+    the standard timeout.
+    """
+    import math
+    scale = escalated_tokens / (2 * _study_text_output_tokens())
+    return max(
+        float(_BATCH_WALL_TIMEOUT),
+        math.ceil(_BATCH_WALL_TIMEOUT * scale),
+    )
+
+
+def _max_batch_wall_timeout() -> float:
+    """Longest wall any single Phase 2 batch attempt can hold.
+
+    The escalated retry's wall at the multiplier's full stretch:
+    ``_escalated_output_tokens`` never exceeds ``multiplier x text
+    budget`` and ``_escalated_wall_timeout`` is monotone in the
+    ceiling, so this bounds every attempt. Text-budget-independent —
+    the multiplier-to-2x ratio cancels the budget out (990s at the
+    shipped 3x). The study-drain ceiling derives from this bound: a
+    drain bound below it abandons a healthy escalated retry
+    mid-generation after its tokens were billed.
+    """
+    text = _study_text_output_tokens()
+    if text <= 0:
+        # A zero/negative env text budget disables escalation
+        # entirely (the stand-down guard); the standard wall is then
+        # the longest attempt. Guards the division below, which the
+        # escalation path itself never reaches with text <= 0.
+        return float(_BATCH_WALL_TIMEOUT)
+    return _escalated_wall_timeout(
+        _TRUNCATION_ESCALATION_MULTIPLIER * text,
+    )
 
 
 def _client_model_name(llm_client: Any) -> str:
@@ -2926,13 +3075,30 @@ def _run_one_batch(
     correlate: list[str] | None = None,
     discard_sink: list | None = None,
     vocab_sink: list | None = None,
+    max_tokens: int | None = None,
+    wall_timeout: float | None = None,
 ) -> tuple[
     list[Concept], list[Invariant], list[Contract],
     list[BugPattern], list[dict[str, str]],
 ]:
-    """Execute a single Phase 2 batch (blocking). Thread-safe."""
+    """Execute a single Phase 2 batch (blocking). Thread-safe.
+
+    ``max_tokens`` / ``wall_timeout`` override the standard request
+    ceiling and wall for the split ladder's one-shot escalated retry;
+    ``None`` keeps the model-derived defaults.
+    """
     if on_batch:
         on_batch(idx, total, focus)
+
+    request_max_tokens = (
+        max_tokens
+        if max_tokens is not None
+        else _study_max_output_tokens(_client_model_name(llm_client))
+    )
+    wall = (
+        wall_timeout if wall_timeout is not None
+        else float(_BATCH_WALL_TIMEOUT)
+    )
 
     prompt = _build_batch_prompt(
         focus, context, target,
@@ -2956,12 +3122,14 @@ def _run_one_batch(
             result_q.put(("ok", llm_client.generate_structured(
                 prompt, _RESPONSE_SCHEMA,
                 system_prompt=_SYSTEM_PROMPT, task_type="study",
-                max_tokens=_study_max_output_tokens(
-                    _client_model_name(llm_client)),
+                max_tokens=request_max_tokens,
                 # Study batches are the canonical long structured
                 # call — per-call streaming opt-in (SSE-capable
-                # surfaces honour it, others ignore it).
-                stream=True,
+                # surfaces honour it, others degrade to plain
+                # create). The one-shot cap escalation keys on this
+                # opt-in resolved against the surface's capability
+                # (``_batch_call_streams``).
+                stream=_BATCH_CALLS_STREAM,
             )))
         except BaseException as exc:  # noqa: BLE001 — marshalled to caller
             result_q.put(("err", exc))
@@ -2971,11 +3139,14 @@ def _run_one_batch(
     )
     worker.start()
     try:
-        kind, payload = result_q.get(timeout=_BATCH_WALL_TIMEOUT)
+        kind, payload = result_q.get(timeout=wall)
     except _queue.Empty:
         logger.warning(
-            "Phase 2 batch %d/%d wall-timeout (%ds)",
-            idx + 1, total, _BATCH_WALL_TIMEOUT,
+            # The EFFECTIVE wall for this attempt (an escalated retry
+            # stretches it past the base constant); %g keeps integral
+            # walls clean ("990s", not "990.0s").
+            "Phase 2 batch %d/%d wall-timeout (%gs)",
+            idx + 1, total, wall,
         )
         msg = f"batch {idx + 1}/{total} wall-timeout"
         raise _BatchLLMError(msg) from None
@@ -3072,10 +3243,17 @@ def _run_batch_splitting_on_truncation(
 
     A truncated response means the batch's CONTENT outgrew the output
     budget, not that the provider failed — an identical re-send
-    re-truncates deterministically, but each half fits twice the
-    per-item budget. Recurses down to single items; a single item that
-    still truncates is recorded as failed (log + discard record) and
-    its siblings' results are returned, so one oversized item can
+    re-truncates deterministically. Before splitting, the SAME batch
+    is retried ONCE at an escalated ceiling
+    (``_escalated_output_tokens``): the standard cap sits well below
+    most models' max_output, so a content-sized batch often fits one
+    step up and the whole split subtree (each level a fresh
+    full-prompt paid call) is skipped. The retry is one-shot per
+    batch level — when it truncates too, the normal split path
+    engages, and each half fits twice the per-item budget. Recurses
+    down to single items; a single item that still truncates past its
+    own escalated retry is recorded as failed (log + discard record)
+    and its siblings' results are returned, so one oversized item can
     never zero out a batch, let alone the phase.
 
     Failure semantics: only errors whose OWN ``truncation`` flag is
@@ -3084,14 +3262,23 @@ def _run_batch_splitting_on_truncation(
     batch honestly (its sibling's results are dropped in favour of
     correct breaker accounting — a transport failure must reach the
     consecutive-failure abort, never be laundered into a
-    truncation-flagged partial success). Raises truncation-flagged
-    ``_BatchLLMError`` only when every item truncated.
+    truncation-flagged partial success). The escalated retry is the
+    one exception: its subject batch ALREADY failed with truncation
+    first-hand, so however the opportunistic retry dies (truncation,
+    wall-timeout, transport), the batch keeps its established
+    truncation classification and proceeds to the split path exactly
+    as if the escalation had never run — downstream behavior
+    unchanged (a genuinely downed provider fails the split ladder's
+    own calls, which DO reach the breaker). ``_PhaseBudgetExhausted``
+    still propagates from the retry untouched. Raises
+    truncation-flagged ``_BatchLLMError`` only when every item
+    truncated.
 
-    The recursion runs OUTSIDE the ``except`` handler on purpose:
-    inside it, Python chains every new exception's ``__context__`` to
-    the truncation error being handled, and the chain-walking
-    classifier would then read unrelated transport failures as
-    truncation.
+    The recursion and the escalated retry run OUTSIDE the ``except``
+    handler on purpose: inside it, Python chains every new
+    exception's ``__context__`` to the truncation error being
+    handled, and the chain-walking classifier would then read
+    unrelated transport failures as truncation.
     """
     trunc_exc: _BatchLLMError | None = None
     try:
@@ -3104,28 +3291,60 @@ def _run_batch_splitting_on_truncation(
     except _BatchLLMError as exc:
         if not exc.truncation:
             raise
-        if len(focus) <= 1:
-            item = focus[0] if focus else None
-            if item is not None:
-                logger.warning(
-                    "Phase 2 batch %d/%d: single item %s (%s) still "
-                    "truncates the output budget — recording it as "
-                    "failed and continuing with the rest",
-                    idx + 1, total, item.name, item.file,
-                )
-                if discard_sink is not None:
-                    discard_sink.append({
-                        "kind": "item",
-                        "id": item.name,
-                        "reason": "batch response truncated at the "
-                                  "output token limit for this single "
-                                  "item",
-                        "names": [item.name],
-                    })
-            raise
         trunc_exc = exc
 
     # From here down we are outside the handler (see docstring).
+    escalated = _escalated_output_tokens(
+        _client_model_name(llm_client), llm_client,
+    )
+    if escalated is not None:
+        logger.warning(
+            "Phase 2 batch %d/%d: response truncated at %d items — "
+            "retrying once at an escalated output ceiling (%d tokens) "
+            "before splitting",
+            idx + 1, total, len(focus), escalated,
+        )
+        try:
+            return _run_one_batch(
+                idx, total, focus, context, target, source_root,
+                llm_client, reading_list,
+                # Progress was already reported for the full batch;
+                # the escalated retry stays silent.
+                None,
+                doc_context=doc_context, correlate=correlate,
+                discard_sink=discard_sink, vocab_sink=vocab_sink,
+                max_tokens=escalated,
+                wall_timeout=_escalated_wall_timeout(escalated),
+            )
+        except _PhaseBudgetExhausted:
+            raise
+        except _BatchLLMError as retry_exc:
+            # Keep the batch's first-hand truncation classification
+            # (see docstring); when the retry itself truncated, its
+            # fresher error carries the escalated-cap context.
+            if retry_exc.truncation:
+                trunc_exc = retry_exc
+
+    if len(focus) <= 1:
+        item = focus[0] if focus else None
+        if item is not None:
+            logger.warning(
+                "Phase 2 batch %d/%d: single item %s (%s) still "
+                "truncates the output budget — recording it as "
+                "failed and continuing with the rest",
+                idx + 1, total, item.name, item.file,
+            )
+            if discard_sink is not None:
+                discard_sink.append({
+                    "kind": "item",
+                    "id": item.name,
+                    "reason": "batch response truncated at the "
+                              "output token limit for this single "
+                              "item",
+                    "names": [item.name],
+                })
+        raise trunc_exc
+
     mid = len(focus) // 2
     if not 0 < mid < len(focus):
         # Unsplittable despite len(focus) >= 2 would mean an empty

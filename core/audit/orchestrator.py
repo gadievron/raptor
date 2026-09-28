@@ -15746,7 +15746,16 @@ def _mark_batch_reading_list(
 
 
 # Drain policy for the study consumer (all seconds):
-# hard ceiling on the wait — unchanged from the historical join(600);
+# FLOOR for the hard ceiling on the wait — the historical join(600).
+# The effective ceiling (``_study_drain_timeout_s``) raises this
+# floor to the longest wall a single study batch attempt can
+# legitimately hold (the escalated retry's stretched wall — 990s at
+# the shipped multiplier): a ceiling below that wall abandons a
+# healthy consumer mid-escalated-call after its tokens were billed,
+# and widens the post-drain daemon-unwind window by the difference; a
+# fixed constant ABOVE the max wall would make every genuinely wedged
+# drain wait that much longer for nothing, so the ceiling is derived,
+# not hardcoded.
 _STUDY_DRAIN_TIMEOUT_S = 600.0
 # how often the drain loop re-samples the consumer's state;
 _STUDY_DRAIN_POLL_S = 2.0
@@ -15761,12 +15770,25 @@ _STUDY_DRAIN_NO_PROGRESS_S = 60.0
 _STUDY_DRAIN_STOP_GRACE_S = 30.0
 
 
+def _study_drain_timeout_s() -> float:
+    """Effective drain ceiling: the floor raised to the longest wall
+    a single batch attempt can hold (see ``_STUDY_DRAIN_TIMEOUT_S``).
+    Resolved at call time so the study module's multiplier governs;
+    without the study module the historical floor stands.
+    """
+    try:
+        from core.concepts.study import _max_batch_wall_timeout
+    except ImportError:
+        return _STUDY_DRAIN_TIMEOUT_S
+    return max(_STUDY_DRAIN_TIMEOUT_S, _max_batch_wall_timeout())
+
+
 def _drain_study_consumer(
     thread: _threading.Thread,
     study_queue: StudyQueue | None,
     *,
     budget_exhausted: bool,
-    timeout_s: float = _STUDY_DRAIN_TIMEOUT_S,
+    timeout_s: float | None = None,
     no_progress_grace_s: float = _STUDY_DRAIN_NO_PROGRESS_S,
     stop_grace_s: float = _STUDY_DRAIN_STOP_GRACE_S,
     poll_s: float = _STUDY_DRAIN_POLL_S,
@@ -15793,7 +15815,14 @@ def _drain_study_consumer(
     Loud-degradation semantics are kept: abandoning a still-alive
     thread emits an operator-visible warning, and a forced stop is
     announced once.
+
+    ``timeout_s`` defaults (None) to ``_study_drain_timeout_s()`` —
+    the historical 600s floor raised to cover the longest single
+    batch attempt, so a healthy escalated retry is never abandoned by
+    the drain bound itself.
     """
+    if timeout_s is None:
+        timeout_s = _study_drain_timeout_s()
     stop_sent = False
     drain_start = time.monotonic()
     deadline = drain_start + timeout_s

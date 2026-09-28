@@ -336,3 +336,66 @@ class TestConsumerLoopHonoursStop:
         assert time.monotonic() - t0 < 5, (
             "consumer loop must exit promptly once a stop is requested"
         )
+
+
+class TestDrainCeilingCoversMaxWall:
+    """The drain's effective hard ceiling must cover the longest wall
+    a single study batch attempt can legitimately hold — a bound below
+    it abandons a healthy escalated retry mid-generation after
+    billing — while never sinking below the historical 600s floor."""
+
+    def test_ceiling_covers_the_escalated_wall(self):
+        from core.audit.orchestrator import (
+            _STUDY_DRAIN_TIMEOUT_S,
+            _study_drain_timeout_s,
+        )
+        from core.concepts.study import _max_batch_wall_timeout
+        effective = _study_drain_timeout_s()
+        # Direction 1: never below the longest single-call wall.
+        assert effective >= _max_batch_wall_timeout()
+        # Direction 2: never below the historical floor either.
+        assert effective >= _STUDY_DRAIN_TIMEOUT_S
+        # Shipped numbers: 3x multiplier -> 990s escalated wall.
+        assert effective == 990
+
+    def test_ceiling_tracks_the_multiplier_both_directions(
+        self, monkeypatch,
+    ):
+        import core.concepts.study as study
+        from core.audit.orchestrator import _study_drain_timeout_s
+        # Multiplier up: the ceiling follows the stretched wall.
+        monkeypatch.setattr(
+            study, "_TRUNCATION_ESCALATION_MULTIPLIER", 6)
+        assert _study_drain_timeout_s() == 1980
+        # Multiplier down to no-stretch: the wall's own 660s floor
+        # (>= the 600s drain floor) holds — the ceiling never shrinks
+        # below either floor.
+        monkeypatch.setattr(
+            study, "_TRUNCATION_ESCALATION_MULTIPLIER", 1)
+        assert _study_drain_timeout_s() == 660
+
+    def test_drain_resolves_derived_ceiling_when_unspecified(
+        self, monkeypatch,
+    ):
+        import core.audit.orchestrator as _orch
+        resolved = []
+
+        def _fake_ceiling() -> float:
+            resolved.append(True)
+            return 5.0
+
+        monkeypatch.setattr(
+            _orch, "_study_drain_timeout_s", _fake_ceiling)
+        dead = threading.Thread(target=lambda: None)
+        dead.start()
+        dead.join(timeout=5)
+        _drain_study_consumer(dead, None, budget_exhausted=False)
+        assert resolved, (
+            "an unspecified timeout_s must resolve the derived ceiling"
+        )
+        # An explicit timeout_s bypasses the derivation.
+        resolved.clear()
+        _drain_study_consumer(
+            dead, None, budget_exhausted=False, timeout_s=1.0,
+        )
+        assert not resolved
