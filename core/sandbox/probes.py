@@ -416,6 +416,150 @@ def _probe_pidns_fresh_proc() -> tuple[bool, bool]:
         return True, False
 
 
+def check_pidns_supervision_available() -> tuple[bool | None, str]:
+    """Whether the supervised pid-namespace tier can engage on this host.
+
+    Consulted by ``core.sandbox.supervised.spawn_supervised`` under
+    ``pid_ns="auto"`` / ``"require"``. Exercises the tier's EXACT
+    namespace shape in-process: a single
+    ``os.unshare(CLONE_NEWUSER | CLONE_NEWPID)`` call (never staged —
+    restricted-userns hosts permit the combined call and refuse a
+    staged second one) followed by a fork whose child must be PID 1 of
+    the new namespace. In-process on purpose, like
+    ``_staged_pidns_selftest``: the real spawn unshares in-process, so
+    an exec'd CLI probe would answer the wrong question.
+
+    Returns ``(verdict, reason)`` — tri-state:
+      True  — the tier engages (cached).
+      False — DEFINITIVE refusal: the kernel/LSM denied the unshare
+              (EPERM/EACCES — e.g. AppArmor's unprivileged-userns
+              restriction — or ENOSYS/EINVAL), the platform lacks the
+              primitives, or the namespace did not actually take
+              effect. Cached.
+      None  — the probe itself could not run (fork failure under
+              pressure, signal death, unexpected error). NOT a verdict
+              and NOT cached; the next call re-probes, and the spawn
+              path treats it as attempt-and-see — the live unshare is
+              the authoritative test.
+
+    Lock discipline matches the sibling checks: brief lock around
+    cache reads/writes, the fork-based probe runs outside the lock;
+    the first publisher wins and racers adopt its verdict.
+    """
+    with state._cache_lock:
+        if state._pidns_supervision_cache is not None:
+            return state._pidns_supervision_cache
+
+    verdict, reason = _probe_pidns_supervision()
+
+    if verdict is None:
+        return (None, reason)
+    with state._cache_lock:
+        if state._pidns_supervision_cache is None:
+            state._pidns_supervision_cache = (verdict, reason)
+        return state._pidns_supervision_cache
+
+
+def note_pidns_supervision_refused(reason: str) -> None:
+    """Record a LIVE unshare refusal seen by the supervised spawn path.
+
+    A runtime refusal is authoritative over any earlier probe verdict
+    (the probe can race an LSM policy load, or the policy can change
+    between probe and spawn), so this overwrites the cache
+    unconditionally: subsequent ``pid_ns="auto"`` spawns skip the
+    doomed namespace attempt instead of re-failing it per spawn.
+    """
+    with state._cache_lock:
+        state._pidns_supervision_cache = (False, reason)
+
+
+def _probe_pidns_supervision() -> tuple[bool | None, str]:
+    """Run the actual probe. Never touches the cache —
+    ``check_pidns_supervision_available`` owns caching and locking.
+
+    Fork/exit-code discipline of ``_staged_pidns_selftest``. Child exit
+    codes: 0 engaged; 190 EPERM/EACCES; 191 ENOSYS/EINVAL; 192 other
+    unshare failure; 194 the post-unshare fork failed (infrastructure,
+    not a verdict); 195 the fork child was not PID 1 (namespace did
+    not take effect); 196 the grandchild died abnormally.
+    """
+    import sys as _sys
+    if _sys.platform != "linux":
+        return (False, f"pid-namespace supervision is Linux-only "
+                       f"(platform: {_sys.platform})")
+    for mod, attr in ((os, "unshare"), (os, "pidfd_open")):
+        if not hasattr(mod, attr):
+            return (False, f"os.{attr} unavailable on this Python/kernel")
+
+    _CLONE_NEWUSER = getattr(os, "CLONE_NEWUSER", 0x10000000)
+    _CLONE_NEWPID = getattr(os, "CLONE_NEWPID", 0x20000000)
+    import warnings as _warnings
+    with _warnings.catch_warnings():
+        _warnings.filterwarnings(
+            "ignore", category=DeprecationWarning,
+            message=r".*fork.*may lead to deadlocks.*",
+        )
+        try:
+            pid = os.fork()
+        except OSError as e:
+            return (None, f"probe fork failed: {e}")
+    if pid == 0:
+        try:
+            os.unshare(_CLONE_NEWUSER | _CLONE_NEWPID)
+        except OSError as e:
+            import errno as _errno
+            if e.errno in (_errno.EPERM, _errno.EACCES):
+                os._exit(190)
+            if e.errno in (_errno.ENOSYS, _errno.EINVAL):
+                os._exit(191)
+            os._exit(192)
+        except BaseException:
+            os._exit(192)
+        try:
+            grandchild = os.fork()
+        except BaseException:
+            os._exit(194)
+        if grandchild == 0:
+            os._exit(0 if os.getpid() == 1 else 61)
+        try:
+            _, gstatus = os.waitpid(grandchild, 0)
+        except BaseException:
+            os._exit(196)
+        if os.WIFEXITED(gstatus) and os.WEXITSTATUS(gstatus) == 0:
+            os._exit(0)
+        if os.WIFEXITED(gstatus) and os.WEXITSTATUS(gstatus) == 61:
+            os._exit(195)
+        os._exit(196)
+    try:
+        _, status = os.waitpid(pid, 0)
+    except ChildProcessError:
+        return (None, "probe child reaped elsewhere (broad os.wait "
+                      "in this process?)")
+    if not os.WIFEXITED(status):
+        return (None, f"probe child died by signal "
+                      f"{os.WTERMSIG(status) if os.WIFSIGNALED(status) else '?'}")
+    code = os.WEXITSTATUS(status)
+    if code == 0:
+        return (True, "")
+    if code == 190:
+        return (False, "unshare(CLONE_NEWUSER|CLONE_NEWPID) refused: "
+                       "EPERM/EACCES (unprivileged user namespaces "
+                       "restricted on this host)")
+    if code == 191:
+        return (False, "unshare(CLONE_NEWUSER|CLONE_NEWPID) refused: "
+                       "ENOSYS/EINVAL (kernel lacks the namespace "
+                       "support)")
+    if code == 192:
+        return (False, "unshare(CLONE_NEWUSER|CLONE_NEWPID) failed")
+    if code == 195:
+        return (False, "pid namespace did not take effect (fork child "
+                       "was not PID 1)")
+    if code == 194:
+        return (None, "probe could not fork inside the namespace "
+                      "(process pressure?)")
+    return (None, f"probe child exited {code} (infrastructure failure)")
+
+
 def check_net_available() -> bool:
     """Check if network isolation via user namespaces is available.
 

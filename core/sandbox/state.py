@@ -55,6 +55,15 @@ _unix_scope_cache = None
 # signal or the known static host condition (warned once, stamped
 # per run).
 _pidns_fresh_proc_cache: bool | None = None
+# _pidns_supervision_cache: (verdict, reason) for the supervised
+# pid-namespace tier (core.sandbox.supervised) — single-call
+# user+pid unshare + PID-1 round-trip. None = not probed. Only
+# DEFINITIVE verdicts land here (True engaged / False refused);
+# probe infrastructure failures are never cached (the check returns
+# None ad hoc and re-probes next call). A LIVE spawn-path refusal
+# overwrites via probes.note_pidns_supervision_refused — runtime
+# evidence is authoritative over an earlier probe.
+_pidns_supervision_cache: tuple[bool, str] | None = None
 # Seccomp cache: None = unchecked, 0 = unavailable, CDLL handle = available.
 _libseccomp_cache = None
 # ptrace cache: None = unchecked, True/False = probed result. Used by

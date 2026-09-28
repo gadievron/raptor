@@ -721,6 +721,7 @@ from .probes import (
     check_child_unix_sockets_available,
     check_mount_available,
     check_net_available,
+    check_pidns_supervision_available,
     check_sandbox_available,
     check_seatbelt_available,
     check_unshare_engages,
@@ -728,6 +729,11 @@ from .probes import (
 from .profiles import _SANDBOX_KWARGS, DEFAULT_PROFILE, PROFILES
 from .python_paths import python_runtime_tool_paths
 from .seccomp import check_seccomp_available
+from .supervised import (
+    SupervisedHandle,
+    SupervisedTeardownError,
+    spawn_supervised,
+)
 from .tiers import ContainmentTier
 
 _cache_lock = _state._cache_lock
@@ -776,6 +782,10 @@ __all__ = [
     "SandboxSetupError",
     # Containment-tier lattice (the floor contract's vocabulary)
     "ContainmentTier",
+    # Supervised process trees — teardown plumbing, NOT a sandbox
+    # (no confinement; see core.sandbox.supervised)
+    "SupervisedHandle",
+    "SupervisedTeardownError",
     "_build_mount_script",
     "_cache_lock",
     "_check_blocked",
@@ -794,6 +804,7 @@ __all__ = [
     "check_landlock_available",
     "check_mount_available",
     "check_net_available",
+    "check_pidns_supervision_available",
     # Availability probes (exposed for the startup banner)
     "check_sandbox_available",
     "check_seatbelt_available",
@@ -813,4 +824,5 @@ __all__ = [
     "set_cli_profile",
     "set_pdeathsig",
     "spawn_backend_available",
+    "spawn_supervised",
 ]
