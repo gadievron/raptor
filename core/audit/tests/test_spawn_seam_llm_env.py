@@ -166,6 +166,14 @@ class TestAgenticPhase3Overlay:
         monkeypatch.setattr(
             raptor_agentic.subprocess, "Popen", FakeProc,
         )
+        # The Popen patch above is on the GLOBAL subprocess module, so
+        # it also reaches ctypes.util.find_library's ldconfig probe —
+        # set_pdeathsig's first-ever _get_libc() in a fresh process
+        # would hand FakeProc to a `with` statement and fail the spawn.
+        # The pdeathsig plumbing is not the seam under test; stub it.
+        monkeypatch.setattr(
+            raptor_agentic, "_parent_death_preexec", lambda: None,
+        )
         rc, _out, _err = raptor_agentic.run_command_streaming(
             ["/bin/true"], "seam test",
         )
