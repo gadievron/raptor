@@ -472,9 +472,10 @@ def _register_private_joern_reap_hook(
 
     Returns True when a hook was registered. The hook is
     exception-guarded and idempotent against the graceful path: the
-    ``finally`` clears the hook registry before its normal stop, and
-    a racing double-stop only re-signals an already-dead corroborated
-    group (``stop_fast`` mutates no instance state).
+    ``finally`` clears the hook registry once its own release is
+    done, and a watchdog firing during that window only re-signals an
+    already-dead corroborated group (``stop_fast`` mutates no
+    instance state).
     """
     if joern_server is None or caller_owns or lifecycle_shared:
         return False
@@ -613,6 +614,43 @@ def _reset_shutdown_state() -> None:
     _shutdown_event.clear()
     _sigterm_event.clear()
     _sigterm_state["count"] = 0
+
+
+# Hard bound on the joern server release during a SIGTERM salvage or
+# forced exit. Not lower: ``joern_release`` serialises on a
+# cross-process file lock, and a healthy sibling holding it briefly
+# (registering or releasing its own server) legitimately takes a few
+# seconds — a ~1s bound would abandon releases that were about to
+# succeed and leak the JVM anyway. Not higher: this wait sits inside
+# the ~30s SIGTERM grace shared with the ledger/journal flush and the
+# salvage export; letting the release consume most of that window
+# trades a JVM the operator can reap by hand for salvage artifacts
+# nothing can recreate.
+_JOERN_EXIT_STOP_TIMEOUT_S = 10.0
+
+
+def _bounded_joern_exit_release(release: Callable[[], None]) -> None:
+    """Run *release* with a hard time bound, then abandon it.
+
+    Exit paths only (SIGTERM salvage conclusion, watchdog expiry,
+    second TERM): ``joern_release`` can block on its cross-process
+    file lock, and an exiting process must not hang there — a leaked
+    forwarder+JVM pair is recoverable, a wedged salvage is not. The
+    worker thread is daemonic, so an expired bound never delays the
+    interpreter's exit.
+    """
+    worker = _threading.Thread(
+        target=release, daemon=True, name="joern-exit-release",
+    )
+    worker.start()
+    worker.join(_JOERN_EXIT_STOP_TIMEOUT_S)
+    if worker.is_alive():
+        logger.warning(
+            "joern server release did not finish within %.0fs during "
+            "exit — abandoning it (the forwarder/JVM pair may outlive "
+            "this process; reap it manually if it does)",
+            _JOERN_EXIT_STOP_TIMEOUT_S,
+        )
 
 
 # Seconds between progress-checkpoint writes from the study consumer.
@@ -2155,6 +2193,45 @@ def run_orchestrator(
         lifecycle_shared=_joern_lifecycle,
     )
 
+    # --- Joern release for every exit shape ---
+    # The graceful ``finally`` below is the normal release; the FORCED
+    # exits (watchdog expiry, second TERM) bypass it via os._exit and
+    # used to leak the forwarder+JVM pair, so the same release rides
+    # the flush-hook registry, time-bounded. Idempotent by lock: the
+    # hook and the ``finally`` may both fire (watchdog racing
+    # teardown) and the server must be released exactly once. Acts on
+    # the lifecycle handle THIS run holds (server object + its
+    # lifecycle token) — never on child-process assumptions, and never
+    # on the heap ledger (its rows self-evict on pid identity).
+    _joern_release_guard = _threading.Lock()
+
+    def _release_joern_for_exit() -> None:
+        if _caller_owns_joern:
+            return  # the embedder owns the server's lifetime
+        if not _joern_release_guard.acquire(blocking=False):
+            return  # already released (or being released) elsewhere
+        if _joern_lifecycle:
+            try:
+                from packages.joern.lifecycle import joern_release
+
+                joern_release(
+                    token=getattr(
+                        joern_server, "_lifecycle_token", None,
+                    ),
+                    srv=joern_server,
+                )
+            except Exception:
+                logger.debug(
+                    "joern lifecycle release failed", exc_info=True,
+                )
+        else:
+            _stop_joern_server(joern_server)
+
+    if joern_server is not None and not _caller_owns_joern:
+        _sigterm_flush_hooks.append(
+            lambda: _bounded_joern_exit_release(_release_joern_for_exit),
+        )
+
     # --- Joern pre-sweep future: submitted at server start ---
     # build_joern_evidence depends only on target/out_dir/server (its
     # cache and interruption-status identity is CPG-content +
@@ -2227,38 +2304,37 @@ def run_orchestrator(
             joern_presweep_abort=joern_presweep_abort,
         )
     finally:
-        # This run's flush hooks must not outlive it (a later run in
-        # the same process registers its own).
-        _sigterm_flush_hooks.clear()
-        if _telemetry_sink is not None:
-            try:
-                from core.llm.telemetry import set_sink
-                set_sink(None)
-                if _telemetry_sink.total_records:
-                    logger.info(_telemetry_sink.summary_line())
-            except Exception:
-                logger.debug(
-                    "llm telemetry summary failed", exc_info=True,
-                )
-        from core.analysis.reach_audit import set_joern_server
+        try:
+            if _telemetry_sink is not None:
+                try:
+                    from core.llm.telemetry import set_sink
+                    set_sink(None)
+                    if _telemetry_sink.total_records:
+                        logger.info(_telemetry_sink.summary_line())
+                except Exception:
+                    logger.debug(
+                        "llm telemetry summary failed", exc_info=True,
+                    )
+            from core.analysis.reach_audit import set_joern_server
 
-        set_joern_server(None)
-        if _caller_owns_joern:
-            pass
-        elif _joern_lifecycle:
-            try:
-                from packages.joern.lifecycle import joern_release
-
-                joern_release(
-                    token=getattr(
-                        joern_server, "_lifecycle_token", None,
-                    ),
-                    srv=joern_server,
-                )
-            except Exception:
-                logger.debug("joern lifecycle release failed", exc_info=True)
-        else:
-            _stop_joern_server(joern_server)
+            set_joern_server(None)
+            if is_sigterm_requested():
+                # Salvage conclusion: joern_release can block on its
+                # cross-process file lock, and the ~30s grace budget
+                # belongs to the ledger/journal flush and the salvage
+                # export — bound the release and abandon it if it
+                # stalls, exactly like the forced-exit hook.
+                _bounded_joern_exit_release(_release_joern_for_exit)
+            else:
+                _release_joern_for_exit()
+        finally:
+            # Cleared AFTER the release (this run's hooks must not
+            # outlive it — a later run registers its own): clearing
+            # first re-opened the leak this closes, a watchdog firing
+            # during teardown found an empty registry and force-exited
+            # past the still-running release. The release guard makes
+            # the hook + finally double-fire benign.
+            _sigterm_flush_hooks.clear()
 
 
 # (target_path, library) → detected version or None. Manifest parsing
