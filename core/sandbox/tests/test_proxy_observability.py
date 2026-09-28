@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
 import ipaddress
 import logging
 import os
@@ -688,3 +689,109 @@ class TestSummaryAndHeartbeat:
         else:
             assert "DEGRADED" not in summaries[0], (
                 "no-netlink platforms are not degraded")
+
+
+class TestStatsLineClosedStreamGuard:
+    """stop()'s teardown summary and the heartbeat can fire during
+    interpreter/harness teardown, AFTER a logging handler's underlying
+    stream (captured stderr, a closed log file) is gone. The resulting
+    ValueError raises inside Handler.emit, where logging swallows it
+    and prints a "--- Logging error ---" traceback to stderr — the
+    call sites' contextlib.suppress never sees it and the noise lands
+    in test/CI output anyway. _log_stats_line therefore skips the emit
+    entirely when a handler that would SERVICE the record (parent
+    chain up to propagate=False, handler level <= INFO; filters are
+    not consulted) sits on an already-closed stream, and the guard
+    itself treats any hostile stream/.closed exception as closed."""
+
+    def test_emit_skipped_when_a_servicing_handler_stream_is_closed(
+            self, reset_proxy, caplog):
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        # Attach to a PARENT logger: the guard must walk the hierarchy
+        # exactly as Logger.callHandlers would reach this handler.
+        parent_log = logging.getLogger("core.sandbox")
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        parent_log.addHandler(handler)
+        try:
+            with caplog.at_level(logging.INFO,
+                                 logger="core.sandbox.proxy"):
+                # Open stream: the forced line emits and lands.
+                assert proxy._log_stats_line("beat", force=True) is True
+                assert "egress proxy beat:" in stream.getvalue()
+                # Closed stream (the teardown shape): the emit is
+                # SKIPPED — not attempted-and-half-swallowed.
+                stream.close()
+                assert proxy._log_stats_line("beat",
+                                             force=True) is False
+        finally:
+            parent_log.removeHandler(handler)
+            proxy.stop()
+
+    def test_closed_handler_above_record_level_does_not_suppress(
+            self, reset_proxy, caplog):
+        # A stale CRITICAL-only handler on a closed stream would never
+        # service the INFO stats record — callHandlers checks
+        # record.levelno against handler.level — so it must not
+        # silence the stats trail (the guard is level-aware).
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"x"})
+        parent_log = logging.getLogger("core.sandbox")
+        stream = io.StringIO()
+        stream.close()
+        handler = logging.StreamHandler(stream)
+        handler.setLevel(logging.CRITICAL)
+        parent_log.addHandler(handler)
+        try:
+            with caplog.at_level(logging.INFO,
+                                 logger="core.sandbox.proxy"):
+                assert proxy._log_stats_line("beat", force=True) is True
+        finally:
+            parent_log.removeHandler(handler)
+            proxy.stop()
+
+    def test_hostile_closed_property_fails_toward_skip(self):
+        # Real shape of the class: a TextIOWrapper whose buffer was
+        # detached raises ValueError on .closed. getattr shields only
+        # AttributeError, so the guard needs its own containment —
+        # any exception during the walk counts as closed (skip),
+        # never propagates to stop()'s caller.
+        class _HostileStream:
+            @property
+            def closed(self):
+                raise RuntimeError("hostile .closed")
+
+            def write(self, *_a):
+                return 0
+
+            def flush(self):
+                return None
+
+        log = logging.getLogger("jailfix_hostile_closed_test")
+        handler = logging.StreamHandler(_HostileStream())
+        log.addHandler(handler)
+        try:
+            assert proxy_mod._stats_emit_would_hit_closed_stream(
+                log) is True
+        finally:
+            log.removeHandler(handler)
+
+    def test_guard_walk_honours_propagate_false(self):
+        parent = logging.getLogger("jailfix_guard_walk_test")
+        child = logging.getLogger("jailfix_guard_walk_test.child")
+        stream = io.StringIO()
+        stream.close()
+        handler = logging.StreamHandler(stream)
+        parent.addHandler(handler)
+        try:
+            child.propagate = True
+            assert proxy_mod._stats_emit_would_hit_closed_stream(
+                child) is True
+            # propagate=False: records never reach the parent's
+            # handler, so its closed stream is not this logger's
+            # problem — the walk must stop where callHandlers stops.
+            child.propagate = False
+            assert proxy_mod._stats_emit_would_hit_closed_stream(
+                child) is False
+        finally:
+            parent.removeHandler(handler)
+            child.propagate = True

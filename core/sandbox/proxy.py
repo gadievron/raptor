@@ -569,6 +569,62 @@ _STATS_FAILED_RESULTS = frozenset({
 # blind window while keeping a 12h audit run to at most ~144 lines.
 _STATS_HEARTBEAT_INTERVAL_S = 300.0
 
+
+def _stats_emit_would_hit_closed_stream(
+        log: logging.Logger, levelno: int = logging.INFO) -> bool:
+    """True when emitting a *levelno* record on *log* would reach a
+    handler whose stream is already closed.
+
+    At interpreter/test-harness teardown the stats emitters (summary in
+    ``stop()``, heartbeat task) can fire after logging's underlying
+    stream (captured stderr, a closed log file) is gone. The
+    ``ValueError`` that raises happens INSIDE ``Handler.emit`` — logging
+    swallows it via ``Handler.handleError`` and prints a
+    "--- Logging error ---" traceback to stderr, so the callers'
+    ``contextlib.suppress`` never sees it and the noise lands in test
+    output anyway.
+
+    Chosen semantics, on the record:
+
+    - The walk covers the same parent chain ``Logger.callHandlers``
+      covers (stopping at ``propagate=False``) and honours per-handler
+      LEVEL, so a stale closed handler that would never service the
+      record (a CRITICAL-only debug tap left behind by a harness)
+      cannot silence INFO stats. Handler FILTERS are deliberately NOT
+      consulted — evaluating them needs a built record, and the cost
+      of ignoring them is one skipped stats line, never emit noise.
+    - A closed handler that WOULD service the record skips the WHOLE
+      emit, live sibling handlers included: logging fans one record
+      out to every servicing handler under logging's own locks, and
+      there is no supported per-handler bypass. A long-lived closed
+      handler next to a live one therefore silences the stats trail —
+      accepted: losing observability lines beats un-catchable
+      "--- Logging error ---" tracebacks in operator/test output, and
+      a process in that state has a logging-hygiene bug this guard
+      cannot fix.
+    - Any exception from a hostile ``stream``/``closed`` attribute
+      (real shape: a detached ``TextIOWrapper`` raises ``ValueError``
+      on ``.closed``) counts as closed — fail toward skip. The guard
+      exists to keep emit-time surprises out of ``stop()``'s callers,
+      so it must not raise its own.
+    """
+    try:
+        node: "logging.Logger | None" = log
+        while node is not None:
+            for handler in node.handlers:
+                if handler.level > levelno:
+                    continue
+                stream = getattr(handler, "stream", None)
+                if stream is not None and getattr(stream, "closed", False):
+                    return True
+            if not node.propagate:
+                break
+            node = node.parent
+    except Exception:  # noqa: BLE001 — hostile stream/.closed properties; fail toward skip, never raise out of a teardown path
+        return True
+    return False
+
+
 # Live-escalation: default distinct-denied-host threshold before the
 # proxy prints an immediate stderr recon-pattern banner. Shared with
 # triage.py's post-hoc `host_recon_pattern` signal via the leaf
@@ -3181,7 +3237,16 @@ class EgressProxy:
         aggregate numbers plus operator-authored constants only —
         nothing peer- or target-derived — so the line satisfies the
         log-sanitisation posture by construction.
+
+        Emits nothing when a handler that would service this INFO
+        record sits on an already-closed stream (interpreter/harness
+        teardown): the write error would surface as logging's internal
+        "--- Logging error ---" stderr noise, not as a catchable
+        exception at this call site. Semantics and trade-offs:
+        ``_stats_emit_would_hit_closed_stream``.
         """
+        if _stats_emit_would_hit_closed_stream(logger, logging.INFO):
+            return False
         snap = self.snapshot()
         c = snap["counters"]
         token = (
