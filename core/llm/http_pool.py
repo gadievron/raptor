@@ -52,22 +52,25 @@ Knobs (all optional; invalid values fall back to the default):
     tunnel termination aborts every one of them at once. Consumers
     that need blast-radius control shard across a small pool of
     independent clients via :class:`ClientShards` (the dispatcher's
-    forwarding leg does).
+    forwarding leg does); the SDK-side clients shard inside their
+    transport via :class:`_ShardedTransport`, built on the same pool.
 ``RAPTOR_HTTP2_SHARDS``
     Number of independent upstream clients the dispatcher's
-    forwarding leg spreads relays across (default 4 under HTTP/2,
-    1 otherwise — see :func:`upstream_shard_count`).
+    forwarding leg spreads relays across, and equally the number of
+    inner transports an SDK-side client shards across (default 4
+    under HTTP/2, 1 otherwise — see :func:`upstream_shard_count`).
 ``RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD``
     Consecutive transport failures on one shard before it is drained
-    and replaced with a fresh client (default 3; active in both HTTP
-    modes — see :func:`shard_failure_threshold`).
+    and replaced fresh (default 3; active in both HTTP modes; governs
+    the forwarding-leg shards and the SDK-side shard transport alike
+    — see :func:`shard_failure_threshold`).
 ``RAPTOR_HTTP2_SHARD_MAX_AGE_S``
     Proactive shard rotation age in seconds under HTTP/2 (default
-    2400 — see :func:`shard_max_age_s`). A shard past this age is
-    drained at a moment with no live streams and replaced fresh,
-    instead of waiting for a middlebox to terminate the long-lived
-    tunnel mid-flight. Inert on HTTP/1.1, where connection lifetime
-    is managed per-connection by the pool.
+    2400 — see :func:`shard_max_age_s`; both shard consumers). A
+    shard past this age is drained at a moment with no live streams
+    and replaced fresh, instead of waiting for a middlebox to
+    terminate the long-lived tunnel mid-flight. Inert on HTTP/1.1,
+    where connection lifetime is managed per-connection by the pool.
 
 The dispatcher's forwarding-leg clients (:func:`forwarding_client`)
 and the SDK-side clients (:func:`sdk_http_client`) additionally
@@ -87,8 +90,8 @@ import os
 import socket
 import threading
 import time
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Iterator
+from typing import Any, Generic, Protocol, TypeVar
 
 import httpx
 
@@ -304,7 +307,8 @@ _HTTP2_SHARDS_CEILING = 64
 
 
 def upstream_shard_count() -> int:
-    """Shard count for the dispatcher's forwarding leg.
+    """Shard count for the dispatcher's forwarding leg and the
+    SDK-side shard transport (:class:`_ShardedTransport`).
 
     Default 4 under HTTP/2 (spread multiplexed streams so one dropped
     connection cannot abort every in-flight relay), 1 otherwise
@@ -360,7 +364,8 @@ _SHARD_MAX_AGE_FLOOR_S = 60.0
 
 
 def shard_failure_threshold() -> int:
-    """Consecutive transport failures that drain a shard.
+    """Consecutive transport failures that drain a shard — on the
+    forwarding leg and in the SDK-side shard transport alike.
 
     Active in both HTTP modes — a repeatedly-failing HTTP/1.1 pool
     benefits from a fresh client exactly like a broken multiplexed
@@ -376,8 +381,8 @@ def shard_failure_threshold() -> int:
 
 
 def shard_max_age_s() -> float | None:
-    """Proactive rotation age for the forwarding-leg shards, or None
-    when rotation is off.
+    """Proactive rotation age for the forwarding-leg and SDK-side
+    shards, or None when rotation is off.
 
     Only meaningful under HTTP/2 — that is where one long-lived
     multiplexed connection concentrates every in-flight stream behind
@@ -398,23 +403,39 @@ def shard_max_age_s() -> float | None:
     return value
 
 
-class _Shard:
+class _SupportsClose(Protocol):
+    """What :class:`ClientShards` needs of a pooled unit: it builds
+    them via the caller's factory and closes them at retirement —
+    nothing else. ``httpx.Client`` and every ``httpx.BaseTransport``
+    both satisfy it."""
+
+    def close(self) -> None: ...
+
+
+_PooledT = TypeVar("_PooledT", bound=_SupportsClose)
+
+
+class _Shard(Generic[_PooledT]):
     """One slot's live client plus its lifecycle state (all fields
     guarded by the owning :class:`ClientShards` lock)."""
 
     __slots__ = ("born", "client", "draining", "failures", "in_flight")
 
-    def __init__(self, client: httpx.Client) -> None:
-        self.client = client
+    def __init__(self, client: _PooledT) -> None:
+        self.client: _PooledT = client
         self.in_flight = 0
         self.failures = 0
         self.born = time.monotonic()
         self.draining = False
 
 
-class ClientShards:
-    """A small pool of independent ``httpx.Client`` instances with
-    least-in-flight selection and drain-shaped repair.
+class ClientShards(Generic[_PooledT]):
+    """A small pool of independent closeable units — ``httpx.Client``
+    on the dispatcher's forwarding leg, inner transports in the
+    SDK-side :class:`_ShardedTransport` — with least-in-flight
+    selection and drain-shaped repair. (The ``clients`` property name
+    predates the transport consumer and is kept for its existing
+    callers.)
 
     Under HTTP/2 a single client funnels every concurrent request
     onto one multiplexed connection (see the module docstring), so
@@ -445,7 +466,7 @@ class ClientShards:
 
     def __init__(
         self,
-        build: Callable[[], httpx.Client],
+        build: Callable[[], _PooledT],
         count: int,
         *,
         failure_threshold: int | None = None,
@@ -457,7 +478,7 @@ class ClientShards:
         self._count = count
         self._failure_threshold = failure_threshold
         self._max_age_s = max_age_s
-        self._slots: list[_Shard | None] = [
+        self._slots: list[_Shard[_PooledT] | None] = [
             _Shard(build()) for _ in range(count)
         ]
         self._lock = threading.Lock()
@@ -468,7 +489,7 @@ class ClientShards:
             return sum(1 for shard in self._slots if shard is not None)
 
     @property
-    def clients(self) -> tuple[httpx.Client, ...]:
+    def clients(self) -> tuple[_PooledT, ...]:
         """The live shard clients (introspection — e.g. asserting
         every shard carries the protocol-observability hook)."""
         with self._lock:
@@ -486,13 +507,13 @@ class ClientShards:
                 if shard is not None
             )
 
-    def _retire_idle_draining_locked(self) -> list[httpx.Client]:
+    def _retire_idle_draining_locked(self) -> list[_PooledT]:
         """Retire every draining shard with zero holds: close its
         client (returned for closing OUTSIDE the lock — close does
         I/O) and either refill the slot with a fresh shard or
         tombstone it, whichever moves the live-slot count toward the
         target. Caller holds the lock."""
-        stale: list[httpx.Client] = []
+        stale: list[_PooledT] = []
         for i, shard in enumerate(self._slots):
             if shard is None or not shard.draining or shard.in_flight:
                 continue
@@ -513,14 +534,14 @@ class ClientShards:
         return shard.in_flight if shard is not None else 0
 
     @staticmethod
-    def _close_stale(stale: list[httpx.Client]) -> None:
+    def _close_stale(stale: list[_SupportsClose]) -> None:
         for client in stale:
             try:
                 client.close()
             except Exception:  # noqa: BLE001 — close the rest regardless
                 logger.debug("shard client close failed", exc_info=True)
 
-    def acquire(self) -> tuple[httpx.Client, int]:
+    def acquire(self) -> tuple[_PooledT, int]:
         """Reserve the least-loaded selectable shard: ``(client,
         index)``. Also the rotation seam: overdue shards are marked
         draining here, and idle draining shards are retired."""
@@ -654,6 +675,14 @@ def sdk_http_client(
     loopback pin survives degradation — rather than failing the SDK
     path: losing keepalive is an observability regression, losing
     the client is an outage.
+
+    HTTP/2 blast-radius sharding also matches the forwarding leg:
+    when the resolved shard count exceeds 1 the client's routes are
+    each backed by a :class:`_ShardedTransport` (the SDK receives one
+    client object, so the sharding lives inside the transport),
+    driven by the same three knobs the dispatcher resolves —
+    ``RAPTOR_HTTP2_SHARDS`` / ``RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD`` /
+    ``RAPTOR_HTTP2_SHARD_MAX_AGE_S``.
     """
     client_kwargs: dict[str, Any] = {
         "timeout": timeout,
@@ -662,11 +691,42 @@ def sdk_http_client(
         "http2": http2_enabled(),
         "event_hooks": response_event_hooks(),
     }
+    # Pre-initialised so the degrade warning below can scope itself
+    # even when the failure happens at (or before) count resolution.
+    count = 1
     try:
+        # Resolved once per client, like the dispatcher resolves once
+        # per pool build. At a count of 1 — the HTTP/1.1 default —
+        # construction collapses to the plain single transport: no
+        # wrapper, no shard bookkeeping, zero behaviour change for h1
+        # users (h1 pools one connection per concurrent request, so
+        # there is no multiplexed blast radius to cap). Above 1 every
+        # route shards: see _env_proxy_mounts for why the proxied
+        # routes shard alongside the direct one.
+        count = upstream_shard_count()
+        wrap: Callable[
+            [Callable[[], httpx.BaseTransport]], httpx.BaseTransport,
+        ] | None = None
+        if count > 1:
+            failure_threshold = shard_failure_threshold()
+            max_age_s = shard_max_age_s()
+
+            def _sharded(
+                build: Callable[[], httpx.BaseTransport],
+            ) -> httpx.BaseTransport:
+                return _ShardedTransport(
+                    build,
+                    count,
+                    failure_threshold=failure_threshold,
+                    max_age_s=max_age_s,
+                )
+
+            wrap = _sharded
         parts = _keepalive_transport_and_mounts(
             http2=client_kwargs["http2"],
             limits=client_kwargs["limits"],
             trust_env=trust_env,
+            wrap=wrap,
         )
         if parts is not None:
             transport, mounts = parts
@@ -676,7 +736,8 @@ def sdk_http_client(
     except Exception:  # noqa: BLE001 — degrade, never break the SDK path
         logger.warning(
             "keepalive-aware SDK client construction failed — building "
-            "a plain client (no TCP keepalive on this leg)",
+            "a plain client (no TCP keepalive on this leg%s)",
+            "; HTTP/2 blast-radius sharding lost too" if count > 1 else "",
             exc_info=True,
         )
     return httpx.Client(**client_kwargs)
@@ -796,6 +857,9 @@ def _env_proxy_mounts(
     *,
     http2: bool,
     limits: httpx.Limits | None,
+    wrap: Callable[
+        [Callable[[], httpx.BaseTransport]], httpx.BaseTransport,
+    ] | None = None,
 ) -> dict[str, httpx.BaseTransport | None] | None:
     """Reproduce httpx's env-proxy mount map with keepalive-carrying
     proxy transports.
@@ -809,6 +873,18 @@ def _env_proxy_mounts(
     default transport) match exactly. Returns None when the private
     helper is unavailable (httpx internals moved): callers fall back
     to a plain client — proxy routing intact, keepalive lost.
+
+    ``wrap`` (when given) wraps EVERY proxy transport built here —
+    when the caller shards, the proxied routes shard exactly like the
+    direct route. Both directions were weighed: sharding proxied
+    routes eagerly builds N proxy pools per env pattern (cheap —
+    transport construction does no I/O), while leaving them single
+    would put the corporate-proxy path — precisely where middleboxes
+    impose tunnel lifetimes and terminate every multiplexed stream at
+    once — back on the one-connection blast radius the shards exist
+    to cap, and would silently diverge from the dispatcher, whose
+    :class:`ClientShards` shards whole clients and therefore every
+    route.
     """
     try:
         from httpx._utils import get_environment_proxies
@@ -829,11 +905,17 @@ def _env_proxy_mounts(
             # transport, which carries the options for direct dials.
             mounts[pattern] = None
         else:
-            mounts[pattern] = _ProxyKeepaliveTransport(
-                proxy=proxy_url,
-                socket_options=options,
-                http2=http2,
-                limits=limits,
+
+            def build_proxy(url: str = proxy_url) -> httpx.BaseTransport:
+                return _ProxyKeepaliveTransport(
+                    proxy=url,
+                    socket_options=options,
+                    http2=http2,
+                    limits=limits,
+                )
+
+            mounts[pattern] = (
+                wrap(build_proxy) if wrap is not None else build_proxy()
             )
     return mounts
 
@@ -866,7 +948,10 @@ def _keepalive_transport_and_mounts(
     http2: bool,
     limits: httpx.Limits | None,
     trust_env: bool = True,
-) -> tuple[httpx.HTTPTransport, dict[str, httpx.BaseTransport | None]] | None:
+    wrap: Callable[
+        [Callable[[], httpx.BaseTransport]], httpx.BaseTransport,
+    ] | None = None,
+) -> tuple[httpx.BaseTransport, dict[str, httpx.BaseTransport | None]] | None:
     """Keepalive-carrying direct transport plus the mounts that keep
     proxy routing correct alongside it, or None when the env-proxy
     mounts cannot be rebuilt (callers degrade to a plain client).
@@ -876,20 +961,30 @@ def _keepalive_transport_and_mounts(
     than its direct transport, so it cannot detour through an
     env-configured proxy — the loopback-gateway pin, preserved by
     construction rather than by flag.
+
+    ``wrap`` (when given) wraps the direct transport and every proxy
+    transport — the SDK-side shard seam (see :func:`sdk_http_client`
+    and :func:`_env_proxy_mounts` for the proxied-route rationale).
     """
     options = tcp_keepalive_socket_options()
     mounts: dict[str, httpx.BaseTransport | None]
     if trust_env:
-        env_mounts = _env_proxy_mounts(options, http2=http2, limits=limits)
+        env_mounts = _env_proxy_mounts(
+            options, http2=http2, limits=limits, wrap=wrap,
+        )
         if env_mounts is None:
             return None
         mounts = env_mounts
     else:
         mounts = {}
-    return (
-        _keepalive_direct_transport(
+
+    def build_direct() -> httpx.BaseTransport:
+        return _keepalive_direct_transport(
             options, http2=http2, limits=limits, trust_env=trust_env,
-        ),
+        )
+
+    return (
+        wrap(build_direct) if wrap is not None else build_direct(),
         mounts,
     )
 
@@ -930,6 +1025,172 @@ def forwarding_client(
             exc_info=True,
         )
     return httpx.Client(**client_kwargs)
+
+
+# ── SDK-side HTTP/2 shard transport ───────────────────────────────
+
+# Transport-death shapes that indict the held shard's own
+# connections and feed its consecutive-failure counter — the SAME
+# classes the dispatcher relay counts as shard-health evidence for
+# ClientShards.report_failure (its _SHARD_HEALTH_ERRORS tuple; a test
+# pins the two against drift): connection establishment failures,
+# read-side deaths, protocol violations, and read-timeout trips.
+# Deliberately narrow: caller-side shapes (cancellations, decoder /
+# programming errors, HTTP status handling) say nothing about the
+# shard's connections and stay neutral.
+_SHARD_STRIKE_ERRORS: tuple[type[Exception], ...] = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadError,
+    httpx.RemoteProtocolError,
+    httpx.ReadTimeout,
+)
+
+
+class _ShardStream(httpx.SyncByteStream):
+    """Response-body stream that carries its shard hold.
+
+    The shard is held for the full request lifetime — the dispatcher
+    relay's contract (acquire, drain, release in ``finally``): the
+    hold is returned when the response closes, never while the body
+    may still ride the shard's connection. Evidence mirrors the relay
+    seams exactly: a full drain without error is a clean completion
+    (consecutive-failure counter resets); a strike-class error during
+    the drain is one strike; an early close — the caller abandoned
+    the body — is neutral, evidence about the caller, not the shard.
+
+    Evidence ends with the hold: slot indices are only stable for
+    the life of a hold (the ``ClientShards`` contract), so ``close()``
+    resolves the stream — neutrally, exactly the early-close
+    semantics — as it returns the hold. Nothing reported after close
+    can land on whatever shard has since been refilled into the slot.
+    """
+
+    def __init__(
+        self,
+        inner: httpx.SyncByteStream,
+        shards: ClientShards[httpx.BaseTransport],
+        index: int,
+    ) -> None:
+        self._inner = inner
+        self._shards = shards
+        self._index = index
+        self._lock = threading.Lock()
+        self._resolved = False  # evidence reported (reset or strike)
+        self._released = False  # hold returned to the pool
+
+    def _resolve(self, *, clean: bool, strike: bool = False) -> None:
+        with self._lock:
+            if self._resolved:
+                return
+            self._resolved = True
+        if clean:
+            self._shards.report_success(self._index)
+        elif strike:
+            self._shards.report_failure(self._index)
+
+    def __iter__(self) -> Iterator[bytes]:
+        try:
+            yield from self._inner
+        except Exception as exc:
+            self._resolve(
+                clean=False, strike=isinstance(exc, _SHARD_STRIKE_ERRORS),
+            )
+            raise
+        self._resolve(clean=True)
+
+    def close(self) -> None:
+        try:
+            self._inner.close()
+        finally:
+            with self._lock:
+                already = self._released
+                self._released = True
+                # The hold ends here and the released slot may be
+                # retired and REFILLED at any point after — resolve
+                # the evidence too (a no-op when the drain already
+                # reported), so a post-close iteration can never
+                # report a strike against whatever fresh shard now
+                # occupies this index.
+                self._resolved = True
+            if not already:
+                self._shards.release(self._index)
+
+
+class _ShardedTransport(httpx.BaseTransport):
+    """HTTP/2 blast-radius sharding inside one transport object.
+
+    An SDK constructor receives exactly ONE client, so the
+    dispatcher's client-level :class:`ClientShards` cannot be applied
+    from outside — the sharding moves inside the transport instead: N
+    independent keepalive-carrying inner transports behind one
+    ``handle_request`` seam, pooled by a :class:`ClientShards` (so
+    the semantics are the dispatcher's by construction, not by
+    imitation): least-in-flight selection, consecutive-transport-
+    failure drain with reset on clean completion, h2-only age
+    rotation, never closing a shard with live in-flight requests, and
+    the all-draining-provisions-fresh invariant.
+    """
+
+    def __init__(
+        self,
+        build: Callable[[], httpx.BaseTransport],
+        count: int,
+        *,
+        failure_threshold: int | None = None,
+        max_age_s: float | None = None,
+    ) -> None:
+        self._shards: ClientShards[httpx.BaseTransport] = ClientShards(
+            build,
+            count,
+            failure_threshold=failure_threshold,
+            max_age_s=max_age_s,
+        )
+
+    @property
+    def shards(self) -> ClientShards[httpx.BaseTransport]:
+        """The underlying shard pool (introspection)."""
+        return self._shards
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        transport, index = self._shards.acquire()
+        try:
+            response = transport.handle_request(request)
+        except BaseException as exc:
+            # Pre-head death: the hold ends here. Strike-class
+            # transport errors are shard evidence; everything else
+            # (caller cancellation, programming errors) is neutral —
+            # but the hold is returned on ANY raise, or the shard
+            # would carry a phantom in-flight count forever.
+            if isinstance(exc, _SHARD_STRIKE_ERRORS):
+                self._shards.report_failure(index)
+            self._shards.release(index)
+            raise
+        if response.is_closed:
+            # In-memory response, body already fully buffered and
+            # closed at head time (``httpx.Response(content=...)``
+            # marks itself closed, so ``close()`` will never reach
+            # the stream we would wrap): a clean completion — resolve
+            # and return the hold here instead of leaking it.
+            self._shards.report_success(index)
+            self._shards.release(index)
+            return response
+        stream = response.stream
+        if not isinstance(stream, httpx.SyncByteStream):  # pragma: no cover
+            # The sync transport contract always yields a sync body
+            # stream; if that ever changes, fail safe — return the
+            # hold now (evidence-neutral) rather than leak it.
+            self._shards.release(index)
+            return response
+        # The response head arrived, but the body may still ride this
+        # shard's connection: the hold (and the success/strike
+        # evidence) transfers to the stream and resolves at
+        # drain/close — the hold-for-full-lifetime contract.
+        response.stream = _ShardStream(stream, self._shards, index)
+        return response
+
+    def close(self) -> None:
+        self._shards.close()
 
 
 __all__ = [

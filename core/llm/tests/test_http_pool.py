@@ -1164,3 +1164,626 @@ class TestSdkClientKeepalive:
                 httpx.URL("https://remote.test/v1"),
             )
             assert routed is client._transport
+
+
+class _RecordingTransport(httpx.BaseTransport):
+    """Inner-transport stub: scripted behaviour, close tracking."""
+
+    def __init__(self, handler):
+        self._handler = handler
+        self.closed = False
+        self.calls = 0
+
+    def handle_request(self, request):
+        self.calls += 1
+        return self._handler(request)
+
+    def close(self):
+        self.closed = True
+
+
+class _ScriptedStream(httpx.SyncByteStream):
+    """Body stream yielding fixed chunks, optionally dying mid-body."""
+
+    def __init__(self, chunks=(b"body",), error=None):
+        self._chunks = chunks
+        self._error = error
+        self.closes = 0
+
+    def __iter__(self):
+        yield from self._chunks
+        if self._error is not None:
+            raise self._error
+
+    def close(self):
+        self.closes += 1
+
+
+def _ok_response(error=None):
+    return httpx.Response(200, stream=_ScriptedStream(error=error))
+
+
+def _scripted_handler(script):
+    """Handler consuming one scripted action per request: an
+    exception instance raises at head; ``("midbody", exc)`` returns
+    an ok response whose body stream dies with ``exc``; anything else
+    returns a clean ok response."""
+
+    def handler(request):
+        action = script.pop(0)
+        if isinstance(action, Exception):
+            raise action
+        if isinstance(action, tuple):
+            return _ok_response(error=action[1])
+        return _ok_response()
+
+    return handler
+
+
+class TestShardedTransport:
+    """Transport-level shard pool with ClientShards semantics: the
+    SDK receives ONE client object, so the blast-radius sharding
+    lives inside the transport it wraps."""
+
+    def _sharded(self, count, script, **kwargs):
+        built = []
+        handler = _scripted_handler(script)
+
+        def build():
+            transport = _RecordingTransport(handler)
+            built.append(transport)
+            return transport
+
+        return http_pool._ShardedTransport(build, count, **kwargs), built
+
+    @staticmethod
+    def _request():
+        return httpx.Request("GET", "http://unit.test/")
+
+    @staticmethod
+    def _drain(response):
+        assert b"".join(response.stream) == b"body"
+        response.close()
+
+    def test_rejects_count_below_one(self):
+        with pytest.raises(ValueError):
+            http_pool._ShardedTransport(
+                lambda: _RecordingTransport(None), 0,
+            )
+
+    def test_hold_spans_head_until_close(self):
+        # The response head arriving does NOT end the hold — the body
+        # may still ride the shard's connection, so least-in-flight
+        # must see the request until the response closes (the
+        # dispatcher relay's hold-for-full-lifetime contract).
+        transport, built = self._sharded(2, [None, None])
+        try:
+            first = transport.handle_request(self._request())
+            second = transport.handle_request(self._request())
+            assert transport.shards.in_flight == (1, 1)
+            assert (built[0].calls, built[1].calls) == (1, 1)
+            self._drain(first)
+            self._drain(second)
+            assert transport.shards.in_flight == (0, 0)
+        finally:
+            transport.close()
+
+    def test_double_close_releases_once(self):
+        transport, _ = self._sharded(1, [None])
+        try:
+            response = transport.handle_request(self._request())
+            self._drain(response)
+            response.stream.close()  # second close: no double release
+            assert transport.shards.in_flight == (0,)
+        finally:
+            transport.close()
+
+    def test_strike_at_head_drains_at_threshold(self):
+        script = [
+            httpx.ConnectError("dead"), httpx.ConnectError("dead"), None,
+        ]
+        transport, built = self._sharded(1, script, failure_threshold=2)
+        try:
+            for _ in range(2):
+                with pytest.raises(httpx.ConnectError):
+                    transport.handle_request(self._request())
+            # Threshold reached with no live holds: retired and
+            # replaced fresh.
+            assert len(built) == 2
+            assert built[0].closed
+            assert not built[1].closed
+            self._drain(transport.handle_request(self._request()))
+            assert built[1].calls == 1
+        finally:
+            transport.close()
+
+    def test_below_threshold_keeps_the_shard(self):
+        script = [httpx.ConnectError("blip"), None]
+        transport, built = self._sharded(1, script, failure_threshold=2)
+        try:
+            with pytest.raises(httpx.ConnectError):
+                transport.handle_request(self._request())
+            self._drain(transport.handle_request(self._request()))
+            assert len(built) == 1
+            assert not built[0].closed
+            assert built[0].calls == 2
+        finally:
+            transport.close()
+
+    def test_non_strike_error_is_neutral(self):
+        # Programming errors / caller-side shapes say nothing about
+        # the shard's connections: no strike even at threshold 1 —
+        # but the hold is still returned.
+        script = [RuntimeError("caller bug")] * 3
+        transport, built = self._sharded(1, script, failure_threshold=1)
+        try:
+            for _ in range(3):
+                with pytest.raises(RuntimeError):
+                    transport.handle_request(self._request())
+            assert len(built) == 1
+            assert not built[0].closed
+            assert transport.shards.in_flight == (0,)
+        finally:
+            transport.close()
+
+    def test_baseexception_at_head_releases_hold(self):
+        # The release path is `except BaseException` for a reason: a
+        # KeyboardInterrupt-shaped raise (NOT an Exception subclass)
+        # at head must still return the hold — and stays
+        # evidence-neutral like every other caller-side shape.
+        class _Interrupt(BaseException):
+            pass
+
+        def handler(request):
+            raise _Interrupt("operator interrupt")
+
+        built = []
+
+        def build():
+            transport = _RecordingTransport(handler)
+            built.append(transport)
+            return transport
+
+        transport = http_pool._ShardedTransport(
+            build, 1, failure_threshold=1,
+        )
+        try:
+            with pytest.raises(_Interrupt):
+                transport.handle_request(self._request())
+            assert transport.shards.in_flight == (0,)
+            assert transport.shards._slots[0].failures == 0
+            assert len(built) == 1
+            assert not built[0].closed
+        finally:
+            transport.close()
+
+    def test_clean_full_drain_resets_counter(self):
+        script = [httpx.ConnectError("x"), None, httpx.ConnectError("x")]
+        transport, built = self._sharded(1, script, failure_threshold=2)
+        try:
+            with pytest.raises(httpx.ConnectError):
+                transport.handle_request(self._request())
+            self._drain(transport.handle_request(self._request()))
+            with pytest.raises(httpx.ConnectError):
+                transport.handle_request(self._request())
+            # Never two CONSECUTIVE failures — the shard stays.
+            assert len(built) == 1
+            assert not built[0].closed
+        finally:
+            transport.close()
+
+    def test_early_close_is_neutral_not_a_reset(self):
+        # A response closed before its body drains is evidence about
+        # the CALLER (it abandoned the body), not the shard: it must
+        # neither strike nor acquit. Counter at 1, early close, one
+        # more strike-class death -> drains at threshold 2.
+        script = [httpx.ConnectError("x"), None, httpx.ConnectError("x")]
+        transport, built = self._sharded(1, script, failure_threshold=2)
+        try:
+            with pytest.raises(httpx.ConnectError):
+                transport.handle_request(self._request())
+            transport.handle_request(self._request()).close()  # no drain
+            with pytest.raises(httpx.ConnectError):
+                transport.handle_request(self._request())
+            assert len(built) == 2
+            assert built[0].closed
+        finally:
+            transport.close()
+
+    def test_early_close_takes_no_strike_and_no_drain(self):
+        # The other direction of early-close neutrality (the test
+        # above pins not-a-reset): at threshold 1 ANY strike at close
+        # would be immediately observable as a drain + rebuild, and
+        # the failure counter pins even a sub-threshold strike.
+        transport, built = self._sharded(1, [None], failure_threshold=1)
+        try:
+            transport.handle_request(self._request()).close()  # no drain
+            assert len(built) == 1
+            assert not built[0].closed
+            assert transport.shards._slots[0].failures == 0
+        finally:
+            transport.close()
+
+    def test_close_ends_evidence_no_strike_on_replacement_shard(self):
+        # Stale-index hazard: close() returns the hold, after which
+        # the slot may be retired and REFILLED. Iterating the stream
+        # AFTER close must not report evidence against whatever shard
+        # now occupies the slot — that would condemn a fresh
+        # replacement that never served the stream's request.
+        class _PostCloseStrikeStream(httpx.SyncByteStream):
+            def __init__(self):
+                self.closed = False
+
+            def __iter__(self):
+                if self.closed:
+                    raise httpx.ReadError("iterated after close")
+                yield b"body"
+
+            def close(self):
+                self.closed = True
+
+        script = [
+            httpx.Response(200, stream=_PostCloseStrikeStream()),
+            httpx.ConnectError("x"),
+        ]
+        built = []
+
+        def handler(request):
+            action = script.pop(0)
+            if isinstance(action, Exception):
+                raise action
+            return action
+
+        def build():
+            transport = _RecordingTransport(handler)
+            built.append(transport)
+            return transport
+
+        transport = http_pool._ShardedTransport(
+            build, 1, failure_threshold=1,
+        )
+        try:
+            held = transport.handle_request(self._request())
+            with pytest.raises(httpx.ConnectError):
+                transport.handle_request(self._request())  # condemns 0
+            held.close()  # hold returned: shard retired, slot REFILLED
+            assert len(built) == 2
+            with pytest.raises(httpx.ReadError):
+                list(held.stream)  # post-close iteration still raises
+            # ...but reports nothing: neither the old shard (gone) nor
+            # its replacement may take the strike.
+            assert transport.shards._slots[0].failures == 0
+            assert not transport.shards._slots[0].draining
+            assert not built[1].closed
+        finally:
+            transport.close()
+
+    def test_midstream_strike_error_counts(self):
+        script = [("midbody", httpx.ReadError("died mid-body")), None]
+        transport, built = self._sharded(1, script, failure_threshold=1)
+        try:
+            response = transport.handle_request(self._request())
+            with pytest.raises(httpx.ReadError):
+                list(response.stream)
+            response.close()
+            assert len(built) == 2
+            assert built[0].closed
+            self._drain(transport.handle_request(self._request()))
+            assert built[1].calls == 1
+        finally:
+            transport.close()
+
+    def test_midstream_non_strike_error_is_neutral(self):
+        script = [("midbody", ValueError("decoder bug")), None]
+        transport, built = self._sharded(1, script, failure_threshold=1)
+        try:
+            response = transport.handle_request(self._request())
+            with pytest.raises(ValueError):
+                list(response.stream)
+            response.close()
+            assert len(built) == 1
+            assert not built[0].closed
+        finally:
+            transport.close()
+
+    def test_never_closes_inner_with_live_hold_and_provisions_fresh(self):
+        # The two lifecycle invariants at once: a draining shard is
+        # never closed under a live hold, and all-draining provisions
+        # a fresh shard instead of blocking or riding the condemned
+        # connection.
+        script = [None, httpx.ConnectError("x"), None]
+        transport, built = self._sharded(1, script, failure_threshold=1)
+        try:
+            held = transport.handle_request(self._request())
+            with pytest.raises(httpx.ConnectError):
+                transport.handle_request(self._request())
+            assert not built[0].closed  # draining, but held is live
+            fresh_response = transport.handle_request(self._request())
+            assert len(built) == 2  # fresh shard provisioned
+            assert built[1].calls == 1
+            # The provisioning acquire crossed the retire seam while
+            # the hold was still live — the draining inner must have
+            # survived it (retire-under-live-hold is the mutation this
+            # transport-level assertion exists to catch).
+            assert not built[0].closed
+            self._drain(held)
+            assert built[0].closed  # last hold gone: retired
+            self._drain(fresh_response)
+        finally:
+            transport.close()
+
+    def test_age_rotation_replaces_idle_shard(self):
+        transport, built = self._sharded(
+            1, [None, None, None], max_age_s=0.05,
+        )
+        try:
+            self._drain(transport.handle_request(self._request()))
+            time.sleep(0.06)
+            self._drain(transport.handle_request(self._request()))
+            assert len(built) == 2
+            assert built[0].closed
+            # The replacement's birth clock is fresh — no immediate
+            # re-rotation.
+            self._drain(transport.handle_request(self._request()))
+            assert len(built) == 2
+        finally:
+            transport.close()
+
+    def test_no_rotation_when_age_disabled(self):
+        transport, built = self._sharded(1, [None, None])  # max_age None
+        try:
+            self._drain(transport.handle_request(self._request()))
+            time.sleep(0.06)
+            self._drain(transport.handle_request(self._request()))
+            assert len(built) == 1
+        finally:
+            transport.close()
+
+    def test_close_closes_every_inner(self):
+        transport, built = self._sharded(2, [])
+        transport.close()
+        assert [inner.closed for inner in built] == [True, True]
+        with pytest.raises(RuntimeError):
+            transport.handle_request(self._request())
+
+    def test_client_send_round_trips_through_shards(self):
+        # Full httpx.Client path over the sharded transport: body,
+        # status, and hold accounting all intact after the client's
+        # own stream wrapping composes over the shard stream.
+        def build():
+            return httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, stream=_ScriptedStream(chunks=(b"hel", b"lo")),
+                ),
+            )
+
+        transport = http_pool._ShardedTransport(build, 2)
+        with httpx.Client(transport=transport) as client:
+            response = client.get("http://unit.test/x")
+            assert response.status_code == 200
+            assert response.content == b"hello"
+        assert transport.shards.in_flight == (0, 0)
+
+    def test_buffered_response_resolves_hold_at_head(self):
+        # An in-memory response (httpx.Response(content=...)) marks
+        # itself closed at construction — close() never reaches the
+        # wrapped stream, so the hold must resolve (clean) at head
+        # instead of leaking an in-flight count forever.
+        def build():
+            return httpx.MockTransport(
+                lambda request: httpx.Response(200, content=b"hello"),
+            )
+
+        transport = http_pool._ShardedTransport(
+            build, 1, failure_threshold=1,
+        )
+        try:
+            response = transport.handle_request(self._request())
+            assert transport.shards.in_flight == (0,)
+            assert response.is_closed
+        finally:
+            transport.close()
+
+    def test_buffered_response_resets_failure_counter(self):
+        # "Clean completion" at the buffered head is two promises:
+        # the hold releases (pinned above) AND the shard is
+        # acquitted. Pre-seed the counter to threshold-1; the
+        # buffered response must reset it — never two CONSECUTIVE
+        # failures, mirroring test_clean_full_drain_resets_counter
+        # at the head seam.
+        script = [
+            httpx.ConnectError("x"),
+            httpx.Response(200, content=b"hello"),
+            httpx.ConnectError("x"),
+        ]
+        built = []
+
+        def handler(request):
+            action = script.pop(0)
+            if isinstance(action, Exception):
+                raise action
+            return action
+
+        def build():
+            transport = _RecordingTransport(handler)
+            built.append(transport)
+            return transport
+
+        transport = http_pool._ShardedTransport(
+            build, 1, failure_threshold=2,
+        )
+        try:
+            with pytest.raises(httpx.ConnectError):
+                transport.handle_request(self._request())
+            assert transport.shards._slots[0].failures == 1
+            response = transport.handle_request(self._request())
+            assert response.is_closed
+            assert transport.shards._slots[0].failures == 0
+            with pytest.raises(httpx.ConnectError):
+                transport.handle_request(self._request())
+            # Never two CONSECUTIVE failures — the shard stays.
+            assert len(built) == 1
+            assert not built[0].closed
+        finally:
+            transport.close()
+
+
+class TestSdkShardWiring:
+    """sdk_http_client() wires the shard transport from the same
+    three knobs the dispatcher's forwarding leg resolves — and
+    collapses to the plain transport at a resolved count of 1."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_proxy_env(self, monkeypatch):
+        for var in _PROXY_ENV:
+            monkeypatch.delenv(var, raising=False)
+
+    def _force_h2(self, monkeypatch):
+        monkeypatch.setenv("RAPTOR_HTTP2", "1")
+        monkeypatch.setattr(
+            http_pool.importlib.util, "find_spec",
+            lambda name: object() if name == "h2" else None,
+        )
+
+    def test_h1_default_collapses_to_plain_transport(self):
+        # Direction 1 of the collapse rule: HTTP/1.1 already uses one
+        # connection per concurrent request — shard bookkeeping would
+        # be pure overhead, so count 1 must build the plain single
+        # transport, not a one-shard pool.
+        with http_pool.sdk_http_client(30) as client:
+            assert isinstance(client._transport, httpx.HTTPTransport)
+            assert not isinstance(
+                client._transport, http_pool._ShardedTransport,
+            )
+
+    def test_explicit_shard_count_wires_sharded_transport(
+        self, monkeypatch,
+    ):
+        # Direction 2: an explicit count shards in either HTTP mode
+        # (same contract as upstream_shard_count), every inner
+        # transport carrying the keepalive options.
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", "3")
+        options = http_pool.tcp_keepalive_socket_options()
+        with http_pool.sdk_http_client(30) as client:
+            transport = client._transport
+            assert isinstance(transport, http_pool._ShardedTransport)
+            assert len(transport.shards) == 3
+            for inner in transport.shards.clients:
+                assert inner._pool._socket_options == options
+
+    def test_h2_defaults_to_four_shards(self, monkeypatch):
+        self._force_h2(monkeypatch)
+        with http_pool.sdk_http_client(30) as client:
+            assert isinstance(
+                client._transport, http_pool._ShardedTransport,
+            )
+            assert len(client._transport.shards) == 4
+
+    def test_lifecycle_knobs_flow_into_the_pool(self, monkeypatch):
+        self._force_h2(monkeypatch)
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", "2")
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "7")
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_MAX_AGE_S", "901")
+        with http_pool.sdk_http_client(30) as client:
+            shards = client._transport.shards
+            assert shards._failure_threshold == 7
+            assert shards._max_age_s == 901.0
+
+    def test_age_rotation_inert_on_h1(self, monkeypatch):
+        # Same h2-only gate as the forwarding leg: on HTTP/1.1 the
+        # pool manages per-connection lifetime already.
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", "2")
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARD_MAX_AGE_S", "901")
+        with http_pool.sdk_http_client(30) as client:
+            assert client._transport.shards._max_age_s is None
+
+    def test_proxied_routes_shard_too(self, monkeypatch):
+        # Parity with the dispatcher, which shards whole clients and
+        # therefore every route: the proxied path — precisely where
+        # middlebox tunnel lifetimes kill every multiplexed stream at
+        # once — shards exactly like the direct one.
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", "2")
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        monkeypatch.setenv("NO_PROXY", "direct.test")
+        options = http_pool.tcp_keepalive_socket_options()
+        with http_pool.sdk_http_client(30) as client:
+            proxied = client._transport_for_url(
+                httpx.URL("https://upstream.test/v1"),
+            )
+            assert isinstance(proxied, http_pool._ShardedTransport)
+            assert len(proxied.shards) == 2
+            import httpcore
+
+            origin = httpcore.Origin(b"https", b"upstream.test", 443)
+            for inner in proxied.shards.clients:
+                assert isinstance(
+                    inner, http_pool._ProxyKeepaliveTransport,
+                )
+                conn = inner._pool.create_connection(origin)
+                assert conn._connection._socket_options == options
+            # NO_PROXY carve-out still falls through to the (sharded)
+            # default transport.
+            direct = client._transport_for_url(
+                httpx.URL("https://direct.test/v1"),
+            )
+            assert direct is client._transport
+
+    def test_trust_env_false_sharded_still_has_no_proxy_route(
+        self, monkeypatch,
+    ):
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", "2")
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        with http_pool.sdk_http_client(30, trust_env=False) as client:
+            assert dict(client._mounts) == {}
+            routed = client._transport_for_url(
+                httpx.URL("https://remote.test/v1"),
+            )
+            assert routed is client._transport
+            assert isinstance(routed, http_pool._ShardedTransport)
+
+    def test_forwarding_client_stays_unsharded(self, monkeypatch):
+        # The dispatcher's sharding is client-level (ClientShards
+        # owns whole forwarding clients); wrapping its transports too
+        # would shard twice.
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", "4")
+        with http_pool.forwarding_client(timeout=5.0) as client:
+            assert isinstance(client._transport, httpx.HTTPTransport)
+            assert not isinstance(
+                client._transport, http_pool._ShardedTransport,
+            )
+
+    def test_degrade_warning_names_shard_loss_when_sharded(
+        self, monkeypatch, caplog,
+    ):
+        # Commit 01's warning is accurate for its own scope
+        # (keepalive lost); with a resolved count above 1 the degrade
+        # ALSO silently loses HTTP/2 blast-radius sharding, and the
+        # warning must say so — the operator loses two protections,
+        # not one.
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", "2")
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("keepalive construction broke")
+
+        monkeypatch.setattr(
+            http_pool, "tcp_keepalive_socket_options", boom,
+        )
+        with caplog.at_level("WARNING", logger="core.llm.http_pool"):
+            with http_pool.sdk_http_client(30) as client:
+                assert not isinstance(
+                    client._transport, http_pool._ShardedTransport,
+                )
+        assert any(
+            "no TCP keepalive" in r.getMessage()
+            and "sharding lost" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_strike_classes_mirror_dispatcher_shard_health(self):
+        # Drift pin: what the SDK shard transport counts as shard
+        # evidence must be exactly what the dispatcher relay counts.
+        from core.llm.dispatcher import server
+
+        assert set(http_pool._SHARD_STRIKE_ERRORS) == set(
+            server._SHARD_HEALTH_ERRORS,
+        )
