@@ -447,7 +447,8 @@ class ClientShards(Generic[_PooledT]):
     ``acquire()`` returns the client with the fewest in-flight
     holds plus its shard index; callers hold the shard for the full
     request lifetime and MUST ``release(index)`` in a ``finally``.
-    Thread-safe; ``close()`` is idempotent.
+    Thread-safe; ``close()`` (hard stop) and ``retire()`` (graceful
+    supersession — see :meth:`retire`) are both idempotent.
 
     Lifecycle: a shard whose caller-reported consecutive transport
     failures reach ``failure_threshold``, or whose age exceeds
@@ -483,6 +484,7 @@ class ClientShards(Generic[_PooledT]):
         ]
         self._lock = threading.Lock()
         self._closed = False
+        self._retiring = False
 
     def __len__(self) -> int:
         with self._lock:
@@ -518,6 +520,11 @@ class ClientShards(Generic[_PooledT]):
             if shard is None or not shard.draining or shard.in_flight:
                 continue
             stale.append(shard.client)
+            if self._retiring:
+                # A superseded pool winds down: never refill —
+                # replacement capacity lives in the successor pool.
+                self._slots[i] = None
+                continue
             others = sum(
                 1 for j, s in enumerate(self._slots)
                 if s is not None and j != i
@@ -525,6 +532,12 @@ class ClientShards(Generic[_PooledT]):
             self._slots[i] = (
                 _Shard(self._build()) if others < self._count else None
             )
+        if self._retiring and all(shard is None for shard in self._slots):
+            # Last shard retired: the superseded pool is closed. Late
+            # acquires must fail loudly (the caller re-fetches the
+            # successor pool) rather than build clients nobody
+            # selects from.
+            self._closed = True
         return stale
 
     def _holds_locked(self, index: int) -> int:
@@ -546,7 +559,10 @@ class ClientShards(Generic[_PooledT]):
         index)``. Also the rotation seam: overdue shards are marked
         draining here, and idle draining shards are retired."""
         with self._lock:
-            if self._closed:
+            if self._closed or self._retiring:
+                # Retiring counts as closed for NEW work: the pool
+                # only lives on to honour existing holds, and callers
+                # must re-fetch the successor pool.
                 raise RuntimeError("ClientShards is closed")
             if self._max_age_s is not None:
                 now = time.monotonic()
@@ -632,6 +648,24 @@ class ClientShards(Generic[_PooledT]):
                     "in-flight requests finish",
                     index, shard.failures,
                 )
+
+    def retire(self) -> None:
+        """Supersede the pool without aborting its in-flight holds:
+        every shard drains — idle ones close now, held ones close at
+        their last :meth:`release` — and no slot is refilled. Once
+        the last shard retires the pool marks itself closed. New
+        ``acquire`` calls fail immediately (callers re-fetch the
+        successor pool). Idempotent; a no-op on a closed pool —
+        :meth:`close` remains the hard stop for shutdown."""
+        with self._lock:
+            if self._closed:
+                return
+            self._retiring = True
+            for shard in self._slots:
+                if shard is not None:
+                    shard.draining = True
+            stale = self._retire_idle_draining_locked()
+        self._close_stale(stale)
 
     def close(self) -> None:
         """Close every live shard client. Idempotent."""

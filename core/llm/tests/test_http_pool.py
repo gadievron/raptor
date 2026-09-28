@@ -757,6 +757,90 @@ class TestClientShardsLifecycle:
             shards.close()
 
 
+class TestClientShardsRetire:
+    """Graceful supersession (the proxy-env rebuild seam):
+    ``retire()`` drains the whole pool instead of closing it under
+    its live holds — idle shards close immediately, held shards close
+    at their last release, and no slot is ever refilled."""
+
+    def _shards(self, count, **kwargs):
+        return http_pool.ClientShards(
+            lambda: httpx.Client(timeout=5.0), count, **kwargs,
+        )
+
+    def test_retire_without_holds_closes_everything(self):
+        shards = self._shards(2)
+        clients = shards.clients
+        shards.retire()
+        assert all(client.is_closed for client in clients)
+        assert len(shards) == 0
+        with pytest.raises(RuntimeError):
+            shards.acquire()
+
+    def test_retire_with_live_hold_defers_close_until_release(self):
+        # The race this exists for: an in-flight relay's stream must
+        # survive its pool being superseded by a proxy-env rebuild.
+        shards = self._shards(2)
+        clients = shards.clients
+        held, index = shards.acquire()
+        shards.retire()
+        assert not held.is_closed  # live hold: never closed under it
+        idle = [c for c in clients if c is not held]
+        assert idle and all(c.is_closed for c in idle)
+        shards.release(index)
+        assert held.is_closed  # last hold gone: retired
+        assert len(shards) == 0
+
+    def test_retire_never_refills_slots(self):
+        # A superseded pool winds down to nothing — replacement
+        # capacity lives in the successor pool, so retiring a shard
+        # must not rebuild a fresh one toward the target count.
+        shards = self._shards(1)
+        _, index = shards.acquire()
+        shards.retire()
+        shards.release(index)
+        assert len(shards) == 0
+        assert shards.clients == ()
+
+    def test_acquire_after_retire_raises_even_with_live_shards(self):
+        # A retiring pool may still hold live (held) shards, but it
+        # is superseded — new work belongs to the successor pool, so
+        # acquire fails loudly instead of provisioning fresh shards
+        # on the corpse.
+        shards = self._shards(1)
+        held, index = shards.acquire()
+        shards.retire()
+        with pytest.raises(RuntimeError):
+            shards.acquire()
+        shards.release(index)
+        assert held.is_closed
+
+    def test_retire_is_idempotent_and_close_still_hard_stops(self):
+        shards = self._shards(1)
+        held, _index = shards.acquire()
+        shards.retire()
+        shards.retire()  # second call: no-op, hold still honoured
+        assert not held.is_closed
+        shards.close()  # the shutdown path stays a hard stop
+        assert held.is_closed
+
+    def test_last_release_marks_the_pool_closed(self):
+        # "Once the last shard retires the pool marks itself closed"
+        # is the wind-down terminal state. Every behavior _closed
+        # gates after wind-down is shadowed by the _retiring flag
+        # (acquire raises either way; close()/retire() find nothing
+        # left to close), so only the flag itself discriminates —
+        # pinned directly, alongside the behavioral companion.
+        shards = self._shards(1)
+        _, index = shards.acquire()
+        shards.retire()
+        assert shards._closed is False  # hold still live: not yet
+        shards.release(index)
+        assert shards._closed is True  # last shard retired: closed
+        with pytest.raises(RuntimeError):
+            shards.acquire()
+
+
 class TestNegotiatedProtocolTelemetry:
     """RAPTOR_HTTP2 requested HTTP/2, but nothing recorded what ALPN
     actually negotiated — h2 service could not be proven from run

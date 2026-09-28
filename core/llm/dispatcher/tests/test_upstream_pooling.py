@@ -98,6 +98,22 @@ class TestClientCache:
         # Stable from there.
         assert dispatcher._upstream_client_shards() is second
 
+    def test_proxy_env_change_spares_in_flight_relay(
+        self, dispatcher, monkeypatch,
+    ):
+        # The rebuild is drain-shaped: a relay mid-stream on the old
+        # pool keeps its shard client until it releases the hold —
+        # superseding the pool must not abort the stream it still
+        # carries.
+        first = dispatcher._upstream_client_shards()
+        held, index = first.acquire()
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        second = dispatcher._upstream_client_shards()
+        assert second is not first
+        assert not held.is_closed
+        first.release(index)
+        assert held.is_closed  # superseded shard retired at last hold
+
     def test_shutdown_closes_upstream_clients(self, fake_creds, tmp_path):
         d = LLMDispatcher(
             run_id="pool-close-test",

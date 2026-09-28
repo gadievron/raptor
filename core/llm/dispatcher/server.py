@@ -2177,11 +2177,13 @@ class LLMDispatcher:
         (``core.llm.egress.enable_llm_egress``) points HTTPS_PROXY at
         the in-process proxy after startup, so the pool is keyed on
         a snapshot of the proxy env: same env → full connection
-        reuse; env changed → rebuild once and reuse from there. Env
-        changes happen at startup, before workers dispatch — closing
-        the superseded clients here cannot race an in-flight stream
-        in any real sequence, and a hypothetical racer surfaces as a
-        502 the worker SDK already retries.
+        reuse; env changed → rebuild once and reuse from there. The
+        superseded pool RETIRES rather than closing: its idle shard
+        clients close immediately, but a relay already holding a
+        shard keeps its client (and its in-flight stream) until the
+        relay's own release — a rebuild racing an in-flight relay
+        (the egress chokepoint arming after a worker dispatched)
+        no longer aborts that relay's stream mid-flight.
         """
         env = tuple(os.environ.get(v) for v in _PROXY_ENV_VARS)
         with self._upstream_http_lock:
@@ -2223,11 +2225,11 @@ class LLMDispatcher:
                 self._upstream_http_env = env
                 if old is not None:
                     try:
-                        old.close()
+                        old.retire()
                     except Exception:
                         _logger.debug(
                             "llm-dispatcher: superseded upstream client "
-                            "close failed", exc_info=True,
+                            "retire failed", exc_info=True,
                         )
             return self._upstream_shards
 
