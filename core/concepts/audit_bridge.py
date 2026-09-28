@@ -26,6 +26,22 @@ logger = logging.getLogger(__name__)
 # Byte budget for domain-model / study-list documents.
 _MAX_MODEL_BYTES = 64 * 1024 * 1024
 
+# Cache bounds for the string-keyed derivation caches below. Every
+# cached function is a pure function of its (hashable, content-bearing)
+# arguments, so eviction can only cost recompute time, never
+# correctness — the bounds are working-set caps in both directions:
+# larger pins more dead strings/patterns for the process lifetime
+# (grep hints and file paths ride LLM/target-derived domain models, so
+# the bound also caps how much memory a hostile model can pin);
+# smaller falls back toward the per-call recompute cost the caches
+# exist to kill (a study model carries thousands of distinct paths and
+# hints, ALL re-derived for EVERY function whose prompt slice is
+# scored — the warm domain-slice fingerprint cost was ~0.27 s/function
+# at a 7 MB model before these caches).
+_PATH_PARTS_CACHE_MAX = 4096
+_PATTERN_CACHE_MAX = 2048
+_NAME_VARIANTS_CACHE_MAX = 1024
+
 _STOPWORDS = frozenset((
     "causes", "which", "would", "could", "should", "their",
     "these", "those", "where", "while", "after", "before",
@@ -34,6 +50,7 @@ _STOPWORDS = frozenset((
 ))
 
 
+@lru_cache(maxsize=_NAME_VARIANTS_CACHE_MAX)
 def _name_variants(function_name: str) -> "tuple[str, ...]":
     """The function name plus its r2-undecorated form, when distinct.
 
@@ -43,6 +60,9 @@ def _name_variants(function_name: str) -> "tuple[str, ...]":
     name in place regressed source audits whose inventories
     legitimately produce dotted names (Lua Class.method, a source
     object named `sym`).
+
+    Cached (pure function of the name): relevance scoring re-derives
+    the variants once per (model item × function) pass.
     """
     for _pfx in ("sym.imp.", "sym.", "fcn.", "imp."):
         if (function_name.startswith(_pfx)
@@ -69,6 +89,19 @@ def _file_gate_applies(file_path: str) -> bool:
     return bool(file_path) and not file_path.startswith(BINARY_PATH_PREFIX)
 
 
+@lru_cache(maxsize=_PATH_PARTS_CACHE_MAX)
+def _pp_parts(path: str) -> tuple[str, frozenset[str]]:
+    """(basename, parent components) of *path*, POSIX semantics.
+
+    Pure function of the path string — cached because relevance
+    scoring compares every model item's file field against the
+    function under review, constructing thousands of PurePosixPath
+    objects per pass over a small set of distinct strings.
+    """
+    p = PurePosixPath(path)
+    return p.name, frozenset(p.parts[:-1])
+
+
 def _paths_match(a: str, b: str) -> bool:
     """Check if two paths refer to the same file (suffix-match on components).
 
@@ -80,10 +113,11 @@ def _paths_match(a: str, b: str) -> bool:
     if a.endswith("/" + b) or b.endswith("/" + a):
         return True
     # Same basename + at least one shared parent component
-    pa, pb = PurePosixPath(a), PurePosixPath(b)
-    if pa.name != pb.name:
+    a_name, a_parents = _pp_parts(a)
+    b_name, b_parents = _pp_parts(b)
+    if a_name != b_name:
         return False
-    return bool(set(pa.parts[:-1]) & set(pb.parts[:-1]))
+    return bool(a_parents & b_parents)
 
 
 @lru_cache(maxsize=4)
@@ -498,6 +532,7 @@ def token_enforcement_context(
 _MAX_GREP_HINT_CHARS = 256
 
 
+@lru_cache(maxsize=_PATTERN_CACHE_MAX)
 def _grep_hint_compilable(grep_hint: str) -> bool:
     """Whether an LLM-derived grep hint may be compiled as a regex.
 
@@ -508,6 +543,9 @@ def _grep_hint_compilable(grep_hint: str) -> bool:
     substring match (the same degradation already used for
     non-compiling hints): fail toward less selection power, never
     toward unbounded matching cost.
+
+    Cached (pure function of the hint): the ReDoS-shape scan re-ran
+    for every hint on every function scored.
     """
     from core.security.prompt_input_preflight import looks_redos
 
@@ -515,6 +553,36 @@ def _grep_hint_compilable(grep_hint: str) -> bool:
         len(grep_hint) <= _MAX_GREP_HINT_CHARS
         and not looks_redos(grep_hint)
     )
+
+
+@lru_cache(maxsize=_PATTERN_CACHE_MAX)
+def _grep_hint_pattern(grep_hint: str) -> re.Pattern[str] | None:
+    """Compiled ``what_to_grep`` matcher, or None when it won't compile.
+
+    Byte-equivalent to the historical inline
+    ``re.search(grep_hint, source, re.IGNORECASE)``: ``re.search``
+    compiles then searches, and ``re.error`` is a compile-time
+    failure, so mapping it to None here preserves the exact substring
+    fallback at the call site. Cached because the interpreter's own
+    regex cache (512 patterns) is evicted wholesale by a model with
+    thousands of distinct hints, recompiling all of them for every
+    function scored.
+    """
+    try:
+        return re.compile(grep_hint, re.IGNORECASE)
+    except re.error:
+        return None
+
+
+@lru_cache(maxsize=_PATTERN_CACHE_MAX)
+def _word_boundary_pattern(word: str) -> re.Pattern[str]:
+    """``\\b<literal>\\b`` matcher for a paired-operation name.
+
+    Same interpreter-cache-thrash rationale as
+    :func:`_grep_hint_pattern` — paired-operation names are model
+    content, re-matched against every function's source.
+    """
+    return re.compile(r"\b" + re.escape(word) + r"\b")
 
 
 def domain_bug_patterns(
@@ -545,15 +613,16 @@ def domain_bug_patterns(
         hit = False
         grep_hint = (bp.get("what_to_grep") or "").strip()
         if source and grep_hint:
-            if not _grep_hint_compilable(grep_hint):
+            pattern = (
+                _grep_hint_pattern(grep_hint)
+                if _grep_hint_compilable(grep_hint) else None
+            )
+            if pattern is None:
+                # Refused (length/ReDoS shape) or non-compiling hint:
+                # the plain substring fallback, exactly as before.
                 hit = grep_hint.lower() in source.lower()
             else:
-                try:
-                    hit = re.search(
-                        grep_hint, source, re.IGNORECASE,
-                    ) is not None
-                except re.error:
-                    hit = grep_hint.lower() in source.lower()
+                hit = pattern.search(source) is not None
         if not hit and source:
             hit = _relevance_score(bp, file_path, function_name, source) > 1.0
         if hit or not source:
@@ -1091,7 +1160,7 @@ def primers_from_domain_model(
         for po in paired:
             acq = po.get("acquire", "")
             rel = po.get("release", "")
-            if (acq and re.search(r"\b" + re.escape(acq.lower()) + r"\b", source_lower)) or (rel and re.search(r"\b" + re.escape(rel.lower()) + r"\b", source_lower)):
+            if (acq and _word_boundary_pattern(acq.lower()).search(source_lower)) or (rel and _word_boundary_pattern(rel.lower()).search(source_lower)):
                 relevant_pairs.append(po)
         if relevant_pairs:
             score = 6.0 + len(relevant_pairs)
