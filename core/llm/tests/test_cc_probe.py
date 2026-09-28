@@ -49,22 +49,32 @@ class TestCachePathOverride:
     def test_env_override_redirects_cache_path(self, monkeypatch, tmp_path):
         """RAPTOR_CC_PROBE_CACHE pins the on-disk probe cache away from
         ~/.raptor/cache — the isolation seam for tests and sandboxed
-        runs (read at import time, hence the reload)."""
-        import importlib
-        from pathlib import Path
-
+        runs. The env var is read at CALL time: a pin installed after
+        the module was imported still takes effect, no reload needed."""
+        monkeypatch.setattr(cc_probe, "_CACHE_PATH", None)
         monkeypatch.setenv(
             "RAPTOR_CC_PROBE_CACHE", str(tmp_path / "probe.json"),
         )
-        try:
-            mod = importlib.reload(cc_probe)
-            assert mod._CACHE_PATH == tmp_path / "probe.json"
-        finally:
-            monkeypatch.delenv("RAPTOR_CC_PROBE_CACHE")
-            mod = importlib.reload(cc_probe)
-        assert mod._CACHE_PATH == (
-            Path.home() / ".raptor" / "cache" / "cc-probe.json"
+        assert cc_probe._cache_path() == tmp_path / "probe.json"
+
+        # Unset → legacy per-uid default (fabricated HOME so the
+        # assertion never resolves against the real home).
+        monkeypatch.delenv("RAPTOR_CC_PROBE_CACHE")
+        monkeypatch.setenv("HOME", str(tmp_path / "fakehome"))
+        assert cc_probe._cache_path() == (
+            tmp_path / "fakehome" / ".raptor" / "cache" / "cc-probe.json"
         )
+
+    def test_seam_overrides_env(self, monkeypatch, tmp_path):
+        """A monkeypatched _CACHE_PATH (the tests' isolation seam)
+        wins over the env override."""
+        monkeypatch.setenv(
+            "RAPTOR_CC_PROBE_CACHE", str(tmp_path / "ignored.json"),
+        )
+        monkeypatch.setattr(
+            cc_probe, "_CACHE_PATH", tmp_path / "pinned.json",
+        )
+        assert cc_probe._cache_path() == tmp_path / "pinned.json"
 
 
 class TestProbe:

@@ -42,10 +42,25 @@ logger = logging.getLogger(__name__)
 # The preflight cache is a tiny RAPTOR-written record.
 _MAX_CACHE_BYTES = 1024 * 1024
 
-_CACHE_PATH = Path(
-    os.environ.get("RAPTOR_BEDROCK_PREFLIGHT_CACHE")
-    or Path.home() / ".raptor" / "cache" / "bedrock-preflight.json"
-)
+# Test-override seam: when set (tests monkeypatch a tmp path here) it
+# wins over the env-derived default. Production leaves it None so
+# ``_cache_path()`` re-reads ``RAPTOR_BEDROCK_PREFLIGHT_CACHE`` on
+# every call — an env pin installed AFTER this module is imported
+# still redirects the cache instead of being silently ignored by an
+# import-time snapshot.
+_CACHE_PATH: Path | None = None
+
+
+def _cache_path() -> Path:
+    """Preflight-cache location, resolved at call time:
+    ``$RAPTOR_BEDROCK_PREFLIGHT_CACHE`` (default
+    ``~/.raptor/cache/bedrock-preflight.json``)."""
+    if _CACHE_PATH is not None:
+        return _CACHE_PATH
+    return Path(
+        os.environ.get("RAPTOR_BEDROCK_PREFLIGHT_CACHE")
+        or Path.home() / ".raptor" / "cache" / "bedrock-preflight.json"
+    )
 _CACHE_TTL_S = 24 * 3600
 _PROBE_TIMEOUT_S = 15
 # Runaway guard: a models.json with many Bedrock entries still fires a
@@ -87,13 +102,13 @@ def _cache_key(model: str, surface: str, region: str, profile: str,
 
 
 def _read_cache() -> dict:
-    data = load_json(_CACHE_PATH, max_bytes=_MAX_CACHE_BYTES)
+    data = load_json(_cache_path(), max_bytes=_MAX_CACHE_BYTES)
     return data if isinstance(data, dict) else {}
 
 
 def _write_cache(cache: dict) -> None:
     try:
-        save_json(_CACHE_PATH, cache)
+        save_json(_cache_path(), cache)
     except OSError as exc:
         logger.debug("bedrock preflight: cache write failed: %s", exc)
 

@@ -41,10 +41,25 @@ logger = logging.getLogger(__name__)
 # The probe cache is a tiny RAPTOR-written record.
 _MAX_CACHE_BYTES = 1024 * 1024
 
-_CACHE_PATH = Path(
-    os.environ.get("RAPTOR_CC_PROBE_CACHE")
-    or Path.home() / ".raptor" / "cache" / "cc-probe.json"
-)
+# Test-override seam: when set (tests monkeypatch a tmp path here) it
+# wins over the env-derived default. Production leaves it None so
+# ``_cache_path()`` re-reads ``RAPTOR_CC_PROBE_CACHE`` on every call —
+# an env pin installed AFTER this module is imported still redirects
+# the cache instead of being silently ignored by an import-time
+# snapshot.
+_CACHE_PATH: Path | None = None
+
+
+def _cache_path() -> Path:
+    """Probe-cache location, resolved at call time:
+    ``$RAPTOR_CC_PROBE_CACHE`` (default
+    ``~/.raptor/cache/cc-probe.json``)."""
+    if _CACHE_PATH is not None:
+        return _CACHE_PATH
+    return Path(
+        os.environ.get("RAPTOR_CC_PROBE_CACHE")
+        or Path.home() / ".raptor" / "cache" / "cc-probe.json"
+    )
 _CACHE_TTL_S = 24 * 3600
 _PROBE_TIMEOUT_S = 120
 _PROBE_BUDGET_USD = "0.25"
@@ -134,7 +149,7 @@ def extract_model_from_envelope(envelope: dict) -> str | None:
 
 
 def _read_cache(signature: str) -> str | None:
-    data = load_json(_CACHE_PATH, max_bytes=_MAX_CACHE_BYTES)
+    data = load_json(_cache_path(), max_bytes=_MAX_CACHE_BYTES)
     if not isinstance(data, dict):
         return None
     if data.get("signature") != signature:
@@ -147,7 +162,7 @@ def _read_cache(signature: str) -> str | None:
 
 def _write_cache(signature: str, model: str) -> None:
     try:
-        save_json(_CACHE_PATH, {
+        save_json(_cache_path(), {
             "signature": signature,
             "model": model,
             "timestamp": time.time(),
