@@ -37,8 +37,14 @@ from __future__ import annotations
 import os
 import stat as _stat_mod
 from pathlib import Path
+from typing import IO
 
-__all__ = ["ReadBudgetExceededError", "read_bytes_gated", "read_text_gated"]
+__all__ = [
+    "ReadBudgetExceededError",
+    "open_regular_gated",
+    "read_bytes_gated",
+    "read_text_gated",
+]
 
 
 class ReadBudgetExceededError(ValueError):
@@ -50,6 +56,75 @@ class ReadBudgetExceededError(ValueError):
     required file is actionable — raise the budget or shrink the
     file — where a malformed one is not).
     """
+
+
+def _open_gated(
+    p: str | Path,
+    *,
+    follow_symlinks: bool,
+) -> tuple[IO[bytes], os.stat_result]:
+    """One open, ONE fstat: the shared body behind
+    :func:`open_regular_gated` and :func:`read_bytes_gated`.
+
+    Returning the stat alongside the stream lets the byte reader run
+    its size gate on the SAME fstat that proved regularity — a second
+    by-fd stat would be sound (same inode) but would split the gates
+    across two kernel snapshots, so a file growing between them would
+    trip the size gate with the wrong refusal message.
+    """
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    if not follow_symlinks:
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(str(p), flags)
+    try:
+        st = os.fstat(fd)
+        if not _stat_mod.S_ISREG(st.st_mode):
+            msg = f"not a regular file: {p}"
+            raise ValueError(msg)
+        fh = os.fdopen(fd, "rb")
+        fd = -1  # fdopen owns it now
+        return fh, st
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def open_regular_gated(
+    p: str | Path,
+    *,
+    follow_symlinks: bool = True,
+) -> IO[bytes]:
+    """Raising fd-gated open of a regular file for reading.
+
+    The open half of :func:`read_bytes_gated`, exposed for callers
+    that need their own read shape (streamed hashing, held inode
+    pins) over the same discipline — one body, so a new consumer can
+    never re-grow a check-by-name ``is_file()``/``lstat()`` probe
+    that races a swap between check and open:
+
+    * ``O_NONBLOCK`` — the open of a reader-less FIFO returns instead
+      of blocking forever (no effect on regular-file reads).
+    * ``fstat`` ``S_ISREG`` on the OPENED fd — the regularity verdict
+      binds to the inode actually opened, not to a name that can be
+      swapped between a check and the open.
+    * ``follow_symlinks=False`` adds ``O_NOFOLLOW`` so a
+      final-component symlink refuses with ``ELOOP`` — the posture
+      for trust-bearing reads whose path must denote the file itself.
+
+    Returns the open binary stream (its ``fileno()`` carries the
+    verified inode for identity pinning). Raises ``ValueError`` for a
+    non-regular file and ``OSError`` for open failures (``ELOOP``
+    when ``follow_symlinks=False`` meets a link).
+    """
+    fh, _st = _open_gated(p, follow_symlinks=follow_symlinks)
+    return fh
 
 
 def read_bytes_gated(
@@ -90,40 +165,21 @@ def read_bytes_gated(
     distinctly — and ``OSError`` for open/read failures (``ELOOP``
     when ``follow_symlinks=False`` meets a link).
     """
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_NONBLOCK", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-    )
-    if not follow_symlinks:
-        flags |= getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(str(p), flags)
-    try:
-        st = os.fstat(fd)
-        if not _stat_mod.S_ISREG(st.st_mode):
-            msg = f"not a regular file: {p}"
-            raise ValueError(msg)
+    fh, st = _open_gated(p, follow_symlinks=follow_symlinks)
+    with fh:
         if max_bytes is not None and st.st_size > max_bytes:
             msg = (
                 f"file size {st.st_size} bytes exceeds "
                 f"max_bytes={max_bytes}: {p}"
             )
             raise budget_error(msg)
-        with os.fdopen(fd, "rb") as fh:
-            fd = -1  # fdopen owns it now
-            raw = fh.read(max_bytes + 1 if max_bytes is not None else -1)
-        if max_bytes is not None and len(raw) > max_bytes:
-            msg = (
-                f"file grew past max_bytes={max_bytes} during read: {p}"
-            )
-            raise budget_error(msg)
-        return raw
-    finally:
-        if fd >= 0:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+        raw = fh.read(max_bytes + 1 if max_bytes is not None else -1)
+    if max_bytes is not None and len(raw) > max_bytes:
+        msg = (
+            f"file grew past max_bytes={max_bytes} during read: {p}"
+        )
+        raise budget_error(msg)
+    return raw
 
 
 def read_text_gated(

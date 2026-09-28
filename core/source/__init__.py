@@ -27,6 +27,7 @@ from core.source.contained import (
 )
 from core.source.gated import (
     ReadBudgetExceededError,
+    open_regular_gated,
     read_bytes_gated,
     read_text_gated,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "number_lines",
     "open_regular",
     "open_regular_beneath",
+    "open_regular_gated",
     "read_bytes_capped",
     "read_bytes_gated",
     "read_contained",

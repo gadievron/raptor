@@ -12,6 +12,7 @@ import pytest
 
 from core.source.gated import (
     ReadBudgetExceededError,
+    open_regular_gated,
     read_bytes_gated,
     read_text_gated,
 )
@@ -205,3 +206,99 @@ class TestJsonDelegation:
         p = tmp_path / "d.json"
         p.write_text('{"k": 1}')
         assert load_json(p, strict=True) == {"k": 1}
+
+
+class TestOpenRegularGated:
+    """The exposed open half — same gates, caller-owned stream."""
+
+    def test_opens_regular_file_and_reads(self, tmp_path):
+        p = tmp_path / "a.bin"
+        p.write_bytes(b"payload")
+        with open_regular_gated(p) as fh:
+            assert fh.read() == b"payload"
+
+    def test_fileno_carries_the_opened_inode(self, tmp_path):
+        p = tmp_path / "a.bin"
+        p.write_bytes(b"x")
+        with open_regular_gated(p) as fh:
+            st_fd = os.fstat(fh.fileno())
+            st_name = os.stat(p)
+            assert (st_fd.st_dev, st_fd.st_ino) == (
+                st_name.st_dev, st_name.st_ino)
+
+    def test_held_stream_pins_identity_across_unlink(self, tmp_path):
+        p = tmp_path / "a.bin"
+        p.write_bytes(b"pinned")
+        with open_regular_gated(p) as fh:
+            pin = os.fstat(fh.fileno())
+            p.unlink()
+            (tmp_path / "a.bin").write_bytes(b"swapped")
+            st_now = os.stat(p)
+            # Held fd keeps the ORIGINAL inode alive and distinct.
+            assert (pin.st_dev, pin.st_ino) != (
+                st_now.st_dev, st_now.st_ino)
+            fh.seek(0)
+            assert fh.read() == b"pinned"
+
+    def test_fifo_refused_without_blocking(self, tmp_path):
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+        with pytest.raises(ValueError, match="not a regular file"):
+            open_regular_gated(fifo)
+
+    def test_directory_refused(self, tmp_path):
+        # Opening a directory O_RDONLY succeeds on POSIX; the fstat
+        # regularity gate must still refuse it.
+        with pytest.raises((ValueError, OSError)):
+            open_regular_gated(tmp_path)
+
+    def test_missing_file_raises_oserror(self, tmp_path):
+        with pytest.raises(OSError):
+            open_regular_gated(tmp_path / "absent")
+
+    def test_default_follows_symlink(self, tmp_path):
+        target = tmp_path / "real.txt"
+        target.write_bytes(b"through-link")
+        link = tmp_path / "link.txt"
+        link.symlink_to(target)
+        with open_regular_gated(link) as fh:
+            assert fh.read() == b"through-link"
+
+    def test_nofollow_refuses_symlink(self, tmp_path):
+        target = tmp_path / "real.txt"
+        target.write_bytes(b"secret")
+        link = tmp_path / "link.txt"
+        link.symlink_to(target)
+        with pytest.raises(OSError):
+            open_regular_gated(link, follow_symlinks=False)
+
+    def test_nofollow_opens_plain_regular_file(self, tmp_path):
+        p = tmp_path / "plain.txt"
+        p.write_bytes(b"ok")
+        with open_regular_gated(p, follow_symlinks=False) as fh:
+            assert fh.read() == b"ok"
+
+    def test_refusal_leaks_no_fd(self, tmp_path):
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+        with pytest.raises(ValueError):
+            open_regular_gated(fifo)
+        # The fd the refusal opened must be closed: the very next
+        # open should land on the lowest free fd, and closing it
+        # again via a fresh open proves no descriptor was orphaned.
+        probe = tmp_path / "probe.txt"
+        probe.write_bytes(b"p")
+        fd1 = os.open(probe, os.O_RDONLY)
+        os.close(fd1)
+        with pytest.raises(ValueError):
+            open_regular_gated(fifo)
+        fd2 = os.open(probe, os.O_RDONLY)
+        os.close(fd2)
+        assert fd2 == fd1
+
+    def test_returned_stream_is_binary(self, tmp_path):
+        p = tmp_path / "a.bin"
+        p.write_bytes(b"\x00\xff")
+        with open_regular_gated(p) as fh:
+            assert fh.read() == b"\x00\xff"
+            assert fh.mode == "rb"
