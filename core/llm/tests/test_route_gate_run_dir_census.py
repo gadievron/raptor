@@ -6,14 +6,21 @@ route gates (``ensure_route_for_client``,
 passes a ``run_dir`` keyword so the dispatcher's L5 audit JSONL lands
 in the caller's run output directory — or the call sits on a small
 allowlist with a rationale (a caller with no run directory keeps the
-gate's documented in-memory fallback). Local wrappers that forward to
-a gate and expose their own ``run_dir`` parameter are swept
+gate's documented in-memory fallback). Wrappers that forward to a
+gate and expose their own ``run_dir`` parameter are swept
 transitively: their call sites carry the same obligation, so the
-threading cannot be dropped one hop above the gate.
+threading cannot be dropped one hop above the gate. The sweep crosses
+module boundaries through ``from … import`` — a compliant forwarding
+wrapper factored into a shared module keeps its importers obligated
+instead of ending the census's reach at the consolidation seam.
+(``import module`` attribute access to a wrapper and package
+``__init__`` re-export chains stay out of scope, like the other
+determined respellings below.)
 
 The census is a write-site tripwire, not a security boundary: a
 literal-shape census is evadable by a determined respelling (an alias
-assignment, ``functools.partial``, ``**kwargs`` forwarding). Import
+assignment, a lambda assignment, ``functools.partial``, ``**kwargs``
+forwarding). Import
 aliases (``from … import <gate> as <alias>``) are NOT an escape: they
 are an ordinary low-intent spelling, so the census maps each asname
 back to the gate it names. The
@@ -97,21 +104,89 @@ def _gate_import_aliases(tree: ast.Module) -> dict[str, str]:
     return aliases
 
 
+def _module_keys(rel: str) -> tuple[str, ...]:
+    """Dotted import spellings the repo file *rel* answers to.
+
+    core/… and the root CLIs import as their path. A packages/<dist>/
+    DIST tree — the dist directory itself goes on sys.path and carries
+    an inner top-level package named after the dist (the cve_env /
+    cve_diff launcher shape) — is ALSO importable as that inner
+    package, so it registers under both spellings. A flat
+    packages/<name>/ module is importable only by its path spelling:
+    registering its bare leaf name would falsely obligate importers
+    of a same-named EXTERNAL module on a name collision. libexec
+    scripts are not importable modules.
+    """
+    if not rel.endswith(".py"):
+        return ()
+    parts = rel[: -len(".py")].split("/")
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    if not parts:
+        return ()
+    keys = [".".join(parts)]
+    if (parts[0] == "packages" and len(parts) > 2
+            and parts[2] == parts[1]):
+        keys.append(".".join(parts[2:]))
+    return tuple(keys)
+
+
+def _imports(tree: ast.Module, rel: str) -> tuple[tuple[str, str, str], ...]:
+    """(local name, source-module dotted spelling, original name) for
+    every ``from X import name [as alias]`` in the module — the seam a
+    shared forwarding wrapper crosses. ``from X import *`` records a
+    star edge ``("*", X, "*")``; the driver treats it as importing
+    every wrapper X exports, so a star import cannot silently end the
+    obligation. Relative imports resolve against the importing file's
+    own repo path.
+    """
+    pkg: list[str] | None = None
+    if rel.endswith(".py"):
+        parts = rel[: -len(".py")].split("/")
+        pkg = parts[:-1]  # the current package (__init__ included)
+    out: list[tuple[str, str, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level:
+            if pkg is None or node.level - 1 > len(pkg):
+                continue  # not resolvable as a repo package member
+            base = pkg[: len(pkg) - (node.level - 1)]
+            src_parts = base + (node.module.split(".") if node.module else [])
+        elif node.module is not None:
+            src_parts = node.module.split(".")
+        else:
+            continue
+        src = ".".join(src_parts)
+        for alias in node.names:
+            out.append((alias.asname or alias.name, src, alias.name))
+    return tuple(out)
+
+
 class _ModuleCensus(NamedTuple):
     """One module's sweep result."""
 
     violations: list[tuple[str, str]]  # (canonical name, message)
     gate_calls: int
     wrapper_calls: int
+    wrappers: frozenset[str]  # wrapper names DEFINED in this module
+    imports: tuple[tuple[str, str, str], ...]  # (local, src, orig)
 
 
-def _census_source(source: str) -> _ModuleCensus:
+def _census_source(
+    source: str,
+    *,
+    rel: str = "<memory>",
+    imported_wrappers: frozenset[str] = frozenset(),
+) -> _ModuleCensus:
     """Sweep one module. A *wrapper* is a function that has a
     ``run_dir`` parameter and calls a censused name (gates first,
     then fixpoint over wrappers-of-wrappers) — its call sites carry
-    the threading obligation too. A function WITHOUT a ``run_dir``
-    parameter that satisfies the gate internally (e.g. deriving the
-    run dir from a config argument) ends the obligation there.
+    the threading obligation too, including sites in OTHER modules
+    when the driver passes the imported wrapper names back in via
+    *imported_wrappers*. A function WITHOUT a ``run_dir`` parameter
+    that satisfies the gate internally (e.g. deriving the run dir
+    from a config argument) ends the obligation there.
     """
     tree = ast.parse(source)
     functions = [
@@ -123,6 +198,8 @@ def _census_source(source: str) -> _ModuleCensus:
     # import aliases; wrappers are their own canonical).
     censused: dict[str, str] = {name: name for name in GATE_NAMES}
     censused.update(_gate_import_aliases(tree))
+    censused.update({name: name for name in imported_wrappers})
+    local_wrappers: set[str] = set()
     changed = True
     while changed:
         changed = False
@@ -136,6 +213,7 @@ def _census_source(source: str) -> _ModuleCensus:
             )
             if calls_censused:
                 censused[fn.name] = fn.name
+                local_wrappers.add(fn.name)
                 changed = True
 
     violations: list[tuple[str, str]] = []
@@ -167,7 +245,8 @@ def _census_source(source: str) -> _ModuleCensus:
                 f"line {node.lineno}: {name}(run_dir=None) literal — "
                 "an explicit None defeats the audit-log placement; "
                 "run-dir-less callers belong on the allowlist instead")))
-    return _ModuleCensus(violations, gate_calls, wrapper_calls)
+    return _ModuleCensus(violations, gate_calls, wrapper_calls,
+                         frozenset(local_wrappers), _imports(tree, rel))
 
 
 def _census_repo(
@@ -180,14 +259,14 @@ def _census_repo(
     violation — merely naming a censused callee in the file does not
     count, so an entry for a compliant caller reads as stale instead
     of silently disarming the census for that (file, gate) pair.
+    Wrapper obligations propagate across modules via ``from … import``
+    (see the fixpoint below).
     """
-    reported: list[str] = []
-    gate_total = 0
-    wrapper_total = 0
-    used: set[tuple[str, str]] = set()
+    censuses: dict[str, _ModuleCensus] = {}
+    sources: dict[str, str] = {}
     for rel, source in modules.items():
         try:
-            census = _census_source(source)
+            censuses[rel] = _census_source(source, rel=rel)
         except SyntaxError:
             # A module the census cannot parse can only hide a gate
             # caller if it names a gate at all.
@@ -195,6 +274,45 @@ def _census_repo(
                 f"{rel}: names a route gate but does not parse — "
                 "the census cannot sweep it")
             continue
+        sources[rel] = source
+    # Cross-module sweep: a compliant forwarding wrapper factored
+    # into a shared module keeps its ``from … import`` call sites
+    # obligated. Re-census every importer with the imported wrapper
+    # names in scope, to a fixpoint — wrappers-of-wrappers can chain
+    # across modules. Terminates: each module's imported set is
+    # monotone non-decreasing and bounded by its import count.
+    exported: dict[str, set[str]] = {}
+    for rel, census in censuses.items():
+        for key in _module_keys(rel):
+            exported.setdefault(key, set()).update(census.wrappers)
+    applied: dict[str, frozenset[str]] = {}
+    progressed = True
+    while progressed:
+        progressed = False
+        for rel, census in list(censuses.items()):
+            names: set[str] = set()
+            for local, src, orig in census.imports:
+                if orig == "*":
+                    # A star edge imports every wrapper the source
+                    # module exports, under their original names.
+                    names.update(exported.get(src, ()))
+                elif orig in exported.get(src, ()):
+                    names.add(local)
+            imported = frozenset(names)
+            if imported == applied.get(rel, frozenset()):
+                continue
+            applied[rel] = imported
+            census = _census_source(
+                sources[rel], rel=rel, imported_wrappers=imported)
+            censuses[rel] = census
+            for key in _module_keys(rel):
+                exported.setdefault(key, set()).update(census.wrappers)
+            progressed = True
+    reported: list[str] = []
+    gate_total = 0
+    wrapper_total = 0
+    used: set[tuple[str, str]] = set()
+    for rel, census in censuses.items():
         gate_total += census.gate_calls
         wrapper_total += census.wrapper_calls
         for name, msg in census.violations:
@@ -279,6 +397,137 @@ class TestSweepSurface:
     def test_root_sweep_matches_only_raptor_clis(self) -> None:
         for rel in self._root_entries():
             assert rel.startswith("raptor") and rel.endswith(".py"), rel
+
+
+class TestCrossModuleWrappers:
+    """A compliant run_dir-forwarding wrapper factored into a shared
+    module keeps its ``from … import`` call sites obligated — the
+    consolidation refactor must not silently end the sweep at the
+    module boundary."""
+
+    _SHARED = (
+        "def shared_boot(client, label, run_dir=None):\n"
+        "    ensure_route_for_client(client, label, run_dir=run_dir)\n"
+    )
+
+    def test_imported_wrapper_call_sites_stay_obligated(self) -> None:
+        modules = {
+            "core/llm/shared.py": self._SHARED,
+            "libexec/raptor-example": (
+                "from core.llm.shared import shared_boot\n"
+                'shared_boot(client, "example-cli")\n'),
+        }
+        reported, gates, wrappers, _ = _census_repo(modules, {})
+        assert gates == 1 and wrappers == 1
+        assert reported and reported[0].startswith("libexec/raptor-example")
+
+    def test_threaded_imported_wrapper_call_accepted(self) -> None:
+        modules = {
+            "core/llm/shared.py": self._SHARED,
+            "libexec/raptor-example": (
+                "from core.llm.shared import shared_boot\n"
+                'shared_boot(client, "example-cli", run_dir=out_dir)\n'),
+        }
+        reported, gates, wrappers, _ = _census_repo(modules, {})
+        assert not reported and gates == 1 and wrappers == 1
+
+    def test_imported_wrapper_asname_is_swept(self) -> None:
+        modules = {
+            "core/llm/shared.py": self._SHARED,
+            "libexec/raptor-example": (
+                "from core.llm.shared import shared_boot as boot\n"
+                'boot(client, "example-cli")\n'),
+        }
+        reported, _, _, _ = _census_repo(modules, {})
+        assert reported and reported[0].startswith("libexec/raptor-example")
+
+    def test_relative_import_is_resolved(self) -> None:
+        modules = {
+            "core/llm/shared.py": self._SHARED,
+            "core/llm/caller.py": (
+                "from .shared import shared_boot\n"
+                'shared_boot(client, "example-cli")\n'),
+        }
+        reported, _, _, _ = _census_repo(modules, {})
+        assert reported and reported[0].startswith("core/llm/caller.py")
+
+    def test_packages_inner_import_spelling_is_resolved(self) -> None:
+        # packages/<dist>/ trees import as their inner top-level
+        # package (cve_env.…, not packages.cve_env.cve_env.…).
+        modules = {
+            "packages/cve_env/cve_env/agent/core_loop.py": self._SHARED,
+            "packages/cve_env/cve_env/cli.py": (
+                "from cve_env.agent.core_loop import shared_boot\n"
+                'shared_boot(client, "example-cli")\n'),
+        }
+        reported, _, _, _ = _census_repo(modules, {})
+        assert reported and reported[0].startswith(
+            "packages/cve_env/cve_env/cli.py")
+
+    def test_star_imported_wrapper_call_sites_stay_obligated(self) -> None:
+        # ``from X import *`` binds the wrapper just like a named
+        # import — it must not silently end the obligation.
+        modules = {
+            "core/llm/shared.py": self._SHARED,
+            "core/audit/caller.py": (
+                "from core.llm.shared import *\n"
+                'shared_boot(client, "star-cli")\n'),
+        }
+        reported, gates, wrappers, _ = _census_repo(modules, {})
+        assert gates == 1 and wrappers == 1
+        assert reported and reported[0].startswith("core/audit/caller.py")
+
+    def test_threaded_star_imported_wrapper_call_accepted(self) -> None:
+        modules = {
+            "core/llm/shared.py": self._SHARED,
+            "core/audit/caller.py": (
+                "from core.llm.shared import *\n"
+                'shared_boot(client, "star-cli", run_dir=out_dir)\n'),
+        }
+        reported, gates, wrappers, _ = _census_repo(modules, {})
+        assert not reported and gates == 1 and wrappers == 1
+
+    def test_inner_spelling_registers_only_for_dist_trees(self) -> None:
+        # Two-level dist tree (dist dir on sys.path, inner top-level
+        # package named after the dist): both spellings register.
+        assert _module_keys("packages/cve_env/cve_env/agent/core_loop.py") \
+            == ("packages.cve_env.cve_env.agent.core_loop",
+                "cve_env.agent.core_loop")
+        # Flat packages/<name>/ module: path spelling only — no bare
+        # leaf key that could falsely obligate importers of a
+        # same-named external module.
+        assert _module_keys("packages/scanner/agent.py") == (
+            "packages.scanner.agent",)
+
+    def test_wrapper_chain_across_modules(self) -> None:
+        modules = {
+            "core/llm/shared.py": self._SHARED,
+            "core/llm/mid.py": (
+                "from core.llm.shared import shared_boot\n"
+                "def outer(client, run_dir=None):\n"
+                '    shared_boot(client, "mid", run_dir=run_dir)\n'),
+            "libexec/raptor-example": (
+                "from core.llm.mid import outer\n"
+                "outer(client)\n"),
+        }
+        reported, _, _, _ = _census_repo(modules, {})
+        assert reported and reported[0].startswith("libexec/raptor-example")
+
+    def test_config_deriving_shared_owner_ends_the_obligation(self) -> None:
+        # A shared gate owner WITHOUT a run_dir parameter derives the
+        # placement itself — importers stay free, exactly like the
+        # same-module obligation-ender.
+        modules = {
+            "core/llm/shared.py": (
+                "def build(config):\n"
+                "    ensure_route_for_client(\n"
+                '        config.client, "shared", run_dir=config.out_dir)\n'),
+            "libexec/raptor-example": (
+                "from core.llm.shared import build\n"
+                "build(config)\n"),
+        }
+        reported, gates, wrappers, _ = _census_repo(modules, {})
+        assert not reported and gates == 1 and wrappers == 0
 
 
 class TestAllowlistRotGuard:
