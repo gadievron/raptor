@@ -90,6 +90,7 @@ import os
 import socket
 import threading
 import time
+import weakref
 from collections.abc import Callable, Iterable, Iterator
 from typing import Any, Generic, Protocol, TypeVar
 
@@ -1144,6 +1145,51 @@ _SHARD_STRIKE_ERRORS: tuple[type[Exception], ...] = (
 )
 
 
+class _HoldState:
+    """Terminal state of one shard hold, shared between the stream
+    and its GC finalizer. The finalizer must not reference the stream
+    itself (a ``weakref.finalize`` callback that captures its own
+    referent keeps it alive and never runs), so the flags both sides
+    coordinate on live here. ``lock`` guards both flags."""
+
+    __slots__ = ("lock", "released", "resolved")
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.resolved = False  # evidence reported (reset or strike)
+        self.released = False  # hold returned to the pool
+
+
+def _release_abandoned_hold(
+    state: _HoldState,
+    shards: ClientShards[httpx.BaseTransport],
+    index: int,
+) -> None:
+    """GC safety net for a response abandoned without ``close()``:
+    return its hold, or the slot stays pinned in-flight forever —
+    least-in-flight steers around it and a draining shard never
+    retires.
+
+    Runs from ``weakref.finalize`` (possibly at interpreter
+    teardown), so it references only its bound arguments and swallows
+    everything — a finalizer must never raise. Semantics mirror
+    ``close()`` exactly: ``resolved`` is set with ``released`` under
+    the lock (nothing can report against whatever shard is refilled
+    into the slot), and a stream that was properly closed is a no-op.
+    The release can cascade into retiring an idle draining shard —
+    a transport/socket close during GC; fd-level only.
+    """
+    try:
+        with state.lock:
+            if state.released:
+                return
+            state.released = True
+            state.resolved = True
+        shards.release(index)
+    except BaseException:  # noqa: BLE001 — a finalizer must never raise
+        pass
+
+
 class _ShardStream(httpx.SyncByteStream):
     """Response-body stream that carries its shard hold.
 
@@ -1161,6 +1207,10 @@ class _ShardStream(httpx.SyncByteStream):
     resolves the stream — neutrally, exactly the early-close
     semantics — as it returns the hold. Nothing reported after close
     can land on whatever shard has since been refilled into the slot.
+
+    A response the caller drops without closing is caught by a GC
+    finalizer (:func:`_release_abandoned_hold`) that returns the hold
+    with the same terminal semantics as ``close()``.
     """
 
     def __init__(
@@ -1172,15 +1222,17 @@ class _ShardStream(httpx.SyncByteStream):
         self._inner = inner
         self._shards = shards
         self._index = index
-        self._lock = threading.Lock()
-        self._resolved = False  # evidence reported (reset or strike)
-        self._released = False  # hold returned to the pool
+        self._state = _HoldState()
+        self._finalizer = weakref.finalize(
+            self, _release_abandoned_hold, self._state, shards, index,
+        )
 
     def _resolve(self, *, clean: bool, strike: bool = False) -> None:
-        with self._lock:
-            if self._resolved:
+        state = self._state
+        with state.lock:
+            if state.resolved:
                 return
-            self._resolved = True
+            state.resolved = True
         if clean:
             self._shards.report_success(self._index)
         elif strike:
@@ -1200,16 +1252,18 @@ class _ShardStream(httpx.SyncByteStream):
         try:
             self._inner.close()
         finally:
-            with self._lock:
-                already = self._released
-                self._released = True
+            state = self._state
+            with state.lock:
+                already = state.released
+                state.released = True
                 # The hold ends here and the released slot may be
                 # retired and REFILLED at any point after — resolve
                 # the evidence too (a no-op when the drain already
                 # reported), so a post-close iteration can never
                 # report a strike against whatever fresh shard now
-                # occupies this index.
-                self._resolved = True
+                # occupies this index. The GC finalizer reads the
+                # same flag and stands down.
+                state.resolved = True
             if not already:
                 self._shards.release(self._index)
 

@@ -9,6 +9,7 @@ that outlives the gap and gives every SDK the same tunable pool.
 
 from __future__ import annotations
 
+import gc
 import sys
 import time
 import types
@@ -1590,6 +1591,67 @@ class TestShardedTransport:
             self._drain(response)
             response.stream.close()  # second close: no double release
             assert transport.shards.in_flight == (0,)
+        finally:
+            transport.close()
+
+    def test_abandoned_response_releases_its_hold_at_gc(self):
+        # A caller that never drains nor closes the response would
+        # otherwise pin its hold forever: least-in-flight keeps
+        # steering around the slot and a draining shard never
+        # retires. The GC finalizer returns the hold — evidence-
+        # neutral, exactly the early-close semantics.
+        transport, built = self._sharded(1, [None])
+        try:
+            response = transport.handle_request(self._request())
+            assert transport.shards.in_flight == (1,)
+            del response
+            gc.collect()
+            assert transport.shards.in_flight == (0,)
+            # Neutral: no strike landed, the shard lives on.
+            assert len(transport.shards) == 1
+            assert not built[0].closed
+        finally:
+            transport.close()
+
+    def test_gc_after_close_never_double_releases(self):
+        # close() already returned the hold; the finalizer must see
+        # that and stand down — a second release would decrement a
+        # sibling hold on the same slot.
+        transport, _ = self._sharded(1, [None, None])
+        try:
+            first = transport.handle_request(self._request())
+            second = transport.handle_request(self._request())
+            assert transport.shards.in_flight == (2,)
+            self._drain(first)  # close: hold already returned
+            del first
+            gc.collect()
+            assert transport.shards.in_flight == (1,)  # second's hold intact
+            self._drain(second)
+            assert transport.shards.in_flight == (0,)
+        finally:
+            transport.close()
+
+    def test_gc_release_cascade_retires_the_draining_shard(self):
+        # The abandoned hold was the LAST thing keeping a draining
+        # shard alive: the finalizer's release cascades into the
+        # retire — the inner transport closes during GC (fd-level
+        # socket close; the accepted hazard) and the slot refills so
+        # the next request rides a fresh shard.
+        script = [("midbody", httpx.ReadError("dead")), None]
+        transport, built = self._sharded(1, script, failure_threshold=1)
+        try:
+            response = transport.handle_request(self._request())
+            with pytest.raises(httpx.ReadError):
+                b"".join(response.stream)  # strike: threshold 1, draining
+            assert transport.shards.in_flight == (1,)
+            del response
+            gc.collect()
+            assert transport.shards.in_flight == (0,)
+            assert built[0].closed  # cascade: retired during GC
+            replacement = transport.handle_request(self._request())
+            self._drain(replacement)
+            assert len(built) == 2
+            assert built[1].calls == 1
         finally:
             transport.close()
 
