@@ -198,6 +198,20 @@ class TestUnverifiedResidue:
         assert lines and "Unverified residue" in lines[0]
         assert format_residue_lines({"unverified_residue": {}}) == []
 
+    def test_browse_placeholders_survive_the_sanitise_seam(
+        self, tmp_path: Path,
+    ) -> None:
+        # The browse/detail constants ride the same sanitise seam as
+        # target-derived values; angle-bracket placeholders came out
+        # HTML-escaped ("&lt;run-dir>") on a live run's console, so
+        # the placeholders must use a form the seam passes through.
+        from core.audit.report import format_residue_lines
+        _seed_residue_run(tmp_path)
+        rendered = "\n".join(
+            format_residue_lines(generate_report(tmp_path)))
+        assert "&lt;" not in rendered
+        assert "{run-dir}" in rendered
+
 
 class TestErroredFunctions:
     def test_json_carries_full_per_item_list(self, tmp_path: Path) -> None:

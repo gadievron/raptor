@@ -1380,11 +1380,14 @@ def _residue_count(value: Any) -> int:
 
 
 # One browse command per residue class: the per-item query surface an
-# operator runs against the run dir. Generic ``<run-dir>`` placeholder
+# operator runs against the run dir. Generic ``{run-dir}`` placeholder
 # by design — the report must not embed operator filesystem paths.
-_RESIDUE_BROWSE_FINDINGS = "raptor-review findings --out <run-dir>"
+# Brace form, not ``<run-dir>``: these constants ride the same
+# sanitise seam as target-derived values, which HTML-escapes angle
+# brackets ("&lt;run-dir>" on the console).
+_RESIDUE_BROWSE_FINDINGS = "raptor-review findings --out {run-dir}"
 _RESIDUE_BROWSE_HISTORY = (
-    "raptor-review history <file> <function> --out <run-dir>"
+    "raptor-review history {file} {function} --out {run-dir}"
 )
 
 
