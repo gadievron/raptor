@@ -473,6 +473,49 @@ a CodeQL pack download) but should not get open network.
   exfiltration) when namespaces are unavailable; environment variables
   alone as the last resort. Runs record which tier engaged.
 
+### Request-line parser jail
+
+The proxy never interprets a client's raw request-line bytes in its
+own process. Those bytes come straight from sandboxed (potentially
+compromised) code, so parsing them — the decode, the method split, the
+host/port extraction — is delegated to a dedicated, long-lived worker
+process that does nothing else. The proxy sends each raw line to the
+worker and consumes only a small structured verdict, re-validating
+every field (type, length, charset, range) before using it; a worker
+that deviates from the protocol in any way is killed and respawned,
+and the request that hit the deviation is refused.
+
+The worker confines itself at startup, in layers:
+
+- Every inherited file descriptor is closed except the single socket
+  to the proxy; stdio is bound to `/dev/null`.
+- Resource limits: a CPU budget that kills a runaway parse, an
+  address-space cap, a file-descriptor cap, zero file writes, and
+  zero forks.
+- Landlock (when the kernel supports it): read-only access to its own
+  code trees, no writes anywhere, no network.
+- Requests carry unpredictable random ids, and the proxy checks for
+  unsolicited buffered bytes before each send — a worker that
+  pre-queues a forged verdict or volunteers data is killed rather
+  than believed.
+
+There is no inline-parse fallback. If no confined worker can be
+spawned, the proxy refuses to start; if the worker becomes
+unavailable mid-run, affected requests are answered `503` and
+recorded as `parser_unavailable` events — the bytes are never parsed
+in-process instead.
+
+On kernels without Landlock the worker steps down to the remaining
+layers (resource limits, descriptor hygiene, process isolation) and
+says so loudly: a one-time warning at startup and a
+`parser_jail_degraded` event in every registration's audit stream.
+If Landlock is available but its policy fails to install, the worker
+does not serve at all — that is a fault, not a degradation.
+
+Method accounting is unaffected: the `requests_connect` /
+`requests_non_connect` counters keep their historical meaning, fed by
+a classification the worker returns with each verdict.
+
 ### Upstream proxy support
 
 If `HTTPS_PROXY` is set in the parent environment (e.g. corporate
