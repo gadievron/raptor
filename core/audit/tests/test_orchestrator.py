@@ -5534,6 +5534,19 @@ class TestSageRecallGate:
     SAGE client is ever contacted.
     """
 
+    @pytest.fixture(autouse=True)
+    def _stub_mechanical_detectors(self, monkeypatch) -> None:
+        """Stub the pre-loop mechanical-detector pass at its seam (the
+        test_consistency_wiring / TestSageFpPrimer idiom): it does real
+        I/O — sandboxed coccinelle spawns where spatch is installed,
+        plus the detector-cache import-closure fingerprint — seconds
+        per run, entirely orthogonal to the recall gate under test,
+        and enough to trip the default-tier duration guard on a
+        loaded CI runner."""
+        from core.audit import orchestrator as orch
+        monkeypatch.setattr(orch, "_run_mechanical_detectors",
+                            lambda *a, **k: ({}, set()))
+
     def _run(self, tmp_path: Path, recall, *, config_kw=None):
         from unittest.mock import patch as _patch
 

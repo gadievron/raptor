@@ -321,6 +321,7 @@ def census_prep(tmp_path_factory):
     )
     assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
 
+    from core.audit import orchestrator as orch
     from core.audit.orchestrator import (
         OrchestratorConfig,
         _compute_audit_prep,
@@ -335,7 +336,21 @@ def census_prep(tmp_path_factory):
         enable_session_context=False,
         propagate_constraints=False,
     )
-    prep = _compute_audit_prep(config)
+    # The census channel is under test (it runs in its own prep phase,
+    # after the detector pass); prep's mechanical-detector phase is
+    # incidental substrate — sandboxed Coccinelle runs on
+    # spatch-equipped hosts plus the detector-cache import-closure
+    # fingerprint, the bulk of this fixture's setup and enough to trip
+    # the default-tier duration guard on a loaded CI runner. Manual
+    # patch/restore because module-scoped fixtures cannot take the
+    # function-scoped monkeypatch; full variadic signature + the real
+    # (dict, set) return contract (the test_consistency_wiring idiom).
+    _real_mechanical = orch._run_mechanical_detectors
+    orch._run_mechanical_detectors = lambda *args, **kwargs: ({}, set())
+    try:
+        prep = _compute_audit_prep(config)
+    finally:
+        orch._run_mechanical_detectors = _real_mechanical
     assert prep is not None
     return prep, out
 

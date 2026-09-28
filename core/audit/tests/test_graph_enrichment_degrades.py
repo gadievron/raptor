@@ -52,7 +52,20 @@ def test_prep_graph_boost_degrades_on_permission_error(
         prep_run_dir: tuple[Path, Path], monkeypatch, caplog):
     """PermissionError from the graph store lands in the skip lane."""
     import core.understand_graph as ug
+    from core.audit import orchestrator as orch
     from core.audit.orchestrator import OrchestratorConfig, _compute_audit_prep
+
+    # The graph enrichment lane is under test; prep's
+    # mechanical-detector phase is incidental substrate (sandboxed
+    # Coccinelle runs on spatch-equipped hosts plus the detector-cache
+    # import-closure fingerprint — the bulk of the call's cost, enough
+    # to trip the default-tier duration guard on a loaded CI runner).
+    # Same seam and (dict, set) return contract as the
+    # test_consistency_wiring stub.
+    monkeypatch.setattr(
+        orch, "_run_mechanical_detectors",
+        lambda *args, **kwargs: ({}, set()),
+    )
 
     target, out = prep_run_dir
     graph_file = out / "graph" / "raptor.graph.sqlite"
@@ -91,7 +104,16 @@ def test_prep_graph_boost_degrades_on_bind_overflow(
     the same skip lane — the artifact-derived value surface is not
     limited to filesystem errors."""
     import core.understand_graph as ug
+    from core.audit import orchestrator as orch
     from core.audit.orchestrator import OrchestratorConfig, _compute_audit_prep
+
+    # Same incidental-substrate stub as the permission-error test
+    # above: the graph lane under test runs regardless of the
+    # mechanical-detector phase's output.
+    monkeypatch.setattr(
+        orch, "_run_mechanical_detectors",
+        lambda *args, **kwargs: ({}, set()),
+    )
 
     target, out = prep_run_dir
     graph_file = out / "graph" / "raptor.graph.sqlite"

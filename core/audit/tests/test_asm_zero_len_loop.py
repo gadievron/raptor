@@ -338,6 +338,7 @@ def prep_with_generated_asm(tmp_path_factory):
     })
     save_checklist(out, checklist)
 
+    from core.audit import orchestrator as orch
     from core.audit.orchestrator import (
         OrchestratorConfig,
         _compute_audit_prep,
@@ -352,7 +353,21 @@ def prep_with_generated_asm(tmp_path_factory):
         enable_session_context=False,
         propagate_constraints=False,
     )
-    prep = _compute_audit_prep(config)
+    # The asm-lead routing seam is under test — scan_inventory_asm runs
+    # in prep AFTER (and independent of) the mechanical-detector phase,
+    # which is incidental substrate here: sandboxed Coccinelle runs on
+    # spatch-equipped hosts plus the detector-cache import-closure
+    # fingerprint, the bulk of this fixture's setup and enough to trip
+    # the default-tier duration guard on a loaded CI runner. Manual
+    # patch/restore because module-scoped fixtures cannot take the
+    # function-scoped monkeypatch; full variadic signature + the real
+    # (dict, set) return contract (the test_consistency_wiring idiom).
+    _real_mechanical = orch._run_mechanical_detectors
+    orch._run_mechanical_detectors = lambda *args, **kwargs: ({}, set())
+    try:
+        prep = _compute_audit_prep(config)
+    finally:
+        orch._run_mechanical_detectors = _real_mechanical
     assert prep is not None, "prep returned None (checklist missing?)"
     return prep, out
 

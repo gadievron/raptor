@@ -50,7 +50,7 @@ _DOMAIN_MODEL = {
 
 
 @pytest.fixture()
-def prep_with_domain_model(tmp_path):
+def prep_with_domain_model(tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir()
     (target / "shapers.py").write_text(_SRC)
@@ -74,9 +74,21 @@ def prep_with_domain_model(tmp_path):
 
     (out / "domain-model.json").write_text(json.dumps(_DOMAIN_MODEL))
 
+    from core.audit import orchestrator as orch
     from core.audit.orchestrator import (
         OrchestratorConfig,
         _compute_audit_prep,
+    )
+
+    # The peer-group L3 layer is under test; prep's mechanical-detector
+    # phase is incidental substrate (sandboxed Coccinelle runs on
+    # spatch-equipped hosts plus the detector-cache import-closure
+    # fingerprint — the bulk of the fixture's setup, enough to trip the
+    # default-tier duration guard on a loaded CI runner). Same seam and
+    # (dict, set) return contract as the test_consistency_wiring stub.
+    monkeypatch.setattr(
+        orch, "_run_mechanical_detectors",
+        lambda *args, **kwargs: ({}, set()),
     )
 
     config = OrchestratorConfig(
