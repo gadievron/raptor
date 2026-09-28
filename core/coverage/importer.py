@@ -176,14 +176,61 @@ def import_checked_by(store: CoverageStore, checklist: dict[str, Any]) -> int:
     labels (``understand:*``, ``read``, unknown bases) grant no
     review credit, so demotion would be pure label churn — same rule
     as :func:`import_functions_analysed`.
+
+    Currency gate on VERIFIED claims: a genuine token replayed with
+    its whole historical file entry (old ``sha256`` + old lines,
+    token intact) verifies — the MAC binds the claim to the
+    PRESENTED entry, not to the current source. So a verified
+    review-grade claim earns its full label only when the file
+    entry's ``sha256`` matches a hash of the CURRENT source under
+    the checklist's ``target_path``; otherwise it demotes to the
+    same ``<label>:machine`` tier, counted distinctly as stale.
+    Same currency posture as the journal fold
+    (``core.audit.gaps._fold_journal_into_covered``) and
+    :func:`import_functions_analysed`'s ``_hash_current``.
     """
+    from core.audit._util import safe_join
+    from core.hash import sha256_bytes
     from core.inventory import checklist_mac
 
     from .registry import CATEGORY_LLM, DEPTH_ANALYSED, classify
 
+    target = _checklist_target(checklist)
+    currency_cache: dict[tuple[str, str], bool] = {}
+
+    def _fe_current(path: str, fe: dict[str, Any]) -> bool:
+        """Whether the file entry's recorded ``sha256`` matches the
+        current source file. FAIL-CLOSED on every unverifiable case —
+        no ``target_path`` in the checklist, no/blank recorded
+        ``sha256``, path escaping the target, missing or unreadable
+        file: all read as NOT current (the claim demotes to the hint
+        tier, never a refusal). Deliberate divergence from the
+        journal fold's verified-keeps-credit carve-out for missing
+        evidence: there ``target_path`` arrives from the run's own
+        caller, while here it rides in the SAME attacker-writable
+        artifact as the claims — stripping it (or the sha256) must
+        not preserve replayed review credit. Same fail-closed
+        contract as :func:`import_functions_analysed`'s
+        ``_hash_current``."""
+        stored = fe.get("sha256")
+        if not target or not isinstance(stored, str) or not stored:
+            return False
+        key = (path, stored)
+        if key not in currency_cache:
+            ok = False
+            resolved = safe_join(Path(target), path)
+            if resolved is not None and resolved.is_file():
+                try:
+                    ok = sha256_bytes(resolved.read_bytes()) == stored
+                except OSError:
+                    ok = False
+            currency_cache[key] = ok
+        return currency_cache[key]
+
     marks = 0
     tampered = 0
     unstamped = 0
+    stale = 0
     review_claims = 0
     for fe in iter_file_entries(checklist):
         path = fe.get("path")
@@ -212,15 +259,25 @@ def import_checked_by(store: CoverageStore, checklist: dict[str, Any]) -> int:
                             tampered += 1
                         else:
                             unstamped += 1
+                    elif not _fe_current(path, fe):
+                        # Genuine token, non-current content: a
+                        # wholesale replay of a historical file entry
+                        # (or a since-changed source). Real install
+                        # history, but not a review of TODAY's code.
+                        effective = f"{tool}:machine"
+                        stale += 1
                 store.mark(path, lo, hi, effective)
                 marks += 1
-    if tampered or unstamped:
+    if tampered or unstamped or stale:
         logger.warning(
             "coverage import: %d of %d review-grade checked_by "
             "claim(s) imported at machine tier (%d tampered token(s), "
-            "%d unstamped — pre-MAC legacy or unauthenticated) — "
-            "examination evidence kept, review credit withheld",
-            tampered + unstamped, review_claims, tampered, unstamped)
+            "%d unstamped — pre-MAC legacy or unauthenticated, "
+            "%d stale — genuinely stamped but not matching the "
+            "current source content) — examination evidence kept, "
+            "review credit withheld",
+            tampered + unstamped + stale, review_claims,
+            tampered, unstamped, stale)
     return marks
 
 

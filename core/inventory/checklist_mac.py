@@ -36,13 +36,18 @@ The claim payload covers identity (file, class, name, kind, label),
 the item's line range (the importer resolves the store interval from
 the row's own line fields — an uncovered range would let an attacker
 stretch one stamped row's interval over the whole file), and the file
-entry's content ``sha256`` (currency: a token replayed against a
-since-changed file demotes — stale review credit must not survive
-source change). Claims are deliberately NOT run-bound: like journal
-rows, checklist marks aggregate across runs by design (project
-promotion merging an older run's validly stamped claim is the
-feature); a replayed stamped claim is genuine install history for the
-exact file content it names.
+entry's content ``sha256``. The sha256 binding stops SPLICES (a
+genuine token pasted onto a different file entry fails), not REPLAY
+(a whole historical entry pasted verbatim — old sha256, old lines,
+genuine token — still verifies: the MAC binds the claim to the
+presented entry, never to the current source). Replay currency is
+the importer's job: ``import_checked_by`` compares the entry's
+``sha256`` to a hash of the current source and demotes verified
+claims that no longer match. Claims are deliberately NOT run-bound:
+like journal rows, checklist marks aggregate across runs by design
+(project promotion merging an older run's validly stamped claim is
+the feature); a replayed stamped claim is genuine install history for
+the exact file content it names.
 
 Key
     ``$XDG_DATA_HOME/raptor/checklist-mac.key`` (default
@@ -163,9 +168,14 @@ def checked_claim(
 
     ONE derivation shared by mint and verify so the two can never
     fork. Fields are taken from the row dicts exactly as they persist
-    in checklist.json (JSON round-trip stable scalars only)."""
+    in checklist.json (JSON round-trip stable scalars only). The
+    ``file`` field reads the ``path`` key only: every reachable mint
+    (``update_coverage`` skips entries without a truthy ``path``) and
+    verify (``import_checked_by`` skips them too) sees it present, so
+    a fallback alias here would never fire for a genuine token and
+    would only widen the payload preimage."""
     return {
-        "file": file_entry.get("path", file_entry.get("file", "")),
+        "file": file_entry.get("path", ""),
         "sha256": file_entry.get("sha256") or "",
         "class": _item_class(item),
         "name": item.get("name", ""),
