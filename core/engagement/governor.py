@@ -1148,6 +1148,14 @@ def reserve_segment(
             prior_deaths = max(0, min(deaths, 1_000))
         if prior.get("state") == "reserved":
             prior_charge = _usd(prior.get("reserved_usd"))
+        elif prior.get("state") == "reconciled":
+            # The new reservation REPLACES the reconciled record, and
+            # the artifact's measured actual is CUMULATIVE across
+            # segments — the next reconcile books the prior spend
+            # inside its own figure. Leaving the prior actual charged
+            # here as well double-counts it against the envelope and
+            # falsely parks a fundable follow-on segment.
+            prior_charge = _usd(prior.get("actual_usd"))
     envelope = _envelope(doc, envelope_usd)
     if envelope is not None:
         committed_after = committed_usd(doc) - prior_charge + usd

@@ -786,6 +786,44 @@ class TestReservations:
         doc = ledger_mod.load_ledger(out)
         assert gov.committed_usd(doc) == 75.0
 
+    def test_reconciled_prior_is_replaced_not_double_counted(
+            self, tmp_path):
+        # False-park shape: envelope 80, the T3 slot reserves its
+        # pessimistic 75, the segment reconciles to a measured 10.
+        # The follow-on segment for the SAME artifact REPLACES the
+        # reconciled record (the measured actual is cumulative), so
+        # it must fund — charging 75 + the prior 10 would refuse a
+        # reservation the envelope covers.
+        out, ids = self._prepared(tmp_path, envelope=80.0)
+        assert gov.reserve_segment(out, ids[0], 1)
+        assert gov.reconcile_segment(out, ids[0], 10.0)
+        res = gov.reserve_segment(out, ids[0], 2)
+        assert res is not None and res["state"] == "reserved"
+        doc = ledger_mod.load_ledger(out)
+        assert gov.committed_usd(doc) == 75.0
+        assert not any(r["kind"] == "reservation_refused"
+                       for r in doc.get("residuals") or [])
+
+    def test_reconciled_prior_never_underfunds_the_refusal(
+            self, tmp_path):
+        # Honest-park shape, guarding the opposite mutation: only
+        # the RECONCILED ACTUAL comes off the committed figure —
+        # deducting the old pessimistic 75 would slip a 75 follow-on
+        # under a 70 envelope. The refusal must stand and the
+        # reconciled record survive untouched.
+        out, ids = self._prepared(tmp_path, envelope=80.0)
+        assert gov.reserve_segment(out, ids[0], 1)
+        assert gov.reconcile_segment(out, ids[0], 10.0)
+        gov.set_envelope(out, 70.0)
+        assert gov.reserve_segment(out, ids[0], 2) is None
+        doc = ledger_mod.load_ledger(out)
+        row = next(r for r in doc["rows"]
+                   if r["artifact_id"] == ids[0])
+        assert row["reservation"]["state"] == "reconciled"
+        assert row["reservation"]["actual_usd"] == 10.0
+        assert any(r["kind"] == "reservation_refused"
+                   for r in doc["residuals"])
+
     def test_reconcile_down_on_clean_close(self, tmp_path):
         out, ids = self._prepared(tmp_path)
         gov.reserve_segment(out, ids[0], 1)
