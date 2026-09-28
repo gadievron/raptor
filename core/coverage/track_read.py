@@ -11,6 +11,7 @@ extension case statement in raptor-hook-read.
 
 import json
 import os
+import stat as _stat_mod
 import time
 import sys
 from pathlib import Path
@@ -37,6 +38,67 @@ _SOURCE_EXTENSIONS = frozenset({
     ".r", ".hs", ".elm", ".vue", ".svelte", ".astro",
     ".tf", ".tofu", ".nix",
 })
+
+
+# Byte budget for `.raptor-run.json`. Both directions: lower breaks
+# attribution for legitimately large run metadata (and diverges from
+# the bash twin's helper, which gates the same file at the same
+# 1 MiB); higher lets a planted file in the sandbox-writable run dir
+# bloat every hook fire. Real records are a few hundred bytes.
+_MAX_RUN_META_BYTES = 1_048_576
+
+
+def _read_run_meta(path: Path) -> dict | None:
+    """Bounded, symlink-refusing parse of a run's `.raptor-run.json`.
+
+    The file sits in the run OUTPUT dir — the sandbox's writable path
+    while a target runs — so every gate holds on the OPENED fd:
+    O_NOFOLLOW refuses a planted symlink (a by-name read parsed
+    arbitrary orchestrator-readable bytes), O_NONBLOCK + S_ISREG
+    refuse a FIFO without blocking (a FIFO stats 0 bytes — passing
+    any by-name size gate — then hangs a plain ``read_text``
+    forever), and the byte budget is re-checked after a capped read
+    so a file that grows between fstat and read is refused rather
+    than buffered unbounded. Any refusal, malformed JSON, or
+    non-dict top level returns None (the candidate is skipped) —
+    lock-step with the bash twin's helper (raptor-hook-json).
+    """
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        fd = os.open(str(path), flags)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not _stat_mod.S_ISREG(st.st_mode):
+            return None
+        if st.st_size > _MAX_RUN_META_BYTES:
+            return None  # attacker-influenced file — never slurp GBs
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1  # fdopen owns it now
+            raw = fh.read(_MAX_RUN_META_BYTES + 1)
+        if len(raw) > _MAX_RUN_META_BYTES:
+            return None  # grew past the budget mid-read
+        meta = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, RecursionError):
+        # RecursionError: a within-budget nesting bomb (hundreds of
+        # thousands of nested arrays fit well under the byte budget)
+        # blows the parser's stack — malformed input, the candidate
+        # is skipped like any other refusal (lock-step with the bash
+        # twin's helper).
+        return None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    return meta if isinstance(meta, dict) else None
 
 
 def _find_active_run():
@@ -114,14 +176,8 @@ def _find_session_run(session_pid):
     candidates.sort(key=lambda c: -c[0])
     for _epoch, run_dir in candidates:
         d = Path(run_dir)
-        try:
-            meta_path = d / ".raptor-run.json"
-            if meta_path.stat().st_size > 1_048_576:
-                continue  # attacker-influenced file — never slurp GBs
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(meta, dict) or meta.get("status") != "running":
+        meta = _read_run_meta(d / ".raptor-run.json")
+        if meta is None or meta.get("status") != "running":
             continue
         # String-compare like the bash twin: a metadata writer that
         # stringifies session_pid must not diverge the two consumers.
@@ -178,21 +234,12 @@ def _find_global_run():
                 continue
             entries.append((mtime, d))
         for _mtime, d in sorted(entries, key=lambda t: t[0], reverse=True):
-            meta_file = d / ".raptor-run.json"
-            try:
-                # Same 1 MiB gate as the session-ledger lane above —
-                # the metadata file is attacker-influenced and this
-                # legacy walk must never slurp GBs either.
-                if meta_file.stat().st_size > 1_048_576:
-                    continue
-                meta_text = meta_file.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            try:
-                meta = json.loads(meta_text)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if not isinstance(meta, dict):
+            # Same gated read as the session-ledger lane above — the
+            # metadata file is attacker-influenced and this legacy
+            # walk must not follow a planted symlink, block on a
+            # FIFO, or slurp GBs either.
+            meta = _read_run_meta(d / ".raptor-run.json")
+            if meta is None:
                 continue
             if meta.get("status") == "running":
                 return str(d), target

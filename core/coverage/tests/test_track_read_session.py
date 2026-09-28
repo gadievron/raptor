@@ -173,6 +173,76 @@ class PythonTwinSessionTest(_LedgerCase):
         self.assertEqual(run_dir, str(run))
         self.assertEqual(target, "/t")
 
+    def test_session_lane_skips_oversize_metadata(self):
+        run = self._mk_run("scan_big")
+        (run / ".raptor-run.json").write_text(
+            '{"status": "running", "session_pid": '
+            + str(self.pid) + ', "pad": "' + "x" * 1_100_000 + '"}')
+        self._ledger((100, run))
+        run_dir, _target = self._resolve()
+        self.assertIsNone(run_dir)
+
+    def test_symlinked_run_metadata_skipped(self):
+        """The run dir is sandbox-writable: a symlink planted at
+        `.raptor-run.json` must not be read through (an unsandboxed
+        parse of arbitrary orchestrator-readable bytes) — the
+        candidate is skipped, lock-step with the bash twin's
+        helper."""
+        run = self._mk_run("scan_link")
+        victim = self.home / "victim.json"
+        victim.write_text(json.dumps(
+            {"status": "running", "session_pid": self.pid}))
+        meta = run / ".raptor-run.json"
+        meta.unlink()
+        meta.symlink_to(victim)
+        self._ledger((100, run))
+        run_dir, _target = self._resolve()
+        self.assertIsNone(run_dir)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "mkfifo not available")
+    def test_fifo_run_metadata_skipped_without_blocking(self):
+        """A FIFO stats 0 bytes — passing any by-name size gate —
+        then blocks a plain read forever. The gated read refuses it
+        on the opened fd and the candidate is skipped promptly."""
+        run = self._mk_run("scan_fifo")
+        meta = run / ".raptor-run.json"
+        meta.unlink()
+        os.mkfifo(meta)
+        self._ledger((100, run))
+        run_dir, _target = self._resolve()
+        self.assertIsNone(run_dir)
+
+    def test_nesting_bomb_metadata_skipped(self):
+        """A ~400 KB file of 200k nested arrays sits inside the byte
+        budget but blows the JSON parser's stack — malformed input:
+        the candidate is skipped (None), the RecursionError never
+        propagates out of the discovery pass (lock-step with the
+        bash twin's helper, which refuses it silently)."""
+        run = self._mk_run("scan_bomb")
+        (run / ".raptor-run.json").write_text(
+            "[" * 200_000 + "]" * 200_000)
+        self._ledger((100, run))
+        run_dir, _target = self._resolve()
+        self.assertIsNone(run_dir)
+
+    def test_global_fallback_skips_symlinked_metadata(self):
+        projects = self.home / ".raptor" / "projects"
+        projects.mkdir(parents=True)
+        proj_dir = self.home / "projout"
+        run = proj_dir / "scan-1"
+        run.mkdir(parents=True)
+        victim = self.home / "victim.json"
+        victim.write_text('{"status": "running"}')
+        (run / ".raptor-run.json").symlink_to(victim)
+        (projects / "p.json").write_text(json.dumps(
+            {"name": "p", "target": "/t", "output_dir": str(proj_dir)}))
+        (projects / ".active").symlink_to("p.json")
+        with patch.dict(os.environ, {}, clear=False), \
+             patch.object(Path, "home", staticmethod(lambda: self.home)):
+            os.environ.pop("RAPTOR_SESSION_PID", None)
+            run_dir, _target = track_read._find_active_run()
+        self.assertIsNone(run_dir)
+
     def test_global_fallback_skips_oversize_metadata(self):
         # Lock-step parity with the session lane's 1 MiB gate: the
         # legacy walk read .raptor-run.json unbounded while its own
@@ -239,6 +309,27 @@ class BashHookSessionTest(_LedgerCase):
         self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
         self.assertFalse((run / ".reads-manifest").exists(),
                          "out-of-target read was attributed")
+
+    def test_symlinked_run_metadata_not_attributed(self):
+        """Lock-step with the python twin: metadata planted as a
+        symlink in the sandbox-writable run dir is never read
+        through — the candidate is skipped."""
+        tree = self.home / "srctree"
+        tree.mkdir()
+        src = tree / "a.c"
+        src.write_text("int a;\n")
+        run = self._mk_run("scan_link", target=str(tree))
+        victim = self.home / "victim.json"
+        victim.write_text(json.dumps(
+            {"status": "running", "session_pid": self.pid,
+             "target_path": str(tree)}))
+        meta = run / ".raptor-run.json"
+        meta.unlink()
+        meta.symlink_to(victim)
+        self._ledger((100, run))
+        r = self._fire(src)
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        self.assertFalse((run / ".reads-manifest").exists())
 
     def test_foreign_session_run_not_attributed(self):
         tree = self.home / "srctree"
