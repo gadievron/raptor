@@ -27,6 +27,10 @@ HELPER = REPO_ROOT / "libexec" / "raptor-validation-helper"
 sys.path.insert(0, str(REPO_ROOT))
 
 from core.json import load_json, save_json  # noqa: E402
+from core.security.log_sanitisation import (  # noqa: E402
+    EXCERPT_MAX_LEN,
+    sanitise_excerpt,
+)
 
 
 @pytest.fixture(scope="module")
@@ -794,3 +798,308 @@ class TestStageFReviewPassthrough:
         note = load_json(tmp_path / "stage-f.json")["stage_f_review"]
         assert "\x1b" not in note
         assert "\x07" not in note
+
+
+# ---------------------------------------------------------------------------
+# Quarantine reason records: escaped + bounded at write
+# ---------------------------------------------------------------------------
+
+class TestQuarantineReasonBounds:
+    """Reason strings quote producer-controlled values; the record
+    (reason.json and the receipt's quarantined[] list) is written
+    escaped and bounded with explicit elision markers. The part file
+    itself keeps the full forensic bytes. Under-bound reasons pass
+    through byte-exact."""
+
+    def test_under_cap_reason_is_byte_exact(self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-c-parts"
+        parts_dir.mkdir()
+        save_json(parts_dir / "part-1.json",
+                  {"updates": {"FIND-001": {"status": "confirmed"}}})
+        save_json(parts_dir / "part-2.json",
+                  {"updates": {"FIND-001": {"status": "ruled_out"}}})
+
+        assert helper.assemble_parts("C", tmp_path) is True
+
+        record = load_json(
+            parts_dir / "quarantine" / "part-2.json.reason.json")
+        assert record["reasons"] == [
+            "duplicate update key FIND-001 (already contributed "
+            "by part-1.json)"]
+        assert record["reasons_total"] == 1
+
+    def test_over_cap_duplicate_key_reason_is_bounded(
+            self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-c-parts"
+        parts_dir.mkdir()
+        huge = "K" * 200_000
+        save_json(parts_dir / "part-1.json",
+                  {"updates": {huge: {"status": "confirmed"}}})
+        save_json(parts_dir / "part-2.json",
+                  {"updates": {huge: {"status": "ruled_out"}}})
+
+        assert helper.assemble_parts("C", tmp_path) is True
+
+        record = load_json(
+            parts_dir / "quarantine" / "part-2.json.reason.json")
+        assert record["part"] == "part-2.json"
+        for r in record["reasons"]:
+            assert huge not in r
+            assert len(r) < 600
+        assert any("...[+" in r for r in record["reasons"])
+        # The receipt's quarantined[] index carries the same bounded
+        # reasons, and the part file itself is untouched.
+        receipt = load_json(tmp_path / "stage-c-assembly-receipt.json")
+        (entry,) = receipt["quarantined"]
+        assert entry["part"] == "part-2.json"
+        assert entry["reasons"] == record["reasons"]
+        assert huge in (parts_dir / "part-2.json").read_text()
+
+    def test_control_bytes_in_reasons_are_escaped_at_write(
+            self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-c-parts"
+        parts_dir.mkdir()
+        key = "FIND-1\x1b]0;spoofed-title\x07"
+        save_json(parts_dir / "part-1.json",
+                  {"updates": {key: {"status": "confirmed"}}})
+        save_json(parts_dir / "part-2.json",
+                  {"updates": {key: {"status": "ruled_out"}}})
+
+        assert helper.assemble_parts("C", tmp_path) is True
+
+        record = load_json(
+            parts_dir / "quarantine" / "part-2.json.reason.json")
+        joined = " | ".join(record["reasons"])
+        assert "\x1b" not in joined
+        assert "\x07" not in joined
+        assert "\\x1b" in joined
+
+    def test_reason_count_capped_with_elision_entry(
+            self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-c-parts"
+        parts_dir.mkdir()
+        updates = {f"FIND-{i:04d}": {"status": "confirmed"}
+                   for i in range(60)}
+        save_json(parts_dir / "part-1.json", {"updates": updates})
+        save_json(parts_dir / "part-2.json", {"updates": dict(updates)})
+
+        assert helper.assemble_parts("C", tmp_path) is True
+
+        record = load_json(
+            parts_dir / "quarantine" / "part-2.json.reason.json")
+        assert len(record["reasons"]) == 51
+        assert record["reasons"][-1].startswith(
+            "...[+10 more reason(s) elided")
+        # The true count travels out-of-band, never recovered from
+        # reason text — on BOTH channels: the reason record and the
+        # receipt's authoritative quarantined[] index.
+        assert record["reasons_total"] == 60
+        receipt = load_json(tmp_path / "stage-c-assembly-receipt.json")
+        (entry,) = receipt["quarantined"]
+        assert entry["reasons_total"] == 60
+        assert entry["reasons"] == record["reasons"]
+        # The 50 kept reasons are the real ones, in order.
+        assert record["reasons"][0] == (
+            "duplicate update key FIND-0000 (already contributed "
+            "by part-1.json)")
+
+    def test_reason_count_under_cap_has_no_elision_entry(
+            self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-c-parts"
+        parts_dir.mkdir()
+        updates = {f"FIND-{i:04d}": {"status": "confirmed"}
+                   for i in range(50)}
+        save_json(parts_dir / "part-1.json", {"updates": updates})
+        save_json(parts_dir / "part-2.json", {"updates": dict(updates)})
+
+        assert helper.assemble_parts("C", tmp_path) is True
+
+        record = load_json(
+            parts_dir / "quarantine" / "part-2.json.reason.json")
+        assert len(record["reasons"]) == 50
+        assert not any(r.startswith("...[+") for r in record["reasons"])
+        assert record["reasons_total"] == 50
+
+    def test_stage_b_conflict_reasons_are_bounded(self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-b-parts"
+        parts_dir.mkdir()
+        huge_id = "HYP-" + "Z" * 100_000
+        save_json(parts_dir / "one.json",
+                  {"hypotheses": [_hypothesis(huge_id)]})
+        save_json(parts_dir / "two.json",
+                  {"hypotheses": [_hypothesis(huge_id)],
+                   "attack_tree_nodes": []})
+
+        assert helper.assemble_parts("B", tmp_path) is True
+
+        record = load_json(
+            parts_dir / "quarantine" / "two.json.reason.json")
+        for r in record["reasons"]:
+            assert huge_id not in r
+            assert len(r) < 600
+        assert any("...[+" in r for r in record["reasons"])
+
+    def test_write_net_bounds_raw_reason(self, helper, tmp_path):
+        # The record-level net is load-bearing on its own: a raw
+        # hostile reason passed straight in (a composition site that
+        # missed excerpting) is still escaped and bounded at write.
+        quarantined: list = []
+        raw = "raw \x1b]0;spoof\x07 " + "R" * 10_000
+        helper._quarantine_part(tmp_path, "victim.json", "0" * 64,
+                                [raw], quarantined)
+        record = load_json(
+            tmp_path / "quarantine" / "victim.json.reason.json")
+        (reason,) = record["reasons"]
+        assert "\x1b" not in reason
+        assert "\\x1b" in reason
+        assert "...[+" in reason
+        assert len(reason) < helper._REASON_MAX_LEN + 40
+        assert quarantined[0]["reasons"] == record["reasons"]
+
+    def test_part_join_key_stays_byte_exact(self, helper, tmp_path):
+        # ``part`` is the join key naming the on-disk part file: it
+        # must stay byte-exact in the reason record, the receipt's
+        # quarantined[] entry, AND the reason file's own name — even
+        # when the part name exceeds the excerpt cap. (Excerpting or
+        # truncating it would break re-dispatch targeting.)
+        parts_dir = tmp_path / "stage-c-parts"
+        parts_dir.mkdir()
+        longname = "p" * (EXCERPT_MAX_LEN + 40) + ".json"
+        save_json(parts_dir / "part-1.json",
+                  {"updates": {"FIND-001": {"status": "confirmed"}}})
+        save_json(parts_dir / longname,
+                  {"updates": {"FIND-001": {"status": "ruled_out"}}})
+
+        assert helper.assemble_parts("C", tmp_path) is True
+
+        record = load_json(
+            parts_dir / "quarantine" / f"{longname}.reason.json")
+        assert record is not None
+        assert record["part"] == longname
+        receipt = load_json(tmp_path / "stage-c-assembly-receipt.json")
+        (entry,) = receipt["quarantined"]
+        assert entry["part"] == longname
+
+    def test_attribution_tail_survives_composition_excerpt(
+            self, helper, tmp_path):
+        # Composition-site excerpts are load-bearing on their own:
+        # with a 200KB hostile key, the TRUSTED attribution tail still
+        # ends the reason. Under the record-level net alone the tail
+        # would be silently elided with the hostile content.
+        parts_dir = tmp_path / "stage-c-parts"
+        parts_dir.mkdir()
+        huge = "K" * 200_000
+        save_json(parts_dir / "part-1.json",
+                  {"updates": {huge: {"status": "confirmed"}}})
+        save_json(parts_dir / "part-2.json",
+                  {"updates": {huge: {"status": "ruled_out"}}})
+
+        assert helper.assemble_parts("C", tmp_path) is True
+
+        record = load_json(
+            parts_dir / "quarantine" / "part-2.json.reason.json")
+        assert record["reasons"][0].endswith(
+            "(already contributed by part-1.json)")
+
+    def test_stage_b_attribution_tail_survives(self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-b-parts"
+        parts_dir.mkdir()
+        huge_id = "HYP-" + "Z" * 100_000
+        save_json(parts_dir / "one.json",
+                  {"hypotheses": [_hypothesis(huge_id)]})
+        save_json(parts_dir / "two.json",
+                  {"hypotheses": [_hypothesis(huge_id)]})
+
+        assert helper.assemble_parts("B", tmp_path) is True
+
+        record = load_json(
+            parts_dir / "quarantine" / "two.json.reason.json")
+        assert any(r.endswith("(already contributed by one.json)")
+                   for r in record["reasons"]), record["reasons"]
+
+
+# ---------------------------------------------------------------------------
+# Receipt sanitised_fields: excerpted + count-capped at receipt build
+# ---------------------------------------------------------------------------
+
+class TestReceiptSanitisedFieldBounds:
+    """The receipt's per-part ``sanitised_fields`` paths embed
+    producer-chosen keys (``updates.<fid>.description``): each path is
+    excerpted and the list count-capped at receipt build, with the
+    true count out-of-band; legitimate short paths pass byte-exact."""
+
+    def test_hostile_fid_path_is_excerpted(self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-c-parts"
+        parts_dir.mkdir()
+        evil = "EVIL-\x1b]0;pwned\x07-" + "A" * 50_000
+        save_json(parts_dir / "part-1.json",
+                  {"updates": {evil: {"description": "note\x1b[2Jesc"}}})
+
+        assert helper.assemble_parts("C", tmp_path) is True
+
+        receipt = load_json(tmp_path / "stage-c-assembly-receipt.json")
+        (entry,) = receipt["parts"]
+        (path,) = entry["sanitised_fields"]
+        assert evil not in path
+        assert "\x1b" not in path
+        assert "...[+" in path
+        assert len(path) < 200
+        # Exact value: the FULL composed path is excerpted (escape,
+        # then bound). Excerpting the fid before composing — or
+        # truncating raw and escaping after — yields a different
+        # string.
+        assert path == sanitise_excerpt(f"updates.{evil}.description")
+        assert entry["sanitised_fields_total"] == 1
+
+    def test_normal_path_byte_exact_no_marker(self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-c-parts"
+        parts_dir.mkdir()
+        save_json(parts_dir / "part-1.json",
+                  {"updates": {"FIND-001":
+                               {"description": "raw \x1b[2J esc"}}})
+
+        assert helper.assemble_parts("C", tmp_path) is True
+
+        receipt = load_json(tmp_path / "stage-c-assembly-receipt.json")
+        (entry,) = receipt["parts"]
+        assert entry["sanitised_fields"] == [
+            "updates.FIND-001.description"]
+        assert entry["sanitised_fields_total"] == 1
+
+    def test_path_count_capped_with_elision_entry(self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-c-parts"
+        parts_dir.mkdir()
+        updates = {f"FIND-{i:04d}": {"description": "esc \x1b[2J here"}
+                   for i in range(110)}
+        save_json(parts_dir / "part-1.json", {"updates": updates})
+
+        assert helper.assemble_parts("C", tmp_path) is True
+
+        receipt = load_json(tmp_path / "stage-c-assembly-receipt.json")
+        (entry,) = receipt["parts"]
+        # Literal expectations pin the cap VALUE (100) in both
+        # directions — reading the constant back at runtime would
+        # self-adjust and let a silent cap change through.
+        assert len(entry["sanitised_fields"]) == 101
+        assert entry["sanitised_fields"][-1].startswith(
+            "...[+10 more sanitised path(s) elided")
+        assert entry["sanitised_fields_total"] == 110
+
+    def test_path_count_at_cap_has_no_elision_entry(
+            self, helper, tmp_path):
+        parts_dir = tmp_path / "stage-c-parts"
+        parts_dir.mkdir()
+        updates = {f"FIND-{i:04d}": {"description": "esc \x1b[2J here"}
+                   for i in range(100)}
+        save_json(parts_dir / "part-1.json", {"updates": updates})
+
+        assert helper.assemble_parts("C", tmp_path) is True
+
+        receipt = load_json(tmp_path / "stage-c-assembly-receipt.json")
+        (entry,) = receipt["parts"]
+        # Exactly at the cap: all 100 paths kept, no elision marker —
+        # pins the cap from below (a cap of 99 would elide here).
+        assert len(entry["sanitised_fields"]) == 100
+        assert not any(p.startswith("...[+")
+                       for p in entry["sanitised_fields"])
+        assert entry["sanitised_fields_total"] == 100

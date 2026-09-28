@@ -42,7 +42,10 @@ import stat  # noqa: E402
 from core.artifacts.provenance import sanitise_free_text, stamp_provenance  # noqa: E402
 from core.inventory.lookup import normalise_path  # noqa: E402
 from core.json import load_json, save_json  # noqa: E402
-from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
+from core.security.log_sanitisation import (  # noqa: E402
+    sanitise_excerpt as _excerpt,
+    sanitise_for_terminal as _sft,
+)
 from core.schema_constants import (  # noqa: E402
     CWE_TO_VULN_TYPE,
     MEMORY_CORRUPTION_TYPES,
@@ -4493,6 +4496,62 @@ def _part_sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+# Bounds on the quarantine reason record. Reason strings quote
+# producer/LLM-derived content and the record is what re-dispatch
+# briefs later quote, so each reason is escaped and bounded AT WRITE.
+# Nothing forensic is destroyed: the part file itself is never moved
+# or deleted and the record carries its sha256 — the part, not the
+# reason text, is the forensic store. Churn-prone limits — rationale
+# in both directions:
+#
+# * ``_REASON_MAX_LEN`` not smaller: a reason legitimately composed
+#   from per-value excerpts tops out near ~350 characters (trusted
+#   skeleton plus two EXCERPT_MAX_LEN excerpts with their elision
+#   markers, or a lint error's dotted schema path) — a tighter cap
+#   would elide the trusted attribution tail rather than the
+#   untrusted excerpt. Not larger: this cap only bites when a
+#   composition site missed per-value excerpting, and widening it
+#   just widens what such a miss floods into the record/brief
+#   channels.
+# * ``_REASON_MAX_COUNT`` not smaller: stage-B conflicts legally span
+#   five channels (four collections plus updates{}) and a
+#   mispartitioned producer can genuinely own dozens of colliding ids
+#   its single re-dispatch must see named. Not larger: no reader
+#   consumes more — the brief quotes excerpts and the untouched part
+#   file holds the full evidence — while the record would otherwise
+#   scale with an attacker-chosen id count.
+_REASON_MAX_LEN = 500
+_REASON_MAX_COUNT = 50
+
+# Bound on the receipt's per-part ``sanitised_fields`` list. Each entry
+# is a dotted path whose middle segment is a producer-chosen key
+# (``updates.<fid>.description``), so a hostile fid would otherwise
+# ride raw into the assembly receipt — the authoritative index
+# re-dispatch briefs read. Paths are excerpted per-entry and the COUNT
+# is capped because it scales with attacker-chosen key counts.
+# Churn-prone limit — rationale in both directions: not smaller, a
+# legitimate part spanning dozens of findings can genuinely have every
+# free-text field sanitised and diagnostics should name them; not
+# larger, no reader consumes more — the elided paths are recomputable
+# by re-running ingestion sanitisation on the untouched part file.
+_SANITISED_FIELDS_MAX_COUNT = 100
+
+
+def _bound_sanitised_fields(paths: list[str]) -> list[str]:
+    """Excerpt each changed-field path and cap the list length.
+
+    Same escape-THEN-bound funnel as reasons; the explicit elision
+    entry names how many paths were dropped (the true count travels
+    out-of-band as ``sanitised_fields_total`` on the receipt entry).
+    """
+    bounded = [_excerpt(p) for p in paths[:_SANITISED_FIELDS_MAX_COUNT]]
+    if len(paths) > _SANITISED_FIELDS_MAX_COUNT:
+        bounded.append(
+            f"...[+{len(paths) - _SANITISED_FIELDS_MAX_COUNT} more "
+            "sanitised path(s) elided]")
+    return bounded
+
+
 def _quarantine_part(parts_dir: Path, part_name: str, sha: str,
                      reasons: list[str],
                      quarantined: list[dict[str, Any]]) -> None:
@@ -4500,14 +4559,32 @@ def _quarantine_part(parts_dir: Path, part_name: str, sha: str,
     qdir = parts_dir / "quarantine"
     qdir.mkdir(exist_ok=True)
     from datetime import datetime, timezone
+    bounded = [_sft(str(r), max_len=_REASON_MAX_LEN)
+               for r in reasons[:_REASON_MAX_COUNT]]
+    if len(reasons) > _REASON_MAX_COUNT:
+        bounded.append(
+            f"...[+{len(reasons) - _REASON_MAX_COUNT} more reason(s) "
+            "elided — the part file retains the full content]")
     record = {
+        # ``part`` stays byte-exact: it is the join key that names the
+        # on-disk part file and this record's own filename (it is a
+        # real filename on this filesystem, so its length is already
+        # bounded by the OS).
         "part": part_name,
         "sha256": sha,
-        "reasons": [str(r) for r in reasons],
+        "reasons": bounded,
+        # Out-of-band authority for the elision entry: the true count
+        # is a structured field, never recovered from reason text (a
+        # producer-controlled excerpt could embed marker-shaped text).
+        "reasons_total": len(reasons),
         "quarantined_at": datetime.now(timezone.utc).isoformat(),
     }
     save_json(qdir / f"{part_name}.reason.json", record)
-    quarantined.append({"part": part_name, "reasons": record["reasons"]})
+    # The receipt entry mirrors the record INCLUDING reasons_total:
+    # the receipt's quarantined[] list is the authoritative re-dispatch
+    # index, so the out-of-band count must travel on that channel too.
+    quarantined.append({"part": part_name, "reasons": record["reasons"],
+                        "reasons_total": record["reasons_total"]})
     print(f"⚠️  QUARANTINED {_sft(part_name, max_len=120)}:", file=sys.stderr)
     for r in record["reasons"]:
         print(f"    {_sft(str(r), max_len=300)}", file=sys.stderr)
@@ -4589,10 +4666,15 @@ def _merge_updates(
         part_updates = data.get("updates") or {}
         dupes = sorted(set(part_updates) & set(updates))
         if dupes:
+            # ``fid`` is a producer-chosen key (the owner name is a
+            # producer-chosen filename): excerpt both — escaped and
+            # bounded with an explicit elision marker — before they
+            # join a reason string.
             _quarantine_part(
                 parts_dir, name, sha,
-                [f"duplicate update key {fid} (already contributed by "
-                 f"{owner[fid]})" for fid in dupes],
+                [f"duplicate update key {_excerpt(fid)} (already "
+                 f"contributed by {_excerpt(owner[fid])})"
+                 for fid in dupes],
                 quarantined)
             continue
         for fid, fields in part_updates.items():
@@ -4614,13 +4696,16 @@ def _assemble_a(
     for name, data, sha, _sanitised in parts:
         rows = data.get("findings") or []
         part_ids = [f.get("id") for f in rows]
+        # Finding ids and owner part names are producer-chosen:
+        # excerpt them before they join a reason string.
         reasons = [
-            f"duplicate finding id {fid} (already contributed by "
-            f"{owner[fid]})"
+            f"duplicate finding id {_excerpt(fid)} (already contributed "
+            f"by {_excerpt(owner[fid])})"
             for fid in sorted({i for i in part_ids if i in owner})
         ]
         reasons.extend(
-            f"finding id {fid} appears more than once in this part"
+            f"finding id {_excerpt(fid)} appears more than once in "
+            "this part"
             for fid in sorted({i for i in part_ids
                                if part_ids.count(i) > 1})
         )
@@ -4710,23 +4795,28 @@ def _assemble_b(
     for name, data, sha, _sanitised in parts:
         conflicts = []
         part_updates = data.get("updates") or {}
+        # Update keys, entry ids, and owner part names are
+        # producer-chosen: excerpt them before they join a reason
+        # string (``coll`` is a trusted collection constant).
         conflicts.extend(
-            f"duplicate update key {fid} (already contributed by "
-            f"{updates_owner[fid]})"
+            f"duplicate update key {_excerpt(fid)} (already contributed "
+            f"by {_excerpt(updates_owner[fid])})"
             for fid in sorted(set(part_updates) & set(updates)))
         for coll in by_id:
             rids = [row.get(id_key[coll]) for row in data.get(coll) or []]
             # Within-part duplicates would silently collapse via the
             # by_id merge below — refuse them like Stage A does.
             conflicts.extend(
-                f"{coll} entry {rid} appears more than once in this part"
+                f"{coll} entry {_excerpt(rid)} appears more than once "
+                "in this part"
                 for rid in sorted({r for r in rids if rids.count(r) > 1},
                                   key=str))
             for rid in rids:
                 if (coll, rid) in part_owner:
                     conflicts.append(
-                        f"duplicate {coll} entry {rid} (already "
-                        f"contributed by {part_owner[(coll, rid)]})")
+                        f"duplicate {coll} entry {_excerpt(rid)} (already "
+                        f"contributed by "
+                        f"{_excerpt(part_owner[(coll, rid)])})")
         if conflicts:
             _quarantine_part(parts_dir, name, sha, conflicts, quarantined)
             continue
@@ -4914,7 +5004,12 @@ def assemble_parts(stage: str, workdir: str | Path) -> bool:
                 "provenance": (part_index[name][0].get("provenance")
                                if isinstance(part_index[name][0], dict)
                                else None),
-                "sanitised_fields": part_index[name][2],
+                # Changed-path entries embed producer-chosen keys:
+                # excerpted + count-capped at receipt build (the part
+                # file itself is untouched and recomputable).
+                "sanitised_fields": _bound_sanitised_fields(
+                    part_index[name][2]),
+                "sanitised_fields_total": len(part_index[name][2]),
             }
             for name in merged_names
         ],
