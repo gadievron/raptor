@@ -833,6 +833,11 @@ class TestQuarantineReasonBounds:
         parts_dir = tmp_path / "stage-c-parts"
         parts_dir.mkdir()
         huge = "K" * 200_000
+        # part-0 is a healthy sibling so assembly proceeds even on
+        # trees whose lint screens updates keys for fid shape and
+        # refuses BOTH hostile parts before the duplicate check.
+        save_json(parts_dir / "part-0.json",
+                  {"updates": {"FIND-001": {"status": "confirmed"}}})
         save_json(parts_dir / "part-1.json",
                   {"updates": {huge: {"status": "confirmed"}}})
         save_json(parts_dir / "part-2.json",
@@ -840,6 +845,9 @@ class TestQuarantineReasonBounds:
 
         assert helper.assemble_parts("C", tmp_path) is True
 
+        # part-2 is refused on every tree — as a duplicate of
+        # part-1's key, or key-screened at lint — and its reason
+        # record never carries the raw key.
         record = load_json(
             parts_dir / "quarantine" / "part-2.json.reason.json")
         assert record["part"] == "part-2.json"
@@ -850,8 +858,8 @@ class TestQuarantineReasonBounds:
         # The receipt's quarantined[] index carries the same bounded
         # reasons, and the part file itself is untouched.
         receipt = load_json(tmp_path / "stage-c-assembly-receipt.json")
-        (entry,) = receipt["quarantined"]
-        assert entry["part"] == "part-2.json"
+        entry = next(e for e in receipt["quarantined"]
+                     if e["part"] == "part-2.json")
         assert entry["reasons"] == record["reasons"]
         assert huge in (parts_dir / "part-2.json").read_text()
 
@@ -860,6 +868,10 @@ class TestQuarantineReasonBounds:
         parts_dir = tmp_path / "stage-c-parts"
         parts_dir.mkdir()
         key = "FIND-1\x1b]0;spoofed-title\x07"
+        # part-0 keeps assembly alive on trees whose lint key-screens
+        # both hostile parts (see the over-cap duplicate test above).
+        save_json(parts_dir / "part-0.json",
+                  {"updates": {"FIND-001": {"status": "confirmed"}}})
         save_json(parts_dir / "part-1.json",
                   {"updates": {key: {"status": "confirmed"}}})
         save_json(parts_dir / "part-2.json",
@@ -983,12 +995,16 @@ class TestQuarantineReasonBounds:
     def test_attribution_tail_survives_composition_excerpt(
             self, helper, tmp_path):
         # Composition-site excerpts are load-bearing on their own:
-        # with a 200KB hostile key, the TRUSTED attribution tail still
-        # ends the reason. Under the record-level net alone the tail
-        # would be silently elided with the hostile content.
+        # with a 200KB hostile key, the reason must still END with its
+        # TRUSTED tail — the duplicate attribution, or the fid-shape
+        # refusal's bound clause on trees whose lint screens updates
+        # keys first. Under the record-level net alone the tail would
+        # be silently elided with the hostile content.
         parts_dir = tmp_path / "stage-c-parts"
         parts_dir.mkdir()
         huge = "K" * 200_000
+        save_json(parts_dir / "part-0.json",
+                  {"updates": {"FIND-001": {"status": "confirmed"}}})
         save_json(parts_dir / "part-1.json",
                   {"updates": {huge: {"status": "confirmed"}}})
         save_json(parts_dir / "part-2.json",
@@ -999,7 +1015,8 @@ class TestQuarantineReasonBounds:
         record = load_json(
             parts_dir / "quarantine" / "part-2.json.reason.json")
         assert record["reasons"][0].endswith(
-            "(already contributed by part-1.json)")
+            ("(already contributed by part-1.json)",
+             "exceeds the finding-id bound (64)"))
 
     def test_stage_b_attribution_tail_survives(self, helper, tmp_path):
         parts_dir = tmp_path / "stage-b-parts"
@@ -1028,18 +1045,15 @@ class TestReceiptSanitisedFieldBounds:
     excerpted and the list count-capped at receipt build, with the
     true count out-of-band; legitimate short paths pass byte-exact."""
 
-    def test_hostile_fid_path_is_excerpted(self, helper, tmp_path):
-        parts_dir = tmp_path / "stage-c-parts"
-        parts_dir.mkdir()
+    def test_hostile_fid_path_is_excerpted(self, helper):
+        # Pinned at the receipt builder itself: the parts channel may
+        # refuse a hostile fid at lint before ingestion (trees whose
+        # lint screens updates keys for fid shape), so the path bound
+        # is exercised directly — it is load-bearing for every caller
+        # that hands the receipt a composed sanitised-field path.
         evil = "EVIL-\x1b]0;pwned\x07-" + "A" * 50_000
-        save_json(parts_dir / "part-1.json",
-                  {"updates": {evil: {"description": "note\x1b[2Jesc"}}})
-
-        assert helper.assemble_parts("C", tmp_path) is True
-
-        receipt = load_json(tmp_path / "stage-c-assembly-receipt.json")
-        (entry,) = receipt["parts"]
-        (path,) = entry["sanitised_fields"]
+        (path,) = helper._bound_sanitised_fields(
+            [f"updates.{evil}.description"])
         assert evil not in path
         assert "\x1b" not in path
         assert "...[+" in path
@@ -1049,7 +1063,6 @@ class TestReceiptSanitisedFieldBounds:
         # truncating raw and escaping after — yields a different
         # string.
         assert path == sanitise_excerpt(f"updates.{evil}.description")
-        assert entry["sanitised_fields_total"] == 1
 
     def test_normal_path_byte_exact_no_marker(self, helper, tmp_path):
         parts_dir = tmp_path / "stage-c-parts"
