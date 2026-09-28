@@ -1521,6 +1521,107 @@ def _record_goconc_discharge(
         return False
 
 
+def _record_witness_discharge(
+    outcome,
+    out_dir,
+    *,
+    mechanism: str,
+    corroboration: list[str],
+) -> bool:
+    """Accept-with-record: persist an in-function-witness discharge.
+
+    The race-protection / safe-teardown witnesses override the
+    receipt-free CWE-allowlist floor exactly like the goconc witness
+    does, so the same doctrine applies: the discharged dismissal goes
+    through the suppressions.jsonl single-writer chokepoint with
+    ``dropped: false`` and a verdict naming the witness, so operators
+    can grep every function these witnesses kept clean.  Returns True
+    only when the row VERIFIABLY landed; the caller refuses the
+    discharge on False — an unrecordable discharge must not happen at
+    all.
+
+    ``record_suppression`` is best-effort BY CONTRACT — it swallows
+    ``OSError``/``TypeError``/``ValueError`` and logs at debug — so a
+    clean return from it is not evidence the row was written (an
+    unwritable out_dir returns cleanly with nothing on disk).
+    Record-or-refuse needs proof: capture the trail size before the
+    call, read back the appended region after it, and accept only
+    when THIS discharge's row is in it.
+    """
+    if not out_dir:
+        logger.debug(
+            "in-function witness discharge for %s:%s refused "
+            "(no out_dir to record)",
+            getattr(outcome, "file", "?"),
+            getattr(outcome, "function", "?"),
+        )
+        return False
+    try:
+        import json as _json
+
+        from core.analysis.reach_chokepoint import record_suppression
+
+        line = getattr(outcome, "line", 0) or 0
+        fpath = getattr(outcome, "file", "")
+        func = getattr(outcome, "function", "")
+        finding_id = f"audit-refutation:{fpath}:{func}:{line}"
+        verdict = "in_function_witness_corroborates_dismissal"
+        trail = Path(out_dir) / "suppressions.jsonl"
+        try:
+            offset = trail.stat().st_size
+        except OSError:
+            offset = 0
+        record_suppression(
+            Path(out_dir),
+            finding={
+                "finding_id": finding_id,
+                "rule_id": "audit:in-function-witness",
+                "file_path": fpath,
+                "line": line,
+                "function": func,
+            },
+            verdict=verdict,
+            reason=(
+                f"self-refutation accepted: the dismissal is "
+                f"mechanically corroborated by the in-function "
+                f"witness ({'; '.join(corroboration)})"
+            ),
+            dropped=False,
+            extra={
+                "stage": "anti-self-refutation",
+                "witness": "in_function",
+                "floor_gate": "cwe_allowlist",
+                "corroboration": list(corroboration),
+                "hypothesis": (mechanism or "")[:160],
+            },
+        )
+        # Durability verification: only the appended region is read
+        # (the trail is append-only with a single writer), and only a
+        # parseable row carrying this discharge's identity counts.
+        with open(trail, "rb") as fh:
+            fh.seek(offset)
+            appended = fh.read()
+        for raw in appended.splitlines():
+            try:
+                row = _json.loads(raw)
+            except ValueError:
+                continue
+            if (row.get("verdict") == verdict
+                    and row.get("finding_id") == finding_id):
+                return True
+        logger.debug(
+            "in-function witness discharge record for %s:%s did not "
+            "land in %s — refusing the discharge",
+            fpath, func, trail,
+        )
+        return False
+    except Exception:
+        logger.debug(
+            "in-function witness discharge record failed", exc_info=True,
+        )
+        return False
+
+
 # TU-local caller-held-lock witness (caller_lock): the caller-context
 # analog of the race-protection discharge.  The in-function C witness
 # only sees lexical lock scopes inside the reviewed function, so a
@@ -2478,18 +2579,34 @@ def rescue_self_refuted(
             # floored.
             discharged |= _TEARDOWN_DISCHARGEABLE_CWES
         if cwes and cwes <= discharged:
-            logger.info(
-                "anti-self-refutation: accepting self-refutation for "
-                "%s — mechanically corroborated (%s)",
-                getattr(outcome, "function", "?"),
-                "; ".join(
-                    ([("race: full lock protection")] if race_protected
-                     and cwes & _LOCK_DISCHARGEABLE_RACE_CWES else [])
-                    + ([f"lifetime: {teardown_reason}"] if teardown_safe
-                       and cwes & _TEARDOWN_DISCHARGEABLE_CWES else [])
-                ),
+            corroboration = (
+                (["race: full lock protection"] if race_protected
+                 and cwes & _LOCK_DISCHARGEABLE_RACE_CWES else [])
+                + ([f"lifetime: {teardown_reason}"] if teardown_safe
+                   and cwes & _TEARDOWN_DISCHARGEABLE_CWES else [])
             )
-            continue
+            # Same record-or-refuse doctrine as the goconc / caller-
+            # lock lanes: the discharge overrides the CWE-allowlist
+            # floor, so it must land as a durable dropped:false row —
+            # an unrecordable discharge does not happen, and the
+            # floor logic below decides instead.
+            if _record_witness_discharge(
+                outcome, _witness_out,
+                mechanism=mechanism, corroboration=corroboration,
+            ):
+                logger.info(
+                    "anti-self-refutation: accepting self-refutation "
+                    "for %s — mechanically corroborated (%s)",
+                    getattr(outcome, "function", "?"),
+                    "; ".join(corroboration),
+                )
+                continue
+            logger.info(
+                "anti-self-refutation: in-function witness discharge "
+                "for %s refused — accept-with-record could not write "
+                "its record",
+                getattr(outcome, "function", "?"),
+            )
         # Go internal-concurrency discharge: race-family only, Go
         # sources only, in-family claims only, only under the
         # operator's repo-trust assertion, and NEVER on a function

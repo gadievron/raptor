@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -1507,9 +1508,67 @@ class TestRaceProtectedSelfRefutation:
             }],
         )
 
-    def test_protected_source_accepts_refutation(self):
-        r = rescue_self_refuted(self._race_outcome(), source=self._LOCKED_C)
+    def test_protected_source_accepts_refutation(self, tmp_path):
+        r = rescue_self_refuted(
+            self._race_outcome(), source=self._LOCKED_C, out_dir=tmp_path,
+        )
         assert r is None
+
+    def test_accepted_discharge_writes_durable_record(self, tmp_path):
+        # Accept-with-record doctrine: the witness overrides the
+        # CWE-allowlist floor, so the discharged dismissal must land
+        # as a durable dropped:false row operators can grep.
+        r = rescue_self_refuted(
+            self._race_outcome(), source=self._LOCKED_C, out_dir=tmp_path,
+        )
+        assert r is None
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "suppressions.jsonl")
+            .read_text(encoding="utf-8").splitlines()
+        ]
+        row = rows[-1]
+        assert row["verdict"] == "in_function_witness_corroborates_dismissal"
+        assert row["dropped"] is False
+        assert row["rule_id"] == "audit:in-function-witness"
+        assert row["witness"] == "in_function"
+        assert row["floor_gate"] == "cwe_allowlist"
+        assert "race: full lock protection" in row["reason"]
+
+    def test_unrecordable_discharge_refused_floor_stands(self):
+        # No out_dir anywhere → the record cannot be written → the
+        # discharge is refused and the floor stands (record-or-refuse:
+        # an unrecorded override would be silent).
+        r = rescue_self_refuted(self._race_outcome(), source=self._LOCKED_C)
+        assert r is not None
+        assert r.demote_to == "suspicious"
+
+    def test_unwritable_out_dir_refuses_discharge(self, tmp_path):
+        # out_dir present but UNWRITABLE: record_suppression swallows
+        # the IO error by contract (best-effort, never propagates), so
+        # a clean return from it is NOT evidence the row landed. The
+        # lane must verify durability itself — read the appended
+        # region back — and refuse the discharge when the record
+        # demonstrably didn't land, else the floor override is silent.
+        import os
+
+        import pytest
+
+        if os.geteuid() == 0:
+            pytest.skip("root bypasses permission checks")
+        out_dir = tmp_path / "run"
+        out_dir.mkdir()
+        out_dir.chmod(0o500)
+        try:
+            r = rescue_self_refuted(
+                self._race_outcome(), source=self._LOCKED_C,
+                out_dir=out_dir,
+            )
+        finally:
+            out_dir.chmod(0o700)
+        assert r is not None
+        assert r.demote_to == "suspicious"
+        assert not (out_dir / "suppressions.jsonl").exists()
 
     def test_without_source_still_floors(self):
         r = rescue_self_refuted(self._race_outcome())
@@ -1527,7 +1586,8 @@ class TestRaceProtectedSelfRefutation:
         r = rescue_self_refuted(self._race_outcome(), source=unlocked)
         assert r is not None
 
-    def test_uaf_refutation_accepted_when_locked_and_nothing_freed(self):
+    def test_uaf_refutation_accepted_when_locked_and_nothing_freed(
+            self, tmp_path):
         # Doctrine update (corpus-verified): a lifetime self-refutation
         # on FULLY lock-protected source that frees NOTHING is
         # mechanically corroborated — the claimed hazard has no local
@@ -1544,7 +1604,9 @@ class TestRaceProtectedSelfRefutation:
                 "counter": "reference held by caller",
             }],
         )
-        r = rescue_self_refuted(outcome, source=self._LOCKED_C)
+        r = rescue_self_refuted(
+            outcome, source=self._LOCKED_C, out_dir=tmp_path,
+        )
         assert r is None
 
     _BARE_FREE_C = (
@@ -1602,7 +1664,8 @@ class TestRaceProtectedSelfRefutation:
         "}\n"
     )
 
-    def test_uaf_refutation_accepted_over_waiting_teardown(self):
+    def test_uaf_refutation_accepted_over_waiting_teardown(
+            self, tmp_path):
         # Waiting cancel + RCU-deferred reclamation corroborate the
         # reviewer's lifetime self-refutation.
         outcome = _Outcome(
@@ -1613,7 +1676,9 @@ class TestRaceProtectedSelfRefutation:
                 "counter": "hrtimer_cancel waits; kfree_rcu defers",
             }],
         )
-        r = rescue_self_refuted(outcome, source=self._SYNC_TEARDOWN_C)
+        r = rescue_self_refuted(
+            outcome, source=self._SYNC_TEARDOWN_C, out_dir=tmp_path,
+        )
         assert r is None
 
 
