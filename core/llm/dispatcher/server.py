@@ -568,13 +568,47 @@ def _stream_stall_s() -> float:
     )
 
 
-def _request_wants_stream(body: bytes) -> bool:
-    """True when the worker's request body asks the provider for a
-    streaming (SSE) response — JSON ``"stream": true`` on every
-    provider surface the dispatcher fronts. Fail-safe: anything
-    unparseable, non-dict, or non-boolean reads as non-streaming,
-    which keeps the FULL read timeout (the watchdog can only ever
-    shorten, never abort a shape it did not positively identify)."""
+# URL-method streaming surfaces: provider APIs that select streaming
+# by the request PATH and carry no JSON "stream" field — Gemini's
+# models.streamGenerateContent method and Bedrock's
+# InvokeModelWithResponseStream / ConverseStream actions. Exact
+# method-name suffixes matched against the query-stripped path: a
+# false positive here would TIGHTEN the read timeout on a
+# non-streaming request whose single body read legitimately spans the
+# whole generation, so nothing looser (substring scans, case folding)
+# is acceptable. Body detection stays primary — this is a small seed
+# for the URL-method surfaces the dispatcher fronts, not a registry
+# of every provider's streaming spelling.
+_STREAM_PATH_SUFFIXES = (
+    ":streamGenerateContent",        # Gemini streaming generateContent
+    "/invoke-with-response-stream",  # Bedrock InvokeModelWithResponseStream
+    "/converse-stream",              # Bedrock ConverseStream
+)
+
+
+def _path_wants_stream(upstream_path: str) -> bool:
+    """True when the request path names a URL-method streaming
+    endpoint. Fail-closed on fragments, like ``_is_cost_free_endpoint``
+    above: the router rejects ``#`` before routing, but this
+    classifier independently refuses them so it can never be steered
+    by one."""
+    if not upstream_path or "#" in upstream_path:
+        return False
+    path = upstream_path.partition("?")[0].rstrip("/")
+    return path.endswith(_STREAM_PATH_SUFFIXES)
+
+
+def _request_wants_stream(body: bytes, upstream_path: str = "") -> bool:
+    """True when the worker's request asks the provider for a
+    streaming (SSE) response — JSON ``"stream": true`` on the
+    body-marked provider surfaces, or a URL-method streaming path
+    (see ``_STREAM_PATH_SUFFIXES``) on the surfaces that mark
+    streaming in the URL instead. Fail-safe: anything unparseable,
+    non-dict, or non-boolean reads as non-streaming, which keeps the
+    FULL read timeout (the watchdog can only ever shorten, never
+    abort a shape it did not positively identify)."""
+    if _path_wants_stream(upstream_path):
+        return True
     if not body or b'"stream"' not in body:
         return False
     try:
@@ -584,14 +618,16 @@ def _request_wants_stream(body: bytes) -> bool:
     return isinstance(payload, dict) and payload.get("stream") is True
 
 
-def _upstream_timeout_for(body: bytes) -> httpx.Timeout:
+def _upstream_timeout_for(
+    body: bytes, upstream_path: str = "",
+) -> httpx.Timeout:
     """Per-request forwarding-leg timeout: the stall watchdog window
     for streaming requests, the full upstream timeout otherwise. The
     watchdog only ever TIGHTENS the read bound — if the operator set
     an upstream timeout at or below the stall window, the stricter
     upstream timeout stands."""
     base = _upstream_timeout()
-    if not _request_wants_stream(body):
+    if not _request_wants_stream(body, upstream_path):
         return base
     stall = _stream_stall_s()
     if base.read is not None and stall >= base.read:
@@ -3136,7 +3172,7 @@ def _make_request_handler(
                     shard_client,
                     dispatcher._fresh_upstream_client,
                     method, url, content=body, headers=forwarded,
-                    timeout=_upstream_timeout_for(body),
+                    timeout=_upstream_timeout_for(body, upstream_path),
                     on_retry=_note_stale_retry,
                 ) as up:
                     watcher.attach_response(up)
