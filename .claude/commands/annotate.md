@@ -17,6 +17,25 @@ interactive (any of stdin/stdout/stderr is a TTY), `agent` when none is.
 Scripted callers that pass `overwrite=respect-manual` will not silently
 clobber `source=human` notes.
 
+**Storage:** `<base>/<source_path>.md` — one annotation file per source
+file, with `## function_name` sections, an HTML-comment metadata line, and a
+free-form prose body. The base directory defaults to the active project's
+`<output_dir>/annotations`.
+
+**Status enum:** `clean` (reviewed, no concern) / `suspicious` (real bug,
+not exploitable) / `finding` (exploitable) / `dormant` (unreachable / dead
+code) / `error`.
+
+**Reader authority:** readers grant human-grade weight (Reflexion veto,
+operator-tier FP primers, durable coverage evidence, IRIS spec promotion)
+only to `source=human` notes with an interactive-TTY stamp (or legacy
+pre-stamp notes); agent notes are hint-tier.
+
+**Substrate:** `core/annotations/` — atomic write via tempfile + rename,
+path-traversal defended (rejects `..` segments and absolute paths),
+function-name and metadata-value validation prevents on-disk format
+corruption.
+
 ## Usage
 
 ```

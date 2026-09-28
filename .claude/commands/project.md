@@ -24,7 +24,7 @@ Manage projects — named workspaces that corral analysis runs into one director
 | `status [<name>]` | Show project summary with run history |
 | `coverage [<name>] [--detailed] [--fail-under <pct>]` | Show tool coverage summary (or per-file table; `--fail-under` gates CI) |
 | `binary <add\|remove\|list\|clear> [<path>]` | Manage persisted debug binaries for binary-oracle enrichment |
-| `ghidra <add\|remove\|list\|clear> [<path.gpr>]` | Manage attached Ghidra projects (registration; `raptor-ghidra attach` imports the cache) |
+| `ghidra <add\|remove\|list\|clear> [<path.gpr>]` | Manage attached Ghidra projects (registration; `raptor-ghidra attach` imports the cache that context injection + finding sync read) |
 | `graph <status\|stats\|clear\|rebuild> [<name>]` | Manage the persistent /understand graph store (`status` = size/schema/node+edge summary, `stats` = per-type counts, `clear` = delete the store, `rebuild` = re-ingest from the project's run artefacts) |
 | `provenance [<name>]` | Provenance rollup across all runs |
 | `show <run>` | One run's provenance detail |
@@ -49,9 +49,42 @@ Manage projects — named workspaces that corral analysis runs into one director
 | `import <path> [--force] [--sha256 <hash>]` | Import project from zip |
 | `trust [<marker>] [<name>]` | List trust assertions (markers + binaries count), or set a marker: `config` / `build` / `dynamic`. Grants are standing (per-run flags override); `build` grants traced-build CodeQL extraction (executes the repo's build system) AND suppression-grade treatment of repo-declared build-flags evidence (fortify/stack-protector) in source-intel's verdict policy on the corpus Validator lane |
 | `untrust <marker> [<name>]` | Remove a trust marker |
-| `set [<key> <value>] [<name>]` | List settings, or set a registry key (`description`, `notes`, `threat-model`, `target-kind`, `build-command[.<lang>]`, `sandbox-floor` — containment-floor consent, `none` refused) |
+| `set [<key> <value>] [<name>]` | List settings, or set a registry key (`description`, `notes`, `threat-model`, `target-kind`, `build-command[.<lang>]`, `sandbox-floor` — standing untrusted containment-floor consent: `mount-ns`\|`mountless-ns`\|`ns-only`\|`landlock`, never `none`; per-run `--sandbox-floor` overrides) |
 | `unset <key> [<name>]` | Remove a setting |
 | `get <key> [<name>]` | Print one setting's bare value (exit 1 when unset) |
+
+## Trust markers — consumer doctrine
+
+**Trust markers** are operator assertions persisted on the project (never
+auto-set, never read from the scanned repo): `config` = the `--trust-repo`
+umbrella (cc_trust + codeql_trust), `build` = traced-build CodeQL extraction
+(`--traced-build`) plus build-flags finding suppression (below), `dynamic` =
+dynamic validation (`config.dynamic_validation`). `/agentic` and `/codeql`
+consume them at start alongside the persisted binaries; the audit pipeline
+consumes `dynamic` and `config` (repo-trust arms its trust-gated refutation
+witnesses — no per-run audit flag, the marker is the only control); `config`
+also grants standing consent for a `--openant-core` that is not a clean
+pinned checkout (the flag surface otherwise refuses;
+`--openant-core-unpinned` is the per-run consent). Source-intel's verdict
+policy also consumes `build` — on the corpus-runner Validator lane
+(`core/dataflow/scripts/corpus-run --validator …SourceIntelValidator`, the
+one place source-intel renders verdicts): fortify-source / stack-protector
+evidence parsed from the repo's declared build config (`.config` / Makefile /
+`compile_commands.json` text) is suppression-grade — it can mark write-class
+findings not exploitable — only under the marker AND only when the analysed
+root matches the marker's project target (the one-target rule, fail-closed on
+unknown roots); without the marker the flags stay steering-only evidence,
+with a withheld-suppression warning on that lane. On `/agentic`/`/analyze`
+the same build-flags facts are injected as hint-tier evidence only — the
+marker changes no verdict there. This consumer has no per-run flag pair — the
+marker is the only control. The marker also defaults env build-on-demand
+where its flag pair exists (`--env-build`/`--no-env-build`; see
+`.claude/skills/binary-oracle.md`). Per-run flags always win in both
+directions where they exist (`--no-trust-repo` / `--no-traced-build` /
+`--no-dynamic` > positive flag > marker > off), a banner line prints whenever
+a marker affects a run — except the corpus-runner build-flags consumer, which
+is silent on grant and warns only when suppression is withheld — and `build`
+does NOT imply `config`.
 
 ## Execution
 
