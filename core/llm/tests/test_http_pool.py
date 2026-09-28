@@ -2015,12 +2015,16 @@ class TestSdkShardWiring:
         for var in _PROXY_ENV:
             monkeypatch.delenv(var, raising=False)
 
-    def _force_h2(self, monkeypatch):
+    def _force_h2(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # These callers build a REAL httpx client with http2=True,
+        # and httpx validates the optional 'h2' extra at client
+        # construction — so runners without it skip. With h2
+        # genuinely importable the opt-in env alone opens the
+        # product gate; a find_spec fake (the pattern the pure knob-
+        # resolver tests use) would defeat that gate and crash the
+        # construction below on bare runners.
+        pytest.importorskip("h2")
         monkeypatch.setenv("RAPTOR_HTTP2", "1")
-        monkeypatch.setattr(
-            http_pool.importlib.util, "find_spec",
-            lambda name: object() if name == "h2" else None,
-        )
 
     def test_h1_default_collapses_to_plain_transport(self):
         # Direction 1 of the collapse rule: HTTP/1.1 already uses one
