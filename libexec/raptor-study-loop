@@ -142,9 +142,17 @@ def _pending_items(rl_path: Path) -> list[dict]:
     raw = load_json(rl_path, max_bytes=_MAX_STUDY_ARTIFACT_BYTES)
     if not isinstance(raw, dict):
         return []
+    # Shape-tolerant like every other raw reader of this multi-writer
+    # artifact: a present-but-null items array or non-dict rows come
+    # from legacy/externally-edited files and must cost those rows
+    # only, not the count.
+    items = raw.get("items")
+    if not isinstance(items, list):
+        return []
     return [
-        i for i in raw.get("items", [])
-        if not i.get("resolved") and not i.get("unresolvable")
+        i for i in items
+        if isinstance(i, dict)
+        and not i.get("resolved") and not i.get("unresolvable")
     ]
 
 

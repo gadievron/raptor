@@ -371,7 +371,9 @@ class TestReadingListPersistence:
             r.message for r in caplog.records if "healed" in r.message
         ]
         assert len(healed_lines) == 1
-        assert "2" in healed_lines[0]
+        # Pin the count in its message context — the line also embeds
+        # a tmp path that can itself contain a bare "2".
+        assert "healed 2 null/non-str" in healed_lines[0]
 
     def test_load_clean_artifact_no_heal_warning(
         self, tmp_path: Path, caplog,

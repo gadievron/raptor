@@ -605,3 +605,33 @@ class TestStructDefinitionsTolerateMalformedItems:
         ]}
         defs = _loop._struct_definitions(sl)
         assert [d["name"] for d in defs] == ["s1", "s2"]
+
+
+class TestPendingItemsShapeTolerance:
+    """``_pending_items`` is a raw reader of the multi-writer
+    reading-list.json: a legacy or externally-edited artifact can
+    carry a present-but-null ``items`` array or non-dict rows — the
+    exact shapes the load-warning treats as evidence.  They must cost
+    the bad rows only, never crash the count (both call sites feed
+    run-start and end-of-run summary lines)."""
+
+    def test_malformed_shapes_never_crash(self, tmp_path):
+        for i, doc in enumerate((
+            {"items": None},
+            {"items": [None]},
+            {"items": ["stray", 42]},
+            {"items": {"not": "a list"}},
+        )):
+            p = tmp_path / f"rl{i}.json"
+            p.write_text(json.dumps(doc))
+            assert _loop._pending_items(p) == []
+
+    def test_bad_rows_cost_only_themselves(self, tmp_path):
+        p = tmp_path / "reading-list.json"
+        p.write_text(json.dumps({"items": [
+            None, "stray",
+            {"id": "rl-1", "question": "q?", "resolved": False},
+            {"id": "rl-2", "question": "q2?", "resolved": True},
+        ]}))
+        pending = _loop._pending_items(p)
+        assert [i["id"] for i in pending] == ["rl-1"]

@@ -2144,6 +2144,10 @@ class TestMalformedReadingListShapes:
     )
 
     def test_items_shapes_never_crash_readers(self, tmp_path) -> None:
+        # A study-supported source keeps the multilang gate OPEN so
+        # the _multilang_pass leg exercises the reader itself, not
+        # the has_study_sources short-circuit.
+        (tmp_path / "m.py").write_text("x = 1\n")
         for i, doc in enumerate(self._SHAPES):
             rl_path = tmp_path / f"rl{i}.json"
             rl_path.write_text(json.dumps(doc))
@@ -2179,6 +2183,9 @@ class TestMalformedReadingListShapes:
         # never reach Path()/regex/.strip() as the wrong type (a
         # list source_file crashed set.add, an int crashed confine).
         (tmp_path / "a.h").write_text("int x;\n")
+        # Keep the multilang gate OPEN (see above) so the pass reads
+        # the hostile rows instead of short-circuiting.
+        (tmp_path / "m.py").write_text("x = 1\n")
         rl_path = tmp_path / "reading-list.json"
         rl_path.write_text(json.dumps({"items": [
             {"id": "rl-1", "question": 42, "source_file": 9,
