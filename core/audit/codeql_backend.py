@@ -21,11 +21,20 @@ logger = logging.getLogger(__name__)
 # source tree. Per-file: real source files this large are generated
 # code, not worth summarising; the multi-language pass historically
 # skipped >500k-char files AFTER reading them fully — now the lstat
-# size gate fires before any read. Aggregate: caps the total bytes the
-# walk will ever read/parse so a tree of many cap-sized files cannot
-# grind the pre-sweep.
+# size gate fires before any read.
 _TAINT_PER_FILE_CAP = 500_000
-_TAINT_AGGREGATE_CAP = 128 * 1024 * 1024
+# Aggregate ceiling, both directions: LOWER silently starves large
+# targets — monorepo-scale JS/Python trees carry well past the old
+# 128 MiB, which exhausted mid-walk and every later function simply
+# had no taint summary (downstream reads absence as "nothing
+# tainted"). HIGHER lets a hostile tree of cap-sized files grind the
+# pre-sweep: measured throughput is ~2.0 MB/s for the multi-language
+# extractor and ~0.2 MB/s for the Python callgraph+summary pass, so
+# 1 GiB bounds the worst case at roughly 10–85 min depending on mix —
+# accepted because exhaustion is no longer silent: the walk stamps
+# the in-band "_truncation" record below, so operators see exactly
+# what was dropped instead of a quietly smaller summary set.
+_TAINT_AGGREGATE_CAP = 1024 * 1024 * 1024
 
 
 def _admit_taint_file(path: Path, budget: dict[str, int]) -> bool:
@@ -33,7 +42,12 @@ def _admit_taint_file(path: Path, budget: dict[str, int]) -> bool:
 
     Refuses symlinks and non-regular files (lstat, never follows),
     over-cap files, and files that would exceed the remaining
-    aggregate budget. Mutates ``budget["remaining"]`` on admission.
+    aggregate budget. Mutates ``budget["remaining"]`` on admission
+    and counts budget-exhaustion skips into
+    ``budget["skipped_files"]``/``budget["skipped_bytes"]`` (via
+    ``.get`` so pre-existing ``{"remaining", "warned"}`` dicts stay
+    valid inputs) — those counters feed the walk's in-band
+    ``"_truncation"`` record.
     """
     try:
         st = path.lstat()
@@ -50,6 +64,13 @@ def _admit_taint_file(path: Path, budget: dict[str, int]) -> bool:
                 "taint_summary: aggregate byte budget (%d) exhausted; "
                 "remaining files skipped", _TAINT_AGGREGATE_CAP,
             )
+        # Only aggregate-budget refusals count as truncation — the
+        # per-file cap above is a per-file policy (generated code),
+        # not a sign the walk stopped seeing the tree.
+        budget["skipped_files"] = budget.get("skipped_files", 0) + 1
+        budget["skipped_bytes"] = (
+            budget.get("skipped_bytes", 0) + st.st_size
+        )
         return False
     budget["remaining"] -= st.st_size
     return True
@@ -475,6 +496,30 @@ def build_taint_summary(
             )
     except ImportError:
         pass
+
+    if budget.get("skipped_files"):
+        # In-band honest-incomplete marker. Every real key in this
+        # mapping is f"{rel}:{func_name}" — at least one colon — so a
+        # colon-free reserved key can never collide with a summary.
+        # Consumers already tolerate a dict value: per-key lookups use
+        # the colon keys, and .values() walks use
+        # getattr(x, "callees", []) / hasattr(x, "to_dict"), both of
+        # which treat a plain dict as inert. The marker therefore
+        # rides into summaries.json unchanged.
+        results["_truncation"] = {
+            "reason": "aggregate_byte_budget",
+            "budget_bytes": _TAINT_AGGREGATE_CAP,
+            "admitted_bytes": (
+                _TAINT_AGGREGATE_CAP - budget["remaining"]
+            ),
+            "skipped_files": budget["skipped_files"],
+            "skipped_bytes": budget.get("skipped_bytes", 0),
+        }
+        logger.warning(
+            "taint_summary: walk truncated by aggregate byte budget "
+            "(%d files / %d bytes skipped) — summaries are partial",
+            budget["skipped_files"], budget.get("skipped_bytes", 0),
+        )
 
     if results:
         py_count = sum(

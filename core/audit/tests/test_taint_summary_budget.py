@@ -57,6 +57,27 @@ class TestAdmitTaintFile:
         assert budget["warned"]
         assert budget["remaining"] == 4
 
+    def test_budget_skips_are_counted(self, tmp_path):
+        p = tmp_path / "a.py"
+        p.write_text(TAINTED)
+        # A bare {"remaining", "warned"} dict (the historical shape)
+        # must still work — counters start via .get().
+        budget = _fresh_budget(remaining=4)
+        assert not _admit_taint_file(p, budget)
+        assert not _admit_taint_file(p, budget)
+        assert budget["skipped_files"] == 2
+        assert budget["skipped_bytes"] == 2 * p.stat().st_size
+
+    def test_per_file_cap_skip_not_counted_as_truncation(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setattr(backend, "_TAINT_PER_FILE_CAP", 8)
+        p = tmp_path / "big.py"
+        p.write_text(TAINTED)
+        budget = _fresh_budget()
+        assert not _admit_taint_file(p, budget)
+        assert budget.get("skipped_files", 0) == 0
+
 
 class TestBuildTaintSummaryBounds:
     def test_symlinked_py_not_analysed(self, tmp_path):
@@ -87,7 +108,12 @@ class TestBuildTaintSummaryBounds:
         target.mkdir()
         (target / "a.py").write_text(TAINTED)
         (target / "b.py").write_text(TAINTED)
-        assert build_taint_summary(target) is None
+        result = build_taint_summary(target)
+        # No summaries survive, but the walk is honest about why:
+        # only the in-band truncation marker remains.
+        assert result is not None
+        assert set(result) == {"_truncation"}
+        assert result["_truncation"]["skipped_files"] == 2
 
     def test_regular_small_file_still_analysed(self, tmp_path):
         (tmp_path / "m.py").write_text(TAINTED)
@@ -107,3 +133,43 @@ class TestBuildTaintSummaryBounds:
         )
         result = build_taint_summary(target, scope=["in"])
         assert result and "in/a.py:f" in result
+
+
+class TestTaintTruncationMarker:
+    """Two directions of the aggregate budget's in-band marker: below
+    budget no marker appears; at budget the reserved colon-free
+    "_truncation" key carries the exact skip accounting alongside the
+    summaries that did fit."""
+
+    def test_below_budget_no_marker(self, tmp_path):
+        (tmp_path / "m.py").write_text(TAINTED)
+        result = build_taint_summary(tmp_path)
+        assert result and "m.py:f" in result
+        assert "_truncation" not in result
+
+    def test_truncated_walk_carries_marker_and_partial_results(
+        self, tmp_path, monkeypatch,
+    ):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.py").write_text(TAINTED)
+        (target / "b.py").write_text(TAINTED)
+        (target / "c.py").write_text(TAINTED)
+        # Fits exactly one file; the other two are budget-skipped.
+        monkeypatch.setattr(
+            backend, "_TAINT_AGGREGATE_CAP", len(TAINTED),
+        )
+        result = build_taint_summary(target)
+        assert result is not None
+        marker = result["_truncation"]
+        assert marker["reason"] == "aggregate_byte_budget"
+        assert marker["budget_bytes"] == len(TAINTED)
+        assert marker["admitted_bytes"] == len(TAINTED)
+        assert marker["skipped_files"] == 2
+        assert marker["skipped_bytes"] == 2 * len(TAINTED)
+        # Exactly one real summary survived, and every real key keeps
+        # the f"{rel}:{func}" shape (>=1 colon) the reserved key
+        # relies on for collision freedom.
+        real = {k: v for k, v in result.items() if k != "_truncation"}
+        assert len(real) == 1
+        assert all(":" in k for k in real)
