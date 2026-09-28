@@ -17,6 +17,7 @@ semantics.
 from __future__ import annotations
 
 import os
+import time
 
 import httpx
 import pytest
@@ -358,6 +359,23 @@ class TestShardHealthSeam:
 
         monkeypatch.setattr(client, "stream", failing_stream)
 
+    @staticmethod
+    def _wait_for_rebuild(
+        dispatcher, pooled: httpx.Client, deadline_s: float = 5.0,
+    ) -> httpx.Client:
+        """The drain-shaped rebuild lands in the handler thread's
+        ``shards.release`` — reached in the relay's ``finally``, AFTER
+        the 502 is already on the wire (and the retired client's close
+        runs outside the pool lock, after the slot refill). A caller
+        that just read the 502 races both; poll briefly instead."""
+        deadline = time.monotonic() + deadline_s
+        while time.monotonic() < deadline:
+            rebuilt = _sole_client(dispatcher)
+            if rebuilt is not pooled and pooled.is_closed:
+                return rebuilt
+            time.sleep(0.01)
+        return _sole_client(dispatcher)
+
     def test_transport_failure_drains_and_rebuilds_the_shard(
         self, dispatcher, monkeypatch,
     ):
@@ -369,7 +387,7 @@ class TestShardHealthSeam:
         # One strike at threshold 1: the shard drained on release and
         # was rebuilt fresh — same pool object, new client.
         shards = dispatcher._upstream_client_shards()
-        rebuilt = _sole_client(dispatcher)
+        rebuilt = self._wait_for_rebuild(dispatcher, pooled)
         assert rebuilt is not pooled
         assert pooled.is_closed
         assert not rebuilt.is_closed
