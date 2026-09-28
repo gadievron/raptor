@@ -69,13 +69,31 @@ GROUP_TYPE_CLONE_FAMILY = "clone_family"
 #: rules — the cache key includes it so stale indexes never load.
 CLONE_INDEX_VERSION = 1
 
-#: Functions admitted per build. Both directions: more turns the
-#: index build into the prep phase's dominant cost on monorepos
-#: (winnowing is ~ms/function; verification is budgeted separately);
-#: fewer blinds the index on exactly the large trees where manual
-#: clone tracking already fails. 40k ≈ the large-target class the
-#: peer-census program sizes for.
+#: FLOOR of the derived function-admission cap (the old fixed cap —
+#: small and mid-size trees keep exactly the historical bound). Both
+#: directions: more turns the index build into the prep phase's
+#: dominant cost on monorepos (winnowing is ~ms/function;
+#: verification is budgeted separately); fewer blinds the index on
+#: exactly the large trees where manual clone tracking already fails.
+#: 40k ≈ the large-target class the peer-census program sizes for.
 MAX_INDEX_FUNCTIONS = 40_000
+
+#: Derivation rate: one admitted function per this many source
+#: chars. Both directions: fewer chars/function over-derives on
+#: comment-dense trees (real C averages ~500 B/function body, so 512
+#: tracks the true function count within ~2x); more starves it — the
+#: cap must reach the tree's actual function census or late-walk
+#: functions silently never join the index.
+_INDEX_CHARS_PER_FUNCTION = 512
+
+#: Absolute CEILING of the derived function cap — memory/CPU
+#: backstop. Both directions: higher stops bounding the build
+#: (~4.6 KB/function of retained body+prints ≈ 0.75 GB transient at
+#: 160k, and winnow+signature at ~0.6 ms/function ≈ 100 s — the
+#: accepted worst case); lower re-creates the kernel-scale silent
+#: drop (a full kernel tree carries ~145k functions, which fits).
+#: At the ceiling truncation still stamps ``caps_hit`` in-band.
+MAX_INDEX_FUNCTIONS_CEILING = 160_000
 
 #: MinHash signature layout: bands × rows hashes per function. Two
 #: rows per band keeps recall high at the 0.85 containment floor
@@ -92,15 +110,81 @@ LSH_ROWS = 2
 #: sampled seeded-random.
 MAX_BUCKET_MEMBERS = 64
 
-#: Verified-pair budget per build. Both directions: higher re-opens
-#: the CPU sink LSH exists to close; lower degrades the index to
-#: fewer families on clone-heavy trees — marked caps_hit, and the
-#: absence-of-match consumers must carry the marker. 20k pairs at
-#: set-intersection cost is well under a second.
+#: FLOOR of the derived verified-pair budget (the old fixed budget).
+#: Both directions: higher re-opens the CPU sink LSH exists to
+#: close; lower degrades the index to fewer families on clone-heavy
+#: trees — marked caps_hit, and the absence-of-match consumers must
+#: carry the marker. 20k pairs at set-intersection cost is well
+#: under a second.
 MAX_VERIFY_PAIRS = 20_000
 
-#: Families kept per index. Mirrors the census family-cap class.
+#: Derivation rate: one verified pair of budget per this many
+#: indexed functions (budget = functions // 2). Both directions: a
+#: smaller divisor scales the budget toward the quadratic sink on
+#: flood trees; a larger one exhausts the budget before
+#: late-shuffled buckets are reached on exactly the large trees the
+#: derivation exists for (a tree's genuine candidate pairs grow
+#: roughly linearly with its function count at fixed clone density).
+_FUNCTIONS_PER_VERIFY_PAIR = 2
+
+#: Absolute CEILING of the derived pair budget — CPU backstop. Both
+#: directions: higher stops bounding verification (120k containment
+#: checks ≈ a few seconds, the accepted worst case); lower truncates
+#: candidate coverage on kernel-scale trees (~145k functions derive
+#: ~72k pairs, comfortably under it). Budget exhaustion still stamps
+#: ``caps_hit``.
+MAX_VERIFY_PAIRS_CEILING = 120_000
+
+#: FLOOR of the derived family cap (the old fixed cap). Mirrors the
+#: census family-cap class.
 MAX_CLONE_FAMILIES = 500
+
+#: Derivation rate: one family of allowance per this many indexed
+#: functions. Both directions: fewer functions/family hands a
+#: generated tree (thousands of tiny planted clone pairs) a cap near
+#: its function count — the flood bound stops binding; more starves
+#: clone-heavy legitimate trees (kernel-scale censuses measure
+#: clone families in the low thousands over ~145k functions, and
+#: //100 clears that with margin).
+_FUNCTIONS_PER_CLONE_FAMILY = 100
+
+#: Absolute CEILING of the derived family cap — review-volume and
+#: cache-size backstop. Both directions: higher stops bounding what
+#: downstream joins and reviewers triage; lower re-creates the
+#: kernel-scale silent drop (~145k functions derive ~1.4k families,
+#: under it). At the ceiling truncation still stamps ``caps_hit``.
+MAX_CLONE_FAMILIES_CEILING = 4_000
+
+
+def _derive_index_function_cap(total_chars: int) -> int:
+    """Function-admission cap derived from source scale.
+
+    ``max(floor, chars // rate)`` clamped to the ceiling. Constants
+    are read at call time so monkeypatched bounds keep binding.
+    """
+    derived = max(
+        MAX_INDEX_FUNCTIONS,
+        total_chars // _INDEX_CHARS_PER_FUNCTION,
+    )
+    return min(derived, MAX_INDEX_FUNCTIONS_CEILING)
+
+
+def _derive_verify_pair_cap(n_functions: int) -> int:
+    """Verified-pair budget derived from the indexed function count."""
+    derived = max(
+        MAX_VERIFY_PAIRS,
+        n_functions // _FUNCTIONS_PER_VERIFY_PAIR,
+    )
+    return min(derived, MAX_VERIFY_PAIRS_CEILING)
+
+
+def _derive_family_cap(n_functions: int) -> int:
+    """Family cap derived from the indexed function count."""
+    derived = max(
+        MAX_CLONE_FAMILIES,
+        n_functions // _FUNCTIONS_PER_CLONE_FAMILY,
+    )
+    return min(derived, MAX_CLONE_FAMILIES_CEILING)
 
 #: Members recorded per family. The comparator family-size ceiling
 #: class (one hub family must not become a whole-tree blob).
@@ -111,10 +195,12 @@ _MERSENNE_P = (1 << 61) - 1
 
 CLONE_INDEX_FILENAME = "clone-index.json"
 
-#: Cache read bound: 500 families × 32 members × ~120 bytes/member
-#: is well under 8 MiB; anything larger is not an index this module
-#: wrote.
-_MAX_CACHE_BYTES = 8 * 1024 * 1024
+#: Cache read bound: the derived maximum index is 4_000 families ×
+#: 32 members × ~120 bytes/member ≈ 15 MiB of JSON; 64 MiB leaves
+#: headroom for long paths without admitting a planted multi-GB
+#: "cache" into the JSON parser. Anything larger is not an index
+#: this module wrote.
+_MAX_CACHE_BYTES = 64 * 1024 * 1024
 
 
 @dataclass
@@ -208,14 +294,19 @@ def build_clone_index(
     rnd_files = random.Random(seed + b"files")
     paths = sorted(source_texts)
     rnd_files.shuffle(paths)
+    function_cap = _derive_index_function_cap(
+        sum(len(source_texts[p] or "") for p in paths),
+    )
     bodies = _function_bodies(
         {p: source_texts[p] for p in paths},
-        max_functions=MAX_INDEX_FUNCTIONS,
+        max_functions=function_cap,
     )
-    caps_hit = len(bodies) >= MAX_INDEX_FUNCTIONS
+    caps_hit = len(bodies) >= function_cap
     bodies = [b for b in bodies if b.prints]
     if len(bodies) < 2:
         return None
+    verify_pair_cap = _derive_verify_pair_cap(len(bodies))
+    family_cap = _derive_family_cap(len(bodies))
 
     params = _minhash_params(seed, LSH_BANDS * LSH_ROWS)
     rnd = random.Random(seed + b"survivors")
@@ -257,7 +348,7 @@ def build_clone_index(
     for members in all_buckets:
         for i, a in enumerate(members):
             for b in members[i + 1:]:
-                if len(candidate_pairs) >= MAX_VERIFY_PAIRS:
+                if len(candidate_pairs) >= verify_pair_cap:
                     verify_budget_hit = True
                     break
                 candidate_pairs.add((a, b) if a < b else (b, a))
@@ -297,7 +388,7 @@ def build_clone_index(
         if len(members) < 2:
             continue
         n_eligible += 1
-        if len(families) >= MAX_CLONE_FAMILIES:
+        if len(families) >= family_cap:
             caps_hit = True
             continue
         if len(members) > MAX_CLONE_FAMILY_MEMBERS:
@@ -335,6 +426,13 @@ def build_clone_index(
             "bucket_cap_events": bucket_cap_events,
             "families": len(families),
             "eligible_families": n_eligible,
+            # The derived bounds this build ran under — with
+            # caps_hit they make the degradation legible (WHICH cap
+            # bound at WHAT value), and a reloaded cache carries the
+            # build-time bounds, not today's constants.
+            "function_cap": function_cap,
+            "verify_pair_cap": verify_pair_cap,
+            "family_cap": family_cap,
         },
     )
     logger.info(

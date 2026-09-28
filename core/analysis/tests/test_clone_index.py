@@ -200,6 +200,116 @@ class TestRailPins:
         assert index.caps_hit is True
 
 
+class TestDerivedCaps:
+    """Caps derived from target scale: floors for small trees (the
+    old fixed bounds), linear growth with scale, absolute ceilings
+    as memory/CPU backstops — and the derived values recorded in the
+    build stats so a degraded index is legible."""
+
+    def test_function_cap_floor_derived_and_ceiling(self):
+        from core.analysis import clone_index as ci
+
+        assert ci._derive_index_function_cap(0) \
+            == ci.MAX_INDEX_FUNCTIONS
+        # Linear region: 512 chars per function.
+        assert ci._derive_index_function_cap(512 * 50_000) == 50_000
+        # Kernel-scale char counts clamp at the ceiling.
+        assert ci._derive_index_function_cap(10**12) \
+            == ci.MAX_INDEX_FUNCTIONS_CEILING
+
+    def test_verify_pair_cap_floor_derived_and_ceiling(self):
+        from core.analysis import clone_index as ci
+
+        assert ci._derive_verify_pair_cap(10_000) \
+            == ci.MAX_VERIFY_PAIRS
+        assert ci._derive_verify_pair_cap(100_000) == 50_000
+        assert ci._derive_verify_pair_cap(10**9) \
+            == ci.MAX_VERIFY_PAIRS_CEILING
+
+    def test_family_cap_floor_derived_and_ceiling(self):
+        from core.analysis import clone_index as ci
+
+        assert ci._derive_family_cap(10_000) == ci.MAX_CLONE_FAMILIES
+        # The kernel-audit scale that motivated the derivation.
+        assert ci._derive_family_cap(144_371) == 1_443
+        assert ci._derive_family_cap(10**9) \
+            == ci.MAX_CLONE_FAMILIES_CEILING
+
+    def test_derive_constants_read_at_call_time(self, monkeypatch):
+        from core.analysis import clone_index as ci
+
+        monkeypatch.setattr(ci, "MAX_INDEX_FUNCTIONS", 2)
+        monkeypatch.setattr(ci, "MAX_INDEX_FUNCTIONS_CEILING", 3)
+        assert ci._derive_index_function_cap(0) == 2
+        assert ci._derive_index_function_cap(10**9) == 3
+
+    @requires_ts("c")
+    def test_scale_raises_function_cap_above_floor(self, monkeypatch):
+        # Below the derived cap: at scale the derivation admits
+        # functions the bare floor (cf. test_index_function_cap_binds)
+        # would have dropped.
+        from core.analysis import clone_index as ci
+
+        monkeypatch.setattr(ci, "MAX_INDEX_FUNCTIONS", 3)
+        monkeypatch.setattr(ci, "_INDEX_CHARS_PER_FUNCTION", 1)
+        sources = {"a.c": "".join(
+            _clone_fn(f"copy_{i}") for i in range(4)
+        )}
+        index = build_clone_index(sources, seed=b"t")
+        assert index is not None
+        assert index.stats["functions"] == 4
+        assert index.stats["function_cap"] > 3
+        assert index.caps_hit is False
+
+    @requires_ts("c")
+    def test_function_ceiling_still_binds_with_marker(
+        self, monkeypatch,
+    ):
+        # At the ceiling: truncation happens and stays marked.
+        from core.analysis import clone_index as ci
+
+        monkeypatch.setattr(ci, "MAX_INDEX_FUNCTIONS", 3)
+        monkeypatch.setattr(ci, "_INDEX_CHARS_PER_FUNCTION", 1)
+        monkeypatch.setattr(ci, "MAX_INDEX_FUNCTIONS_CEILING", 3)
+        sources = {"a.c": "".join(
+            _clone_fn(f"copy_{i}") for i in range(4)
+        )}
+        index = build_clone_index(sources, seed=b"t")
+        assert index is not None
+        assert index.stats["functions"] <= 3
+        assert index.stats["function_cap"] == 3
+        assert index.caps_hit is True
+
+    @requires_ts("c")
+    def test_scale_raises_family_cap_above_floor(self, monkeypatch):
+        # Same tree as test_family_count_cap_binds: with the
+        # derivation engaged, the second family survives the floor.
+        from core.analysis import clone_index as ci
+
+        monkeypatch.setattr(ci, "MAX_CLONE_FAMILIES", 1)
+        monkeypatch.setattr(ci, "_FUNCTIONS_PER_CLONE_FAMILY", 1)
+        sources = {"a.c": (
+            _clone_fn("alpha_a") + _clone_fn("alpha_b")
+            + _unrelated_fn("beta_a") + _unrelated_fn("beta_b")
+        )}
+        index = build_clone_index(sources, seed=b"t")
+        assert index is not None
+        assert len(index.families) == 2
+        assert index.stats["family_cap"] == 4
+        assert index.caps_hit is False
+
+    @requires_ts("c")
+    def test_stats_record_derived_caps(self):
+        sources = {"a.c": _clone_fn("a") + _clone_fn("b")}
+        index = build_clone_index(sources, seed=b"t")
+        assert index is not None
+        from core.analysis import clone_index as ci
+
+        assert index.stats["function_cap"] == ci.MAX_INDEX_FUNCTIONS
+        assert index.stats["verify_pair_cap"] == ci.MAX_VERIFY_PAIRS
+        assert index.stats["family_cap"] == ci.MAX_CLONE_FAMILIES
+
+
 class TestTargetedEviction:
     """Candidate admission is bucket-granular seeded-random: with
     first-come admission in file order, decoy clone clusters in
