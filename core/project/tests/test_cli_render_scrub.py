@@ -477,3 +477,36 @@ def test_report_annotation_headings_escaped():
     # No raw backtick from the value survives inside the heading span.
     heading = next(ln for ln in md.splitlines() if ln.startswith("### "))
     assert heading.count("`") == 4  # exactly the two wrapping pairs
+
+
+def test_status_surfaces_parked_marker_escaped(tmp_path, capsys):
+    """A run carrying the engagement PARKED marker surfaces its parks
+    (ids, first reason, acknowledge route) on the status row — with
+    every marker-derived field escaped."""
+    from core.json import save_json
+    from core.project.cli import _print_status
+    d = _hostile_run_dir(tmp_path, name="run_parked")
+    save_json(d / "PARKED", {"schema_version": 1, "parks": [
+        {"park_id": "park-deadbeef", "scope": "engagement",
+         "kind": "code_drift", "reason": f"moved {HOSTILE}",
+         "at": "t"}]})
+    _print_status(_FakeProject(tmp_path, runs=[d]))
+    out = capsys.readouterr().out
+    assert "PARKED" in out
+    assert "park-deadbeef" in out
+    assert "--acknowledge" in out
+    for raw in RAW:
+        assert raw not in out
+
+
+def test_status_corrupt_parked_marker_never_wedges(tmp_path, capsys):
+    """The marker line is best-effort: junk bytes at the marker path
+    must not take down /project status."""
+    from core.project.cli import _print_status
+    d = _hostile_run_dir(tmp_path, name="run_junkmark")
+    (d / "PARKED").write_bytes(b"\x00not json{{{")
+    _print_status(_FakeProject(tmp_path, runs=[d]))
+    out = capsys.readouterr().out
+    assert "Runs: 1" in out
+    for raw in RAW:
+        assert raw not in out

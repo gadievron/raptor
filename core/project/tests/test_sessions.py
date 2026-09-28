@@ -1533,3 +1533,109 @@ class OwnRepairContinuityTest(_RegistryCase):
         }):
             sessions.record_session("myapp", pid=os.getpid())
         self.assertEqual(sessions.ledger_runs(pid=os.getpid()), [])
+
+
+class DrainRequestTest(_RegistryCase):
+    """Drain-request records: the fleet's pause-at-a-safe-boundary
+    channel. Lines ride the ledger's unknown-lines channel — every
+    other writer preserves them verbatim — and are gated by the same
+    registered-session + identity checks as the record writers."""
+
+    def setUp(self):
+        super().setUp()
+        self.run_root = Path(self._tmp.name) / "runs"
+        self.run_root.mkdir()
+        sessions.record_session("drainapp", pid=os.getpid())
+
+    def _mk_run(self, name: str) -> Path:
+        d = self.run_root / name
+        d.mkdir()
+        (d / ".raptor-run.json").write_text(
+            '{"status": "running"}', encoding="utf-8")
+        return d
+
+    def test_record_and_read_roundtrip(self):
+        d = self._mk_run("eng_1")
+        self.assertTrue(
+            sessions.ledger_record_drain_request(d, pid=os.getpid()))
+        reqs = sessions.ledger_drain_requests(d)
+        self.assertEqual(len(reqs), 1)
+        self.assertEqual(reqs[0]["run_dir"], str(d.resolve()))
+        self.assertEqual(reqs[0]["run_id"], "eng_1")
+        self.assertEqual(reqs[0]["session_pid"], os.getpid())
+        self.assertIsInstance(reqs[0]["epoch"], int)
+
+    def test_deduplicated_per_run_dir(self):
+        d = self._mk_run("eng_dedup")
+        sessions.ledger_record_drain_request(d, pid=os.getpid())
+        sessions.ledger_record_drain_request(d, pid=os.getpid())
+        self.assertEqual(len(sessions.ledger_drain_requests(d)), 1)
+
+    def test_other_writers_preserve_drain_lines(self):
+        """The forward-compat channel contract: run start/finish on
+        OTHER runs never drops a drain line."""
+        d = self._mk_run("eng_keep")
+        other = self._mk_run("scan_other")
+        sessions.ledger_record_drain_request(d, pid=os.getpid())
+        sessions.ledger_record_start(other, pid=os.getpid())
+        (other / ".raptor-run.json").write_text(
+            '{"status": "completed"}', encoding="utf-8")
+        sessions.ledger_record_finish(other, "completed",
+                                      pid=os.getpid())
+        self.assertEqual(len(sessions.ledger_drain_requests(d)), 1)
+
+    def test_clear_removes_and_counts(self):
+        d = self._mk_run("eng_clear")
+        sessions.ledger_record_drain_request(d, pid=os.getpid())
+        self.assertEqual(sessions.ledger_clear_drain_requests(d), 1)
+        self.assertEqual(sessions.ledger_drain_requests(d), [])
+        self.assertEqual(sessions.ledger_clear_drain_requests(d), 0)
+
+    def test_clear_leaves_other_runs_requests(self):
+        d1 = self._mk_run("eng_a")
+        d2 = self._mk_run("eng_b")
+        sessions.ledger_record_drain_request(d1, pid=os.getpid())
+        sessions.ledger_record_drain_request(d2, pid=os.getpid())
+        sessions.ledger_clear_drain_requests(d1)
+        self.assertEqual(len(sessions.ledger_drain_requests(d2)), 1)
+
+    def test_vanished_run_dir_pruned_on_next_record(self):
+        import shutil
+        d1 = self._mk_run("eng_gone")
+        d2 = self._mk_run("eng_live")
+        sessions.ledger_record_drain_request(d1, pid=os.getpid())
+        shutil.rmtree(d1)
+        sessions.ledger_record_drain_request(d2, pid=os.getpid())
+        _r, _p, unknown = sessions._read_ledger_full(os.getpid())
+        drains = [ln for ln in unknown
+                  if sessions._drain_parse(ln) is not None]
+        self.assertEqual(len(drains), 1)
+
+    def test_owner_session_ledger_hosts_the_request(self):
+        """pid=None routes the request to the session holding the
+        run's RUNNING record."""
+        d = self._mk_run("eng_owned")
+        sessions.ledger_record_start(d, pid=os.getpid())
+        self.assertTrue(sessions.ledger_record_drain_request(d))
+        reqs = sessions.ledger_drain_requests(d)
+        self.assertEqual(len(reqs), 1)
+        self.assertEqual(reqs[0]["session_pid"], os.getpid())
+
+    def test_unregistered_pid_refused(self):
+        d = self._mk_run("eng_norefs")
+        self.assertFalse(
+            sessions.ledger_record_drain_request(d, pid=DEAD_PID))
+        self.assertEqual(sessions.ledger_drain_requests(d), [])
+
+    def test_hostile_run_dir_refused(self):
+        evil = self.run_root / "eng\x1b[31mred"
+        evil.mkdir()
+        self.assertFalse(
+            sessions.ledger_record_drain_request(evil,
+                                                 pid=os.getpid()))
+
+    def test_orphan_ledger_never_steers_reads(self):
+        d = self._mk_run("eng_orphan")
+        sessions.ledger_record_drain_request(d, pid=os.getpid())
+        (self.sessions_dir / str(os.getpid())).unlink()
+        self.assertEqual(sessions.ledger_drain_requests(d), [])

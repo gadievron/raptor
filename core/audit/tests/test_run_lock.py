@@ -670,3 +670,73 @@ def test_cmd_run_refuses_locked_out_dir_before_lifecycle(
         assert calls == []      # refused BEFORE lifecycle start ran
     finally:
         _finish(proc)
+
+
+# ---------------------------------------------------------------------------
+# non-audit lock families (lock_name / subject parameterization)
+# ---------------------------------------------------------------------------
+
+_CUSTOM_HOLDER_SCRIPT = textwrap.dedent("""\
+    import os, signal, sys
+    sys.path.insert(0, sys.argv[2])
+    from core.audit.run_lock import acquire_run_lock
+    acquire_run_lock(sys.argv[1], "run",
+                     lock_name=".engage-supervise.lock",
+                     subject="engagement supervisor")
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    print("READY", os.getpid(), flush=True)
+    sys.stdin.read()
+""")
+
+
+def test_custom_lock_name_is_an_independent_family(tmp_path):
+    """A second orchestrator FAMILY on the same run dir uses its own
+    lock file — the audit lock and the engagement-supervisor lock
+    never contend with each other."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    custom = acquire_run_lock(run_dir, "run",
+                              lock_name=".engage-supervise.lock",
+                              subject="engagement supervisor")
+    assert custom.held
+    assert custom.lock_path == run_lock_path(
+        run_dir, lock_name=".engage-supervise.lock")
+    assert custom.lock_path.name == ".engage-supervise.lock"
+    assert custom.lock_path != run_lock_path(run_dir)
+    default = acquire_run_lock(run_dir, "run")
+    assert default.held
+    assert default.lock_path.name == RUN_LOCK_NAME
+    default.release()
+    custom.release()
+
+
+def test_custom_subject_names_the_family_in_refusal(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    proc = _spawn(_CUSTOM_HOLDER_SCRIPT, str(run_dir),
+                  str(_REPO_ROOT))
+    try:
+        with pytest.raises(AuditRunLocked) as exc:
+            acquire_run_lock(run_dir, "resume",
+                             lock_name=".engage-supervise.lock",
+                             subject="engagement supervisor")
+        msg = str(exc.value)
+        assert "live engagement supervisor" in msg
+        assert "audit orchestrator" not in msg
+        assert f"pid {proc.pid}" in msg
+        # The AUDIT family stays acquirable while the supervisor runs.
+        handle = acquire_run_lock(run_dir, "run")
+        assert handle.held
+        handle.release()
+    finally:
+        _finish(proc)
+
+
+def test_default_call_shape_unchanged(tmp_path):
+    """The pre-parameterization surface: no keywords, audit wording,
+    audit lock file."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    handle = acquire_run_lock(run_dir, "run")
+    assert handle.lock_path == run_dir / RUN_LOCK_NAME
+    handle.release()
