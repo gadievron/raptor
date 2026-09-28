@@ -255,7 +255,7 @@ Default behaviour (no flags): /agentic and /codeql auto-detect debug binaries un
 
 ## EXPLOIT DEVELOPMENT
 
-**Verify constraints BEFORE attempting any technique** — many hours are wasted on architecturally impossible approaches. MANDATORY: check the `exploitation_paths` verdict first (Unlikely = no known path, suggest environment changes; Difficult = primitives exist but hard to chain, be honest about challenges; Likely exploitable = good chance, proceed with suggested techniques), then follow the `chain_breaks` (exactly what WON'T work) and `what_would_help` (what MIGHT). ALWAYS offer next steps, even for Difficult/Unlikely verdicts — **never just stop**; let the user decide how to proceed. Constraint tables, technique alternatives, and the next-steps fork: `tiers/exploit-guidance.md`.
+**Verify constraints BEFORE attempting any technique** — many hours are wasted on architecturally impossible approaches. MANDATORY: check the `exploitation_paths` verdict first (Unlikely = no known path, suggest environment changes; Difficult = primitives exist but hard to chain, be honest about challenges; Likely Exploitable = good chance, proceed with suggested techniques), then follow the `chain_breaks` (exactly what WON'T work) and `what_would_help` (what MIGHT). ALWAYS offer next steps, even for Difficult/Unlikely verdicts — **never just stop**; let the user decide how to proceed. Constraint tables, technique alternatives, and the next-steps fork: `tiers/exploit-guidance.md`.
 
 ---
 

@@ -510,7 +510,7 @@ The output is structured into three categories:
 
 | Verdict | Meaning | Action |
 |---------|---------|--------|
-| Likely exploitable | Good primitives, clear path | Proceed with suggested techniques |
+| Likely Exploitable | Good primitives, clear path | Proceed with suggested techniques |
 | Difficult | Primitives exist but hard to chain | Be honest about challenges, try alternatives |
 | Unlikely | No known viable path | Suggest environment changes or move on |
 
