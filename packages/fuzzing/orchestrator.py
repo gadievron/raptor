@@ -732,15 +732,26 @@ class FuzzingOrchestrator:
                 return
             if not env_build.rootfs.exists():
                 return
-            import shutil as _shutil
-            _shutil.rmtree(env_build.rootfs, ignore_errors=True)
-            logger.info(
-                "env rootfs removed (%s); the campaign outputs and the "
-                "read-only extracted binaries remain — re-run the build "
-                "to reproduce crashes in-image, or pass "
-                "--keep-env-rootfs to retain it",
-                env_build.rootfs,
-            )
+            from core.atomic_fs import rmtree_hardened
+            if rmtree_hardened(env_build.rootfs):
+                logger.info(
+                    "env rootfs removed (%s); the campaign outputs and "
+                    "the read-only extracted binaries remain — re-run "
+                    "the build to reproduce crashes in-image, or pass "
+                    "--keep-env-rootfs to retain it",
+                    env_build.rootfs,
+                )
+            else:
+                # Only claim removal on success — leftover entries
+                # (a griefed mode-0 subtree, host I/O failure) leave
+                # gigabytes in the run dir, and the operator must hear
+                # that, not read "removed".
+                logger.warning(
+                    "env rootfs NOT fully removed (%s): entries "
+                    "survived cleanup — remove it manually to reclaim "
+                    "the space",
+                    env_build.rootfs,
+                )
 
         # cargo-fuzz corpus convention: without an operator corpus,
         # the crate's own fuzz/corpus/<target>/ seeds win over the

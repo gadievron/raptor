@@ -88,6 +88,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import shutil
 import stat as _stat
 import threading
 from pathlib import Path
@@ -439,9 +440,59 @@ def open_hardened_append(path: str | Path, *, mode: int = 0o644) -> int:
     return fd
 
 
+def rmtree_hardened(path: str | Path) -> bool:
+    """Remove a directory tree a sandboxed child may have griefed;
+    return whether the path is actually gone.
+
+    A compromised child can leave a mode-0 subdirectory inside its
+    write grant, which makes a plain ``rmtree(ignore_errors=True)``
+    fail silently — the scratch dirs then accumulate without bound
+    (or, worse, the caller logs "removed" over a tree that is still
+    there). Restore traversal permissions top-down first (chmod each
+    subdirectory before descending into it), then remove.
+
+    Symlink discipline: ``os.walk(followlinks=False)`` still LISTS a
+    symlink-to-directory in dirnames (it just doesn't descend), and
+    ``os.chmod`` follows symlinks (Linux has no lchmod) — chmoding it
+    would apply 0o700 to the symlink's TARGET, which a hostile child
+    can point anywhere outside its grant. Skip links: rmtree removes
+    the link itself without descending, and a link needs no
+    permission restore anyway. A symlink ROOT is refused outright
+    (``False``, no side effects) BEFORE any chmod or walk:
+    ``os.walk`` always follows its ``top`` argument — ``followlinks``
+    only governs entries found during the descent — so walking a
+    link root would chmod the link TARGET's subtree.
+
+    Never raises. Returns ``True`` when nothing remains at *path*
+    (including the was-never-there case) so callers can log honestly.
+    """
+    p = str(path)
+    if os.path.islink(p):
+        return False
+    try:
+        os.chmod(p, 0o700)
+    except OSError:
+        pass
+    try:
+        for root, dirs, _files in os.walk(p):
+            for name in dirs:
+                entry = os.path.join(root, name)
+                if os.path.islink(entry):
+                    continue
+                try:
+                    os.chmod(entry, 0o700)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    shutil.rmtree(p, ignore_errors=True)
+    return not os.path.lexists(p)
+
+
 __all__ = [
     "open_exclusive_artifact",
     "open_hardened_append",
+    "rmtree_hardened",
     "write_bytes_atomically",
     "write_new_bytes",
     "write_new_text",

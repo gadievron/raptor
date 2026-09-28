@@ -43,11 +43,12 @@ import logging
 import os
 import secrets
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from core.atomic_fs import rmtree_hardened
 
 from . import ResolverResult, _check_tool, _run
 
@@ -454,8 +455,10 @@ class PipResolver:
             # already discarded the venv and this removes the empty
             # mkdtemp reservation; in shared-/tmp lanes it removes the
             # populated venv (mkdtemp names never dedupe across calls
-            # the way the old derived name did).
-            shutil.rmtree(venv_dir, ignore_errors=True)
+            # the way the old derived name did). rmtree_hardened: the
+            # venv ran attacker-influenced installs — a griefed
+            # mode-0 subdirectory defeats plain rmtree.
+            rmtree_hardened(venv_dir)
 
         return self._parse_batch_output(
             proc.stdout, proc.stderr, proc.returncode, manifests,
@@ -650,8 +653,9 @@ class PipResolver:
             # Remove the host-side mkdtemp reservation (and, in
             # shared-/tmp sandbox lanes, the populated venv itself) —
             # unpredictable names never dedupe across calls.
+            # rmtree_hardened: see the batch dry_run finally above.
             if venv_dir is not None:
-                shutil.rmtree(venv_dir, ignore_errors=True)
+                rmtree_hardened(venv_dir)
         raw = (proc.stdout + "\n" + proc.stderr).strip()
         if proc.returncode != 0:
             return ResolverResult(

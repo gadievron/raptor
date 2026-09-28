@@ -39,7 +39,6 @@ import multiprocessing as mp
 import os
 import pickle
 import selectors
-import shutil
 import struct
 import tempfile
 import time
@@ -353,35 +352,13 @@ def _apply_symex_sandbox(private_tmp: str | None = None) -> None:
 def _remove_private_tmp(path: str) -> None:
     """Remove the child's private temp dir after the child exits.
 
-    Defeats permission griefing: a compromised child can leave a
-    mode-0 subdirectory inside its grant, which makes a plain
-    ``rmtree(ignore_errors=True)`` fail silently — the per-call dirs
-    would then accumulate without bound. Restore traversal
-    permissions top-down first (the walk chmods each subdirectory
-    before descending into it), then remove. Never raises.
+    Defeats permission griefing (a compromised child leaving a mode-0
+    subdirectory inside its grant defeats a plain
+    ``rmtree(ignore_errors=True)``): delegates to the shared
+    chmod-walk-then-rmtree helper. Never raises.
     """
-    import os
-    try:
-        for root, dirs, _files in os.walk(path):
-            for name in dirs:
-                entry = os.path.join(root, name)
-                # os.walk(followlinks=False) still LISTS a symlink-to-
-                # directory in dirnames (it just doesn't descend), and
-                # os.chmod follows symlinks (Linux has no lchmod) — so
-                # chmoding it would apply 0700 to the symlink's TARGET,
-                # which a hostile child can point anywhere OUTSIDE its
-                # private tmp. Skip links: rmtree below removes the
-                # link itself without descending, and a link needs no
-                # permission restore anyway.
-                if os.path.islink(entry):
-                    continue
-                try:
-                    os.chmod(entry, 0o700)
-                except OSError:
-                    pass
-    except OSError:
-        pass
-    shutil.rmtree(path, ignore_errors=True)
+    from core.atomic_fs import rmtree_hardened
+    rmtree_hardened(path)
 
 
 def _child_entry(

@@ -611,3 +611,102 @@ class TestOpenHardenedAppend:
                 open_hardened_append(target)
         finally:
             os.close(reader)
+
+
+class TestRmtreeHardened:
+    """Griefing-resistant tree removal (the chmod-walk-then-rmtree
+    shape shared by symex private tmps, fuzzing env rootfs, and sca
+    venv scratch)."""
+
+    def test_removes_griefed_mode0_subtree(self, tmp_path):
+        from core.atomic_fs import rmtree_hardened
+
+        victim = tmp_path / "scratch"
+        nested = victim / "a" / "b"
+        nested.mkdir(parents=True)
+        (nested / "f").write_text("x")
+        (victim / "a").chmod(0o000)
+        try:
+            assert rmtree_hardened(victim) is True
+            assert not victim.exists()
+        finally:
+            if victim.exists():  # restore so pytest tmp cleanup works
+                (victim / "a").chmod(0o700)
+
+    def test_removes_mode0_root(self, tmp_path):
+        from core.atomic_fs import rmtree_hardened
+
+        victim = tmp_path / "scratch"
+        victim.mkdir()
+        (victim / "f").write_text("x")
+        victim.chmod(0o000)
+        try:
+            assert rmtree_hardened(victim) is True
+            assert not victim.exists()
+        finally:
+            if victim.exists():
+                victim.chmod(0o700)
+
+    def test_never_chmods_through_symlink(self, tmp_path):
+        from core.atomic_fs import rmtree_hardened
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        outside.chmod(0o755)
+        victim = tmp_path / "scratch"
+        victim.mkdir()
+        (victim / "evil").symlink_to(outside)
+        assert rmtree_hardened(victim) is True
+        assert not victim.exists()
+        assert outside.exists()
+        assert (outside.stat().st_mode & 0o777) == 0o755
+
+    def test_symlink_root_not_followed(self, tmp_path):
+        from core.atomic_fs import rmtree_hardened
+
+        # The target carries a restrictive-mode SUBDIRECTORY: os.walk
+        # always follows its `top` argument (followlinks only governs
+        # the descent), so an unrefused link root would restore 0o700
+        # onto the target's subtree through the link before rmtree
+        # ever refused it. The refusal must come first — no chmod, no
+        # walk, no side effects.
+        target = tmp_path / "real"
+        sub = target / "locked"
+        sub.mkdir(parents=True)
+        (sub / "keep").write_text("x")
+        sub.chmod(0o555)
+        target.chmod(0o755)
+        link = tmp_path / "scratch"
+        link.symlink_to(target)
+        try:
+            result = rmtree_hardened(link)
+            assert result is False
+            assert link.is_symlink()
+            assert (sub / "keep").read_text() == "x"
+            assert (target.stat().st_mode & 0o777) == 0o755
+            assert (sub.stat().st_mode & 0o777) == 0o555
+        finally:
+            sub.chmod(0o700)  # so pytest tmp cleanup works
+
+    def test_missing_path_reports_gone(self, tmp_path):
+        from core.atomic_fs import rmtree_hardened
+
+        assert rmtree_hardened(tmp_path / "never-there") is True
+
+    def test_reports_false_when_removal_blocked(self, tmp_path):
+        import os
+
+        from core.atomic_fs import rmtree_hardened
+
+        if os.geteuid() == 0:
+            pytest.skip("root bypasses permission checks")
+        parent = tmp_path / "jail"
+        victim = parent / "scratch"
+        victim.mkdir(parents=True)
+        (victim / "f").write_text("x")
+        parent.chmod(0o500)  # no write: victim cannot be unlinked
+        try:
+            assert rmtree_hardened(victim) is False
+            assert victim.exists()
+        finally:
+            parent.chmod(0o700)

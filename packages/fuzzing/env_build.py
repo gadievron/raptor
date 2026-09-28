@@ -26,6 +26,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.atomic_fs import rmtree_hardened
 from core.json import save_json
 from core.logging import get_logger
 
@@ -199,7 +200,10 @@ def env_build_for_fuzzing(
         broken = _broken_afl_version(rootfs_dir / afl_fuzz.lstrip("/"))
         if broken:
             version, defect = broken
-            shutil.rmtree(rootfs_dir, ignore_errors=True)
+            # rmtree_hardened: the rootfs was populated by an
+            # image-controlled build — a mode-0 subdirectory left
+            # behind defeats plain rmtree(ignore_errors=True).
+            rmtree_hardened(rootfs_dir)
             logger.error(
                 "REFUSING to fuzz with afl-fuzz %s: %s. Use the pinned "
                 "AFL_BUILD_IMAGE (or any build without this defect).",
@@ -210,7 +214,7 @@ def env_build_for_fuzzing(
                 command=command, command_source=source, guessed=guessed,
                 base_image=AFL_BUILD_IMAGE)
     if not afl_fuzz:
-        shutil.rmtree(rootfs_dir, ignore_errors=True)
+        rmtree_hardened(rootfs_dir)
         return FuzzEnvBuild(
             ok=False, reason="no_afl_fuzz_in_image",
             detail=f"{AFL_BUILD_IMAGE} rootfs lacks afl-fuzz",
