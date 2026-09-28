@@ -76,6 +76,23 @@ def _sole_client(dispatcher) -> httpx.Client:
     return shards.clients[0]
 
 
+def _wait_for_release(shards, deadline_s: float = 5.0) -> tuple[int, ...]:
+    """The shard hold is returned in the relay's ``finally`` —
+    reached AFTER ``_send_simple`` already put the Content-Length-
+    delimited error response on the wire, so a caller that just read
+    the response races the handler thread's ``shards.release``. Poll
+    for the release (every hold returned) under a bounded deadline
+    instead of sampling once; on expiry return the still-held
+    snapshot so the caller's assertion fails with the real value."""
+    deadline = time.monotonic() + deadline_s
+    while time.monotonic() < deadline:
+        holds = shards.in_flight
+        if not any(holds):
+            return holds
+        time.sleep(0.01)
+    return shards.in_flight
+
+
 class TestClientCache:
 
     def test_same_env_reuses_pool(self, dispatcher):
@@ -198,7 +215,7 @@ class TestForwardingUsesPool:
             )
             assert resp.status_code == 502  # dial fails; relay exits
         shards = dispatcher._upstream_client_shards()
-        assert shards.in_flight == (0,)
+        assert _wait_for_release(shards) == (0,)
 
     def test_per_request_timeout_still_env_driven(self, dispatcher, monkeypatch):
         """The pooled client must not freeze the timeout at
