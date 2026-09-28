@@ -369,6 +369,49 @@ class TestStubShape:
         assert journal_mac.entry_provenance(stub) == "tampered"
         assert stub.integrity == row["integrity"]
 
+    def test_newer_writer_row_slims_to_unstamped_not_tampered(
+        self, tmp_path: Path,
+    ) -> None:
+        """Version-skew shape: a newer writer stamped an additive
+        field this checkout's dataclass does not know. The token
+        VERIFIES over the row as written, so keeping it verbatim on
+        the blanked stub would demote a verified row to tampered —
+        the stub must land honest-unstamped instead, with the
+        original token preserved in the sidecar record."""
+        append_entry(tmp_path, _entry(1))
+        journal = tmp_path / JOURNAL_FILENAME
+        row = json.loads(journal.read_bytes())
+        row.pop(journal_mac.TOKEN_KEY, None)
+        row["future_field"] = [1, 2, 3]
+        token = journal_mac.mint_row(row)
+        assert token, "test key must be usable"
+        row[journal_mac.TOKEN_KEY] = token
+        journal.write_bytes((json.dumps(row) + "\n").encode())
+
+        compact_journal(tmp_path, slim_clean=True)
+
+        (stub,) = _stubs(tmp_path)
+        assert stub.body_offload
+        assert stub.integrity is None
+        assert journal_mac.entry_provenance(stub) == "unstamped"
+        # The raw stub line carries no inline token either — and the
+        # sidecar record keeps the verifiable original for
+        # reconstruction.
+        (raw_line,) = [
+            json.loads(ln) for ln in
+            journal.read_text(encoding="utf-8").splitlines() if ln
+        ]
+        assert journal_mac.TOKEN_KEY not in raw_line
+        records = [
+            json.loads(ln) for ln in
+            (tmp_path / SIDECAR_FILENAME)
+            .read_text(encoding="utf-8").splitlines() if ln
+        ]
+        assert records[-1]["integrity_orig"] == token
+        rebuilt = reconstruct_row(raw_line, records[-1])
+        assert journal_mac.verify_row(
+            rebuilt, rebuilt[journal_mac.TOKEN_KEY])
+
 
 class TestSidecarIntegrity:
     def test_resolve_and_hydrate_roundtrip(self, tmp_path: Path) -> None:

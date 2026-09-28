@@ -670,11 +670,19 @@ def _slim_stub_line(
       the row round-trips the reader's dataclass exactly → the stub
       is rebuilt through the dataclass and freshly stamped (the
       pointer, content hash included, is covered by the new token);
-    * anything else (unstamped, tampered, another install's key, a
-      newer writer's additive fields) → the stub is the raw dict
-      minus the offloaded values with the ORIGINAL token kept
-      verbatim, so the row keeps exactly the demoted tier a reader
-      already gave it — the compactor never mints over content it
+    * the token verifies over the row as written but the row does
+      NOT round-trip this reader's dataclass (a newer writer's
+      additive fields) → the stub is the raw dict minus the
+      offloaded values with the token STRIPPED: blanking the
+      offloaded values changes the stamped content, so a verbatim
+      token would demote a VERIFIED row to tampered — the sidecar
+      record's ``integrity_orig`` keeps the verifiable original for
+      reconstruction;
+    * anything else (unstamped, tampered, another install's key) →
+      the stub is the raw dict minus the offloaded values with the
+      ORIGINAL token kept verbatim, so the row keeps exactly the
+      demoted tier a reader already gave it — the compactor never
+      mints over content it
       could not verify.
     """
     from dataclasses import replace
@@ -749,6 +757,17 @@ def _slim_stub_line(
         for f in extracted:
             row2[f] = "" if f == "body" else []
         row2["body_offload"] = pointer
+        if verified:
+            # The token verified over the row AS WRITTEN, but the
+            # row does not round-trip this reader's dataclass (a
+            # newer writer's additive fields). Blanking the offloaded
+            # values changes the stamped content, so keeping the
+            # token verbatim would manufacture a token-over-altered-
+            # content stub every fold reads as TAMPERED — a VERIFIED
+            # row demoted by its own compaction. Strip it: the stub
+            # lands honest-unstamped, and ``integrity_orig`` above
+            # preserves the verifiable original.
+            row2.pop(journal_mac.TOKEN_KEY, None)
 
     return (
         json.dumps(row2, separators=(",", ":"), allow_nan=False) + "\n"
