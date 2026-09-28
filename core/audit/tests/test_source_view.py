@@ -1094,3 +1094,125 @@ class TestCppRawDelimQuote:
         view = sanitized_view(src, "a.cpp")
         assert "f(y);" in view
         assert "run(c);" in view
+
+
+class TestKotlinView:
+    def test_kt_extension_routes_c_family(self):
+        view = sanitized_view("val x = 1 // system( here\nrun()\n", "A.kt")
+        assert "system" not in view
+        assert "run()" in view
+
+    def test_kts_extension_routes_too(self):
+        view = sanitized_view("/* system( */\ngo()\n", "build.kts")
+        assert "system" not in view
+        assert "go()" in view
+
+    def test_nested_block_comment_fully_blanked(self):
+        # Kotlin block comments NEST: closing at the first `*/` left
+        # interior comment prose visible as code (the over-inclusion
+        # direction — a comment mentioning a sink minted a presence
+        # receipt).
+        src = "a()\n/* outer /* inner */ check_perm() */\nrun()\n"
+        view = sanitized_view(src, "A.kt")
+        assert "check_perm" not in view
+        assert "run()" in view
+        assert view.count("\n") == src.count("\n")
+
+    def test_raw_string_backslash_is_data(self):
+        # Kotlin `"""` raw strings have NO escape processing — a
+        # trailing backslash before the closer must not push the
+        # close past the real terminator (the swallow direction).
+        view = sanitized_view('val x = """abc\\"""\nrunIt()\n', "A.kt")
+        assert "runIt()" in view
+        assert "abc" not in view
+
+    def test_raw_string_content_blanked_across_lines(self):
+        src = 'val q = """\nselect exec( from t\n"""\ngo()\n'
+        view = sanitized_view(src, "A.kt")
+        assert "exec" not in view
+        assert "go()" in view
+        assert view.count("\n") == src.count("\n")
+
+
+class TestSwiftView:
+    def test_swift_extension_routes_c_family(self):
+        view = sanitized_view("let x = 1 // system( here\nrun()\n", "m.swift")
+        assert "system" not in view
+        assert "run()" in view
+
+    def test_nested_block_comment_fully_blanked(self):
+        view = sanitized_view(
+            "f()\n/* a /* b */ system( */\ngo()\n", "m.swift")
+        assert "system" not in view
+        assert "go()" in view
+
+    def test_multiline_string_escapes_honoured(self):
+        # Swift multi-line strings DO process escapes (the Java text
+        # block model): an escaped interior quote never closes early.
+        src = 'let s = """\nhas \\" quote system( here\n"""\ngo()\n'
+        view = sanitized_view(src, "m.swift")
+        assert "system" not in view
+        assert "go()" in view
+
+
+class TestCSharpVerbatimStrings:
+    def test_trailing_backslash_does_not_desync(self):
+        # `@"dir\"` — verbatim strings give the backslash NO escape
+        # meaning; the default escape model read `\"` as an escaped
+        # quote and blanked live code after the string (the swallow
+        # direction).
+        view = sanitized_view(r'var p = @"C:\dir\"; Check(a);', "P.cs")
+        assert "Check(a);" in view
+        assert "dir" not in view
+
+    def test_doubled_quote_is_data(self):
+        view = sanitized_view(
+            'var s = @"say ""hi"" exec( more"; Run();', "P.cs")
+        assert "exec" not in view
+        assert "Run();" in view
+
+    def test_doubled_quote_then_newline_stays_string(self):
+        # A doubled `""` is DATA, not a terminator — and the failure
+        # mode only surfaces across a NEWLINE (verbatim strings span
+        # newlines; plain strings do not, so an early close desyncs
+        # the lexer at the line break and string payload surfaces as
+        # visible code: an attacker-plantable abort idiom inside a
+        # catch block would then mint a fail-closed receipt).
+        src = ('var s = @"a""\n'
+               'Environment.Exit(1); // still string data\n'
+               '";\n'
+               'Run();')
+        view = sanitized_view(src, "P.cs")
+        assert "Environment.Exit" not in view, (
+            "verbatim-string payload leaked as visible code")
+        assert "Run();" in view, "real code after the string was lost"
+
+    def test_interpolated_verbatim_prefixes(self):
+        for src, marker in (
+            (r'var s = $@"path\"; Go();', "Go();"),
+            (r'var s = @$"path\"; Go2();', "Go2();"),
+        ):
+            view = sanitized_view(src, "P.cs")
+            assert marker in view
+            assert "path" not in view
+
+    def test_verbatim_beats_triple_quote_arm(self):
+        # `@"""x"` is a verbatim string whose content starts with a
+        # doubled quote — not a raw-string opener.
+        view = sanitized_view('var s = @"""x"; After();', "P.cs")
+        assert "After();" in view
+        assert "x" not in view.replace("After();", "")
+
+    def test_verbatim_multiline_content_blanked(self):
+        src = 'var s = @"multi\nline exec( data";\nDone();\n'
+        view = sanitized_view(src, "P.cs")
+        assert "exec" not in view
+        assert "Done();" in view
+        assert view.count("\n") == src.count("\n")
+
+    def test_raw_string_literal_backslash_is_data(self):
+        # C# raw string literals (`"""…"""`) have no escapes either.
+        view = sanitized_view(
+            'var s = """raw exec( body""";\nNext();\n', "P.cs")
+        assert "exec" not in view
+        assert "Next();" in view

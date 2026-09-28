@@ -57,9 +57,9 @@ PATTERN_TYPES = frozenset({
 _C_EXTS = (
     ".c", ".h", ".cc", ".cpp", ".cxx",
     ".go", ".rs",
-    ".java", ".kt",
+    ".java", ".kt", ".kts",
     ".js", ".mjs", ".cjs", ".ts", ".tsx",
-    ".cs",
+    ".cs", ".swift",
 )
 
 

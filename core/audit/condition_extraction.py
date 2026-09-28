@@ -192,6 +192,8 @@ _EXT_TO_LANG: dict[str, str] = {
     ".php": "php",
     ".lua": "lua",
     ".cs": "csharp",
+    ".kt": "kotlin", ".kts": "kotlin",
+    ".swift": "swift",
 }
 
 
@@ -222,6 +224,11 @@ _CONDITIONAL_TYPES: dict[str, tuple[str, ...]] = {
     "php": ("if_statement", "switch_statement", "match_expression"),
     "lua": ("if_statement",),
     "csharp": ("if_statement", "switch_statement", "switch_expression"),
+    "kotlin": ("if_expression", "when_expression"),
+    "swift": (
+        "if_statement", "switch_statement", "guard_statement",
+        "ternary_expression",
+    ),
 }
 
 # Node types that represent function definitions (for enclosing function lookup)
@@ -239,6 +246,8 @@ _FUNCTION_TYPES: dict[str, tuple[str, ...]] = {
     "php": ("method_declaration", "function_definition"),
     "lua": ("function_declaration", "function_definition"),
     "csharp": ("method_declaration", "constructor_declaration"),
+    "kotlin": ("function_declaration", "secondary_constructor"),
+    "swift": ("function_declaration", "init_declaration"),
 }
 
 # Node types representing early exit (return/goto/break/throw)
@@ -256,6 +265,12 @@ _EXIT_TYPES: dict[str, tuple[str, ...]] = {
     "php": ("return_statement", "throw_expression"),
     "lua": ("return_statement",),
     "csharp": ("return_statement", "throw_statement", "break_statement"),
+    # Kotlin has no dedicated break/continue node in this grammar
+    # (they parse as bare identifiers), so only the typed exits are
+    # named. Swift folds return/throw/break/continue into one
+    # control_transfer_statement node.
+    "kotlin": ("return_expression", "throw_expression"),
+    "swift": ("control_transfer_statement",),
 }
 
 
@@ -296,6 +311,10 @@ def _get_function_name(func_node, _lang: str, source_bytes: bytes) -> str:
             return _node_text(child, source_bytes)
         if child.type == "name":
             return _node_text(child, source_bytes)
+        if child.type == "simple_identifier":
+            # Swift: function_declaration names its identifier child
+            # simple_identifier (no `name` field in this grammar).
+            return _node_text(child, source_bytes)
         if child.type in ("function_declarator", "declarator"):
             # C/C++: dig into declarator for the identifier
             for sub in child.children:
@@ -323,7 +342,7 @@ def _extract_condition_text(cond_node, lang: str, source_bytes: bytes) -> str:
     For match: extracts the subject.
     """
     if cond_node.type in ("if_statement", "if_expression", "if_let_expression",
-                          "if", "unless"):
+                          "if", "unless", "guard_statement"):
         # Look for 'condition', 'parenthesized_expression', or first expression child
         for child in cond_node.children:
             if child.type == "condition_clause":
@@ -349,9 +368,12 @@ def _extract_condition_text(cond_node, lang: str, source_bytes: bytes) -> str:
                 text = _node_text(child, source_bytes).strip()
                 if text:
                     return text
-        # Fallback: first meaningful child after keyword
+        # Fallback: first meaningful child after keyword ("guard" and
+        # "else" are keyword children too — Swift guard_statement puts
+        # both around the bare condition expression)
         for child in cond_node.children:
-            if child.type not in ("if", "elif", "switch", "match", "(", ")", "{", "}"):
+            if child.type not in ("if", "elif", "switch", "match",
+                                  "guard", "else", "(", ")", "{", "}"):
                 text = _node_text(child, source_bytes).strip()
                 if text and len(text) < 200:
                     return text
@@ -415,6 +437,15 @@ def _determine_polarity(
     must not share a polarity — adequacy discards "excluded" but counts
     "negated_guard" with its negated sense.
     """
+    # Swift guard: control continues past the statement only when the
+    # condition HOLDS (the compiler requires the else body to exit
+    # scope), so the condition itself protects everything after the
+    # guard; only the else body runs with the condition FALSE.
+    if cond_node.type == "guard_statement":
+        if sink_line - 1 > cond_node.end_point[0]:
+            return "required"
+        return "excluded"
+
     # Find consequence and alternative blocks
     consequence = None
     alternative = None
@@ -422,7 +453,8 @@ def _determine_polarity(
     children = list(cond_node.children)
     for i, child in enumerate(children):
         if child.type in ("block", "compound_statement", "consequence",
-                          "statement_block", "then", "body"):
+                          "statement_block", "then", "body",
+                          "statements"):
             if consequence is None:
                 consequence = child
             elif alternative is None:
@@ -474,7 +506,8 @@ def _determine_polarity(
         is_exit_only = False
         if consequence.type in exit_types:
             is_exit_only = True
-        elif consequence.type in ("block", "compound_statement", "statement_block"):
+        elif consequence.type in ("block", "compound_statement",
+                                  "statement_block", "statements"):
             blk_children = [c for c in consequence.children
                             if c.type not in ("{", "}", "comment")]
             if blk_children and blk_children[-1].type in exit_types:
@@ -566,7 +599,8 @@ def _find_preceding_guard_clauses(
     cond_types = _CONDITIONAL_TYPES.get(lang, ())
     exit_types = _EXIT_TYPES.get(lang, ())
     block_types = ("block", "compound_statement", "statement_block",
-                   "statement_list", "function_body", "source_file")
+                   "statement_list", "function_body", "source_file",
+                   "statements")
 
     # Find the enclosing block that contains the sink as a direct child
     enclosing_block = target_node.parent
@@ -598,18 +632,24 @@ def _find_preceding_guard_clauses(
         # Must be a conditional
         if child.type not in cond_types:
             continue
-        # Must be an if_statement type (not switch/match)
-        if "if" not in child.type and "unless" not in child.type:
+        # Must be an if_statement type (not switch/match) or a Swift
+        # guard_statement (whose else body the compiler REQUIRES to
+        # exit scope — every guard is a guard clause by grammar).
+        is_guard_stmt = child.type == "guard_statement"
+        if ("if" not in child.type and "unless" not in child.type
+                and not is_guard_stmt):
             continue
         # Check if its body is exit-only (guard clause pattern)
-        if _is_exit_only_body(child, lang, exit_types):
+        if is_guard_stmt or _is_exit_only_body(child, lang, exit_types):
             cond_text = _extract_condition_text(child, lang, source_bytes)
             if cond_text:
-                # unless guard: body fires when condition is FALSE,
-                # so sink after it requires condition TRUE = "required";
-                # if-guard: the NEGATED condition protects the sink.
+                # unless/guard: the exit body fires when the condition
+                # is FALSE, so a sink after it requires the condition
+                # TRUE = "required"; if-guard: the NEGATED condition
+                # protects the sink.
                 polarity = (
-                    "required" if child.type == "unless"
+                    "required"
+                    if child.type == "unless" or is_guard_stmt
                     else "negated_guard"
                 )
                 results.append((child, cond_text, polarity))
@@ -625,7 +665,8 @@ def _is_exit_only_body(if_node, _lang: str, exit_types: tuple) -> bool:
       - C/Go: if_statement → [if, (cond), compound_statement{return}]
       - C: if_statement → [if, (cond), return_statement] (no braces)
     """
-    block_types = ("block", "compound_statement", "statement_block")
+    block_types = ("block", "compound_statement", "statement_block",
+                   "statements")
 
     # Strategy: find the first block-type child (the body).
     # If none, look for a bare exit statement as a direct child.
@@ -703,6 +744,8 @@ _CALL_TYPES: dict[str, tuple[str, ...]] = {
             "scoped_call_expression"),
     "lua": ("function_call",),
     "csharp": ("invocation_expression",),
+    "kotlin": ("call_expression",),
+    "swift": ("call_expression",),
 }
 
 

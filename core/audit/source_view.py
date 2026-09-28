@@ -18,11 +18,20 @@ strings (``R"delim(…)delim"``), Rust raw strings (``r#"…"#``), Java
 text blocks (triple-quote delimited), Go raw backticks, JS/TS template literals
 (``${…}`` interpolation stays visible — it is executable code, and
 blanking it forged absence receipts), PHP ``#`` comments and
-heredoc/nowdoc bodies, and Lua ``--``/``--[[…]]`` comments with
-``[[…]]`` long strings.  All the multi-line forms carry state across
-lines, so a comment marker inside string data can never open or
-close comment state (the swallow direction), and an escaped quote
-can never close a literal early.
+heredoc/nowdoc bodies, Kotlin/Swift triple-quote multi-line strings
+and NESTING block comments, C# verbatim strings (``@"…"`` — ``""``
+doubling, no backslash escapes) and raw string literals, and Lua
+``--``/``--[[…]]`` comments with ``[[…]]`` long strings.  All the
+multi-line forms carry state across lines, so a comment marker
+inside string data can never open or close comment state (the
+swallow direction), and an escaped quote can never close a literal
+early.  Documented residuals for the newer C-family members, all
+known-direction: Kotlin ``${…}`` / Swift ``\\(…)`` / C# ``$"{…}"``
+string interpolation blanks as data (an interpolated call is hidden
+from blanked-view consumers — same class as the perl variable-
+interpolation residual), Swift extended delimiters (``#"…"#``) and
+C# raw strings fenced with more than three quotes take the plain
+string/text-block paths.
 
 ``keep_strings=True`` selects the comments-only view: string
 literals stay verbatim while comments still blank.  Consumers whose
@@ -107,6 +116,9 @@ class _CFamilySpec:
     cpp_raw_strings: bool = False
     rust_raw_strings: bool = False
     java_text_blocks: bool = False
+    text_block_escapes: bool = True
+    nested_block_comments: bool = False
+    csharp_verbatim_strings: bool = False
     php_heredocs: bool = False
     php_interpolation: bool = False
     regex_literals: bool = False
@@ -133,6 +145,31 @@ _C_FAMILY_SPECS = {
         hash_line_comments=True, php_heredocs=True,
         php_interpolation=True,
     ),
+    # Kotlin: `"""` raw strings are multi-line with NO escape
+    # processing (a backslash is data — honouring escapes let a
+    # trailing `\"""` push the close past the real terminator, the
+    # swallow direction), and block comments NEST per the language
+    # spec (closing at the first `*/` left interior comment prose
+    # visible as code — the over-inclusion direction).
+    "kotlin": _CFamilySpec(
+        java_text_blocks=True, text_block_escapes=False,
+        nested_block_comments=True,
+    ),
+    # Swift: multi-line string literals are `"""` delimited WITH
+    # escape processing (the Java model), and block comments nest.
+    "swift": _CFamilySpec(
+        java_text_blocks=True, nested_block_comments=True,
+    ),
+    # C#: `"""` raw string literals have no escape processing, and
+    # verbatim strings (`@"…"`, `$@"…"`/`@$"…"`) are multi-line, use
+    # `""` doubling for a literal quote, and give the backslash NO
+    # escape meaning — the default escape model read `@"dir\"` as an
+    # escaped quote and desynced string state from there (the swallow
+    # direction). Block comments do not nest.
+    "csharp": _CFamilySpec(
+        java_text_blocks=True, text_block_escapes=False,
+        csharp_verbatim_strings=True,
+    ),
 }
 
 _C_FAMILY_EXT_LANG = {
@@ -142,6 +179,8 @@ _C_FAMILY_EXT_LANG = {
     ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript",
     ".cjs": "javascript", ".ts": "typescript", ".tsx": "typescript",
     ".php": "php", ".phtml": "php",
+    ".kt": "kotlin", ".kts": "kotlin", ".swift": "swift",
+    ".cs": "csharp",
 }
 
 
@@ -304,8 +343,11 @@ def _strip_c_family(
             _blank(chars, i, end)
             i = end
         elif ch == "/" and nxt == "*":
-            close = source.find("*/", i + 2)
-            end = n if close < 0 else close + 2
+            if spec.nested_block_comments:
+                end = _nested_block_comment_end(source, i)
+            else:
+                close = source.find("*/", i + 2)
+                end = n if close < 0 else close + 2
             _blank(chars, i, end)
             i = end
         elif (spec.regex_literals and ch == "/"
@@ -334,9 +376,20 @@ def _strip_c_family(
                 interpolation=spec.php_interpolation,
             )
             i = nxt_i if nxt_i is not None else i + 3
+        elif (spec.csharp_verbatim_strings and ch == '"'
+                and _csharp_verbatim_prefix(source, i)):
+            # @"…" / $@"…" / @$"…" — multi-line, `""` doubling, no
+            # backslash escapes (see the csharp spec comment).
+            # Judged BEFORE the triple-quote arm: `@"""x"` is a
+            # verbatim string whose content begins with a doubled
+            # quote, not a raw-string opener.
+            end = _csharp_verbatim_end(source, i)
+            blank_str(i + 1, max(i + 1, end - 1))
+            i = end
         elif (spec.java_text_blocks and ch == '"'
                 and source.startswith('"""', i)):
-            end = _java_text_block_end(source, i)
+            end = _java_text_block_end(
+                source, i, escapes=spec.text_block_escapes)
             blank_str(i + 3, max(i + 3, end - 3))
             i = end
         elif (spec.cpp_raw_strings and ch == '"'
@@ -1255,17 +1308,81 @@ def _rust_raw_hashes(source: str, i: int) -> int | None:
     return hashes
 
 
-def _java_text_block_end(source: str, i: int) -> int:
-    """Index just past the ``\\\"\\\"\\\"`` closing the Java text
-    block opened at ``i`` (escapes honoured), or end of input."""
+def _java_text_block_end(
+    source: str, i: int, *, escapes: bool = True,
+) -> int:
+    """Index just past the ``\\\"\\\"\\\"`` closing the triple-quoted
+    block opened at ``i``, or end of input. ``escapes`` selects the
+    language's escape model: Java text blocks honour backslash
+    escapes; Kotlin raw strings and C# raw string literals give the
+    backslash no meaning (honouring escapes there let a trailing
+    ``\\\"\\\"\\\"`` push the close past the real terminator — the
+    swallow direction)."""
     n = len(source)
     j = i + 3
     while j < n:
-        if source[j] == "\\":
+        if escapes and source[j] == "\\":
             j += 2
             continue
         if source.startswith('"""', j):
             return j + 3
+        j += 1
+    return n
+
+
+def _nested_block_comment_end(source: str, i: int) -> int:
+    """Index just past the ``*/`` closing the NESTING block comment
+    opened at ``i`` (Kotlin/Swift grammar: interior ``/*`` opens a
+    nested level and its ``*/`` closes only that level), or end of
+    input when unterminated (comment-to-EOF, matching both
+    compilers)."""
+    n = len(source)
+    depth = 1
+    j = i + 2
+    while j < n:
+        if source.startswith("/*", j):
+            depth += 1
+            j += 2
+        elif source.startswith("*/", j):
+            depth -= 1
+            j += 2
+            if depth == 0:
+                return j
+        else:
+            j += 1
+    return n
+
+
+def _csharp_verbatim_prefix(source: str, i: int) -> bool:
+    """True when the quote at ``i`` opens a C# verbatim string —
+    directly preceded by ``@`` (optionally interleaved with the
+    interpolation sigil: ``$@"`` / ``@$"``). ``@`` cannot appear
+    inside an identifier, so no longer-identifier tail check is
+    needed."""
+    j = i - 1
+    saw_at = False
+    while j >= 0 and source[j] in "@$":
+        if source[j] == "@":
+            saw_at = True
+        j -= 1
+        if i - j > 2:
+            break
+    return saw_at
+
+
+def _csharp_verbatim_end(source: str, i: int) -> int:
+    """Index just past the quote closing the C# verbatim string
+    opened at ``i``: multi-line, ``\"\"`` doubling spells a literal
+    quote, backslash has no escape meaning. Unterminated runs to end
+    of input."""
+    n = len(source)
+    j = i + 1
+    while j < n:
+        if source[j] == '"':
+            if j + 1 < n and source[j + 1] == '"':
+                j += 2
+                continue
+            return j + 1
         j += 1
     return n
 

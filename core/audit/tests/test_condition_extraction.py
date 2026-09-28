@@ -59,6 +59,16 @@ class TestLanguageForFile:
     def test_php(self):
         assert language_for_file("src/Controller.php") == "php"
 
+    def test_kotlin(self):
+        assert language_for_file("src/Main.kt") == "kotlin"
+        assert language_for_file("build.gradle.kts") == "kotlin"
+
+    def test_swift(self):
+        assert language_for_file("Sources/App/main.swift") == "swift"
+
+    def test_csharp(self):
+        assert language_for_file("src/Program.cs") == "csharp"
+
     def test_unknown(self):
         assert language_for_file("Makefile") is None
         assert language_for_file("data.json") is None
@@ -305,6 +315,173 @@ func runCmd(cmd string, authorized bool) error {
         sg = guards[0]
         assert sg.sink_function == "runCmd"
         assert len(sg.guards) >= 1
+
+
+@requires_ts("kotlin")
+class TestKotlinExtraction:
+    """Kotlin guard extraction via tree-sitter layer.
+
+    Fixtures deliberately hardcode target-like names (execCommand) —
+    they simulate targets, so the vocabulary policy does not apply.
+    """
+
+    SINKS = frozenset({"execCommand"})
+
+    def test_unconditional_sink(self):
+        source = """\
+class Runner {
+    fun run(cmd: String) {
+        execCommand(cmd)
+    }
+}
+"""
+        guards = extract_sink_guards(
+            source, "Runner.kt", sink_names=self.SINKS)
+        assert len(guards) == 1
+        sg = guards[0]
+        assert sg.unconditional is True
+        assert sg.sink_function == "run"
+
+    def test_if_guard(self):
+        source = """\
+class Runner {
+    fun run(cmd: String, user: User) {
+        if (user.isAuthenticated) {
+            execCommand(cmd)
+        }
+    }
+}
+"""
+        guards = extract_sink_guards(
+            source, "Runner.kt", sink_names=self.SINKS)
+        assert len(guards) == 1
+        sg = guards[0]
+        assert sg.unconditional is False
+        assert len(sg.guards) == 1
+        g = sg.guards[0]
+        assert "isAuthenticated" in g.text
+        assert g.polarity == "required"
+        assert g.category == "auth"
+
+    def test_early_return_guard(self):
+        source = """\
+class Runner {
+    fun run(cmd: String, user: User) {
+        if (!user.isAdmin) return
+        execCommand(cmd)
+    }
+}
+"""
+        guards = extract_sink_guards(
+            source, "Runner.kt", sink_names=self.SINKS)
+        assert len(guards) == 1
+        sg = guards[0]
+        assert len(sg.guards) == 1
+        assert sg.guards[0].polarity == "negated_guard"
+
+
+@requires_ts("swift")
+class TestSwiftExtraction:
+    """Swift guard extraction via tree-sitter layer.
+
+    Fixtures deliberately hardcode target-like names (execCommand) —
+    they simulate targets, so the vocabulary policy does not apply.
+    """
+
+    SINKS = frozenset({"execCommand"})
+
+    def test_unconditional_sink(self):
+        source = """\
+class Runner {
+    func run(cmd: String) {
+        execCommand(cmd)
+    }
+}
+"""
+        guards = extract_sink_guards(
+            source, "Runner.swift", sink_names=self.SINKS)
+        assert len(guards) == 1
+        sg = guards[0]
+        assert sg.unconditional is True
+        assert sg.sink_function == "run"
+
+    def test_if_guard(self):
+        source = """\
+class Runner {
+    func run(cmd: String, user: User) {
+        if user.isAuthenticated {
+            execCommand(cmd)
+        }
+    }
+}
+"""
+        guards = extract_sink_guards(
+            source, "Runner.swift", sink_names=self.SINKS)
+        assert len(guards) == 1
+        sg = guards[0]
+        assert sg.unconditional is False
+        assert len(sg.guards) == 1
+        g = sg.guards[0]
+        assert "isAuthenticated" in g.text
+        assert g.polarity == "required"
+        assert g.category == "auth"
+
+    def test_guard_statement_protects_following_sink(self):
+        # `guard cond else { exit }` — control continues only when the
+        # condition HOLDS, so the condition itself (not its negation)
+        # protects the sink after the guard.
+        source = """\
+class Runner {
+    func run(cmd: String, user: User) {
+        guard user.isAuthenticated else { return }
+        execCommand(cmd)
+    }
+}
+"""
+        guards = extract_sink_guards(
+            source, "Runner.swift", sink_names=self.SINKS)
+        assert len(guards) == 1
+        sg = guards[0]
+        assert len(sg.guards) == 1
+        g = sg.guards[0]
+        assert "isAuthenticated" in g.text
+        assert g.polarity == "required"
+
+    def test_sink_inside_guard_else_is_excluded(self):
+        source = """\
+func f(x: Int, user: User) {
+    guard user.isAuthenticated else {
+        execCommand("cleanup")
+        return
+    }
+}
+"""
+        guards = extract_sink_guards(
+            source, "f.swift", sink_names=self.SINKS)
+        assert len(guards) == 1
+        sg = guards[0]
+        assert len(sg.guards) == 1
+        assert sg.guards[0].polarity == "excluded"
+
+    def test_sink_on_guard_end_line_is_excluded(self):
+        # A sink on the guard statement's OWN closing line sits in
+        # the else body — it runs exactly when the condition FAILS,
+        # so its polarity is `excluded`. Claiming `required` would
+        # credit an auth condition with protecting the failure-branch
+        # sink.
+        source = """\
+class Runner {
+    func run(cmd: String, user: User) {
+        guard user.isAuthenticated else { execCommand(cmd); return }
+    }
+}
+"""
+        guards = extract_sink_guards(
+            source, "Runner.swift", sink_names=self.SINKS)
+        assert len(guards) == 1
+        sg = guards[0]
+        assert len(sg.guards) == 1
+        assert sg.guards[0].polarity == "excluded"
 
 
 # ---------------------------------------------------------------------------
