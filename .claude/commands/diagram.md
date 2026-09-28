@@ -5,7 +5,9 @@ dispatch: libexec/raptor-render-diagrams <out-dir> [args]
 
 # /diagram
 
-Turn `/understand` and `/validate` JSON outputs into Mermaid diagrams. Instead of reading raw JSON, you get a visual map of entry points, trust boundaries, sinks, attack trees, and attack paths.
+Turn `/understand` and `/validate` JSON outputs into Mermaid diagrams. Instead of reading raw JSON, you get a visual map of entry points, trust boundaries, sinks, attack trees, and attack paths. Consider this very much a WIP, but it can be of use to those wanting to see relationships and flows better.
+
+Diagrams are auto-generated at the end of `/validate` and `/understand --map`/`--trace`; use `/diagram <dir>` to re-render after manual edits to the JSON outputs.
 
 ## Usage
 

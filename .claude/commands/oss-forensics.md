@@ -65,9 +65,18 @@ Key outputs:
 
 **Analysis Pipeline** (spawn sequentially):
 - `oss-hypothesis-former-agent`: Forms hypothesis, can request more evidence
-- `oss-evidence-verifier-agent`: Verifies evidence against original sources
+- `oss-evidence-verifier-agent`: Verifies evidence against original sources via `store.verify_all()`
 - `oss-hypothesis-checker-agent`: Validates claims against verified evidence
 - `oss-report-generator-agent`: Produces final forensic report
+
+## Skills
+
+(in `.claude/skills/oss-forensics/`):
+- `orchestration` - Main orchestrator (coordinates the investigator agents)
+- `github-archive` - GH Archive BigQuery queries
+- `github-evidence-kit` - Evidence collection, storage, verification
+- `github-commit-recovery` - Recover deleted commits
+- `github-wayback-recovery` - Recover content from Wayback Machine
 
 ## Examples
 

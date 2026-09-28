@@ -62,4 +62,12 @@ This command invokes the `crash-analysis-agent` (no network tools) which orchest
 
 The analysis follows a hypothesis-validation loop - if the checker rejects a hypothesis, the analyzer is re-invoked with feedback until a valid root cause is confirmed.
 
+## Skills
+
+(in `.claude/skills/crash-analysis/`):
+- `rr-debugger` - Deterministic record-replay debugging
+- `function-tracing` - Function instrumentation with -finstrument-functions
+- `gcov-coverage` - Code coverage collection
+- `line-execution-checker` - Fast line execution queries
+
 ---

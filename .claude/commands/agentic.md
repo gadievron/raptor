@@ -33,13 +33,16 @@ and do NOT hand-summarise the flags from this doc when `--help` is requested.
 
 ## Optional enrichment flags
 
-By default, `/agentic` scans and analyses findings in isolation. Three optional flags add richer context and coverage for more thorough results. They are opt-in because they add time and cost, but if you are doing a proper security review rather than a quick scan, they are well worth it.
+By default, `/agentic` scans and analyses findings in isolation. Six optional flags adjust the run: `--understand`, `--validate`, `--gap-audit`, and `--openant` add richer context and coverage (opt-in because they add time and cost, but well worth it for a proper security review rather than a quick scan), while `--sequential` bypasses the parallel orchestration and `--openant-only` replaces the pattern scanners outright rather than enriching them.
 
 | Flag | What it does |
 |------|-------------|
 | `--understand` | Runs `/understand --map` as a proper sibling run, producing `context-map.json` (entry points, trust boundaries, sinks). Two consumers: (a) the agentic checklist gets priority markers, so per-finding analysis prompts say things like *"Architectural role: entry_point"* — improving in-run analysis; (b) any `/validate` against the same target — including this run's `--validate` post-pass — picks the map up via the bridge. |
 | `--validate` | After the agentic pipeline completes, runs `/validate` on findings flagged `is_exploitable: true` or `confidence: "high"`. Creates a sibling validate run; the bridge auto-discovers any `/understand` sibling produced by `--understand`. |
 | `--gap-audit` | After analysis, runs the `/audit` orchestrator over the coverage residual — functions no phase reviewed — as a sibling audit run. Inherits the run's checklist, every CodeQL database the scan phase built (dispatch routes per file language), binaries, and models (2+ models enable the adversarial reviewer); the run's own per-finding analyses ride in as prior claims, never as coverage. Uses the configured external LLM (`--model` or API key); with only Claude Code available it runs on the claudecode transport, gated on the repo trust check. With `--validate`, audit findings join the same validate pass and the validation verdicts feed back into the audit journal; without it, the run ends with a loud UNVALIDATED warning. NOTE: `--audit` (no prefix) is the sandbox audit mode — a different feature. |
+| `--openant` | Adds an OpenAnt semantic scan phase (AST + LLM per-function analysis) alongside Semgrep/CodeQL — findings are deduplicated and enter the same validation pipeline. |
+| `--openant-only` | Replaces the pattern scanners entirely with OpenAnt (cannot be combined with `--codeql`/`--codeql-only` — refused at parse time). |
+| `--sequential` | Bypasses parallel orchestration (scan → dedup → prep → analysis run sequentially in one process). |
 
 `--project <name>` pins the run to a named project regardless of the session's binding or the last-activated default (`--project -` = explicitly projectless; invalid names are a hard error, never a fallback).
 
