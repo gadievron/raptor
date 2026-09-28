@@ -972,3 +972,107 @@ class TestDomainSliceHashField:
         loaded = load_entries(tmp_path)
         assert loaded[0].domain_slice_hash == "00" * 32
         assert entry_provenance(loaded[0]) == ROW_TAMPERED
+
+
+class TestReemissionPruneElection:
+    """The load prune must keep, per identity, the row the
+    latest-wins consumers elect (strict ``ts >``, first-in-file on a
+    tie) — never the last row by file position. A position-based
+    election can change which row wins a key's latest election when
+    re-emission ``ts`` order disagrees with append order (journals
+    merged from concurrent segments, cross-shard concatenation)."""
+
+    @staticmethod
+    def _twin(ts: str, run_id: str) -> ReviewJournalEntry:
+        e = _entry(1)
+        e.ts = ts
+        e.run_id = run_id  # non-identity marker: shows which twin survived
+        e.reused = True
+        e.reused_from_run = "run-0"
+        e.cost_usd = 0.0
+        return e
+
+    @staticmethod
+    def _consumer_latest(
+        entries: list[ReviewJournalEntry],
+    ) -> dict[str, ReviewJournalEntry]:
+        # Mirror of the latest_entries election (strict ``ts >``,
+        # first-in-file tie) — the oracle the prune must not disturb.
+        best: dict[str, ReviewJournalEntry] = {}
+        for entry in entries:
+            existing = best.get(entry.key)
+            if existing is None or entry.ts > existing.ts:
+                best[entry.key] = entry
+        return best
+
+    def test_ts_straddle_prune_is_invisible_to_latest_election(
+        self,
+    ) -> None:
+        # The twins straddle a live row's ts, max-ts twin FIRST in
+        # file: a position election drops it and hands the key's
+        # latest election to the live row in the middle.
+        high = self._twin("2099-01-01T00:00:00.000005+00:00", "seg-2")
+        low = self._twin("2099-01-01T00:00:00.000001+00:00", "seg-1")
+        live = _entry(1)
+        live.ts = "2099-01-01T00:00:00.000003+00:00"
+        live.run_id = "live"
+        live.cost_usd = 0.10
+        entries = [high, live, low]
+        sizes = [100, 100, 100]
+        before = self._consumer_latest(entries)[high.key]
+        freed_rows, freed_bytes = journal_mod._prune_reemission_rows(
+            entries, sizes)
+        assert (freed_rows, freed_bytes) == (1, 100)
+        after = self._consumer_latest(entries)[high.key]
+        assert before.run_id == after.run_id == "seg-2"
+        assert [e.run_id for e in entries] == ["seg-2", "live"]
+        assert sizes == [100, 100]
+
+    def test_ts_tie_keeps_first_in_file(self) -> None:
+        ts = "2099-01-01T00:00:00.000001+00:00"
+        entries = [self._twin(ts, "seg-1"), self._twin(ts, "seg-2")]
+        sizes = [10, 20]
+        freed_rows, freed_bytes = journal_mod._prune_reemission_rows(
+            entries, sizes)
+        assert (freed_rows, freed_bytes) == (1, 20)
+        assert [e.run_id for e in entries] == ["seg-1"]
+
+    def test_append_order_control_keeps_newest(self) -> None:
+        # Normal single-writer shape: ts increases with position, so
+        # last-in-file IS the max-ts row — behavior unchanged.
+        entries = [
+            self._twin(
+                f"2099-01-01T00:00:00.00000{i}+00:00", f"seg-{i}",
+            )
+            for i in range(1, 4)
+        ]
+        sizes = [10, 20, 30]
+        freed_rows, freed_bytes = journal_mod._prune_reemission_rows(
+            entries, sizes)
+        assert (freed_rows, freed_bytes) == (2, 30)
+        assert [e.run_id for e in entries] == ["seg-3"]
+
+    def test_loader_prune_elects_by_ts(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        # File-level wiring through the real budget prune: with
+        # out-of-order ts the survivor is the max-ts twin, not the
+        # last-appended one.
+        append_entry(
+            tmp_path,
+            self._twin("2099-01-01T00:00:00.000009+00:00", "seg-9"),
+        )
+        for i in range(1, 7):
+            append_entry(
+                tmp_path,
+                self._twin(
+                    f"2099-01-01T00:00:00.00000{i}+00:00", f"seg-{i}",
+                ),
+            )
+        size = (tmp_path / "review-journal.jsonl").stat().st_size
+        monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_BYTES", size // 2)
+        loaded = journal_mod.load_entries_checked(tmp_path)
+        assert loaded.complete
+        assert loaded.pruned > 0
+        reused = [e for e in loaded.entries if e.reused]
+        assert [e.run_id for e in reused] == ["seg-9"]

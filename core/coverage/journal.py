@@ -2400,28 +2400,39 @@ def _prune_reemission_rows(
     """Drop all-but-the-NEWEST duplicate re-emission row per identity,
     in place, preserving order. Returns ``(rows_freed, bytes_freed)``.
 
-    "Newest" here is last-in-file BY POSITION (``ts`` is not
-    consulted); the latest-wins consumers themselves compare strict
-    ``entry.ts > existing.ts``, first-in-file winning a ``ts`` tie.
-    The rows this prune folds are zero-cost reused re-emissions
-    whose identity pins every verdict-relevant field (key, site,
-    source hash, verdict, model, strategy hash), so surviving twins
-    differ only in non-identity fields.
+    "Newest" is the row the latest-wins consumers elect: strict
+    ``entry.ts > winner.ts``, first-in-file winning a ``ts`` tie
+    (matching :func:`latest_entries` and ``merge_into_index``).
+    Election is by ``ts``, never file position, so the prune is
+    invisible to the per-key latest election even when re-emission
+    ``ts`` order disagrees with append order (journals merged from
+    concurrent segments, foreign appenders): keeping a lower-``ts``
+    twin while dropping the group's max-``ts`` one could otherwise
+    hand the key's election to a DIFFERENT, non-pruned row sitting
+    between the twins' timestamps. The rows this prune folds are
+    zero-cost reused re-emissions whose identity pins every
+    verdict-relevant field (key, site, source hash, verdict, model,
+    strategy hash), so surviving twins differ only in non-identity
+    fields.
     """
-    seen: set[tuple] = set()
+    idents = [_reemission_identity(entry) for entry in entries]
+    winner: dict[tuple, tuple[str, int]] = {}
+    for idx, ident in enumerate(idents):
+        if ident is None:
+            continue
+        prev = winner.get(ident)
+        if prev is None or entries[idx].ts > prev[0]:
+            winner[ident] = (entries[idx].ts, idx)
+    winning = {idx for _ts, idx in winner.values()}
     keep = [True] * len(entries)
     freed_rows = 0
     freed_bytes = 0
-    for idx in range(len(entries) - 1, -1, -1):
-        ident = _reemission_identity(entries[idx])
-        if ident is None:
+    for idx, ident in enumerate(idents):
+        if ident is None or idx in winning:
             continue
-        if ident in seen:
-            keep[idx] = False
-            freed_rows += 1
-            freed_bytes += sizes[idx]
-        else:
-            seen.add(ident)
+        keep[idx] = False
+        freed_rows += 1
+        freed_bytes += sizes[idx]
     if freed_rows:
         entries[:] = [e for e, k in zip(entries, keep) if k]
         sizes[:] = [s for s, k in zip(sizes, keep) if k]
