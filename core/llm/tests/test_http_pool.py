@@ -418,6 +418,25 @@ class TestClientShards:
         finally:
             shards.close()
 
+    def test_failed_build_closes_the_already_built_shards(self):
+        # Construction is exception-safe: when building shard k+1
+        # raises, the k clients already built are closed before the
+        # error propagates — after __init__ fails nothing owns them,
+        # so an unclosed client would leak its pool to GC.
+        built = []
+
+        def build():
+            if len(built) == 2:
+                raise RuntimeError("third shard build broke")
+            client = httpx.Client(timeout=5.0)
+            built.append(client)
+            return client
+
+        with pytest.raises(RuntimeError, match="third shard build broke"):
+            http_pool.ClientShards(build, 3)
+        assert len(built) == 2
+        assert all(client.is_closed for client in built)
+
     def test_least_loaded_selection(self):
         shards = self._shards(2)
         try:
@@ -1251,6 +1270,194 @@ class TestSdkClientKeepalive:
         assert any(
             "no TCP keepalive on this leg" in r.getMessage()
             for r in caplog.records
+        )
+
+    @pytest.mark.parametrize("count", ["1", "3"])
+    def test_degrade_closes_built_proxy_transports(
+        self, monkeypatch, caplog, count,
+    ):
+        # Failure AFTER the proxy mounts were built (the direct
+        # transport is constructed last): every already-built proxy
+        # transport must be closed on the way to the plain fallback,
+        # not abandoned to GC still holding its connection pool. Both
+        # shapes: unsharded mounts hold the proxy transport directly;
+        # sharded mounts hold it inside a _ShardedTransport.
+        monkeypatch.setenv("RAPTOR_HTTP2_SHARDS", count)
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        built = []
+        real_proxy = http_pool._ProxyKeepaliveTransport
+
+        class Recording(real_proxy):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.test_closed = False
+                built.append(self)
+
+            def close(self):
+                self.test_closed = True
+                super().close()
+
+        monkeypatch.setattr(http_pool, "_ProxyKeepaliveTransport", Recording)
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("direct transport broke")
+
+        monkeypatch.setattr(
+            http_pool, "_keepalive_direct_transport", boom,
+        )
+        with caplog.at_level("WARNING", logger="core.llm.http_pool"):
+            with http_pool.sdk_http_client(30) as client:
+                assert client._transport._pool._socket_options is None
+        assert len(built) == int(count)
+        assert all(transport.test_closed for transport in built)
+        # The degrade stays visible — cleanup must not eat the warning.
+        assert any(
+            "no TCP keepalive on this leg" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_failed_mount_build_closes_the_earlier_mounts(
+        self, monkeypatch, caplog,
+    ):
+        # Failure partway through the mount map itself: the mounts
+        # built before the failing one are closed, not abandoned.
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:59998")
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        built = []
+        real_proxy = http_pool._ProxyKeepaliveTransport
+
+        class Recording(real_proxy):
+            def __init__(self, *args, **kwargs):
+                if built:
+                    raise RuntimeError("second mount build broke")
+                super().__init__(*args, **kwargs)
+                self.test_closed = False
+                built.append(self)
+
+            def close(self):
+                self.test_closed = True
+                super().close()
+
+        monkeypatch.setattr(http_pool, "_ProxyKeepaliveTransport", Recording)
+        with caplog.at_level("WARNING", logger="core.llm.http_pool"):
+            with http_pool.sdk_http_client(30):
+                pass
+        assert len(built) == 1
+        assert built[0].test_closed
+
+    def test_failed_client_construction_closes_transport_and_mounts(
+        self, monkeypatch, caplog,
+    ):
+        # Failure at the last step — httpx.Client itself — with the
+        # direct transport AND the mount map fully built: both are
+        # closed before the degrade fallback.
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        built = []
+        real_proxy = http_pool._ProxyKeepaliveTransport
+
+        class Recording(real_proxy):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.test_closed = False
+                built.append(self)
+
+            def close(self):
+                self.test_closed = True
+                super().close()
+
+        monkeypatch.setattr(http_pool, "_ProxyKeepaliveTransport", Recording)
+        directs = []
+        real_direct = http_pool._keepalive_direct_transport
+
+        def recording_direct(*args, **kwargs):
+            transport = real_direct(*args, **kwargs)
+            transport.test_closed = False
+            orig_close = transport.close
+
+            def marked_close():
+                transport.test_closed = True
+                orig_close()
+
+            transport.close = marked_close
+            directs.append(transport)
+            return transport
+
+        monkeypatch.setattr(
+            http_pool, "_keepalive_direct_transport", recording_direct,
+        )
+        real_client = httpx.Client
+
+        class Picky(real_client):
+            def __init__(self, *args, **kwargs):
+                if kwargs.get("transport") is not None:
+                    raise RuntimeError("client construction broke")
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(httpx, "Client", Picky)
+        with caplog.at_level("WARNING", logger="core.llm.http_pool"):
+            with http_pool.sdk_http_client(30):
+                pass
+        assert len(built) == 1 and built[0].test_closed
+        assert len(directs) == 1 and directs[0].test_closed
+
+    def test_forwarding_client_construction_failure_closes_parts(
+        self, monkeypatch, caplog,
+    ):
+        # forwarding_client carries its own copy of the constructor
+        # cleanup — pin it separately from the sdk_http_client twin:
+        # the client constructor fails with the direct transport and
+        # a proxy mount fully built; both close, degrade still fires.
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:59999")
+        built = []
+        real_proxy = http_pool._ProxyKeepaliveTransport
+
+        class Recording(real_proxy):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.test_closed = False
+                built.append(self)
+
+            def close(self):
+                self.test_closed = True
+                super().close()
+
+        monkeypatch.setattr(http_pool, "_ProxyKeepaliveTransport", Recording)
+        directs = []
+        real_direct = http_pool._keepalive_direct_transport
+
+        def recording_direct(*args, **kwargs):
+            transport = real_direct(*args, **kwargs)
+            transport.test_closed = False
+            orig_close = transport.close
+
+            def marked_close():
+                transport.test_closed = True
+                orig_close()
+
+            transport.close = marked_close
+            directs.append(transport)
+            return transport
+
+        monkeypatch.setattr(
+            http_pool, "_keepalive_direct_transport", recording_direct,
+        )
+        real_client = httpx.Client
+
+        class Picky(real_client):
+            def __init__(self, *args, **kwargs):
+                if kwargs.get("transport") is not None:
+                    raise RuntimeError("client construction broke")
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(httpx, "Client", Picky)
+        with caplog.at_level("WARNING", logger="core.llm.http_pool"):
+            with http_pool.forwarding_client(timeout=30):
+                pass
+        assert len(built) == 1 and built[0].test_closed
+        assert len(directs) == 1 and directs[0].test_closed
+        assert any(
+            "no TCP keepalive on this leg" in record.getMessage()
+            for record in caplog.records
         )
 
     def test_degraded_pinned_client_still_ignores_proxy_env(

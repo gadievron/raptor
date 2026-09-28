@@ -90,7 +90,7 @@ import os
 import socket
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any, Generic, Protocol, TypeVar
 
 import httpx
@@ -415,6 +415,21 @@ class _SupportsClose(Protocol):
 _PooledT = TypeVar("_PooledT", bound=_SupportsClose)
 
 
+def _close_abandoned(units: Iterable[_SupportsClose | None]) -> None:
+    """Best-effort close for units a construction path built before
+    failing partway: the original exception is already propagating,
+    so per-unit close errors are logged and swallowed — cleanup must
+    never mask the failure that triggered it. ``None`` entries (e.g.
+    NO_PROXY mount carve-outs) are skipped."""
+    for unit in units:
+        if unit is None:
+            continue
+        try:
+            unit.close()
+        except Exception:  # noqa: BLE001 — close the rest regardless
+            logger.debug("abandoned unit close failed", exc_info=True)
+
+
 class _Shard(Generic[_PooledT]):
     """One slot's live client plus its lifecycle state (all fields
     guarded by the owning :class:`ClientShards` lock)."""
@@ -479,9 +494,17 @@ class ClientShards(Generic[_PooledT]):
         self._count = count
         self._failure_threshold = failure_threshold
         self._max_age_s = max_age_s
-        self._slots: list[_Shard[_PooledT] | None] = [
-            _Shard(build()) for _ in range(count)
-        ]
+        slots: list[_Shard[_PooledT] | None] = []
+        try:
+            for _ in range(count):
+                slots.append(_Shard(build()))
+        except BaseException:
+            # Building shard k+1 failed: close the k already built —
+            # once __init__ raises nothing owns them, and an unclosed
+            # client leaks its connection pool to GC.
+            _close_abandoned(shard.client for shard in slots if shard)
+            raise
+        self._slots: list[_Shard[_PooledT] | None] = slots
         self._lock = threading.Lock()
         self._closed = False
         self._retiring = False
@@ -776,9 +799,16 @@ def sdk_http_client(
         )
         if parts is not None:
             transport, mounts = parts
-            return httpx.Client(
-                transport=transport, mounts=mounts, **client_kwargs,
-            )
+            try:
+                return httpx.Client(
+                    transport=transport, mounts=mounts, **client_kwargs,
+                )
+            except BaseException:
+                # The client constructor failed with the transport
+                # and mounts fully built — close them before the
+                # degrade below rebuilds plain.
+                _close_abandoned((transport, *mounts.values()))
+                raise
     except Exception:  # noqa: BLE001 — degrade, never break the SDK path
         logger.warning(
             "keepalive-aware SDK client construction failed — building "
@@ -945,24 +975,33 @@ def _env_proxy_mounts(
             )
         return None
     mounts: dict[str, httpx.BaseTransport | None] = {}
-    for pattern, proxy_url in get_environment_proxies().items():
-        if proxy_url is None:
-            # NO_PROXY carve-out: route to the client's default
-            # transport, which carries the options for direct dials.
-            mounts[pattern] = None
-        else:
+    try:
+        for pattern, proxy_url in get_environment_proxies().items():
+            if proxy_url is None:
+                # NO_PROXY carve-out: route to the client's default
+                # transport, which carries the options for direct
+                # dials.
+                mounts[pattern] = None
+            else:
 
-            def build_proxy(url: str = proxy_url) -> httpx.BaseTransport:
-                return _ProxyKeepaliveTransport(
-                    proxy=url,
-                    socket_options=options,
-                    http2=http2,
-                    limits=limits,
+                def build_proxy(
+                    url: str = proxy_url,
+                ) -> httpx.BaseTransport:
+                    return _ProxyKeepaliveTransport(
+                        proxy=url,
+                        socket_options=options,
+                        http2=http2,
+                        limits=limits,
+                    )
+
+                mounts[pattern] = (
+                    wrap(build_proxy) if wrap is not None else build_proxy()
                 )
-
-            mounts[pattern] = (
-                wrap(build_proxy) if wrap is not None else build_proxy()
-            )
+    except BaseException:
+        # A mount build failed partway: close the mounts already
+        # built before the error propagates to the degrade path.
+        _close_abandoned(mounts.values())
+        raise
     return mounts
 
 
@@ -1029,10 +1068,15 @@ def _keepalive_transport_and_mounts(
             options, http2=http2, limits=limits, trust_env=trust_env,
         )
 
-    return (
-        wrap(build_direct) if wrap is not None else build_direct(),
-        mounts,
-    )
+    try:
+        transport = wrap(build_direct) if wrap is not None else build_direct()
+    except BaseException:
+        # The direct transport is built LAST: on failure the whole
+        # mount map is already built — close it before the error
+        # propagates to the degrade path.
+        _close_abandoned(mounts.values())
+        raise
+    return transport, mounts
 
 
 def forwarding_client(
@@ -1061,9 +1105,16 @@ def forwarding_client(
         parts = _keepalive_transport_and_mounts(http2=http2, limits=limits)
         if parts is not None:
             transport, mounts = parts
-            return httpx.Client(
-                transport=transport, mounts=mounts, **client_kwargs,
-            )
+            try:
+                return httpx.Client(
+                    transport=transport, mounts=mounts, **client_kwargs,
+                )
+            except BaseException:
+                # The client constructor failed with the transport
+                # and mounts fully built — close them before the
+                # degrade below rebuilds plain.
+                _close_abandoned((transport, *mounts.values()))
+                raise
     except Exception:  # noqa: BLE001 — degrade, never break the relay path
         logger.warning(
             "keepalive-aware client construction failed — building a "
