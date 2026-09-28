@@ -891,9 +891,18 @@ def _caller_guard_walk(
     )
     by_key: dict[tuple[str, str], list[str]] = {}
     by_name: dict[str, tuple[str, list[str]]] = {}
+    # Names defined in more than one file: the name-only fallbacks
+    # below refuse these — a same-named function from an unrelated
+    # file could donate (or hide) a guard, and a wrongly donated
+    # guard suppresses the SMT escalation.
+    ambiguous_names: set[str] = set()
     for fp, fn, _start, body in _function_spans(source_texts):
         by_key.setdefault((fp, fn), body)
-        by_name.setdefault(fn, (fp, body))
+        prior = by_name.get(fn)
+        if prior is None:
+            by_name[fn] = (fp, body)
+        elif prior[0] != fp:
+            ambiguous_names.add(fn)
 
     def _seed_candidates() -> list[Any]:
         """Canonicalise the deviant's enclosing function to its
@@ -922,7 +931,17 @@ def _caller_guard_walk(
                     exact.append(node)
                 else:
                     by_name_only.append(node)
-        return exact or by_name_only
+        if exact:
+            return exact
+        # Name-only fallback: legitimate only for path-representation
+        # drift between the inventory and the deviation record. With
+        # several same-named definitions in other files the identity
+        # is ambiguous — walking the wrong function's callers could
+        # surface a guard that suppresses SMT escalation, so return
+        # nothing and let the verdict fall through to SMT.
+        if len(by_name_only) == 1:
+            return by_name_only
+        return []
 
     seeds = _seed_candidates()
     if not seeds:
@@ -951,16 +970,26 @@ def _caller_guard_walk(
                     visited.add(key)
                     searched.append(caller.name)
                     body = by_key.get(key)
-                    if body is None:
+                    if body is None and caller.name not in ambiguous_names:
+                        # Same path-drift rationale as the seed
+                        # fallback: a unique name is trustworthy, an
+                        # ambiguous one is not.
                         named = by_name.get(caller.name)
                         body = named[1] if named else None
                     next_frontier.append(caller)
                     if body is None:
                         continue
+                    # A missed call-site locator (multi-line call,
+                    # aliased callee, dispatch table) must fail toward
+                    # SMT escalation: default 0 scans nothing. The old
+                    # whole-body default let ANY guard-shaped line —
+                    # even one after the call, or guarding an
+                    # unrelated variable — count as "guarding" and
+                    # suppress the escalation.
                     call_idx = next(
                         (i for i, ln in enumerate(body)
                          if call_re.search(ln)),
-                        len(body),
+                        0,
                     )
                     for i in range(call_idx):
                         if guard_re.search(body[i]):

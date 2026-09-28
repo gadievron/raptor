@@ -318,6 +318,175 @@ class TestGuardElsewhereWalk:
         assert res.rule_id == "consistency:guard-presence-majority"
 
 
+_SPLIT_CALL_LATE_GUARD_CALLER = textwrap.dedent("""\
+    int outer_late_guard(pkt_t *p, int idx) {
+        int v = sum_dev
+            (p, idx);
+        if (idx < p->count)
+            return v;
+        return 0;
+    }
+""")
+
+
+@requires_ts('c')
+class TestCallSiteLocatorMiss:
+    """A missed call-site locator must fail toward SMT escalation,
+    never toward whole-body guard scanning."""
+
+    def test_missed_locator_does_not_count_late_guard(self):
+        # The call is split across lines (``sum_dev`` and ``(`` on
+        # different lines), so the single-line call-site regex misses.
+        # The only guard-shaped line sits AFTER the call — it guards
+        # nothing on the path to the deviant, so the deviation must
+        # stay confirmed (genuinely-unguarded), not be suppressed as
+        # guard-elsewhere.
+        texts, inventory = _caller_inventory(
+            _SPLIT_CALL_LATE_GUARD_CALLER, _bounds_fixture(deviant=True),
+        )
+        devs = [
+            d for d in detect_guard_presence_deviations(texts)
+            if d.enclosing_function == "sum_dev"
+        ]
+        assert devs and devs[0].param_derived
+        res = guard_presence_verdict(
+            devs[0],
+            inventory=inventory,
+            source_texts=texts,
+            smt_check=lambda d: None,
+        )
+        walk = res.corroboration[0]["caller_guard_walk"]
+        # Pin that the walk really reached the caller — otherwise a
+        # call-graph miss would make this test pass vacuously.
+        assert walk["searched"] == ["outer_late_guard"]
+        assert walk["guarding"] == []
+        assert res.outcome == "confirmed"
+
+
+def _walk_fixture_inventory(texts: dict[str, str]):
+    """Inventory records (items + call_graph) for every file in
+    *texts* — the direct-call analog of ``_caller_inventory``."""
+    import re
+
+    from core.inventory.call_graph import extract_call_graph_c
+
+    files = []
+    for path, text in texts.items():
+        items = [
+            {"kind": "function", "name": m.group(1), "line_start": i + 1}
+            for i, line in enumerate(text.splitlines())
+            for m in [re.match(r"int (\w+)\(", line)]
+            if m
+        ]
+        files.append({
+            "path": path,
+            "language": "c",
+            "items": items,
+            "call_graph": extract_call_graph_c(text).to_dict(),
+        })
+    return {"files": files}
+
+
+_DEV_SRC = textwrap.dedent("""\
+    int sum_dev(pkt_t *p, int i) {
+        return p->data[i];
+    }
+""")
+
+_GUARDED_G_CALLER = textwrap.dedent("""\
+    int outer_g(pkt_t *p, int idx) {
+        if (idx < p->count)
+            return sum_dev(p, idx);
+        return 0;
+    }
+""")
+
+_OTHER_G = textwrap.dedent("""\
+    int outer_g(pkt_t *p, int idx) {
+        return idx;
+    }
+""")
+
+
+@requires_ts('c')
+class TestNameOnlyFallbacks:
+    """The name-only seed/body fallbacks accept only an unambiguous
+    single candidate — a same-named function from an unrelated file
+    must never donate (or hide) a guard."""
+
+    def _deviation(self, file: str = "src/pkt.c"):
+        from types import SimpleNamespace
+
+        from core.audit.consistency_dimensions import GUARD_KIND_BOUNDS
+        return SimpleNamespace(
+            kind=GUARD_KIND_BOUNDS,
+            enclosing_function="sum_dev",
+            file=file,
+        )
+
+    def test_ambiguous_seed_fallback_refused(self):
+        from core.audit.consistency_verify import _caller_guard_walk
+
+        texts = {
+            "src/one.c": _DEV_SRC + "\n" + _GUARDED_G_CALLER,
+            "src/two.c": _DEV_SRC,
+        }
+        inventory = _walk_fixture_inventory(texts)
+        walk = _caller_guard_walk(
+            self._deviation(file="src/absent.c"), inventory, texts,
+        )
+        assert walk["status"] == "unavailable"
+        assert walk["guarding"] == []
+
+    def test_unique_seed_fallback_still_matches(self):
+        from core.audit.consistency_verify import _caller_guard_walk
+
+        texts = {"src/one.c": _DEV_SRC + "\n" + _GUARDED_G_CALLER}
+        inventory = _walk_fixture_inventory(texts)
+        walk = _caller_guard_walk(
+            self._deviation(file="src/absent.c"), inventory, texts,
+        )
+        assert walk["status"] == "searched"
+        assert walk["guarding"] and walk["guarding"][0]["caller"] == "outer_g"
+
+    def test_ambiguous_body_fallback_refused(self):
+        from core.audit.consistency_verify import _caller_guard_walk
+
+        # The caller's own file is absent from source_texts (path
+        # drift); TWO other files define ``outer_g``. Falling back to
+        # either body would scan a different file's same-named
+        # function — the first one carries a guard the real caller
+        # does not have.
+        inv_texts = {"src/pkt.c": _DEV_SRC + "\n" + _GUARDED_G_CALLER}
+        inventory = _walk_fixture_inventory(inv_texts)
+        walk_texts = {
+            "src/x.c": _GUARDED_G_CALLER,
+            "src/y.c": _OTHER_G,
+            "src/pkt2.c": _DEV_SRC,
+        }
+        walk = _caller_guard_walk(
+            self._deviation(), inventory, walk_texts,
+        )
+        assert walk["status"] == "searched"
+        assert walk["searched"] == ["outer_g"]
+        assert walk["guarding"] == []
+
+    def test_unique_body_fallback_still_matches(self):
+        from core.audit.consistency_verify import _caller_guard_walk
+
+        inv_texts = {"src/pkt.c": _DEV_SRC + "\n" + _GUARDED_G_CALLER}
+        inventory = _walk_fixture_inventory(inv_texts)
+        walk_texts = {
+            "src/x.c": _GUARDED_G_CALLER,
+            "src/pkt2.c": _DEV_SRC,
+        }
+        walk = _caller_guard_walk(
+            self._deviation(), inventory, walk_texts,
+        )
+        assert walk["status"] == "searched"
+        assert walk["guarding"] and walk["guarding"][0]["caller"] == "outer_g"
+
+
 @requires_ts('c')
 class TestPrepassIntegration:
     def test_detection_grade_lead_and_telemetry(self, tmp_path):
