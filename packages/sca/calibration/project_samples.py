@@ -63,8 +63,12 @@ from core.json import load_json, save_json
 
 from ..kinds import VULNERABLE_DEPENDENCY
 
-# findings.json artifacts are RAPTOR-written run output — the
-# findings-class budget.
+# Self-produced findings budget for the findings.json the in-process
+# run_sca just wrote (rationale in kinds.py).
+from ..kinds import MAX_SELF_FINDINGS_BYTES as _MAX_SELF_FINDINGS_BYTES
+
+# Steered-path budget for the repo-resident sanitised sample files
+# (small by construction — sanitised rows only; rationale in kinds.py).
 _MAX_FINDINGS_BYTES = 64 * 1024 * 1024
 
 logger = logging.getLogger(__name__)
@@ -905,9 +909,10 @@ def _collect_one(
             )
 
         try:
+            # Self-produced budget: run_sca above just wrote it.
             findings = load_json(
                 sca_out / "findings.json", strict=True,
-                max_bytes=_MAX_FINDINGS_BYTES,
+                max_bytes=_MAX_SELF_FINDINGS_BYTES,
             )
             if findings is None:
                 # Strict load_json soft-returns None for a MISSING

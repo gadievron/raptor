@@ -50,8 +50,12 @@ from .versions import compare as version_compare
 
 from core.json import load_json, save_json
 
-# findings.json artifacts are RAPTOR-written run output — the
-# findings-class budget.
+# Self-produced findings budget for the findings.json the in-process
+# analyse prepass (run_sca) just wrote (rationale in kinds.py).
+from .kinds import MAX_SELF_FINDINGS_BYTES as _MAX_SELF_FINDINGS_BYTES
+
+# Steered-path findings budget for the operator-supplied --findings
+# read (rationale in kinds.py).
 _MAX_FINDINGS_BYTES = 64 * 1024 * 1024
 
 if TYPE_CHECKING:
@@ -649,8 +653,10 @@ def _load_findings(args: argparse.Namespace) -> list[dict[str, Any]] | None:
     )
     result = run_sca(target=target, output_dir=pre_out, options=options)
     try:
+        # Self-produced budget: run_sca above just wrote this file.
         data = load_json(
-            result.findings_path, strict=True, max_bytes=_MAX_FINDINGS_BYTES,
+            result.findings_path, strict=True,
+            max_bytes=_MAX_SELF_FINDINGS_BYTES,
         )
         if data is None:
             # Strict load_json soft-returns None for a missing file.

@@ -52,9 +52,11 @@ from typing import Any, TYPE_CHECKING
 
 from core.json import JsonCache, load_json, save_json
 
-# findings.json artifacts are RAPTOR-written run output — the
-# findings-class budget (single owner: kinds.MAX_FINDINGS_BYTES).
+# findings.json byte budgets (single owner + rationale: kinds.py) —
+# steered-path budget for the operator-supplied --findings read,
+# self-produced budget for files a run_sca in THIS process just wrote.
 from .kinds import MAX_FINDINGS_BYTES as _MAX_FINDINGS_BYTES
+from .kinds import MAX_SELF_FINDINGS_BYTES as _MAX_SELF_FINDINGS_BYTES
 from . import SCA_CACHE_ROOT
 from .diff import compute_delta, md_cell
 from .findings import severity_rank
@@ -143,6 +145,8 @@ def main(
 
     if args.findings:
         before_findings = Path(args.findings).resolve()
+        # Operator-steered location — steered-path budget.
+        before_max_bytes = _MAX_FINDINGS_BYTES
         if not before_findings.exists():
             print(f"raptor-sca verify: --findings file not found: {before_findings}",
                   file=sys.stderr)
@@ -156,13 +160,18 @@ def main(
             print(f"raptor-sca verify: analyse on target failed: {e}", file=sys.stderr)
             return 3
         before_findings = before.findings_path
+        # Self-produced: the run_sca above just wrote it.
+        before_max_bytes = _MAX_SELF_FINDINGS_BYTES
 
     try:
         rows_before = load_json(
-            before_findings, strict=True, max_bytes=_MAX_FINDINGS_BYTES,
+            before_findings, strict=True, max_bytes=before_max_bytes,
         )
+        # The after-file is always self-produced (the overlay run_sca
+        # above just wrote it) — self-produced budget.
         rows_after = load_json(
-            after.findings_path, strict=True, max_bytes=_MAX_FINDINGS_BYTES,
+            after.findings_path, strict=True,
+            max_bytes=_MAX_SELF_FINDINGS_BYTES,
         )
         if rows_before is None or rows_after is None:
             # Strict load_json soft-returns None for a MISSING file —

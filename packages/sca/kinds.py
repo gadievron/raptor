@@ -89,4 +89,29 @@ RAPTOR_CONFIG_FILENAMES = (
 # The rows are RAPTOR-written, but the read sites accept operator-
 # steered paths (--findings / --baseline / another run's output dir),
 # so every read pays a budget instead of trusting the location.
+# STEERED PATHS ONLY: a read of a findings.json the same process just
+# wrote takes MAX_SELF_FINDINGS_BYTES below instead.
 MAX_FINDINGS_BYTES = 64 * 1024 * 1024
+
+# Byte budget for a run reading back its OWN findings.json — the
+# self-produced class: the path came from write_findings_json /
+# RunResult.findings_path in the SAME process, never from an
+# operator- or repo-steered location, so the content's provenance is
+# this pipeline and the size is the pipeline's own legitimate output.
+# Both directions of the trade-off matter:
+# - NOT LOWER: the 64 MiB steered-path budget refused LEGITIMATE
+#   pipeline output — large targets write 75 MB (saleor-2.10) to
+#   202 MB (superset-0.36: 6k deps + 1.4k base-image packages)
+#   findings.json, and the refusal fired at run_sca's own SARIF
+#   re-read, losing the whole completed scan at its final step. Real
+#   monorepos scale past that corpus, so the bound keeps ~2.5x
+#   headroom over the largest observed size instead of hugging it.
+# - NOT HIGHER / NOT UNBOUNDED: the consumers whole-document
+#   json-parse, pinning several times the file size in memory — past
+#   512 MiB the parse peak alone endangers the host, and a
+#   findings.json that size signals a row-explosion bug, not a big
+#   target: refusing loudly beats an OOM kill. Same doctrine and
+#   value as core.json.utils.RE_DATABASE_MAX_BYTES_DEFAULT ("raised,
+#   not removed"); targets beyond it need a storage-format change
+#   (sharding), not a bigger constant.
+MAX_SELF_FINDINGS_BYTES = 512 * 1024 * 1024

@@ -56,9 +56,10 @@ from ._md import code_cell, neutralize_inline
 from .versions import VersionError
 from .versions import compare as version_compare
 
-# findings.json artifacts are RAPTOR-written run output — the
-# findings-class budget.
-_MAX_FINDINGS_BYTES = 64 * 1024 * 1024
+# The only findings.json read here is of the file the in-process
+# analyse prepass (run_sca) just wrote — the self-produced budget,
+# not the steered-path one (rationale on both in kinds.py).
+from .kinds import MAX_SELF_FINDINGS_BYTES as _MAX_SELF_FINDINGS_BYTES
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -135,7 +136,8 @@ def main(argv: Sequence[str]) -> int:
 
     try:
         loaded_rows = load_json(
-            result.findings_path, strict=True, max_bytes=_MAX_FINDINGS_BYTES,
+            result.findings_path, strict=True,
+            max_bytes=_MAX_SELF_FINDINGS_BYTES,
         )
         if loaded_rows is None:
             # Strict load_json soft-returns None for a MISSING file —

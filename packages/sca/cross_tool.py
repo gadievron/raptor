@@ -18,6 +18,8 @@ from typing import Any
 from core.json import load_json
 from core.sarif.parser import load_sarif
 
+from .kinds import MAX_SELF_FINDINGS_BYTES
+
 logger = logging.getLogger(__name__)
 
 _CVE_RE = re.compile(r"(CVE-\d{4}-\d{4,})", re.IGNORECASE)
@@ -70,9 +72,15 @@ def link_related_findings(
 
 
 def _load_findings(path: Path) -> list[dict[str, Any]]:
-    # SCA-written findings artifact; missing / corrupt / oversize come
-    # back as None and fall into the isinstance guard.
-    data = load_json(Path(path), max_bytes=64 * 1024 * 1024)
+    # Self-produced budget, NOT the steered-path one: the only
+    # production caller (api.analyse) passes RunResult.findings_path
+    # from the in-process run_sca that just wrote the file, so its
+    # size is the pipeline's own legitimate output (rationale on both
+    # budgets in kinds.py). At the 64 MiB steered budget, big-target
+    # runs silently dropped every cross-tool link (oversize -> None
+    # -> "no findings"). Missing / corrupt / oversize come back as
+    # None and fall into the isinstance guard.
+    data = load_json(Path(path), max_bytes=MAX_SELF_FINDINGS_BYTES)
     return data if isinstance(data, list) else []
 
 

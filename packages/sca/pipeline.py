@@ -1155,8 +1155,15 @@ def run_sca(
     # canonical row shape, including the suppression overlay.
     from core.json import load_json as _load_json
 
-    from .kinds import MAX_FINDINGS_BYTES as _MAX_FINDINGS
-    rows = _load_json(findings_path, strict=True, max_bytes=_MAX_FINDINGS)
+    # Self-produced budget, NOT the steered-path one: this re-reads
+    # the findings.json THIS call wrote a few lines up, so its size
+    # is the pipeline's own legitimate output — the 64 MiB steered
+    # budget refused real 75-202 MB big-target output here, failing
+    # the whole completed scan at its final step.
+    from .kinds import MAX_SELF_FINDINGS_BYTES as _MAX_SELF_FINDINGS
+    rows = _load_json(
+        findings_path, strict=True, max_bytes=_MAX_SELF_FINDINGS,
+    )
     if rows is None:
         # Strict load_json soft-returns None only for a MISSING file —
         # our own just-written findings vanishing is a hard error.

@@ -288,12 +288,19 @@ def _run_analyse(argv: list[str]) -> int:
     if cfg.is_active:
         from core.json import load_json as _load_json
 
-        from .kinds import MAX_FINDINGS_BYTES as _MAX_FINDINGS
+        # Self-produced budget, NOT the steered-path one: this reads
+        # the findings.json the in-process run_sca above just wrote.
+        # --out names the DIRECTORY, but the read is only reachable
+        # after run_sca succeeded, so the file's CONTENT is this
+        # run's own output — the same provenance class as run_sca's
+        # SARIF re-read (rationale on both budgets in kinds.py). At
+        # the 64 MiB steered budget, a completed big-target
+        # --fail-on-* scan exited 3 here ("cannot read findings for
+        # threshold check").
+        from .kinds import MAX_SELF_FINDINGS_BYTES as _MAX_SELF_FINDINGS
         try:
-            # Byte-budgeted: --out is operator-steered, so this read
-            # must not be an unbounded-slurp primitive.
             rows = _load_json(output_dir / "findings.json", strict=True,
-                              max_bytes=_MAX_FINDINGS)
+                              max_bytes=_MAX_SELF_FINDINGS)
         except (OSError, ValueError) as e:
             logger.error("raptor-sca: cannot read findings for "
                          "threshold check: %s", e)
@@ -346,11 +353,18 @@ def _emit_baseline_delta(
         from core.json import load_json as _load_json
 
         from .kinds import MAX_FINDINGS_BYTES as _MAX_FINDINGS
-        # Byte-budgeted: --baseline points wherever the operator says.
+        from .kinds import MAX_SELF_FINDINGS_BYTES as _MAX_SELF_FINDINGS
+        # Steered budget: --baseline points wherever the operator says.
         baseline_rows = _load_json(baseline_path, strict=True,
                                    max_bytes=_MAX_FINDINGS)
+        # Self-produced budget: current_findings is the findings.json
+        # the in-process run_sca just wrote (the only caller passes
+        # output_dir/"findings.json" straight after the run), so its
+        # size is this run's own legitimate output (kinds.py). At the
+        # steered budget, big-target --baseline runs silently lost
+        # baseline-delta.json / pr-comment.md here.
         current_rows = _load_json(current_findings, strict=True,
-                                  max_bytes=_MAX_FINDINGS)
+                                  max_bytes=_MAX_SELF_FINDINGS)
     except (ValueError, OSError) as exc:
         logger.warning("raptor-sca: cannot read baseline/findings: %s", exc)
         return
