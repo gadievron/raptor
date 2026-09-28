@@ -126,6 +126,11 @@ _DIR_PREFIXES = (
     # finally, so survival past the floor means the process died
     # mid-probe (SIGKILL/OOM skip the cleanup).
     "raptor-ebpf-probe-",
+    # eBPF TLV cross-check decode scratch (packages/binary_analysis/
+    # corpus_profile.py TemporaryDirectory); cleaned by the context
+    # manager on exit, so survival past the floor means the process
+    # died mid-decode (SIGKILL/OOM skip the cleanup).
+    "raptor-ebpf-xcheck-",
     # Per-session pytest temp containment (root conftest.py): the test
     # session points TMPDIR/tempfile.tempdir at one scratch dir so raw
     # tempfile call sites in tests and code under test land inside it.
