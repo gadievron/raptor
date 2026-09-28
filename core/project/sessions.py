@@ -123,6 +123,16 @@ _RUN_LINE_RE = re.compile(
 #: python twin) skip these lines by their status filter.
 _PIN_LINE_RE = re.compile(r"^pin (\d+) (\S+) (\S+) (/.+)$")
 
+#: Drain-request record: ``drain <epoch> <run-id> <abs-dir>`` — a
+#: cooperative ask that the named run pause at its next safe boundary
+#: (the engagement supervisor's fleet-citizenship contract). NOT
+#: parsed by ``_read_ledger_full``: drain lines deliberately ride the
+#: unknown-lines channel, so every existing reader/rewriter carries
+#: them verbatim (evicted last under byte pressure) and the
+#: ``(records, pins, unknown)`` tuple contract never changes. Only
+#: the drain helpers below parse them.
+_DRAIN_LINE_RE = re.compile(r"^drain (\d+) (\S+) (/.+)$")
+
 
 # ---------------------------------------------------------------------------
 # process identity
@@ -1687,6 +1697,158 @@ def ledger_running_runs_all_sessions() -> list[dict]:
         out.extend(dict(r, session_pid=pid) for r in records
                    if r["status"] == "running")
     return out
+
+
+def _drain_parse(line: str) -> dict | None:
+    m = _DRAIN_LINE_RE.match(line)
+    if not m:
+        return None
+    return {"epoch": int(m.group(1)), "run_id": m.group(2),
+            "run_dir": m.group(3)}
+
+
+def _drain_owner_pid(resolved: str) -> int | None:
+    """The session pid whose ledger carries a RUNNING record for
+    *resolved* — the natural home for that run's drain requests (the
+    supervisor scans every ledger, but co-locating request and record
+    lets the record's lifecycle bound the request's)."""
+    for r in ledger_running_runs_all_sessions():
+        if r["run_dir"] == resolved:
+            return r["session_pid"]
+    return None
+
+
+def ledger_record_drain_request(run_dir: str | os.PathLike[str],
+                                pid: int | None = None) -> bool:
+    """Durably ask the run at *run_dir* to pause at its next safe
+    boundary: one ``drain`` line on a session ledger, deduplicated per
+    run dir. Target ledger: the session holding the run's running
+    record when one exists, else the caller's own session (a
+    cron-launched supervisor has no running record here). Same
+    registered-session + identity gates as the record writers; riding
+    the unknown-lines channel means every other writer preserves the
+    line verbatim. Returns True when the request is durably recorded.
+    """
+    import time
+    try:
+        resolved = str(Path(run_dir).resolve())
+    except OSError:
+        return False
+    if not _valid_run_dir(resolved):
+        logger.debug("sessions: drain request refused run dir %r",
+                     resolved)
+        return False
+    if pid is None:
+        pid = _drain_owner_pid(resolved)
+    if pid is None:
+        pid = resolve_session_pid()
+    if pid is None:
+        return False
+    fields = _parse_entry(SESSIONS_DIR / str(pid))
+    if not fields:
+        return False
+    if (fields.get("v") == ENTRY_VERSION
+            and not _identity_matches(pid, fields)):
+        return False
+    run_id = Path(resolved).name
+    with _ledger_lock(pid):
+        if not _parse_entry(SESSIONS_DIR / str(pid)):
+            return False  # entry pruned since the pre-lock gate
+        records, pins, unknown = _read_ledger_full(pid)
+        kept: list[str] = []
+        for line in unknown:
+            drain = _drain_parse(line)
+            if drain is None:
+                kept.append(line)  # foreign future-format line
+                continue
+            if drain["run_dir"] == resolved:
+                continue  # replaced below (dedup per run dir)
+            if not Path(drain["run_dir"]).is_dir():
+                continue  # request for a vanished run dir — prune
+            kept.append(line)
+        kept.append(f"drain {int(time.time())} {run_id} {resolved}")
+        return _write_ledger(pid, records, pins, kept)
+
+
+def ledger_drain_requests(
+        run_dir: str | os.PathLike[str]) -> list[dict]:
+    """Every recorded drain request naming *run_dir*, across all
+    session ledgers whose registry entry still exists (orphan ledgers
+    never steer — same gate as ``ledger_pinned_dirs``; the REQUESTER's
+    later death does not withdraw a durable request). Each dict
+    carries ``epoch``/``run_id``/``run_dir``/``session_pid``.
+    Best-effort: unreadable ledgers are skipped, never raised."""
+    out: list[dict] = []
+    try:
+        resolved = str(Path(run_dir).resolve())
+        children = list(SESSIONS_DIR.iterdir())
+    except OSError:
+        return out
+    for f in children:
+        if not f.name.endswith(".run"):
+            continue
+        stem = f.name[:-len(".run")]
+        pid = _pid_from_name(stem)
+        if pid is None:
+            continue
+        if not (SESSIONS_DIR / stem).exists():
+            continue  # orphan ledger — never steers
+        try:
+            _records, _pins, unknown = _read_ledger_full(pid)
+        except Exception:  # noqa: BLE001 — observation is best-effort
+            continue
+        for line in unknown:
+            drain = _drain_parse(line)
+            if drain is not None and drain["run_dir"] == resolved:
+                out.append(dict(drain, session_pid=pid))
+    return out
+
+
+def ledger_clear_drain_requests(
+        run_dir: str | os.PathLike[str]) -> int:
+    """Remove every drain request naming *run_dir* (the honoring run
+    calls this AT the pause — without the clear, the stale request
+    would re-drain every later resume). Non-blocking per ledger: a
+    held lock is skipped with a debug log (the next boundary check
+    re-clears). Returns the number of requests removed."""
+    cleared = 0
+    try:
+        resolved = str(Path(run_dir).resolve())
+        children = list(SESSIONS_DIR.iterdir())
+    except OSError:
+        return 0
+    for f in children:
+        if not f.name.endswith(".run"):
+            continue
+        stem = f.name[:-len(".run")]
+        pid = _pid_from_name(stem)
+        if pid is None:
+            continue
+        if not (SESSIONS_DIR / stem).exists():
+            continue
+        try:
+            with _ledger_lock_nb(pid) as held:
+                if not held:
+                    logger.debug(
+                        "sessions: pid %d's ledger lock is held — "
+                        "drain clear for %s deferred", pid, resolved)
+                    continue
+                records, pins, unknown = _read_ledger_full(pid)
+                kept = []
+                hit = 0
+                for line in unknown:
+                    drain = _drain_parse(line)
+                    if drain is not None \
+                            and drain["run_dir"] == resolved:
+                        hit += 1
+                        continue
+                    kept.append(line)
+                if hit and _write_ledger(pid, records, pins, kept):
+                    cleared += hit
+        except Exception:  # noqa: BLE001 — per-ledger best-effort
+            logger.debug("sessions: drain clear failed for pid %s",
+                         stem, exc_info=True)
+    return cleared
 
 
 def ledger_runs(pid: int | None = None,
