@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from .checklist_mac import TOKEN_MAP_KEY, mint_checked_claim
+
 
 def _get_items(file_info):
     """Read code items from a file entry. Handles both old and new format."""
@@ -80,6 +82,24 @@ def update_coverage(
                 if source_label not in checked_by:
                     checked_by.append(source_label)
                 func['checked_by'] = checked_by
+                # Mint chokepoint: this is the only code that ADDS a
+                # checked_by label, so the review claim is stamped
+                # here, at creation — read-modify-write writers
+                # (rebuild carry-forward, project promotion) copy
+                # tokens verbatim and the coverage backfill demotes
+                # unverified claims to the machine hint tier
+                # (core/inventory/checklist_mac.py). Minted even when
+                # the label was already present: a re-mark is a fresh
+                # genuine review, and re-minting heals a token that
+                # went stale with the source. None (no usable key)
+                # persists unstamped — never a write failure.
+                token = mint_checked_claim(file_info, func, source_label)
+                if token:
+                    mac_map = func.get(TOKEN_MAP_KEY)
+                    if not isinstance(mac_map, dict):
+                        mac_map = {}
+                    mac_map[source_label] = token
+                    func[TOKEN_MAP_KEY] = mac_map
 
     return inventory
 
