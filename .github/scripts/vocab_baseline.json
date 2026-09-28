@@ -568,6 +568,10 @@
     "count": 14,
     "kind": "literal"
   },
+  "core/audit/evidence_grade.py::_CLASSIFIER_FALLBACK_VERIFICATION": {
+    "count": 12,
+    "kind": "literal"
+  },
   "core/audit/evidence_grade.py::_DETECTION_CLASSIFIER_MODULES": {
     "count": 12,
     "kind": "literal",
@@ -1499,7 +1503,7 @@
     "kind": "literal"
   },
   "core/llm/scorecard/scorecard.py::cell": {
-    "count": 13,
+    "count": 14,
     "kind": "literal"
   },
   "core/llm/scripts/transport-churn-measure::_drive": {
@@ -1847,7 +1851,7 @@
     "note": "detector vocabulary, not a learned name set: the field names whose values carry LLM/tool output in run artifacts \u2014 grown by the mechanism-spec widening, each name backed by a live writer lane and pinned by mutation fixtures in test_report_writer_audit"
   },
   "core/security/report_writer_audit.py::_SANITISERS": {
-    "count": 39,
+    "count": 41,
     "kind": "literal",
     "note": "recognised-sanitiser vocabulary for the writer audit; every local definition of these names must build on a canonical sanitiser (enforced by the name-shadow arm)"
   },
@@ -2528,7 +2532,7 @@
     "kind": "literal"
   },
   "packages/exploitability_validation/schemas.py::ATTACK_PATH_SCHEMA": {
-    "count": 14,
+    "count": 16,
     "kind": "literal"
   },
   "packages/exploitability_validation/schemas.py::ATTACK_TREE_SCHEMA": {
