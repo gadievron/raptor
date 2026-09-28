@@ -266,6 +266,29 @@ def is_sandbox_setup_skip(reason: str | None) -> bool:
 #: Bytes of each child stream kept in the on-disk failure artifact.
 _CHILD_TAIL_PERSIST_CHARS = 65536
 
+#: Writer-authored disclosure for a dispatch result whose streams were
+#: never captured (stdout/stderr both None — the runner was invoked
+#: without capture, so the child's narrative went to the parent's
+#: inherited stdio and is gone). Distinct from a captured-but-silent
+#: child: rendering the two identically made a plumbing regression
+#: look like a quiet child, and the empty tail was undiagnosable.
+_CAPTURE_MISSING_NOTE = (
+    "child streams were not captured (dispatch ran without "
+    "capture_output — the child's output went to the parent's "
+    "inherited stdio and was not persisted)"
+)
+
+
+def _streams_captured(proc: subprocess.CompletedProcess) -> bool:
+    """True when the dispatch result carries captured streams.
+
+    ``subprocess`` semantics: an uncaptured stream is ``None``; a
+    captured-but-silent stream is ``""``/``b""``. Both streams share
+    one ``capture_output`` switch, so either being non-None means
+    capture was on.
+    """
+    return proc.stdout is not None or proc.stderr is not None
+
 
 def _child_failure_tail(proc: subprocess.CompletedProcess) -> str:
     """Bounded diagnostic line for a failed dispatch child.
@@ -279,6 +302,8 @@ def _child_failure_tail(proc: subprocess.CompletedProcess) -> str:
     """
     from core.security.log_sanitisation import sanitise_for_terminal
 
+    if not _streams_captured(proc):
+        return f"({_CAPTURE_MISSING_NOTE})"
     err = (proc.stderr or "").strip()
     if err:
         return sanitise_for_terminal(err, max_len=500)
@@ -286,7 +311,8 @@ def _child_failure_tail(proc: subprocess.CompletedProcess) -> str:
     if out:
         return ("(stderr empty; stdout tail) "
                 + sanitise_for_terminal(out[-500:], max_len=500))
-    return "(no output captured on either stream)"
+    return ("(capture active — the child produced no output on "
+            "stdout or stderr)")
 
 
 def _timeout_partial_capture(
@@ -315,8 +341,16 @@ def _timeout_partial_capture(
 def _persist_child_tail(
     run_dir: Path | None, proc: subprocess.CompletedProcess,
     exit_label: str | None = None,
+    duration_s: float | None = None,
 ) -> None:
     """Write bounded child-stream tails beside the failed pass.
+
+    The artifact must never be SILENTLY empty: a child that produced
+    no bytes gets an explicit writer-authored ``streams=empty`` line
+    (with the exit label and ``duration=`` above it), and a result
+    whose streams were never captured gets ``capture=missing`` —
+    "the child said nothing" and "nobody listened" are different
+    failures and must read differently on disk.
 
     The WARNING line carries 500 chars; the artifact keeps enough of
     both streams to root-cause without re-running a multi-minute
@@ -338,8 +372,26 @@ def _persist_child_tail(
         return
     exit_text: str = (exit_label if exit_label is not None
                       else str(proc.returncode))
+    # Writer-authored header lines (column 0, like the exit label —
+    # child body lines are always ``| ``-quoted so these cannot be
+    # forged). Empty tails must never render silently: an artifact
+    # that reads identically for "capture was off", "the child said
+    # nothing", and "the child crashed pre-logging" is undiagnosable
+    # exactly when it is needed.
+    notes: str = ""
+    if duration_s is not None:
+        notes += f"duration={duration_s:.1f}s\n"
+    captured = _streams_captured(proc)
+    if not captured:
+        notes += f"capture=missing ({_CAPTURE_MISSING_NOTE})\n"
+    elif not (proc.stderr or "").strip() and not (proc.stdout or "").strip():
+        notes += ("streams=empty (capture was active — the child "
+                  "produced no output on stdout or stderr; it likely "
+                  "died before logging anything)\n")
     content = (
-        f"exit={exit_text}\n--- stderr tail ---\n"
+        f"exit={exit_text}\n"
+        + notes
+        + "--- stderr tail ---\n"
         + _quote_body((proc.stderr or "")[-_CHILD_TAIL_PERSIST_CHARS:])
         + "\n--- stdout tail ---\n"
         + _quote_body((proc.stdout or "")[-_CHILD_TAIL_PERSIST_CHARS:])
@@ -949,6 +1001,27 @@ def run_skill_dispatch(
                         system_prompt_file=_sys_prompt_path,
                     ),
                     text=True,
+                    # The sandbox runner's capture defaults to FALSE:
+                    # without this kwarg the CompletedProcess carries
+                    # stdout=None/stderr=None and every failure-path
+                    # consumer below (_child_failure_tail,
+                    # _persist_child_tail, the timeout partial
+                    # capture) persisted EMPTY tails — a multi-minute
+                    # billed child exited nonzero and the run dir held
+                    # nothing diagnosable. The CC child in -p mode
+                    # emits its result/error narrative at exit (no
+                    # live progress stream is lost), and the fork
+                    # spawn backend drains the pipes under its own
+                    # per-stream byte cap, so capture is bounded.
+                    capture_output=True,
+                    # The captured streams can quote hostile-target
+                    # bytes; the subprocess-backed lanes otherwise
+                    # decode strict and a single bad byte raises
+                    # UnicodeDecodeError in the parent — losing the
+                    # very narrative capture exists to keep. (The
+                    # fork spawn backend already decodes with
+                    # replacement; this aligns the other lanes.)
+                    errors="replace",
                     **stdin_kwargs,
                     timeout=timeout_s,
                     target=str(target), output=str(run_dir),
@@ -1013,7 +1086,8 @@ def run_skill_dispatch(
             # timeout line).
             _persist_child_tail(
                 run_dir, _timeout_partial_capture(e),
-                exit_label=f"timeout after {timeout_s}s")
+                exit_label=f"timeout after {timeout_s}s",
+                duration_s=time.monotonic() - t0)
             logger.warning("%s timed out after %ds", log_label, timeout_s)
             return SkillDispatchResult(
                 ran=False, skipped_reason=f"timeout after {timeout_s}s",
@@ -1046,7 +1120,8 @@ def run_skill_dispatch(
         if proc.returncode != 0:
             lifecycle_settled = True
             fail_lifecycle(run_dir, f"subprocess returned {proc.returncode}")
-            _persist_child_tail(run_dir, proc)
+            _persist_child_tail(run_dir, proc,
+                                duration_s=time.monotonic() - t0)
             logger.warning("%s returned %d: %s", log_label, proc.returncode,
                            _child_failure_tail(proc))
             return SkillDispatchResult(
@@ -1063,7 +1138,8 @@ def run_skill_dispatch(
                 # The child exited 0 but the pass produced no terminal
                 # artifact — its narrative is the only account of what
                 # went wrong inside.
-                _persist_child_tail(run_dir, proc)
+                _persist_child_tail(run_dir, proc,
+                                    duration_s=time.monotonic() - t0)
                 logger.warning("%s: %s", log_label, error)
                 return SkillDispatchResult(
                     ran=False, skipped_reason=error, run_dir=run_dir,

@@ -621,7 +621,8 @@ class ChildTailTests(unittest.TestCase):
                     level="WARNING") as logs:
                 _run(tmp, run_dir,
                      sandbox=self._fail_sandbox(run_dir, returncode=1))
-            self.assertIn("no output captured", "\n".join(logs.output))
+            self.assertIn("produced no output on stdout or stderr",
+                          "\n".join(logs.output))
 
     def test_validate_outputs_failure_persists_tail(self):
         # Child exits 0 but the pass produced no terminal artifact —
@@ -667,8 +668,10 @@ class ChildTailTests(unittest.TestCase):
             lines = content.split("\n")
             self.assertEqual(lines[0], "exit=1")
             column0 = [ln for ln in lines if ln and not ln.startswith("| ")]
+            # The duration= header varies per run; the remaining
+            # column-0 lines are the fixed writer-authored set.
             self.assertEqual(
-                column0,
+                [ln for ln in column0 if not ln.startswith("duration=")],
                 ["exit=1", "--- stderr tail ---", "--- stdout tail ---"],
                 "only writer-authored lines may sit at column 0")
             self.assertIn("| exit=0", lines)
@@ -729,6 +732,145 @@ class ChildTailTests(unittest.TestCase):
             # label with empty tails — forensics never raises.
             content = (run_dir / "dispatch-child-tail.log").read_text()
             self.assertIn("exit=timeout after 60s", content)
+
+
+class ChildStreamCaptureTests(unittest.TestCase):
+    """The dispatch must REQUEST stream capture from the sandbox.
+
+    The sandbox runner's ``capture_output`` defaults to False, under
+    which the returned CompletedProcess carries ``stdout=None`` /
+    ``stderr=None`` — the child's narrative goes to the parent's
+    inherited stdio and is never persisted. A dispatch that omits the
+    kwarg makes every failure-path artifact (dispatch-child-tail.log,
+    the WARNING excerpt, the postpass record's embedded tail) EMPTY
+    for every failing child: a multi-minute billed pass exits nonzero
+    with nothing diagnosable in the run dir. The fakes here mirror
+    the real runner's capture contract instead of unconditionally
+    handing streams back.
+    """
+
+    def _faithful_sandbox(self, run_dir, *, returncode,
+                          stdout="", stderr="", seen=None):
+        """run()-faithful fake: streams exist ONLY when capture was
+        requested (mirrors the runner's capture_output=False default,
+        under which both CompletedProcess streams are None)."""
+        dispatcher = _lifecycle_dispatcher(run_dir)
+
+        def _sandbox(cmd, *args, **kwargs):
+            dispatcher(cmd, *args, **kwargs)
+            if seen is not None:
+                seen.update(kwargs)
+            if kwargs.get("capture_output"):
+                return _ok(returncode=returncode,
+                           stdout=stdout, stderr=stderr)
+            return _ok(returncode=returncode, stdout=None, stderr=None)
+        return _sandbox
+
+    def test_dispatch_requests_capture_with_replacing_decode(self):
+        # The kwargs ARE the contract: capture on, hostile bytes
+        # decoded with replacement instead of raising in the parent.
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            seen = {}
+            result = _run(
+                tmp, run_dir,
+                sandbox=self._faithful_sandbox(
+                    run_dir, returncode=0, seen=seen))
+        self.assertTrue(result.ran)
+        self.assertIs(seen.get("capture_output"), True)
+        self.assertEqual(seen.get("errors"), "replace")
+
+    def test_failing_child_leaves_a_nonempty_diagnostic(self):
+        # The regression this class exists for: under a run()-faithful
+        # sandbox, a failing child's narrative must reach the tail
+        # artifact — a dispatch that never asked for capture persisted
+        # `exit=1` over two empty tails.
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING") as logs:
+                result = _run(
+                    tmp, run_dir,
+                    sandbox=self._faithful_sandbox(
+                        run_dir, returncode=1,
+                        stdout="Stage C helper: TypeError: boom\n"))
+            self.assertFalse(result.ran)
+            self.assertEqual(result.child_exit, "1")
+            content = (run_dir / "dispatch-child-tail.log").read_text()
+            self.assertIn("exit=1", content)
+            self.assertIn("TypeError: boom", content,
+                          "failing child's narrative must be persisted")
+            self.assertIn("TypeError: boom", "\n".join(logs.output))
+
+    def test_silent_failing_child_gets_a_loud_artifact(self):
+        # A child that dies before logging anything must still leave
+        # a diagnosable record: exit label, duration, and an explicit
+        # streams=empty disclosure — never two silent empty tails.
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING"):
+                result = _run(
+                    tmp, run_dir,
+                    sandbox=self._faithful_sandbox(
+                        run_dir, returncode=1, stdout="", stderr=""))
+            self.assertFalse(result.ran)
+            content = (run_dir / "dispatch-child-tail.log").read_text()
+            self.assertIn("exit=1", content)
+            self.assertIn("duration=", content)
+            self.assertIn("streams=empty", content)
+            self.assertIn("produced no output on stdout or stderr",
+                          content)
+
+    def test_uncaptured_streams_are_disclosed_in_the_artifact(self):
+        # Belt-and-braces on the artifact writer itself: a result
+        # whose streams were never captured (both None) must say so
+        # instead of rendering as a silent child — the two cases were
+        # indistinguishable on disk, which is how the missing capture
+        # went undiagnosed.
+        import subprocess as sp
+        from core.orchestration.skill_dispatch import _persist_child_tail
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            proc = sp.CompletedProcess(
+                args=["claude"], returncode=1, stdout=None, stderr=None)
+            _persist_child_tail(run_dir, proc, duration_s=12.5)
+            content = (run_dir / "dispatch-child-tail.log").read_text()
+        self.assertIn("exit=1", content)
+        self.assertIn("duration=12.5s", content)
+        self.assertIn("capture=missing", content)
+        self.assertIn("not captured", content)
+
+    def test_uncaptured_streams_are_disclosed_in_the_warning(self):
+        import subprocess as sp
+        from core.orchestration.skill_dispatch import _child_failure_tail
+        proc = sp.CompletedProcess(
+            args=["claude"], returncode=1, stdout=None, stderr=None)
+        line = _child_failure_tail(proc)
+        self.assertIn("not captured", line)
+        self.assertNotIn("produced no output on stdout or stderr", line)
+
+    def test_captured_but_silent_child_is_not_a_capture_failure(self):
+        # Empty-string streams mean capture worked and the child said
+        # nothing — that must NOT read as a plumbing failure.
+        import subprocess as sp
+        from core.orchestration.skill_dispatch import (
+            _child_failure_tail,
+            _persist_child_tail,
+        )
+        proc = sp.CompletedProcess(
+            args=["claude"], returncode=1, stdout="", stderr="")
+        self.assertIn("produced no output on stdout or stderr",
+                      _child_failure_tail(proc))
+        self.assertNotIn("not captured", _child_failure_tail(proc))
+        with TemporaryDirectory() as tmp:
+            _persist_child_tail(Path(tmp), proc)
+            content = (
+                Path(tmp) / "dispatch-child-tail.log").read_text()
+        self.assertNotIn("capture=missing", content)
+        self.assertIn("streams=empty", content)
 
 
 class ChildTailPlantTests(unittest.TestCase):
