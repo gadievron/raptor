@@ -3142,8 +3142,12 @@ def _verify_entries_fold(
         logger.warning(
             "journal-fold: %d row(s) carried a provenance token that "
             "does not verify (edited content, another install's key, "
-            "or a newer row schema) — demoted to the unstamped tier: "
-            "exact-hash fold credit only, no verdict reuse",
+            "a newer row schema, or an index copy written by a "
+            "version-skewed merge that dropped a stamped field) — "
+            "demoted to the unstamped tier: exact-hash fold credit "
+            "only, no verdict reuse. If these are project-index rows "
+            "whose run journal still verifies, `raptor-audit journal "
+            "reindex <run-dir>` re-projects the verifying copies",
             tampered,
         )
     if unstamped_unverifiable:

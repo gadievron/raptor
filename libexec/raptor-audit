@@ -17,7 +17,8 @@ Subcommands:
     stale    — list annotations with stale source hashes
     ast      — extract function AST subtree and call targets
     critique — identify gaps in tool coverage
-    journal  — journal maintenance (compact duplicate re-emission rows)
+    journal  — journal maintenance (compact duplicate re-emission rows;
+               reindex a run into its project's journal index)
     coverage — coverage-store maintenance (compact an over-budget store)
 """
 
@@ -2604,6 +2605,43 @@ def _check_legacy_state(project_dir: Path) -> str | None:
     )
 
 
+def _journal_reindex(args: argparse.Namespace) -> int:
+    """``journal reindex <run-dir>`` — see :func:`cmd_journal`.
+
+    The governing project comes from the RUN PIN, the exact
+    resolution run completion's merge uses — a run is never
+    re-projected into a project it is not pinned to, and a
+    pin-to-none (standalone) run refuses loudly. Legacy marker-less
+    dirs resolve through the same containment probe run completion
+    applies (a project-shaped parent directory), no wider.
+    """
+    run_dir = Path(args.run_dir).resolve()
+    if not run_dir.is_dir():
+        print(
+            "error: "
+            f"{sanitise_for_terminal(str(run_dir), max_len=300)} "
+            "is not a directory", file=sys.stderr)
+        return 1
+    from core.run.metadata import _journal_project_dir
+    project_dir = _journal_project_dir(run_dir)
+    if project_dir is None:
+        print(
+            "error: "
+            f"{sanitise_for_terminal(str(run_dir), max_len=300)} "
+            "resolves to no project (standalone or "
+            "pin-refused run) — there is no project index to rebuild",
+            file=sys.stderr,
+        )
+        return 1
+    from core.coverage.journal import INDEX_FILENAME, merge_run_into_index
+    merged = merge_run_into_index(project_dir, run_dir)
+    index_path = str(project_dir / INDEX_FILENAME)
+    print(f"index: {sanitise_for_terminal(index_path, max_len=300)}")
+    print(f"  {merged} row(s) merged or repaired from "
+          f"{sanitise_for_terminal(run_dir.name, max_len=120)}")
+    return 0
+
+
 def cmd_journal(args: argparse.Namespace) -> int:
     """Journal maintenance. ``journal compact <out-dir>`` atomically
     rewrites the run's review journal without its duplicate
@@ -2633,11 +2671,22 @@ def cmd_journal(args: argparse.Namespace) -> int:
     inline; verdicts, coverage keys, and the spend floor are
     unchanged; the full original is preserved as
     ``review-journal.jsonl.pre-slim``.
+
+    ``journal reindex <run-dir>`` re-projects a run's review journals
+    (run root + one-level tool subdirs) into its pinned project's
+    ``review-journal-index.json``. The repair path for index rows a
+    version-skewed merge damaged (a stamped field dropped, the token
+    kept — every fold reads the copy as tampered): the merge replaces
+    a stored copy whose token is absent or failing with the run
+    journal's verifying copy at the same timestamp. Idempotent — a
+    healthy index re-merges as a no-op.
     """
+    if getattr(args, "journal_command", None) == "reindex":
+        return _journal_reindex(args)
     if getattr(args, "journal_command", None) != "compact":
         print(
             "error: usage: raptor-audit journal compact <out-dir> "
-            "[--supersede] [--slim-clean]",
+            "[--supersede] [--slim-clean] | journal reindex <run-dir>",
             file=sys.stderr,
         )
         return 1
@@ -4685,6 +4734,18 @@ def main() -> int:
              "their bodies inline; verdicts, coverage, and the spend "
              "floor are unchanged; the full original is archived as "
              "review-journal.jsonl.pre-slim",
+    )
+    p_jreindex = journal_sub.add_parser(
+        "reindex",
+        help="Re-project a run's review journals into its pinned "
+             "project's review-journal-index.json — repairs index "
+             "rows whose stored copy fails provenance while the run "
+             "journal's copy verifies (idempotent; the project comes "
+             "from the run pin, never guessed)",
+    )
+    p_jreindex.add_argument(
+        "run_dir",
+        help="Run output directory containing review-journal.jsonl",
     )
 
     p_backlog = sub.add_parser(
