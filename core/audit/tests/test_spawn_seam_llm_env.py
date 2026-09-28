@@ -150,6 +150,19 @@ class TestAgenticPhase3Overlay:
             def wait(self, timeout=None):
                 return 0
 
+        # Prime the parent-side libc cache BEFORE replacing Popen:
+        # raptor_agentic imports the shared subprocess module, so the
+        # setattr below mutates subprocess.Popen for the whole
+        # process — including ctypes.util.find_library("c"), which
+        # run_command_streaming reaches through set_pdeathsig() on a
+        # cold cache and which uses Popen as a context manager. After
+        # this call every _get_libc() is a pure cache read, so the
+        # test no longer depends on another test on the same worker
+        # having warmed the cache first.
+        from core.sandbox.preexec import set_pdeathsig
+
+        set_pdeathsig()
+
         monkeypatch.setattr(
             raptor_agentic.subprocess, "Popen", FakeProc,
         )
