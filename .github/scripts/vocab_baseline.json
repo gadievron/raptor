@@ -18,6 +18,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "core/analysis/binary_oracle.py::enrich_inventory_with_binary_oracle": {
+    "count": 10,
+    "kind": "literal",
+    "note": "inventory['binary_oracle'] summary result-dict field manifest (suppression-authority flags + per-channel demotion accounting: identity pins, guessed env builds, coverage floor) — persistence schema keys read by the chokepoint/cache consumers, not a learned name vocabulary; crossed the 9-name seed threshold when the identity-demotion channel added any_identity_demoted / identity_demoted"
+  },
   "core/analysis/binary_oracle_precision.py::to_dict": {
     "count": 12,
     "kind": "literal"

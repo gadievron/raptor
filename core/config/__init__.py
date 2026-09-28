@@ -429,6 +429,22 @@ class RaptorConfig:
     # declaration is the trust assertion the floor's drop warning names
     # as its remedy. Always re-assigned alongside BINARY_ORACLE_PATHS.
     BINARY_ORACLE_DECLARED: tuple[str, ...] = ()
+    # Identity pins for content-witnessed project-store binaries:
+    # path (as it appears in BINARY_ORACLE_PATHS) -> either
+    # ``(st_dev, st_ino, st_size, sha256_hex)`` — the fstat identity
+    # of the very fd the witness hash was verified on (O_NOFOLLOW
+    # open, fstat, hash that fd) — or ``None``, meaning the witness
+    # could not be verified fd-honestly (plant / content drift): the
+    # binary stays loaded for hint-tier enrichment but is DEMOTED out
+    # of absent-verdict suppression. The enrichment re-verifies each
+    # tuple pin around its own classify pass and demotes on mismatch,
+    # closing the window between the witness read and the oracle's
+    # by-name opens. Paths absent from the dict carry no pin (explicit
+    # --binary, auto-detect, env-build) and verify nothing. Always
+    # re-assigned alongside BINARY_ORACLE_PATHS (never gate on
+    # truthiness).
+    BINARY_ORACLE_IDENTITY_PINS: ClassVar[
+        dict[str, tuple[int, int, int, str] | None]] = {}
 
     # Inc 2b Tier 1: when True, extract direct call edges from each
     # binary in BINARY_ORACLE_PATHS (via r2) and annotate inventory

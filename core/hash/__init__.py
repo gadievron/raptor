@@ -18,6 +18,7 @@ doesn't wrap it.
 
 import hashlib
 from pathlib import Path
+from typing import BinaryIO
 
 from core.config import RaptorConfig
 from core.logging import get_logger
@@ -283,14 +284,32 @@ def sha256_file(path: Path, chunk_size: int | None = None) -> str:
 
     Use this in preference to ``hashlib.sha256(path.read_bytes())`` —
     streaming avoids OOM on multi-GB files.
+
+    NB: this opens BY NAME (and follows symlinks). When the digest is
+    a trust decision about an attacker-swappable path, open the file
+    fd-honest first (``core.source.open_regular``) and hash the opened
+    stream with :func:`sha256_fileobj` so the bytes hashed are the
+    bytes of the inode you verified.
+    """
+    with Path(path).open("rb") as f:
+        return sha256_fileobj(f, chunk_size)
+
+
+def sha256_fileobj(f: BinaryIO, chunk_size: int | None = None) -> str:
+    """Hash an already-open binary stream from its CURRENT position.
+
+    The fd-honest sibling of :func:`sha256_file`: the caller owns the
+    open (and any O_NOFOLLOW / fstat discipline that came with it), so
+    check and use share one file description — nothing is re-opened by
+    name between them. The stream is left positioned at EOF; seek(0)
+    first to re-hash a stream already read once.
     """
     if chunk_size is None:
         chunk_size = RaptorConfig.HASH_CHUNK_SIZE
     chunk_size = _chunk_floor(chunk_size)
     h = hashlib.sha256()
-    with Path(path).open("rb") as f:
-        for chunk in iter(lambda: f.read(chunk_size), b""):
-            h.update(chunk)
+    for chunk in iter(lambda: f.read(chunk_size), b""):
+        h.update(chunk)
     return h.hexdigest()
 
 

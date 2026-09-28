@@ -354,6 +354,7 @@ def _project_binaries(
     repo: Path | None = None,
     run_dir: Path | None = None,
     no_suppress_out: list | None = None,
+    identity_out: dict[str, tuple[int, int, int, str] | None] | None = None,
 ) -> tuple[list[Path], str | None]:
     """Layer in any binaries persisted on the governing project (the
     run pin's project in-run, the ambient layers otherwise). Returns
@@ -361,14 +362,23 @@ def _project_binaries(
     schema mismatch returns ``([], None)`` rather than crashing the
     run.
 
-    CONTENT-WITNESS GATE: ``/project binary add`` pins sha256 of the
-    bytes the operator pointed at; the store is the one surface where
-    run-writable content is promoted to durable suppression authority
-    (the env-build persist hint names a path inside the run dir's
-    write grant). Each witnessed entry is re-hashed here: a mismatch
-    means the file changed since the operator's assertion — the entry
-    is REFUSED for this run (loud warning + re-add hint), because the
-    trust travelled with the bytes, not the path. Entries with no
+    CONTENT-WITNESS GATE (fd-honest): ``/project binary add`` pins
+    sha256 of the bytes the operator pointed at; the store is the one
+    surface where run-writable content is promoted to durable
+    suppression authority (the env-build persist hint names a path
+    inside the run dir's write grant). Each witnessed entry is
+    re-verified here on ONE open file description — O_NOFOLLOW open
+    (``core.source.open_regular``), fstat, hash that fd — never a
+    by-name re-hash that races a swap between check and use. On
+    success ``identity_out`` receives the fd's stat identity
+    ``(st_dev, st_ino, st_size, sha256)`` so the enrichment can
+    re-verify the SAME identity around its own classify pass. On
+    witness mismatch or fd-honest open failure over an occupied slot
+    the entry DEMOTES rather than refuses (loud warning + re-add
+    hint): it still loads for hint-tier enrichment (promotions keep
+    findings alive) but ``identity_out`` records ``None`` and the
+    enrichment strips its absent verdicts of suppression authority —
+    the trust travelled with the bytes, not the path. Entries with no
     witness (pre-v6 stores) still load but join ``no_suppress_out``
     (the env-build guessed-command channel): enrichment verdicts
     count, ``absent`` never hard-suppresses off them.
@@ -407,36 +417,96 @@ def _project_binaries(
         witnesses = getattr(proj, "binary_witnesses", None) or {}
         out: list[Path] = []
         for b in proj.binaries:
-            p = Path(b).expanduser().resolve()
+            # Open the UNRESOLVED store path: O_NOFOLLOW must judge
+            # the final component the store names — resolving first
+            # would walk THROUGH a planted symlink and verify
+            # whatever it points at instead of refusing it.
+            raw = Path(b).expanduser()
             recorded = witnesses.get(b)
             if recorded:
-                from core.hash import sha256_file
+                from core.hash import sha256_fileobj
+                from core.source import open_regular
+                fh = open_regular(raw, "rb")
+                if fh is None:
+                    if not os.path.lexists(raw):
+                        logger.warning(
+                            "binary-oracle: project binary %s is "
+                            "missing/unreadable — refusing for this "
+                            "run (re-add with /project binary add "
+                            "once rebuilt)", raw)
+                        continue
+                    # The slot is occupied but refused an fd-honest
+                    # open (symlink or special file at the stored
+                    # name): the witness cannot be verified against
+                    # any fd, so DEMOTE — load for hint-tier
+                    # enrichment only, no suppression authority.
+                    p = raw.resolve()
+                    logger.warning(
+                        "binary-oracle: project binary %s is not an "
+                        "fd-honestly openable regular file (symlink "
+                        "or special file at the stored name?) — its "
+                        "content witness cannot be verified, so it "
+                        "is DEMOTED to enrichment-only for this run "
+                        "(absent verdicts will not suppress). Re-add "
+                        "with /project binary add if you moved or "
+                        "rebuilt it.", p)
+                    if identity_out is not None:
+                        identity_out[str(p)] = None
+                    out.append(p)
+                    continue
                 try:
-                    actual = sha256_file(p)
+                    with fh:
+                        st = os.fstat(fh.fileno())
+                        actual = sha256_fileobj(fh)
                 except OSError:
                     logger.warning(
-                        "binary-oracle: project binary %s is "
-                        "unreadable — refusing for this run "
-                        "(re-add with /project binary add once "
-                        "rebuilt)", p)
+                        "binary-oracle: project binary %s could not "
+                        "be read for witness verification — DEMOTED "
+                        "to enrichment-only for this run (absent "
+                        "verdicts will not suppress)", raw)
+                    p = raw.resolve()
+                    if identity_out is not None:
+                        identity_out[str(p)] = None
+                    out.append(p)
                     continue
+                p = raw.resolve()
                 if actual != recorded:
                     logger.warning(
-                        "binary-oracle: REFUSED project binary %s — "
-                        "content changed since /project binary add "
-                        "pinned it (sha256 mismatch). If you rebuilt "
-                        "it, re-add to re-assert trust; if you did "
-                        "not, treat the file as tampered.", p)
+                        "binary-oracle: project binary %s content "
+                        "changed since /project binary add pinned it "
+                        "(sha256 mismatch) — DEMOTED to enrichment-"
+                        "only for this run (absent verdicts will not "
+                        "suppress). If you rebuilt it, re-add to "
+                        "re-assert trust; if you did not, treat the "
+                        "file as tampered.", p)
+                    if identity_out is not None:
+                        identity_out[str(p)] = None
+                    out.append(p)
                     continue
-            else:
-                logger.warning(
-                    "binary-oracle: project binary %s has no content "
-                    "witness (pre-witness store entry) — loading as "
-                    "enrichment-only; absent verdicts will not "
-                    "suppress. Re-add with /project binary add to "
-                    "pin it.", p)
-                if no_suppress_out is not None:
-                    no_suppress_out.append(str(p))
+                # Verified on this very fd: pin the fd's identity so
+                # the enrichment consumes the witness on the same
+                # terms (same dev/ino/size + content hash). Demotion
+                # is STICKY across duplicate store entries resolving
+                # to the same path: if an earlier alias already
+                # demoted (planted symlink at its slot, mismatch), a
+                # later verified entry must not restore the pin —
+                # last-writer-wins would let alias ordering launder
+                # the demotion away.
+                if identity_out is not None and identity_out.get(
+                        str(p), ()) is not None:
+                    identity_out[str(p)] = (
+                        st.st_dev, st.st_ino, st.st_size, recorded)
+                out.append(p)
+                continue
+            p = raw.resolve()
+            logger.warning(
+                "binary-oracle: project binary %s has no content "
+                "witness (pre-witness store entry) — loading as "
+                "enrichment-only; absent verdicts will not "
+                "suppress. Re-add with /project binary add to "
+                "pin it.", p)
+            if no_suppress_out is not None:
+                no_suppress_out.append(str(p))
             out.append(p)
         return out, active
     except Exception:  # noqa: BLE001
@@ -561,6 +631,10 @@ def resolve_binary_paths(args, repo: Path, target_kind: str,
                          parser=None,
                          no_suppress_out: list | None = None,
                          declared_out: list | None = None,
+                         identity_out: dict[
+                             str,
+                             tuple[int, int, int, str] | None,
+                         ] | None = None,
                          ) -> tuple[str, ...]:
     """Compose the final tuple of binary paths from three sources:
     ``--binary`` (explicit), auto-detect, and the active project's
@@ -587,7 +661,14 @@ def resolve_binary_paths(args, repo: Path, target_kind: str,
     ``declared_out`` — when supplied, receives the OPERATOR-declared
     subset (explicit ``--binary`` paths + project-store binaries).
     The enrichment exempts these from its source-coverage floor;
-    auto-detected and env-built paths stay floor-subject."""
+    auto-detected and env-built paths stay floor-subject.
+
+    ``identity_out`` — when supplied, receives the per-path identity
+    pins the project-store witness verification produced (see
+    ``_project_binaries``): the fstat identity of the fd the witness
+    hash was verified on, or ``None`` for a demoted entry. The
+    enrichment re-verifies tuple pins around its classify pass and
+    strips suppression authority on mismatch."""
     explicit_binary = getattr(args, "binary", None)
     explicit_auto = bool(getattr(args, "binary_auto", False))
     opted_out = bool(getattr(args, "no_binary_oracle", False))
@@ -620,7 +701,8 @@ def resolve_binary_paths(args, repo: Path, target_kind: str,
     _out = getattr(args, "out", None)
     proj_paths, proj_name = _project_binaries(
         repo=repo, run_dir=Path(_out) if _out else None,
-        no_suppress_out=no_suppress_out)
+        no_suppress_out=no_suppress_out,
+        identity_out=identity_out)
     added = 0
     for p in proj_paths:
         if not Path(p).is_file():
@@ -672,10 +754,12 @@ def apply_to_config(args, repo: Path, parser=None) -> tuple[str, ...]:
     from core.config import RaptorConfig
     no_suppress: list = []
     declared: list = []
+    identity: dict[str, tuple[int, int, int, str] | None] = {}
     paths = resolve_binary_paths(
         args, repo, resolve_target_kind(args), parser=parser,
         no_suppress_out=no_suppress,
         declared_out=declared,
+        identity_out=identity,
     )
     # ALWAYS assign — never gate on truthiness — so a prior run's
     # value cannot leak into this one in long-lived processes
@@ -683,6 +767,7 @@ def apply_to_config(args, repo: Path, parser=None) -> tuple[str, ...]:
     RaptorConfig.BINARY_ORACLE_PATHS = paths
     RaptorConfig.BINARY_ORACLE_NO_SUPPRESS = tuple(no_suppress)
     RaptorConfig.BINARY_ORACLE_DECLARED = tuple(declared)
+    RaptorConfig.BINARY_ORACLE_IDENTITY_PINS = identity
     RaptorConfig.BINARY_ORACLE_EDGES = bool(
         getattr(args, "binary_edges", False))
     return paths
