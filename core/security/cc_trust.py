@@ -62,11 +62,19 @@ import logging
 import os
 import re
 import stat
-import unicodedata
-from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
+from core.security._trust_common import (
+    RAPTOR_DIR as _RAPTOR_DIR,
+    FileScan,
+    Finding,
+    mask as _mask,
+    render_scan_report,
+    resolve_supplied_target,
+    safe_text as _safe,
+    truncate as _truncate,
+)
 from core.security.capped_read import read_capped
 from core.security.credential_env import (
     CONFIG_HOME_REDIRECT_ENV_VARS,
@@ -111,23 +119,9 @@ def is_trust_overridden() -> bool:
     return _trust_override_set
 
 
-@dataclass
-class Finding:
-    """One labelled row in the per-file findings table."""
-    label: str          # e.g. "apiKeyHelper", "SessionStart hook", "env LD_PRELOAD"
-    value: str          # e.g. the helper command, hook command, env value
-    blocking: bool      # True = blocks dispatch; False = info only (URL MCP)
-
-
-@dataclass
-class FileScan:
-    """Findings for one inspected file."""
-    path: Path
-    findings: list[Finding] = field(default_factory=list)
-
-    def has_blocking(self) -> bool:
-        return any(f.blocking for f in self.findings)
-
+# Finding / FileScan result shapes ship from the shared trust-gate
+# helper layer (core/security/_trust_common.py), re-exported here for
+# this gate's callers.
 
 # Commands CC executes to obtain/refresh credentials — the same
 # transcription discipline as the credential_env ecosystem surfaces
@@ -325,51 +319,15 @@ except ImportError:
 
 _MAX_CONFIG_BYTES = 1_000_000
 
-# RAPTOR repo root = core/security/cc_trust.py -> ../../
-_RAPTOR_DIR = Path(__file__).resolve().parents[2]
+# Operator-facing subject for this gate's shared renderer / resolve
+# gate (core/security/_trust_common.py) — names what was scanned.
+_SCAN_SUBJECT = "Claude Code config"
 
-# U+2028/U+2029 line-separators — Zl/Zp categories slip past Cc/Cf below
-# but terminals render them as newlines, which could split our output.
-_EXTRA_STRIP = frozenset({"\u2028", "\u2029"})
-
-
-def _safe(s: str) -> str:
-    """Strip Unicode control/format chars and line/paragraph separators.
-    Defends against ANSI escapes, Trojan Source bidi (CVE-2021-42574),
-    zero-width chars, and line-separator-driven output splitting."""
-    return "".join(
-        c if c == "\t" or (
-            c not in _EXTRA_STRIP
-            and unicodedata.category(c) not in ("Cc", "Cf")
-        ) else "?"
-        for c in s
-    )
-
-
-def _truncate(s: str, limit: int = 80) -> str:
-    safe = _safe(s)
-    return safe[:limit] + "..." if len(safe) > limit else safe
-
-
-def _mask(s: str, keep: int = 8) -> str:
-    """Render a secret-bearing config value without echoing it.
-
-    Scan output lands on stdout and from there in retained CI logs, so
-    credential-helper commands, env values, and MCP command lines must
-    not be printed verbatim — a leaked settings.json would otherwise
-    republish its secrets into every build log. Keep a short prefix
-    (enough to identify the binary/helper for triage), redact the tail,
-    and show the length so distinct values remain distinguishable.
-    ``keep=0`` fully redacts — used for env values, where the value IS
-    the secret and even a prefix is a partial leak.
-    """
-    safe = _safe(s)
-    if not safe:
-        return "(empty)"
-    # A prefix of a value no longer than ``keep`` IS the value —
-    # fully redact rather than echo it whole.
-    prefix = safe[:keep] if 0 < keep < len(safe) else ""
-    return f"{prefix}*** ({len(safe)} chars)"
+# _safe / _truncate / _mask (sanitise, bound, redact — the display
+# path every attacker-influencable value rides through), the U+2028/
+# U+2029 strip set, and _RAPTOR_DIR (repo-root self-scan skip) live in
+# the shared trust-gate helper layer; see core/security/
+# _trust_common.py for the threat model.
 
 
 def _mask_url(s: str) -> str:
@@ -740,29 +698,13 @@ def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) 
         return False
     if trust_override is None:
         trust_override = _trust_override_set
-    # A SUPPLIED target the checker cannot resolve or stat is refused,
-    # not waved through: these lanes previously returned "clean", but
-    # that verdict had examined nothing — a vanished (TOCTOU),
-    # mistyped, or pathological path skipped the gate entirely while
-    # the caller went on to use the same spelling. The trust override
-    # downgrades to warn-and-proceed exactly like a real finding, so
-    # the launcher's "Override: --trust-repo" hint stays truthful.
-    try:
-        resolved = str(Path(repo_path).resolve())
-        os.stat(resolved)
-    except (ValueError, OSError) as e:
-        reason = getattr(e, "strerror", None) or type(e).__name__
-        shown = _truncate(_safe(repo_path), limit=200)
-        if trust_override:
-            print(f"raptor: cannot examine {shown} for Claude Code "
-                  f"config ({_safe(str(reason))}) — proceeding "
-                  f"(trust override active)")
-            return False
-        # Caller-neutral phrasing: some call sites use the return only
-        # as an early warning and enforce at later re-check sites.
-        print(f"raptor: cannot examine {shown} for Claude Code "
-              f"config ({_safe(str(reason))}) — treating as dangerous")
-        return True
+    # Fail-closed resolve+stat gate (shared helper layer): a SUPPLIED
+    # target the checker cannot resolve or stat is refused, not waved
+    # through; the trust override downgrades to warn-and-proceed.
+    resolved, refuse = resolve_supplied_target(
+        repo_path, trust_override, subject=_SCAN_SUBJECT)
+    if resolved is None:
+        return refuse
     scans, any_blocking = _scan_cached(resolved,
                                        _read_config_state(Path(resolved)))
     # Print side-effects live OUTSIDE the cache. Pre-fix the print() calls
@@ -774,7 +716,8 @@ def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) 
     # orchestrator that re-checks the same repo per finding).
     if scans:
         target = Path(resolved)
-        _render_scan_report(target, scans, any_blocking, trust_override)
+        render_scan_report(target, scans, any_blocking, trust_override,
+                           subject=_SCAN_SUBJECT)
     return any_blocking and not trust_override
 
 
@@ -886,28 +829,7 @@ def _scan_cached(resolved_path: str,
     return (tuple(scans), any_blocking)
 
 
-def _render_scan_report(target: Path, scans, any_blocking: bool,
-                        trust_override: bool) -> None:
-    """Pure rendering — separated from `_scan_cached` so the cache
-    doesn't suppress the operator-visible warning on re-invocation."""
-    safe_target = _safe(str(target))
-    if any_blocking:
-        if trust_override:
-            print(f"raptor: {safe_target} has dangerous Claude Code config "
-                  f"(trust override active):")
-        else:
-            print(f"raptor: {safe_target} has dangerous Claude Code config:")
-    else:
-        print(f"raptor: {safe_target} has Claude Code config:")
-
-    for fs in scans:
-        try:
-            rel = fs.path.relative_to(target)
-        except ValueError:
-            rel = fs.path
-        print(f"  {_safe(str(rel))}")
-        if not fs.findings:
-            continue
-        label_w = max(len(f.label) for f in fs.findings) + 2
-        for f in fs.findings:
-            print(f"    {f.label:<{label_w}}{f.value}")
+# Report rendering lives in the shared helper layer
+# (core.security._trust_common.render_scan_report) — kept OUTSIDE
+# `_scan_cached` so the cache doesn't suppress the operator-visible
+# warning on re-invocation.
