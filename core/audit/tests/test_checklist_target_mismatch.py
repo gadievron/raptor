@@ -252,19 +252,25 @@ class TestCmdRunChecklistGate:
         rounds = {json.loads(p.read_text())["round"] for p in asides}
         assert rounds == {1, 2}
 
-    def _write_sharded(self, monkeypatch, out_dir: Path,
-                       target: Path) -> None:
-        """A run-local SHARDED checklist recording *target*."""
+    def _write_sharded(self, out_dir: Path, target: Path) -> None:
+        """A run-local SHARDED checklist recording *target*.
+
+        Uses a LOCAL MonkeyPatch context for the byte-budget shrink:
+        the function-scoped ``monkeypatch`` fixture instance is shared
+        with the conftest's autouse key-isolation fixture, so calling
+        ``monkeypatch.undo()`` here would also drop the XDG_DATA_HOME
+        redirect — the frame token would then be minted under the
+        per-test key but verified against the user's real key, and the
+        checklist would read back as tampered (empty).
+        """
         import core.inventory as inv
         from core.inventory import save_checklist
-        monkeypatch.setattr(inv, "_MAX_CHECKLIST_BYTES", 64)
-        try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(inv, "_MAX_CHECKLIST_BYTES", 64)
             save_checklist(out_dir, {
                 "target_path": str(target),
                 "files": [{"path": "a.c", "items": [], "sloc": 1}],
             })
-        finally:
-            monkeypatch.undo()
         assert (out_dir / "checklist" / "index.json").is_file()
 
     def test_sharded_mismatch_discards_and_rebuilds(
@@ -279,7 +285,7 @@ class TestCmdRunChecklistGate:
         target_b.mkdir()
         out_dir = tmp_path / "out"
         out_dir.mkdir()
-        self._write_sharded(monkeypatch, out_dir, target_a)
+        self._write_sharded(out_dir, target_a)
 
         mod, calls, args = _run_cmd_run(
             tmp_path, monkeypatch, out_dir, target_b)
@@ -305,7 +311,7 @@ class TestCmdRunChecklistGate:
         target_a.mkdir()
         out_dir = tmp_path / "out"
         out_dir.mkdir()
-        self._write_sharded(monkeypatch, out_dir, target_a)
+        self._write_sharded(out_dir, target_a)
 
         mod, calls, args = _run_cmd_run(
             tmp_path, monkeypatch, out_dir, target_a)
