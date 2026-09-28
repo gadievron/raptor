@@ -486,11 +486,36 @@ class TestStructural:
         assert "symlink" in capsys.readouterr().out
 
     def test_oversized_pack_file_blocks(self, tmp_path, capsys):
-        # 2 MiB pack file — beyond the 1 MiB cap.
+        # 2 MiB pack file — well beyond the cap.
         big = "name: x\n" + ("# pad\n" * 350_000)
         (tmp_path / "qlpack.yml").write_text(big)
         assert _check(str(tmp_path)) is True
         assert "oversized" in capsys.readouterr().out
+
+    def test_pack_file_one_byte_over_cap_blocks(self, tmp_path, capsys):
+        """Boundary pin on the SHARED cap: one byte over refuses.
+
+        Both trust gates read config through the shared bounded read
+        (core.security._trust_common.read_trust_config), so this gate's
+        refusal threshold is MAX_TRUST_CONFIG_BYTES exactly — not a
+        private per-gate cap that can drift from the cc gate's again.
+        """
+        from core.security._trust_common import MAX_TRUST_CONFIG_BYTES
+        body = b"name: x\n# " + b"p" * (MAX_TRUST_CONFIG_BYTES - 10) + b"\n"
+        assert len(body) == MAX_TRUST_CONFIG_BYTES + 1
+        (tmp_path / "qlpack.yml").write_bytes(body)
+        assert _check(str(tmp_path)) is True
+        assert "oversized" in capsys.readouterr().out
+
+    def test_pack_file_at_cap_scans(self, tmp_path, capsys):
+        """A benign pack file of exactly the cap still gets scanned
+        (and produces no findings) — the boundary is over, not at."""
+        from core.security._trust_common import MAX_TRUST_CONFIG_BYTES
+        body = b"name: x\n# " + b"p" * (MAX_TRUST_CONFIG_BYTES - 11) + b"\n"
+        assert len(body) == MAX_TRUST_CONFIG_BYTES
+        (tmp_path / "qlpack.yml").write_bytes(body)
+        assert _check(str(tmp_path)) is False
+        assert capsys.readouterr().out == ""
 
     def test_raptor_self_scan_short_circuits(self, capsys):
         """Operator running RAPTOR against RAPTOR itself isn't an

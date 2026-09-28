@@ -70,12 +70,12 @@ from core.security._trust_common import (
     FileScan,
     Finding,
     mask as _mask,
+    read_trust_config as _read_capped,
     render_scan_report,
     resolve_supplied_target,
     safe_text as _safe,
     truncate as _truncate,
 )
-from core.security.capped_read import read_capped
 from core.security.credential_env import (
     CONFIG_HOME_REDIRECT_ENV_VARS,
     CREDENTIAL_ENV_FAMILY,
@@ -317,8 +317,6 @@ try:
 except ImportError:
     _DANGEROUS_ENV_VARS = _COMPREHENSIVE_DANGEROUS_ENV_VARS
 
-_MAX_CONFIG_BYTES = 1_000_000
-
 # Operator-facing subject for this gate's shared renderer / resolve
 # gate (core/security/_trust_common.py) — names what was scanned.
 _SCAN_SUBJECT = "Claude Code config"
@@ -343,12 +341,6 @@ def _mask_url(s: str) -> str:
     if parsed.scheme and host:
         return f"{parsed.scheme}://{host}/*** ({len(safe)} chars)"
     return _mask(safe)
-
-
-def _read_capped(path: Path) -> bytes | None:
-    """Read up to ``_MAX_CONFIG_BYTES``; delegates the hardened
-    open/read to :func:`core.security.capped_read.read_capped`."""
-    return read_capped(path, _MAX_CONFIG_BYTES)
 
 
 def _load_json(path: Path, raw: bytes | None = None) -> tuple[dict | None, bool]:

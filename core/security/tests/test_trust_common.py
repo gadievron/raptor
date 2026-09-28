@@ -19,6 +19,7 @@ import pytest
 
 from core.security._trust_common import (
     EXTRA_STRIP,
+    MAX_TRUST_CONFIG_BYTES,
     FileScan,
     Finding,
     mask,
@@ -216,6 +217,29 @@ class TestRenderScanReport:
         render_scan_report(evil, self._one_scan(evil, True),
                            True, False, "x config")
         assert "\x1b" not in capsys.readouterr().out
+
+
+class TestCapMagnitude:
+    """Band pin on MAX_TRUST_CONFIG_BYTES itself. The consumer-suite
+    boundary tests follow the constant (at-cap scans, one-over blocks),
+    so they stay green under ANY value — only a magnitude pin catches
+    the constant being moved. Both directions are regressions."""
+
+    def test_cap_not_rewidened_past_resolved_value(self):
+        # Upper bound: the shared cap resolved the twin drift to the
+        # SMALLER historical value (cc_trust's 1_000_000). Re-widening
+        # past it silently re-opens the 1_000_001..1_048_576 band where
+        # attacker-supplied pack/config bytes scanned (and could scan
+        # clean) instead of refusing — a deny-direction regression.
+        assert MAX_TRUST_CONFIG_BYTES <= 1_000_000
+
+    def test_cap_not_shrunk_below_legitimate_config_floor(self):
+        # Lower bound: shrinking the cap makes the gates refuse
+        # ordinary legitimate trust configs outright (an operational
+        # break, recoverable only via --trust-repo). Real config/pack
+        # files are <10 KiB; 64 KiB is the floor below which refusal
+        # stops being oversize defence.
+        assert MAX_TRUST_CONFIG_BYTES >= 65_536
 
 
 if __name__ == "__main__":

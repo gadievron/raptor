@@ -767,6 +767,34 @@ class TestMalformed:
         (claude / "settings.json").write_text("x" * 1_000_001)
         assert _check(str(tmp_path)) is True
 
+    def test_one_byte_over_shared_cap_blocks(self, tmp_path):
+        """Boundary pin on the SHARED cap: one byte over refuses.
+
+        Both trust gates read config through the shared bounded read
+        (core.security._trust_common.read_trust_config), so this gate's
+        refusal threshold is MAX_TRUST_CONFIG_BYTES exactly — not a
+        private per-gate cap that can drift from the codeql gate's
+        again.
+        """
+        from core.security._trust_common import MAX_TRUST_CONFIG_BYTES
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        (claude / "settings.json").write_bytes(
+            b"x" * (MAX_TRUST_CONFIG_BYTES + 1))
+        assert _check(str(tmp_path)) is True
+
+    def test_benign_settings_at_shared_cap_scans_clean(self, tmp_path, capsys):
+        """A benign settings.json of exactly the cap still parses and
+        passes — the boundary is over, not at."""
+        from core.security._trust_common import MAX_TRUST_CONFIG_BYTES
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        body = json.dumps({"model": "opus"}).encode()
+        pad = MAX_TRUST_CONFIG_BYTES - len(body) - 1
+        (claude / "settings.json").write_bytes(body + b"\n" + b" " * pad)
+        assert _check(str(tmp_path)) is False
+        assert capsys.readouterr().out == ""
+
     def test_malformed_blocks(self, tmp_path):
         claude = tmp_path / ".claude"
         claude.mkdir()

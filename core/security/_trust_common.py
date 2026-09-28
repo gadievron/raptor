@@ -36,10 +36,31 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.security.capped_read import read_capped
+
 # RAPTOR repo root = core/security/_trust_common.py -> ../../
 # Both gates skip scanning RAPTOR's own repo (operator running RAPTOR
 # against itself is implicitly trusted).
 RAPTOR_DIR = Path(__file__).resolve().parents[2]
+
+# One cap for every trust-gate config read. Real config/pack files are
+# tiny (<10 KiB); the cap bounds the JSON/YAML parsers' memory exposure
+# and anything over it is refused as oversized/unreadable — a BLOCKING
+# finding, so a smaller cap can only move a file toward refusal, never
+# wave it through. Both directions matter when touching this value:
+# raising it widens parser exposure on attacker-supplied bytes;
+# lowering it starts refusing larger legitimate configs (operators
+# override per run via --trust-repo, so refusal is recoverable).
+MAX_TRUST_CONFIG_BYTES = 1_000_000
+
+
+def read_trust_config(path: Path) -> bytes | None:
+    """Read up to ``MAX_TRUST_CONFIG_BYTES``; delegates the hardened
+    open/read (O_NOFOLLOW, non-regular refusal, cap) to
+    :func:`core.security.capped_read.read_capped`. None = refuse
+    (fail-closed: callers treat an unreadable candidate as a blocking
+    finding, never as absent)."""
+    return read_capped(path, MAX_TRUST_CONFIG_BYTES)
 
 # U+2028/U+2029 line-separators — Zl/Zp categories slip past the Cc/Cf
 # strip below but terminals render them as newlines, which could split

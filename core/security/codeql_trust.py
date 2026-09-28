@@ -93,12 +93,12 @@ from core.security._trust_common import (
     FileScan,
     Finding,
     mask as _mask,
+    read_trust_config as _read_capped,
     render_scan_report,
     resolve_supplied_target,
     safe_text as _safe,
     truncate as _truncate,
 )
-from core.security.capped_read import read_capped
 
 try:
     import yaml
@@ -238,10 +238,6 @@ def set_trust_override(val: bool) -> None:
 # load-bearing — revisit the docstring and walk boundaries instead.
 PACK_PROBE_VERIFIED_CLI = "2.26.3"
 
-# 1 MiB cap on pack files. Real codeql-pack.yml files are <10 KiB; the
-# cap exists to bound the YAML parser's memory exposure.
-_MAX_CONFIG_BYTES = 1_048_576
-
 # Bound the recursive walk on pathological repos (vendored monorepos
 # with thousands of nested pack files). 200 hits + early break is
 # enough to catch any realistic pack layout while keeping the walk
@@ -312,12 +308,6 @@ def _path_present(p: Path) -> bool:
         # reads it, and an unreadable file is a blocking
         # "oversized/unreadable" finding.
         return True
-
-
-def _read_capped(path: Path) -> bytes | None:
-    """Read up to ``_MAX_CONFIG_BYTES``; delegates the hardened
-    open/read to :func:`core.security.capped_read.read_capped`."""
-    return read_capped(path, _MAX_CONFIG_BYTES)
 
 
 # ---------------------------------------------------------------------------
