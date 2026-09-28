@@ -297,6 +297,18 @@ def build_sink_results(
                         len(result.direct_sinks),
                         len(result.transitive_reach),
                     )
+                    if result.truncation is not None:
+                        # The cached extraction was budget-truncated;
+                        # the marker round-trips so a resumed segment
+                        # inherits the degradation honestly (its
+                        # eligible verdicts were already fail-closed
+                        # at build time).
+                        logger.warning(
+                            "sink discovery: reloaded cache is "
+                            "truncated (%s) — sink_unreachable "
+                            "scope-narrowing stays disabled",
+                            result.truncation.get("reason"),
+                        )
                 except Exception:
                     result = None
                     logger.debug(

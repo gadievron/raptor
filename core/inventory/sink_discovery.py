@@ -56,7 +56,20 @@ logger = logging.getLogger(__name__)
 # silent by design), so a skipped monster is visible, not a silent
 # hole in sink/reachability coverage.
 _PER_FILE_CAP = 2_000_000
-_AGGREGATE_CAP = 256 * 1024 * 1024
+# Aggregate ceiling, both directions: LOWER re-creates kernel-scale
+# truncation — a kernel tree carries on the order of 1 GiB of
+# admissible C, the previous 256 MiB budget exhausted mid-walk, the
+# remaining files contributed zero sinks/reach, and every "no sink
+# path" claim after that point was computed on a partial call graph.
+# HIGHER lets a hostile tree of cap-sized files grind discovery:
+# call-graph extraction measures ~1.8 MB/s (tree-sitter C), so the
+# ceiling already admits ~20 min of worst-case parse (paid once per
+# tree — the result rides the prep cache by content fingerprint).
+# Truncation at the ceiling is never silent: the walk stamps a
+# structured ``SinkDiscoveryResult.truncation`` record and the
+# sink-unreachable verdicts fail closed (see
+# ``discover_sinks_for_target``).
+_AGGREGATE_CAP = 2 * 1024 * 1024 * 1024
 
 # ── Source-level dangerous call targets ─────────────────────────────
 # Qualified dotted names matched against the full call chain. Only
@@ -336,6 +349,14 @@ class SinkDiscoveryResult:
     framework_apis: list[FrameworkAPI]
     dangerous_target_counts: dict[str, int]
     unreachable_eligible: dict[tuple[str, str], UnreachableVerdict] | None = None
+    #: Honest-incomplete marker: ``None`` when the discovery walk read
+    #: every eligible file; a structured record (reason, budget and
+    #: admitted/skipped file+byte counts) when the aggregate byte
+    #: budget truncated the walk. Serialised through every artifact
+    #: shape (context-map ``sink_discovery``, the audit prep cache) so
+    #: downstream consumers see the degradation as a field, not a log
+    #: line.
+    truncation: dict[str, Any] | None = None
 
     def as_dict(self) -> dict:
         """Serialise for JSON output / context-map enrichment."""
@@ -376,6 +397,10 @@ class SinkDiscoveryResult:
                     key=lambda x: -x[1],
                 )
             },
+            # Only present when the walk truncated — the common
+            # (complete) case keeps the context-map shape unchanged.
+            **({"truncation": self.truncation}
+               if self.truncation is not None else {}),
         }
 
     def to_full_dict(self) -> dict:
@@ -420,6 +445,7 @@ class SinkDiscoveryResult:
                 for f in self.framework_apis
             ],
             "dangerous_target_counts": self.dangerous_target_counts,
+            "truncation": self.truncation,
             "unreachable_eligible": (
                 [
                     {
@@ -481,6 +507,10 @@ class SinkDiscoveryResult:
             ],
             dangerous_target_counts=dict(
                 d.get("dangerous_target_counts") or {},
+            ),
+            truncation=(
+                dict(d["truncation"])
+                if isinstance(d.get("truncation"), dict) else None
             ),
             unreachable_eligible=(
                 {
@@ -940,9 +970,10 @@ def discover_sinks_for_target(
 
     from core.inventory.languages import refine_language
 
+    walk_stats: dict[str, Any] = {}
     for source_file, rel, lang in iter_discovery_source_files(
         target, languages=languages, scope_dirs=scope_dirs,
-        budget_warning=True,
+        budget_warning=True, stats=walk_stats,
     ):
         extractor = extractors[lang]
         try:
@@ -966,13 +997,52 @@ def discover_sinks_for_target(
         # without a second parse of the tree).
         collect_call_graphs.update(call_graphs)
 
-    return discover_sinks(
+    result = discover_sinks(
         call_graphs,
         max_depth=max_depth,
         framework_threshold=framework_threshold,
         framework_min_files=framework_min_files,
         file_languages=file_languages,
     )
+
+    if walk_stats.get("truncated"):
+        # Structured honest-incomplete marker: rides as_dict() into
+        # the context map and to_full_dict() into the prep cache, so
+        # every downstream consumer (and a resumed segment reloading
+        # the cache) sees the degradation in-band, not just in a log
+        # line.
+        result.truncation = {
+            "reason": "aggregate_byte_budget",
+            "budget_bytes": walk_stats.get("budget_bytes", 0),
+            "admitted_files": walk_stats.get("admitted_files", 0),
+            "admitted_bytes": walk_stats.get("admitted_bytes", 0),
+            "skipped_files": walk_stats.get("skipped_files", 0),
+            "skipped_bytes": walk_stats.get("skipped_bytes", 0),
+        }
+        # A truncated walk saw only part of the call graph: any
+        # skipped file may hold a caller that reaches a "no sink
+        # path" function, so no eligible=True verdict may survive.
+        # eligible=False is the fail-safe direction — it only BLOCKS
+        # sink_unreachable scope-narrowing downstream (core.evidence
+        # consumes eligible verdicts as permission to narrow, never
+        # as suppression on their own).
+        for key, verdict in result.unreachable_eligible.items():
+            if verdict.eligible:
+                result.unreachable_eligible[key] = UnreachableVerdict(
+                    file=verdict.file,
+                    function=verdict.function,
+                    eligible=False,
+                    reason="discovery truncated: aggregate byte budget",
+                )
+        logger.warning(
+            "sink_discovery: walk truncated by aggregate byte budget "
+            "(%d files / %d bytes skipped) — sink_unreachable "
+            "scope-narrowing disabled for this run",
+            result.truncation["skipped_files"],
+            result.truncation["skipped_bytes"],
+        )
+
+    return result
 
 
 def iter_discovery_source_files(
@@ -981,6 +1051,7 @@ def iter_discovery_source_files(
     languages: set[str] | None = None,
     scope_dirs: list | None = None,
     budget_warning: bool = False,
+    stats: dict[str, Any] | None = None,
 ):
     """Yield ``(path, rel, lang)`` for every file the discovery walk
     reads, applying the same gates in the same walk order (scope,
@@ -991,6 +1062,17 @@ def iter_discovery_source_files(
     walk in :func:`discover_sinks_for_target` and any fingerprint of
     its inputs (the audit prep cache) both consume it, so the two can
     never drift.
+
+    ``stats``, when provided, is filled in place with the walk's
+    admission accounting (``admitted_files``/``admitted_bytes``/
+    ``skipped_files``/``skipped_bytes``/``budget_bytes``/
+    ``truncated``) once the generator is exhausted. The ADMITTED set
+    is byte-identical with or without ``stats`` — the first file
+    over the remaining budget permanently closes admission (matching
+    the historical ``break``), and with ``stats`` the walk merely
+    keeps counting the gate-passing files it can no longer admit.
+    The fingerprint path (no ``stats``) and the discovery walk
+    therefore still enumerate the same inputs.
     """
     from core.inventory.languages import detect_language
 
@@ -999,7 +1081,15 @@ def iter_discovery_source_files(
         tuple(str(Path(s).resolve()) for s in scope_dirs)
         if scope_dirs else None
     )
-    budget_remaining = _AGGREGATE_CAP
+    # Read once at generator start so a monkeypatched cap binds the
+    # whole walk consistently (admission AND the reported budget).
+    budget_bytes = _AGGREGATE_CAP
+    budget_remaining = budget_bytes
+    truncated = False
+    admitted_files = 0
+    admitted_bytes = 0
+    skipped_files = 0
+    skipped_bytes = 0
     oversize_skipped = 0
     oversize_example: str | None = None
 
@@ -1033,14 +1123,28 @@ def iter_discovery_source_files(
             if oversize_example is None:
                 oversize_example = rel
             continue
-        if st.st_size > budget_remaining:
-            if budget_warning:
-                logger.warning(
-                    "sink_discovery: aggregate byte budget (%d) exhausted "
-                    "at %s; remaining files skipped", _AGGREGATE_CAP, rel,
-                )
-            break
+        if truncated or st.st_size > budget_remaining:
+            if not truncated:
+                truncated = True
+                if budget_warning:
+                    logger.warning(
+                        "sink_discovery: aggregate byte budget (%d) "
+                        "exhausted at %s; remaining files skipped",
+                        budget_bytes, rel,
+                    )
+            if stats is None:
+                # Historical behaviour (fingerprint path): stop the
+                # walk on the first over-budget file.
+                break
+            # Admission stays closed (identical admitted set to the
+            # break above); keep walking only to COUNT what the
+            # budget dropped, so the truncation record is honest.
+            skipped_files += 1
+            skipped_bytes += st.st_size
+            continue
         budget_remaining -= st.st_size
+        admitted_files += 1
+        admitted_bytes += st.st_size
         yield source_file, rel, lang
     if budget_warning and oversize_skipped:
         # Coverage-carrying disclosure, once per walk: every skipped
@@ -1052,6 +1156,16 @@ def iter_discovery_source_files(
             "sinks or reachability to the context map",
             oversize_skipped, _PER_FILE_CAP, oversize_example,
         )
+
+    if stats is not None:
+        stats.update({
+            "admitted_files": admitted_files,
+            "admitted_bytes": admitted_bytes,
+            "skipped_files": skipped_files,
+            "skipped_bytes": skipped_bytes,
+            "budget_bytes": budget_bytes,
+            "truncated": truncated,
+        })
 
 
 def _get_call_graph_extractors():
