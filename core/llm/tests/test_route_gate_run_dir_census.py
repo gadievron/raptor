@@ -26,8 +26,9 @@ call spellings plus the allowlist is proportionate for that risk.
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
+from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -39,8 +40,12 @@ GATE_NAMES = frozenset({
     "ensure_inprocess_dispatcher_env",
 })
 
-#: (repo-relative path, callee name) → rationale. Every entry must be
-#: exercised by the scan — a stale entry fails the census (rot guard).
+#: (repo-relative path, canonical callee name) → rationale. Every
+#: entry must SUPPRESS an actual violation on every run — an entry
+#: whose caller has become compliant (or vanished) is stale and fails
+#: the census, so a preemptive entry for a compliant file cannot
+#: silently pre-disarm the sweep for that (file, gate) pair (rot
+#: guard).
 ALLOWLIST: dict[tuple[str, str], str] = {
     ("libexec/raptor-llm-ask", "ensure_route_for_model_configs"):
         "free-form ask CLI: no run lifecycle and no output directory "
@@ -92,11 +97,16 @@ def _gate_import_aliases(tree: ast.Module) -> dict[str, str]:
     return aliases
 
 
-def _census_source(
-    source: str,
-) -> tuple[list[tuple[str, str]], int, int, set[str]]:
-    """Sweep one module: (violations, gate-call count, wrapper-call
-    count, callee names seen). A *wrapper* is a function that has a
+class _ModuleCensus(NamedTuple):
+    """One module's sweep result."""
+
+    violations: list[tuple[str, str]]  # (canonical name, message)
+    gate_calls: int
+    wrapper_calls: int
+
+
+def _census_source(source: str) -> _ModuleCensus:
+    """Sweep one module. A *wrapper* is a function that has a
     ``run_dir`` parameter and calls a censused name (gates first,
     then fixpoint over wrappers-of-wrappers) — its call sites carry
     the threading obligation too. A function WITHOUT a ``run_dir``
@@ -131,7 +141,6 @@ def _census_source(
     violations: list[tuple[str, str]] = []
     gate_calls = 0
     wrapper_calls = 0
-    seen: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -139,7 +148,6 @@ def _census_source(
         if name is None or name not in censused:
             continue
         canonical = censused[name]
-        seen.add(canonical)
         if canonical in GATE_NAMES:
             gate_calls += 1
         else:
@@ -159,7 +167,42 @@ def _census_source(
                 f"line {node.lineno}: {name}(run_dir=None) literal — "
                 "an explicit None defeats the audit-log placement; "
                 "run-dir-less callers belong on the allowlist instead")))
-    return violations, gate_calls, wrapper_calls, seen
+    return _ModuleCensus(violations, gate_calls, wrapper_calls)
+
+
+def _census_repo(
+    modules: Mapping[str, str],
+    allowlist: Mapping[tuple[str, str], str] = ALLOWLIST,
+) -> tuple[list[str], int, int, set[tuple[str, str]]]:
+    """Sweep the whole surface: (reported violations, gate-call total,
+    wrapper-call total, allowlist entries that suppressed a
+    violation). An entry is *used* only when it masks an actual
+    violation — merely naming a censused callee in the file does not
+    count, so an entry for a compliant caller reads as stale instead
+    of silently disarming the census for that (file, gate) pair.
+    """
+    reported: list[str] = []
+    gate_total = 0
+    wrapper_total = 0
+    used: set[tuple[str, str]] = set()
+    for rel, source in modules.items():
+        try:
+            census = _census_source(source)
+        except SyntaxError:
+            # A module the census cannot parse can only hide a gate
+            # caller if it names a gate at all.
+            assert not any(name in source for name in GATE_NAMES), (
+                f"{rel}: names a route gate but does not parse — "
+                "the census cannot sweep it")
+            continue
+        gate_total += census.gate_calls
+        wrapper_total += census.wrapper_calls
+        for name, msg in census.violations:
+            if (rel, name) in allowlist:
+                used.add((rel, name))
+            else:
+                reported.append(f"{rel}: {msg}")
+    return reported, gate_total, wrapper_total, used
 
 
 def _python_sources() -> Iterator[tuple[str, Path]]:
@@ -196,39 +239,20 @@ def _python_sources() -> Iterator[tuple[str, Path]]:
 
 class TestRouteGateRunDirCensus:
     def test_every_gate_call_threads_run_dir(self) -> None:
-        all_violations: list[str] = []
-        gate_total = 0
-        wrapper_total = 0
-        used_allowlist: set[tuple[str, str]] = set()
-        for rel, path in _python_sources():
-            source = path.read_text(encoding="utf-8", errors="replace")
-            try:
-                violations, gates, wrappers, seen = _census_source(source)
-            except SyntaxError:
-                # A module the census cannot parse can only hide a gate
-                # caller if it names a gate at all.
-                assert not any(name in source for name in GATE_NAMES), (
-                    f"{rel}: names a route gate but does not parse — "
-                    "the census cannot sweep it")
-                continue
-            gate_total += gates
-            wrapper_total += wrappers
-            for name in seen:
-                if (rel, name) in ALLOWLIST:
-                    used_allowlist.add((rel, name))
-            allowed = {name for (p, name) in ALLOWLIST if p == rel}
-            all_violations.extend(
-                f"{rel}: {msg}" for name, msg in violations
-                if name not in allowed
-            )
-        assert not all_violations, (
+        modules = {
+            rel: path.read_text(encoding="utf-8", errors="replace")
+            for rel, path in _python_sources()
+        }
+        reported, gate_total, wrapper_total, used = _census_repo(modules)
+        assert not reported, (
             "route-gate calls missing run_dir threading:\n  "
-            + "\n  ".join(all_violations))
+            + "\n  ".join(reported))
         # Non-vacuity: the census must keep seeing the swept callers.
         assert gate_total >= _KNOWN_GATE_CALLS, gate_total
         assert wrapper_total >= _KNOWN_WRAPPER_CALLS, wrapper_total
-        # Rot guard: every allowlist entry must still match a caller.
-        stale = set(ALLOWLIST) - used_allowlist
+        # Rot guard: every allowlist entry must still suppress an
+        # actual violation.
+        stale = set(ALLOWLIST) - used
         assert not stale, f"stale allowlist entries: {sorted(stale)}"
 
 
@@ -257,25 +281,58 @@ class TestSweepSurface:
             assert rel.startswith("raptor") and rel.endswith(".py"), rel
 
 
+class TestAllowlistRotGuard:
+    """An allowlist entry is used only when it suppresses an actual
+    violation — masking works, but a compliant or vanished caller
+    leaves its entry visibly stale."""
+
+    _ENTRY = ("libexec/raptor-example", "ensure_route_for_client")
+    _ALLOW = {_ENTRY: "test rationale"}
+
+    def test_entry_suppressing_a_violation_counts_as_used(self) -> None:
+        modules = {
+            "libexec/raptor-example":
+                'ensure_route_for_client(client, "example-cli")\n',
+        }
+        reported, _, _, used = _census_repo(modules, self._ALLOW)
+        assert not reported and used == {self._ENTRY}
+
+    def test_entry_for_compliant_caller_reads_stale(self) -> None:
+        # The file names and CALLS the gate, compliantly — under the
+        # old seen-a-callee rule this masked future regressions; now
+        # the entry is unused and the census reports it stale.
+        modules = {
+            "libexec/raptor-example":
+                'ensure_route_for_client(client, "example-cli", '
+                "run_dir=out_dir)\n",
+        }
+        reported, _, _, used = _census_repo(modules, self._ALLOW)
+        assert not reported and not used
+
+    def test_entry_for_vanished_caller_reads_stale(self) -> None:
+        reported, _, _, used = _census_repo({}, self._ALLOW)
+        assert not reported and not used
+
+
 class TestCensusMechanics:
     """Mutant shapes: the census must trip on the defect spellings it
     exists to catch, and accept the threaded ones."""
 
     def test_trips_on_gate_call_without_run_dir(self) -> None:
-        violations, gates, _, _ = _census_source(
+        census = _census_source(
             'ensure_route_for_client(client, "some-cli")\n')
-        assert violations and gates == 1
+        assert census.violations and census.gate_calls == 1
 
     def test_trips_on_none_literal(self) -> None:
-        violations, _, _, _ = _census_source(
+        census = _census_source(
             'ensure_route_for_client(client, "some-cli", run_dir=None)\n')
-        assert violations
+        assert census.violations
 
     def test_accepts_threaded_gate_call(self) -> None:
-        violations, gates, _, _ = _census_source(
+        census = _census_source(
             'ensure_route_for_client(client, "some-cli", '
             "run_dir=out_dir)\n")
-        assert not violations and gates == 1
+        assert not census.violations and census.gate_calls == 1
 
     def test_trips_on_aliased_gate_import(self) -> None:
         source = (
@@ -284,11 +341,11 @@ class TestCensusMechanics:
             ")\n"
             '_gate(client, "some-cli")\n'
         )
-        violations, gates, _, _ = _census_source(source)
-        assert violations and gates == 1
+        census = _census_source(source)
+        assert census.violations and census.gate_calls == 1
         # Canonical name, so an allowlist entry keyed on the gate
         # matches regardless of the caller's import spelling.
-        assert violations[0][0] == "ensure_route_for_client"
+        assert census.violations[0][0] == "ensure_route_for_client"
 
     def test_accepts_threaded_aliased_gate_call(self) -> None:
         source = (
@@ -297,8 +354,8 @@ class TestCensusMechanics:
             ")\n"
             '_gate(client, "some-cli", run_dir=out_dir)\n'
         )
-        violations, gates, _, _ = _census_source(source)
-        assert not violations and gates == 1
+        census = _census_source(source)
+        assert not census.violations and census.gate_calls == 1
 
     def test_wrapper_over_aliased_gate_is_swept(self) -> None:
         source = (
@@ -310,9 +367,9 @@ class TestCensusMechanics:
             "def main(out_dir):\n"
             '    _wrap(client, "cli")\n'
         )
-        violations, gates, wrappers, _ = _census_source(source)
-        assert gates == 1 and wrappers == 1
-        assert violations and violations[0][0] == "_wrap"
+        census = _census_source(source)
+        assert census.gate_calls == 1 and census.wrapper_calls == 1
+        assert census.violations and census.violations[0][0] == "_wrap"
 
     def test_wrapper_call_sites_are_swept(self) -> None:
         source = (
@@ -321,9 +378,9 @@ class TestCensusMechanics:
             "def main(out_dir):\n"
             '    _wrap(client, "cli")\n'
         )
-        violations, gates, wrappers, _ = _census_source(source)
-        assert gates == 1 and wrappers == 1
-        assert violations and violations[0][0] == "_wrap"
+        census = _census_source(source)
+        assert census.gate_calls == 1 and census.wrapper_calls == 1
+        assert census.violations and census.violations[0][0] == "_wrap"
 
     def test_threaded_wrapper_call_accepted_transitively(self) -> None:
         source = (
@@ -334,8 +391,8 @@ class TestCensusMechanics:
             "def main(out_dir):\n"
             '    _outer(client, run_dir=out_dir)\n'
         )
-        violations, _, wrappers, _ = _census_source(source)
-        assert not violations and wrappers == 2
+        census = _census_source(source)
+        assert not census.violations and census.wrapper_calls == 2
 
     def test_config_deriving_owner_ends_the_obligation(self) -> None:
         # A gate owner WITHOUT a run_dir parameter that threads the
@@ -348,5 +405,6 @@ class TestCensusMechanics:
             "def caller(config):\n"
             "    _build(config)\n"
         )
-        violations, gates, wrappers, _ = _census_source(source)
-        assert not violations and gates == 1 and wrappers == 0
+        census = _census_source(source)
+        assert not census.violations and census.gate_calls == 1
+        assert census.wrapper_calls == 0
