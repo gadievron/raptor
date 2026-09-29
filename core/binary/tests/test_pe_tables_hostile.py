@@ -411,13 +411,14 @@ class TestSectionCountReadProduct:
         tell a live stop from a fast inert one."""
         p = tmp_path / "fwdheavy.dll"
         p.write_bytes(self._amp_export_image(0))
-        # 3.0 matches the sections-x-reads sibling: the regression
-        # this pins (a per-read linear section scan) costs tens of
-        # seconds, so the margin holds, while 1.0 sat close enough
-        # to the quiet cost that slow loaded CI cores tripped it
-        # (cache pressure inflates CPU seconds too, not just wall).
-        # Lowering it back re-admits those false failures; raising
-        # it further starts hiding a partially-regressed resolver.
+        # 3.0 sits ~60x above the measured quiet cost (~0.05s CPU)
+        # — out of reach of loaded CI cores (cache pressure
+        # inflates CPU seconds too, not just wall); 1.0 sat close
+        # enough that they tripped it. This bound only fences gross
+        # blowups: on this 0-decoy image even a per-read linear
+        # section scan stays under budget, so the regression class
+        # is caught by TestBudgetReadStop's read-count pin, not
+        # here. Raising it further would hide even gross blowups.
         with cpu_budget(3.0, what="forwarder-heavy export walk"):
             facts = extract_pe_facts(p)
         assert facts is not None
@@ -431,9 +432,12 @@ class TestSectionCountReadProduct:
         """The sections x reads product (the resolver-scan
         regression): _MAX_SECTIONS - 1 decoy sections under the
         same max-shape table. Served from the segment index this
-        is bisect-cheap; a per-read linear scan makes it ~100k
-        reads x 4095 sections — tens of seconds from a sub-MB
-        file."""
+        is bisect-cheap. A per-read linear scan multiplies every
+        resolve by the 4096-entry table, but the name-retention
+        budget stops the walk after ~2k resolves, keeping even the
+        regressed cost under a second — the read-count pin
+        (TestBudgetReadStop) is the live catch for that class;
+        this bound only fences gross blowups."""
         p = tmp_path / "amp4k.dll"
         p.write_bytes(self._amp_export_image(
             pe_mod._MAX_SECTIONS - 1))
