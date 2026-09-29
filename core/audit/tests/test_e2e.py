@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from core.audit.tests.checklist_corpus import ChecklistBuildCache
+
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _AUDIT_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-audit")
 _CHECKLIST_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist")
@@ -40,12 +42,7 @@ def _run(args, **kwargs):
     )
 
 
-def _write_target(tmp_path):
-    """Create a small C target with a known bug and a clean function."""
-    target = tmp_path / "target"
-    target.mkdir()
-    src = target / "vuln.c"
-    src.write_text("""\
+_VULN_C = """\
 #include <stdio.h>
 #include <string.h>
 
@@ -63,7 +60,14 @@ int main(int argc, char **argv) {
     vuln_fn(argv[1]);
     return 0;
 }
-""")
+"""
+
+
+def _write_target(tmp_path):
+    """Create a small C target with a known bug and a clean function."""
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "vuln.c").write_text(_VULN_C)
     return target
 
 
@@ -91,6 +95,19 @@ class TestAuditE2E:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
         return target, out_dir
+
+    @pytest.fixture()
+    def built(
+        self, checklist_builds: ChecklistBuildCache, tmp_path: Path,
+    ) -> tuple[Path, Path]:
+        """Shared prebuilt checklist over the standard corpus (one CLI
+        build per process): private writable run dir + shared
+        read-only target. Tests that exercise the build itself, the
+        gaps auto-build, or mutate the target keep ``setup`` and
+        build their own."""
+        build = checklist_builds.build({"vuln.c": _VULN_C})
+        out_dir = build.make_run_dir(tmp_path / "out")
+        return build.target, out_dir
 
     def test_checklist_build(self, setup):
         target, out_dir = setup
@@ -122,9 +139,8 @@ class TestAuditE2E:
                   "--target", str(target)])
         assert "no context-map.json" in r.stderr
 
-    def test_context_assembly(self, setup):
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
+    def test_context_assembly(self, built):
+        target, out_dir = built
         r = _run([_AUDIT_CLI, "context", "--target", str(target),
                   "--file", "vuln.c", "--function", "vuln_fn",
                   "--line", "8", "--out", str(out_dir)])
@@ -132,10 +148,8 @@ class TestAuditE2E:
         assert "sprintf" in r.stdout
 
     @needs_semgrep
-    def test_record_finding_emits_findings_json(self, setup):
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+    def test_record_finding_emits_findings_json(self, built):
+        target, out_dir = built
         _run([_AUDIT_CLI, "context", "--target", str(target),
               "--file", "vuln.c", "--function", "vuln_fn",
               "--line", "8", "--out", str(out_dir)])
@@ -168,10 +182,8 @@ class TestAuditE2E:
         assert findings[0]["function"] == "vuln_fn"
         assert findings[0]["cwe"] == "CWE-134"
 
-    def test_record_clean_no_findings_json(self, setup):
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+    def test_record_clean_no_findings_json(self, built):
+        target, out_dir = built
         _run([_AUDIT_CLI, "context", "--target", str(target),
               "--file", "vuln.c", "--function", "safe_fn",
               "--line", "4", "--out", str(out_dir)])
@@ -187,10 +199,8 @@ class TestAuditE2E:
             findings = json.loads(findings_path.read_text())
             assert not any(f["function"] == "safe_fn" for f in findings)
 
-    def test_g5_blocks_without_context(self, setup):
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+    def test_g5_blocks_without_context(self, built):
+        target, out_dir = built
         r = _run([_AUDIT_CLI, "record",
                   "--out", str(out_dir), "--target", str(target),
                   "--file", "vuln.c", "--function", "vuln_fn",
@@ -249,12 +259,10 @@ void orphan_fn(char *user_input) {
         assert r.returncode == 0, r.stderr
 
     @needs_semgrep
-    def test_g7_passes_finding_with_callers(self, setup):
+    def test_g7_passes_finding_with_callers(self, built):
         # vuln_fn IS called (from main) — the checklist call graph
         # must satisfy G7 with no --reach-via.
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+        target, out_dir = built
         _run([_AUDIT_CLI, "context", "--target", str(target),
               "--file", "vuln.c", "--function", "vuln_fn",
               "--line", "8", "--out", str(out_dir)])
@@ -277,10 +285,8 @@ void orphan_fn(char *user_input) {
         assert r.returncode == 0, r.stderr
 
     @needs_semgrep
-    def test_report_counts_match(self, setup):
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+    def test_report_counts_match(self, built):
+        target, out_dir = built
         for fn, line, status in [("safe_fn", "4", "clean"),
                                  ("main", "13", "clean")]:
             _run([_AUDIT_CLI, "context", "--target", str(target),
@@ -320,12 +326,9 @@ void orphan_fn(char *user_input) {
         assert "Tool-confirmed findings: 1" in r.stdout
 
     @needs_semgrep
-    def test_critique_identifies_mode2_gap(self, setup):
+    def test_critique_identifies_mode2_gap(self, built):
         """Critique identifies confirmed findings without codebase-wide rules."""
-        target, out_dir = setup
-        r = _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-        assert r.returncode == 0, r.stderr
-
+        target, out_dir = built
         # Review vuln_fn: context → sweep → finding
         r = _run([_AUDIT_CLI, "context", "--target", str(target),
                   "--file", "vuln.c", "--function", "vuln_fn",
@@ -369,11 +372,9 @@ void orphan_fn(char *user_input) {
         # Should flag safe_fn as low sweep coverage
         assert "Low tool coverage" in r.stdout
 
-    def test_smt_sweep_manual(self, setup):
+    def test_smt_sweep_manual(self, built):
         """SMT sweep logs a manual entry when no auto-run is possible."""
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+        target, out_dir = built
         _run([_AUDIT_CLI, "context", "--target", str(target),
               "--file", "vuln.c", "--function", "vuln_fn",
               "--line", "8", "--out", str(out_dir)])
@@ -388,11 +389,9 @@ void orphan_fn(char *user_input) {
         assert r.returncode == 0, r.stderr
         assert "smt:check-overflow" in r.stdout
 
-    def test_context_includes_strategy_exemplars(self, setup):
+    def test_context_includes_strategy_exemplars(self, built):
         """Context assembly includes per-strategy CVE exemplars."""
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+        target, out_dir = built
         r = _run([_AUDIT_CLI, "context", "--target", str(target),
                   "--file", "vuln.c", "--function", "vuln_fn",
                   "--line", "8", "--out", str(out_dir)])
@@ -401,11 +400,9 @@ void orphan_fn(char *user_input) {
         assert "CVE-2022-0995" in r.stdout or "Strategy exemplars" in r.stdout
 
     @needs_semgrep
-    def test_feedback_downgrades_disproven_finding(self, setup):
+    def test_feedback_downgrades_disproven_finding(self, built):
         """Feedback loop: /validate disproved → annotation downgraded."""
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+        target, out_dir = built
         # Review vuln_fn as finding
         _run([_AUDIT_CLI, "context", "--target", str(target),
               "--file", "vuln.c", "--function", "vuln_fn",
@@ -479,11 +476,9 @@ void orphan_fn(char *user_input) {
         assert correction[-1]["verdict"] == "clean"
         assert correction[-1]["prior_review"] == "finding"
 
-    def test_feedback_upgrades_missed_clean(self, setup):
+    def test_feedback_upgrades_missed_clean(self, built):
         """Feedback loop: /validate confirms → clean upgraded to finding."""
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+        target, out_dir = built
         # Review safe_fn as clean
         _run([_AUDIT_CLI, "context", "--target", str(target),
               "--file", "vuln.c", "--function", "safe_fn",
@@ -526,11 +521,9 @@ void orphan_fn(char *user_input) {
         assert correction[-1]["verdict"] == "finding"
         assert correction[-1]["prior_review"] == "clean"
 
-    def test_g1_blocks_finding_without_hypothesis(self, setup):
+    def test_g1_blocks_finding_without_hypothesis(self, built):
         """G1: finding without --hypothesis is rejected."""
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+        target, out_dir = built
         _run([_AUDIT_CLI, "context", "--target", str(target),
               "--file", "vuln.c", "--function", "vuln_fn",
               "--line", "8", "--out", str(out_dir)])
@@ -547,11 +540,9 @@ void orphan_fn(char *user_input) {
         assert r.returncode != 0
         assert "G1" in r.stderr
 
-    def test_g2_blocks_finding_without_evidence_tool(self, setup):
+    def test_g2_blocks_finding_without_evidence_tool(self, built):
         """G2: finding without --evidence-tool is rejected."""
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+        target, out_dir = built
         _run([_AUDIT_CLI, "context", "--target", str(target),
               "--file", "vuln.c", "--function", "vuln_fn",
               "--line", "8", "--out", str(out_dir)])
@@ -568,11 +559,9 @@ void orphan_fn(char *user_input) {
         assert r.returncode != 0
         assert "G2" in r.stderr
 
-    def test_related_to_same_file(self, setup):
+    def test_related_to_same_file(self, built):
         """--related-to allows recording sibling functions."""
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+        target, out_dir = built
         # Read context for vuln_fn
         _run([_AUDIT_CLI, "context", "--target", str(target),
               "--file", "vuln.c", "--function", "vuln_fn",
@@ -586,11 +575,9 @@ void orphan_fn(char *user_input) {
                   "--related-to", "vuln.c:vuln_fn"])
         assert r.returncode == 0, r.stderr
 
-    def test_related_to_different_file_blocked(self, setup):
+    def test_related_to_different_file_blocked(self, built):
         """--related-to rejects cross-file references."""
-        target, out_dir = setup
-        _run([_CHECKLIST_CLI, str(target), str(out_dir)])
-
+        target, out_dir = built
         _run([_AUDIT_CLI, "context", "--target", str(target),
               "--file", "vuln.c", "--function", "vuln_fn",
               "--line", "8", "--out", str(out_dir)])
