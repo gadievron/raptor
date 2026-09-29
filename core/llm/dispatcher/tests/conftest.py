@@ -28,6 +28,7 @@ they mean to test; the ambient family is noise here.
 
 import os
 import shutil
+import socketserver
 import tempfile
 from collections.abc import Iterator
 
@@ -56,6 +57,46 @@ _OPERATOR_PROXY_ENV = {
 def _scrub_ambient_env(monkeypatch):
     for var in (*_PROXY_ENV_FAMILY, *_AWS_ENV_FAMILY):
         monkeypatch.delenv(var, raising=False)
+
+
+# serve_forever() shutdown-notice poll, for every socketserver these
+# tests spin up (the dispatcher's worker/child/TCP planes AND the
+# captive upstream doubles): socketserver's serve_forever only checks
+# for shutdown() every ``poll_interval``, so each server thread pays
+# up to one interval of pure wall-clock wait at teardown. At the
+# stdlib default (0.5s) with three-plus servers per test, that wait
+# was the single largest cost of this battery (~0.7s of nearly every
+# dispatcher test). The knob bounds ONLY shutdown-notice latency —
+# request handling is selector-driven and wakes immediately — so
+# shrinking it weakens nothing the tests assert.
+#
+# 0.02s, both directions: TOO LOW (sub-millisecond) has every idle
+# server thread busy-spinning its selector for the length of each
+# test, which under ``-n auto`` is real contention; TOO HIGH
+# re-inserts per-server teardown latency (0.1s would already put
+# ~0.3s back on every dispatcher-constructing test). Production code
+# is untouched: it keeps the stdlib default, and this wrapper lives
+# only in the test harness.
+_SERVE_POLL_INTERVAL_S = 0.02
+
+# Bound once at import so repeated fixture applications can never
+# stack wrappers.
+_REAL_SERVE_FOREVER = socketserver.BaseServer.serve_forever
+
+
+@pytest.fixture(autouse=True)
+def _fast_serve_shutdown_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _serve_forever_fast_poll(
+        self: socketserver.BaseServer,
+        poll_interval: float = _SERVE_POLL_INTERVAL_S,
+    ) -> None:
+        # Explicit callers keep their own interval — only the stdlib
+        # default is replaced.
+        _REAL_SERVE_FOREVER(self, poll_interval=poll_interval)
+
+    monkeypatch.setattr(
+        socketserver.BaseServer, "serve_forever", _serve_forever_fast_poll,
+    )
 
 
 # AF_UNIX hermeticity: every real-dispatcher test binds two Unix

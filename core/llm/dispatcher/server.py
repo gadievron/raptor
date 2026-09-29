@@ -386,7 +386,15 @@ _ORPHAN_POLL_INTERVAL_FLOOR_S = 1.0
 def _orphan_poll_interval_s() -> float:
     """Env-tunable per relay (one lookup), same knob pattern as the
     upstream timeout. Values below the busy-poll floor fall back to
-    the default (the ``_env_float`` contract)."""
+    the default (the ``_env_float`` contract).
+
+    Test seam: the floor guards operator *configuration* against
+    busy-polling; it is not a bound on test rigs. Tests that need a
+    sub-second grace window inject one by monkeypatching THIS
+    accessor (it is consulted at watcher construction, per relay) —
+    never by widening the floor or the env parse. When nothing is
+    patched the production path is bit-identical.
+    """
     return _env_float(
         "RAPTOR_LLM_DISPATCHER_ORPHAN_POLL_S",
         _ORPHAN_POLL_INTERVAL_DEFAULT_S,
