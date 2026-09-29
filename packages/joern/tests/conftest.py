@@ -32,11 +32,11 @@ Real-process handles keep their finalizer: for those, GC-time
 
 from __future__ import annotations
 
-import gc
 import os
 import shutil
 import subprocess
 import tempfile
+import weakref
 from pathlib import Path
 from typing import Iterator
 
@@ -115,13 +115,47 @@ def _sentinel(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value <= 1
 
 
+# Every JoernServer constructed in this process, alive or awaiting
+# collection. The per-test sweep inspects THIS set: sweeping the
+# whole heap instead (gc.get_objects() + isinstance over millions of
+# tracked objects) costs most of a second per call, and as an
+# autouse teardown that single line dominated the suite's runtime
+# (~0.75s x ~880 tests measured under the nightly tier).
+_LIVE_SERVERS: "weakref.WeakSet[JoernServer]" = weakref.WeakSet()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _track_server_handles() -> Iterator[None]:
+    """Register every JoernServer construction in ``_LIVE_SERVERS``.
+
+    ``__new__`` is the hook, not ``__init__``: the doubles the sweep
+    exists to catch are built with ``JoernServer.__new__(JoernServer)``
+    and never run ``__init__``. The weak references keep sweep
+    visibility without extending any handle's lifetime — a handle
+    collected mid-test already ran its finalizer inside that test's
+    own patch window, which is the pre-sweep status quo.
+    """
+    def tracking_new(cls: type, *args: object, **kwargs: object) -> JoernServer:
+        obj = object.__new__(cls)
+        _LIVE_SERVERS.add(obj)
+        return obj
+
+    JoernServer.__new__ = tracking_new  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        del JoernServer.__new__
+        _LIVE_SERVERS.clear()
+
+
 @pytest.fixture(autouse=True)
-def _no_sentinel_server_handles(request: pytest.FixtureRequest) -> Iterator[None]:
+def _no_sentinel_server_handles(
+    request: pytest.FixtureRequest,
+    _track_server_handles: None,
+) -> Iterator[None]:
     yield
     offenders: list[str] = []
-    for obj in gc.get_objects():
-        if not isinstance(obj, JoernServer):
-            continue
+    for obj in list(_LIVE_SERVERS):
         pgid = getattr(obj, "_pgid", None)
         proc = getattr(obj, "_proc", None)
         try:
