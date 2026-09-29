@@ -141,12 +141,18 @@ class TestAdjudication:
         # registry-grade: the receipt's rule id loses the -naming
         # detection suffix. Registry grade requires the provenance
         # stamp (source=human + interactive-tty) — the note is
-        # written with the exact keys the annotate CLI stamps.
+        # written with the exact keys the annotate CLI stamps,
+        # INCLUDING the corroboration facts (sid/envm/parents): a
+        # key-less interactive stamp is only grandfathered while the
+        # file mtime predates the corroboration era, so a fresh
+        # fixture must carry the full stamp to grade deterministically
+        # (never through the wall-clock mtime fence).
         import json
         receipt = self._annotated_receipt(
             tmp_path,
             "<!-- meta: status=trust_boundary source=human"
-            " provenance=interactive-tty tty=stdin -->",
+            " provenance=interactive-tty tty=stdin"
+            " sid=inherited envm=none parents=bash,sshd -->",
         )
         assert receipt is not None, receipt
         assert receipt["outcome"] == "confirmed"
