@@ -239,10 +239,18 @@ def test_positive_fixtures_fire(rule_rel: str):
     positives, _ = _CASES[rule_rel]
     rule_file = _RULES_DIR / rule_rel
     for fixture in positives:
-        target = _FIXTURES / fixture
-        assert target.is_file(), target
-        results = _run_semgrep(rule_file, [target])["results"]
-        assert results, f"{rule_rel} produced no findings on {fixture}"
+        assert (_FIXTURES / fixture).is_file(), fixture
+    # ONE semgrep run over all of the rule's positive fixtures, then
+    # per-fixture attribution via each result's path: the contract is
+    # per-fixture (every one must fire), but a run per fixture re-paid
+    # semgrep's ~1.3s startup for each — the multi-second parametrized
+    # cases were pure spawn overhead, not scan time.
+    results = _run_semgrep(
+        rule_file, [_FIXTURES / f for f in positives],
+    )["results"]
+    fired = {Path(r["path"]).name for r in results}
+    silent = [f for f in positives if f not in fired]
+    assert not silent, f"{rule_rel} produced no findings on {silent}"
 
 
 @pytest.mark.parametrize("rule_rel", sorted(_CASES))
@@ -250,11 +258,17 @@ def test_negative_fixtures_stay_silent(rule_rel: str):
     _, negatives = _CASES[rule_rel]
     rule_file = _RULES_DIR / rule_rel
     for fixture in negatives:
-        target = _FIXTURES / fixture
-        assert target.is_file(), target
-        results = _run_semgrep(rule_file, [target])["results"]
-        hits = [(r["check_id"], r["start"]["line"]) for r in results]
-        assert not hits, f"{rule_rel} fired on clean fixture {fixture}: {hits}"
+        assert (_FIXTURES / fixture).is_file(), fixture
+    # ONE batched run (see test_positive_fixtures_fire); any hit
+    # anywhere is a failure, attributed by result path.
+    results = _run_semgrep(
+        rule_file, [_FIXTURES / f for f in negatives],
+    )["results"]
+    hits = [
+        (Path(r["path"]).name, r["check_id"], r["start"]["line"])
+        for r in results
+    ]
+    assert not hits, f"{rule_rel} fired on clean fixture(s): {hits}"
 
 
 def test_php_rules_silent_on_c_targets(tmp_path: Path):
@@ -274,9 +288,16 @@ def test_php_rules_silent_on_c_targets(tmp_path: Path):
     )
     php_rules = sorted((_RULES_DIR / "php").glob("*.yaml"))
     assert php_rules, "php rule pack missing"
-    for rule_file in php_rules:
-        data = _run_semgrep(rule_file, [c_file])
-        assert not data["results"], f"{rule_file.name} fired on C source"
+    # ONE run with the whole pack as --config, not one per rule file:
+    # a per-rule run re-paid semgrep startup ~12 times (~18s of pure
+    # spawn overhead). The single run preserves both contract arms —
+    # a load-error anywhere in the pack fails _run_semgrep's
+    # returncode assert (schema validity is additionally pinned
+    # universe-wide by test_every_rule_file_validates), and any
+    # firing is attributed below via its check_id.
+    data = _run_semgrep(_RULES_DIR / "php", [c_file])
+    fired = sorted({r["check_id"] for r in data["results"]})
+    assert not fired, f"php rule(s) fired on C source: {fired}"
 
 
 def test_every_rule_has_cwe_metadata():
