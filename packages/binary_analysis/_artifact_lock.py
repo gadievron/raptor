@@ -62,7 +62,7 @@ def run_artifacts_lock(run_dir: Path) -> Iterator[None]:
     # create and flock an attacker-chosen path; O_NONBLOCK plus the
     # fstat S_ISREG refusal keeps a planted reader-less FIFO from
     # wedging every artifact append forever. Same flag shape as
-    # core.fs_lock / core.run.metadata's locks.
+    # core.atomic_fs.fs_lock / core.run.metadata's locks.
     fd = None
     try:
         fd = os.open(

@@ -850,7 +850,7 @@ def _model_write_lock(json_path: Path) -> Iterator[None]:
         yield
         return
     lock_path = json_path.with_name(json_path.name + ".lock")
-    # O_NOFOLLOW / O_NONBLOCK / fstat S_ISREG (core.fs_lock's flag
+    # O_NOFOLLOW / O_NONBLOCK / fstat S_ISREG (core.atomic_fs.fs_lock's flag
     # shape): the lock sits beside the model in a project dir other
     # runs' sandboxed children may have written — a planted symlink
     # must not steer the flock, and a planted reader-less FIFO must

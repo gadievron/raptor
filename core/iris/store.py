@@ -143,7 +143,7 @@ def store_lock(out_dir: Path):
     fd = None
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        # O_NOFOLLOW / O_NONBLOCK / fstat S_ISREG (core.fs_lock's flag
+        # O_NOFOLLOW / O_NONBLOCK / fstat S_ISREG (core.atomic_fs.fs_lock's flag
         # shape): a planted symlink at the predictable lock path must
         # not steer the flock to an attacker-chosen path, and a
         # planted reader-less FIFO must not wedge the persist on the

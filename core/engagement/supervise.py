@@ -76,7 +76,7 @@ from core.engagement.ledger import (
     set_artifact_status,
     update_engagement_policy,
 )
-from core.fs_lock import artifact_lock
+from core.atomic_fs.fs_lock import artifact_lock
 from core.json import load_json, save_json
 
 logger = logging.getLogger(__name__)

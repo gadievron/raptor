@@ -328,7 +328,7 @@ def _promotion_lock(canonical: Path) -> Iterator[None]:
     """Cross-process exclusive lock over a canonical study artifact's
     load → merge → write window.
 
-    Delegates to :func:`core.fs_lock.artifact_lock` (the shared flock
+    Delegates to :func:`core.atomic_fs.fs_lock.artifact_lock` (the shared flock
     idiom: sibling ``.lock`` file, whole-window hold, O_NOFOLLOW, loud
     unlocked degrade, no-op without fcntl). Without it, concurrent
     promoters on one project (parallel study runs, the study loop
@@ -336,7 +336,7 @@ def _promotion_lock(canonical: Path) -> Iterator[None]:
     read the same canonical state and the later writer silently drops
     the earlier run's entire study contribution.
     """
-    from core.fs_lock import artifact_lock
+    from core.atomic_fs.fs_lock import artifact_lock
 
     with artifact_lock(canonical, subject="study promotion"):
         yield

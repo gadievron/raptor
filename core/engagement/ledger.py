@@ -23,7 +23,7 @@ Doctrine (pinned by ``.github/tests/test_engagement_ledger_doctrine.py``):
   ``derived_from_target`` naming exactly which of its fields hold
   target-derived bytes; any render path escapes those fields per the
   ``core.security.log_sanitisation`` contract; store writes go through
-  ``save_json`` (atomic) under :func:`core.fs_lock.artifact_lock`.
+  ``save_json`` (atomic) under :func:`core.atomic_fs.fs_lock.artifact_lock`.
   Nothing target-derived is ever a raw key in an operator-facing
   surface (family keys are fixed-vocabulary by construction; artifact
   ids are hex digests / identity anchors).
@@ -149,7 +149,7 @@ from core.binary.identity import (
     content_identity,
     identity_anchor,
 )
-from core.fs_lock import artifact_lock
+from core.atomic_fs.fs_lock import artifact_lock
 from core.hash import sha256_file, sha256_string
 from core.json import load_json, save_json
 from core.security.log_sanitisation import sanitise_for_terminal

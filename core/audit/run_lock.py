@@ -16,7 +16,7 @@ Nothing in the pre-existing lock family covered this window:
   there, because the stub-driven lifecycle spans processes. The audit
   orchestrator is the opposite shape: one process from start to exit,
   which is exactly what a held flock represents faithfully.
-* ``core.fs_lock.artifact_lock`` / ``packages.binary_analysis
+* ``core.atomic_fs.fs_lock.artifact_lock`` / ``packages.binary_analysis
   ._artifact_lock`` / ``core.inventory._checklist_lock`` / the journal
   appenders' flock cover single read-modify-write windows, not a
   process lifetime — and their degrade-on-unopenable posture (fine for

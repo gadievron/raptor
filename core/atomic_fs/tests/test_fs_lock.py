@@ -1,4 +1,4 @@
-"""Tests for core.fs_lock — the shared load → merge → write lock.
+"""Tests for core.atomic_fs.fs_lock — the shared load → merge → write lock.
 
 The lock file lives in directories broader write grants reach, so a
 planted symlink or FIFO at the ``.lock`` path must degrade to the
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from core.fs_lock import artifact_lock
+from core.atomic_fs.fs_lock import artifact_lock
 
 
 class TestArtifactLock:

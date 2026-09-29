@@ -39,7 +39,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.fs_lock import artifact_lock
+from core.atomic_fs.fs_lock import artifact_lock
 
 logger = logging.getLogger(__name__)
 

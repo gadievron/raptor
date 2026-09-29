@@ -13,7 +13,7 @@ battery's placement:
   2. **derived_from_target coverage (M1)** — every row leaves the
      builder through the one ``_finish_row`` seam that stamps
      ``derived_from_target``; writes go through ``save_json``
-     (atomic) under ``core.fs_lock.artifact_lock``, never a hand
+     (atomic) under ``core.atomic_fs.fs_lock.artifact_lock``, never a hand
      ``open(..., "w")``.
   3. **Identity-collision demotion (M2)** — two artifacts sharing a
      producer-authored identity value with different content demote

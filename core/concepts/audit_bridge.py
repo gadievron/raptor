@@ -2678,7 +2678,7 @@ def queue_reading_list_item(
         context=context,
     )
 
-    from core.fs_lock import artifact_lock
+    from core.atomic_fs.fs_lock import artifact_lock
 
     # Load-modify-save cycle: hold the shared writer lock end to end
     # so concurrent in-process writers (premise questions, the study

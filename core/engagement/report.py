@@ -55,7 +55,7 @@ and the unit battery):
   Title Case in the human-readable rendering; never ALL_CAPS, no
   red/green indicators.
 - **Atomic writes.** The JSON report leaves through ``save_json``
-  under :func:`core.fs_lock.artifact_lock`; the markdown leaves
+  under :func:`core.atomic_fs.fs_lock.artifact_lock`; the markdown leaves
   through :func:`core.atomic_fs.write_text_atomically` under the same
   lock. Nothing is written into the target tree.
 
@@ -89,7 +89,7 @@ from core.engagement.ledger import (
     load_policy_amendments,
     read_artifact_checklist,
 )
-from core.fs_lock import artifact_lock
+from core.atomic_fs.fs_lock import artifact_lock
 from core.json import load_json, save_json
 from core.security.log_sanitisation import sanitise_for_terminal
 from core.security.markdown_render import md_inline

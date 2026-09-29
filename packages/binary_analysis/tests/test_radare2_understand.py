@@ -94,10 +94,10 @@ class TestBinaryContextMap(unittest.TestCase):
 class TestDangerousImports(unittest.TestCase):
     def test_known_dangerous_imports_present(self):
         # Representatives from each composed category. The full
-        # taxonomy is exhaustively tested in core/tests/
-        # test_function_taxonomy.py; here we just confirm radare2_
-        # understand's composition still includes the major sink
-        # families.
+        # taxonomy is exhaustively tested in core/function_taxonomy/
+        # tests/test_function_taxonomy.py; here we just confirm
+        # radare2_understand's composition still includes the major
+        # sink families.
         self.assertIn("strcpy", _DANGEROUS_IMPORTS)         # string overflow
         self.assertIn("scanf", _DANGEROUS_IMPORTS)          # scan-family
         self.assertIn("memcpy", _DANGEROUS_IMPORTS)         # mem copy

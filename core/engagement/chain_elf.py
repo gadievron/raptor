@@ -111,7 +111,7 @@ from core.engagement.ledger import (
     set_artifact_status,
     write_artifact_checklist,
 )
-from core.fs_lock import artifact_lock
+from core.atomic_fs.fs_lock import artifact_lock
 from core.hash import sha256_file
 from core.json import load_json, save_json
 from core.security.log_sanitisation import sanitise_for_terminal

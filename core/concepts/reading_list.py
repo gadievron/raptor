@@ -55,7 +55,7 @@ def question_scoped_id(prefix: str, question: str) -> str:
 # In-process half of the exclusion; the project-level reading list
 # (``<project>/concepts/reading-list.json``) has cross-PROCESS writers
 # too (concurrent runs of one project), so every load→mutate→save
-# window ALSO holds ``core.fs_lock.artifact_lock`` on the file, inside
+# window ALSO holds ``core.atomic_fs.fs_lock.artifact_lock`` on the file, inside
 # this lock (thread lock outer, file lock inner — one order,
 # everywhere).
 READING_LIST_WRITE_LOCK = threading.Lock()
@@ -251,7 +251,7 @@ class ReadingList:
         by id alone silently destroyed a concurrent writer's DISTINCT
         question that happened to share an id.
         """
-        from core.fs_lock import artifact_lock
+        from core.atomic_fs.fs_lock import artifact_lock
 
         with READING_LIST_WRITE_LOCK:
             p = path or self._path

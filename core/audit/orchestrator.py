@@ -15176,7 +15176,7 @@ def _mark_unsupported_unresolvable(
             ReadingList,
         )
 
-        from core.fs_lock import artifact_lock
+        from core.atomic_fs.fs_lock import artifact_lock
 
         rl_path = out_dir / "reading-list.json"
         # Load-modify-save cycle: hold the shared writer lock end to
@@ -27748,7 +27748,7 @@ def _queue_premise_study_question(
         counter = (h.get("counter") or "").strip()
         if not counter or config.out_dir is None:
             return
-        from core.fs_lock import artifact_lock
+        from core.atomic_fs.fs_lock import artifact_lock
 
         rl_path = config.out_dir / "reading-list.json"
         question = (

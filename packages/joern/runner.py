@@ -28,7 +28,7 @@ from core.analysis._joern_lines import (
     MarkerChunkAssembler,
     parse_marker_records,
 )
-from core.fs_lock import artifact_lock
+from core.atomic_fs.fs_lock import artifact_lock
 
 from .heap_ledger import heap_admission
 from .models import FlowStep, JoernCPG, JoernMethodSummary, JoernResult, TaintFlow

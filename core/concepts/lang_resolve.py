@@ -1094,7 +1094,7 @@ def merge_into_study_list(
     items actually added.  Creates a minimal skeleton when the file
     does not exist yet.
     """
-    from core.fs_lock import artifact_lock
+    from core.atomic_fs.fs_lock import artifact_lock
 
     path = Path(study_list_path)
     # Cross-process lock over the whole load → merge → save window:
