@@ -32,6 +32,7 @@ pytestmark = _pytest.mark.skipif(
     reason="Linux-only sandbox internals (mount-ns rootfs pivot)",
 )
 
+import functools  # noqa: E402
 import os  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
@@ -53,6 +54,93 @@ def _mount_ns_usable() -> bool:
     if sysctl.exists() and sysctl.read_text().strip() == "1":
         return False
     return True
+
+
+_CLONE_NEWUSER = 0x10000000
+
+
+@functools.cache
+def _rootfs_uidmap_step_usable() -> tuple[bool, str]:
+    """Truthful probe for the one rootfs prerequisite the static
+    ``_mount_ns_usable`` checks cannot see: can ``newuidmap`` actually
+    apply the uid map the rootfs spawn would choose in THIS
+    environment?
+
+    Rootfs mode maps the operator's /etc/subuid+/etc/subgid allotment
+    (a RANGE map) when one exists — and inside an unprivileged NESTED
+    user namespace that range is unmapped in the writer's namespace,
+    so the kernel refuses the uid_map write with EPERM regardless of
+    binary presence, sysctls, or the on-disk allotment. Only
+    attempting the exact operation answers truthfully: this probe
+    unshares a scratch child userns and runs ``newuidmap`` with the
+    same mapping lines ``core.sandbox._spawn`` would use (single-id
+    when no allotment exists — the shape that DOES work nested, which
+    is why the plain mount-ns suites keep running there).
+
+    Returns ``(usable, reason)``; ``reason`` names the missing OS
+    capability when ``usable`` is False. Cached per process — one
+    subprocess pair, ~100 ms, paid only when an E2E test's static
+    gates already passed.
+    """
+    from core.sandbox._spawn import _subid_range
+    from core.sandbox.probes import _find_sandbox_binary
+
+    newuidmap = _find_sandbox_binary("newuidmap")
+    if newuidmap is None:
+        return (False, "newuidmap not present in the trusted system "
+                       "dirs (uidmap package)")
+    host_uid = os.getuid()
+    try:
+        import pwd
+        user = pwd.getpwuid(host_uid).pw_name
+    except (KeyError, OSError):
+        user = str(host_uid)
+    uid_lines = ["0", str(host_uid), "1"]
+    urange = _subid_range("/etc/subuid", user, str(host_uid))
+    grange = _subid_range("/etc/subgid", user, str(os.getgid()))
+    # Mirror the spawn's choice exactly: the range map is taken only
+    # when BOTH allotments (and plain newgidmap) exist.
+    if urange and grange and _find_sandbox_binary("newgidmap"):
+        count = max(1, min(urange[1], 65535))
+        uid_lines += ["1", str(urange[0]), str(count)]
+    holder_code = (
+        "import ctypes, sys, time\n"
+        "libc = ctypes.CDLL(None, use_errno=True)\n"
+        f"if libc.unshare({_CLONE_NEWUSER}) != 0:\n"
+        "    sys.exit(42)\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    import sys
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_code],
+        stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        line = holder.stdout.readline()
+        if "ready" not in line:
+            return (False, "cannot create an unprivileged user "
+                           "namespace here (unshare(CLONE_NEWUSER) "
+                           "refused)")
+        try:
+            r = subprocess.run(
+                [newuidmap, str(holder.pid), *uid_lines],
+                capture_output=True, text=True, timeout=10,
+                check=False,
+                env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return (False, f"newuidmap probe could not run: {e}")
+        if r.returncode != 0:
+            return (False,
+                    "newuidmap cannot write the uid map the rootfs "
+                    f"spawn would choose (rc={r.returncode}: "
+                    f"{r.stderr.strip()!r}) — an unprivileged nested "
+                    "user namespace cannot apply subuid-range maps")
+        return (True, "")
+    finally:
+        holder.kill()
+        holder.wait(timeout=10)
 
 
 # ── static-binary image builder ───────────────────────────────────────
@@ -304,6 +392,15 @@ class _RootfsE2EBase(unittest.TestCase):
             )
         if _static_init_binary() is None:
             self.skipTest("no working `cc -static` on this host")
+        usable, why = _rootfs_uidmap_step_usable()
+        if not usable:
+            # Truthful skip, not a vacuous run: with the uid-map step
+            # unavailable EVERY rootfs spawn dies in setup, so even the
+            # refusal-shape tests in these classes would "pass" without
+            # exercising the code path they pin.
+            self.skipTest(
+                f"rootfs mount-ns uid-map step unavailable: {why}"
+            )
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.rootfs = _build_rootfs(self.tmp.name)
