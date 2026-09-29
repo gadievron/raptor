@@ -894,6 +894,24 @@ Policy: RAPTOR does NOT auto-degrade to weaker isolation when the
 requested profile cannot engage. The operator resolves it explicitly
 (e.g. `--sandbox network-only`).
 
+### OS-capability degradation map
+
+Sandbox behaviours — and the test families that exercise them — key on
+truthful runtime probes, not on binary presence alone. When a
+capability is genuinely absent the affected behaviour degrades by
+design and the corresponding tests skip with the missing capability
+named (never error); everywhere the capability exists they run
+unchanged.
+
+| OS capability | Sandbox behaviour it gates | Tests |
+|---|---|---|
+| Unprivileged user namespaces, incl. the staged second pid-ns unshare | namespace backend selection (network/PID/IPC isolation) | `requires_userns` families |
+| `unshare(CLONE_NEWNS)` + `mount(2)` in an owned userns, plus `newuidmap`/`newgidmap` | mount-ns tier: bind tree, fresh `/tmp`, read-only root | `requires_mount` families |
+| Landlock (ABI v4+ for the degraded TCP-connect deny) | filesystem confinement; network deny fallback | `requires_landlock` families |
+| subuid/subgid-range id-maps — impossible inside an unprivileged NESTED user namespace (rootless container, namespaced test runner): the range is unmapped in the writer's namespace, so the kernel refuses the write regardless of `/etc/subuid` or the setuid helpers | rootfs (image) mode's range map; setup fails closed, and the error names the nested-userns cause when detected | rootfs E2E family probes the exact `newuidmap` invocation up front and skips with the reason |
+| A FOREIGN (root-owned) init user namespace — absent when pid 1 is the runner's own init inside a nested userns | none (refusal-test posture only) | foreign-namespace refusal tests (pytest and the C harness pid-1 case) skip when pid 1's userns is self-owned |
+| A promptly-reaping init for re-parented orphans — a pid-namespace init that never `wait()`s keeps killed orphans visible as zombies | none (process-teardown observability only) | kill/reap tests read `/proc/<pid>/stat` state, so dead-but-unreaped counts as killed (hermetic — no skip) |
+
 ---
 
 ## Supervised process trees (not a sandbox)
