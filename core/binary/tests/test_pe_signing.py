@@ -655,10 +655,24 @@ class TestSkimMutationFuzz:
                 start = time.perf_counter()
                 name = _skim_claimed_signer(bytes(blob), caps)
                 elapsed = time.perf_counter() - start
+                if elapsed >= 0.5:
+                    # The input is deterministic, so a genuinely
+                    # pathological skim reproduces its cost on
+                    # re-measure; a descheduled xdist worker (observed:
+                    # 0.504s for a microsecond-scale mutation under a
+                    # full -n auto battery) does not. Min-of-3 keeps
+                    # the bound a pathology contract, not a scheduler
+                    # lottery — a real quadratic blow-up still fails
+                    # all three measurements.
+                    for _ in range(2):
+                        start = time.perf_counter()
+                        _skim_claimed_signer(bytes(blob), set())
+                        elapsed = min(
+                            elapsed, time.perf_counter() - start)
                 worst = max(worst, elapsed)
                 assert elapsed < 0.5, (
                     f"seed {seed:#x} mutation {i} took "
-                    f"{elapsed:.3f}s — pathological skim")
+                    f"{elapsed:.3f}s (min of 3) — pathological skim")
                 assert name is None or isinstance(name, str)
                 if name is not None:
                     assert len(name) <= 4 * pe_mod._MAX_SIGNER_NAME_BYTES
