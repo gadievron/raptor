@@ -188,8 +188,14 @@ _SUPERVISOR_CODE = (
     "            return None\n"
     "        return 999999.0\n"
     "child = None\n"
+    # grace_s bills directly to the escalation-path test's wall time
+    # (a TERM-ignoring child waits out the whole grace before the
+    # group KILL): keep it small. It still needs headroom above a
+    # cooperative child's TERM-exit latency, or every run would
+    # escalate and the sigterm-exits lane would stop exercising the
+    # graceful rung — don't shrink it towards the poll interval.
     "_start_orphan_watchdog(lambda: child, _Idle(),\n"
-    "                       poll_s=0.1, grace_s=2.0, idle_ttl_s=0.5)\n"
+    "                       poll_s=0.1, grace_s=1.0, idle_ttl_s=0.5)\n"
     "child = subprocess.Popen([sys.executable, '-c', sys.argv[1]])\n"
     "with open(os.environ['READY_FILE'], 'w') as f:\n"
     "    f.write(f'{os.getpid()} {child.pid}')\n"
@@ -257,7 +263,7 @@ class TestOrphanReap:
         try:
             os.kill(parent.pid, signal.SIGKILL)
             parent.wait(timeout=10)
-            # 0.1s poll + 0.5s idle ttl + 2s escalation grace; 20s wall.
+            # 0.1s poll + 0.5s idle ttl + 1s escalation grace; 20s wall.
             _wait_for(lambda: not _pid_alive(sup_pid), 20.0,
                       "orphaned idle supervisor to exit")
             _wait_for(lambda: not _pid_alive(wrapped_pid), 20.0,
@@ -278,7 +284,13 @@ class TestOrphanReap:
         try:
             os.kill(parent.pid, signal.SIGKILL)
             parent.wait(timeout=10)
-            time.sleep(2.0)  # well past poll + ttl
+            # Must-survive window: a buggy watchdog would reap the
+            # active server at ~poll(0.1) + ttl(0.5); observe well
+            # past that. Longer only buys detection margin against a
+            # starved watchdog thread — it can't make the passing
+            # direction flake — while billing every run, so keep it
+            # a small multiple of poll + ttl, never below it.
+            time.sleep(1.2)
             assert _pid_alive(sup_pid), (
                 "active orphaned server was reaped — warm reuse broken"
             )
