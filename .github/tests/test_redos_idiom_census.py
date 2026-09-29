@@ -250,6 +250,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
 
+# The census sre-parses every EXTRACTED candidate string, including
+# literal alias spellings that runtime code re.escape()s before
+# compiling (e.g. the C++ attribute forms ``[[nodiscard]]``). Parsing
+# those raw trips Python 3.14's nested-set forward-compat
+# FutureWarning; the census only inspects parse structure, so the
+# warning is noise here (and would break the sweep under a -W error
+# policy) while the runtime compile sites stay warning-clean.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:Possible nested set:FutureWarning")
+
 _REPO = repo_root()
 
 # (posix-relative path, pattern variable/first-40-chars key) -> justification.
