@@ -1583,7 +1583,13 @@ def domain_bug_patterns(
         if not isinstance(bp, dict):
             continue
         hit = False
-        grep_hint = (bp.get("what_to_grep") or "").strip()
+        raw_hint = bp.get("what_to_grep")
+        # Model JSON is external input: a non-str hint (int, list,
+        # dict, bool) is schema drift, not a matchable pattern — treat
+        # it as an absent hint (fail toward no-hint; the relevance
+        # fallback below still applies) instead of crashing pattern
+        # selection on .strip().
+        grep_hint = raw_hint.strip() if isinstance(raw_hint, str) else ""
         if source and grep_hint:
             # The guard runs FIRST so a dangerous shape logs its
             # demotion regardless of source size; the source clamp
@@ -1620,7 +1626,9 @@ def domain_bug_patterns(
         desc = bp.get("description", bp.get("id", ""))
         parts.append(f"- {desc}")
         grep_hint = bp.get("what_to_grep", "")
-        if grep_hint:
+        # Same non-str drift gate as selection: never render a
+        # non-str value as a grep suggestion.
+        if isinstance(grep_hint, str) and grep_hint:
             parts.append(f"  - Grep: `{grep_hint}`")
     return "\n".join(parts)
 
@@ -2100,7 +2108,9 @@ def domain_model_context(
             desc = bp.get("description", bp.get("id", ""))
             parts.append(f"- {desc}")
             grep_hint = bp.get("what_to_grep", "")
-            if grep_hint:
+            # Same non-str drift gate as domain_bug_patterns: never
+            # render a non-str value as a grep suggestion.
+            if isinstance(grep_hint, str) and grep_hint:
                 parts.append(f"  - Grep: `{grep_hint}`")
 
     if gaps:

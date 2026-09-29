@@ -302,6 +302,37 @@ class TestDomainModelContext:
             tmp_path, "any.c", "any_func")
         assert block is None
 
+    def test_non_str_grep_hint_not_rendered(self, tmp_path):
+        """The whole-model renderer applies the same non-str drift
+        gate as domain_bug_patterns: a schema-drifted what_to_grep
+        (list, int) must never be str()-coerced into a `- Grep:` line,
+        while a str hint on the same model still renders."""
+        import json as _json
+
+        (tmp_path / "domain-model.json").write_text(_json.dumps({
+            "concepts": [{
+                "id": "c1",
+                "description": "lifetime of f buffers",
+                "related_functions": ["f"],
+                "related_files": ["a.c"],
+            }],
+            "bug_patterns": [
+                {"id": "p", "description": "hinted pattern",
+                 "what_to_grep": ["(a*)\\1b"]},
+                {"id": "q", "description": "int pattern",
+                 "what_to_grep": 123},
+                {"id": "r", "description": "str pattern",
+                 "what_to_grep": "memcpy.*len"},
+            ],
+        }), encoding="utf-8")
+        block = domain_model_context(
+            tmp_path, "a.c", "f", "int x = 1; f(); lifetime",
+            include_sage=False)
+        assert block is not None
+        grep_lines = [ln for ln in block.splitlines() if "Grep:" in ln]
+        # Other direction: the str hint still renders as a suggestion.
+        assert grep_lines == ["  - Grep: `memcpy.*len`"]
+
     def test_injection_survives_poisoned_study_artifacts(self, dm_dir):
         """Briefing-side injection is a pure disk read of
         domain-model.json — a broken study SUBSYSTEM (here: the run's
@@ -987,6 +1018,22 @@ class TestDomainBugPatterns:
         block = domain_bug_patterns(tmp_path, "a.c", "f", src)
         assert block is not None
         assert "hinted pattern" in block
+
+    @pytest.mark.parametrize("bad_hint", [123, ["a"], {"x": 1}, True])
+    def test_non_str_grep_hint_treated_as_absent(self, tmp_path, bad_hint):
+        # Model JSON is external input; a non-str hint must behave as
+        # an absent hint — no AttributeError from .strip(), selection
+        # falls through to the relevance score (which finds nothing
+        # here), and the prompt never renders a non-str Grep line.
+        self._write_hint_model(tmp_path, bad_hint)
+        assert domain_bug_patterns(
+            tmp_path, "a.c", "f", "int x = 1;") is None
+        # Empty source includes every pattern: the block renders, the
+        # bogus hint does not.
+        block = domain_bug_patterns(tmp_path, "a.c", "f", "")
+        assert block is not None
+        assert "hinted pattern" in block
+        assert "- Grep:" not in block
 
     def test_admitted_hint_bounded_on_quadratic_source(self, tmp_path):
         """The clamp's reason to exist: an ADMITTED single-span hint
