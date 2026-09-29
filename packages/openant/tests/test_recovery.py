@@ -294,7 +294,21 @@ class TestDedupRederivationLane(_ScanDirCase):
         (self.scan_dir / "results.json").write_text(rows_text,
                                                     encoding="utf-8")
         self.write_call_graph({CALLEE: [CALLER]})
-        with patch.object(cju, "_orjson", None):
+        # Two namespaces on purpose (mirrors _force_stdlib_json in
+        # core/coverage/tests/test_journal_append.py). The
+        # sys.modules-resolved patch covers call-time imports and any
+        # consumer imported after this point; the held function's
+        # __globals__ patch covers recovery.py's import-time
+        # ``from core.json import load_json`` binding — the copy that
+        # actually executes. After a sibling suite purges core.json.*
+        # from sys.modules those are DIFFERENT module objects, and a
+        # sys.modules-only patch leaves the orjson lane live in the
+        # executing copy (orjson then refuses the 1e999 doc and the
+        # recovery silently returns nothing).
+        from packages.openant import recovery as _recovery_mod
+        with patch.object(cju, "_orjson", None), \
+                patch.dict(_recovery_mod.load_json.__globals__,
+                           {"_orjson": None}):
             recovered = recover_dropped_verdicts(
                 self.scan_dir,
                 _pipeline([_finding_for(CALLER)], deduplicated=1))
