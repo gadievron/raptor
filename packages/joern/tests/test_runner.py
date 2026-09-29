@@ -1491,6 +1491,7 @@ class TestStallKillAddressesTheGroup:
 
     def _wrapper_with_grandchild(self):
         import subprocess as sp
+        from packages.joern.server import _proc_starttime
         proc = sp.Popen(
             ["bash", "-c", "sleep 300 & echo $!; wait"],
             stdout=sp.PIPE, text=True,
@@ -1498,11 +1499,16 @@ class TestStallKillAddressesTheGroup:
         )
         assert proc.stdout is not None
         grandchild = int(proc.stdout.readline())
-        return proc, grandchild
+        # (pid, starttime) names this process INCARNATION. The anchor
+        # read cannot race the kill: the grandchild's 300s sleep pins
+        # it alive here, before the monitor exists. None only without
+        # procfs, where the identity check below degrades away.
+        return proc, grandchild, _proc_starttime(grandchild)
 
     @staticmethod
-    def _gone(pid: int) -> bool:
-        """True once *pid* has been KILLED — a zombie counts as gone.
+    def _gone(pid: int, starttime: int | None) -> bool:
+        """True once *pid* has been KILLED — a zombie counts as gone,
+        and so does a RECYCLED pid (same number, different starttime).
 
         The waits below poll the condition the stall monitor CONTROLS:
         the group SIGKILL landing on the grandchild. A kill victim is
@@ -1522,6 +1528,15 @@ class TestStallKillAddressesTheGroup:
         escalation tests' ``_pid_gone`` and the production
         ``_pgid_alive`` zombie confirmation; without procfs the coarse
         kill-0 answer stands (there the platform reaper owns orphans).
+
+        The starttime anchor closes the reuse hole on a churning
+        host: once the reaped grandchild's pid is handed to a
+        stranger, kill-0 sees a live non-zombie and the poll runs out
+        its deadline against a process the monitor never owned. A
+        mismatched starttime proves the recorded incarnation no
+        longer exists — which for a 300s sleeper means it was killed.
+        Matching starttime keeps the strict direction: the original
+        grandchild still running reads as not-gone.
         """
         try:
             os.kill(pid, 0)
@@ -1533,7 +1548,12 @@ class TestStallKillAddressesTheGroup:
             stat = Path(f"/proc/{pid}/stat").read_text()
         except OSError:
             return False  # no procfs — accept the coarse kill-0 answer
-        return stat.rsplit(")", 1)[-1].split()[0] == "Z"
+        fields = stat.rsplit(")", 1)[-1].split()
+        if fields[0] == "Z":
+            return True
+        # /proc/<pid>/stat field 22 (starttime), 0-indexed 19 after
+        # the state field that follows the ")"-terminated comm.
+        return starttime is not None and int(fields[19]) != starttime
 
     def test_stall_kill_reaps_wrapper_spawned_grandchild(self):
         import os
@@ -1541,7 +1561,7 @@ class TestStallKillAddressesTheGroup:
         import threading
         import time as time_mod
         from packages.joern.runner import _StallMonitor
-        proc, grandchild = self._wrapper_with_grandchild()
+        proc, grandchild, anchor = self._wrapper_with_grandchild()
         try:
             mon = _StallMonitor(proc)
             mon._threshold = 0.1
@@ -1552,11 +1572,11 @@ class TestStallKillAddressesTheGroup:
             proc.wait(10)
             deadline = time_mod.monotonic() + 5
             while time_mod.monotonic() < deadline:
-                if self._gone(grandchild):
+                if self._gone(grandchild, anchor):
                     break
                 time_mod.sleep(0.05)
             assert mon.was_killed
-            assert self._gone(grandchild), (
+            assert self._gone(grandchild, anchor), (
                 "wrapper-spawned grandchild survived the stall kill"
             )
         finally:
