@@ -2142,7 +2142,7 @@ def domain_slice_hash(
     THIS function's injected slice byte-identical must not re-buy the
     function's verdict just because the whole-model hash moved.
 
-    Deliberate exclusions — neither is part of the whole-model
+    Deliberate exclusions — none of these is part of the whole-model
     invalidation key today either, so excluding them adds no reuse
     the old key would have refused:
 
@@ -2151,7 +2151,25 @@ def domain_slice_hash(
     * the token-enforcement block: projected per FILE from
       entry-point sources (not per function), hint-tier steering
       context, and its renderer has the side effect of materialising
-      the run's token map.
+      the run's token map;
+    * the external hypothesis-seed block (the review context's
+      ``seed_hypotheses`` section, stamped onto gaps by
+      ``core.audit.hypothesis_intake`` from run-local
+      ``sibling-hypotheses.json`` artifacts): not domain-model
+      content, and structurally out of reach of this gate anyway —
+      seeds stamp gaps in the residual queue, while this fingerprint
+      only ever adjudicates rows for ALREADY-covered functions; the
+      designed lever for forcing a fresh review when a seed names a
+      settled function is the ``--seed-rereview`` consent flag, not
+      stamp invalidation. Tradeoff, both directions: excluding seeds
+      means a reused verdict's briefing never saw a claim a fresh
+      review would be shown (hint-tier only — seeds are never
+      verdict weight, so the reuse loses steering, not evidence);
+      including them would key the fingerprint on a run-local,
+      externally-supplied artifact, so any seed-file delta — or its
+      absence on the next run — would mismatch every stamp it
+      touched, and a planted seed file would gain a cheap
+      mass-re-review-spend lever over settled verdicts.
 
     Returns None when no domain model is discoverable — the caller
     then persists no stamp and the whole-model behaviour applies.
