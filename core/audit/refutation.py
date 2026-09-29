@@ -1598,7 +1598,19 @@ def _record_witness_discharge(
         # Durability verification: only the appended region is read
         # (the trail is append-only with a single writer), and only a
         # parseable row carrying this discharge's identity counts.
-        with open(trail, "rb") as fh:
+        # open_regular returns None for a missing, irregular, or
+        # symlinked trail — all mean the row verifiably did not land
+        # in a legitimate trail, so refuse exactly like an absent row.
+        fh = open_regular(trail, "rb")
+        if fh is None:
+            logger.debug(
+                "in-function witness discharge record for %s:%s did "
+                "not land in %s — refusing the discharge (trail "
+                "missing or not a regular file)",
+                fpath, func, trail,
+            )
+            return False
+        with fh:
             fh.seek(offset)
             appended = fh.read()
         for raw in appended.splitlines():
