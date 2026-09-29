@@ -1623,8 +1623,10 @@ def _promote_checklist(project_dir: Path) -> None:
 
     Scans sibling run dirs for checklist.json files. Takes the newest
     and copies it to project_dir/checklist.json, merging checked_by
-    from older checklists. Every candidate passes the checklist frame
-    gate first: a TAMPERED run-local frame is skipped with a warning
+    from older checklists. Candidates must be JSON objects — any other
+    shape is skipped with a warning (a non-dict document would brick
+    the project slot for every reader). Every candidate passes the
+    checklist frame gate: a TAMPERED run-local frame is skipped with a warning
     (promotion re-stamps at project level, so promoting one would
     launder it into a verified project checklist); unstamped legacy
     and relocated frames stay promotable at the legacy tier.
@@ -1695,6 +1697,28 @@ def _promote_checklist(project_dir: Path) -> None:
             # accessor would follow a symlinked slot back to the
             # project checklist (self-promotion).
             data = load_json(cl, max_bytes=RUN_ARTIFACT_MAX_BYTES)  # checklist-direct-read: run-local only, symlink-excluded above
+            # Shape gate BEFORE the frame gate: this direct read can
+            # hand back any JSON value, and a non-dict candidate (a
+            # list, a string, a number) is corrupt for every consumer
+            # — read_checklist returns {} for one. Ungated, a truthy
+            # non-dict would dodge the dict-guarded frame and scope
+            # gates, crash _carry_forward_coverage on the
+            # older-siblings path, or win newest and be installed by
+            # save_checklist as a project checklist every reader then
+            # refuses. Same degrade direction as a tampered frame:
+            # loud warning naming the file + the rebuild remedy, then
+            # skip to the next-newest sibling.
+            if data is not None and not isinstance(data, dict):
+                from core.logging import get_logger
+                get_logger(__name__).warning(
+                    "checklist promotion: candidate at %s is not a "
+                    "JSON object (%s) — a non-dict checklist is "
+                    "corrupt for every reader. Skipping to the "
+                    "next-newest sibling; rebuild the inventory to "
+                    "restore this run's checklist.",
+                    cl, type(data).__name__,
+                )
+                continue
             # Frame gate on the raw candidate: save_checklist below
             # RE-STAMPS whatever it is handed at project level, so an
             # ungated promotion would launder a frame every direct
@@ -1712,6 +1736,10 @@ def _promote_checklist(project_dir: Path) -> None:
                 continue
         else:
             from core.inventory import read_checklist
+            # Accessor read: read_checklist is dict-or-{} by contract
+            # (non-dict, tampered, and integrity-failed documents all
+            # come back as {}), so the sharded arm needs no shape gate
+            # — the `if not data` below drops the empty degrade.
             data = read_checklist(d)
         if not data:
             continue
