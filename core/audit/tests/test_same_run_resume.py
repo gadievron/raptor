@@ -8,6 +8,7 @@ import pytest
 from core.audit.cost_tracker import PRIOR_SEGMENTS_PHASE, PhaseCostLedger
 from core.audit.gaps import compute_gaps
 from core.audit.orchestrator import OrchestratorConfig, OrchestratorResult
+from core.audit.record import _compute_hash
 from core.audit.strategy import strategies_from_item
 from core.audit.verdict_reuse import import_reused_verdicts
 from core.coverage.journal import (
@@ -99,7 +100,9 @@ class TestOwnRunReuseFold:
         original = _entry(target, verdict="suspicious")
         corrective = _entry(
             target, verdict="clean", strategies=[], line_end=None,
-            source_hash=hash_span(target / "auth.c", 1, 1),
+            # The corrective writer's minimal gap had no line_end, so
+            # its stamp covers the fallback read window.
+            source_hash=_compute_hash(target, "auth.c", 1, None),
             body="[resolution] corrective entry",
         )
         run_dir = _run_dir(tmp_path, original, corrective)

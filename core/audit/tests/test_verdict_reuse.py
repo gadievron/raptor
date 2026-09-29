@@ -13,6 +13,7 @@ import pytest
 
 from core.audit.gaps import compute_gaps
 from core.audit.orchestrator import OrchestratorConfig, OrchestratorResult
+from core.audit.record import _compute_hash
 from core.audit.strategy import strategies_from_item
 from core.audit.verdict_reuse import import_reused_verdicts, outcome_from_entry
 from core.coverage.journal import (
@@ -387,13 +388,14 @@ class TestCorrectiveStrategyBackfill:
 
     def _corrective(self, target, **over):
         # The observed corrective shape: same site, empty strategies,
-        # single-line source hash (the writer's minimal gap had no
-        # line_end), final verdict differing from the original.
+        # window source hash (the writer's minimal gap had no
+        # line_end, so the stamp covers the fallback read window),
+        # final verdict differing from the original.
         fields = {
             "verdict": "clean",
             "strategies": [],
             "line_end": None,
-            "source_hash": hash_span(target / "auth.c", 1, 1),
+            "source_hash": _compute_hash(target, "auth.c", 1, None),
             "body": "[resolution] corrective entry",
         }
         fields.update(over)
@@ -1352,9 +1354,9 @@ class TestSliceStampReuse:
     @staticmethod
     def _none_end_item(line_start: int) -> dict:
         # A checklist item the inventory never measured an end line
-        # for: line_end is absent, and every consumer normalises it
-        # differently — the source hash to a single line, the slice
-        # stamp (and the review prompt) to the fallback read window.
+        # for: line_end is absent, and every consumer reads the
+        # fallback window — the source hash, the slice stamp, and the
+        # review prompt all cover the same lines.
         item = dict(_ITEM, line_start=line_start)
         del item["line_end"]
         return item
@@ -1394,8 +1396,8 @@ class TestSliceStampReuse:
         """Reuse-preserving half of the raw-window semantics: a row
         whose checklist item carries no line_end was stamped over the
         fallback read window (the raw None the writer hands the
-        renderer), while its source hash covers the single normalised
-        header line. When the function has NOT moved and the model
+        renderer), and its source hash covers that same window.
+        When the function has NOT moved and the model
         gained nothing that selects into that window, the recompute
         must read the SAME fallback window — recomputing over the
         single normalised line would select nothing where the stamp's
@@ -1421,7 +1423,7 @@ class TestSliceStampReuse:
         item = self._none_end_item(1)
         _project_with(tmp_path, _entry(
             target,
-            source_hash=hash_span(target / "auth.c", 1, 1),
+            source_hash=_compute_hash(target, "auth.c", 1, None),
             line_end=None,
             strategies=sorted(strategies_from_item(dict(item), "auth.c")),
             domain_model_hash="00000000",
@@ -1437,9 +1439,10 @@ class TestSliceStampReuse:
         self, tmp_path,
     ):
         """A row without a line_end whose function MOVED: the source
-        hash covers one header line, so it verifies at the
-        checklist's current span even though the body now sits on
-        different lines. The recompute must read the fallback window
+        hash covers the review window (clamped here to the whole
+        unchanged body), so it verifies at the checklist's current
+        span even though the body now sits on different lines. The
+        recompute must read the fallback window
         at the function's real location — the raw missing line_end,
         exactly what the re-review prompt reads there. Recomputing
         over the single normalised current line selects nothing and
@@ -1454,7 +1457,7 @@ class TestSliceStampReuse:
         item = self._none_end_item(11)
         _project_with(tmp_path, _entry(
             target,
-            source_hash=hash_span(target / "auth.c", 1, 1),
+            source_hash=_compute_hash(target, "auth.c", 1, None),
             line_end=None,
             strategies=sorted(strategies_from_item(dict(item), "auth.c")),
             domain_model_hash="00000000",
@@ -1499,7 +1502,7 @@ class TestSliceStampReuse:
         sibling = self._none_end_item(11)
         _project_with(tmp_path, _entry(
             target,
-            source_hash=hash_span(target / "auth.c", 11, 11),
+            source_hash=_compute_hash(target, "auth.c", 11, None),
             line_start=11,
             line_end=None,
             strategies=sorted(
@@ -1718,7 +1721,7 @@ class TestSliceStampReuse:
         decoy = dict(_ITEM, line_start=11, line_end=15)
         _project_with(tmp_path, _entry(
             target,
-            source_hash=hash_span(target / "auth.c", 1, 1),
+            source_hash=_compute_hash(target, "auth.c", 1, None),
             line_end=None,
             strategies=sorted(
                 strategies_from_item(dict(reviewed), "auth.c")),

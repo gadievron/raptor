@@ -570,7 +570,15 @@ def _compute_hash(
 
     try:
         from core.annotations.storage import compute_function_hash
-        end = line_end if line_end is not None else line_start
+
+        from .context import fallback_span_end
+
+        # A missing line_end means the review covered the fallback
+        # read window (core.audit.context._read_source), so the hash
+        # must cover the SAME window: hashing only the header line
+        # left every body edit below it invisible to staleness and
+        # reuse gating (changed code silently reused as reviewed).
+        end = fallback_span_end(line_start, line_end)
         return compute_function_hash(full_path, line_start, end)
     except Exception:  # noqa: BLE001 — best-effort: missing hash only widens review
         logger.debug("hash computation failed for %s:%d", file_path, line_start)

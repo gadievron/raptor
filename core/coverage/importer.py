@@ -760,6 +760,7 @@ def import_functions_analysed(
     # are tiered: scanned/runtime labels grant no review credit, so
     # demotion would be pure label churn.
     from core.audit._util import safe_join
+    from core.audit.context import fallback_span_end
     from core.staleness import hash_spans
 
     from . import journal_mac
@@ -778,8 +779,14 @@ def import_functions_analysed(
             current = ""
             if resolved is not None and resolved.is_file():
                 try:
+                    # hi=None = the fallback read window — the row's
+                    # hash was stamped over that window (see
+                    # core.audit.context.fallback_span_end), so the
+                    # gate must hash the same lines or every
+                    # window-stamped row demotes to machine tier.
                     current = hash_spans(
-                        resolved, [(lo, hi if hi is not None else lo)])[0]
+                        resolved,
+                        [(lo, fallback_span_end(lo, hi))])[0]
                 except OSError:
                     current = ""
             per_span[key] = current

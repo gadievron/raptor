@@ -2148,6 +2148,8 @@ def _build_covered_set(
     )
     from core.staleness import hash_spans
 
+    from .context import fallback_span_end
+
     # (file, function) → current-source hash oracle for the
     # unstamped tier, built lazily: spans come from the checklist,
     # hashes are computed per-file on the first candidate row
@@ -2170,7 +2172,14 @@ def _build_covered_set(
             if (name and isinstance(name, str) and isinstance(ls, int)
                     and not isinstance(ls, bool) and ls > 0):
                 le = item.get("line_end")
-                if not isinstance(le, int) or isinstance(le, bool):
+                if le is None:
+                    # Missing line_end = the fallback read window —
+                    # the writer stamped the row's hash over that
+                    # window (core.audit.record._compute_hash), so
+                    # the oracle must hash the same lines or a
+                    # window-stamped row can never earn hash credit.
+                    le = fallback_span_end(ls, None)
+                elif not isinstance(le, int) or isinstance(le, bool):
                     le = ls
                 spans_by_file.setdefault(fp, []).append((name, (ls, le)))
     current_hashes: dict[str, dict[str, set]] = {}
@@ -3065,6 +3074,7 @@ def _verify_entries_fold(
     """
     from core.coverage import journal_mac
 
+    from .context import fallback_span_end
     from .journal import is_agent_mark, is_function_grade, is_mechanical_echo
 
     def _hydrate_from_sidecar(entry: Any) -> Any:
@@ -3250,12 +3260,30 @@ def _verify_entries_fold(
         # * the checklist's CURRENT span: an unchanged function that
         #   merely moved down the file verifies there.
         spans = []
+        # Hash windows ride in LOCKSTEP with the candidate spans
+        # (same index = same candidate). The normalised span tuples
+        # feed the matched-span bookkeeping below; HASHING must cover
+        # the window the row's stamp was computed over — a missing
+        # line_end means the fallback read window (fallback_span_end),
+        # not a single line. Hashing the normalised single line here
+        # would make a window-stamped row read as permanent drift
+        # (every fold re-buys the same review); stamping the single
+        # line was the converse defect (body edits below the header
+        # never flipped the hash).
+        hash_windows: list[tuple[int, int]] = []
         if getattr(entry, "line_start", None):
             spans.append(
                 (entry.line_start, entry.line_end or entry.line_start))
+            hash_windows.append(
+                (entry.line_start,
+                 fallback_span_end(entry.line_start, entry.line_end)))
         cur = current_spans.get(key)
         if cur is not None and cur not in spans:
             spans.append(cur)
+            hash_windows.append(
+                (cur[0],
+                 fallback_span_end(
+                     cur[0], (current_raw_ends or {}).get(key, cur[1]))))
         if entry.source_hash and entry.source_hash.startswith("bin:"):
             # Binary items: the hash anchors the BINARY's content +
             # the function's address/size. A rebuilt binary (or a
@@ -3302,7 +3330,7 @@ def _verify_entries_fold(
                 unstamped_unverifiable += 1
             continue
         to_verify.setdefault(entry.file, []).append(
-            (entry, key, spans, verified_row))
+            (entry, key, spans, hash_windows, verified_row))
 
     if legacy_verified:
         split = ", ".join(
@@ -3356,12 +3384,12 @@ def _verify_entries_fold(
             # and their verdicts stood as coverage; compute_drift
             # flags the identical case as drift. Resurface instead.
             stale += len(items)
-            # 4-tuples, matching the to_verify append above. A 3-name
-            # unpack here raised ValueError for ANY missing file, and
-            # the fold-level except then aborted the ENTIRE fold —
-            # every prior verdict re-bought because one reviewed file
-            # was deleted.
-            for _entry, key, _spans, _verified in items:
+            # 5-tuples, matching the to_verify append above. A
+            # shorter unpack here raised ValueError for ANY missing
+            # file, and the fold-level except then aborted the ENTIRE
+            # fold — every prior verdict re-bought because one
+            # reviewed file was deleted.
+            for _entry, key, _spans, _windows, _verified in items:
                 logger.debug(
                     "journal-fold: %s source missing since %s review "
                     "— resurfacing as gap",
@@ -3370,12 +3398,14 @@ def _verify_entries_fold(
             continue
         flat_spans: list[tuple] = []
         span_counts: list[int] = []
-        for _entry, _key, entry_spans, _verified in items:
+        for _entry, _key, entry_spans, windows, _verified in items:
+            # windows is index-aligned with entry_spans by
+            # construction: hash the WINDOW, report the span.
             span_counts.append(len(entry_spans))
-            flat_spans.extend(entry_spans)
+            flat_spans.extend(windows)
         all_hashes = hash_spans(resolved, flat_spans)
         hash_idx = 0
-        for (entry, key, entry_spans, verified_row), n_spans in zip(
+        for (entry, key, entry_spans, _windows, verified_row), n_spans in zip(
                 items, span_counts):
             candidates = all_hashes[hash_idx:hash_idx + n_spans]
             hash_idx += n_spans

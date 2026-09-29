@@ -143,6 +143,30 @@ CALLEE_SNIPPET_TOTAL_LINES: int = 150
 # function the span spills into the file's NEXT functions, which the
 # reviewer may misattribute to the one under review.
 SOURCE_SPAN_FALLBACK_LINES: int = 50
+
+
+def fallback_span_end(line_start: int, line_end: int | None) -> int:
+    """Inclusive 1-indexed end of the span a review actually covers.
+
+    A measured ``line_end`` passes through unchanged. ``None`` means
+    the inventory never measured one — the review prompt then shows
+    the SOURCE_SPAN_FALLBACK_LINES window starting at ``line_start``
+    (:func:`_read_source`), and every source-hash producer and
+    verifier must cover that SAME window: the stamp side
+    (``core.audit.record._compute_hash``) so a body edit below the
+    header line flips the hash instead of staying invisible to
+    staleness/reuse gating, and the verify side (the journal fold's
+    span candidates, the coverage-record hash oracles, the resume
+    drift gate) so a window-stamped row can actually verify instead
+    of reading as permanent drift. Callers clamp to the file's real
+    length at slice/hash time (``slice_lines`` and ``_read_source``
+    both clamp), so the returned value may exceed the file.
+    """
+    if line_end is not None:
+        return line_end
+    return max(line_start, 1) + SOURCE_SPAN_FALLBACK_LINES - 1
+
+
 # Bound on the uniform-absence prompt section: a whole-family record
 # is heavier than a per-function lead, and a function rarely sits in
 # more than a couple of certain-membership families — the full record
@@ -3136,8 +3160,10 @@ def _read_source(
     lines = split_lines(text)  # \n model: line ranges come from inventory/SARIF
 
     start = max(0, line_start - 1)
-    end = (line_end if line_end is not None
-           else min(start + SOURCE_SPAN_FALLBACK_LINES, len(lines)))
+    # The shared window rule IS the read/hash coupling: the prompt
+    # and every source-hash site must cover the same lines (see
+    # fallback_span_end).
+    end = min(fallback_span_end(line_start, line_end), len(lines))
     return "\n".join(
         f"{i + 1:4d}  {line}"
         for i, line in enumerate(lines[start:end], start=start)

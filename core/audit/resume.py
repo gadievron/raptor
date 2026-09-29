@@ -159,6 +159,7 @@ def compute_drift(
     Error verdicts are skipped (they are retried, not reused); entries
     without a recorded hash cannot be verified and are not counted.
     """
+    from .context import fallback_span_end
     from .journal import latest_entries
 
     by_file: dict[str, list[Any]] = {}
@@ -178,7 +179,13 @@ def compute_drift(
             label=entry.function,
             stored_hash=entry.source_hash,
             line_start=entry.line_start,
-            line_end=entry.line_end or entry.line_start,
+            # A missing line_end means the review — and its stamp
+            # (core.audit.record._compute_hash) — covered the
+            # fallback read window, not a single line; the drift
+            # gate must re-hash the same window or every
+            # window-stamped row reads as drifted on every resume.
+            line_end=fallback_span_end(
+                entry.line_start, entry.line_end or None),
         )
         for _file, entries in sorted(by_file.items())
         for entry in entries
