@@ -1555,9 +1555,33 @@ def _build_study_items(
     for entries in type_ref_index.values():
         type_ref_fns.update(fn for fn, _cls in entries)
 
+    # One study item per function NAME, not per regex match: the
+    # extractor deliberately returns every match (forward declarations
+    # and duplicate decomp thunks included) and documents that
+    # consumers merge on name keys preferring the entry with a body —
+    # the call graph and fn_loc above already do. Item ids
+    # (func_<name>_<line>) kept line-distinct duplicates alive here,
+    # so every duplicate burned a paid study slot and a derived-
+    # attention cap slot (observed live: identical decomp-tree thunks
+    # studied several times over). The implementation wins, and among
+    # several body-bearing entries the LAST wins — the same tie-break
+    # the call graph applies — so the survivor's definition and its
+    # `calls` list come from the same entry. A dropped forward
+    # declaration's doc comment is carried onto the survivor rather
+    # than lost with it.
+    best_by_name: dict[str, dict] = {}
+    doc_by_name: dict[str, str] = {}
     for f in functions:
+        name = f["name"]
+        if name not in doc_by_name and f.get("doc_comment"):
+            doc_by_name[name] = f["doc_comment"]
+        prev = best_by_name.get(name)
+        if prev is None or f.get("body"):
+            best_by_name[name] = f
+
+    for f in best_by_name.values():
         signals = f.get("signals", {})
-        doc = f.get("doc_comment", "")
+        doc = f.get("doc_comment", "") or doc_by_name.get(f["name"], "")
         calls = call_graph.get(f["name"], [])
         callers = reverse_graph.get(f["name"], [])
         flag_checks = signals.get("flag_checks", [])
@@ -3766,12 +3790,15 @@ def main() -> None:
     if bridge_names and items:
         bridge_rank = {n.lower(): i for i, n in enumerate(bridge_names)}
         unranked = len(bridge_rank)
-        matched = 0
+        # Unique NAMES, not item occurrences: a seed name can match
+        # several items (a function item plus a struct item, say), and
+        # counting occurrences printed impossible ratios like 52/36.
+        matched_names: set[str] = set()
         for it in items:
             rank = bridge_rank.get(it.name.lower())
             if rank is None:
                 continue
-            matched += 1
+            matched_names.add(it.name.lower())
             if identifiers:
                 if not it.seed_source:
                     it.seed_source = "bridge_corroborated"
@@ -3779,12 +3806,12 @@ def main() -> None:
                 it.seed_source = "bridge_seed"
                 if it.relevance_tier is None or it.relevance_tier > 1:
                     it.relevance_tier = 1
-        if matched and not identifiers:
+        if matched_names and not identifiers:
             items.sort(key=lambda it: (
                 bridge_rank.get(it.name.lower(), unranked)
                 if it.seed_source == "bridge_seed" else unranked
             ))
-        print(f"study-prep: bridge seeds matched {matched}/"
+        print(f"study-prep: bridge seeds matched {len(matched_names)}/"
               f"{len(bridge_names)} name(s)", file=sys.stderr)
 
     out_path = output_dir / "study-list.json"
