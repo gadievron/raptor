@@ -733,7 +733,15 @@ the two transports with real failure modes need a deliberate one:
   between calls but stay inside middlebox idle-kill horizons (squid's
   default `read_timeout` is 15 minutes; NAT tables usually 5+). The
   default sits well inside both bounds — tune only if your proxy's
-  idle timer is unusually tight.
+  idle timer is unusually tight. Raising it far is harmless but
+  useless: the knob is a local pool ceiling, not a path guarantee.
+  On a measured proxied path, idle connections always survived
+  300 s gaps and never survived 600 s — identically with TCP
+  keepalives armed and unarmed, because keepalive probes are not
+  tunnel payload and do not reset middlebox idle timers. Past the
+  path's window the middlebox expires the connection first, and the
+  pool re-dials transparently at the cost of roughly one TLS
+  handshake after the silence.
 - **HTTP/2** is a per-deployment, evidence-based opt-in. A clean
   sequential smoke test is *not* sufficient evidence — the risk cases
   are multiplexed concurrency under packet loss (TCP head-of-line

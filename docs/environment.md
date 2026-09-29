@@ -327,7 +327,7 @@ warn and fall back.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `RAPTOR_HTTP_KEEPALIVE_S` | `60` | Idle keepalive expiry (seconds) for pooled SDK transports (httpx default is 5 s — shorter than RAPTOR's inter-call think time). |
+| `RAPTOR_HTTP_KEEPALIVE_S` | `60` | Idle keepalive expiry (seconds) for pooled SDK transports (httpx default is 5 s — shorter than RAPTOR's inter-call think time). A local pool ceiling, not a path guarantee: middleboxes (egress proxies, provider edges) expire idle tunnels on their own clocks, and TCP-keepalive arming does not extend their horizon — on a measured proxied path, idle connections always survived 300 s gaps and never survived 600 s, armed and unarmed alike. Values above the path's idle window therefore buy nothing there; the pool re-dials transparently after a long silence at about one TLS handshake of cost. |
 | `RAPTOR_HTTP_MAX_KEEPALIVE` | `20` | Idle connections kept in each SDK transport pool. |
 | `RAPTOR_HTTP_MAX_CONNECTIONS` | `100` | Total concurrent connections per SDK transport. |
 | `RAPTOR_HTTP2` | off | `1`/`true`/`yes`/`on` opts pooled transports into HTTP/2; additionally requires the `h2` package (opted-in-but-missing warns once and stays on HTTP/1.1). Off by default: TCP head-of-line blocking and middlebox risk are real. |
