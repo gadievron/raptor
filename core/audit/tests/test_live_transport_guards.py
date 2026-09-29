@@ -267,21 +267,26 @@ class TestSemgrepMintedIdentities:
             )
 
 
+def _stub_semgrep_runner(
+    monkeypatch: pytest.MonkeyPatch, **result_kwargs,
+) -> None:
+    """Pin the runner seam to a fixed result: the sweep grades a REAL
+    engine outcome shape without any engine present."""
+    import packages.semgrep.runner as runner_mod
+    from packages.semgrep.models import SemgrepResult
+
+    monkeypatch.setattr(runner_mod, "is_available", lambda: True)
+    monkeypatch.setattr(
+        runner_mod, "run_rule",
+        lambda *a, **k: SemgrepResult(**result_kwargs),
+    )
+
+
 class TestSemgrepDirectionsThroughLiveBody:
     """A REAL live test body (test_encoding_rules_c's mode
     adjudication) routed through an injected transport outcome — the
     guard converts a degraded runtime to a skip and leaves a product
     misclassification a hard failure."""
-
-    def _stub_runner_result(self, monkeypatch, **result_kwargs) -> None:
-        import packages.semgrep.runner as runner_mod
-        from packages.semgrep.models import SemgrepResult
-
-        monkeypatch.setattr(runner_mod, "is_available", lambda: True)
-        monkeypatch.setattr(
-            runner_mod, "run_rule",
-            lambda *a, **k: SemgrepResult(**result_kwargs),
-        )
 
     def _run_live_body(self, tmp_path: Path) -> None:
         from core.audit.tests.test_encoding_rules_c import (
@@ -295,7 +300,7 @@ class TestSemgrepDirectionsThroughLiveBody:
     def test_degraded_transport_skips_the_live_assertions(
         self, monkeypatch, tmp_path,
     ) -> None:
-        self._stub_runner_result(
+        _stub_semgrep_runner(
             monkeypatch, errors=["Timeout after 900s"], returncode=-1,
         )
         with pytest.raises(
@@ -309,7 +314,7 @@ class TestSemgrepDirectionsThroughLiveBody:
         # A healthy engine that scanned nothing and found nothing:
         # the sweep grades it, the guard stays out of the way, and
         # the ground-truth assertion fails hard.
-        self._stub_runner_result(monkeypatch, returncode=0)
+        _stub_semgrep_runner(monkeypatch, returncode=0)
 
         def body() -> None:
             with pytest.raises(AssertionError):
@@ -322,7 +327,65 @@ class TestSemgrepDirectionsThroughLiveBody:
     ) -> None:
         # The engine's own failure verdict (positive exit) must reach
         # the assertion as a hard failure, never a skip.
-        self._stub_runner_result(
+        _stub_semgrep_runner(
+            monkeypatch,
+            errors=["semgrep exited with code 2: invalid rule schema"],
+            returncode=2,
+        )
+
+        def body() -> None:
+            with pytest.raises(AssertionError):
+                self._run_live_body(tmp_path)
+
+        _fail_on_skip(body)
+
+
+class TestPhpDirectionsThroughLiveBody:
+    """A REAL php live test body (test_cwe_dispatch_php's
+    TestLiveAdjudication, called directly so the class-level
+    needs_semgrep mark stays out of the way) routed through an
+    injected transport outcome — hermetic on every host."""
+
+    def _run_live_body(self, tmp_path: Path) -> None:
+        from core.audit.tests.test_cwe_dispatch_php import (
+            _PHP_FAMILIES,
+            TestLiveAdjudication,
+        )
+
+        cwe = sorted(_PHP_FAMILIES)[0]
+        TestLiveAdjudication().test_vulnerable_snippet_confirms(
+            cwe, tmp_path,
+        )
+
+    def test_degraded_transport_skips_the_live_assertions(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        _stub_semgrep_runner(
+            monkeypatch, errors=["Timeout after 900s"], returncode=-1,
+        )
+        with pytest.raises(
+            pytest.skip.Exception, match="transport degraded",
+        ):
+            self._run_live_body(tmp_path)
+
+    def test_product_misclassification_still_fails(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        # A healthy engine that found nothing in the vulnerable
+        # snippet: the guard stays out of the way and the
+        # ground-truth assertion fails hard.
+        _stub_semgrep_runner(monkeypatch, returncode=0)
+
+        def body() -> None:
+            with pytest.raises(AssertionError):
+                self._run_live_body(tmp_path)
+
+        _fail_on_skip(body)
+
+    def test_product_error_shape_still_fails(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        _stub_semgrep_runner(
             monkeypatch,
             errors=["semgrep exited with code 2: invalid rule schema"],
             returncode=2,
@@ -877,9 +940,18 @@ class TestExpandedViewGuardDirections:
 
 class TestPinnedSubprocess:
     def test_healthy_exit_codes_return(self) -> None:
-        proc = run_pinned_subprocess(
-            ["/bin/sh", "-c", "exit 3"], timeout=30, context="pin",
-        )
+        # No-skip direction: an engine-chosen exit code must REACH the
+        # caller, never skip.
+        proc = None
+
+        def body() -> None:
+            nonlocal proc
+            proc = run_pinned_subprocess(
+                ["/bin/sh", "-c", "exit 3"], timeout=30, context="pin",
+            )
+
+        _fail_on_skip(body)
+        assert proc is not None
         assert proc.returncode == 3
 
     def test_spawn_failure_skips(self, tmp_path: Path) -> None:
@@ -1094,4 +1166,49 @@ class TestCompilerSurfaceFences:
             "_sweep_uaf",
             "test_in_tree_linemarker_still_refutes",
             "test_conditional_analyzer_token_in_header_cannot_refute",
+        }
+
+
+class TestPhpSurfaceFences:
+    """Every live php-dispatch semgrep call site and every live
+    interpreter spawn routes through the guarded runners, enumerated
+    per file."""
+
+    def test_cwe_dispatch_php(self) -> None:
+        calls = _function_call_map("test_cwe_dispatch_php.py")
+        assert _callers_of(calls, "run_semgrep_sweep") == set()
+        assert _callers_of(calls, "run_semgrep_sweep_guarded") == {
+            "test_vulnerable_snippet_confirms",
+            "test_sanitized_snippet_refutes",
+        }
+        assert _callers_of(calls, "run_pinned_subprocess") == {
+            "test_semgrep_php_target_selection_pin",
+        }
+
+    def test_cwe_dispatch_php_web(self) -> None:
+        calls = _function_call_map("test_cwe_dispatch_php_web.py")
+        assert _callers_of(calls, "run_semgrep_sweep") == set()
+        assert _callers_of(calls, "run_semgrep_sweep_guarded") == {
+            "test_vulnerable_snippet_confirms",
+            "test_sanitized_snippet_refutes",
+        }
+
+    def test_dark_verify_interpreter_pins(self) -> None:
+        # The live interpreter round-trips all funnel through
+        # _run_stdout; the one direct pin is the ruby foreign-load
+        # leg (it adjudicates on stdout, not the exit code).
+        calls = _function_call_map("test_dark_verify.py")
+        assert _callers_of(calls, "run_pinned_subprocess") == {
+            "_run_stdout",
+            "test_live_foreign_load_reports_binding_error",
+        }
+        assert _callers_of(calls, "_run_stdout") == {
+            "test_live_target_load_passes_binding",
+            "test_live_shadowed_init_reports_binding_error",
+            "test_json_encode_escapes_backslash_and_control_chars",
+            "test_ruby_roundtrips_as_data",
+            "test_perl_roundtrips_as_data",
+            "test_php_roundtrips_as_data",
+            "test_lua_roundtrips_as_data",
+            "test_perl_backtick_block_interpolation_stays_data",
         }

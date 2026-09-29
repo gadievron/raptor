@@ -283,13 +283,15 @@ class TestLiveAdjudication:
 
     @pytest.mark.parametrize("cwe", sorted(_PHP_FAMILIES))
     def test_vulnerable_snippet_confirms(self, cwe: str, tmp_path: Path):
-        from core.audit.sweep import run_semgrep_sweep
+        from core.audit.tests._live_transport import (
+            run_semgrep_sweep_guarded,
+        )
 
         _, vulnerable, _ = _PHP_FAMILIES[cwe]
         (tmp_path / "app.php").write_text(vulnerable)
         rule = resolve_semgrep_rule_for_cwe(cwe, "app.php")
         assert rule
-        result = run_semgrep_sweep(
+        result = run_semgrep_sweep_guarded(
             target_path=tmp_path,
             file_path="app.php",
             function_name="f",
@@ -302,13 +304,15 @@ class TestLiveAdjudication:
 
     @pytest.mark.parametrize("cwe", sorted(_PHP_FAMILIES))
     def test_sanitized_snippet_refutes(self, cwe: str, tmp_path: Path):
-        from core.audit.sweep import run_semgrep_sweep
+        from core.audit.tests._live_transport import (
+            run_semgrep_sweep_guarded,
+        )
 
         _, _, sanitized = _PHP_FAMILIES[cwe]
         (tmp_path / "app.php").write_text(sanitized)
         rule = resolve_semgrep_rule_for_cwe(cwe, "app.php")
         assert rule
-        result = run_semgrep_sweep(
+        result = run_semgrep_sweep_guarded(
             target_path=tmp_path,
             file_path="app.php",
             function_name="f",
@@ -325,7 +329,8 @@ class TestLiveAdjudication:
         starts scanning a legacy suffix, this fails and the suffix
         can be promoted to the php mapping."""
         import json
-        import subprocess
+
+        from core.audit.tests._live_transport import run_pinned_subprocess
 
         rule = tmp_path / "probe.yaml"
         rule.write_text(
@@ -344,11 +349,12 @@ class TestLiveAdjudication:
         # PYTHONPATH dropped like the runtime spawn path does: the CI
         # preflight dependency simulation hides modules via a stub
         # PYTHONPATH, which must not leak into the semgrep child.
-        proc = subprocess.run(
+        proc = run_pinned_subprocess(
             ["semgrep", "scan", "--config", str(rule), "--metrics",
              "off", "--json", "--quiet", *targets],
-            capture_output=True, text=True, timeout=180, check=False,
+            timeout=180,
             env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
+            context="semgrep php target-selection pin",
         )
         assert proc.returncode == 0, proc.stderr[:500]
         scanned = {

@@ -184,13 +184,15 @@ class TestLiveAdjudication:
 
     @pytest.mark.parametrize("cwe", sorted(_WEB_FAMILIES))
     def test_vulnerable_snippet_confirms(self, cwe: str, tmp_path: Path):
-        from core.audit.sweep import run_semgrep_sweep
+        from core.audit.tests._live_transport import (
+            run_semgrep_sweep_guarded,
+        )
 
         _, vulnerable, _ = _WEB_FAMILIES[cwe]
         (tmp_path / "app.php").write_text(vulnerable)
         rule = resolve_semgrep_rule_for_cwe(cwe, "app.php")
         assert rule
-        result = run_semgrep_sweep(
+        result = run_semgrep_sweep_guarded(
             target_path=tmp_path,
             file_path="app.php",
             function_name="f",
@@ -203,13 +205,15 @@ class TestLiveAdjudication:
 
     @pytest.mark.parametrize("cwe", sorted(_WEB_FAMILIES))
     def test_sanitized_snippet_refutes(self, cwe: str, tmp_path: Path):
-        from core.audit.sweep import run_semgrep_sweep
+        from core.audit.tests._live_transport import (
+            run_semgrep_sweep_guarded,
+        )
 
         _, _, sanitized = _WEB_FAMILIES[cwe]
         (tmp_path / "app.php").write_text(sanitized)
         rule = resolve_semgrep_rule_for_cwe(cwe, "app.php")
         assert rule
-        result = run_semgrep_sweep(
+        result = run_semgrep_sweep_guarded(
             target_path=tmp_path,
             file_path="app.php",
             function_name="f",

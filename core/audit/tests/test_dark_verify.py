@@ -1426,10 +1426,11 @@ class TestGenerateRubyHarness:
             lang_config={"require_path": "lib/auth"},
         )
         harness = generate_ruby_harness(spec, target, witness_token="ab12")
-        import subprocess
-        proc = subprocess.run(
+        from core.audit.tests._live_transport import run_pinned_subprocess
+        proc = run_pinned_subprocess(
             [shutil.which("ruby"), "-I", str(other), "-e", harness],
-            capture_output=True, text=True, timeout=30,
+            timeout=30, context="dark-verify ruby foreign-load pin",
+            skip_signals=(9,),
         )
         data = json.loads(proc.stdout.strip().splitlines()[-1])
         assert data["status"] == "binding_error"
@@ -5795,7 +5796,17 @@ def _sq_roundtrip(literal: str) -> str:
 
 
 def _run_stdout(argv: list[str]) -> str:
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    # Live interpreter spawn: transport degradation (the deadline, a
+    # fork failure, a KILL from the resource ceiling) skips; every exit
+    # the interpreter chooses itself — including crash signals like
+    # SIGSEGV, which are product-relevant for a generated harness —
+    # stays a hard failure on the assert below.
+    from core.audit.tests._live_transport import run_pinned_subprocess
+
+    proc = run_pinned_subprocess(
+        argv, timeout=30, context="dark-verify interpreter round-trip",
+        skip_signals=(9,),
+    )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout
 
