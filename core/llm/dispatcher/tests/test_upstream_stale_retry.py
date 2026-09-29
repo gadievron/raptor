@@ -318,10 +318,11 @@ class TestStaleRetryShardEvidence:
 
     def _wait_rebuilt(self, d: LLMDispatcher, old: httpx.Client) -> None:
         """The drained shard is retired at release, which can lag the
-        worker-visible response by a beat."""
+        worker-visible response by a beat — and the retired client's
+        close lags the swap by another one, so wait for both."""
         deadline = time.monotonic() + 5.0
         while (
-            self._sole_shard_client(d) is old
+            (self._sole_shard_client(d) is old or not old.is_closed)
             and time.monotonic() < deadline
         ):
             time.sleep(0.05)
