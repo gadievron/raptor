@@ -29,6 +29,9 @@ from core.audit.expanded_semgrep import (
     run_expanded_semgrep_rule,
     translate_corpus_findings,
 )
+from core.audit.tests._live_transport import (
+    skip_if_expanded_view_transport_degraded,
+)
 
 pv._reset_probe_cache()
 HAVE_CPP = pv._preprocessor_for(False) is not None
@@ -560,6 +563,7 @@ def test_e2e_real_semgrep_finds_macro_hidden_strcpy(tmp_path, sandbox_spy):
         target_path=target, file_path="main.c", rule_config=str(rule),
         budget=ExpansionBudget(),
     )
+    skip_if_expanded_view_transport_degraded(res)
     assert res.ok is True, res.reason
     assert any(m["line"] == _MACRO_CALL_LINE for m in res.matches), res.matches
     for m in res.matches:

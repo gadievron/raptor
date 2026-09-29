@@ -311,10 +311,10 @@ needs_semgrep = pytest.mark.skipif(
 
 def _sweep(tmp_path: Path, rule: str, snippet: str, *, fname: str,
            file_name: str = "app.c"):
-    from core.audit.sweep import run_semgrep_sweep
+    from core.audit.tests._live_transport import run_semgrep_sweep_guarded
 
     (tmp_path / file_name).write_text(snippet)
-    return run_semgrep_sweep(
+    return run_semgrep_sweep_guarded(
         target_path=tmp_path,
         file_path=file_name,
         function_name=fname,
@@ -505,7 +505,9 @@ class TestConfirmOnlyMarkerScope:
     def test_tempfile_marker_rule_still_refutes(self, tmp_path: Path):
         # End-to-end: an inline rule carrying the marker keeps the
         # scanned-witness refutation (author opt-out blocked).
-        from core.audit.sweep import run_semgrep_sweep
+        from core.audit.tests._live_transport import (
+            run_semgrep_sweep_guarded,
+        )
 
         rule = tmp_path / ".sweep-rule-inline.yaml"
         rule.write_text(
@@ -520,7 +522,7 @@ class TestConfirmOnlyMarkerScope:
         (tmp_path / "app.c").write_text(
             "void f(void) { benign_call(); }\n",
         )
-        result = run_semgrep_sweep(
+        result = run_semgrep_sweep_guarded(
             target_path=tmp_path,
             file_path="app.c",
             function_name="f",

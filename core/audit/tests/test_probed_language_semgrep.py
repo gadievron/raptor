@@ -28,6 +28,11 @@ from core.audit.cwe_dispatch import resolve_semgrep_rule_for_cwe
 from core.audit.hypothesis_mapping import semgrep_probed_language
 from core.audit.orchestrator import _hypothesis_to_tool_chain
 from core.audit.sweep import _rule_languages_include, run_semgrep_sweep
+from core.audit.tests._live_transport import (
+    guard_refinement_semgrep,
+    run_pinned_subprocess,
+    run_semgrep_sweep_guarded,
+)
 
 _VULNERABLE_MOD = (
     "<?php\n"
@@ -301,7 +306,6 @@ class TestLiveProbedTarget:
         fails and the flag plumbing can be retired."""
         import json
         import os
-        import subprocess
 
         target = tmp_path / "check.mod"
         target.write_text(_VULNERABLE_MOD)
@@ -313,16 +317,16 @@ class TestLiveProbedTarget:
         # preflight dependency simulation hides modules via a stub
         # PYTHONPATH, which must not leak into the semgrep child.
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-        proc = subprocess.run(
-            base, capture_output=True, text=True, timeout=180, check=False,
-            env=env,
+        proc = run_pinned_subprocess(
+            base, timeout=180, env=env,
+            context="semgrep unknown-extension selection pin",
         )
         assert proc.returncode == 0, proc.stderr[:500]
         assert json.loads(proc.stdout)["paths"]["scanned"] == []
-        proc = subprocess.run(
+        proc = run_pinned_subprocess(
             base[:-1] + ["--scan-unknown-extensions", str(target)],
-            capture_output=True, text=True, timeout=180, check=False,
-            env=env,
+            timeout=180, env=env,
+            context="semgrep unknown-extension selection pin",
         )
         assert proc.returncode == 0, proc.stderr[:500]
         scanned = json.loads(proc.stdout)["paths"]["scanned"]
@@ -330,7 +334,7 @@ class TestLiveProbedTarget:
 
     def test_probed_vulnerable_mod_confirms(self, tmp_path: Path):
         (tmp_path / "check.mod").write_text(_VULNERABLE_MOD)
-        result = run_semgrep_sweep(
+        result = run_semgrep_sweep_guarded(
             target_path=tmp_path,
             file_path="check.mod",
             function_name="interstitial:2-4",
@@ -347,7 +351,7 @@ class TestLiveProbedTarget:
         probed file, so a clean scan is a licensed refutation (was
         capped at inconclusive — no witness — before the hint)."""
         (tmp_path / "check.mod").write_text(_SANITIZED_MOD)
-        result = run_semgrep_sweep(
+        result = run_semgrep_sweep_guarded(
             target_path=tmp_path,
             file_path="check.mod",
             function_name="interstitial:2-4",
@@ -364,7 +368,7 @@ class TestLiveProbedTarget:
         # skips the file and the witness gate caps at inconclusive —
         # never a false refutation.
         (tmp_path / "check.mod").write_text(_VULNERABLE_MOD)
-        result = run_semgrep_sweep(
+        result = run_semgrep_sweep_guarded(
             target_path=tmp_path,
             file_path="check.mod",
             function_name="interstitial:2-4",
@@ -379,7 +383,7 @@ class TestLiveProbedTarget:
         # c) with a php rule is not scanned as php — no flag, no scan,
         # inconclusive rather than a cross-language match.
         (tmp_path / "table.gen").write_text(_C_CONTENT)
-        result = run_semgrep_sweep(
+        result = run_semgrep_sweep_guarded(
             target_path=tmp_path,
             file_path="table.gen",
             function_name="main",
@@ -407,7 +411,7 @@ class TestLiveProbedTarget:
         (tmp_path / "check.mod").write_text(broken)
         (tmp_path / "app.php").write_text(broken)
         for file_name, language in (("check.mod", "php"), ("app.php", None)):
-            result = run_semgrep_sweep(
+            result = run_semgrep_sweep_guarded(
                 target_path=tmp_path,
                 file_path=file_name,
                 function_name="f",
@@ -419,13 +423,16 @@ class TestLiveProbedTarget:
             )
 
     def test_refinement_dispatch_confirms_probed_file(
-        self, tmp_path: Path,
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ):
         # The suggested-rule re-run adjudicates the probed file like
         # the main lane; without the inventory it degrades to the
         # pre-hint inconclusive, and mapped extensions are unchanged
-        # either way.
+        # either way. The dispatch collapses the sweep result to a
+        # string, so the transport guard rides at the sweep seam.
         from core.audit.refinement import _dispatch_semgrep
+
+        guard_refinement_semgrep(monkeypatch)
 
         (tmp_path / "check.mod").write_text(_VULNERABLE_MOD)
         (tmp_path / "app.php").write_text(_VULNERABLE_MOD)
@@ -458,7 +465,7 @@ class TestLiveProbedTarget:
         (tmp_path / "app.php").write_text(_VULNERABLE_MOD)
         outcomes = []
         for language in (None, "php"):
-            result = run_semgrep_sweep(
+            result = run_semgrep_sweep_guarded(
                 target_path=tmp_path,
                 file_path="app.php",
                 function_name="interstitial:2-4",

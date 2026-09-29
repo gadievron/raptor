@@ -485,13 +485,18 @@ class TestCppControlRelanguage:
     @pytest.mark.skipif(
         shutil.which("semgrep") is None, reason="semgrep not installed",
     )
-    def test_cpp_uaf_rule_caps_against_real_semgrep(self, monkeypatch):
+    def test_cpp_uaf_rule_caps_against_real_semgrep(
+        self, monkeypatch, tmp_path,
+    ):
         """Empirical pin of the vacuity: the generated cpp UAF rule
         must match the guarded .c fixture through the re-languaged
         control run (it reported zero findings on zero scanned files
         before the fix)."""
         import core.audit.sweep as sweep_mod
         from core.audit.sweep import _rule_matches_negative_control
+        from core.audit.tests._live_transport import (
+            skip_unless_semgrep_carries_probe,
+        )
 
         keyed = hypothesis_to_semgrep_rule_keyed(
             "use after free of request buffer", "src/handler.cpp",
@@ -500,8 +505,19 @@ class TestCppControlRelanguage:
         rule_path, keyword = keyed
         try:
             monkeypatch.setattr(sweep_mod, "_negative_control_cache", {})
-            assert _rule_matches_negative_control(
+            matched = _rule_matches_negative_control(
                 rule_path, keyword, "src/handler.cpp",
-            ) is True
+            )
+            if matched is None:
+                # The control run collapses EVERY failure to None —
+                # a dead/overloaded engine and a product regression
+                # are indistinguishable on this surface. Re-probe the
+                # executed path: transport degradation skips with its
+                # identity; a healthy engine falls through to the
+                # hard failure below.
+                skip_unless_semgrep_carries_probe(
+                    tmp_path, context="negative-control run returned None",
+                )
+            assert matched is True
         finally:
             Path(rule_path).unlink()

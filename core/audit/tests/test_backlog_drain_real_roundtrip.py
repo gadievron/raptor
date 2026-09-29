@@ -142,6 +142,13 @@ class TestRealRoundTrip:
 
         report = drain(run_dir, target, 1.0)
 
+        if report.witnessed != 1:
+            # The drain report collapses failure identity — a rule the
+            # controls refused and an engine the loaded runtime failed
+            # to carry both read "still dark". Re-probe the adapter:
+            # a degraded engine skips with the probe's identity; a
+            # healthy one falls through to the hard failures below.
+            _probe_or_skip_semgrep(tmp_path)
         assert report.witnessed == 1
         assert report.attempted == 0
         assert report.spent_usd > 0
@@ -184,6 +191,13 @@ class TestRealRoundTrip:
 
         report = drain(run_dir, target, 1.0)
 
+        # Vacuity fence: a still-dark row is ALSO what a dead engine
+        # produces, so this receipt proves nothing unless the adapter
+        # can still carry a known-matching rule. (A transient that
+        # degraded only the in-drain run and healed by now is not
+        # detectable on this surface — the drain report carries no
+        # error identity.)
+        _probe_or_skip_semgrep(tmp_path)
         assert report.witnessed == 0
         assert report.attempted == 1
         assert not (run_dir / "review-journal.jsonl").exists()
