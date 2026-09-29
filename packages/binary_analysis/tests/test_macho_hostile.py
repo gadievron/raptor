@@ -106,21 +106,20 @@ def _rich_fat() -> bytes:
 
 
 class TestMutationFuzz:
-    def test_seeded_mutations_never_raise(self, tmp_path):
-        """The never-raises contract under random damage, three
-        seeds, thin and fat bases. Seeded — every run replays the
-        identical corpus. Mutations are header-biased (the leading
-        bytes hold the fat table, mach header, and every command this
-        parser walks) and mixed with truncations. Each parse is also
-        individually time-bounded: no mutation may buy a pathological
-        walk."""
+    def _fuzz(self, tmp_path, seeds, per_seed):
+        """The never-raises contract under random damage, thin and
+        fat bases. Seeded — every run replays the identical corpus.
+        Mutations are header-biased (the leading bytes hold the fat
+        table, mach header, and every command this parser walks) and
+        mixed with truncations. Each parse is also individually
+        time-bounded: no mutation may buy a pathological walk."""
         bases = [_rich_thin(), _rich_fat()]
         p = tmp_path / "mut.bin"
         worst = 0.0
         total = 0
-        for seed in (0xA11CE, 0xB0B, 0xC0FFEE):
+        for seed in seeds:
             rng = random.Random(seed)
-            for i in range(1700):
+            for i in range(per_seed):
                 base = bases[i % 2]
                 blob = bytearray(base)
                 if i % 10 == 9:
@@ -141,8 +140,21 @@ class TestMutationFuzz:
                     " — pathological walk")
                 assert facts is None or isinstance(facts, MachOFacts)
                 total += 1
-        assert total == 5100
+        assert total == len(seeds) * per_seed
         assert worst < 1.0
+
+    def test_mutation_smoke_never_raises(self, tmp_path):
+        # Default-tier smoke: one seed's leading slice keeps the
+        # never-raises contract exercised on every push.
+        self._fuzz(tmp_path, (0xA11CE,), 300)
+
+    @pytest.mark.slow  # genuine fuzz battery: 5100 seeded parses,
+    # each a file write plus a full load-command walk — cheap alone,
+    # but the corpus rides the default-tier time budget on a loaded
+    # CI runner. The smoke above keeps default-tier mutation
+    # coverage; the full three-seed zoo runs in the nightly tier.
+    def test_seeded_mutations_never_raise(self, tmp_path):
+        self._fuzz(tmp_path, (0xA11CE, 0xB0B, 0xC0FFEE), 1700)
 
 
 class TestTruncationSweep:
