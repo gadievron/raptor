@@ -260,7 +260,8 @@ jobs:
   # triggers (pull_request → main, push → main, merge_group) mean a
   # direct push to main cannot smuggle a finding either.
   #
-  # Pure stdlib Python; no setup beyond checkout + interpreter.
+  # Pure stdlib Python; no setup beyond checkout + interpreter
+  # (plus a pytest install for the ReDoS census rider at the end).
   # Wall-clock budget: ~1 min total for all nine; check_miswiring's
   # single-pass parallel AST index is ~5-10 s on 4-vCPU runners; the
   # others are ~5-20 s each. timeout-minutes: 10 leaves generous
@@ -315,3 +316,18 @@ jobs:
 
       - name: Run run-dir read census against baseline
         run: python3 .github/scripts/check_run_dir_reads.py
+
+      # The ReDoS idiom census rides this job rather than keeping its
+      # own single-step job in tests.yml: same whole-repo-invariant
+      # shape (its universe is the runtime tree), same checkout, and
+      # this job's no-paths-filter trigger is a superset of the old
+      # import-graph gate — every runtime-source PR still runs it.
+      # It is a pytest suite, not a check_*.py detector, so it sits
+      # outside the daily-sweep parity set above.
+      - name: Install pytest
+        # grep + pip install keeps pyproject.toml the single source
+        # of truth for the pytest pin (the ruff idiom above).
+        run: pip install "$(grep -oE 'pytest==[0-9.]+' pyproject.toml)"
+
+      - name: Run ReDoS idiom census
+        run: python -m pytest .github/tests/test_redos_idiom_census.py -q
