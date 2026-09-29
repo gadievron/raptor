@@ -131,6 +131,40 @@ def _spy(monkeypatch, module, attr):
     return calls
 
 
+# The real registry is a whole-tree derivation: parsing every module
+# in the detector entry points' import closure costs seconds per
+# process and grows with the tree — and the per-process memo means
+# whichever test triggers it first on a worker pays all of it. The
+# cache contracts under test never depend on the registry's BREADTH,
+# only on fingerprint semantics over some registry, so every test in
+# this file runs against a small pinned registry of real modules
+# (real repo files, real bytes — the hashing semantics stay live).
+# Registry breadth keeps its own pins: the fixture-repo walker test
+# stays in the default tier, and TestClosureRegistry's whole-tree
+# sweeps run in the slow tier against the real derivation via the
+# ``real_registry`` opt-out.
+_PINNED_REGISTRY: tuple[str, ...] = (
+    "core.audit.block_sibling_analysis",
+    "core.audit.detector_cache",
+    "core.smt_solver.session",
+)
+
+
+@pytest.fixture(autouse=True)
+def _pinned_registry(request, monkeypatch):
+    if "real_registry" in request.fixturenames:
+        return
+    monkeypatch.setattr(
+        dc, "detector_modules", lambda: _PINNED_REGISTRY,
+    )
+
+
+@pytest.fixture
+def real_registry():
+    """Opt out of the pinned registry: the whole-tree derivation."""
+    return dc.detector_modules
+
+
 class TestGoldenEquivalence:
     def test_cached_rerun_is_byte_equivalent(self, tmp_path):
         target = _make_target(tmp_path)
@@ -368,12 +402,13 @@ class TestDetectorSetIdentity:
         one no hand-written registry listed — must flip the
         detector-set fingerprint and drop every cached entry. A stale
         SMT-backed record reaching guard_clean_keys skips LLM review,
-        so this is the cache's highest-stakes binding."""
+        so this is the cache's highest-stakes binding.
+
+        Runs against the pinned registry (which carries the same
+        solver-session dependency); that the REAL derivation registers
+        it is pinned by TestClosureRegistry's slow-tier sweep."""
         dep = "core.smt_solver.session"
-        assert dep in dc.detector_modules(), (
-            "condition_smt's solver-session dependency must be in the "
-            "derived registry"
-        )
+        assert dep in dc.detector_modules()
         target = _make_target(tmp_path)
         out = tmp_path / "out"
         out.mkdir()
@@ -410,7 +445,13 @@ class TestDetectorSetIdentity:
 
 
 class TestClosureRegistry:
-    def test_known_transitive_deps_are_registered(self):
+    @pytest.mark.slow  # genuine whole-tree sweep: deriving the real
+    # registry parses every module in the detector entry points'
+    # import closure (tens of MB of source) — seconds per process on
+    # a loaded CI runner and growing with the tree. Walker SEMANTICS
+    # keep a default-tier pin via the fixture-repo test below; these
+    # membership pins need the real repo-wide derivation.
+    def test_known_transitive_deps_are_registered(self, real_registry):
         registry = set(dc.detector_modules())
         # Deep, function-local, and package-shaped dependencies that a
         # hand-written registry historically missed. A walker
@@ -435,18 +476,20 @@ class TestClosureRegistry:
         ):
             assert dep in registry, dep
 
-    def test_entry_points_and_glue_are_registered(self):
+    @pytest.mark.slow  # whole-tree sweep — same registry derivation
+    # as the membership pins above.
+    def test_entry_points_and_glue_are_registered(self, real_registry):
         registry = set(dc.detector_modules())
         assert set(dc.DETECTOR_ENTRY_POINTS) <= registry
         assert set(dc._GLUE_MODULES) <= registry
 
     @pytest.mark.slow  # genuine whole-tree sweep: the UNPRUNED import
-    # closure AST-walks every module reachable from the detector entry
-    # points over the real repo (~2M AST nodes + ~20k path resolutions)
-    # — over the 10s tier budget on a loaded CI runner and growing with
-    # the tree. The registry/entry-point pins above stay in the default
-    # tier; only this reachability witness needs the full walk.
-    def test_exempt_modules_are_reachable_but_not_registered(self):
+    # closure walks every module reachable from the detector entry
+    # points over the real repo — over the 10s tier budget on a loaded
+    # CI runner and growing with the tree.
+    def test_exempt_modules_are_reachable_but_not_registered(
+        self, real_registry,
+    ):
         # Reachability witness: an exemption nothing imports any more
         # is stale and must be removed; a role change (the module
         # moving onto a cached result path) is caught in review of
