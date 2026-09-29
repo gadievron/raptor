@@ -10,6 +10,19 @@ _DASH_RUN_RE = re.compile(r'-{2,}')
 
 _FENCE_RE = re.compile(r'`{3,}')
 
+#: Cap on sanitized Mermaid node-id length. Churn-prone limit —
+#: rationale in both directions:
+#:
+#: * Not smaller: node ids legally embed compound producer forms
+#:   (``graph-path-<ep>-<sink>``, ``binary-handoff:<escaped>`` at up
+#:   to ~116 chars); every observed honest id is <= 116, so 128 keeps
+#:   all of them byte-identical and never truncates honest output.
+#: * Not larger: node ids land UNQUOTED in Mermaid positions and
+#:   diagrams.md is catted to operator terminals — the charset strip
+#:   already makes the bytes inert, so length is the remaining
+#:   channel, and no renderer or join benefits from ids past 128.
+ID_MAX_LEN = 128
+
 
 def sanitize(text: str, max_len: int | None = None) -> str:
     """Escape characters that break Mermaid node labels.
@@ -73,9 +86,17 @@ def sanitize_id(node_id: str) -> str:
     position, so an id like `A---B` would parse as an edge between
     phantom nodes A and B and inject spurious topology into the
     rendered graph. A single `-` inside an id is inert.
+
+    Finally truncates to ID_MAX_LEN — a hostile producer's flood id
+    is charset-inert after the strip but would otherwise survive
+    length-unbounded into diagrams.md. Truncation runs AFTER the dash
+    collapse (removing a suffix cannot create a new dash run), and
+    truncation collisions surface via detect_id_collisions, which
+    groups by this function's output.
     """
     sanitized = _SAFE_ID_RE.sub('_', str(node_id))
     sanitized = _DASH_RUN_RE.sub('-', sanitized)
+    sanitized = sanitized[:ID_MAX_LEN]
     return sanitized if sanitized.strip('_-') else "node"
 
 
