@@ -29,6 +29,7 @@ import time
 import httpx
 import pytest
 
+import core.llm.dispatcher.server as dispatcher_server
 from core.llm.dispatcher.auth import CredentialStore, ProviderRule
 from core.llm.dispatcher.server import (
     _ORPHAN_POLL_INTERVAL_DEFAULT_S,
@@ -42,6 +43,27 @@ from core.llm.dispatcher.server import (
 
 _SSE_CHUNK_ONE = b"data: one\n\n"
 _SSE_CHUNK_TWO = b"data: two\n\n"
+
+# Injected orphan-poll grace window for the integration tests below
+# (via the documented monkeypatch seam on _orphan_poll_interval_s —
+# the env knob's >=1s floor is an anti-busy-poll guard on operator
+# configuration, not a test bound; TestOrphanPollKnob still pins that
+# contract and the slow-tier canary still runs the real env path).
+# Both directions: TOO LOW and the detection-latency margins the
+# tests assert (>=10 poll intervals of slack) drown in scheduler
+# jitter under -n auto — 0.05s already assumes only tens-of-ms
+# wakeup lag; TOO HIGH re-inserts the real-clock waits this seam
+# exists to remove (every negative sleep below is expressed in poll
+# multiples, so the whole file scales with this constant).
+_FAST_POLL_S = 0.05
+
+
+def _inject_fast_poll(
+    monkeypatch: pytest.MonkeyPatch, interval_s: float = _FAST_POLL_S,
+) -> None:
+    monkeypatch.setattr(
+        dispatcher_server, "_orphan_poll_interval_s", lambda: interval_s,
+    )
 
 
 def _chunked(payload: bytes) -> bytes:
@@ -449,14 +471,13 @@ class TestCancelGuardIsStructural:
 @pytest.mark.upstream_forward
 class TestOrphanCancel:
 
-    def test_worker_disconnect_mid_stream_cancels_upstream(
-        self, fake_creds, tmp_path, monkeypatch,
-    ):
+    def _drive_disconnect_mid_stream(self, fake_creds, tmp_path) -> None:
         """Worker abandons after the first SSE event while the
         upstream stalls: the upstream connection must be torn down
         within the poll bound (not the 20s stall), with the
-        abandonment audited and the error row tied to it."""
-        monkeypatch.setenv("RAPTOR_LLM_DISPATCHER_ORPHAN_POLL_S", "1")
+        abandonment audited and the error row tied to it. Poll
+        interval is the caller's (injected fast path, or the real
+        env-floor path for the slow-tier canary)."""
         upstream = _CaptiveUpstream("sse_stall", stall_s=20.0)
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
@@ -493,14 +514,41 @@ class TestOrphanCancel:
             upstream.shutdown()
             d.shutdown()
 
+    def test_worker_disconnect_mid_stream_cancels_upstream(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        _inject_fast_poll(monkeypatch)
+        self._drive_disconnect_mid_stream(fake_creds, tmp_path)
+
+    @pytest.mark.slow
+    def test_worker_disconnect_real_clock_canary(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        """Real-clock canary for the injected-interval seam: the same
+        abandonment teardown as
+        test_worker_disconnect_mid_stream_cancels_upstream, but on the
+        REAL env-knob path at its 1s anti-busy-poll floor — no
+        monkeypatched accessor anywhere. Slow tier by design: the
+        genuine grace window is the subject. If the fast battery is
+        green while this reddens, suspect the seam itself (accessor
+        rename, floor change, or grace behaviour that only holds for
+        injected sub-second windows)."""
+        monkeypatch.setenv("RAPTOR_LLM_DISPATCHER_ORPHAN_POLL_S", "1")
+        self._drive_disconnect_mid_stream(fake_creds, tmp_path)
+
     def test_healthy_slow_upstream_with_live_worker_is_untouched(
         self, fake_creds, tmp_path, monkeypatch,
     ):
         """An inter-chunk gap longer than the poll interval with a
         LIVE worker: several watcher polls run and none may misdetect
         — the stream completes intact, no orphan row, no error row."""
-        monkeypatch.setenv("RAPTOR_LLM_DISPATCHER_ORPHAN_POLL_S", "1")
-        upstream = _CaptiveUpstream("sse_slow_complete", gap_s=2.5)
+        _inject_fast_poll(monkeypatch)
+        # Gap = 8 poll intervals (the original ran 2.5 intervals'
+        # worth of polls mid-gap): MORE no-misdetect polls than
+        # before, at a fraction of the wall clock.
+        upstream = _CaptiveUpstream(
+            "sse_slow_complete", gap_s=_FAST_POLL_S * 8,
+        )
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
             token = _worker_token(d)
@@ -529,7 +577,7 @@ class TestOrphanCancel:
     ):
         """A worker that closes once it holds the complete response is
         a healthy close, never an orphan."""
-        monkeypatch.setenv("RAPTOR_LLM_DISPATCHER_ORPHAN_POLL_S", "1")
+        _inject_fast_poll(monkeypatch)
         upstream = _CaptiveUpstream("json_quick")
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
@@ -539,8 +587,10 @@ class TestOrphanCancel:
             assert b"200" in raw.split(b"\r\n", 1)[0]
             s.close()
             assert _wait_audit(d, "request.dispatch", timeout=5.0)
-            # Give a poll interval a chance to misfire before checking.
-            time.sleep(1.5)
+            # Give a poll interval a chance to misfire before checking
+            # (three intervals — the original's 1.5-interval margin,
+            # rounded up for scheduler jitter at the smaller scale).
+            time.sleep(_FAST_POLL_S * 3)
             assert not _audit_events(d, "request.orphan_cancel")
             assert not _audit_events(d, "request.error")
         finally:
@@ -554,8 +604,13 @@ class TestOrphanCancel:
         no response object to tear down (flag_only), but the flag is
         raised within the poll bound and the relay abandons the moment
         the head arrives instead of writing to a dead worker."""
-        monkeypatch.setenv("RAPTOR_LLM_DISPATCHER_ORPHAN_POLL_S", "1")
-        upstream = _CaptiveUpstream("slow_head", head_delay_s=3.0)
+        _inject_fast_poll(monkeypatch)
+        # Head dwell = 20 poll intervals, detection budget = 12: the
+        # budget-under-dwell ordering the assertion proves is kept
+        # with MORE slack than the original (3s dwell / 2.5s budget
+        # at a 1s poll) while the dwell itself shrinks 3x.
+        head_delay_s = _FAST_POLL_S * 20
+        upstream = _CaptiveUpstream("slow_head", head_delay_s=head_delay_s)
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
             token = _worker_token(d)
@@ -566,8 +621,12 @@ class TestOrphanCancel:
             assert upstream.request_seen.wait(5.0)
             s.close()
 
-            rows = _wait_audit(d, "request.orphan_cancel", timeout=2.5)
-            assert rows, "detection must precede the 3s head arrival"
+            rows = _wait_audit(
+                d, "request.orphan_cancel", timeout=_FAST_POLL_S * 12,
+            )
+            assert rows, (
+                f"detection must precede the {head_delay_s}s head arrival"
+            )
             assert rows[0]["cancel"] == "flag_only"
             assert rows[0]["response_started"] is False
 
@@ -600,7 +659,7 @@ class TestAcquireFailureRetiresWatcher:
     def test_acquire_raise_stops_watcher_and_writes_no_orphan_row(
         self, fake_creds, tmp_path, monkeypatch,
     ):
-        monkeypatch.setenv("RAPTOR_LLM_DISPATCHER_ORPHAN_POLL_S", "1")
+        _inject_fast_poll(monkeypatch)
         upstream = _CaptiveUpstream("json_quick")
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
@@ -629,8 +688,9 @@ class TestAcquireFailureRetiresWatcher:
 
             # Give a leaked watcher's poll every chance to misfire —
             # two poll intervals on a connection the handler has
-            # already closed — before asserting audit silence.
-            time.sleep(2.5)
+            # already closed (plus scheduler slack, the original's
+            # 2.5s at a 1s poll) — before asserting audit silence.
+            time.sleep(_FAST_POLL_S * 2 + 0.1)
             assert not _audit_events(d, "request.orphan_cancel")
         finally:
             upstream.shutdown()
@@ -648,7 +708,7 @@ class TestWatcherAbortIsNotShardEvidence:
     def test_watcher_cancel_does_not_drain_the_shard(
         self, fake_creds, tmp_path, monkeypatch,
     ):
-        monkeypatch.setenv("RAPTOR_LLM_DISPATCHER_ORPHAN_POLL_S", "1")
+        _inject_fast_poll(monkeypatch)
         monkeypatch.setenv("RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD", "1")
         # One shard, so the relay under test provably rode the client
         # being asserted on.
@@ -669,9 +729,10 @@ class TestWatcherAbortIsNotShardEvidence:
             errors = _wait_audit(d, "request.error", timeout=6.0)
             assert errors
             assert errors[0]["worker_disconnected"] is True
-            # Give the relay's release its beat, then pin: no drain,
-            # the shard client is still the one in rotation.
-            time.sleep(0.5)
+            # Give the relay's release its beat (thread scheduling
+            # only — no window of the dispatcher's is involved), then
+            # pin: no drain, the shard client is still in rotation.
+            time.sleep(0.25)
             assert shards.clients[0] is pooled
             assert not pooled.is_closed
         finally:
