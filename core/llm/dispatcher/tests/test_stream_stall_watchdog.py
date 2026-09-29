@@ -845,16 +845,23 @@ class TestStallArmUnit:
         # belongs to the native request timeout — a watcher that fired
         # before any chunk would re-create the slow-start kill from
         # inside the fix.
-        watcher, _up_a, _up_b = rig(stall=0.2)
-        time.sleep(0.7)
+        # 3.5x the window: long enough that an armed-at-construction
+        # bug fires with certainty (several 0.05s poll ticks past the
+        # deadline), short enough not to re-insert idle wall time.
+        watcher, _up_a, _up_b = rig(stall=0.1)
+        time.sleep(0.35)
         assert not watcher.stall_fired.is_set()
 
     def test_chunk_stamp_resets_deadline(self, rig):
-        watcher, _up_a, _up_b = rig(stall=0.3)
+        # Inter-stamp gap = window/3 (the 2/3-window slack absorbs
+        # sleep overshoot under load without a gap ever legitimately
+        # crossing the window); window any smaller and that slack
+        # stops covering scheduler lag, any larger just adds wall time.
+        watcher, _up_a, _up_b = rig(stall=0.15)
         for _ in range(6):
             watcher.note_upstream_chunk()
-            time.sleep(0.1)
-        # 0.6s elapsed since the FIRST stamp — twice the window — but
+            time.sleep(0.05)
+        # 0.3s elapsed since the FIRST stamp — twice the window — but
         # no inter-stamp gap ever exceeded it.
         assert not watcher.stall_fired.is_set()
 
@@ -878,10 +885,12 @@ class TestStallArmUnit:
         # relay declares the stream drained, a late stall detection
         # must not shut down a socket that may already be back in the
         # shared connection pool.
-        watcher, up_a, _up_b = rig(stall=0.2)
+        # 3x the window (several poll ticks past the deadline): a
+        # stop() that failed to exclude the arm would have fired.
+        watcher, up_a, _up_b = rig(stall=0.1)
         watcher.note_upstream_chunk()
         watcher.stop()
-        time.sleep(0.6)
+        time.sleep(0.3)
         assert not watcher.stall_fired.is_set()
         up_a.sendall(b"x")  # would raise if the socket had been shut
 
@@ -898,9 +907,12 @@ class TestStallArmUnit:
         # Non-streaming relays construct the watcher with
         # stream_stall_s=None: their single body read legitimately
         # spans the whole generation, so chunk stamps must be inert.
+        # No window to scale against — the dwell just has to span
+        # several 0.05s poll ticks so a wrongly-armed watcher would
+        # certainly have fired.
         watcher, _up_a, _up_b = rig(stall=None)
         watcher.note_upstream_chunk()
-        time.sleep(0.5)
+        time.sleep(0.25)
         assert not watcher.stall_fired.is_set()
 
     def test_under_lock_recheck_spares_resumed_stream(self, rig):
@@ -910,11 +922,11 @@ class TestStallArmUnit:
         # poll tick and is spared. Simulate the race deterministically
         # by calling the fire path directly with a fresh stamp (poll
         # interval parked high so the loop itself stays dormant).
-        watcher, _up_a, up_b = rig(stall=0.2, poll=60.0)
+        watcher, _up_a, up_b = rig(stall=0.1, poll=60.0)
         watcher.note_upstream_chunk()
         assert watcher._fire_stall() is None    # fresh stamp: spared
         assert not watcher.stall_fired.is_set()
-        time.sleep(0.4)
+        time.sleep(0.2)  # 2x the window: the stamp is decisively stale
         # Stale stamp: fires, reporting the cancel action taken.
         assert watcher._fire_stall() == "upstream_shutdown"
         assert watcher.stall_fired.is_set()
@@ -980,7 +992,7 @@ class TestStallArmUnit:
             # is now attached. If the arm could re-fire, the poll
             # loop would shut this socket down within a few ticks.
             watcher.attach_response(_FakeResponse(up2_a, "HTTP/1.1"))
-            time.sleep(0.5)
+            time.sleep(0.25)  # five 0.05s poll ticks — ample re-fire room
             up2_a.sendall(b"x")  # untouched: no second cancel
             assert watcher._fire_stall() is None  # direct probe too
             assert not watcher.worker_gone.is_set()
