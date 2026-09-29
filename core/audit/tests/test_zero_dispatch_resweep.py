@@ -161,18 +161,29 @@ class TestBounds:
     def test_wall_bound_stops_mid_pass(self, tmp_path, monkeypatch):
         calls: list[str] = []
         _patch_mechanical(monkeypatch, confirm=set(), calls=calls)
+        # Event-driven fake clock. ``orch.time`` is the process-global
+        # stdlib module, so a fake that advances on EVERY call also
+        # ticks for unrelated consumers (executor internals,
+        # heartbeats) and burns the budget before the first item under
+        # battery load. The clock therefore only jumps — past the wall
+        # bound — when the first sweep actually completes:
+        # call-count-independent in any environment.
         clock = {"now": 0.0}
+        monkeypatch.setattr(orch.time, "monotonic", lambda: clock["now"])
+        swept_chain = orch._run_tool_chain  # the _patch_mechanical stub
 
-        def fake_monotonic():
-            clock["now"] += 10.0
-            return clock["now"]
+        def chain_then_burn_bound(chain, **kw):
+            out = swept_chain(chain, **kw)
+            clock["now"] += 100.0
+            return out
 
-        monkeypatch.setattr(orch.time, "monotonic", fake_monotonic)
+        monkeypatch.setattr(orch, "_run_tool_chain", chain_then_burn_bound)
         result = _result([_outcome(f"fn{i}") for i in range(4)])
         config = _config(tmp_path, zero_dispatch_resweep_seconds=25.0)
         _resweep_zero_dispatch_suspicious(result, config)
-        # pass_start=10; item0 checks at 20 (elapsed 10 < 25) and
-        # sweeps; item1 checks at 50 (elapsed 40 >= 25) and stops.
+        # item0 checks at elapsed 0 (< 25) and sweeps, which consumes
+        # the whole bound; item1 checks at elapsed 100 (>= 25) and
+        # stops.
         assert calls == ["fn0"]
 
     def test_generous_bound_sweeps_everything(self, tmp_path, monkeypatch):
