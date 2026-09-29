@@ -700,6 +700,13 @@ def _build_cpg_admitted(
         tmp_reaper.register_dir_prefix("raptor-joern-cpg-")
         output_dir = Path(tempfile.mkdtemp(prefix="raptor-joern-cpg-"))
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Absolute from here on: output_dir feeds joern-parse argv
+    # (--output, -J-Djava.io.tmpdir) AND is the cwd pin for the bare
+    # spawn lanes below — a caller-relative dir must keep meaning
+    # "relative to the CALLER's cwd", not silently re-anchor to the
+    # pinned one. (target and the --exclude/--include operands are
+    # already resolved on their own paths.)
+    output_dir = output_dir.resolve()
 
     cpg_path = output_dir / "cpg.bin"
 
@@ -794,11 +801,21 @@ def _build_cpg_admitted(
         )
     except TypeError:
         try:
+            # Runner without the sandbox kwargs (injected stubs, bare
+            # subprocess.run). Still pass an explicit cwd: a bare
+            # runner inherits the CALLER's cwd, and any cwd-relative
+            # write from the launcher/JVM (importCpg drops a
+            # `workspace/` copy under the process cwd; observed once
+            # as workspace/cpg.bin debris at a repo root) must land
+            # in the run-owned output dir, never the directory the
+            # caller happened to run from. Mirrors the sandboxed lane
+            # above, whose runner defaults cwd to its `output=`.
             proc = runner(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                cwd=str(output_dir),
             )
         except subprocess.TimeoutExpired:
             logger.warning("joern-parse timed out after %ds", timeout)
@@ -869,6 +886,16 @@ def _build_cpg_with_stall_monitor(
             stderr=subprocess.PIPE,
             text=True,
             env=safe_env,
+            # Raw Popen inherits the CALLER's cwd — pin it to the
+            # build's own output dir (cpg_path's parent, created by
+            # build_cpg before cmd assembly) so any cwd-relative
+            # write from the launcher/JVM (importCpg drops a
+            # `workspace/` copy under the process cwd; observed once
+            # as workspace/cpg.bin debris at a repo root) lands in a
+            # run-owned directory, never the directory the caller
+            # happened to run from. Mirrors the sandboxed lane and
+            # the TypeError fallback in build_cpg.
+            cwd=str(cpg_path.parent),
             # Own group, so the stall/timeout kills below can address
             # the wrapper-spawned JVM too (see _kill_build_group).
             start_new_session=True,
