@@ -924,6 +924,947 @@ class TestDomainBugPatterns:
         assert block is not None
         assert "hinted pattern" in block
 
+    def test_ungrouped_star_chain_hint_not_compiled(self, tmp_path):
+        """`a*a*a*...b` has no group or alternation for any shape
+        rule to anchor on, yet backtracks combinatorially — the
+        repeat budget must route it to the substring fallback. The
+        source is sized so a compiled match attempt would effectively
+        never return (the test hanging IS the red direction)."""
+        self._write_hint_model(tmp_path, "a*" * 20 + "b")
+        src = "a" * 60 + "c"
+        block = domain_bug_patterns(tmp_path, "a.c", "f", src)
+        assert block is None
+
+    def test_refused_hint_keeps_substring_semantics(self, tmp_path):
+        """A budget-refused hint still selects when its LITERAL text
+        appears in source — demotion means substring matching, not
+        no matching at all."""
+        hint = "a*a*a*b"
+        self._write_hint_model(tmp_path, hint)
+        block = domain_bug_patterns(tmp_path, "a.c", "f",
+                                    f"lex table row: {hint} end")
+        assert block is not None
+        assert "hinted pattern" in block
+
+    def test_backreference_hint_not_compiled(self, tmp_path):
+        r"""`(a*)\1b` carries ONE repeat token and no quantified-group
+        shape, yet the backreference re-matches the captured span —
+        super-linear backtracking. The source is sized so a compiled
+        match attempt would effectively never return (the test
+        hanging IS the red direction)."""
+        self._write_hint_model(tmp_path, r"(a*)\1b")
+        src = "a" * 4000 + "c"
+        block = domain_bug_patterns(tmp_path, "a.c", "f", src)
+        assert block is None
+
+    def test_source_clamp_two_directions(self, tmp_path):
+        # Both directions of _MAX_REGEX_SOURCE_CHARS: at the clamp an
+        # admitted hint keeps REGEX semantics (matches with no literal
+        # occurrence); one char past it the same hint drops to
+        # substring semantics (same source content, no literal -> no
+        # selection). The decision depends only on len(source).
+        from core.concepts.audit_bridge import _MAX_REGEX_SOURCE_CHARS
+        self._write_hint_model(tmp_path, "memcpy.*len")
+        head = "memcpy(dst, src, len);\n"
+        at_clamp = head + "x" * (_MAX_REGEX_SOURCE_CHARS - len(head))
+        assert len(at_clamp) == _MAX_REGEX_SOURCE_CHARS
+        block = domain_bug_patterns(tmp_path, "a.c", "f", at_clamp)
+        assert block is not None
+        assert "hinted pattern" in block
+        over_clamp = at_clamp + "x"
+        assert len(over_clamp) == _MAX_REGEX_SOURCE_CHARS + 1
+        block = domain_bug_patterns(tmp_path, "a.c", "f", over_clamp)
+        assert block is None
+
+    def test_source_clamp_substring_scans_full_source(self, tmp_path):
+        # Past the clamp the hint is a substring over the FULL source
+        # — the literal is planted beyond the clamp offset to prove
+        # the source is not truncated for the fallback.
+        from core.concepts.audit_bridge import _MAX_REGEX_SOURCE_CHARS
+        hint = "memcpy.*len"
+        self._write_hint_model(tmp_path, hint)
+        src = "x" * (_MAX_REGEX_SOURCE_CHARS + 10) + hint
+        block = domain_bug_patterns(tmp_path, "a.c", "f", src)
+        assert block is not None
+        assert "hinted pattern" in block
+
+    def test_admitted_hint_bounded_on_quadratic_source(self, tmp_path):
+        """The clamp's reason to exist: an ADMITTED single-span hint
+        is quadratic on a failing search when its leading literal
+        recurs through the source. This source size hangs the regex
+        path for minutes pre-clamp (the test hanging IS the red
+        direction); the substring fallback returns instantly."""
+        self._write_hint_model(tmp_path, "memcpy.*len")
+        src = "memcpy" * 100_000  # ~600 KB, no "len" anywhere
+        block = domain_bug_patterns(tmp_path, "a.c", "f", src)
+        assert block is None
+
+    def test_legit_leading_literal_hint_stays_regex_selected(
+        self, tmp_path,
+    ):
+        # Other direction of the shape rules: the common
+        # leading-literal single-span hint keeps REGEX semantics —
+        # the literal "memcpy.*len" appears nowhere in this source,
+        # so only a compiled match can select the pattern (the
+        # relevance fallback scores nothing here). Over-refusal by
+        # any rule turns this selection off.
+        self._write_hint_model(tmp_path, "memcpy.*len")
+        block = domain_bug_patterns(
+            tmp_path, "a.c", "f", "memcpy(dst, src, length);")
+        assert block is not None
+        assert "hinted pattern" in block
+
+    def test_worst_admitted_shape_cost_bounded(self, tmp_path):
+        """Cost pin for the worst shapes the guard ADMITS, CONSTRUCTED
+        from the cost model's own bounds (the model at
+        ``_MAX_REGEX_SOURCE_CHARS``) — and an arithmetic pin of each
+        shape's weight over those bounds. The weighted walk is
+        (1 + branch bars) x continuation chars, capped at 13 — an
+        odd number, so among shapes whose only weight-counted bars
+        are path-splitting ones the cap is reachable only bar-free:
+        the bar-free arithmetic maximum is a minimum-period prefix
+        + the atom cap + a BAR-FREE prefix-periodic continuation of
+        exactly the cap, while the path-splitting-bar constructions
+        max out one weighted element lower. (Mixed raw+grouped-bar
+        shapes reach weight 13 with the grouped bar present and
+        score 15 restart-floor units, but only at continuation
+        <= 1 char, and measure below this family — figures and
+        both spellings at the clamp comment; boundary pinned in
+        ``test_repeat_continuation_walk_two_directions``.) W alone
+        is NOT a strict cost ranking at the top: in restart-floor
+        units the full-walk admitted maxima TIE at 14 (bar-free:
+        1 + 13; each path-splitting-bar family: 2 + 12), and
+        measurement discriminates — the (1+g) path factor also
+        multiplies the walk-INDEPENDENT per-restart base cost
+        (~60% of bar-free wall clock at the clamp), so the MEASURED
+        admitted ceiling belongs to the matching-alternative
+        pre-token family (its constructed "[a-z0-9]" representative
+        ~1.4 s light-load at the clamp; within the family the cost
+        is atom-spelling-dependent and sampled spellings are
+        samples with no stated supremum — figures at the clamp
+        comment), above
+        the post-token runner-up (~1.1 s — the raw char-count walk
+        over-prices a literal continuation, which usually fails at
+        its first char, against a grouped one whose alternatives
+        are always both tried) and the bar-free arithmetic maximum
+        (~0.9 s). All three tying shapes are built here from the
+        constants, each weight is asserted as arithmetic over those
+        constants, and all three are evaluated against an at-clamp
+        source saturated with the prefix (every third position
+        restarts the span; the match always fails; the pre-token
+        group's alternatives are drawn from the prefix so they
+        MATCH the saturated source — non-matching alternatives fail
+        at the group and would hide the family's cost). Measures
+        ~3.4 s total single-threaded light-load; the wall-clock
+        bound leaves headroom for loaded hosts while staying far
+        below the shapes the bounds exist to refuse (the 246-char
+        literal-tail reproducer measured ~8.7 s here; the
+        pre-token-bar shape at the saturated walk, refused,
+        ~1.8 s), and the alarm turns a cost regression into a
+        failure instead of a hang."""
+        import signal
+        import time
+
+        from core.concepts.audit_bridge import (
+            _MAX_HINT_GROUPED_ALTERNATION_BARS,
+            _MAX_HINT_REPEAT_ATOM_CHARS,
+            _MAX_HINT_REPEAT_CONTINUATION_WALK,
+            _MAX_REGEX_SOURCE_CHARS,
+            _MIN_HINT_PREFIX_PERIOD,
+            _engine_fold,
+            _grep_hint_compilable,
+            _string_period,
+        )
+
+        prefix = "aab"
+        assert len(prefix) == _MIN_HINT_PREFIX_PERIOD
+        assert (
+            _string_period(_engine_fold(prefix)) == _MIN_HINT_PREFIX_PERIOD
+        )
+        atom = "[a-z0-9]"
+        assert len(atom) == _MAX_HINT_REPEAT_ATOM_CHARS
+        walk = _MAX_HINT_REPEAT_CONTINUATION_WALK
+        bars = _MAX_HINT_GROUPED_ALTERNATION_BARS
+        # Arithmetic-worst: bar-free continuation of exactly the walk
+        # cap, prefix-periodic so the source's period never breaks it.
+        cont_worst = (prefix * walk)[: walk - 1] + "z"
+        assert len(cont_worst) == walk
+        assert cont_worst.count("|") == 0
+        worst = prefix + atom + "*" + cont_worst
+        # Runner-up: the walk spent through the one admitted grouped
+        # bar — (1 + bars) x chars <= walk caps the chars at
+        # walk // (1 + bars).
+        runner_chars = walk // (1 + bars)
+        runner_cont = "(" + "a" * (runner_chars - 5) + "z|q)"
+        assert len(runner_cont) == runner_chars
+        assert runner_cont.count("|") == bars
+        runner = prefix + atom + "*" + runner_cont
+        # Measured-worst: the one admitted grouped bar spent BEFORE
+        # the token (the weight counts bars over the WHOLE branch, so
+        # a pre-token bar halves the continuation allowance exactly
+        # like a post-token one), with the group's alternatives drawn
+        # from the prefix so they MATCH the saturated source — the
+        # engine walks the group on every restart instead of
+        # short-circuiting, which is what makes this family the
+        # measured ceiling.
+        pre_group = "(" + prefix[:1] + "|" + prefix[:1] + ")"
+        pre_cont = (prefix * walk)[: runner_chars - 1] + "z"
+        assert len(pre_cont) == runner_chars
+        assert pre_cont.count("|") == 0
+        pretoken = prefix + pre_group + atom + "*" + pre_cont
+        # Weight arithmetic over the constants — NOT a cost ranking:
+        # the bar-free construction reaches the walk cap exactly and
+        # every admitted shape whose only weight-counted bars are
+        # path-splitting ones sits one weighted element lower (13 is
+        # not divisible by 1 + bars = 2; mixed raw+grouped-bar
+        # shapes do reach weight 13, at continuation <= 1 char —
+        # figures at the clamp comment), but in full cost units
+        # these three shapes TIE and the pre-token family carries
+        # the MEASURED ceiling (docstring; clamp comment at
+        # ``_MAX_REGEX_SOURCE_CHARS``). Each shape here is
+        # a single top-level branch, so counting bars over the whole
+        # hint IS the branch-wide count the shipped rule uses.
+        worst_weighted = (1 + worst.count("|")) * len(cont_worst)
+        runner_weighted = (1 + runner.count("|")) * len(runner_cont)
+        pretoken_weighted = (1 + pretoken.count("|")) * len(pre_cont)
+        assert worst_weighted == walk
+        assert runner_weighted == (1 + bars) * (walk // (1 + bars))
+        assert pretoken_weighted == (1 + bars) * (walk // (1 + bars))
+        assert pretoken_weighted <= walk
+        assert runner_weighted < worst_weighted
+        assert _grep_hint_compilable(worst), worst
+        assert _grep_hint_compilable(runner), runner
+        assert _grep_hint_compilable(pretoken), pretoken
+
+        (tmp_path / "domain-model.json").write_text(json.dumps({
+            "bug_patterns": [
+                {"id": "w", "description": "arithmetic-worst shape",
+                 "what_to_grep": worst},
+                {"id": "r", "description": "bar-carrying runner-up",
+                 "what_to_grep": runner},
+                {"id": "m", "description": "measured-worst pre-token",
+                 "what_to_grep": pretoken},
+            ],
+        }), encoding="utf-8")
+        n = _MAX_REGEX_SOURCE_CHARS
+        src = ("aab" * (n // 3 + 1))[:n]  # no "z" or "q" anywhere
+
+        def _on_alarm(signum: int, frame: object) -> None:
+            msg = "admitted-hint evaluation exceeded the alarm bound"
+            raise AssertionError(msg)
+
+        old = signal.signal(signal.SIGALRM, _on_alarm)
+        signal.alarm(60)
+        try:
+            t0 = time.perf_counter()
+            block = domain_bug_patterns(tmp_path, "a.c", "f", src)
+            dt = time.perf_counter() - t0
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old)
+        assert block is None  # regex fails; relevance finds nothing
+        assert dt < 8.0, f"worst admitted shapes took {dt:.3f}s at clamp"
+
+    def test_milder_admitted_shapes_cost_bounded(self, tmp_path):
+        """Regression net for the milder shapes that stressed the
+        superseded ceiling claim: each is refused or admitted WITH a
+        pinned cost. "aab(x|.*)(y|w)" is refused (two grouped bars);
+        the big-but-bounded brace span "aab[ab]{0,9999}z" and the
+        escape-atom span "aab\\D*z" are admitted and measure
+        ~0.3-0.4 s each at the clamp (bare-engine best-of-5 on one
+        host) — both under the constructed admitted worst."""
+        import signal
+        import time
+
+        from core.concepts.audit_bridge import (
+            _MAX_REGEX_SOURCE_CHARS,
+            _grep_hint_compilable,
+        )
+
+        assert not _grep_hint_compilable("aab(x|.*)(y|w)")
+        (tmp_path / "domain-model.json").write_text(json.dumps({
+            "bug_patterns": [
+                {"id": "p0", "description": "brace span",
+                 "what_to_grep": "aab[ab]{0,9999}z"},
+                {"id": "p1", "description": "escape-atom span",
+                 "what_to_grep": r"aab\D*z"},
+            ],
+        }), encoding="utf-8")
+        n = _MAX_REGEX_SOURCE_CHARS
+        src = ("aab" * (n // 3 + 1))[:n]  # no "z" anywhere
+
+        def _on_alarm(signum: int, frame: object) -> None:
+            msg = "milder-shape evaluation exceeded the alarm bound"
+            raise AssertionError(msg)
+
+        old = signal.signal(signal.SIGALRM, _on_alarm)
+        signal.alarm(30)
+        try:
+            t0 = time.perf_counter()
+            block = domain_bug_patterns(tmp_path, "a.c", "f", src)
+            dt = time.perf_counter() - t0
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old)
+        assert block is None
+        assert dt < 5.0, f"milder admitted shapes took {dt:.3f}s at clamp"
+
+    def test_hostile_pattern_list_slice_hash_bounded(
+        self, tmp_path, monkeypatch,
+    ):
+        """One fold-row slice recompute against a whole hostile
+        pattern LIST: forty quantified-group hints — each measured
+        in the seconds regime per evaluation when compiled — against
+        an at-clamp adversarial source. The guard demotes every one
+        to a substring scan, so the single ``domain_slice_hash`` call
+        the staleness gate makes per journal row returns promptly
+        (pre-refusal this call outlived a 15 s bound)."""
+        import signal
+        import time
+
+        from core.concepts import audit_bridge as ab
+
+        monkeypatch.setattr(ab, "_demoted_hints_logged", set())
+        (tmp_path / "domain-model.json").write_text(json.dumps({
+            "bug_patterns": [
+                {"id": f"p{i}", "description": f"pattern {i}",
+                 "what_to_grep": f"([ab][ba])*qqx{i}"}
+                for i in range(40)
+            ],
+        }), encoding="utf-8")
+        n = ab._MAX_REGEX_SOURCE_CHARS
+        src = ("ab" * (n // 2 + 1))[:n]
+
+        def _on_alarm(signum: int, frame: object) -> None:
+            msg = "hostile-list slice recompute exceeded the alarm"
+            raise AssertionError(msg)
+
+        old = signal.signal(signal.SIGALRM, _on_alarm)
+        signal.alarm(30)
+        try:
+            t0 = time.perf_counter()
+            digest = ab.domain_slice_hash(tmp_path, "a.c", "f", src)
+            dt = time.perf_counter() - t0
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old)
+        assert digest is not None
+        assert dt < 5.0, f"40-hint slice recompute took {dt:.3f}s"
+
+    def test_group_split_bypass_list_slice_hash_bounded(
+        self, tmp_path, monkeypatch,
+    ):
+        """The split-artifact shape at LIST scale: forty distinct
+        "(a|aab).*z"-family hints against an at-clamp saturated
+        source. Under the raw "|" branch split these were ADMITTED
+        (each ~0.9 s per evaluation, ~15-25 s per fold-row slice
+        recompute measured on one host); the structure-aware split
+        demotes every one, so the single ``domain_slice_hash`` call
+        returns promptly. Red if the top-level scanner is neutralized
+        back to a raw split."""
+        import signal
+        import time
+
+        from core.concepts import audit_bridge as ab
+
+        monkeypatch.setattr(ab, "_demoted_hints_logged", set())
+        (tmp_path / "domain-model.json").write_text(json.dumps({
+            "bug_patterns": [
+                {"id": f"p{i}", "description": f"pattern {i}",
+                 "what_to_grep": f"(a|aab).*zx{i}"}
+                for i in range(40)
+            ],
+        }), encoding="utf-8")
+        n = ab._MAX_REGEX_SOURCE_CHARS
+        src = ("aab" * (n // 3 + 1))[:n]
+
+        def _on_alarm(signum: int, frame: object) -> None:
+            msg = "bypass-list slice recompute exceeded the alarm"
+            raise AssertionError(msg)
+
+        old = signal.signal(signal.SIGALRM, _on_alarm)
+        signal.alarm(30)
+        try:
+            t0 = time.perf_counter()
+            digest = ab.domain_slice_hash(tmp_path, "a.c", "f", src)
+            dt = time.perf_counter() - t0
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old)
+        assert digest is not None
+        assert dt < 5.0, f"bypass-list slice recompute took {dt:.3f}s"
+
+
+class TestGrepHintGuard:
+    """Decision-level pins for ``_grep_hint_compilable`` — assert on
+    the guard's verdict, never on wall-clock."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_demotion_log(self, monkeypatch):
+        # The guard's verdict cache would swallow the demotion-log
+        # side effect for hints another test already scored — clear
+        # it around every test so log assertions see cache misses.
+        from core.concepts import audit_bridge as ab
+        monkeypatch.setattr(ab, "_demoted_hints_logged", set())
+        ab._grep_hint_compilable.cache_clear()
+        yield
+        ab._grep_hint_compilable.cache_clear()
+
+    def test_plain_literal_hint_compiles(self):
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert _grep_hint_compilable("sg->length after dma_map_sg")
+
+    def test_multi_alternation_hint_compiles(self):
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert _grep_hint_compilable("memcpy|memmove|strcpy|sprintf")
+
+    def test_repeat_budget_two_directions(self):
+        # Both directions of _MAX_GREP_HINT_REPEATS (1): exactly at
+        # the budget keeps regex power (the common single-span hint);
+        # one over is refused (the smallest chain the shape scans
+        # cannot see).
+        from core.concepts.audit_bridge import (
+            _MAX_GREP_HINT_REPEATS,
+            _grep_hint_compilable,
+        )
+        at_budget = "memcpy" + ".*len" * _MAX_GREP_HINT_REPEATS
+        over_budget = "memcpy" + ".*len" * (_MAX_GREP_HINT_REPEATS + 1)
+        assert _grep_hint_compilable(at_budget)
+        assert not _grep_hint_compilable(over_budget)
+
+    def test_star_chain_refused(self):
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert not _grep_hint_compilable("a*" * 20 + "b")
+
+    def test_optional_chain_refused(self):
+        # The a?a?...a{n} classic — only the repeat budget sees it.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert not _grep_hint_compilable("a?" * 12 + "a" * 12)
+
+    def test_consecutive_quantifiers_refused(self):
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert not _grep_hint_compilable("ab**c")
+
+    def test_nested_counted_group_refused(self):
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert not _grep_hint_compilable("(a{1,9}){1,9}")
+
+    def test_demotion_logged_once_per_hint(self, caplog):
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        hint = ".*alloc.*free"
+        with caplog.at_level("WARNING", "core.concepts.audit_bridge"):
+            assert not _grep_hint_compilable(hint)
+            assert not _grep_hint_compilable(hint)
+        demotions = [
+            r for r in caplog.records
+            if "demoted to substring matching" in r.getMessage()
+        ]
+        assert len(demotions) == 1
+        assert "alloc" in demotions[0].getMessage()
+
+    def test_demotion_log_escapes_hostile_bytes(self, caplog):
+        # Hint text is target-derived LLM output — control bytes must
+        # land escaped, never raw, in the operator log.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        hint = ".*\x1b]0;pwn\x07.*x"
+        with caplog.at_level("WARNING", "core.concepts.audit_bridge"):
+            assert not _grep_hint_compilable(hint)
+        demotions = [
+            r for r in caplog.records
+            if "demoted to substring matching" in r.getMessage()
+        ]
+        assert len(demotions) == 1
+        assert "\x1b" not in demotions[0].getMessage()
+        assert "\\x1b" in demotions[0].getMessage()
+
+    def test_demotion_log_cap_two_directions(self, caplog, monkeypatch):
+        # Both directions of _MAX_DEMOTED_HINTS_LOGGED: under the cap
+        # a NEW distinct offender warns; at the cap it does not — and
+        # the refusal decision is identical either way (the cap gates
+        # only the log line).
+        from core.concepts import audit_bridge as ab
+        with caplog.at_level("WARNING", "core.concepts.audit_bridge"):
+            assert not ab._grep_hint_compilable(".*under.*cap")
+        assert any(
+            "demoted to substring matching" in r.getMessage()
+            for r in caplog.records
+        )
+        caplog.clear()
+        monkeypatch.setattr(
+            ab, "_demoted_hints_logged",
+            {f"filler-{i}" for i in range(ab._MAX_DEMOTED_HINTS_LOGGED)},
+        )
+        with caplog.at_level("WARNING", "core.concepts.audit_bridge"):
+            assert not ab._grep_hint_compilable(".*over.*cap")
+        assert not any(
+            "demoted to substring matching" in r.getMessage()
+            for r in caplog.records
+        )
+        # The seen-set stays at the cap — a hostile model minting
+        # unlimited distinct hints cannot grow it further.
+        assert len(ab._demoted_hints_logged) == ab._MAX_DEMOTED_HINTS_LOGGED
+
+    def test_plus_plus_code_phrase_refused_on_every_interpreter(self):
+        # "sg++ without sg_next" is a documented legit hint shape
+        # whose compile fate is version-dependent (re.error on 3.10,
+        # possessive quantifier on 3.11+). The guard's refusal must
+        # be shape-based and identical everywhere — substring is the
+        # faithful matcher for a literal code phrase either way.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert not _grep_hint_compilable("sg++ without sg_next")
+
+    @pytest.mark.parametrize("hint", [
+        r"(a*)\1b",
+        r"(a*)\1\1b",
+        r"(.*)\1b",
+        r"(\w*)\1b",
+        r"(a{99})\1b",
+    ])
+    def test_backreference_hints_refused(self, hint):
+        # Each carries a single repeat token and no quantified-group
+        # shape — invisible to every other layer — yet re-matching the
+        # captured span backtracks super-linearly.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert not _grep_hint_compilable(hint)
+
+    def test_named_backref_and_conditional_refused(self):
+        # Named backrefs and conditional groups happen to be refused
+        # by the repeat-token budget too (the "?" in "(?" counts), so
+        # pin the backref rule itself as well — budget drift must not
+        # be the only thing keeping these re-match forms out.
+        from core.concepts.audit_bridge import (
+            _HINT_BACKREF_RE,
+            _grep_hint_compilable,
+        )
+        for hint in (r"(?P<g>a*)(?P=g)b", r"(a)(?(1)b*|c)"):
+            assert _HINT_BACKREF_RE.search(hint) is not None
+            assert not _grep_hint_compilable(hint)
+
+    def test_demotion_log_truncation_never_splits_escape(self, caplog):
+        # Two directions of the excerpt cut: an escape sequence
+        # SPLIT by the cut is dropped whole; an escape sequence that
+        # ENDS exactly at the cut is kept whole. Either way the
+        # excerpt carries the elision marker and never a partial
+        # escape.
+        from core.concepts import audit_bridge as ab
+
+        def demotion_msgs():
+            return [
+                r.getMessage() for r in caplog.records
+                if "demoted to substring matching" in r.getMessage()
+            ]
+
+        cut = ab._MAX_DEMOTED_HINT_EXCERPT_CHARS
+        # Escaped form: "a"*117 + "\x1b" (chars 118-121) + ".*x.*y";
+        # the cut at 120 lands inside the escape.
+        split_hint = "a" * (cut - 3) + "\x1b.*x.*y"
+        with caplog.at_level("WARNING", "core.concepts.audit_bridge"):
+            assert not ab._grep_hint_compilable(split_hint)
+        (msg,) = demotion_msgs()
+        assert msg.endswith("…")
+        assert "\\x1" not in msg  # the partial escape was dropped whole
+        caplog.clear()
+        # Escaped form: "a"*116 + "\x1b" ends exactly AT the cut — a
+        # complete escape is not over-trimmed.
+        kept_hint = "a" * (cut - 4) + "\x1b.*x.*y"
+        with caplog.at_level("WARNING", "core.concepts.audit_bridge"):
+            assert not ab._grep_hint_compilable(kept_hint)
+        (msg,) = demotion_msgs()
+        assert msg.endswith("\\x1b…")
+
+    @pytest.mark.parametrize("hint", [
+        r"(ab)*c",
+        r"([ab][ba])*x",
+        r"(x.)*y",
+        r"([^x][^y])*z",
+        r"(..)*xy",
+        r"(a){60000}",
+        r"(abab){9000}",
+        r"kfree(ab)*x",
+        r"kfree(ab){2000}x",
+    ])
+    def test_quantified_group_hints_refused(self, hint):
+        # Body-blind group refusal: a plain-literal or class group
+        # body passes the body-inspecting shape rules, yet every
+        # iteration boundary backtracks — these measure 0.8-1.8 s
+        # per evaluation when compiled (bare re.search IGNORECASE at
+        # the source clamp, saturated failing source, best-of-5 wall
+        # clock on one host). The kfree-prefixed pair isolates
+        # _HINT_QUANTIFIED_GROUP_RE: their long literal prefix
+        # satisfies the restart-density gate, so only the group rule
+        # keeps them out.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert not _grep_hint_compilable(hint)
+
+    def test_group_hint_without_group_repeat_stays_admitted(self):
+        # Other direction of the quantified-group rule: a group whose
+        # repeat sits INSIDE it ("kfree(.*) double free") is a legit
+        # hint shape — mandatory "kfree" prefix, span cost bounded by
+        # the source clamp — and must stay a regex.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert _grep_hint_compilable("kfree(.*) double free")
+
+    def test_span_prefix_period_two_directions(self):
+        # Both directions of _MIN_HINT_PREFIX_PERIOD (3): the
+        # shortest common C-identifier prefix keeps regex power; a
+        # shorter or self-overlapping prefix lets a failing search
+        # restart the span at up to every source position — the
+        # density-1 shapes measure ~3-4x the tail-free period-3
+        # baseline at the source clamp ("aab.*z" 0.22 s vs "x.*y"
+        # 0.68 s / "aa.*z"
+        # 0.88 s; bare re.search IGNORECASE, saturated failing
+        # source, best-of-5 wall clock on one host).
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        # At the floor: period-3 prefixes stay regexes.
+        assert _grep_hint_compilable("len.*memcpy")
+        assert _grep_hint_compilable("aab.*z")
+        # Below the floor: demoted to substring matching.
+        assert not _grep_hint_compilable("ab.*z")    # period 2
+        assert not _grep_hint_compilable("aa.*z")    # period 1
+        assert not _grep_hint_compilable("aaaa.*z")  # long, period 1
+        assert not _grep_hint_compilable("x.*y")     # 1-char prefix
+        assert not _grep_hint_compilable(".*z")      # no prefix
+        assert not _grep_hint_compilable("a*z")      # span atom only
+
+    def test_span_prefix_period_engine_folded(self):
+        # Matching is IGNORECASE, so the period is computed under the
+        # ENGINE's character equivalence (_engine_fold), not any
+        # plain string fold. Same-letter case: "aAA" (raw period 3)
+        # folds to period-1 "aaa"; "kKK" needs the lower() layer
+        # (KELVIN SIGN lowercases to "k"). Cross-codepoint orbits:
+        # "ſsss" hides period-1 "ssss" behind the long s, and the
+        # i/ı orbit is the one where casefold() DISAGREES with the
+        # engine — "iıı" casefolds to period-3 "iıı" yet the engine
+        # matches i <-> ı at every position (true restart density 1;
+        # 0.81 s at the clamp, bare-engine best-of-5, vs the 0.22 s
+        # tail-free "aab.*z" baseline). Expansion traps: casefold
+        # blows "İ" and
+        # "ﬃ" up to multi-char strings ("i"+dot, "ffi") with fake
+        # period 3, while the engine matches each 1:1 (İ <-> i by
+        # simple lowercase; ﬃ only to itself) — density 1 again
+        # (0.76 s / 0.92 s in the same venue). Every one must refuse.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert not _grep_hint_compilable("aAA.*z")
+        assert not _grep_hint_compilable("kKK.*z")
+        assert not _grep_hint_compilable("ſsss.*z")
+        assert not _grep_hint_compilable("iıı.*z")
+        assert not _grep_hint_compilable("ıii.*z")
+        assert not _grep_hint_compilable("İii.*z")
+        assert not _grep_hint_compilable("ﬃﬃﬃ.*z")
+
+    def test_engine_fold_admits_what_the_engine_distinguishes(self):
+        # Direction pin for the fold itself: ß is NOT in any engine
+        # orbit with "s" (re.IGNORECASE matches ß only against ß/ẞ),
+        # so "ssß" is a true period-3 prefix and keeps regex power.
+        # casefold() expands ß to "ss" (period-1 "ssss") — a fold
+        # regression back to casefold turns this admission off.
+        import re as _re
+
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert _re.fullmatch("s", "ß", _re.IGNORECASE) is None
+        assert _grep_hint_compilable("ssß.*z")
+
+    def test_engine_fold_covers_interpreter_orbits(self):
+        # Drift pin for the HARDCODED orbit table: re-derive the
+        # engine's extra-case pairs from the RUNNING interpreter and
+        # assert the fold unifies every one (the admission-risk
+        # direction — a pair the fold misses is a period the rule
+        # overstates). The table is hardcoded so the verdict feeding
+        # domain_slice_hash never varies by interpreter; this test is
+        # the loud failure that demands a table update when a new
+        # interpreter widens re._casefix.
+        from re import _casefix
+
+        from core.concepts.audit_bridge import _engine_fold
+        for k, vals in _casefix._EXTRA_CASES.items():
+            for v in vals:
+                assert _engine_fold(chr(k)) == _engine_fold(chr(v)), (
+                    f"engine orbit pair not unified by _engine_fold: "
+                    f"{hex(k)} vs {hex(v)}"
+                )
+        # The one character whose full lowercase EXPANDS: the engine
+        # simple-lowercases İ to "i", and the fold must too (1:1).
+        assert _engine_fold("İ") == "i"
+
+    def test_span_prefix_checked_per_alternation_branch(self):
+        # A literal first branch must not vouch for a bare span in a
+        # later branch; alternations made only of plain literals keep
+        # regex power (no unbounded repeat in any branch).
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert not _grep_hint_compilable("memcpy|.*z")
+        assert _grep_hint_compilable("memcpy|memmove|strcpy|sprintf")
+
+    @pytest.mark.parametrize("hint", [
+        "(a|aab).*z",        # the split-artifact bypass itself
+        "(aab|a).*z",        # branch order must not matter
+        "aabX|(a|aab).*z",   # benign top-level branch in front
+        "aab|[]|aab]*z",     # bar hidden in a class ("]" first member)
+        "[q|aab]*z",         # class-star rebuild of the same shape
+        "(memcpy|memmove).*len",  # group alternation, no whole-branch
+                                  # prefix before the span
+    ])
+    def test_group_internal_alternation_never_vouches(self, hint):
+        # The restart-density rule takes its branches from the
+        # structure-aware top-level split: a bar INSIDE a group or
+        # class is not an alternative of the whole pattern, so a
+        # strong literal fragment there must never vouch for a span
+        # whose real branch has no mandatory prefix. A raw "|" split
+        # admitted every one of these (true engine restart density 1;
+        # 0.72-1.8 s per evaluation at the source clamp, bare
+        # re.search IGNORECASE best-of-5 on one host, vs the 0.22 s
+        # tail-free "aab.*z" baseline).
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert not _grep_hint_compilable(hint)
+
+    def test_group_after_admissible_prefix_stays_admitted(self):
+        # Other direction of the top-level split: when the mandatory
+        # whole-branch prefix DOES clear the period floor, a
+        # group-internal alternation after it is fine — the prefix,
+        # not the group, bounds the restart density (same class as
+        # the admitted "memcpy.*len" baseline). A raw "|" split
+        # over-refused this shape on its "b.*z)" fragment.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert _grep_hint_compilable("memcpy(a|b.*z)")
+
+    def test_top_level_branch_scanner_structure(self):
+        # Unit pins for _hint_top_level_branches: bars split only at
+        # depth 0 outside classes; escapes and the leading
+        # "]"-as-member rule are honoured; unbalanced structure
+        # returns None (refusal at the caller).
+        from core.concepts.audit_bridge import _hint_top_level_branches
+        assert _hint_top_level_branches("a|b") == ["a", "b"]
+        assert _hint_top_level_branches("(a|aab).*z") == ["(a|aab).*z"]
+        assert _hint_top_level_branches("ab[|]c") == ["ab[|]c"]
+        assert _hint_top_level_branches(r"a\|b") == [r"a\|b"]
+        assert _hint_top_level_branches("aab|[]|aab]*z") == [
+            "aab", "[]|aab]*z",
+        ]
+        assert _hint_top_level_branches("[^]a|b]c") == ["[^]a|b]c"]
+        assert _hint_top_level_branches("(a") is None
+        assert _hint_top_level_branches("a)") is None
+        assert _hint_top_level_branches("[ab") is None
+
+    def test_unbalanced_structure_two_directions(self):
+        # Unbalanced structure WITH an unbounded repeat refuses (the
+        # scanner cannot attribute the repeat to a true branch, and
+        # re.error would demote such a hint anyway); unbalanced
+        # structure with NO repeat token anywhere is exempt before
+        # any structure scan — truncated identifier hints like
+        # "(frame_checksum" keep their historical verdict.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert not _grep_hint_compilable("(a.*z")
+        assert _grep_hint_compilable("(frame_checksum")
+
+    def test_repeat_continuation_walk_two_directions(self):
+        # Both directions of _MAX_HINT_REPEAT_CONTINUATION_WALK (13):
+        # at the budget the longest legit continuation keeps regex
+        # power ("kfree(.*) double free" — ") double free" is exactly
+        # 13 chars — and its 13-char prefix-periodic analogue); one
+        # char over is refused. The walk is bar-WEIGHTED by the WHOLE
+        # branch, (1 + branch bars) * continuation chars: a grouped
+        # bar doubles what each backtracked position walks whether it
+        # sits after the token (the alternation is re-walked per
+        # backtrack) or before it (the span and its walk are re-run
+        # per alternative). So 13 continuation chars with a bar weigh
+        # 26 and refuse while 6 chars with a bar weigh 12 and stay
+        # admitted — on BOTH sides of the token (rationale and
+        # measurements at the constant).
+        from core.concepts.audit_bridge import (
+            _MAX_HINT_REPEAT_CONTINUATION_WALK,
+            _grep_hint_compilable,
+        )
+        walk = _MAX_HINT_REPEAT_CONTINUATION_WALK
+        at_budget = ("aab" * walk)[: walk - 1] + "z"     # 13 chars
+        over_budget = ("aab" * walk)[:walk] + "z"        # 14 chars
+        assert _grep_hint_compilable("kfree(.*) double free")
+        assert _grep_hint_compilable("aab.*" + at_budget)
+        assert not _grep_hint_compilable("aab.*" + over_budget)
+        # bar AFTER the token
+        assert _grep_hint_compilable("aab.*(az|q)")            # 2*6=12
+        assert not _grep_hint_compilable("aab.*(aabaabaaz|q)")  # 2*13
+        # bar BEFORE the token — same weight, same boundary
+        assert _grep_hint_compilable("aab(x|y)[a-z0-9]*aabaaz")      # 2*6
+        assert not _grep_hint_compilable("aab(x|y)[a-z0-9]*aabaabz")  # 2*7
+        # ... and with alternatives that MATCH a prefix-saturated
+        # source — the measured-worst admitted family (the (x|y)
+        # spelling above short-circuits on such a source and hides
+        # the family's cost; figures at the constant). Same weight,
+        # same boundary.
+        assert _grep_hint_compilable("aab(a|a)[a-z0-9]*aabaaz")      # 2*6
+        assert not _grep_hint_compilable("aab(a|a)[a-z0-9]*aabaabz")  # 2*7
+        # ... and the family's atom spelling is free within the atom
+        # cap: a multi-member negated class spells 6 and keeps the
+        # same weight-12/14 boundary — the family's costliest
+        # sampled spelling AXIS, its range+literal mixes at the
+        # sampled top (spelling-dependent, no stated supremum;
+        # figures at the clamp comment).
+        assert _grep_hint_compilable("aab(a|a)[^c-z]*aabaaz")        # 2*6
+        assert not _grep_hint_compilable("aab(a|a)[^c-z]*aabaazz")   # 2*7
+        # ... and a range+literal MIX inside that axis spells 7 —
+        # still within the atom cap — and keeps the same boundary
+        # (the mix defeats the single-RANGE charset compilation;
+        # figures at the clamp comment).
+        assert _grep_hint_compilable("aab(a|a)[^c-e9]*aabaaz")       # 2*6
+        assert not _grep_hint_compilable("aab(a|a)[^c-e9]*aabaazz")  # 2*7
+        # Raw (escaped or class-member) bars split no paths but are
+        # weight-counted anyway (demote-only, asymmetry note at the
+        # constant): raw-bar weight-13 admitted shapes exist and
+        # are strictly cheap (~0.000 s: the mandatory literal bars
+        # kill every match attempt immediately).
+        assert _grep_hint_compilable("aab" + r"\|" * 12 + "[ab]*z")   # 13*1
+        assert not _grep_hint_compilable(
+            "aab" + r"\|" * 13 + "[ab]*z"                             # 14*1
+        )
+        # ... and raw bars MIX with the one grouped bar in the raw
+        # branch count, so weight 13 is reachable WITH a
+        # path-splitting bar present — one grouped bar + 11 raw
+        # bars over a 1-char continuation, (1+12)*1 = 13 (the bar
+        # BUDGET counts only the grouped bar) — in both raw
+        # spellings; one more raw bar weighs (1+13)*1 = 14 and
+        # refuses. Measured figures for both spellings at the clamp
+        # comment (escaped ~0.000 s; class-member ~1.0 s — its
+        # classes match a prefix-saturated source, so the doubled
+        # span work is real — both below the measured-worst family).
+        assert _grep_hint_compilable(
+            "aab(a|a)" + r"\|" * 11 + "[ab]*z"                        # 13*1
+        )
+        assert not _grep_hint_compilable(
+            "aab(a|a)" + r"\|" * 12 + "[ab]*z"                        # 14*1
+        )
+        assert _grep_hint_compilable(
+            "aab(a|a)" + "[a|b]" * 11 + "[a-z0-9]*z"                  # 13*1
+        )
+        assert not _grep_hint_compilable(
+            "aab(a|a)" + "[a|b]" * 12 + "[a-z0-9]*z"                  # 14*1
+        )
+        # Top-level bars are additive, not multiplicative: a grouped
+        # bar in a SIBLING top-level branch is priced only against
+        # its own branch's (empty) continuation, so the repeat
+        # branch keeps the full walk 13 — while the same bar moved
+        # INTO the repeat branch weighs (1 + 1) * 13 = 26 and
+        # refuses.
+        assert _grep_hint_compilable("x(a|a)y|aab[a-z0-9]*" + at_budget)
+        assert not _grep_hint_compilable("aab(a|a)[a-z0-9]*" + at_budget)
+
+    def test_literal_tail_continuation_refused(self):
+        # Red-if-neutralized pin for the literal-tail family: a
+        # minimum-period prefix, ONE repeat token, and a long
+        # self-overlapping literal tail — every guard layer before
+        # the continuation walk admits it, and per-backtrack tail
+        # cost multiplies the quadratic term ~linearly in tail
+        # length (L30 ~1.0 s, L90 ~3.0 s, L240 ~7.4 s at the source
+        # clamp; venue at the constant). Removing or unbounding the
+        # walk turns every one of these back into an admission.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        for repeats in (10, 30, 80):
+            hint = "aab.*" + "aab" * repeats + "z"
+            assert not _grep_hint_compilable(hint), hint
+
+    def test_pre_token_grouped_bar_saturated_walk_refused(self):
+        # Red-if-neutralized pin for the pre-token-bar family: the
+        # one admitted grouped bar spent BEFORE the repeat token,
+        # riding in front of a walk-saturated bar-free continuation.
+        # sre re-runs the span AND its backtrack walk once per group
+        # alternative, so this shape costs (1 + bars) x the bar-free
+        # twin (~1.8 s vs ~0.9 s at the source clamp; venue at the
+        # constant) — the branch-wide bar weight prices it at
+        # (1 + 1) * 13 = 26 > 13 and refuses. Weighting only the
+        # continuation's own bars would admit every one of these;
+        # the bar-free twin stays admitted.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        tail13 = ("aab" * 5)[:12] + "z"  # aabaabaabaabz
+        assert _grep_hint_compilable("aab[a-z0-9]*" + tail13)  # twin
+        for hint in (
+            "aab(a|a)[a-z0-9]*" + tail13,
+            "aab(a|a).*" + tail13,
+            "aab(x|y).*" + tail13,
+            "memcpy(a|b).*" + tail13,
+        ):
+            assert not _grep_hint_compilable(hint), hint
+
+    def test_repeat_atom_spelling_two_directions(self):
+        # Both directions of _MAX_HINT_REPEAT_ATOM_CHARS (8): the
+        # common range class "[a-z0-9]" spells exactly 8 and keeps
+        # regex power (so do the golden "abc[)]*x" at 3 and the
+        # escape atom "\D" at 2); one char over is refused, as is an
+        # escape-heavy member zoo whose per-span-char cost the model
+        # cannot state. The spelled span is located by the branch
+        # splitter's forward class scan: a class-member "[" must not
+        # fake a short spelling.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert _grep_hint_compilable("aab[a-z0-9]*z")       # spells 8
+        assert _grep_hint_compilable("abc[)]*x")            # spells 3
+        assert _grep_hint_compilable(r"aab\D*z")            # spells 2
+        assert not _grep_hint_compilable("aab[a-z0-9_]*z")  # spells 9
+        assert not _grep_hint_compilable(r"aab[ab\x63\x64]*z")
+        # class-member "[": true opener is index 3, spelling 11
+        assert not _grep_hint_compilable("aab[qwerty[ab]*z")
+
+    def test_repeat_atom_chars_structure(self):
+        # Unit pins for _hint_repeat_atom_chars: literal / escape /
+        # class atoms; the class span is measured from its TRUE
+        # opener (a nearest-"[" backward scan would credit the
+        # class-member "[" instead); token at position 0 spells 0.
+        from core.concepts.audit_bridge import _hint_repeat_atom_chars
+        assert _hint_repeat_atom_chars("aab.*z", 4) == 1
+        assert _hint_repeat_atom_chars(r"aab\D*z", 5) == 2
+        assert _hint_repeat_atom_chars("abc[)]*x", 6) == 3
+        assert _hint_repeat_atom_chars("aab[a-z0-9]*z", 11) == 8
+        assert _hint_repeat_atom_chars("aab[qwerty[ab]*z", 14) == 11
+        assert _hint_repeat_atom_chars("*z", 0) == 0
+
+    def test_grouped_alternation_bar_budget_two_directions(self):
+        # Both directions of _MAX_HINT_GROUPED_ALTERNATION_BARS (1):
+        # one grouped bar keeps the legit
+        # group-alternation-after-prefix class admitted
+        # ("memcpy(a|b.*z)"); a second grouped bar refuses — every
+        # allowed bar doubles the paths one match attempt explores
+        # through the pattern suffix (rationale and the exponential
+        # stack measurements at the constant).
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert _grep_hint_compilable("memcpy(a|b.*z)")
+        assert not _grep_hint_compilable("aab(x|.*)(y|w)")
+        assert not _grep_hint_compilable("(a|b|c)x")
+        # Top-level bars stay additive, not multiplicative — budget
+        # does not touch them.
+        assert _grep_hint_compilable("memcpy|memmove|strcpy|sprintf")
+
+    def test_alternation_stack_refused(self):
+        # Red-if-neutralized pin for the repeat-free exponential:
+        # "(a|a)(a|a)...b" carries ZERO repeat tokens — invisible to
+        # every repeat-anchored rule — yet sre memoises nothing, so
+        # each group doubles the paths per start position (measured
+        # x~1.9 per group; 0.93 s at 22 groups over a 32-char source,
+        # venue at the constant). Only the grouped-bar budget stands
+        # between this family and an effective hang at the clamp.
+        from core.concepts.audit_bridge import _grep_hint_compilable
+        assert not _grep_hint_compilable("(a|a)(a|a)b")
+        assert not _grep_hint_compilable("(a|a)" * 10 + "b")
+        assert not _grep_hint_compilable("(a|a)" * 24 + "b")
+
+    def test_grouped_bar_counter_structure(self):
+        # Unit pins for _hint_grouped_alternation_bars: depth moves
+        # only on TRUE group parens — an escaped or class-member ")"
+        # must not close the depth and hide the bars behind it (each
+        # rebuilds the exponential stack if it does) — while escaped
+        # and class-member bars are literal members and never count.
+        # Counting never fails: unterminated structure still yields
+        # a defined count (refusal-on-unbalance stays the splitter's,
+        # for repeat-bearing hints only).
+        from core.concepts.audit_bridge import (
+            _hint_grouped_alternation_bars,
+        )
+        assert _hint_grouped_alternation_bars("a|b") == 0
+        assert _hint_grouped_alternation_bars("(a|b)") == 1
+        assert _hint_grouped_alternation_bars("(a|b|c)") == 2
+        assert _hint_grouped_alternation_bars(r"a\|b(c)") == 0
+        assert _hint_grouped_alternation_bars("[(]a|b") == 0
+        assert _hint_grouped_alternation_bars("(a[|]b)") == 0
+        assert _hint_grouped_alternation_bars(r"(a\)x|a)") == 1
+        assert _hint_grouped_alternation_bars("([)]|x)") == 1
+        assert _hint_grouped_alternation_bars("(a|b") == 1
+        assert _hint_grouped_alternation_bars("a)b|c") == 0
+
 
 class TestDomainKeyFiles:
     def test_returns_paths_from_dicts_and_strings(self, extras_out_dir):

@@ -600,28 +600,924 @@ def token_enforcement_context(
 # bounded.
 _MAX_GREP_HINT_CHARS = 256
 
+# Super-linear shapes ``looks_redos`` does not see. Same guard idiom
+# as the log-check pattern gate in ``core/env/verify.py``
+# (``_dangerous_re``): consecutive quantifiers, possessive-looking
+# ``(?...+`` forms, any quantified group whose body carries an
+# alternation or its own quantifier (incl. bounded ``{m,n}`` —
+# ``(a|a)+`` and ``(a{1,9}){1,9}`` both blow up), and nested
+# quantified groups. Group spans are bounded at the hint length cap
+# (the length gate runs FIRST, so on every input this scan can see
+# an unbounded ``[^)]*`` span would change no verdict — the bound
+# only keeps the scan itself linear).
+_HINT_SUPERLINEAR_RE = re.compile(
+    r"[+*]{2,}"
+    rf"|\(\?[^)]{{0,{_MAX_GREP_HINT_CHARS}}}\+"
+    rf"|\([^)|+*{{]{{0,{_MAX_GREP_HINT_CHARS}}}[|+*{{]"
+    rf"[^)]{{0,{_MAX_GREP_HINT_CHARS}}}\)\s*[+*{{]"
+    rf"|\([^)]{{0,{_MAX_GREP_HINT_CHARS}}}\)[+*{{]"
+    rf"[^)]{{0,{_MAX_GREP_HINT_CHARS}}}\)\s*[+*{{]"
+)
+
+# Any repeat applied to a GROUP — a repeat token after a close paren,
+# regardless of the group body. The two group forms above inspect the
+# body (alternation / inner quantifier); a quantified group whose
+# body is a plain literal or class passes them, yet every iteration
+# boundary is still a backtrack point, and at the source clamp below
+# such shapes measure an order above the leading-literal baseline.
+# Measurement venue for every figure in this guard block unless
+# stated otherwise: bare ``re.search(pattern, source, re.IGNORECASE)``
+# on a FAILING search over a saturated source at the 16384-char
+# clamp, best-of-5 single-threaded wall clock on one development
+# host — order-of-magnitude figures for ranking shapes, not portable
+# constants. In that venue: "(ab)*c" 0.79 s, "([ab][ba])*x" 1.8 s,
+# "(..)*xy" 1.5 s, counted forms like "(a){60000}" in the same
+# regime, vs "memcpy.*len" 0.11 s. The body-inspecting forms above
+# stay (their pins hold independently); this rule subsumes them
+# body-blind. ``\s*`` slack matches their idiom, and ``?`` after a
+# group — bounded on its own — is refused with the rest: over-refusal
+# only demotes to the substring fallback, in keeping with the
+# counted-not-parsed stance of the repeat-token budget below.
+_HINT_QUANTIFIED_GROUP_RE = re.compile(r"\)\s*[+*?{]")
+
+# Backreferences re-match a variable-length captured span, so
+# ``(a*)\1b`` carries ONE repeat token and no quantified-group shape
+# yet backtracks super-linearly (measured cubic-order: every split of
+# the captured span is retried against the tail) — a clean bypass of
+# every rule above. Numeric (``\1``..``\9``) and named (``(?P=name``)
+# forms are refused alike. Conditional groups (``(?(id)yes|no)``,
+# matched by ``\(\?\(``) are refused with them: the conditional test
+# itself does not re-consume text, but it exists only alongside the
+# same capture/backref machinery, no legitimate hint uses it, and
+# refusal costs only the substring fallback. Over-refusal is safe
+# (``\1`` inside a character class is an octal escape, not a backref
+# — it still demotes): demotion loses selection power, never
+# soundness. No shipped or schema-suggested hint uses any of these
+# forms. The ``\g<1>`` / ``\g{1}`` spellings are deliberately not
+# matched: they are replacement-template syntax, ``re.error`` inside
+# a PATTERN on every interpreter, so the ``re.error`` arm demotes
+# them to the same substring fallback — a spelling gap, not a bypass.
+_HINT_BACKREF_RE = re.compile(r"\\[1-9]|\(\?P=|\(\?\(")
+
+# Repeat tokens for the budget below. Counted, not parsed: every
+# ``*``, ``+``, ``?``, or ``{`` occurrence counts, including escaped
+# (``\*``) and class-member (``[+*]``) uses — over-counting only ever
+# demotes a hint to the substring fallback (less selection power); a
+# parser-accurate count could under-count a live repeat and is not
+# worth the machinery for hint-sized inputs.
+_HINT_REPEAT_TOKEN_RE = re.compile(r"[*+?{]")
+
+# Repeat budget for compiled hints. The shape scans above are blind
+# to UNGROUPED repeat chains — ``a*a*a*...b`` and ``a?a?...a{n}``
+# backtrack combinatorially with no group or alternation for any
+# shape rule to anchor on — so the only static bound on them is how
+# many repeat tokens a hint may carry at all. Both directions:
+# higher admits multi-repeat regex hints, but every additional
+# repeat that can overlap its neighbour ahead of a failable
+# continuation multiplies the split space the engine explores over
+# target-derived source (two overlapping spans are already quadratic
+# per attempt, and the source under the fold's slice recompute is
+# attacker-authored); zero would demote the common single-span hint
+# ("memcpy.*len"). One repeat admits exactly that single-span class —
+# which is NOT free: a failing search is quadratic in the source when
+# the leading literal recurs ("memcpy.*len" against "memcpy"*k
+# restarts a full scan-and-backtrack at every occurrence), so
+# admitted hints are additionally cost-bounded by the source-length
+# clamp below (``_MAX_REGEX_SOURCE_CHARS``). The budget bounds the
+# blow-up CLASS (no chains, no stacked repeats); the clamp bounds
+# what the admitted class may cost. Both directions pinned by
+# ``test_repeat_budget_two_directions``.
+_MAX_GREP_HINT_REPEATS = 1
+
+# Unbounded-capable repeat tokens for the prefix-period rule below:
+# ``*``, ``+``, and ``{`` (counted repeats reach ``{60000}``-scale).
+# ``?`` is excluded — it repeats its atom at most once, and the
+# budget above already limits the whole hint to one repeat token.
+_HINT_UNBOUNDED_REPEAT_RE = re.compile(r"[*+{]")
+
+# Leading literal run of an alternation branch: everything up to the
+# first regex metacharacter. Counted, not parsed (the stance of the
+# repeat-token scan above): a ``\``-escape or class ends the run even
+# when it would match a fixed character — under-counting the prefix
+# only ever demotes.
+_HINT_LITERAL_PREFIX_RE = re.compile(r"[^\\.\[\](){}*+?|^$]*")
+
+# Minimum self-overlap period of the literal prefix required in front
+# of any unbounded repeat, per top-level alternation branch. A
+# failing search restarts the span once per occurrence of the
+# mandatory leading literal, and occurrences can sit no closer than
+# the prefix's period, so the period caps restart density — the
+# multiplier on the quadratic floor the clamp below bounds. Measured
+# (venue as above): density-1 shapes ("x.*y" 0.68 s, "aa.*z" 0.88 s,
+# ".*z" 0.62 s — empty, 1-char, or self-overlapping prefixes) vs
+# period-2 ("ab.*z") 0.35 s, period-3 ("aab.*z" 0.22 s,
+# "len.*memcpy" 0.20 s), and the plain leading-literal baseline
+# ("memcpy.*len", period 6) 0.11 s. The period is computed under the
+# ENGINE's IGNORECASE character equivalence (``_engine_fold`` below)
+# — matching is IGNORECASE, so the restart density that matters is
+# the engine's, not any particular string fold's ("sSsS" folds to
+# period-1 "ssss"; so do the cross-codepoint orbits the fold
+# closes). Both directions: higher demotes real short-identifier
+# hints (period 3 is the shortest common C-name shape — "len",
+# "buf", "ptr", which must keep regex power); lower divides the
+# restart spacing in the cost model's dominant n^2*W/p term at the
+# source clamp (2 re-admits the 0.35 s period-2 tail-free class, 1
+# the 0.6-0.9 s density-1 class — and at the full continuation walk
+# a lower p scales the admitted-worst ceiling by the same factor).
+# Both directions pinned by
+# ``test_span_prefix_period_two_directions``; the admitted-worst
+# ceiling itself is wall-clock-pinned by
+# ``test_worst_admitted_shape_cost_bounded``.
+_MIN_HINT_PREFIX_PERIOD = 3
+
+# Per-backtrack walk budget for the repeat-bearing branch: the raw
+# character count of the branch CONTINUATION (everything after the
+# sole unbounded repeat token, to the end of the branch), weighted by
+# the alternation bars anywhere in the WHOLE branch — walk =
+# (1 + branch bars) * continuation chars. The period rule above
+# bounds how OFTEN a failing search restarts the span; this bounds
+# what each backtracked span position may COST: every backtrack
+# attempt walks at most the continuation's elements once per
+# alternation path through the branch, and sre memoises nothing, so
+# a grouped bar multiplies that walk WHEREVER it sits — after the
+# token ("aab.*(aabaabaaz|q)": 13 continuation chars whose bar
+# doubles the per-position walk, 1.05 s measured, well above the
+# 0.59 s no-bar "aab.*" + 13-char tail; unweighted it would ADMIT)
+# or BEFORE it ("aab(a|a)[a-z0-9]*aabaabaabaabz": 1.77 s measured,
+# exactly 2.0x its bar-free twin "aab[a-z0-9]*aabaabaabaabz" at
+# 0.88 s — sre re-runs the whole span and its full backtrack once
+# per group alternative; venue as above). A continuation-only bar
+# weight would let the one admitted bar ride in FRONT of a
+# full-budget tail at bare weight — an unpriced, clean 2x of its
+# bar-free twin (1.77 s, inside the sampled spread of the family's
+# admitted spellings — the weight bounds the cost class, not a
+# total ordering of shapes; figures at the clamp constant);
+# counting bars over the whole branch
+# prices the path factor on both sides of the token. Unbounded, the
+# continuation is a bypass of the whole cost model — a long
+# self-overlapping literal tail ("aab.*" + "aab"*80 + "z": 246
+# chars, ONE repeat token, period-3 prefix) measured 7.4 s at the
+# source clamp (venue as above), ~35x the tail-free "aab.*z" at
+# 0.20 s, scaling linearly in tail length (L30 1.0 s, L90 3.0 s).
+# Counted, not parsed (the repeat-token scan's stance): brace
+# digits, close-parens, escapes, and class-member or escaped bars
+# all count — over-counting only ever demotes, and counting brace
+# digits keeps a counted repeat from smuggling extra continuation
+# mass past the budget. Deliberate asymmetry with the bar BUDGET
+# below: the budget's counter is structure-aware (escaped and
+# class-member bars are literal members, never path splits), while
+# this WEIGHT uses the raw branch bar count — raw can only
+# over-count, i.e. demote; a structure-aware weight would only
+# re-admit shapes, so do not "fix" the asymmetry in that direction.
+# Both directions: lower demotes the longest continuation in the
+# legit corpus ("kfree(.*) double free" — ") double free" is
+# exactly 13 chars, bars 0; admission pinned by
+# ``test_group_hint_without_group_repeat_stays_admitted``); higher
+# admits linearly costlier tails (~0.04-0.05 s per admitted
+# continuation char at the clamp — the measured slope of the tail
+# family, same venue). Both directions pinned by
+# ``test_repeat_continuation_walk_two_directions``; the refusal of
+# the literal-tail family is separately pinned red-if-neutralized
+# by ``test_literal_tail_continuation_refused``, and the
+# pre-token-bar family (bar spent before the token, walk
+# saturated) by
+# ``test_pre_token_grouped_bar_saturated_walk_refused``.
+_MAX_HINT_REPEAT_CONTINUATION_WALK = 13
+
+# Spelled length of the atom the unbounded repeat applies to (the
+# span atom): a character class's per-span-char test cost is engine-
+# and spelling-dependent, not O(1) — figures recorded under an
+# earlier venue on this host had an escape-spelled member zoo
+# ("aab[ab\x63\x64...]*" + 13-char tail) at 1.9-2.1 s at the clamp
+# with the two-member "[ab]" spelling at 1.3-1.5 s, growth not even
+# monotone in member count; in the current venue (as above) the
+# same pair measures ~0.86 s in BOTH spellings ("[ab]" and the 4-
+# and 8-member escape zoos alike), and within ONE admitted
+# pre-token-bar family at the same clamp the negation spelling
+# splits at the engine's compiler: the single-literal negation
+# "aab(a|a)[^c]*aabaaz" compiles to the cheap single-op path and
+# measures ~0.87 s where the two-member negation "[^cd]" spelling
+# of the same shape measures ~1.63 s — the spelling-cost spread
+# itself comes and
+# goes with the engine's charset compilation and the host, which is
+# exactly why the model refuses to carry an unbounded spelling
+# rather than characterise it. The
+# hint length cap alone bounds the spelling only at ~240 chars, too
+# weak for a stated per-span-char constant. The span is located by
+# the branch splitter's own escape/class scan rules, run forward
+# (``_hint_repeat_atom_chars``): a nearest-"[" backward scan would
+# let a class-member "[" understate an escape-heavy spelling
+# ("aab[<escape zoo>[ab]*…" scans back to the inner "["). Both
+# directions: lower refuses the golden class-atom shapes ("abc[)]*x"
+# spells 3, "[ab]" 4, the common "[a-z0-9]" range spelling exactly
+# 8); higher re-admits spellings whose walk constant the model
+# cannot state. Both directions pinned by
+# ``test_repeat_atom_spelling_two_directions``.
+_MAX_HINT_REPEAT_ATOM_CHARS = 8
+
+# Alternation bars INSIDE groups, whole-hint budget. Top-level bars
+# are additive (the engine tries each top-level branch per start
+# position; the total walk is bounded by the hint length), but every
+# grouped alternation MULTIPLIES the paths one attempt explores
+# through the pattern suffix after it, and sre memoises nothing: the
+# repeat-free "(a|a)(a|a)...(a|a)b" stack doubles per group —
+# measured 0.93 s at 22 groups over a 32-CHAR source, x~1.9 per
+# added group (bare re.search IGNORECASE, single-threaded wall
+# clock, one development host) — an exponential family fully inside
+# the length cap with ZERO repeat tokens, invisible to every
+# repeat-anchored rule above. One grouped bar caps the path factor
+# of a match attempt at 2 (times 2 more for the sole ``?`` the
+# repeat budget can admit), keeping one attempt's walk linear in the
+# hint. On a repeat-BEARING branch the same factor multiplies the
+# span walk and its backtrack too — priced there by the branch-wide
+# bar weight of the continuation-walk budget above, so the budget
+# here bounds the factor and the walk budget charges for it.
+# Structure-aware, never failing
+# (``_hint_grouped_alternation_bars``): a paren-depth-only count is
+# bypassable — an escaped or class-member ")" silently closes the
+# depth and hides every later real bar — so the count runs the
+# branch splitter's escape/class scan; escaped and class-member bars
+# are literal members, not path splits, and do not count. Unlike the
+# splitter it never refuses on unbalance: a stray ")" clamps at
+# depth zero and unterminated structure still yields a defined count
+# (refusal-on-unbalance belongs to the splitter, which runs only on
+# repeat-bearing hints — repeat-free unbalanced goldens like
+# "(frame_checksum" keep their historical ADMIT, and the truly
+# malformed are re.error and demote at compile). Both directions:
+# zero refuses the legit group-alternation-after-admissible-prefix
+# class ("memcpy(a|b.*z)", pinned by
+# ``test_group_after_admissible_prefix_stays_admitted``); every
+# extra allowed bar doubles the worst per-position path count —
+# exponential in the allowance, the measured stack above. Both
+# directions pinned by
+# ``test_grouped_alternation_bar_budget_two_directions``; the stack
+# family is pinned red-if-neutralized by
+# ``test_alternation_stack_refused``.
+_MAX_HINT_GROUPED_ALTERNATION_BARS = 1
+
+# --- Engine-equivalence fold for the prefix-period rule ---
+# The period must be computed under the same character equivalence
+# the regex engine applies when matching IGNORECASE, or a prefix can
+# look non-self-overlapping to the rule while every character of it
+# matches every other at match time. CPython's sre matches literal
+# characters 1:1 by SIMPLE lowercase and widens that with the
+# extra-case orbits in ``re._casefix._EXTRA_CASES``;
+# ``str.casefold()`` — the previous fold here — diverges from that
+# equivalence in both directions, and each direction broke the rule
+# (venue as above):
+#
+# * casefold SPLITS an engine orbit: "ı" (U+0131) casefolds to
+#   itself while the engine matches i <-> ı, so "iıı.*z" showed a
+#   casefold period of 3 (admitted) with a true engine restart
+#   density of 1 — 0.81 s, vs the 0.22 s admitted worst.
+# * casefold EXPANDS some single characters to multi-character
+#   strings the engine still matches 1:1: "ﬃ" (U+FB03 -> "ffi",
+#   fake period 3 over the expansion; "ﬃﬃﬃ.*z" 0.92 s) and "İ"
+#   (U+0130 -> "i" + combining dot; the engine's simple lowercase
+#   is plain "i", so "İii.*z" is engine-density-1, 0.76 s).
+#
+# The fold therefore maps each character to a canonical
+# representative of its ENGINE orbit: İ first (the one character
+# whose full lowercase via ``str.lower`` expands to two characters,
+# while the engine's simple lowercase is "i"), then ``str.lower``
+# (the engine's 1:1 simple-lowercase table for everything else —
+# unlike casefold it never expands another character), then one
+# representative per ``re._casefix._EXTRA_CASES`` orbit (dropping
+# casefold loses its ς/σ-style unifications, which lower() does not
+# perform but the engine does — the table restores every one). The
+# orbit table is HARDCODED, not imported from ``re._casefix`` at
+# runtime: the verdict feeds ``domain_slice_hash`` and must be
+# identical on every interpreter, and ``re._casefix`` is a private
+# stdlib module whose content (or importability) may drift. Drift is
+# pinned instead by ``test_engine_fold_covers_interpreter_orbits``,
+# which re-derives the pairs from the RUNNING interpreter's
+# ``re._casefix`` and fails loudly if the fold misses any (a
+# mechanical re-verify on interpreter bumps — never a silent verdict
+# split; a fold that over-unifies only over-refuses, so the pinned
+# direction is the admission-risk one). Source: CPython 3.14
+# ``re/_casefix.py`` — 24 orbits over 50 codepoints.
+_HINT_FOLD_DOTTED_I = str.maketrans({0x0130: "i"})
+_HINT_FOLD_ORBIT_REPS = str.maketrans({
+    0x0131: "\u0069",  # dotless i -> i
+    0x017F: "\u0073",  # long s -> s
+    0x00B5: "\u03BC",  # micro sign -> greek mu
+    0x0345: "\u03B9",  # combining iota subscript -> iota
+    0x1FBE: "\u03B9",  # prosgegrammeni -> iota
+    0x1FD3: "\u0390",  # iota dialytika oxia -> iota dialytika tonos
+    0x1FE3: "\u03B0",  # upsilon dialytika oxia -> dialytika tonos
+    0x03D0: "\u03B2",  # beta symbol -> beta
+    0x03F5: "\u03B5",  # lunate epsilon -> epsilon
+    0x03D1: "\u03B8",  # theta symbol -> theta
+    0x03F0: "\u03BA",  # kappa symbol -> kappa
+    0x03D6: "\u03C0",  # pi symbol -> pi
+    0x03F1: "\u03C1",  # rho symbol -> rho
+    0x03C2: "\u03C3",  # final sigma -> sigma
+    0x03D5: "\u03C6",  # phi symbol -> phi
+    0x1C80: "\u0432",  # cyrillic small rounded ve -> ve
+    0x1C81: "\u0434",  # long-legged de -> de
+    0x1C82: "\u043E",  # narrow o -> o
+    0x1C83: "\u0441",  # wide es -> es
+    0x1C84: "\u0442",  # tall te -> te
+    0x1C85: "\u0442",  # three-legged te -> te
+    0x1C86: "\u044A",  # tall hard sign -> hard sign
+    0x1C87: "\u0463",  # tall yat -> yat
+    0x1C88: "\uA64B",  # unblended uk -> monograph uk
+    0x1E9B: "\u1E61",  # long s with dot above -> s with dot above
+    0xFB05: "\uFB06",  # st (long s-t) ligature -> st ligature
+})
+
+
+def _engine_fold(text: str) -> str:
+    """Fold ``text`` by the engine's IGNORECASE character equivalence.
+
+    Two characters fold equal here exactly when CPython's sre matches
+    one against the other under ``re.IGNORECASE`` (simple lowercase
+    plus the ``re._casefix`` extra-case orbits — rationale and drift
+    pin at the tables above). Unlike ``str.casefold`` the result is
+    1:1 per character, so self-overlap periods computed on it equal
+    the engine's restart periods.
+    """
+    return (
+        text.translate(_HINT_FOLD_DOTTED_I)
+        .lower()
+        .translate(_HINT_FOLD_ORBIT_REPS)
+    )
+
+
+# Source-length clamp for the regex path. The shape rules above
+# decide WHICH hints compile, not what they cost: the admitted
+# single-span class is quadratic in ``len(source)`` on a failing
+# search, and source reaching this point is target-derived with no
+# per-function bound upstream (the only upstream limit is the 64 MB
+# per-file read cap in ``core/audit/context.py``). Measured quadratic
+# curve ("memcpy.*len" over saturated failing source, bare
+# ``re.search`` IGNORECASE, best-of-3 single-threaded wall clock on
+# one development host — order-of-magnitude, host-dependent):
+# 16 KiB ~ 0.11 s, 32 KiB ~ 0.42 s, 64 KiB ~ 2.1 s, 117 KiB ~ 7.1 s
+# per hint evaluation. Both directions: higher keeps regex semantics
+# on bigger functions, but the clamp value bounds the worst-case
+# per-hint match cost quadratically (doubling the clamp quadruples
+# the ceiling); lower demotes more big-function hints to the
+# substring fallback (less selection power, never less soundness);
+# both directions of the constant pinned by
+# ``test_source_clamp_two_directions``.
+#
+# COST MODEL for one failing search of an ADMITTED hint over a
+# clamped source (n = 16384). Every admitted hint obeys, by
+# construction of the refusal layers: hint length H <= 256; at most
+# ONE repeat token, never on a group, no backreference; at most ONE
+# grouped alternation bar — a span-path factor g <= 1, because each
+# grouped bar multiplies the paths one match attempt explores
+# through its branch and sre memoises nothing; and when the sole
+# token is unbounded, a mandatory branch prefix of engine-folded
+# period p >= _MIN_HINT_PREFIX_PERIOD, a span atom spelled
+# <= _MAX_HINT_REPEAT_ATOM_CHARS, and a WEIGHTED continuation walk
+# W = (1 + branch bars) * continuation chars
+# <= _MAX_HINT_REPEAT_CONTINUATION_WALK. The weight counts bars over
+# the WHOLE branch, so branch bars >= g and W already prices the
+# (1+g) path factor no matter which side of the token the bar sits
+# (a continuation-only weight would omit g for a pre-token bar:
+# the walk figure it stated would then be 1/(1+g) of the true
+# weighted cost, a clean 2x hole).
+# Repeat-free hints cost <= n starts x <= 4 paths x <= H elements —
+# linear in n (worst constructed shapes measure ~ms at the clamp).
+# The 4 is DERIVED from the budgets, not assumed: the only path
+# multipliers a repeat-free admitted hint can carry are the sole
+# "?" the repeat-token budget admits (x2) and the sole grouped bar
+# the bar budget admits (x2) — top-level bars are additive, not
+# multiplicative — so paths <= 2 x 2 = 4.
+# Repeat-bearing hints cost
+# <= c * [ n*H + (1+g) * (n/p) * n + (n/p) * n * W ]: prefix
+# scanning is the n*H term; at most n/p positions carry the
+# mandatory prefix, and each restarts the span once per path — the
+# (1+g) span re-runs of <= n span chars each are the middle term,
+# itself capped at 2 * (n/p) * n by g <= 1, i.e. at most 2/13 of
+# the dominant term's cap IN ELEMENT COUNTS (its measured
+# wall-clock share is far larger — see the ranking note below) —
+# and each restarted span
+# backtracks <= n positions whose continuation attempts walk, over
+# ALL (1+g) paths together, <= W weighted elements. Every variable
+# in the dominant n^2*W/p term is bounded by a named constant — W
+# (which internally prices g) binds the ceiling, p divides it — and
+# the constant c is the engine's per-element step with the span
+# atom's test folded in (why the atom spelling is bounded too).
+# The element-count arithmetic orders admitted repeat-bearing
+# shapes by W at fixed p and atom spelling, but W alone is NOT a
+# strict cost ranking at the top: in units of the (n/p)*n restart
+# floor, the middle (span re-run) term contributes (1+g) and the
+# dominant term W. Among shapes whose ONLY weight-counted bars are
+# path-splitting ones, the best bar-carrying weight is
+# (1+1) x 6 = 12 and the full-walk admitted maxima TIE at 14 units
+# — the bar-free walk-13 shape (1 + 13), the pre-token-bar walk-12
+# family (2 + 12), and the post-token-bar walk-12 runner-up
+# (2 + 12). Raw (escaped or class-member) bars are weight-counted
+# yet split no paths, and they MIX with the one grouped bar in the
+# raw branch count, so mixed-bar admitted shapes reach weight 13
+# with a path-splitting bar present — one grouped bar + 11 raw
+# bars over a 1-char continuation, (1+12) x 1 = 13 (the bar BUDGET
+# counts only the grouped bar) — scoring 2 + 13 = 15 units. That
+# needs continuation <= 1 char, and both raw spellings measure
+# below the measured-worst family stated next (venue as at
+# ``_HINT_QUANTIFIED_GROUP_RE``): the escaped spelling
+# ("aab(a|a)" + "\|"x11 + "[ab]*z") ~0.000 s — its mandatory
+# literal bars kill every match attempt immediately, as they do
+# for the pure raw-bar weight-13 shapes
+# ("aab" + "\|"x12 + "[ab]*z", also ~0.000 s) — and the
+# class-member spelling
+# ("aab(a|a)" + "[a|b]"x11 + "[a-z0-9]*z") 1.00 s at n = 16384:
+# its "[a|b]" prefix classes MATCH the aab-saturated source, so
+# the (1+g)-doubled span-and-backtrack work is real, yet it
+# measures below the measured-worst family.
+# Measurement discriminates where the tie arithmetic cannot: the
+# element counts under-weight the walk-INDEPENDENT cost each
+# restart carries (the span run plus per-restart overhead —
+# empirically ~60% of the bar-free wall clock at the clamp:
+# in-venue, walk-13 bar-free 0.88 s vs walk-6 bar-free 0.69 s
+# gives ~0.03 s per continuation char over a ~0.5 s base), and a
+# pre-token bar multiplies that WHOLE base by (1+g). The MEASURED
+# admitted ceiling therefore belongs to the matching-alternative
+# pre-token family — its "[a-z0-9]" representative
+# "aab(a|a)[a-z0-9]*aabaaz" (weight (1+1) x 6 = 12) measures
+# (venue as at ``_HINT_QUANTIFIED_GROUP_RE``)
+# 0.09 s / 0.35 s / 1.38 s at n = 4096 / 8192 / 16384 — ~1.4 s at
+# the clamp light-load, higher under host load as across the
+# recorded figure history — 2.0x its bar-free twin
+# "aab[a-z0-9]*aabaaz" (0.69 s). WITHIN the family the cost is
+# atom-spelling-dependent and every stated figure is a SAMPLE, not
+# a supremum: sampled range spellings ("[a-b0-9]", "[a-c0-9]",
+# "[0-9a-b]") measure 1.45-1.47 s at the clamp, and the sampled
+# multi-member negated-class axis measures ~1.6-1.65 s in its
+# single-range and enumerated spellings ("[^c-z]", "[^cde]",
+# "[^C-Z]", "[^cd]") and ~1.8 s in its range+literal-mix
+# spellings ("[^c-e9]", "[^9c-e]", "[^c-e0]", "[^cd-e9]") — the
+# axis's sampled top: the mix defeats the single-RANGE charset
+# compilation that holds "[^c-z]" at ~1.63 s (same venue, stable
+# across passes; the single-literal negation "[^c]" compiles to
+# the engine's cheap single-op path, ~0.87 s — the atom-cap note
+# above shows the same split) — the negated-class samples beat the
+# range-spelling samples ON THIS HOST in this same venue, so no
+# measured constant is stated as the family's ceiling: the ceiling
+# is spelling-dependent with no stated supremum, and the
+# atom-spelling cap, not a measured figure, is the bound — the
+# model's own "spelling-dependent, not O(1)" stance showing up
+# inside one admitted family. The group
+# alternatives must MATCH the saturated source: non-matching ones
+# ("(x|y)" over aab-saturation) fail at the group before any span
+# work and measure ~0.000 s, hiding the family's true cost. The
+# bar-free arithmetic maximum "aab[a-z0-9]*aabaabaabaabz" measures
+# 0.05 s / 0.22 s / 0.88 s (x~4 per doubling — quadratic) and the
+# post-token runner-up "aab[a-z0-9]*(az|q)" (W = 12)
+# 0.07 s / 0.28 s / 1.11 s in the same venue: the raw char-count
+# walk over-prices a literal continuation (it usually fails at its
+# first char) relative to a grouped one (both alternatives are
+# always tried), a conservative-direction gap between the element
+# counts and the engine, consistent with the three-way tie. For
+# scale: the pre-token-bar shape at the SATURATED walk, which the
+# branch-wide weight refuses ("aab(a|a)[a-z0-9]*aabaabaabaabz",
+# weighted walk 26), measured 1.77 s — 2.0x its admitted bar-free
+# twin, right where (1+g) arithmetic puts it, and INSIDE the
+# family's sampled spread: the admitted range+literal-mix negated
+# samples above measure ~1.8 s, ABOVE this refused shape. An
+# admitted spelling out-measuring a refused shape is the model
+# working as stated — the walk weight bounds the cost CLASS
+# (bounded quadratic at the clamp), not a total ordering of
+# shapes. Baselines: ~0.1 s
+# for the common leading-literal hint ("memcpy.*len"), ~0.2 s for
+# the tail-free minimum-period span ("aab.*z"). The ceiling is PER
+# HINT EVALUATION: the recompute runs every bug-pattern hint
+# against each fold row, so a hostile model's pattern list
+# multiplies it by the list length — a 40-pattern list built
+# entirely from atom-varied admitted-worst shapes through ONE
+# ``domain_slice_hash`` call is bounded and LINEAR in list length,
+# not sub-second (each run tracks 40 x the concurrently measured
+# per-hint figure: the measured-worst pre-token family sampled
+# ~56 s at its ~1.4 s per-hint figure, the runner-up family's
+# recorded samples span ~45-75 s as host load varied, the
+# arithmetic-worst family ~36 s at its lower ~0.9 s per-hint
+# figure; the patterns-per-model cap that would bound the
+# multiplier is a deliberate non-goal here).
+# The single-hint ceiling is wall-clock-pinned with CI margin by
+# ``test_worst_admitted_shape_cost_bounded`` (which CONSTRUCTS the
+# three tying shapes — the measured-worst pre-token family, the
+# bar-free arithmetic maximum, and the post-token runner-up — from
+# the constants above, asserts each weight as arithmetic over
+# those constants, and pins all three through one real pipeline
+# call); the list-length multiplier stays prose (a 40x
+# admitted-worst wall test would dominate the battery);
+# ``test_hostile_pattern_list_slice_hash_bounded``
+# pins the other side — a 40-list of REFUSED shapes stays prompt.
+# Past the clamp the hint is evaluated as a plain substring over
+# the FULL source (linear two-way search — it does not share the
+# quadratic floor). The decision depends only on ``len(source)``:
+# deterministic, interpreter-independent.
+_MAX_REGEX_SOURCE_CHARS = 16384
+
+# Once-per-hint demotion log, bounded. A hostile model can mint
+# unlimited DISTINCT hostile hints, and the guard runs per function
+# x per bug pattern (prompt assembly AND every fold-row slice
+# recompute), so an unbounded seen-set — or per-call logging — hands
+# that model a memory / log-volume lever. Both directions: higher
+# keeps more distinct offenders operator-visible per process; lower
+# silences later distinct offenders sooner. The cap gates ONLY the
+# log line — the guard's refusal decision never depends on it. 64
+# covers every observed model's bug-pattern count (study emits tens
+# of patterns) with headroom. (The lru cache on the guard already
+# keeps repeat calls for a cached hint from re-reaching the logger;
+# this set is what keeps the dedupe across cache evictions, and the
+# cap is what bounds the set itself.)
+_MAX_DEMOTED_HINTS_LOGGED = 64
+_demoted_hints_logged: set[str] = set()
+
+# Log-excerpt bound for a demoted hint. Both directions: higher shows
+# more of a long offender per warning line; lower keeps the line
+# short. Hints reaching the log are already <= _MAX_GREP_HINT_CHARS
+# raw (the length gate refuses silently before any shape check), so
+# this only trims escape-expanded text. 120 keeps the whole warning
+# within a single conventional log line.
+_MAX_DEMOTED_HINT_EXCERPT_CHARS = 120
+
+# A trailing PARTIAL escape at the excerpt cut point: "\", "\x" or
+# "\u"/"\U" with fewer hex digits than escape_nonprintable emits
+# (\xHH, \uHHHH, \UHHHHHHHH — lowercase hex). A complete escape does
+# not match (the anchor requires end-of-string right after the short
+# hex run).
+_PARTIAL_ESCAPE_AT_CUT_RE = re.compile(
+    r"\\(?:x[0-9a-f]?|u[0-9a-f]{0,3}|U[0-9a-f]{0,7})?\Z",
+)
+
+
+def _log_hint_demotion(grep_hint: str) -> None:
+    """Warn once per distinct refused hint.
+
+    Repeat refusals of the same hint are silent (the first line
+    already names it), and distinct offenders beyond the cap drop to
+    debug — the fold recompute re-checks every hint per journal row,
+    so anything louder is a log flood on a single planted model.
+    Hint text is target-derived LLM output: escape before logging.
+    """
+    from core.security.log_sanitisation import escape_nonprintable
+
+    if grep_hint in _demoted_hints_logged:
+        return
+    if len(_demoted_hints_logged) >= _MAX_DEMOTED_HINTS_LOGGED:
+        logger.debug(
+            "domain-model grep hint demoted to substring matching "
+            "(demotion-log cap reached; hint not recorded)",
+        )
+        return
+    _demoted_hints_logged.add(grep_hint)
+    excerpt = escape_nonprintable(grep_hint)
+    if len(excerpt) > _MAX_DEMOTED_HINT_EXCERPT_CHARS:
+        # Cutting the ESCAPED text can split a \xHH / \uHHHH /
+        # \UHHHHHHHH sequence mid-escape; drop any trailing partial
+        # escape after the cut and mark the elision. (A printable
+        # literal that merely LOOKS like a partial escape at the cut
+        # point is over-trimmed — cosmetic, on an already-elided log
+        # excerpt.)
+        excerpt = _PARTIAL_ESCAPE_AT_CUT_RE.sub(
+            "", excerpt[:_MAX_DEMOTED_HINT_EXCERPT_CHARS],
+        ) + "…"
+    logger.warning(
+        "domain-model grep hint refused as a regex (super-linear "
+        "risk) — demoted to substring matching: %s",
+        excerpt,
+    )
+
+
+def _string_period(text: str) -> int:
+    """Smallest shift at which ``text`` overlaps itself.
+
+    ``len(text)`` when there is no proper self-overlap ("abc" -> 3),
+    smaller when there is ("abab" -> 2, "aaa" -> 1), 0 for the empty
+    string. Quadratic scan — fine at hint scale (the length cap runs
+    before any caller).
+    """
+    for shift in range(1, len(text) + 1):
+        if text[shift:] == text[: len(text) - shift]:
+            return shift
+    return 0
+
+
+def _hint_top_level_branches(grep_hint: str) -> list[str] | None:
+    """Split a hint on TOP-LEVEL alternation bars only.
+
+    A raw ``str.split("|")`` mis-attributed group-internal
+    alternation: "(a|aab).*z" donated the strong-prefix fragment
+    "aab).*z" to the period rule while the pattern's real single
+    branch has no literal prefix at all — flipping a refusal into an
+    admission (0.95 s in the measurement venue at
+    ``_HINT_QUANTIFIED_GROUP_RE``; exactly the density-1 class the
+    restart-density rule exists to refuse). Prepending a benign
+    literal branch or moving the alternation into a character class
+    rebuilds the same bypass around any narrower fix
+    ("aabX|(a|aab).*z" 0.72 s, "aab|[]|aab]*z" 1.7 s, "[q|aab]*z"
+    1.8 s — same venue), so the split itself must be
+    structure-aware: this scanner tracks ``\\``-escapes, group
+    depth, and character classes (including the leading
+    "]"-as-member rule) so a bar inside any of them never splits a
+    branch. One linear pass, no recursion, no compile probe — the
+    verdict stays deterministic and interpreter-independent.
+
+    Returns None when the scan sees unbalanced structure (a stray
+    ")" at depth 0, an unclosed group, or an unterminated class):
+    the caller refuses — fail toward the substring fallback, which
+    is also where ``re.error`` would send such a pattern had it been
+    compiled.
+    """
+    branches: list[str] = []
+    start = 0
+    depth = 0
+    in_class = False
+    class_body_start = -1
+    i = 0
+    n = len(grep_hint)
+    while i < n:
+        ch = grep_hint[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if in_class:
+            if ch == "]" and i != class_body_start:
+                in_class = False
+            i += 1
+            continue
+        if ch == "[":
+            in_class = True
+            class_body_start = i + 1
+            if grep_hint[class_body_start : class_body_start + 1] == "^":
+                class_body_start += 1
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth == 0:
+                return None
+            depth -= 1
+        elif ch == "|" and depth == 0:
+            branches.append(grep_hint[start:i])
+            start = i + 1
+        i += 1
+    if depth != 0 or in_class:
+        return None
+    branches.append(grep_hint[start:])
+    return branches
+
+
+def _hint_grouped_alternation_bars(grep_hint: str) -> int:
+    """Count alternation bars that sit INSIDE a group.
+
+    Same linear escape/class scan as ``_hint_top_level_branches`` —
+    a paren-depth-only count is bypassable (an escaped or
+    class-member ")" silently closes the depth, hiding every later
+    real bar behind it), so depth moves only on true group parens.
+    Escaped and class-member bars are literal members, not path
+    splits, and do not count. Unlike the splitter this never fails:
+    a stray ")" clamps at depth zero and unterminated structure
+    still yields a defined count — refusal on unbalance belongs to
+    the splitter, which runs only on repeat-bearing hints, so
+    repeat-free unbalanced goldens ("(frame_checksum") keep their
+    historical ADMIT (the truly malformed are ``re.error`` and
+    demote at compile regardless).
+    """
+    bars = 0
+    depth = 0
+    in_class = False
+    class_body_start = -1
+    i = 0
+    n = len(grep_hint)
+    while i < n:
+        ch = grep_hint[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if in_class:
+            if ch == "]" and i != class_body_start:
+                in_class = False
+            i += 1
+            continue
+        if ch == "[":
+            in_class = True
+            class_body_start = i + 1
+            if grep_hint[class_body_start : class_body_start + 1] == "^":
+                class_body_start += 1
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth > 0:
+                depth -= 1
+        elif ch == "|" and depth > 0:
+            bars += 1
+        i += 1
+    return bars
+
+
+def _hint_repeat_atom_chars(branch: str, token_start: int) -> int:
+    """Spelled length of the atom a repeat token at ``token_start`` repeats.
+
+    The branch splitter's escape/class scan, run forward up to the
+    token: a class atom spans from its true "[" opener to the "]"
+    that closes it (a nearest-"[" backward scan would let a
+    class-member "[" understate an escape-heavy spelling), an escape
+    atom spells 2, anything else 1 — and 0 when nothing precedes the
+    token (the period rule refuses such a branch regardless).
+    A multi-character escape ("\\x63") scans as the two-char escape
+    pair plus ordinary literals, so 2 is returned only when the
+    escape pair itself ends directly at the token ("\\D*"); a token
+    right after the trailing literals ("\\x63*") sees the last
+    literal and spells 1. Either way the repeated atom is a single
+    codepoint whose per-span-char test cost is a literal's — exactly
+    what the spelling bound exists to pin. A token that is itself a class
+    member never reaches a repeat semantically; whatever this
+    returns for it can only demote.
+    """
+    closed_class_start = -1
+    closed_class_end = -1
+    escape_end = -1
+    in_class = False
+    class_start = -1
+    class_body_start = -1
+    i = 0
+    while i < token_start:
+        ch = branch[i]
+        if ch == "\\":
+            escape_end = i + 1
+            i += 2
+            continue
+        if in_class:
+            if ch == "]" and i != class_body_start:
+                in_class = False
+                closed_class_start = class_start
+                closed_class_end = i
+            i += 1
+            continue
+        if ch == "[":
+            in_class = True
+            class_start = i
+            class_body_start = i + 1
+            if branch[class_body_start : class_body_start + 1] == "^":
+                class_body_start += 1
+        i += 1
+    if token_start == 0:
+        return 0
+    if closed_class_end == token_start - 1:
+        return token_start - closed_class_start
+    if escape_end == token_start - 1:
+        return 2
+    return 1
+
+
+def _hint_repeat_prefix_admissible(grep_hint: str) -> bool:
+    """Restart-density and per-backtrack-cost gate for unbounded repeats.
+
+    Every top-level alternation branch that carries an unbounded
+    repeat token must satisfy all three repeat-path bounds of the
+    cost model (stated in full at ``_MAX_REGEX_SOURCE_CHARS``):
+
+    * open with a literal run whose engine-folded period is at least
+      ``_MIN_HINT_PREFIX_PERIOD`` — the mandatory literal is what
+      keeps a failing search from restarting the span at every
+      source position (the model's n/p restart term);
+    * carry a continuation walk (character count of everything
+      after the token, weighted by the bars in the WHOLE branch) of
+      at most ``_MAX_HINT_REPEAT_CONTINUATION_WALK`` — the walk is
+      what each backtracked span position may cost across every
+      alternation path through the branch (the model's W factor,
+      which prices the grouped-bar path multiplier on either side
+      of the token; a long self-overlapping literal tail multiplies
+      the quadratic term ~linearly in its length — the constants
+      carry the measurements);
+    * spell the repeated atom in at most
+      ``_MAX_HINT_REPEAT_ATOM_CHARS`` characters — the atom's
+      spelling bounds the per-span-char test constant.
+
+    Branches come from the structure-aware top-level split
+    (``_hint_top_level_branches``): a branch here is a real
+    alternative of the whole pattern, so its leading literal run is
+    genuinely mandatory for any match through that branch — a raw
+    ``"|"`` split instead donated group-internal fragments whose
+    prefixes the engine never requires (the bypass documented on the
+    scanner). Unbalanced structure refuses (None from the scanner).
+    Hints with no unbounded repeat anywhere are exempt without any
+    structure scan, so alternations of plain literals — and
+    unbalanced parens in repeat-free hints — stay regexes, exactly
+    as before.
+    """
+    if _HINT_UNBOUNDED_REPEAT_RE.search(grep_hint) is None:
+        return True
+    branches = _hint_top_level_branches(grep_hint)
+    if branches is None:
+        return False
+    for branch in branches:
+        repeat = _HINT_UNBOUNDED_REPEAT_RE.search(branch)
+        if repeat is None:
+            # Includes the EMPTY top-level branch ("|aab.*w"): an
+            # empty alternative matches at every position, so every
+            # search through it succeeds immediately — safe by
+            # construction, nothing to bound.
+            continue
+        prefix_match = _HINT_LITERAL_PREFIX_RE.match(branch)
+        prefix = prefix_match.group() if prefix_match else ""
+        if _string_period(_engine_fold(prefix)) < _MIN_HINT_PREFIX_PERIOD:
+            return False
+        # Walk and atom are anchored on the FIRST unbounded-capable
+        # token: the repeat budget already caps the hint at one
+        # repeat token in total, so the first is the only live one
+        # (a second occurrence means the budget refused the hint
+        # before this gate ran).
+        continuation = branch[repeat.end():]
+        # Weighted by bars in the WHOLE branch, not just the
+        # continuation: a grouped bar BEFORE the token makes sre
+        # re-run the span AND its backtrack walk once per
+        # alternative, exactly like a bar after it — weighting only
+        # the continuation's own bars let the one admitted bar ride
+        # in front of a full-budget tail at bare weight, an
+        # unpriced 2x of its bar-free twin — the weight bounds the
+        # cost class, not a total ordering of shapes (figures at
+        # the constant). Raw
+        # count (asymmetry note at the constant): over-counts only,
+        # i.e. demote-only.
+        if (
+            (1 + branch.count("|")) * len(continuation)
+            > _MAX_HINT_REPEAT_CONTINUATION_WALK
+        ):
+            return False
+        if (
+            _hint_repeat_atom_chars(branch, repeat.start())
+            > _MAX_HINT_REPEAT_ATOM_CHARS
+        ):
+            return False
+    return True
+
 
 @lru_cache(maxsize=_PATTERN_CACHE_MAX)
 def _grep_hint_compilable(grep_hint: str) -> bool:
     """Whether an LLM-derived grep hint may be compiled as a regex.
 
     ``what_to_grep`` is LLM output derived from the untrusted target,
-    and it runs per-function over source text — a catastrophic-
-    backtracking pattern can pin a review worker for hours, and only
-    ``re.error`` was caught. Refused hints fall back to the plain
-    substring match (the same degradation already used for
-    non-compiling hints): fail toward less selection power, never
-    toward unbounded matching cost.
+    and it runs per-function over source text — at prompt assembly
+    AND per journal row in the gap fold's slice recompute
+    (``domain_slice_hash`` → ``domain_bug_patterns``) — so a
+    catastrophic-backtracking pattern can pin a review worker or the
+    whole fold, and only ``re.error`` was caught originally.
+    Refusal layers: the length cap, the shared ``looks_redos``
+    shapes, the wider super-linear shape scan
+    (``_HINT_SUPERLINEAR_RE``), the body-blind quantified-group
+    refusal (``_HINT_QUANTIFIED_GROUP_RE``), the backreference
+    refusal (``_HINT_BACKREF_RE`` — one repeat token, no quantified
+    group, still super-linear), the repeat budget
+    (``_MAX_GREP_HINT_REPEATS``) for the ungrouped chains no shape
+    rule can see, the grouped-alternation bar budget
+    (``_MAX_HINT_GROUPED_ALTERNATION_BARS``) that caps one match
+    attempt's path count (the repeat-free alternation stack is
+    exponential with ZERO repeat tokens — invisible to every
+    repeat-anchored rule), and the restart-density gate
+    (``_hint_repeat_prefix_admissible``) requiring a low-self-overlap
+    literal prefix — under the engine's own IGNORECASE character
+    equivalence, per TRUE top-level alternation branch — in front of
+    any unbounded repeat, plus a bounded continuation walk and span-
+    atom spelling behind it: the shapes the other rules admit are
+    quadratic on a failing search; the prefix bounds how OFTEN the
+    engine restarts the span, the walk and atom bound what each
+    backtracked position may COST, and the source clamp bounds each
+    restart (the full cost model is stated at
+    ``_MAX_REGEX_SOURCE_CHARS``). Refused hints fall back to the plain substring
+    match (the same degradation already used for non-compiling
+    hints): fail toward less selection power, never toward unbounded
+    matching cost. Dangerous-shape refusals log a demotion
+    (``_log_hint_demotion``); the length-cap refusal stays silent as
+    before (long literal phrases are a producer-verbosity signal,
+    not a hostility signal). Refusal is shape-based only — no
+    compile probe — so the decision AND the log line are identical
+    on every supported interpreter.
 
-    Cached (pure function of the hint): the ReDoS-shape scan re-ran
-    for every hint on every function scored.
+    Cached (pure function of the hint): the shape scans re-ran for
+    every hint on every function scored. The cache means the
+    demotion log fires on cache MISSES only — correct for the log's
+    once-per-distinct-hint contract — and neither the decision nor
+    its slice-hash consumers ever depend on cache state.
     """
     from core.security.prompt_input_preflight import looks_redos
 
-    return (
-        len(grep_hint) <= _MAX_GREP_HINT_CHARS
-        and not looks_redos(grep_hint)
-    )
+    if len(grep_hint) > _MAX_GREP_HINT_CHARS:
+        return False
+    if (
+        looks_redos(grep_hint)
+        or _HINT_SUPERLINEAR_RE.search(grep_hint) is not None
+        or _HINT_QUANTIFIED_GROUP_RE.search(grep_hint) is not None
+        or _HINT_BACKREF_RE.search(grep_hint) is not None
+        or len(_HINT_REPEAT_TOKEN_RE.findall(grep_hint))
+        > _MAX_GREP_HINT_REPEATS
+        or _hint_grouped_alternation_bars(grep_hint)
+        > _MAX_HINT_GROUPED_ALTERNATION_BARS
+        or not _hint_repeat_prefix_admissible(grep_hint)
+    ):
+        # Deliberately NOT compile-gated: whether a refused shape
+        # would even have compiled is Python-version-dependent
+        # ("sg++" is re.error on 3.10 but a possessive quantifier on
+        # 3.11+), and the guard's observable behaviour must not vary
+        # by interpreter. Every dangerous-shape refusal logs.
+        _log_hint_demotion(grep_hint)
+        return False
+    return True
 
 
 @lru_cache(maxsize=_PATTERN_CACHE_MAX)
@@ -689,13 +1585,22 @@ def domain_bug_patterns(
         hit = False
         grep_hint = (bp.get("what_to_grep") or "").strip()
         if source and grep_hint:
+            # The guard runs FIRST so a dangerous shape logs its
+            # demotion regardless of source size; the source clamp
+            # then bounds what the admitted shapes may cost (both
+            # rationales at the constants).
             pattern = (
                 _grep_hint_pattern(grep_hint)
-                if _grep_hint_compilable(grep_hint) else None
+                if (
+                    _grep_hint_compilable(grep_hint)
+                    and len(source) <= _MAX_REGEX_SOURCE_CHARS
+                )
+                else None
             )
             if pattern is None:
-                # Refused (length/ReDoS shape) or non-compiling hint:
-                # the plain substring fallback, exactly as before.
+                # Refused (shape/length/source-clamp) or
+                # non-compiling hint: the plain substring fallback,
+                # exactly as before.
                 hit = grep_hint.lower() in source.lower()
             else:
                 hit = pattern.search(source) is not None
