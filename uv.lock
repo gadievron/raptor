@@ -2891,7 +2891,6 @@ requires-dist = [
     { name = "requests", specifier = "==2.34.2" },
     { name = "sage-agent-sdk", marker = "extra == 'sage'", specifier = "==11.17.11" },
     { name = "tabulate", specifier = "==0.10.0" },
-    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'tomli'", specifier = "==2.4.1" },
     { name = "tree-sitter", marker = "extra == 'grammars'", specifier = "==0.25.2" },
     { name = "tree-sitter-c", marker = "extra == 'grammars'", specifier = "==0.24.2" },
     { name = "tree-sitter-c-sharp", marker = "extra == 'grammars'", specifier = "==0.23.5" },
@@ -2912,7 +2911,7 @@ requires-dist = [
     { name = "urllib3", specifier = "==2.7.0" },
     { name = "z3-solver", marker = "extra == 'smt'", specifier = ">=4.13.0.0,<4.15.5.0" },
 ]
-provides-extras = ["anthropic", "google", "bedrock", "llm", "web", "smt", "binary", "sage", "grammars", "h2", "cvss", "orjson", "r2pipe", "pyghidra", "frida", "jsonschema", "tomli"]
+provides-extras = ["anthropic", "google", "bedrock", "llm", "web", "smt", "binary", "sage", "grammars", "h2", "cvss", "orjson", "r2pipe", "pyghidra", "frida", "jsonschema"]
 
 [package.metadata.requires-dev]
 dev = [

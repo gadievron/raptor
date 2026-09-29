@@ -79,7 +79,6 @@ r2pipe = ["r2pipe==1.9.8"]
 pyghidra = ["pyghidra==3.1.0"]
 frida = ["frida==16.7.19"]
 jsonschema = ["jsonschema==4.23.0"]
-tomli = ["tomli==2.4.1; python_version<'3.11'"]
 
 [project.urls]
 Homepage = "https://github.com/gadievron/raptor"

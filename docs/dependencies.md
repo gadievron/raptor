@@ -78,7 +78,6 @@ Pinned versions are in `requirements.txt`. Install with
 | sage-agent-sdk | -- | SAGE persistent memory (see [sage.md](sage.md)) |
 | httpx | BSD | HTTP client used by the SAGE SDK (installed alongside it) |
 | h2 | MIT | HTTP/2 for pooled LLM transports (opt-in via `RAPTOR_HTTP2=1`; see [llm.md](llm.md)) |
-| tomli | MIT | TOML reader on Python <3.11 (stdlib `tomllib` from 3.11+) |
 
 
 ## Licensing

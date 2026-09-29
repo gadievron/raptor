@@ -78,9 +78,8 @@ DIST_TO_MODULES = {
 # Optional-group packages guaranteed present in the default environment
 # anyway, so an unguarded test import cannot fail there:
 #   openai — hard requirement of the pinned ``instructor``;
-#   httpx  — hard requirement of the openai SDK;
-#   tomli  — stdlib ``tomllib`` from Python 3.11 (CI runs newer).
-TRANSITIVE_PRESENT = {"openai", "httpx", "tomli"}
+#   httpx  — hard requirement of the openai SDK.
+TRANSITIVE_PRESENT = {"openai", "httpx"}
 
 _DIST_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)")
 

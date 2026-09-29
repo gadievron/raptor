@@ -143,7 +143,5 @@ pyelftools==0.33
 # sage-agent-sdk==11.17.11
 # httpx==0.28.1
 
-# SCA hard deps (defusedxml, packaging, pyyaml) are pinned above. The
-# only remaining optional one:
-#   - tomli      : TOML reader on Python <3.11 (stdlib `tomllib` from 3.11+)
-# tomli==2.4.1; python_version<"3.11"
+# SCA hard deps (defusedxml, packaging, pyyaml) are pinned above; TOML
+# parsing rides the stdlib `tomllib` (the Python floor is 3.12).
