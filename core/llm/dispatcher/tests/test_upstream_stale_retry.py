@@ -30,6 +30,16 @@ from core.llm.dispatcher.server import (
 )
 from core.llm.tests.mock_upstream import MockUpstream
 
+# Idle threshold for the captive half-open upstream; tests sleep
+# 3x this to guarantee the condemnation fired before the reuse (the
+# mock's timer is a socket timeout — precise — so the margin only
+# has to absorb its handler thread's wakeup lag under -n auto load).
+# Both directions: TOO LOW and the threshold can fire inside a
+# healthy request's own connect-to-first-write gap (condemning the
+# connection mid-handshake instead of between requests); TOO HIGH
+# just re-inserts wall-clock idle time on every half-open test.
+_IDLE_S = 0.15
+
 
 @pytest.fixture
 def fake_creds():
@@ -129,7 +139,7 @@ class TestUpstreamStaleRetry:
         dispatcher: the worker sees two clean 200s, the audit records
         a ``request.retry`` and — the pre-fix burst shape — NO
         ``request.error``."""
-        upstream = MockUpstream("half-open", idle_s=0.4)
+        upstream = MockUpstream("half-open", idle_s=_IDLE_S)
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
             token = _worker_token(d)
@@ -138,7 +148,7 @@ class TestUpstreamStaleRetry:
             # Idle past the far side's threshold: the pooled upstream
             # connection is now condemned but polls unreadable, so
             # only the next write can discover it.
-            time.sleep(0.9)
+            time.sleep(_IDLE_S * 3)
             second = _post(d, token)
             assert second.status_code == 200
             retries = _wait_audit(d, "request.retry")
@@ -197,10 +207,13 @@ class TestUpstreamStaleRetry:
         request and plausibly spent the dwell handling it — billable
         work, and a SigV4 signature aging all the while) must not be
         re-sent. Ordinary 502, zero retries, single upstream send."""
+        # Death at 4x the ceiling (same ratio as the original 0.8s at
+        # a 0.2s ceiling); load only ever widens the measured elapsed,
+        # which is the direction this test asserts.
         monkeypatch.setenv(
-            "RAPTOR_LLM_DISPATCHER_STALE_RETRY_CEILING_S", "0.2",
+            "RAPTOR_LLM_DISPATCHER_STALE_RETRY_CEILING_S", "0.1",
         )
-        upstream = MockUpstream("no-response-close", response_delay_s=0.8)
+        upstream = MockUpstream("no-response-close", response_delay_s=0.4)
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
             token = _worker_token(d)
@@ -225,12 +238,12 @@ class TestUpstreamStaleRetry:
         the same read-class shapes ``_STALE_REUSE_ERRORS`` names.
         Version-dependent behaviour: this pins that a large-body
         stale death still lands in the retryable set."""
-        upstream = MockUpstream("half-open", idle_s=0.4)
+        upstream = MockUpstream("half-open", idle_s=_IDLE_S)
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
             token = _worker_token(d)
             assert _post(d, token, body_bytes=262144).status_code == 200
-            time.sleep(0.9)
+            time.sleep(_IDLE_S * 3)
             assert _post(d, token, body_bytes=262144).status_code == 200
             assert _wait_audit(d, "request.retry")
             assert not _audit_events(d, "request.error")
@@ -390,8 +403,11 @@ class TestStaleRetryShardEvidence:
             assert _post(d, token).status_code == 200  # strike one again
 
             # A lagging release is the only async step; give it a
-            # beat, then pin that no drain happened.
-            time.sleep(0.5)
+            # beat, then pin that no drain happened. The beat only
+            # has to outlast the relay thread's own release path
+            # (in-process, no polling loop involved) — a longer wait
+            # buys no extra confidence for this negative assertion.
+            time.sleep(0.25)
             assert self._sole_shard_client(d) is pooled
             assert not pooled.is_closed
             assert len(_audit_events(d, "request.retry")) == 2
@@ -433,8 +449,9 @@ class TestStaleRetryShardEvidence:
             assert _wait_audit(d, "request.retry")
             # A lagging release is the only async step; give it a
             # beat, then pin: exactly one strike from this relay, so
-            # no drain at threshold 2.
-            time.sleep(0.5)
+            # no drain at threshold 2. Same bound as above: the beat
+            # only outlasts the in-process release path.
+            time.sleep(0.25)
             assert self._sole_shard_client(d) is pooled, (
                 "double strike: one relay drained the shard at threshold 2"
             )

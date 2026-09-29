@@ -183,12 +183,17 @@ class TestErrorRowProvenance:
         """request.retry shares the writer and the shape: a stale-reuse
         retry is pre-response by construction and fires within the
         retry ceiling of the send."""
-        upstream = MockUpstream("half-open", idle_s=0.4)
+        # 3x the idle threshold guarantees the mock's condemnation
+        # (a precise socket timeout) fired before the reuse; the
+        # threshold itself only has to exceed a healthy request's
+        # connect-to-first-write gap so it never fires mid-handshake.
+        idle_s = 0.15
+        upstream = MockUpstream("half-open", idle_s=idle_s)
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
             token = _worker_token(d)
             assert _post(d, token).status_code == 200
-            time.sleep(0.9)  # idle the pooled connection past teardown
+            time.sleep(idle_s * 3)  # idle the pooled connection past teardown
             assert _post(d, token).status_code == 200
             rows = _wait_audit(d, "request.retry")
             assert rows
