@@ -62,6 +62,42 @@ requires_mount = pytest.mark.skipif(
 )
 
 
+def pid1_userns_owner_is_invoker() -> bool:
+    """True when pid 1's user namespace is OWNED by the invoking uid —
+    i.e. this process runs inside a self-owned nested user namespace
+    (test container, pid-namespaced battery) whose init is our own
+    process tree, not the root-owned system init.
+
+    Tests that use pid 1 as their FOREIGN-namespace refusal subject
+    cannot construct that posture here: the ownership check they
+    expect to refuse legitimately accepts a namespace the invoker
+    owns. Lazy (call it inside the test), so no probe cost rides
+    module import.
+
+    Mirrors the gidmap helper's own check: ``NS_GET_OWNER_UID`` on
+    ``/proc/1/ns/user``. On a normal host an unprivileged process
+    cannot even open pid 1's ns/user — that open refusal IS the
+    foreign-namespace posture, so any OSError reports False.
+    """
+    import array
+    import fcntl
+    import os
+
+    ns_get_owner_uid = 0xB704  # _IO(0xb7, 0x4) — linux/nsfs.h
+    try:
+        fd = os.open("/proc/1/ns/user", os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        owner = array.array("I", [0])
+        fcntl.ioctl(fd, ns_get_owner_uid, owner, True)
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+    return owner[0] == os.getuid()
+
+
 def _network_block_enforceable() -> bool:
     # sandbox()'s default profile requests block_network=True, which is
     # fail-closed: with no namespace backend (userns) AND no Landlock

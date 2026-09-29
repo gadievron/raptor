@@ -23,8 +23,20 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+
+#if defined(__has_include)
+# if __has_include(<linux/nsfs.h>)
+#  include <linux/nsfs.h>
+# endif
+#endif
+#ifndef NS_GET_OWNER_UID
+/* From <linux/nsfs.h> (kernel >= 4.11, guaranteed on supported hosts):
+ * returns the owner uid of a user namespace fd. */
+# define NS_GET_OWNER_UID _IO(0xb7, 0x4)
+#endif
 
 #include "helpers_validate.h"
 
@@ -527,6 +539,26 @@ static void test_mapping_args(void) {
 /* raptor-gidmap-allow: check_ns_owner                                  */
 /* ------------------------------------------------------------------ */
 
+/* Independent nested-userns posture probe for the pid-1 case below.
+ * Deliberately does NOT call check_ns_owner_at — that is the function
+ * under test, and gating a skip on its own return value would let a
+ * regression in the product check masquerade as the skip posture. On
+ * a normal host an unprivileged open of /proc/1/ns/user is refused
+ * (EACCES): that refusal IS the foreign, root-owned posture, so any
+ * error here reports "not invoker-owned" and the refusal case runs. */
+static int pid1_userns_owned_by_invoker(void) {
+    int fd = open("/proc/1/ns/user", O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return 0;
+    uid_t owner = (uid_t)-1;
+    int rc = ioctl(fd, NS_GET_OWNER_UID, &owner);
+    close(fd);
+    if (rc != 0)
+        return 0;
+    return owner == getuid();
+}
+
+
 static void test_ns_owner(void) {
     char err[512];
 
@@ -593,9 +625,28 @@ static void test_ns_owner(void) {
     if (getuid() != 0) {
         /* pid 1 lives in the init user namespace (owned by root); an
          * unprivileged invoker is refused either at the ns/user open()
-         * or at the owner comparison. */
+         * or at the owner comparison. Inside a nested user namespace
+         * (test container / pid-namespaced runner) pid 1 is instead
+         * the runner's own init, so the foreign-owner posture cannot
+         * be constructed against it. That posture is decided by the
+         * INDEPENDENT probe above — never by the product check's own
+         * return value, which is exactly what this case pins. */
         int init_fd = open_proc_pid_dir(1, err, sizeof err);
-        if (init_fd >= 0) {
+        if (pid1_userns_owned_by_invoker()) {
+            /* Nested: the check's documented contract for a
+             * self-owned namespace is acceptance — pin that. The
+             * owner-differs refusal itself stays pinned above with a
+             * synthetic uid. */
+            if (init_fd >= 0) {
+                CHECK(check_ns_owner_at(init_fd, 1, getuid(), err,
+                                        sizeof err) == 0,
+                      "accepts pid 1 (invoker-owned nested user "
+                      "namespace)");
+                close(init_fd);
+            }
+            printf("skip pid-1 foreign-ns refusal case (pid 1's user "
+                   "namespace is owned by the invoker)\n");
+        } else if (init_fd >= 0) {
             CHECK(check_ns_owner_at(init_fd, 1, getuid(), err,
                                     sizeof err) != 0,
                   "refuses pid 1 (init user namespace)");

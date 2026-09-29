@@ -548,6 +548,16 @@ class TestGidmapAllowContract:
         # pid 1 lives in the init user namespace (owned by root): the
         # ownership check refuses it either at open() or at the owner
         # comparison, even with otherwise-valid mapping arguments.
+        from core.sandbox.tests.capability import (
+            pid1_userns_owner_is_invoker,
+        )
+        if pid1_userns_owner_is_invoker():
+            pytest.skip(
+                "pid 1's user namespace is owned by the invoker "
+                "(nested user namespace — pid 1 is our own init, not "
+                "the root-owned system init): the foreign-namespace "
+                "refusal posture cannot be constructed here"
+            )
         r = _run([
             str(built / "raptor-gidmap-allow"),
             "1", "0", str(os.getgid()), "1",
