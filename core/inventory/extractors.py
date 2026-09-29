@@ -2108,6 +2108,29 @@ class GenericExtractor:
         r'\b\w+\s+(\w+)\s*\([^)]{0,1000}\)\s*\{',
     ]
 
+    # Allman-brace variant of PATTERNS[1]: C# convention (and common
+    # C-family style in the `.inc` lane) puts the opening brace on
+    # the line BELOW the signature, so the same-line ``\)\s*\{`` tail
+    # never sees it — a grammar-less host extracted ZERO methods from
+    # idiomatic C#. This head matches a signature that ENDS at the
+    # ``)`` (horizontal whitespace only — a trailing ``;``/``=>``
+    # body stays out), and ``extract`` confirms the next non-blank
+    # line opens a brace block before minting an item. The negative
+    # lookahead on the type token keeps expression heads out:
+    # ``= new Foo(...)`` object initialisers and ``return Foo(...)``
+    # calls are the two shapes that otherwise satisfy
+    # "word word ( ... )" at end of line with a ``{`` below.
+    _ALLMAN_HEAD: ClassVar[re.Pattern] = re.compile(
+        r'(?:(?:public|private|protected)\s+)?(?:static\s+)?'
+        r'\b(?!new\b|return\b|throw\b|await\b|yield\b|case\b)'
+        r'\w+[ \t]+(\w+)[ \t]*\([^)]{0,1000}\)[ \t]*$',
+    )
+
+    # Blank lines tolerated between an Allman signature and its
+    # opening brace. Real style puts the brace directly below; the
+    # allowance is for stray whitespace, not for scanning far ahead.
+    _ALLMAN_BRACE_LOOKAHEAD = 2
+
     # Same per-line bound as the JS extractor (which shares the
     # brace-and-paren pattern shape): real source lines routed to the
     # generic fallback are far shorter, and an unbounded line lets a
@@ -2142,9 +2165,11 @@ class GenericExtractor:
         functions = []
         seen = set()
 
-        for i, line in enumerate(content.split('\n'), 1):  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
+        lines = content.split('\n')  # line-model: byte-decoded inventory content; per-line matchers are prefix-anchored or strip()-normalised
+        for i, line in enumerate(lines, 1):
             if len(line) > self._MAX_LINE:
                 continue
+            matched = False
             for pattern in self.PATTERNS:
                 match = re.search(pattern, line)
                 if match:
@@ -2154,7 +2179,24 @@ class GenericExtractor:
                     if name not in seen:
                         functions.append(FunctionInfo(name=name, line_start=i))
                         seen.add(name)
+                    matched = True
                     break
+            if matched:
+                continue
+            match = self._ALLMAN_HEAD.search(line)
+            if not match:
+                continue
+            name = match.group(1)
+            if name in self._CONTROL_FLOW_NAMES or name in seen:
+                continue
+            # Signature only counts when a brace block opens below it.
+            j = i  # 0-based index of the line after the signature
+            stop = min(len(lines), i + 1 + self._ALLMAN_BRACE_LOOKAHEAD)
+            while j < stop and not lines[j].strip():
+                j += 1
+            if j < len(lines) and lines[j].lstrip().startswith('{'):
+                functions.append(FunctionInfo(name=name, line_start=i))
+                seen.add(name)
 
         return functions
 

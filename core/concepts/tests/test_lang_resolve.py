@@ -779,12 +779,10 @@ class Decoder
 
     @requires_ts("csharp")
     def test_method_with_doc_comment(self, tree: Path) -> None:
-        # C# methods carry no leading keyword the generic regex
-        # extractor keys on, so an Allman-style method (this fixture)
-        # resolves only on the grammar tier — K&R-style methods still
-        # match GenericExtractor's `type name(...) {` shape (unlike
-        # the Kotlin/Swift twins, which resolve in both styles via
-        # their `fun`/`func` keywords).
+        # Method NAMES resolve on both tiers (GenericExtractor covers
+        # the same-line-brace shape and the Allman head this fixture
+        # uses); the doc-comment extraction asserted here is what the
+        # grammar tier adds.
         res = resolve_identifiers(tree, ["DecodeFrame"])
         assert len(res.items) == 1
         it = res.items[0]
@@ -843,20 +841,21 @@ class Decoder
         self, tree: Path, monkeypatch,
     ) -> None:
         # Without tree_sitter_c_sharp the type/constant regex passes
-        # still resolve, and the Allman-style method comes back
-        # unresolved WITH a reason — never a crash, never a guessed
-        # definition. (A K&R-style method would still resolve via
-        # GenericExtractor; the boundary is brace-style-dependent.)
+        # still resolve, and methods resolve in BOTH brace styles —
+        # the same-line `type name(...) {` shape and the Allman head
+        # with the brace on the line below (this fixture). Where the
+        # fallback genuinely has no answer, degradation stays honest:
+        # a missing identifier comes back unresolved WITH a reason —
+        # never a crash, never a guessed definition.
         import core.inventory.extractors as ex
         monkeypatch.setattr(ex, "_TS_AVAILABLE", False)
         res = resolve_identifiers(
-            tree, ["UserStore", "MaxRetries", "DecodeFrame"],
+            tree,
+            ["UserStore", "MaxRetries", "DecodeFrame", "GhostHelper"],
         )
         names = {it.name for it in res.items}
-        assert "UserStore" in names
-        assert "MaxRetries" in names
-        assert "DecodeFrame" not in names
-        assert [u["name"] for u in res.unresolved] == ["DecodeFrame"]
+        assert {"UserStore", "MaxRetries", "DecodeFrame"} <= names
+        assert [u["name"] for u in res.unresolved] == ["GhostHelper"]
         assert res.unresolved[0]["reason"]
 
     def test_grammar_absence_knr_method_still_resolves(
