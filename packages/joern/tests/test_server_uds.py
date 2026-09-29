@@ -297,7 +297,8 @@ class TestMakeUdsDir:
         d = server_mod._make_uds_dir()
         try:
             sock = os.path.join(d, "joern.sock")
-            assert len(sock) <= server_mod._SUN_PATH_MAX_SAFE
+            # Bytes, not characters: sun_path caps the fsencoded form.
+            assert len(os.fsencode(sock)) <= server_mod._SUN_PATH_MAX_SAFE
             assert d.startswith("/tmp/")
         finally:
             os.rmdir(d)

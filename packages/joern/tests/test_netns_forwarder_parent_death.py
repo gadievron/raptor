@@ -120,7 +120,7 @@ class _EchoOnce:
 
 @pytest.fixture
 def uds_stack(monkeypatch):
-    # Short private root: AF_UNIX paths cap at ~108 chars and a nested
+    # Short private root: AF_UNIX paths cap at ~108 bytes and a nested
     # pytest basetemp blows past it (same workaround as the sibling
     # forwarder tests).
     import shutil
