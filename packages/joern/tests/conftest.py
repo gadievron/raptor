@@ -18,6 +18,16 @@ process on the host each time the file ran. The product guards now
 refuse pgid ≤ 1, but the suite must never rely on them: any offender
 is defused in place (so its eventual finalizer is a no-op even on a
 regressed tree) and the test that built it fails by name.
+
+The same sweep silently defuses every leaked server whose ``_proc``
+is a test double rather than a real ``subprocess.Popen``. Doubles
+routinely outlive their test inside reference cycles (a MagicMock
+proc alone is one), so their destruction waits for the cyclic
+collector — which can run inside a LATER test's ``patch`` window,
+where the deferred ``__del__ -> stop()`` replays against that test's
+mocks (a phantom ``_ensure_group_dead`` call was the observed shape).
+Real-process handles keep their finalizer: for those, GC-time
+``stop()`` is live cleanup, not replay.
 """
 
 from __future__ import annotations
@@ -25,6 +35,7 @@ from __future__ import annotations
 import gc
 import os
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Iterator
@@ -124,6 +135,13 @@ def _no_sentinel_server_handles(request: pytest.FixtureRequest) -> Iterator[None
             )
             # Defuse BEFORE failing: the finalizer early-returns on a
             # None _proc, so this handle can never signal anything.
+            obj._proc = None
+            obj._pgid = None
+        elif proc is not None and not isinstance(proc, subprocess.Popen):
+            # Double-backed leak: its deferred __del__ -> stop() would
+            # replay against a later test's patched mocks (see module
+            # docstring). Defuse silently — stopping a double at GC
+            # time cleans up nothing real by definition.
             obj._proc = None
             obj._pgid = None
     if offenders:
