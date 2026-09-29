@@ -433,3 +433,82 @@ class TestSocketPathBudget:
                 d.shutdown()
         finally:
             _tempfile.tempdir = None
+
+    def test_surrogate_tmpdir_falls_back_instead_of_crashing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        """A TMPDIR carrying undecodable bytes reaches Python as a
+        surrogate-escaped str. The socket-path budget check must
+        MEASURE it (os.fsencode round-trips the escapes, one byte
+        each) rather than crash: bare str.encode() raised
+        UnicodeEncodeError at construction — before the /tmp fallback
+        this check exists to trigger could rescue the path."""
+        import os
+        import tempfile as _tempfile
+
+        from core.llm.dispatcher.auth import CredentialStore
+        from core.llm.dispatcher.server import LLMDispatcher
+
+        creds = CredentialStore.__new__(CredentialStore)
+        creds._keys = {}
+
+        # Real undecodable byte in a real dir; padded well past the
+        # byte budget so the /tmp fallback MUST divert.
+        bad = os.fsencode(tmp_path) + b"/srg-\xff-" + b"x" * 64
+        os.mkdir(bad)
+        bad_str = os.fsdecode(bad)
+        assert "\udcff" in bad_str  # the hazard is live on this fs
+        monkeypatch.setenv("TMPDIR", bad_str)
+        monkeypatch.setattr(_tempfile, "tempdir", None)
+
+        d = LLMDispatcher(
+            run_id="srg-tmpdir-e2e",
+            creds=creds,
+            audit_path=tmp_path / "audit.jsonl",
+        )
+        try:
+            assert d.socket_path.exists()
+            assert not str(d._sock_dir).startswith(bad_str)
+            assert len(os.fsencode(d.child_socket_path)) <= 104
+        finally:
+            d.shutdown()
+
+    def test_surrogate_tmpdir_within_budget_stays(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        """Two-direction pin for the byte measurement: a
+        surrogate-escaped root that FITS the budget is used as-is —
+        no needless /tmp diversion — and the socket still binds."""
+        import os
+        import shutil
+        import tempfile as _tempfile
+
+        from core.llm.dispatcher.auth import CredentialStore
+        from core.llm.dispatcher.server import LLMDispatcher
+
+        creds = CredentialStore.__new__(CredentialStore)
+        creds._keys = {}
+
+        # Anchor at /tmp (not tmp_path) to keep the fsencoded socket
+        # path safely under the budget on deep-scratch hosts.
+        host = _tempfile.mkdtemp(prefix="rl-srg-", dir="/tmp")
+        try:
+            bad = os.fsencode(host) + b"/s\xff"
+            os.mkdir(bad)
+            bad_str = os.fsdecode(bad)
+            assert "\udcff" in bad_str
+            monkeypatch.setenv("TMPDIR", bad_str)
+            monkeypatch.setattr(_tempfile, "tempdir", None)
+
+            d = LLMDispatcher(
+                run_id="srg",
+                creds=creds,
+                audit_path=tmp_path / "audit.jsonl",
+            )
+            try:
+                assert d.socket_path.exists()
+                assert str(d._sock_dir).startswith(bad_str)
+            finally:
+                d.shutdown()
+        finally:
+            shutil.rmtree(host, ignore_errors=True)

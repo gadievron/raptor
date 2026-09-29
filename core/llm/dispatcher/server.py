@@ -1177,6 +1177,16 @@ _UPSTREAM_STATE_PRE = "pre-response"
 # under it, so one dead-owner sweep covers the whole family.
 _SOCK_DIR_SWEEP_PREFIX = "raptor-llm-"
 
+# Socket-path budget, in BYTES of the fsencoded path — the unit the
+# kernel compares against sun_path (108 bytes on Linux including the
+# trailing NUL; 104 on the BSD family). 100 keeps headroom under the
+# tightest common cap. Higher (toward 107) admits dirs whose sockets
+# fail bind() on smaller-sun_path platforms; lower diverts to the
+# system-global /tmp fallback needlessly, abandoning the caller's
+# TMPDIR containment. Measured against "llm-child.sock" — the longest
+# socket name in the dir — so the budget covers its siblings too.
+_SUN_PATH_BUDGET = 100
+
 
 @dataclass
 class _TokenRecord:
@@ -1488,7 +1498,12 @@ class LLMDispatcher:
         sweep_dead_owner_dirs(_SOCK_DIR_SWEEP_PREFIX)
         _sock_prefix = f"raptor-llm-{run_id[:40]}-"
         sock_dir = Path(tempfile.mkdtemp(prefix=_sock_prefix))
-        if len(str(sock_dir / "llm-child.sock").encode()) > 100:
+        # os.fsencode, not str.encode(): the budget is in bytes as the
+        # kernel sees them, and an undecodable TMPDIR reaches Python
+        # as surrogate-escaped str — bare .encode() raised
+        # UnicodeEncodeError here, killing construction before this
+        # very fallback could rescue the path.
+        if len(os.fsencode(sock_dir / "llm-child.sock")) > _SUN_PATH_BUDGET:
             fallback = Path(tempfile.mkdtemp(prefix=_sock_prefix, dir="/tmp"))
             with contextlib.suppress(OSError):
                 os.rmdir(sock_dir)
