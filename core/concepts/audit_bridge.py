@@ -1914,12 +1914,6 @@ def _model_content_canonical(model: dict[str, Any]) -> str:
     return dumps_canonical(model)
 
 
-def _model_content_digest(model: dict[str, Any]) -> str:
-    """Canonical content identity of a parsed domain model."""
-    return hashlib.sha256(
-        _model_content_canonical(model).encode("utf-8")).hexdigest()
-
-
 def _slice_memo_for(model: dict[str, Any]) -> _DomainSliceMemo:
     """The shared slice memo for *model*'s current content.
 
