@@ -134,6 +134,11 @@ def _track_server_handles() -> Iterator[None]:
     visibility without extending any handle's lifetime — a handle
     collected mid-test already ran its finalizer inside that test's
     own patch window, which is the pre-sweep status quo.
+
+    Visibility boundary: a double constructed at module IMPORT time
+    (collection runs before this session fixture installs the hook)
+    never joins the set and escapes the sweep. Build doubles inside
+    test bodies or fixtures only.
     """
     def tracking_new(cls: type, *args: object, **kwargs: object) -> JoernServer:
         obj = object.__new__(cls)
