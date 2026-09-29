@@ -108,6 +108,14 @@ class TestCoccinelleAdapterTruth:
 
 @needs_semgrep
 class TestSynthesisEndToEndTruth:
+    @pytest.mark.slow  # genuinely heavy: synthesise_and_run drives
+    # several REAL serial semgrep invocations (validate + control
+    # runs, plus the probe), each paying ~1s+ of engine startup that
+    # cannot be batched — the seriality IS the pipeline under test.
+    # The fail-closed contract (invalid rule body → errors, never a
+    # library-tier rule) keeps default-tier coverage through the
+    # stub-engine tests in test_synthesise.py; this end-to-end run
+    # with the real engine lands in the nightly tier.
     def test_llm_invalid_rule_never_reaches_library(self, tmp_path):
         """End-to-end: an LLM that emits a schema-invalid rule body must
         produce engine errors on the control runs and no library-tier
