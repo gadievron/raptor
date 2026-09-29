@@ -27,6 +27,10 @@ core/analysis/tests/fixtures/*.o
 core/analysis/tests/fixtures/demo
 
 # Runtime artifacts
+# Joern's importCpg materialises a workspace/ under the JVM's cwd; a
+# query launched with cwd at the repo root drops one here. Root-anchored
+# so a legitimate nested workspace/ source dir (none today) stays visible.
+/workspace/
 codeql_dbs/
 engine/semgrep/rules/registry-cache/c.p.*.json
 # Build-ID binary cache (core/audit/build_id_cache.py; default lives at
