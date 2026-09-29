@@ -11,8 +11,9 @@ must measure ``len(os.fsencode(...))``:
   ``str``.
 
 This module covers the ``_af_unix_safe_tmp`` re-rooting fixture in
-this directory's conftest; the runtime side (``LLMDispatcher``'s own
-/tmp fallback) is pinned in
+this directory's conftest plus the exact-value boundary of the
+runtime budget (``test_sun_path_budget_exact_value``); the rest of
+the runtime side (``LLMDispatcher``'s own /tmp fallback) is pinned in
 ``test_lifecycle.py::TestSocketPathBudget``.
 """
 
@@ -21,6 +22,7 @@ from __future__ import annotations
 import os
 import tempfile
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -120,3 +122,99 @@ def test_boundary_both_directions(
         assert tempfile.gettempdir() != over
     finally:
         gen.close()
+
+
+def _padded_tmpdir(host: str, run_id: str, target_bytes: int) -> str:
+    """Make a dir under ``host`` sized so the dispatcher's minted
+    child-socket path is exactly ``target_bytes`` fsencoded bytes.
+
+    The minted path is deterministic given TMPDIR:
+    ``<TMPDIR>/raptor-llm-<run_id[:40]>-<suffix>/llm-child.sock``
+    (mirrors ``_sock_prefix`` in ``LLMDispatcher.__init__``), with the
+    mkdtemp random-suffix width measured via a probe, not assumed.
+    """
+    prefix = f"raptor-llm-{run_id[:40]}-"
+    probe = tempfile.mkdtemp(prefix=prefix, dir=host)
+    suffix_len = len(os.fsencode(os.path.basename(probe))) - len(
+        os.fsencode(prefix)
+    )
+    os.rmdir(probe)
+    # "/" + prefix + suffix + "/" + "llm-child.sock"
+    fixed = 1 + len(os.fsencode(prefix)) + suffix_len + 1 + len(
+        os.fsencode("llm-child.sock")
+    )
+    pad = target_bytes - len(os.fsencode(host)) - 1 - fixed
+    assert pad > 0, "host dir too deep to land the boundary"
+    root = os.path.join(host, "p" * pad)
+    os.mkdir(root)
+    assert len(os.fsencode(root)) + fixed == target_bytes
+    return root
+
+
+# The LITERAL budget value, restated independently of the constant in
+# server.py — importing it would make the pin self-referential (the
+# padding would track a drifted constant and the boundary test would
+# still pass). 100 is load-bearing for existing deep-TMPDIR
+# deployments, so both directions matter: raising it silently admits
+# paths the kernel truncates on smaller-sun_path platforms, lowering
+# it silently diverts working deployments to the system-global /tmp,
+# abandoning their TMPDIR containment. Changing _SUN_PATH_BUDGET means
+# consciously changing this pin with it.
+_PINNED_SUN_PATH_BUDGET = 100
+
+
+def test_sun_path_budget_exact_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Boundary pin for the EXACT value of ``_SUN_PATH_BUDGET``: a
+    worst-case socket path of exactly 100 fsencoded bytes stays in the
+    caller's TMPDIR (no /tmp diversion) and binds; exactly one byte
+    over diverts to the /tmp fallback. Rationale for pinning the
+    value: see ``_PINNED_SUN_PATH_BUDGET`` above and the constant's
+    own comment in server.py."""
+    import shutil
+    import tempfile as _tempfile
+
+    from core.llm.dispatcher.auth import CredentialStore
+    from core.llm.dispatcher.server import LLMDispatcher
+
+    creds = CredentialStore.__new__(CredentialStore)
+    creds._keys = {}
+
+    # Anchor at /tmp (not tmp_path): the padding math needs positive
+    # headroom under the budget even on deep-scratch hosts.
+    host = _tempfile.mkdtemp(prefix="rl-pin-", dir="/tmp")
+    try:
+        for overshoot, must_stay in ((0, True), (1, False)):
+            root = _padded_tmpdir(
+                host, "pin", _PINNED_SUN_PATH_BUDGET + overshoot
+            )
+            monkeypatch.setenv("TMPDIR", root)
+            monkeypatch.setattr(_tempfile, "tempdir", None)
+            d = LLMDispatcher(
+                run_id="pin",
+                creds=creds,
+                audit_path=tmp_path / "audit.jsonl",
+            )
+            try:
+                assert d.socket_path.exists()
+                stayed = str(d._sock_dir).startswith(root + os.sep)
+                assert stayed == must_stay, (
+                    f"worst-case socket path at pinned budget"
+                    f"{'+1' if overshoot else ''} "
+                    f"({_PINNED_SUN_PATH_BUDGET + overshoot} bytes) "
+                    f"{'diverted to /tmp' if must_stay else 'stayed'}"
+                )
+                if must_stay:
+                    # Landed exactly AT the boundary, not merely under
+                    # it — this also self-validates the padding math
+                    # against the real minted path.
+                    assert (
+                        len(os.fsencode(d.child_socket_path))
+                        == _PINNED_SUN_PATH_BUDGET
+                    )
+            finally:
+                d.shutdown()
+    finally:
+        monkeypatch.setattr(_tempfile, "tempdir", None)
+        shutil.rmtree(host, ignore_errors=True)
