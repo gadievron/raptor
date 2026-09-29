@@ -70,9 +70,7 @@ jobs:
         # and the mount-ns backend needs them (plus newuidmap/newgidmap
         # from uidmap). If 26.04 renames or removes the sysctl, this
         # step is the first loud signal.
-        run: |
-          sudo apt-get install -y --no-install-recommends uidmap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        uses: ./.github/actions/enable-userns
 
       - name: Probe kernel features (userns enabled)
         run: |

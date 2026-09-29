@@ -342,13 +342,12 @@ jobs:
           path: ${{ env.VENV_PATH }}
           key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
 
-  # Fast tier: everything under core/ and packages/ except the two
-  # heavyweight subdirs that get their own jobs (sandbox, exploit_feasibility).
-  # Split 2-way via pytest-split so the slowest CI job runs in parallel.
-  # No .test_durations file is committed: pytest-split falls back to random
-  # distribution on first run and converges over subsequent runs. The
-  # max(group1, group2) wallclock is still well below the unsplit total
-  # even when unbalanced, so the saving is meaningful from day one.
+  # Fast tier: everything under core/ and packages/ except the heavyweight
+  # subdirs that get their own jobs (sandbox, exploit_feasibility, sca, and
+  # the container tiers). Batching is dynamic, not pytest-split: the
+  # ``changes`` job's test_scope.py partitions the affected test files into
+  # 1-8 balanced batches (the strategy matrix below), so a single-file PR
+  # gets one runner and a broad refactor fans out.
   python-unit-tests-fast:
     name: python-unit-tests-fast (${{ matrix.batch }})
     needs: [pre_check, changes, deps]
@@ -370,86 +369,22 @@ jobs:
         with:
           persist-credentials: false
 
+      # AppArmor blocks unprivileged userns on Ubuntu 24.04 runners;
+      # the sandbox's mount-ns backend needs them (full rationale in
+      # the composite).
       - name: Enable unprivileged user namespaces
-        # Ubuntu 24.04 runners block unprivileged user namespaces via
-        # AppArmor by default; the sandbox's mount-ns backend needs them
-        # (plus newuidmap/newgidmap from uidmap). Without this, the
-        # untrusted-run fresh-procfs contract correctly refuses the
-        # host-procfs-visible fallback and every untrusted-target test
-        # fails at setup.
-        run: |
-          sudo apt-get install -y --no-install-recommends uidmap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        uses: ./.github/actions/enable-userns
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # actions/cache@v6.1.x does not retry 429s from the cache backend
-      # (see v5.0.2 changelog: "429s returned from the cache service
-      # will not be retried"); under matrix-parallel restore load some
-      # jobs intermittently see "Failed to restore cache entry" even
-      # when the cache exists.  Three layers of mitigation, fastest-to-
-      # slowest:
-      #   1. Stagger -- random 0-7s sleep spreads concurrent restores
-      #      across time so the backend serialises reads instead of
-      #      rate-limiting them.  Common path: this prevents the 429
-      #      and attempt 1 succeeds.
-      #   2. Retry with restore-keys -- 30s backoff + prefix-match
-      #      fallback so a transient 429 OR an evicted exact-key
-      #      both recover by reusing a slightly older venv.
-      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
-      #      backstop; runs only if all restore attempts failed.
-      - name: Stagger cache restore (avoid 429 thundering herd)
-        run: sleep $((RANDOM % 8))
-
-      - name: Restore venv from cache (attempt 1, exact key)
-        id: cache-1
-        continue-on-error: true
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
-        with:
-          path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-          fail-on-cache-miss: true
-
-      - name: Backoff before retry
-        if: steps.cache-1.outcome == 'failure'
-        run: sleep 30
-
-      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
-        id: cache-2
-        if: steps.cache-1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
-        with:
-          path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-
-      - name: Install uv (rebuild fallback when both restore attempts failed)
-        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
-
-      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
-        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        shell: bash
-        run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv export --locked --no-hashes | uv pip install -r -
-
-      - name: Restore venv permissions and fix symlinks
-        run: |
-          # Re-point python symlinks at the current setup-python binary
-          # so shebangs in pip-installed scripts (pytest, etc.) resolve.
-          REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
-          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
-          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
-          PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
-          find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
+      # Retry ladder + rebuild backstop + symlink fix-up live in the
+      # composite (rationale documented there); the key matches what
+      # the deps job saves.
+      - name: Restore or rebuild venv
+        uses: ./.github/actions/setup-venv
 
       - name: Cache Python bytecode
         id: pycache
@@ -538,86 +473,22 @@ jobs:
         with:
           persist-credentials: false
 
+      # AppArmor blocks unprivileged userns on Ubuntu 24.04 runners;
+      # the sandbox's mount-ns backend needs them (full rationale in
+      # the composite).
       - name: Enable unprivileged user namespaces
-        # Ubuntu 24.04 runners block unprivileged user namespaces via
-        # AppArmor by default; the sandbox's mount-ns backend needs them
-        # (plus newuidmap/newgidmap from uidmap). Without this, the
-        # untrusted-run fresh-procfs contract correctly refuses the
-        # host-procfs-visible fallback and every untrusted-target test
-        # fails at setup.
-        run: |
-          sudo apt-get install -y --no-install-recommends uidmap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        uses: ./.github/actions/enable-userns
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # actions/cache@v6.1.x does not retry 429s from the cache backend
-      # (see v5.0.2 changelog: "429s returned from the cache service
-      # will not be retried"); under matrix-parallel restore load some
-      # jobs intermittently see "Failed to restore cache entry" even
-      # when the cache exists.  Three layers of mitigation, fastest-to-
-      # slowest:
-      #   1. Stagger -- random 0-7s sleep spreads concurrent restores
-      #      across time so the backend serialises reads instead of
-      #      rate-limiting them.  Common path: this prevents the 429
-      #      and attempt 1 succeeds.
-      #   2. Retry with restore-keys -- 30s backoff + prefix-match
-      #      fallback so a transient 429 OR an evicted exact-key
-      #      both recover by reusing a slightly older venv.
-      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
-      #      backstop; runs only if all restore attempts failed.
-      - name: Stagger cache restore (avoid 429 thundering herd)
-        run: sleep $((RANDOM % 8))
-
-      - name: Restore venv from cache (attempt 1, exact key)
-        id: cache-1
-        continue-on-error: true
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
-        with:
-          path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-          fail-on-cache-miss: true
-
-      - name: Backoff before retry
-        if: steps.cache-1.outcome == 'failure'
-        run: sleep 30
-
-      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
-        id: cache-2
-        if: steps.cache-1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
-        with:
-          path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-
-      - name: Install uv (rebuild fallback when both restore attempts failed)
-        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
-
-      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
-        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        shell: bash
-        run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv export --locked --no-hashes | uv pip install -r -
-
-      - name: Restore venv permissions and fix symlinks
-        run: |
-          # Re-point python symlinks at the current setup-python binary
-          # so shebangs in pip-installed scripts (pytest, etc.) resolve.
-          REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
-          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
-          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
-          PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
-          find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
+      # Retry ladder + rebuild backstop + symlink fix-up live in the
+      # composite (rationale documented there); the key matches what
+      # the deps job saves.
+      - name: Restore or rebuild venv
+        uses: ./.github/actions/setup-venv
 
       - name: Run SCA tests (group ${{ matrix.group }} of 4)
         env:
@@ -649,86 +520,22 @@ jobs:
         with:
           persist-credentials: false
 
+      # AppArmor blocks unprivileged userns on Ubuntu 24.04 runners;
+      # the sandbox's mount-ns backend needs them (full rationale in
+      # the composite).
       - name: Enable unprivileged user namespaces
-        # Ubuntu 24.04 runners block unprivileged user namespaces via
-        # AppArmor by default; the sandbox's mount-ns backend needs them
-        # (plus newuidmap/newgidmap from uidmap). Without this, the
-        # untrusted-run fresh-procfs contract correctly refuses the
-        # host-procfs-visible fallback and every untrusted-target test
-        # fails at setup.
-        run: |
-          sudo apt-get install -y --no-install-recommends uidmap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        uses: ./.github/actions/enable-userns
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # actions/cache@v6.1.x does not retry 429s from the cache backend
-      # (see v5.0.2 changelog: "429s returned from the cache service
-      # will not be retried"); under matrix-parallel restore load some
-      # jobs intermittently see "Failed to restore cache entry" even
-      # when the cache exists.  Three layers of mitigation, fastest-to-
-      # slowest:
-      #   1. Stagger -- random 0-7s sleep spreads concurrent restores
-      #      across time so the backend serialises reads instead of
-      #      rate-limiting them.  Common path: this prevents the 429
-      #      and attempt 1 succeeds.
-      #   2. Retry with restore-keys -- 30s backoff + prefix-match
-      #      fallback so a transient 429 OR an evicted exact-key
-      #      both recover by reusing a slightly older venv.
-      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
-      #      backstop; runs only if all restore attempts failed.
-      - name: Stagger cache restore (avoid 429 thundering herd)
-        run: sleep $((RANDOM % 8))
-
-      - name: Restore venv from cache (attempt 1, exact key)
-        id: cache-1
-        continue-on-error: true
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
-        with:
-          path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-          fail-on-cache-miss: true
-
-      - name: Backoff before retry
-        if: steps.cache-1.outcome == 'failure'
-        run: sleep 30
-
-      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
-        id: cache-2
-        if: steps.cache-1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
-        with:
-          path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-
-      - name: Install uv (rebuild fallback when both restore attempts failed)
-        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
-
-      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
-        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        shell: bash
-        run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv export --locked --no-hashes | uv pip install -r -
-
-      - name: Restore venv permissions and fix symlinks
-        run: |
-          # Re-point python symlinks at the current setup-python binary
-          # so shebangs in pip-installed scripts (pytest, etc.) resolve.
-          REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
-          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
-          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
-          PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
-          find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
+      # Retry ladder + rebuild backstop + symlink fix-up live in the
+      # composite (rationale documented there); the key matches what
+      # the deps job saves.
+      - name: Restore or rebuild venv
+        uses: ./.github/actions/setup-venv
 
       - name: Run sandbox tests
         run: |
@@ -1008,86 +815,22 @@ jobs:
         with:
           persist-credentials: false
 
+      # AppArmor blocks unprivileged userns on Ubuntu 24.04 runners;
+      # the sandbox's mount-ns backend needs them (full rationale in
+      # the composite).
       - name: Enable unprivileged user namespaces
-        # Ubuntu 24.04 runners block unprivileged user namespaces via
-        # AppArmor by default; the sandbox's mount-ns backend needs them
-        # (plus newuidmap/newgidmap from uidmap). Without this, the
-        # untrusted-run fresh-procfs contract correctly refuses the
-        # host-procfs-visible fallback and every untrusted-target test
-        # fails at setup.
-        run: |
-          sudo apt-get install -y --no-install-recommends uidmap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        uses: ./.github/actions/enable-userns
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # actions/cache@v6.1.x does not retry 429s from the cache backend
-      # (see v5.0.2 changelog: "429s returned from the cache service
-      # will not be retried"); under matrix-parallel restore load some
-      # jobs intermittently see "Failed to restore cache entry" even
-      # when the cache exists.  Three layers of mitigation, fastest-to-
-      # slowest:
-      #   1. Stagger -- random 0-7s sleep spreads concurrent restores
-      #      across time so the backend serialises reads instead of
-      #      rate-limiting them.  Common path: this prevents the 429
-      #      and attempt 1 succeeds.
-      #   2. Retry with restore-keys -- 30s backoff + prefix-match
-      #      fallback so a transient 429 OR an evicted exact-key
-      #      both recover by reusing a slightly older venv.
-      #   3. Rebuild -- install uv + ``uv pip install``.  Last-resort
-      #      backstop; runs only if all restore attempts failed.
-      - name: Stagger cache restore (avoid 429 thundering herd)
-        run: sleep $((RANDOM % 8))
-
-      - name: Restore venv from cache (attempt 1, exact key)
-        id: cache-1
-        continue-on-error: true
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
-        with:
-          path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-          fail-on-cache-miss: true
-
-      - name: Backoff before retry
-        if: steps.cache-1.outcome == 'failure'
-        run: sleep 30
-
-      - name: Restore venv from cache (attempt 2, exact-or-prefix key)
-        id: cache-2
-        if: steps.cache-1.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
-        with:
-          path: ${{ env.VENV_PATH }}
-          key: venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            venv-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-
-      - name: Install uv (rebuild fallback when both restore attempts failed)
-        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
-
-      - name: Rebuild venv (rebuild fallback when both restore attempts failed)
-        if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
-        shell: bash
-        run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv export --locked --no-hashes | uv pip install -r -
-
-      - name: Restore venv permissions and fix symlinks
-        run: |
-          # Re-point python symlinks at the current setup-python binary
-          # so shebangs in pip-installed scripts (pytest, etc.) resolve.
-          REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
-          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
-          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
-          PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
-          find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
+      # Retry ladder + rebuild backstop + symlink fix-up live in the
+      # composite (rationale documented there); the key matches what
+      # the deps job saves.
+      - name: Restore or rebuild venv
+        uses: ./.github/actions/setup-venv
 
       - name: Run exploit_feasibility integration tests
         env:

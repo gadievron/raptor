@@ -1,0 +1,116 @@
+name: Restore or rebuild the project venv
+description: >
+  Restore the uv-built project venv from the actions cache with the
+  429-resilient retry ladder, rebuilding from uv.lock as the last
+  resort, then re-point the venv's python symlinks at the current
+  setup-python interpreter. Requires the calling job to have run
+  actions/setup-python and to expose PYTHON_VERSION and VENV_PATH in
+  its environment (both are workflow-level env in every caller).
+
+  actions/cache@v6.1.x does not retry 429s from the cache backend
+  (see v5.0.2 changelog: "429s returned from the cache service
+  will not be retried"); under matrix-parallel restore load some
+  jobs intermittently see "Failed to restore cache entry" even
+  when the cache exists.  Three layers of mitigation, fastest-to-
+  slowest:
+    1. Stagger -- random 0-7s sleep spreads concurrent restores
+       across time so the backend serialises reads instead of
+       rate-limiting them.  Common path: this prevents the 429
+       and attempt 1 succeeds.
+    2. Retry with restore-keys -- 30s backoff + prefix-match
+       fallback so a transient 429 OR an evicted exact-key
+       both recover by reusing a slightly older venv.
+    3. Rebuild -- install uv + ``uv pip install``.  Last-resort
+       backstop; runs only if all restore attempts failed.
+
+inputs:
+  cache-key-prefix:
+    description: >
+      First segment of the cache key. The default matches the key the
+      deps job saves; flavoured venvs (e.g. with extra dependency
+      groups) use their own prefix so a prefix-match restore never
+      hands them a venv missing their extras.
+    required: false
+    default: 'venv'
+  uv-export-extra-args:
+    description: >
+      Extra arguments appended to ``uv export --locked --no-hashes``
+      on the rebuild path (e.g. ``--extra grammars``). Space-separated,
+      word-split unquoted; empty adds nothing.
+    required: false
+    default: ''
+  save-on-rebuild:
+    description: >
+      Save the venv back to the cache after a rebuild ("true"/"false").
+      Callers whose key no other job saves (flavoured venvs) set this
+      so the rebuild cost is paid once per uv.lock change, not nightly.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Stagger cache restore (avoid 429 thundering herd)
+      shell: bash
+      run: sleep $((RANDOM % 8))
+
+    - name: Restore venv from cache (attempt 1, exact key)
+      id: cache-1
+      continue-on-error: true
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+      with:
+        path: ${{ env.VENV_PATH }}
+        key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
+        fail-on-cache-miss: true
+
+    - name: Backoff before retry
+      if: steps.cache-1.outcome == 'failure'
+      shell: bash
+      run: sleep 30
+
+    - name: Restore venv from cache (attempt 2, exact-or-prefix key)
+      id: cache-2
+      if: steps.cache-1.outcome == 'failure'
+      continue-on-error: true
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+      with:
+        path: ${{ env.VENV_PATH }}
+        key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+
+    - name: Install uv (rebuild fallback when both restore attempts failed)
+      if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+
+    - name: Rebuild venv (rebuild fallback when both restore attempts failed)
+      if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
+      shell: bash
+      env:
+        UV_EXPORT_EXTRA_ARGS: ${{ inputs.uv-export-extra-args }}
+      run: |
+        uv venv $VENV_PATH
+        source $VENV_PATH/bin/activate
+        uv export --locked --no-hashes $UV_EXPORT_EXTRA_ARGS | uv pip install -r -
+
+    - name: Save rebuilt venv to cache
+      if: >-
+        inputs.save-on-rebuild == 'true' &&
+        steps.cache-1.outcome == 'failure' &&
+        steps.cache-2.outputs.cache-matched-key == ''
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+      with:
+        path: ${{ env.VENV_PATH }}
+        key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
+
+    - name: Restore venv permissions and fix symlinks
+      shell: bash
+      run: |
+        # Re-point python symlinks at the current setup-python binary
+        # so shebangs in pip-installed scripts (pytest, etc.) resolve.
+        REAL_PYTHON=$(python3 -c "import sys; print(sys.executable)")
+        ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python"
+        ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python3"
+        PYMINOR=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        ln -sf "$REAL_PYTHON" "$VENV_PATH/bin/python${PYMINOR}"
+        find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +

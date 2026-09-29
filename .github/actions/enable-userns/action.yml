@@ -1,0 +1,18 @@
+name: Enable unprivileged user namespaces
+description: >
+  Ubuntu 24.04 runners block unprivileged user namespaces via AppArmor
+  by default; the sandbox's mount-ns backend needs them (plus
+  newuidmap/newgidmap from uidmap). Without this, the untrusted-run
+  fresh-procfs contract correctly refuses the host-procfs-visible
+  fallback and every untrusted-target test fails at setup. Call sites
+  keep their own comment when they have a site-specific reason (e.g.
+  probing a newer runner image's policy).
+
+runs:
+  using: composite
+  steps:
+    - name: Install uidmap and relax the AppArmor userns restriction
+      shell: bash
+      run: |
+        sudo apt-get install -y --no-install-recommends uidmap
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

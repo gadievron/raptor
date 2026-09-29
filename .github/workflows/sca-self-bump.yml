@@ -97,9 +97,7 @@ jobs:
         # allowlist). Ubuntu 24.04 runner images block unprivileged
         # user namespaces via AppArmor by default and the tier needs
         # newuidmap/newgidmap from the uidmap package.
-        run: |
-          sudo apt-get install -y --no-install-recommends uidmap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        uses: ./.github/actions/enable-userns
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
