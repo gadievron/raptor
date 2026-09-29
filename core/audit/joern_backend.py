@@ -790,8 +790,59 @@ def _ensure_cpg_loaded(srv, target_path, tunables=None,
     return True
 
 
-def stop_joern_server(server) -> None:
-    """Stop the Joern server if it was started."""
+#: Grace budget for stop_joern_server's join on the graceful stop
+#: thread. Not lower: an orderly stop() legitimately takes tens of
+#: seconds (leader SIGTERM, bounded reap wait on a multi-GB JVM,
+#: workspace/socket-dir cleanup), and a shorter budget escalates a
+#: HEALTHY shutdown to a group kill, discarding the cleanup stop()
+#: was about to finish. Not higher: this join sits on the run's own
+#: teardown path (graceful finally, corpus shutdown), so every extra
+#: second is wall time added to every wedged-stop run before the
+#: backstop can fire — and past ~30s a stop that hasn't returned is
+#: wedged (TERM-ignoring JVM, stuck transport), not slow. Tests may
+#: shorten it via monkeypatch; the shipped default stays 30.
+_STOP_JOIN_GRACE_S = 30.0
+
+
+def stop_joern_server(
+    server: Any,
+    *,
+    caller_owns: bool = False,
+    lifecycle_shared: bool = False,
+) -> None:
+    """Stop the Joern server if it was started.
+
+    Runs the orderly ``server.stop()`` on a daemon thread with a
+    bounded join (``_STOP_JOIN_GRACE_S``). On join timeout, a stop
+    that wedged used to be simply abandoned — on non-TERM runs there
+    is no SIGTERM-watchdog or forced-exit hook behind this call, so a
+    TERM-ignoring JVM and its forwarder leaked for the life of the
+    host. Now, when THIS RUN owns the server's forwarder ``Popen``
+    handle, the timeout escalates to the server's own ``stop_fast()``
+    — the per-tier kill rules live there and are never re-implemented
+    here, and its double-fire against a still-running ``stop()`` is
+    benign by contract (no instance state mutated; both entries
+    early-return once ``_proc`` clears; signalling an already-dead
+    corroborated group is a no-op).
+
+    Ownership predicate (mirrors the forced-exit reap hook in the
+    orchestrator): refused classes keep the abandon-with-warning
+    behaviour unchanged —
+
+    * ``caller_owns``: the embedder's server, its lifecycle;
+    * ``lifecycle_shared``: a state-file-shared server another run
+      may still be using;
+    * reuse handles (``_proc is None``, re-checked here
+      independently of the flags): another session's process, never
+      ours to signal.
+
+    Both flags default to False because every in-repo caller reaches
+    this function only for a server THIS run started (the
+    orchestrator's release branches caller-owned and
+    lifecycle-shared handles away before calling; the corpus runner
+    stops the server it itself booted); callers that proxy for
+    another owner must say so explicitly.
+    """
     if server is None:
         return
 
@@ -803,9 +854,34 @@ def stop_joern_server(server) -> None:
 
     t = threading.Thread(target=_do_stop, daemon=True)
     t.start()
-    t.join(timeout=30)
-    if t.is_alive():
-        logger.warning("Joern server stop timed out after 30s — abandoning")
+    t.join(timeout=_STOP_JOIN_GRACE_S)
+    if not t.is_alive():
+        return
+    if (
+        caller_owns
+        or lifecycle_shared
+        or getattr(server, "_proc", None) is None
+    ):
+        # Another owner's process — killing it is cross-run
+        # collateral. Abandon exactly as before.
+        logger.warning(
+            "Joern server stop timed out after %.0fs — abandoning",
+            _STOP_JOIN_GRACE_S,
+        )
+        return
+    tier: str = getattr(server, "_supervision_tier", "group")
+    logger.warning(
+        "Joern server stop timed out after %.0fs — escalating to "
+        "stop_fast on the run-owned forwarder+JVM pair "
+        "(supervision tier=%s)",
+        _STOP_JOIN_GRACE_S, tier,
+    )
+    try:
+        server.stop_fast()
+    except Exception:
+        logger.debug(
+            "Joern stop_fast escalation failed", exc_info=True,
+        )
 
 
 def _flow_sort_key(flow: Any) -> tuple:
