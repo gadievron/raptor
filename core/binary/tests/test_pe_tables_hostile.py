@@ -411,7 +411,14 @@ class TestSectionCountReadProduct:
         tell a live stop from a fast inert one."""
         p = tmp_path / "fwdheavy.dll"
         p.write_bytes(self._amp_export_image(0))
-        with cpu_budget(1.0, what="forwarder-heavy export walk"):
+        # 3.0 matches the sections-x-reads sibling: the regression
+        # this pins (a per-read linear section scan) costs tens of
+        # seconds, so the margin holds, while 1.0 sat close enough
+        # to the quiet cost that slow loaded CI cores tripped it
+        # (cache pressure inflates CPU seconds too, not just wall).
+        # Lowering it back re-admits those false failures; raising
+        # it further starts hiding a partially-regressed resolver.
+        with cpu_budget(3.0, what="forwarder-heavy export walk"):
             facts = extract_pe_facts(p)
         assert facts is not None
         exp = facts.exports
