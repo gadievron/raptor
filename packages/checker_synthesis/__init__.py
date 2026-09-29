@@ -1,5 +1,6 @@
-"""KNighter-style checker synthesis (Yang et al., SOSP 2025,
-arXiv:2503.09002; see docs/references.md).
+"""KNighter-style checker synthesis (Yang et al., "KNighter:
+Transforming Static Analysis with LLM-Synthesized Checkers",
+SOSP 2025, arXiv:2503.09002).
 
 Turn a single confirmed bug into a Semgrep or Coccinelle rule, run
 it across the codebase, surface variant matches. The thing that

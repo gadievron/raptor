@@ -26,8 +26,9 @@ The per-callee aggregate is a first-class artifact
 ``consistency`` verification channel, ``spec_inference`` (one majority
 computation in the tree) and the flag/mode comparator.
 
-Intellectual ancestor: Engler et al., "Bugs as Deviant Behavior"
-(SOSP 2001; see docs/references.md).
+Intellectual ancestor: Engler et al., "Bugs as Deviant Behavior: A
+General Approach to Inferring Errors in Systems Code" (SOSP 2001,
+doi:10.1145/502034.502041).
 """
 
 from __future__ import annotations

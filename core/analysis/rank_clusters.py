@@ -1,7 +1,9 @@
 """Call-graph cluster analysis over listwise-ranking output.
 
-The localization recipe from the SiftRank paper's security evaluation
-(Gross, arXiv:2512.06155 §4; see docs/references.md): after ranking
+The localization recipe from the security evaluation in the SiftRank
+paper (Gross, "Sift or Get Off the PoC: Applying Information
+Retrieval to Vulnerability Research with SiftRank",
+arXiv:2512.06155 §4): after ranking
 call chains against an advisory or query with ``core.llm.ranking``,
 convert per-chain ranks into per-function weights and re-aggregate
 the survivors into call-graph clusters, so a critical function that

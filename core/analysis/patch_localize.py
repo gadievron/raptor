@@ -1,8 +1,10 @@
 """Patch localization: rank changed functions against an advisory,
 expand to call chains, cluster the survivors.
 
-The end-to-end recipe from the SiftRank paper's security evaluation
-(arXiv:2512.06155 §4; see docs/references.md), for the situation
+The end-to-end recipe from the security evaluation in the SiftRank
+paper (Gross, "Sift or Get Off the PoC: Applying Information
+Retrieval to Vulnerability Research with SiftRank",
+arXiv:2512.06155 §4), for the situation
 /cve-diff's discovery agent cannot solve: no published fix commit,
 but a vendor patch is in hand and the changed functions are known
 (from a source diff, or BinDiff + decompilation for binary patches).

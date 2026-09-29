@@ -1,5 +1,6 @@
 """/validate → /audit feedback loop (Reflexion pattern — Shinn et
-al., NeurIPS 2023, arXiv:2303.11366; see docs/references.md).
+al., "Reflexion: Language Agents with Verbal Reinforcement
+Learning", NeurIPS 2023, arXiv:2303.11366).
 
 Reads a /validate report (Stage-D ``stage-d.json`` or final
 ``findings.json``), matches findings back to prior audit review
