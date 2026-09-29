@@ -33,6 +33,23 @@ def _wait_for(predicate, timeout_s: float, what: str) -> None:
     pytest.fail(f"timed out after {timeout_s}s waiting for {what}")
 
 
+def _read_ready_pids(path: Path) -> tuple[int, int] | None:
+    """Parse ``<child_pid> <grand_pid>`` from the E2E ready file, None
+    until the content is complete. Existence alone is not readiness —
+    a created-but-unfilled file reads as two-token-less and stays
+    "not ready" instead of crashing the caller's unpack."""
+    try:
+        parts = path.read_text().split()
+    except OSError:
+        return None
+    if len(parts) != 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+
+
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -143,8 +160,14 @@ class TestParentHardKillE2E:
             "assert maybe_start_orphan_watchdog('e2e', poll_s=0.1) is not None\n"
             "g = subprocess.Popen(\n"
             "    [sys.executable, '-c', 'import time; time.sleep(300)'])\n"
-            "with open(os.environ['READY_FILE'], 'w') as f:\n"
+            # Atomic publish: open('w') on the final path creates an
+            # EMPTY file before the payload lands, and the test parent
+            # gates on that path — write beside it, then rename, so
+            # the ready file never exists without its full content.
+            "tmp = os.environ['READY_FILE'] + '.tmp'\n"
+            "with open(tmp, 'w') as f:\n"
             "    f.write(f'{os.getpid()} {g.pid}')\n"
+            "os.replace(tmp, os.environ['READY_FILE'])\n"
             "g.wait()\n"
         )
         parent_code = (
@@ -164,10 +187,16 @@ class TestParentHardKillE2E:
         )
         child_pid = grand_pid = None
         try:
-            _wait_for(ready.exists, 30.0, "child tree to come up")
-            child_pid, grand_pid = (
-                int(x) for x in ready.read_text().split()
-            )
+            # Readiness = the payload PARSES, not the file exists: the
+            # child publishes atomically (rename above), but the wait
+            # still keys on parse success so a partial or empty file —
+            # however it arises — keeps polling instead of blowing up
+            # the one-shot unpack below.
+            _wait_for(lambda: _read_ready_pids(ready) is not None,
+                      30.0, "child tree to come up")
+            pids = _read_ready_pids(ready)
+            assert pids is not None
+            child_pid, grand_pid = pids
             os.kill(parent.pid, signal.SIGKILL)
             parent.wait(timeout=10)
             # Hard wall: watchdog polls at 0.1s; 15s is generous.
