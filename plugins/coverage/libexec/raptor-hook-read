@@ -44,6 +44,25 @@ fi
 HELPER="$(dirname "${BASH_SOURCE[0]}")/raptor-hook-json"
 [ -f "$HELPER" ] || exit 0
 
+# Operator-registry resolution — same seam contract as the python
+# side (core.project.registry_home): RAPTOR_REGISTRY_HOME relocates
+# the projects registry, the .active bookmark, and sessions.d
+# TOGETHER from one base. Absolute values only, no ~ expansion (the
+# python seam applies the identical rule, so the two worlds can
+# never split the registry); a set-but-non-absolute value attributes
+# NOTHING — the python twin's consumers return no attribution when
+# the seam refuses, and an async hook must stay quiet rather than
+# wander to a cwd-relative registry.
+_REG_SESSIONS_BASE="$HOME/.local/share/raptor"
+_REG_PROJECTS_BASE="$HOME/.raptor"
+if [ -n "${RAPTOR_REGISTRY_HOME:-}" ]; then
+    case "$RAPTOR_REGISTRY_HOME" in
+        /*) _REG_SESSIONS_BASE="$RAPTOR_REGISTRY_HOME"
+            _REG_PROJECTS_BASE="$RAPTOR_REGISTRY_HOME" ;;
+        *)  exit 0 ;;
+    esac
+fi
+
 # Resolve THIS SESSION's run via the run ledger (primary), falling
 # back to the legacy machine-global project route only when no session
 # credential is present (pre-series launchers, bare invocations).
@@ -67,7 +86,7 @@ case "$_SESSION_PID" in
     ''|*[!0-9]*) _SESSION_PID="" ;;
 esac
 if [ -n "$_SESSION_PID" ]; then
-    _LEDGER="$HOME/.local/share/raptor/sessions.d/$_SESSION_PID.run"
+    _LEDGER="$_REG_SESSIONS_BASE/sessions.d/$_SESSION_PID.run"
     # Size guard matching the python reader's ledger budget: an
     # over-budget ledger reads as empty there, and the two consumers
     # must not diverge on the same file.
@@ -153,7 +172,7 @@ else
     # `.active` is operator-controlled but should always point at a
     # SIBLING entry under `~/.raptor/projects/`; reject path-shaped
     # targets (`../`, absolute) — see the twin for the full rationale.
-    ACTIVE_LINK="$HOME/.raptor/projects/.active"
+    ACTIVE_LINK="$_REG_PROJECTS_BASE/projects/.active"
     [ ! -L "$ACTIVE_LINK" ] && exit 0
 
     LINK_TARGET=$(readlink "$ACTIVE_LINK")
@@ -165,7 +184,7 @@ else
     case "$LINK_TARGET" in
         *..*) exit 0 ;;
     esac
-    PROJECT_FILE="$HOME/.raptor/projects/$LINK_TARGET"
+    PROJECT_FILE="$_REG_PROJECTS_BASE/projects/$LINK_TARGET"
     [ ! -f "$PROJECT_FILE" ] && exit 0
 
     # File parses go through the helper in both lanes (see the

@@ -132,9 +132,16 @@ def _find_active_run():
 
 
 def _find_session_run(session_pid):
+    # Registry location via the shared seam (call-time, honours
+    # RAPTOR_REGISTRY_HOME) — the bash twin applies the same override
+    # in its parameter expansion. A set-but-relative override raises
+    # in the seam; the twin no-ops on it, so both attribute NOTHING.
     try:
-        ledger = (Path.home() / ".local" / "share" / "raptor"
-                  / "sessions.d" / f"{session_pid}.run")
+        from core.project import registry_home
+        ledger = registry_home.sessions_dir() / f"{session_pid}.run"
+    except ValueError:
+        return None, None  # invalid override — parity: attribute nothing
+    try:
         if ledger.stat().st_size > 512 * 1024:
             return None, None  # over the reader budget — like sessions
         text = ledger.read_text(encoding="utf-8")
@@ -201,7 +208,12 @@ def _find_session_run(session_pid):
 
 def _find_global_run():
     """Legacy machine-global discovery (no-session fallback only)."""
-    active_link = Path.home() / ".raptor" / "projects" / ".active"
+    # Same seam + same invalid-override parity as _find_session_run.
+    try:
+        from core.project import registry_home
+        active_link = registry_home.active_link()
+    except ValueError:
+        return None, None
     if not active_link.is_symlink():
         return None, None
 

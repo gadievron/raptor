@@ -735,7 +735,22 @@ fi
 # is MANDATORY — 'project=-' when nothing resolved — so an
 # empty-bookmark launch is insulated from later bookmark moves.
 # Format/keys shared with core/project/sessions.py (ENTRY_KEYS).
-_sessions_dir="$HOME/.local/share/raptor/sessions.d"
+# Registry base honours the RAPTOR_REGISTRY_HOME seam
+# (core/project/registry_home.py): the python readers of this very
+# file resolve sessions.d through it, so the seeder must write where
+# they will read. Same rule as the python side: absolute values only,
+# no ~ expansion. Unlike the async coverage hook (which exits quietly),
+# a bad value at LAUNCH must fail loudly — silently seeding the default
+# registry while every python consumer errors would split the session.
+_sessions_base="$HOME/.local/share/raptor"
+if [ -n "${RAPTOR_REGISTRY_HOME:-}" ]; then
+    case "$RAPTOR_REGISTRY_HOME" in
+        /*) _sessions_base="$RAPTOR_REGISTRY_HOME" ;;
+        *)  echo "raptor: RAPTOR_REGISTRY_HOME must be an absolute path, got: $RAPTOR_REGISTRY_HOME" >&2
+            exit 1 ;;
+    esac
+fi
+_sessions_dir="$_sessions_base/sessions.d"
 RAPTOR_SESSION_TOKEN=""
 if _rp mkdir -p -m 700 "$_sessions_dir" 2>/dev/null; then
     _rp chmod 700 "$_sessions_dir" 2>/dev/null || true

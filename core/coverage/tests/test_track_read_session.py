@@ -344,5 +344,166 @@ class BashHookSessionTest(_LedgerCase):
         self.assertFalse((stolen / ".reads-manifest").exists())
 
 
+class _RegistrySeamCase(_LedgerCase):
+    """RAPTOR_REGISTRY_HOME relocates the operator registry — the
+    session ledger (`<base>/sessions.d`) AND the legacy `.active`
+    bookmark (`<base>/projects/.active`) — for BOTH twins, with a
+    set-but-non-absolute value attributing NOTHING (the python seam
+    refuses it, the bash hook exits quietly; parity)."""
+
+    def setUp(self):
+        super().setUp()
+        self.reg = self.home / "regbase"
+        (self.reg / "sessions.d").mkdir(parents=True)
+
+    def _reg_ledger(self, *records: tuple[int, Path]):
+        lines = [f"running {epoch} {d.name} {d}" for epoch, d in records]
+        (self.reg / "sessions.d" / f"{self.pid}.run").write_text(
+            "\n".join(lines) + "\n")
+
+
+class PythonTwinRegistrySeamTest(_RegistrySeamCase):
+
+    def _resolve(self, registry: str):
+        with patch.dict(os.environ,
+                        {"RAPTOR_SESSION_PID": str(self.pid),
+                         "RAPTOR_REGISTRY_HOME": registry}), \
+             patch.object(Path, "home", staticmethod(lambda: self.home)):
+            return track_read._find_active_run()
+
+    def test_session_ledger_read_from_override_registry(self):
+        # The default-location ledger names a decoy run; the override
+        # registry's ledger names the real one — the override must win
+        # outright, not merge.
+        decoy = self._mk_run("decoy_run")
+        self._ledger((500, decoy))
+        real = self._mk_run("real_run")
+        self._reg_ledger((100, real))
+        run_dir, _target = self._resolve(str(self.reg))
+        self.assertEqual(run_dir, str(real))
+
+    def test_relative_override_attributes_nothing(self):
+        # A valid default-location ledger exists, but the override is
+        # set and unusable: attribute NOTHING (never fall back to a
+        # registry the operator asked to move away from).
+        run = self._mk_run("scan_rel")
+        self._ledger((100, run))
+        run_dir, target = self._resolve("relative/reg")
+        self.assertIsNone(run_dir)
+        self.assertIsNone(target)
+
+    def test_global_fallback_bookmark_from_override_registry(self):
+        projects = self.reg / "projects"
+        projects.mkdir(parents=True)
+        proj_dir = self.home / "projout"
+        run = proj_dir / "scan-1"
+        run.mkdir(parents=True)
+        (run / ".raptor-run.json").write_text('{"status": "running"}')
+        (projects / "p.json").write_text(json.dumps(
+            {"name": "p", "target": "/t", "output_dir": str(proj_dir)}))
+        (projects / ".active").symlink_to("p.json")
+        with patch.dict(os.environ,
+                        {"RAPTOR_REGISTRY_HOME": str(self.reg)}), \
+             patch.object(Path, "home", staticmethod(lambda: self.home)):
+            os.environ.pop("RAPTOR_SESSION_PID", None)
+            run_dir, target = track_read._find_active_run()
+        self.assertEqual(run_dir, str(run))
+        self.assertEqual(target, "/t")
+
+    def test_global_fallback_relative_override_attributes_nothing(self):
+        # Default-location bookmark exists and would attribute — the
+        # unusable override still wins (nothing attributed).
+        projects = self.home / ".raptor" / "projects"
+        projects.mkdir(parents=True)
+        proj_dir = self.home / "projout"
+        run = proj_dir / "scan-1"
+        run.mkdir(parents=True)
+        (run / ".raptor-run.json").write_text('{"status": "running"}')
+        (projects / "p.json").write_text(json.dumps(
+            {"name": "p", "target": "/t", "output_dir": str(proj_dir)}))
+        (projects / ".active").symlink_to("p.json")
+        with patch.dict(os.environ,
+                        {"RAPTOR_REGISTRY_HOME": "relative/reg"}), \
+             patch.object(Path, "home", staticmethod(lambda: self.home)):
+            os.environ.pop("RAPTOR_SESSION_PID", None)
+            run_dir, target = track_read._find_active_run()
+        self.assertIsNone(run_dir)
+        self.assertIsNone(target)
+
+
+@unittest.skipIf(sys.platform == "win32", "bash hook")
+class BashHookRegistrySeamTest(_RegistrySeamCase):
+
+    def _fire(self, file_path: Path, env: dict):
+        payload = json.dumps({"tool_input": {"file_path": str(file_path)}})
+        return subprocess.run(
+            ["bash", str(HOOK)], input=payload, capture_output=True,
+            text=True, env=env, timeout=60, check=False,
+        )
+
+    def _base_env(self) -> dict:
+        return {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(self.home),
+        }
+
+    def test_session_ledger_from_override_registry(self):
+        tree = self.home / "srctree"
+        tree.mkdir()
+        src = tree / "main.c"
+        src.write_text("int main(void) { return 0; }\n")
+        run = self._mk_run("scan_reg", target=str(tree))
+        self._reg_ledger((100, run))  # ledger ONLY in the override reg
+        env = self._base_env()
+        env["RAPTOR_SESSION_PID"] = str(self.pid)
+        env["RAPTOR_REGISTRY_HOME"] = str(self.reg)
+        r = self._fire(src, env)
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        manifest = run / ".reads-manifest"
+        self.assertTrue(manifest.exists(),
+                        "override-registry ledger got no attribution")
+        self.assertIn(str(src.resolve()),
+                      manifest.read_text(encoding="utf-8"))
+
+    def test_relative_override_attributes_nothing(self):
+        tree = self.home / "srctree"
+        tree.mkdir()
+        src = tree / "a.c"
+        src.write_text("int a;\n")
+        run = self._mk_run("scan_rel", target=str(tree))
+        self._ledger((100, run))  # valid DEFAULT-location ledger
+        env = self._base_env()
+        env["RAPTOR_SESSION_PID"] = str(self.pid)
+        env["RAPTOR_REGISTRY_HOME"] = "relative/reg"
+        r = self._fire(src, env)
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        self.assertFalse((run / ".reads-manifest").exists(),
+                         "unusable override fell back to the default"
+                         " registry")
+
+    def test_global_fallback_bookmark_from_override(self):
+        tree = self.home / "srctree"
+        tree.mkdir()
+        src = tree / "b.c"
+        src.write_text("int b;\n")
+        projects = self.reg / "projects"
+        projects.mkdir(parents=True)
+        proj_dir = self.home / "projout"
+        run = proj_dir / "scan-1"
+        run.mkdir(parents=True)
+        (run / ".raptor-run.json").write_text('{"status": "running"}')
+        (projects / "p.json").write_text(json.dumps(
+            {"name": "p", "target": str(tree),
+             "output_dir": str(proj_dir)}))
+        (projects / ".active").symlink_to("p.json")
+        env = self._base_env()  # no session pid → legacy route
+        env["RAPTOR_REGISTRY_HOME"] = str(self.reg)
+        r = self._fire(src, env)
+        self.assertEqual(r.returncode, 0, (r.stdout, r.stderr))
+        manifest = run / ".reads-manifest"
+        self.assertTrue(manifest.exists(),
+                        "override-registry bookmark got no attribution")
+
+
 if __name__ == "__main__":
     unittest.main()
