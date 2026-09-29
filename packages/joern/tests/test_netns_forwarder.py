@@ -16,6 +16,7 @@ import http.client
 import json
 import os
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -23,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -388,7 +390,9 @@ def _wait_for(predicate, timeout_s: float = 15.0) -> None:
 @needs_userns
 class TestNamespaceIsolation:
     @pytest.fixture
-    def running_stack(self, uds_dir):
+    def running_stack(
+        self, uds_dir: str,
+    ) -> Iterator[tuple[str, int, subprocess.Popen[bytes]]]:
         """Forwarder script + stub in-namespace HTTP child."""
         path = os.path.join(uds_dir, "joern.sock")
         # Free on the host right now (so "connection refused" below
@@ -406,8 +410,28 @@ class TestNamespaceIsolation:
             _wait_for(lambda: os.path.exists(path))
             yield path, port, proc
         finally:
+            # The socket (this fixture's readiness gate) exists before
+            # the supervisor installs its SIGTERM handler, and that
+            # handler DROPS the signal while the wrapped child is not
+            # yet bound (netns_forwarder.main: create_listener precedes
+            # both the signal.signal calls and the Popen). A terminate()
+            # landing in that boot window is absorbed entirely, and
+            # under load a delivered one can simply be slow to unwind —
+            # either way a bare fixed wait errored the teardown with
+            # TimeoutExpired. Escalate instead: a second SIGTERM sent
+            # after the window has passed still gets the clean
+            # forwarded shutdown; SIGKILL is the total backstop for a
+            # supervisor that cannot act on signals at all.
             proc.terminate()
-            proc.wait(timeout=10)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=10)
 
     @staticmethod
     def _uds_roundtrip(path: str) -> dict:
@@ -461,6 +485,23 @@ class TestNamespaceIsolation:
         proc.terminate()
         assert proc.wait(timeout=10) != 0
         assert not os.path.exists(path)
+
+    def test_teardown_reclaims_unresponsive_supervisor(
+        self,
+        running_stack: tuple[str, int, subprocess.Popen[bytes]],
+    ) -> None:
+        """The fixture teardown must reclaim a supervisor that cannot
+        act on SIGTERM. SIGSTOP simulates that faithfully: a stopped
+        process holds a handled SIGTERM pending, exactly like the
+        supervisor's boot window where the installed handler drops the
+        signal because the wrapped child is not yet bound. The real
+        assertion is the fixture's own finally block (the shipped
+        teardown, not a copy): it must escalate and reclaim the
+        process within its bounds instead of erroring the teardown
+        with TimeoutExpired."""
+        path, _port, proc = running_stack
+        self._uds_roundtrip(path)  # fully booted first
+        os.kill(proc.pid, signal.SIGSTOP)  # own Popen child only
 
 
 class TestSelfProbe:
