@@ -110,6 +110,12 @@ def _fast_serve_shutdown_poll(monkeypatch: pytest.MonkeyPatch) -> None:
 # long" while short-/tmp hosts (CI) pass. Budget below the cap for
 # the dispatcher's own suffix: "/raptor-llm-" + run_id (headroom 40;
 # longest in this dir is 31) + "-XXXXXXXX" + "/llm-child.sock".
+# Every quantity here is BYTES of the fsencoded path — the unit the
+# kernel compares sun_path in — so the TMPDIR side of the check must
+# measure ``len(os.fsencode(...))``, never ``len(str)`` (a multibyte
+# root is longer in bytes than in chars, and an undecodable root
+# reaches Python as surrogate-escaped str that bare ``.encode()``
+# rejects). The suffix terms below are ASCII literals: chars == bytes.
 _AF_UNIX_PATH_MAX = 107  # usable bytes (108 incl. the trailing NUL)
 _SOCKET_SUFFIX_BUDGET = len("/raptor-llm-") + 40 + len("-XXXXXXXX") + len(
     "/llm-child.sock")
@@ -132,7 +138,7 @@ def _af_unix_safe_tmp(monkeypatch) -> Iterator[None]:
     prefix listing only helps when some later session runs with
     ``gettempdir() == /tmp`` (CI, short-tmp hosts) and sweeps it up.
     """
-    if len(tempfile.gettempdir()) <= _SAFE_TMP_LEN:
+    if len(os.fsencode(tempfile.gettempdir())) <= _SAFE_TMP_LEN:
         yield
         return
     short_tmp = tempfile.mkdtemp(prefix="raptor-llm-sock-", dir="/tmp")
