@@ -1082,6 +1082,11 @@ class TestPrefilterWiring:
             )
 
         config = OrchestratorConfig(
+            # hermetic: prefilter wiring only — with Joern installed a
+            # live server spins up for this two-function target, and a
+            # loaded-host CPG build failure fails the review, whose
+            # error-retry recovery then double-counts the function.
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             prefilter=True, batch_sloc_threshold=0,
         )
@@ -1105,6 +1110,8 @@ class TestPrefilterWiring:
             )
 
         config = OrchestratorConfig(
+            # hermetic: see the note on the prefilter=True siblings.
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             prefilter=False, batch_sloc_threshold=0,
         )
@@ -1127,6 +1134,11 @@ class TestPrefilterWiring:
             )
 
         config = OrchestratorConfig(
+            # hermetic: prefilter wiring only — with Joern installed a
+            # live server spins up for this two-function target, and a
+            # loaded-host CPG build failure fails the review, whose
+            # error-retry recovery then double-counts the function.
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             prefilter=True, batch_sloc_threshold=0,
         )
@@ -1151,6 +1163,11 @@ class TestPrefilterWiring:
             )
 
         config = OrchestratorConfig(
+            # hermetic: prefilter wiring only — with Joern installed a
+            # live server spins up for this two-function target, and a
+            # loaded-host CPG build failure fails the review, whose
+            # error-retry recovery then double-counts the function.
+            joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
             prefilter=True, batch_sloc_threshold=0,
         )
