@@ -526,6 +526,122 @@ def _owning_package_seeds(path: Path, all_py: list[Path]) -> set[Path]:
 # Dynamic batching
 # ---------------------------------------------------------------------------
 
+#: Env var naming a JSON file that maps test-file path (repo-relative,
+#: as emitted in the matrix) → total seconds. Produced by
+#: junit_durations.py from a full-run junit XML. Optional: when unset
+#: or unusable, batching stays count-based.
+DURATIONS_ENV = "RAPTOR_TEST_DURATIONS"
+
+
+def _load_duration_map() -> dict[str, float] | None:
+    """The ``RAPTOR_TEST_DURATIONS`` file→seconds map, or None.
+
+    Fail-open contract: this feeds a CI-critical path (an empty or
+    skewed matrix silently under-runs tests), so ANY defect — env
+    unset, file missing/unreadable, JSON malformed, wrong shape, a
+    non-numeric / negative / non-finite value — yields None and the
+    caller keeps the pre-existing count-based behavior EXACTLY. Every
+    fallback is logged loudly so a wiring regression is visible in the
+    job log instead of silently degrading batch balance.
+    """
+    env_val = os.environ.get(DURATIONS_ENV)
+    if not env_val:
+        return None
+    try:
+        with open(env_val, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print(
+            f"::warning::{DURATIONS_ENV}={env_val} unusable ({exc}) — "
+            "falling back to count-based round-robin batching"
+        )
+        return None
+    if not isinstance(raw, dict):
+        print(
+            f"::warning::{DURATIONS_ENV}={env_val} is not a JSON object "
+            "— falling back to count-based round-robin batching"
+        )
+        return None
+    out: dict[str, float] = {}
+    for key, val in raw.items():
+        if (
+            not isinstance(key, str)
+            or isinstance(val, bool)
+            or not isinstance(val, (int, float))
+            or not math.isfinite(val)
+            or val < 0
+        ):
+            print(
+                f"::warning::{DURATIONS_ENV}={env_val} has a malformed "
+                f"entry ({key!r}: {val!r}) — falling back to count-based "
+                "round-robin batching"
+            )
+            return None
+        out[key] = float(val)
+    return out
+
+
+def _round_robin(sorted_files: list[str], n_batches: int) -> list[list[str]]:
+    """Count-based partition: batch sizes differ by at most 1
+    (26 files → 13+13, not 25+1)."""
+    batches: list[list[str]] = [[] for _ in range(n_batches)]
+    for i, f in enumerate(sorted_files):
+        batches[i % n_batches].append(f)
+    return batches
+
+
+def _lpt_partition(
+    sorted_files: list[str],
+    durations: dict[str, float],
+    n_batches: int,
+) -> list[list[str]]:
+    """Duration-aware partition: greedy LPT (longest processing time
+    first) — place each file, heaviest first, on the currently
+    lightest batch, so max-batch wallclock approaches total/n instead
+    of tracking whichever batch round-robin dealt the heavy files to.
+
+    Files absent from the duration map get the median of the mapped
+    files' durations: a neutral weight that neither hides a new heavy
+    file at zero cost nor lets one unknown dominate placement.
+
+    Tie-breaking is (load, count, index): with many zero/equal
+    durations a load-only minimum would keep feeding one batch and
+    could emit an EMPTY batch — an empty ``files`` matrix entry runs
+    pytest with no path args, i.e. the whole repo. The count term
+    spreads ties, and because an untouched batch always compares
+    lowest, the first ``n_batches`` placements land in distinct
+    batches — no batch is ever empty while ``len(files) >= n_batches``
+    (callers guarantee this via the ``n_batches`` formula; the
+    invariant is regression-pinned in the test suite).
+    """
+    import heapq
+
+    known = [durations[f] for f in sorted_files if f in durations]
+    if known:
+        default = sorted(known)[len(known) // 2]
+    else:
+        default = 1.0  # no overlap at all: uniform weights ≈ count-based
+    weighted = sorted(
+        ((durations.get(f, default), f) for f in sorted_files),
+        key=lambda pair: (-pair[0], pair[1]),
+    )
+    heap: list[tuple[float, int, int]] = [
+        (0.0, 0, i) for i in range(n_batches)
+    ]
+    heapq.heapify(heap)
+    batches: list[list[str]] = [[] for _ in range(n_batches)]
+    for dur, f in weighted:
+        load, count, idx = heapq.heappop(heap)
+        batches[idx].append(f)
+        heapq.heappush(heap, (load + dur, count + 1, idx))
+    print(
+        f"batch_matrix: duration-aware LPT over {n_batches} batches "
+        f"({len(known)}/{len(sorted_files)} files in duration map, "
+        f"default {default:.2f}s for the rest)"
+    )
+    return [sorted(b) for b in batches]
+
+
 def batch_matrix(
     files: list[Path],
     *,
@@ -537,17 +653,22 @@ def batch_matrix(
     Returns a list of ``{"batch": N, "files": "a.py b.py ..."}`` dicts
     suitable for ``strategy.matrix.include: ${{ fromJSON(...) }}``.
 
-    Uses round-robin distribution so batch sizes differ by at most 1
-    (26 files → 13+13, not 25+1).
+    Balance strategy: when ``RAPTOR_TEST_DURATIONS`` names a usable
+    per-file duration map (see ``_load_duration_map``), batches are
+    bin-packed by measured seconds (greedy LPT); otherwise — including
+    on ANY defect in the env var or file — distribution is count-based
+    round-robin, byte-identical to the historical behavior.
     """
     if not files:
         return []
     sorted_files = sorted(str(f) for f in files)
     n = len(sorted_files)
     n_batches = min(max_batches, max(1, math.ceil(n / target_per_batch)))
-    batches: list[list[str]] = [[] for _ in range(n_batches)]
-    for i, f in enumerate(sorted_files):
-        batches[i % n_batches].append(f)
+    durations = _load_duration_map()
+    if durations is None:
+        batches = _round_robin(sorted_files, n_batches)
+    else:
+        batches = _lpt_partition(sorted_files, durations, n_batches)
     return [
         {"batch": i + 1, "files": " ".join(b)}
         for i, b in enumerate(batches)

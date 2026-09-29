@@ -169,6 +169,106 @@ class TestBatchMatrix:
         assert len(result) == 2
 
 
+class TestBatchMatrixDurationAware:
+    """RAPTOR_TEST_DURATIONS switches batch_matrix from count-based
+    round-robin to duration-aware LPT; every defect in the env/file
+    falls back to the count-based result EXACTLY (CI-critical path —
+    fail open to the status quo, never to a skewed or empty matrix)."""
+
+    # One heavy file among cheap ones: round-robin deals by name and
+    # lands the heavy file plus half the cheap ones on one batch.
+    _FILES = [Path(f"core/tests/test_{i:02d}.py") for i in range(8)]
+    _DURS = {"core/tests/test_00.py": 100.0,
+             **{f"core/tests/test_{i:02d}.py": 1.0 for i in range(1, 8)}}
+
+    @staticmethod
+    def _shard_seconds(matrix, durs, default=0.0):
+        return [
+            sum(durs.get(f, default) for f in entry["files"].split())
+            for entry in matrix
+        ]
+
+    def _with_map(self, monkeypatch, tmp_path, payload) -> None:
+        p = tmp_path / "durations.json"
+        p.write_text(payload if isinstance(payload, str)
+                     else json.dumps(payload), encoding="utf-8")
+        monkeypatch.setenv("RAPTOR_TEST_DURATIONS", str(p))
+
+    def test_lpt_beats_round_robin_on_skewed_set(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("RAPTOR_TEST_DURATIONS", raising=False)
+        rr = batch_matrix(self._FILES, max_batches=2, target_per_batch=4)
+        self._with_map(monkeypatch, tmp_path, self._DURS)
+        lpt = batch_matrix(self._FILES, max_batches=2, target_per_batch=4)
+        rr_max = max(self._shard_seconds(rr, self._DURS))
+        lpt_max = max(self._shard_seconds(lpt, self._DURS))
+        assert lpt_max < rr_max
+        # Heavy file rides alone; the seven 1s files share the other
+        # batch — max shard 100s, the LPT optimum for this set.
+        assert lpt_max == 100.0
+        # Same file multiset, same output shape.
+        assert sorted(f for e in lpt for f in e["files"].split()) == \
+            sorted(str(f) for f in self._FILES)
+        assert [e["batch"] for e in lpt] == [1, 2]
+
+    def test_missing_files_get_median_default(self, monkeypatch, tmp_path):
+        # Two unmapped files must weigh the median (1.0s), not 0: at
+        # zero weight they would both pile onto the heavy batch.
+        durs = dict(self._DURS)
+        del durs["core/tests/test_06.py"], durs["core/tests/test_07.py"]
+        self._with_map(monkeypatch, tmp_path, durs)
+        lpt = batch_matrix(self._FILES, max_batches=2, target_per_batch=4)
+        heavy = next(e for e in lpt
+                     if "core/tests/test_00.py" in e["files"].split())
+        assert heavy["files"] == "core/tests/test_00.py"
+
+    @pytest.mark.parametrize("payload", [
+        "{not json",                      # malformed JSON
+        json.dumps(["a.py", 1.0]),        # wrong shape (not an object)
+        json.dumps({"a.py": "fast"}),     # non-numeric value
+        json.dumps({"a.py": -3.0}),       # negative value
+        json.dumps({"a.py": True}),       # bool masquerading as number
+        '{"a.py": NaN}',                  # non-finite value
+    ])
+    def test_bad_map_falls_back_to_count_based(
+            self, monkeypatch, tmp_path, payload):
+        monkeypatch.delenv("RAPTOR_TEST_DURATIONS", raising=False)
+        baseline = batch_matrix(self._FILES, max_batches=3,
+                                target_per_batch=2)
+        self._with_map(monkeypatch, tmp_path, payload)
+        assert batch_matrix(self._FILES, max_batches=3,
+                            target_per_batch=2) == baseline
+
+    def test_unreadable_path_falls_back_to_count_based(
+            self, monkeypatch, tmp_path):
+        monkeypatch.delenv("RAPTOR_TEST_DURATIONS", raising=False)
+        baseline = batch_matrix(self._FILES, max_batches=3,
+                                target_per_batch=2)
+        monkeypatch.setenv(
+            "RAPTOR_TEST_DURATIONS", str(tmp_path / "no_such.json"))
+        assert batch_matrix(self._FILES, max_batches=3,
+                            target_per_batch=2) == baseline
+
+    def test_fallback_is_logged_loudly(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv(
+            "RAPTOR_TEST_DURATIONS", str(tmp_path / "no_such.json"))
+        batch_matrix(self._FILES, max_batches=2, target_per_batch=4)
+        out = capsys.readouterr().out
+        assert "::warning::" in out and "falling back" in out
+
+    def test_all_zero_durations_leave_no_batch_empty(
+            self, monkeypatch, tmp_path):
+        # Regression pin for the LPT tie-break: with load-only heap
+        # keys every zero-duration file lands on batch 1 and later
+        # batches emit EMPTY files entries — pytest with no path args
+        # runs the whole repo. The (load, count, index) key must
+        # spread ties so every batch gets files.
+        self._with_map(
+            monkeypatch, tmp_path, {str(f): 0.0 for f in self._FILES})
+        lpt = batch_matrix(self._FILES, max_batches=4, target_per_batch=2)
+        assert len(lpt) == 4
+        assert all(e["files"] for e in lpt)
+
+
 class TestTierConsistency:
     """Verify TIERS and FAST_TIER_IGNORES are consistent."""
 
