@@ -196,6 +196,100 @@ def skip_unless_semgrep_carries_probe(tmp_path: Path, *, context: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# compiler channel (core.audit.compiler_sweep)
+# ---------------------------------------------------------------------------
+
+# The reasons run_compiler_analyzer_sweep mints when the runtime failed
+# to carry the analyzer (all with rule_id="compiler:{cwe}"):
+#   * the sandboxed compile hitting the deadline
+#     (subprocess.TimeoutExpired, uncached);
+#   * a signal-killed compile (_AnalyzerSignalKilled on a negative
+#     returncode — OOM killer / sandbox kill, deliberately uncached
+#     as transient);
+#   * an invocation that could not spawn — ONLY the errno'd OSError
+#     subset of the broad "analyzer invocation failed: {exc}" arm.
+#     That except tuple also catches ValueError/TypeError from product
+#     code building the invocation; those spellings stay hard.
+# The sandbox ImportError refusal ("core.sandbox unavailable — …") is
+# deterministic (module import, not load-dependent) and stays hard.
+COMPILER_TRANSPORT_RE = re.compile(
+    r"analyzer timed out \(\d+s\)\Z"
+    r"|analyzer killed by signal \d+\Z"
+    r"|analyzer invocation failed: \[Errno \d+\] ",
+)
+
+# The pre-spawn availability arm (rule_id=None). Under battery load the
+# per-call gcc PROBE itself can degrade (_gcc_probe_ok goes False on a
+# probe timeout / spawn OSError), so on a host that probed gcc healthy
+# at collection time this arm is a transport statement; on a
+# clang-only host _clang_path is a bare PATH lookup that load cannot
+# flip, so the same message is a product-shaped surprise and stays
+# hard.
+_COMPILER_NOT_INSTALLED = (
+    "compiler static analyzer not installed "
+    "(need gcc >= 10 with -fanalyzer, or clang)"
+)
+
+
+def skip_if_compiler_transport_degraded(
+    result: SweepResult, *, gcc_probed: bool,
+) -> None:
+    """Skip when the live compiler-analyzer run degraded instead of
+    carrying the analysis. ``gcc_probed`` is the toolchain identity
+    the test module observed at collection time (its ``HAVE_GCC``):
+
+    * error outcomes skip only on the transport shapes above, keyed
+      on the ``compiler:*`` rule_id arm they are minted with (the
+      availability arm on its ``rule_id=None`` identity, gcc-probed
+      hosts only);
+    * non-error outcomes skip when a gcc-probed host silently fell
+      back to clang (``details["compiler"]`` vs. the collection-time
+      probe) — the verdict is real but comes from a different
+      analyzer than the leg's expectations were written against.
+    """
+    if result.tool != "compiler":
+        return
+    if result.outcome == "error":
+        errors = list(result.errors or [])
+        if len(errors) != 1:
+            return
+        rule_id = result.rule_id
+        if (
+            rule_id is not None
+            and rule_id.startswith("compiler:")
+            and COMPILER_TRANSPORT_RE.match(errors[0])
+        ):
+            pytest.skip(f"compiler transport degraded: {errors[0]}")
+        if (
+            rule_id is None
+            and gcc_probed
+            and errors[0] == _COMPILER_NOT_INSTALLED
+        ):
+            pytest.skip(f"compiler transport degraded: {errors[0]}")
+        return
+    if gcc_probed and (result.details or {}).get("compiler") == "clang":
+        pytest.skip(
+            "compiler transport degraded: gcc probed healthy at "
+            "collection but this run's probe lost it under load and "
+            "the sweep fell back to clang",
+        )
+
+
+def run_compiler_analyzer_sweep_guarded(
+    *, gcc_probed: bool, **kwargs: Any,
+) -> SweepResult:
+    """``run_compiler_analyzer_sweep`` with the transport guard
+    applied — the drop-in for live call sites. Product
+    classifications (including the deterministic sandbox refusal and
+    every compile-failure inconclusive) pass through untouched."""
+    from core.audit.compiler_sweep import run_compiler_analyzer_sweep
+
+    result = run_compiler_analyzer_sweep(**kwargs)
+    skip_if_compiler_transport_degraded(result, gcc_probed=gcc_probed)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # expanded-view channel (core.audit.expanded_semgrep)
 # ---------------------------------------------------------------------------
 

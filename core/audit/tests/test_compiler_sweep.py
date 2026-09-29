@@ -16,6 +16,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -28,6 +29,10 @@ from core.audit.compiler_sweep import (
     run_compiler_analyzer_sweep,
 )
 from core.audit.evidence_grade import is_tool_evidence
+from core.audit.sweep import SweepResult
+from core.audit.tests._live_transport import (
+    run_compiler_analyzer_sweep_guarded,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "compiler_sweep"
 
@@ -87,11 +92,27 @@ def _target_with(tmp_path: Path, *fixture_names: str) -> Path:
     return target
 
 
+def _guarded_compiler_sweep(
+    *, gcc_probed: bool = HAVE_GCC, **kwargs: Any,
+) -> SweepResult:
+    """Live analyzer runs route through the transport guard: runtime
+    degradation (deadline, signal-killed compile, spawn OSError, a
+    gcc probe lost under load) skips with the transport's reason;
+    every product classification passes through untouched for the
+    caller's own hard assertions. ``gcc_probed`` pins the toolchain
+    identity this module observed at collection time (legs that
+    deliberately mask gcc pass False)."""
+    return run_compiler_analyzer_sweep_guarded(
+        gcc_probed=gcc_probed, **kwargs,
+    )
+
+
 def _sweep(tmp_path, fixture, cwe, hypothesis, function_name="f",
-           line_start=0, line_end=0):
+           line_start=0, line_end=0, gcc_probed: bool = HAVE_GCC):
     target = _target_with(tmp_path, fixture)
     out_dir = tmp_path / "out"
-    return run_compiler_analyzer_sweep(
+    return _guarded_compiler_sweep(
+        gcc_probed=gcc_probed,
         target_path=target,
         file_path=fixture,
         function_name=function_name,
@@ -338,7 +359,7 @@ class TestSandboxInvocation:
     def test_sandbox_used_with_network_deny(self, tmp_path, sandbox_spy):
         target = _target_with(tmp_path, "uaf.c")
         out_dir = tmp_path / "out"
-        run_compiler_analyzer_sweep(
+        _guarded_compiler_sweep(
             target_path=target,
             file_path="uaf.c",
             function_name="use_after_free",
@@ -411,14 +432,29 @@ class TestToolchainFallback:
             tmp_path, "uaf.c", "CWE-416",
             "use-after-free of `p` in use_after_free",
             function_name="use_after_free", line_start=3, line_end=9,
+            # gcc is masked ON PURPOSE: clang is this leg's expected
+            # analyzer, not a degraded fallback, so the guard's
+            # probe-flip arm must stay out of the way (the transport
+            # arms still cover the live clang run).
+            gcc_probed=False,
         )
         assert result.details and result.details["compiler"] == "clang"
         assert result.outcome == "confirmed"
 
     def test_both_missing_is_error(self, tmp_path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
-        result = _sweep(
-            tmp_path, "uaf.c", "CWE-416", "use-after-free of `p`",
+        # Deliberate toolchain fault: this leg MINTS the not-installed
+        # error on purpose, so it bypasses the transport guard (which
+        # reads exactly that shape as a degraded runtime) and calls
+        # the sweep raw.
+        target = _target_with(tmp_path, "uaf.c")
+        result = run_compiler_analyzer_sweep(
+            target_path=target,
+            file_path="uaf.c",
+            function_name="f",
+            hypothesis="use-after-free of `p`",
+            cwe="CWE-416",
+            out_dir=tmp_path / "out",
         )
         assert result.outcome == "error"
         assert any("not installed" in e for e in result.errors)
@@ -453,7 +489,7 @@ class TestMappingEdges:
         target = tmp_path / "repo"
         target.mkdir()
         (target / "app.py").write_text("x = 1\n")
-        result = run_compiler_analyzer_sweep(
+        result = _guarded_compiler_sweep(
             target_path=target, file_path="app.py", function_name="f",
             hypothesis="use-after-free of `x`", cwe="CWE-416",
             out_dir=tmp_path / "out",
@@ -464,7 +500,7 @@ class TestMappingEdges:
     def test_path_escape_is_error(self, tmp_path, sandbox_spy):
         target = tmp_path / "repo"
         target.mkdir()
-        result = run_compiler_analyzer_sweep(
+        result = _guarded_compiler_sweep(
             target_path=target, file_path="../evil.c", function_name="f",
             hypothesis="h", cwe="CWE-416", out_dir=tmp_path / "out",
         )
@@ -474,7 +510,7 @@ class TestMappingEdges:
     def test_missing_file_is_error(self, tmp_path, sandbox_spy):
         target = tmp_path / "repo"
         target.mkdir()
-        result = run_compiler_analyzer_sweep(
+        result = _guarded_compiler_sweep(
             target_path=target, file_path="ghost.c", function_name="f",
             hypothesis="h", cwe="CWE-416", out_dir=tmp_path / "out",
         )
@@ -640,7 +676,7 @@ class TestSuppressionForgery:
             "int f(void){char *p=malloc(8); if(!p) return 0; "
             "free(p); return p[0];}\n",
         )
-        result = run_compiler_analyzer_sweep(
+        result = _guarded_compiler_sweep(
             target_path=target,
             file_path="poc.c",
             function_name="f",
@@ -667,7 +703,7 @@ class TestSuppressionForgery:
             "int f(void){char *p=malloc(8); if(!p) return 0; "
             "free(p); free(p); return 0;}\n",
         )
-        result = run_compiler_analyzer_sweep(
+        result = _guarded_compiler_sweep(
             target_path=target,
             file_path="poc.c",
             function_name="f",
@@ -690,7 +726,7 @@ class TestSuppressionForgery:
             "/* never add #pragma GCC diagnostic ignored here */\n"
             "int f(int y){ return y + 1; }\n",
         )
-        result = run_compiler_analyzer_sweep(
+        result = _guarded_compiler_sweep(
             target_path=target,
             file_path="ok.c",
             function_name="f",
@@ -710,7 +746,7 @@ class TestIncludeClosureSuppressionForgery:
 
     def _sweep_uaf(self, tmp_path, fixture, *extra):
         target = _target_with(tmp_path, fixture, *extra)
-        return run_compiler_analyzer_sweep(
+        return _guarded_compiler_sweep(
             target_path=target,
             file_path=fixture,
             function_name="use_after_free",
@@ -780,7 +816,7 @@ class TestIncludeClosureSuppressionForgery:
             '#line 5 "parser.y"\n'
             "int f(int y){ return y + 1; }\n",
         )
-        result = run_compiler_analyzer_sweep(
+        result = _guarded_compiler_sweep(
             target_path=target,
             file_path="ok.c",
             function_name="f",
@@ -847,7 +883,7 @@ class TestIncludeClosureSuppressionForgery:
             '#include "cond.h"\n'
             "int f(int y){ return y + 1; }\n",
         )
-        result = run_compiler_analyzer_sweep(
+        result = _guarded_compiler_sweep(
             target_path=target,
             file_path="ok.c",
             function_name="f",

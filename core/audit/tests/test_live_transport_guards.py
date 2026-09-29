@@ -31,10 +31,13 @@ from core.audit import preprocessor_view as pv
 from core.audit.expanded_semgrep import ExpandedRuleResult
 from core.audit.sweep import SweepResult
 from core.audit.tests._live_transport import (
+    COMPILER_TRANSPORT_RE,
     EXPANDED_VIEW_TRANSPORT_RE,
     SEMGREP_TRANSPORT_RE,
+    run_compiler_analyzer_sweep_guarded,
     run_pinned_subprocess,
     run_semgrep_sweep_guarded,
+    skip_if_compiler_transport_degraded,
     skip_if_expanded_view_transport_degraded,
     skip_if_semgrep_transport_degraded,
 )
@@ -330,6 +333,386 @@ class TestSemgrepDirectionsThroughLiveBody:
                 self._run_live_body(tmp_path)
 
         _fail_on_skip(body)
+
+
+# ---------------------------------------------------------------------
+# compiler channel — guard directions
+# ---------------------------------------------------------------------
+
+
+_COMPILER_NOT_INSTALLED_REASON = (
+    "compiler static analyzer not installed "
+    "(need gcc >= 10 with -fanalyzer, or clang)"
+)
+
+
+def _compiler_error(
+    reason: str, *, rule_id: str | None = "compiler:cwe-416",
+) -> SweepResult:
+    return SweepResult(
+        tool="compiler", file_path="app.c", function_name="f",
+        outcome="error", errors=[reason], rule_id=rule_id,
+    )
+
+
+def _compiler_verdict(
+    outcome: str, *, compiler: str | None,
+) -> SweepResult:
+    details = {"compiler": compiler} if compiler is not None else None
+    return SweepResult(
+        tool="compiler", file_path="app.c", function_name="f",
+        outcome=outcome, rule_id="compiler:cwe-416", details=details,
+    )
+
+
+class TestCompilerGuardDirections:
+    @pytest.mark.parametrize("reason", [
+        "analyzer timed out (120s)",
+        "analyzer timed out (45s)",
+        "analyzer killed by signal 9",
+        "analyzer killed by signal 11",
+        "analyzer invocation failed: [Errno 11] Resource temporarily "
+        "unavailable",
+        "analyzer invocation failed: [Errno 12] Cannot allocate memory",
+    ])
+    def test_transport_reasons_skip(self, reason: str) -> None:
+        with pytest.raises(
+            pytest.skip.Exception, match="transport degraded",
+        ):
+            skip_if_compiler_transport_degraded(
+                _compiler_error(reason), gcc_probed=True,
+            )
+
+    def test_availability_arm_skips_on_gcc_probed_hosts(self) -> None:
+        # rule_id=None + the exact pre-spawn message: the gcc probe
+        # itself degrades under load, so on a host that probed gcc
+        # healthy at collection this is a transport statement.
+        with pytest.raises(
+            pytest.skip.Exception, match="transport degraded",
+        ):
+            skip_if_compiler_transport_degraded(
+                _compiler_error(
+                    _COMPILER_NOT_INSTALLED_REASON, rule_id=None,
+                ),
+                gcc_probed=True,
+            )
+
+    def test_availability_arm_stays_hard_on_clang_only_hosts(self) -> None:
+        # _clang_path is a bare PATH lookup load cannot flip: the same
+        # message on a clang-only host is a product-shaped surprise.
+        _fail_on_skip(
+            lambda: skip_if_compiler_transport_degraded(
+                _compiler_error(
+                    _COMPILER_NOT_INSTALLED_REASON, rule_id=None,
+                ),
+                gcc_probed=False,
+            ),
+        )
+
+    @pytest.mark.parametrize("reason", [
+        # The sweep's own verdicts on the input — product territory.
+        "path escapes target: ../evil.c",
+        "file not found: /repo/ghost.c",
+        "core.sandbox unavailable — refusing to run the compiler "
+        "on untrusted source without isolation",
+        # The broad except-tuple also wraps ValueError/TypeError from
+        # product code — only the errno'd OSError subset is transport.
+        "analyzer invocation failed: expected str, bytes or "
+        "os.PathLike object, not NoneType",
+        "analyzer invocation failed: embedded null byte",
+        # Anchoring look-alikes.
+        "analyzer timed out (120s) again",
+        "analyzer killed by signal 9; retried",
+        "analyzer timed out (120s)\n",
+    ])
+    def test_product_error_reasons_do_not_skip(self, reason: str) -> None:
+        _fail_on_skip(
+            lambda: skip_if_compiler_transport_degraded(
+                _compiler_error(reason), gcc_probed=True,
+            ),
+        )
+
+    def test_rule_id_keying_blocks_none_arm_leaks(self) -> None:
+        # A transport-shaped reason with rule_id=None is not the arm
+        # that mints it — no skip.
+        _fail_on_skip(
+            lambda: skip_if_compiler_transport_degraded(
+                _compiler_error("analyzer timed out (120s)", rule_id=None),
+                gcc_probed=True,
+            ),
+        )
+        # And the availability text on the compiler:* arm is not the
+        # arm that mints IT — no skip.
+        _fail_on_skip(
+            lambda: skip_if_compiler_transport_degraded(
+                _compiler_error(_COMPILER_NOT_INSTALLED_REASON),
+                gcc_probed=True,
+            ),
+        )
+
+    def test_multi_error_results_do_not_skip(self) -> None:
+        res = _compiler_error("analyzer timed out (120s)")
+        res.errors.append("compile failed")
+        _fail_on_skip(
+            lambda: skip_if_compiler_transport_degraded(
+                res, gcc_probed=True,
+            ),
+        )
+
+    def test_other_tools_never_skip(self) -> None:
+        res = SweepResult(
+            tool="semgrep", file_path="app.c", function_name="f",
+            outcome="error", errors=["analyzer timed out (120s)"],
+            rule_id="compiler:cwe-416",
+        )
+        _fail_on_skip(
+            lambda: skip_if_compiler_transport_degraded(
+                res, gcc_probed=True,
+            ),
+        )
+
+    @pytest.mark.parametrize("outcome", [
+        "confirmed", "refuted", "inconclusive",
+    ])
+    def test_probe_flip_to_clang_skips_on_gcc_probed_hosts(
+        self, outcome: str,
+    ) -> None:
+        # gcc probed healthy at collection, but THIS run's probe lost
+        # it under load and the sweep silently fell back to clang —
+        # the verdict comes from a different analyzer than the leg's
+        # expectations were written against.
+        with pytest.raises(
+            pytest.skip.Exception, match="fell back to clang",
+        ):
+            skip_if_compiler_transport_degraded(
+                _compiler_verdict(outcome, compiler="clang"),
+                gcc_probed=True,
+            )
+
+    def test_clang_verdicts_stand_on_clang_only_hosts(self) -> None:
+        _fail_on_skip(
+            lambda: skip_if_compiler_transport_degraded(
+                _compiler_verdict("confirmed", compiler="clang"),
+                gcc_probed=False,
+            ),
+        )
+
+    def test_gcc_verdicts_never_skip(self) -> None:
+        for outcome in ("confirmed", "refuted", "inconclusive"):
+            _fail_on_skip(
+                lambda o=outcome: skip_if_compiler_transport_degraded(
+                    _compiler_verdict(o, compiler="gcc"),
+                    gcc_probed=True,
+                ),
+            )
+
+    def test_detail_less_results_never_skip(self) -> None:
+        # Pre-toolchain inconclusives (unmapped CWE, non-C file) carry
+        # no details dict — the flip arm must stay out of the way.
+        _fail_on_skip(
+            lambda: skip_if_compiler_transport_degraded(
+                _compiler_verdict("inconclusive", compiler=None),
+                gcc_probed=True,
+            ),
+        )
+
+
+# ---------------------------------------------------------------------
+# compiler channel — minted-identity pins (real sweep, injected
+# toolchain probes + sandbox seam)
+# ---------------------------------------------------------------------
+
+
+class TestCompilerMintedIdentities:
+    """The regex arms match what run_compiler_analyzer_sweep ACTUALLY
+    mints — pinned by running the real sweep with the toolchain
+    probes and the sandbox-run seam injected (no compiler, no
+    sandbox)."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_compiler_caches(self):
+        from core.audit import compiler_sweep as cs
+
+        cs._reset_probe_cache()
+        cs._reset_tu_cache()
+        yield
+        cs._reset_probe_cache()
+        cs._reset_tu_cache()
+
+    def _run_real_sweep(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        *,
+        gcc: tuple[str, str] | None,
+        clang: str | None,
+        sandbox_run,
+    ) -> SweepResult:
+        from core.audit import compiler_sweep as cs
+
+        target = tmp_path / "repo"
+        target.mkdir(exist_ok=True)
+        (target / "uaf.c").write_text("int f(void) { return 0; }\n")
+        monkeypatch.setattr(cs, "_gcc_analyzer", lambda: gcc)
+        monkeypatch.setattr(cs, "_clang_path", lambda: clang)
+        if sandbox_run is not None:
+            monkeypatch.setattr("core.sandbox.context.run", sandbox_run)
+        return cs.run_compiler_analyzer_sweep(
+            target_path=target, file_path="uaf.c", function_name="f",
+            hypothesis="use-after-free of `p`", cwe="CWE-416",
+            out_dir=tmp_path / "out",
+        )
+
+    @staticmethod
+    def _fake_gcc() -> tuple[str, str]:
+        import sys
+
+        # A real on-disk path (the cache key stats the compiler
+        # binary) whose spawn never happens — the sandbox seam is
+        # stubbed.
+        return (sys.executable, "json")
+
+    def _minted_error(
+        self, monkeypatch, tmp_path, sandbox_run,
+    ) -> SweepResult:
+        result = self._run_real_sweep(
+            monkeypatch, tmp_path,
+            gcc=self._fake_gcc(), clang=None, sandbox_run=sandbox_run,
+        )
+        assert result.outcome == "error"
+        assert result.rule_id == "compiler:cwe-416"
+        assert len(result.errors) == 1
+        return result
+
+    def test_timeout_identity(self, monkeypatch, tmp_path) -> None:
+        result = self._minted_error(
+            monkeypatch, tmp_path,
+            _raising_runner(subprocess.TimeoutExpired(["gcc"], 120)),
+        )
+        assert COMPILER_TRANSPORT_RE.match(result.errors[0]), result.errors
+
+    def test_signal_kill_identity(self, monkeypatch, tmp_path) -> None:
+        result = self._minted_error(
+            monkeypatch, tmp_path, _rc_runner(-9),
+        )
+        assert COMPILER_TRANSPORT_RE.match(result.errors[0]), result.errors
+
+    def test_spawn_oserror_identity(self, monkeypatch, tmp_path) -> None:
+        result = self._minted_error(
+            monkeypatch, tmp_path,
+            _raising_runner(
+                OSError(errno.EAGAIN, "Resource temporarily unavailable"),
+            ),
+        )
+        assert COMPILER_TRANSPORT_RE.match(result.errors[0]), result.errors
+
+    def test_product_typeerror_stays_hard(self, monkeypatch, tmp_path) -> None:
+        # The same except-tuple wraps TypeError from product code —
+        # the minted spelling must NOT match, and the guarded runner
+        # must return it as a hard error result, not a skip.
+        result = self._minted_error(
+            monkeypatch, tmp_path,
+            _raising_runner(TypeError(
+                "expected str, bytes or os.PathLike object, not NoneType",
+            )),
+        )
+        assert not COMPILER_TRANSPORT_RE.match(result.errors[0]), (
+            result.errors
+        )
+
+    def test_timeout_constant_pins_the_arm(self) -> None:
+        from core.audit import compiler_sweep as cs
+
+        assert COMPILER_TRANSPORT_RE.match(
+            f"analyzer timed out ({cs._COMPILE_TIMEOUT_S}s)",
+        )
+
+    def test_not_installed_identity_and_guard_chain(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        # Both probes gone: the sweep mints the availability arm with
+        # rule_id=None, and the guarded runner converts it to a skip
+        # on a gcc-probed host.
+        result = self._run_real_sweep(
+            monkeypatch, tmp_path, gcc=None, clang=None, sandbox_run=None,
+        )
+        assert result.outcome == "error"
+        assert result.rule_id is None
+        assert result.errors == [_COMPILER_NOT_INSTALLED_REASON]
+        with pytest.raises(
+            pytest.skip.Exception, match="transport degraded",
+        ):
+            skip_if_compiler_transport_degraded(result, gcc_probed=True)
+
+    def test_probe_flip_minted_through_real_sweep(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        # gcc probe returns None, clang present: the real sweep runs
+        # the (stubbed) clang leg and stamps details["compiler"] =
+        # "clang" — the guarded chain skips on a gcc-probed host and
+        # returns the verdict on a clang-only one.
+        import sys
+
+        from core.audit import compiler_sweep as cs
+
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "uaf.c").write_text("int f(void) { return 0; }\n")
+        monkeypatch.setattr(cs, "_gcc_analyzer", lambda: None)
+        monkeypatch.setattr(cs, "_clang_path", lambda: sys.executable)
+        monkeypatch.setattr("core.sandbox.context.run", _rc_runner(0))
+
+        def _call() -> SweepResult:
+            return run_compiler_analyzer_sweep_guarded(
+                gcc_probed=False,
+                target_path=target, file_path="uaf.c",
+                function_name="f", hypothesis="use-after-free of `p`",
+                cwe="CWE-416", out_dir=tmp_path / "out",
+            )
+
+        result: SweepResult | None = None
+
+        def body() -> None:
+            nonlocal result
+            result = _call()
+
+        _fail_on_skip(body)
+        assert result is not None
+        assert (result.details or {}).get("compiler") == "clang"
+        cs._reset_tu_cache()
+        with pytest.raises(
+            pytest.skip.Exception, match="fell back to clang",
+        ):
+            run_compiler_analyzer_sweep_guarded(
+                gcc_probed=True,
+                target_path=target, file_path="uaf.c",
+                function_name="f", hypothesis="use-after-free of `p`",
+                cwe="CWE-416", out_dir=tmp_path / "out",
+            )
+
+    def test_guard_chain_timeout_skips(self, monkeypatch, tmp_path) -> None:
+        # Full chain: real sweep + injected deadline through the
+        # guarded runner.
+        from core.audit import compiler_sweep as cs
+
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "uaf.c").write_text("int f(void) { return 0; }\n")
+        monkeypatch.setattr(cs, "_gcc_analyzer", self._fake_gcc)
+        monkeypatch.setattr(cs, "_clang_path", lambda: None)
+        monkeypatch.setattr(
+            "core.sandbox.context.run",
+            _raising_runner(subprocess.TimeoutExpired(["gcc"], 120)),
+        )
+        with pytest.raises(
+            pytest.skip.Exception, match="transport degraded",
+        ):
+            run_compiler_analyzer_sweep_guarded(
+                gcc_probed=True,
+                target_path=target, file_path="uaf.c",
+                function_name="f", hypothesis="use-after-free of `p`",
+                cwe="CWE-416", out_dir=tmp_path / "out",
+            )
 
 
 # ---------------------------------------------------------------------
@@ -680,3 +1063,35 @@ class TestSemgrepSurfaceFences:
             drain_at = order["drain"]
             probe_at = order["_probe_or_skip_semgrep"]
             assert max(probe_at) > max(drain_at), test_name
+
+
+class TestCompilerSurfaceFences:
+    """Every live compiler-analyzer call site routes through the
+    guarded runner (via the file-local ``_guarded_compiler_sweep``),
+    enumerated exactly. A new live test calling the raw sweep — or a
+    guard silently dropped — flips these."""
+
+    def test_compiler_sweep(self) -> None:
+        calls = _function_call_map("test_compiler_sweep.py")
+        # The one raw caller is the deliberate toolchain fault: it
+        # MINTS the not-installed shape on purpose, so it must bypass
+        # the guard.
+        assert _callers_of(calls, "run_compiler_analyzer_sweep") == {
+            "test_both_missing_is_error",
+        }
+        assert _callers_of(
+            calls, "run_compiler_analyzer_sweep_guarded",
+        ) == {"_guarded_compiler_sweep"}
+        assert _callers_of(calls, "_guarded_compiler_sweep") == {
+            "_sweep",
+            "test_sandbox_used_with_network_deny",
+            "test_non_c_file_inconclusive",
+            "test_path_escape_is_error",
+            "test_missing_file_is_error",
+            "test_pragma_suppressed_silence_cannot_refute",
+            "test_linemarker_system_header_silence_cannot_refute",
+            "test_clean_tu_with_prose_mentions_still_refutes",
+            "_sweep_uaf",
+            "test_in_tree_linemarker_still_refutes",
+            "test_conditional_analyzer_token_in_header_cannot_refute",
+        }
