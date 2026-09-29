@@ -13,7 +13,30 @@ runs after this autouse fixture and wins.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from core.audit.tests.checklist_corpus import ChecklistBuildCache
+
+
+@pytest.fixture(scope="session")
+def checklist_builds(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[ChecklistBuildCache]:
+    """Build-once cache for checklist-CLI corpora (one build per
+    DISTINCT corpus per pytest process; per xdist worker). Shared
+    trees are read-only on disk — mutation fails loudly; consumers
+    write into ``make_run_dir`` copies. Doctrine + identity contract:
+    ``core.audit.tests.checklist_corpus``."""
+    from core.audit.tests.checklist_corpus import ChecklistBuildCache
+
+    cache = ChecklistBuildCache(tmp_path_factory.mktemp)
+    yield cache
+    cache.restore_writability()
 
 
 @pytest.fixture(autouse=True)
