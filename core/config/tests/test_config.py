@@ -146,6 +146,34 @@ class TestGetSafeEnv:
             "RAPTOR_LLM_TRANSCRIPT" in RaptorConfig.TARGET_ENV_STRIP_SET
         )
 
+    def test_registry_home_var_survives_scrub(self):
+        """RAPTOR_REGISTRY_HOME must cross the subprocess boundary:
+        RAPTOR's own scrub-spawned children (libexec lifecycle
+        helpers, coverage hooks, nested dispatches) re-resolve the
+        operator registries through core.project.registry_home, and a
+        stripped var means the child resolves the DEFAULT home while
+        the parent runs against the override — the registry contract
+        (session binding, .active bookmark, ledger locks) silently
+        splits at every spawn boundary. Path value, absolute-only
+        validated at consumption; an attacker setting it gains
+        nothing beyond same-UID write access to the home dirs it
+        redirects (the RAPTOR_OUT_DIR argument)."""
+        with patch.dict(os.environ, {
+            "RAPTOR_REGISTRY_HOME": "/tmp/reg-scratch",
+        }):
+            safe = RaptorConfig.get_safe_env()
+        assert safe.get("RAPTOR_REGISTRY_HOME") == "/tmp/reg-scratch"
+
+    def test_registry_home_var_stripped_from_target_envs(self):
+        """Target-bound envs must NOT carry the registry override — it
+        is a framework tell plus a host path leaking the operator's
+        registry layout, and no target consumes it. Membership in
+        TARGET_ENV_STRIP_SET is what the table-driven strip harnesses
+        key on."""
+        assert (
+            "RAPTOR_REGISTRY_HOME" in RaptorConfig.TARGET_ENV_STRIP_SET
+        )
+
     def test_redb_ceiling_override_survives_scrub(self):
         """RAPTOR_REDB_MAX_BYTES must reach scrub-spawned children:
         the RE-database ceiling is resolved per process, so stripping

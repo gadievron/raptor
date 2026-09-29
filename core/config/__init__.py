@@ -629,6 +629,25 @@ class RaptorConfig:
         # TARGET_ENV_STRIP_SET (sandboxed code never sees the
         # credential; see core/sandbox/context.py).
         "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
+        #   RAPTOR_REGISTRY_HOME  operator-registry relocation override
+        #                    (core.project.registry_home — projects
+        #                    registry, .active bookmark, sessions.d,
+        #                    all from one base). Must survive the
+        #                    subprocess boundary: RAPTOR's own
+        #                    scrub-spawned children re-resolve the
+        #                    registries through the seam, and a
+        #                    stripped var means the child resolves the
+        #                    DEFAULT home while the parent runs
+        #                    against the override — session binding,
+        #                    bookmark, and ledger locking silently
+        #                    split at every spawn boundary (the
+        #                    RAPTOR_OUT_DIR silent-loss class).
+        #                    Absolute-path-validated on every read;
+        #                    an attacker setting it gains nothing
+        #                    beyond same-UID write access to the dirs
+        #                    it redirects. Target-bound envs strip it
+        #                    below.
+        "RAPTOR_REGISTRY_HOME",
         # Host-level consent for RAPTOR's reduced untrusted sandbox tier.
         # RAPTOR-owned workers must inherit it so the decision made at the
         # launcher boundary is not silently lost.  Target-bound envs strip it
@@ -686,6 +705,11 @@ class RaptorConfig:
         # by contract.
         "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND",
         "RAPTOR_SCORECARD_PATH",
+        # Operator-registry override: framework tell plus a host path
+        # that leaks the operator's registry layout. No target
+        # consumes it; RAPTOR's own children ride the keep-trust
+        # dispatch arm.
+        "RAPTOR_REGISTRY_HOME",
         # LLM transcript seam: framework tell plus a host path that
         # leaks the run layout. No target consumes it; RAPTOR's own
         # LLM-calling children ride the keep-trust dispatch arm.

@@ -565,6 +565,7 @@ def main() -> int:
                   "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
                   "RAPTOR_NO_SANDBOX_NONCE",
                   "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND",
+                  "RAPTOR_REGISTRY_HOME",
                   "RAPTOR_SCORECARD_PATH", "RAPTOR_LLM_TRANSCRIPT",
                   "RAPTOR_SANITIZER_CUT", "RAPTOR_SANITIZER_CUT_NO_LEXICAL",
                   "RAPTOR_SANITIZER_CUT_PARITY_LOG",
