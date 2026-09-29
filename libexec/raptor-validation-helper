@@ -4878,11 +4878,17 @@ def _assemble_a(
         expected = {f.get("id") for f in inventory.get("findings", [])
                     if isinstance(f, dict) and f.get("id")}
         got = {f["id"] for f in findings}
-        for fid in sorted(expected - got):
-            print(f"WARNING: inventory id {fid} missing from assembled "
-                  "findings", file=sys.stderr)
-        for fid in sorted(got - expected):
-            print(f"WARNING: assembled finding {fid} not in the "
+        # Both id sets are producer-derived (findings.json rides in
+        # from imports; part rows are LLM-written): escape and bound
+        # each id before it joins a terminal line — a raw id carrying
+        # ESC/newline bytes is a terminal-injection / log-splitting
+        # primitive on this stderr channel.
+        for fid in sorted(expected - got, key=str):
+            print(f"WARNING: inventory id {_sft(str(fid), max_len=120)} "
+                  "missing from assembled findings", file=sys.stderr)
+        for fid in sorted(got - expected, key=str):
+            print(f"WARNING: assembled finding "
+                  f"{_sft(str(fid), max_len=120)} not in the "
                   "findings.json inventory", file=sys.stderr)
 
     return {"stage-a.json": ("stage", assembled)}, merged_names
