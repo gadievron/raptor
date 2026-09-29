@@ -98,7 +98,7 @@ REGEX_POP_METHODS: tuple[str, ...] = (
 )
 
 _RE_METHOD_DEF = re.compile(
-    rb"function\s+&?\s*("
+    rb"function\s+(?:&\s*)?("
     + b"|".join(m.encode() for m in REGEX_POP_METHODS)
     + rb")\s*\(",
     re.IGNORECASE,
@@ -114,7 +114,7 @@ _RE_SERIALIZABLE = re.compile(
 #: The name must follow ``function`` immediately, so ``__unserialize``
 #: (POP arm) and near-names like ``deserialize`` never match.
 _RE_PAIR_DEF = re.compile(
-    rb"function\s+&?\s*(?:un)?serialize\s*\(", re.IGNORECASE,
+    rb"function\s+(?:&\s*)?(?:un)?serialize\s*\(", re.IGNORECASE,
 )
 
 #: Trait-use adaptation targets the alias arm greps for — the POP
@@ -158,7 +158,7 @@ _RE_TRAIT_ALIAS = re.compile(
 #: arm's purposes.
 _RE_AUTOLOAD = re.compile(
     rb"\bspl_autoload_register\b"
-    rb"|\bfunction\s+&?\s*__autoload\s*\("
+    rb"|\bfunction\s+(?:&\s*)?__autoload\s*\("
     rb"|unserialize_callback_func",
     re.IGNORECASE,
 )
