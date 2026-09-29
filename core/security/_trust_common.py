@@ -37,7 +37,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.security.capped_read import read_capped
+from core.security.capped_read import read_capped, read_capped_with_stat
 
 # RAPTOR repo root = core/security/_trust_common.py -> ../../
 # Both gates skip scanning RAPTOR's own repo (operator running RAPTOR
@@ -82,13 +82,29 @@ def read_git_link(path: Path) -> str | None:
     unreadable, non-regular, symlink (O_NOFOLLOW via the shared capped
     read), oversized, empty, or multi-line.
     """
-    raw = read_trust_config(path)
-    if raw is None or len(raw) > GIT_LINK_MAX_BYTES:
-        return None
+    return read_git_link_with_stat(path)[0]
+
+
+def read_git_link_with_stat(
+    path: Path,
+) -> tuple[str, os.stat_result] | tuple[None, None]:
+    """:func:`read_git_link` plus the fstat of the fd the payload was
+    read from.
+
+    For link files whose trust decision keys on stat fields (type,
+    ownership): the returned stat describes the very inode the bytes
+    came from, so type, ownership, and content are one atomic
+    observation — a separate path-level lstat would leave a swap
+    window between the stat and the read. ``(None, None)`` on ANY
+    problem, same refusal set as :func:`read_git_link`.
+    """
+    raw, st = read_capped_with_stat(path, MAX_TRUST_CONFIG_BYTES)
+    if raw is None or st is None or len(raw) > GIT_LINK_MAX_BYTES:
+        return None, None
     text = os.fsdecode(raw).strip()
     if not text or any(c in text for c in ("\n", "\r", "\x00")):
-        return None
-    return text
+        return None, None
+    return text, st
 
 
 def is_registered_worktree_of_self(target: Path, raptor_dir: Path) -> bool:
@@ -113,14 +129,38 @@ def is_registered_worktree_of_self(target: Path, raptor_dir: Path) -> bool:
     — both sides must agree on the exact registry entry that nominated
     the match.
 
+    INVARIANT — registrant uid equality, three ways: the nominating
+    registry entry directory (``worktrees/<name>`` itself, trusted-side
+    — an attacker who can re-own it can write the registry and needs
+    none of this) anchors the registrant's uid; the directory at the
+    registered path AND the target's ``.git`` back-link file must both
+    carry that exact uid. A stale registry entry whose worktree was
+    deleted (``rm -rf`` without a prune — and ``git worktree prune``
+    cannot help: it only stats the path named in ``gitdir``, so a
+    re-plant satisfies it) would otherwise trust hostile content
+    planted at the vacated path by ANY local uid — under a sticky
+    world-writable parent (/tmp, /var/tmp) the vacated name is free
+    for everyone. A non-root attacker cannot choose the ``st_uid`` of
+    anything they create (chown needs CAP_CHOWN; FUSE uid forgery
+    needs the non-default ``user_allow_other``, without which every
+    non-mounter access fails EACCES → fail-closed), so foreign
+    ownership on either object is proof the object is not the
+    registered worktree, whatever its contents claim. The anchor is
+    deliberately the entry DIRECTORY, not the ``worktrees/<name>/
+    gitdir`` file: ``git worktree move``/``repair`` rewrite that file
+    (in place on some git versions, via lockfile-rename — re-owning it
+    — on others), while no rewrite path touches the entry directory,
+    so the anchor survives cross-uid repairs under either semantics.
+    The back-link's type and ownership bind to the fstat of the very
+    fd the capped read returned bytes from — one atomic observation of
+    one inode, no lstat-then-open swap window.
+
     Fail closed everywhere: any OSError, unreadable/oversized/
     malformed file, symlinked ``.git`` (lstat first, never followed),
-    a symlink at the registered root itself, or missing piece → False
-    → the caller's normal scan runs. No exception escapes. Known
-    residual (operator-side control is registry hygiene via ``git
-    worktree prune``): a stale registry entry whose worktree was
-    deleted would trust hostile content later planted as a REAL
-    directory at that exact path with a forged back-link.
+    a symlink at the registered root itself, a symlink at the registry
+    entry (not a nomination), a uid mismatch on any of the three
+    objects, or missing piece → False → the caller's normal scan runs.
+    No exception escapes.
     """
     try:
         worktrees_dir = raptor_dir / ".git" / "worktrees"
@@ -139,6 +179,24 @@ def is_registered_worktree_of_self(target: Path, raptor_dir: Path) -> bool:
             wt_git = Path(payload)
             if not wt_git.is_absolute():
                 continue
+            # Registrant anchor: the nominating registry entry
+            # directory's owner. lstat (never follow) — a symlinked
+            # registry entry is not a nomination. Trusted-side data:
+            # the assumed attacker cannot write inside raptor_dir/
+            # .git, so there is no TOCTOU of interest between this
+            # lstat and the capped read above. ``git worktree add``
+            # creates this directory, the worktree root, and the
+            # ``.git`` back-link in one operation under one uid, so
+            # every single-principal add (including sudo adds and
+            # second-operator adds) satisfies the equality below by
+            # construction.
+            try:
+                st_entry = os.lstat(entry)
+            except OSError:
+                continue
+            if not stat.S_ISDIR(st_entry.st_mode):
+                continue
+            anchor_uid = st_entry.st_uid
             # The registered root must be a real DIRECTORY before any
             # resolve: a symlink at a registered path re-aims trust at
             # a path the registry never named (resolve() would follow
@@ -154,6 +212,13 @@ def is_registered_worktree_of_self(target: Path, raptor_dir: Path) -> bool:
                 continue
             if not stat.S_ISDIR(st_root.st_mode):
                 continue
+            # The root at the registered path must be owned by the
+            # registrant. A re-plant in a sticky world-writable parent
+            # is necessarily owned by its creator (chown needs
+            # CAP_CHOWN), so a foreign-uid root is not the registered
+            # worktree, whatever its contents claim.
+            if st_root.st_uid != anchor_uid:
+                continue
             try:
                 root = wt_git.parent.resolve()
             except (OSError, RuntimeError):
@@ -163,7 +228,10 @@ def is_registered_worktree_of_self(target: Path, raptor_dir: Path) -> bool:
             # Bidirectional link check. The target's own ``.git`` must
             # be a regular FILE — os.lstat first (never followed): a
             # symlink, or a real ``.git`` DIRECTORY squatting the
-            # registered path (an ordinary clone), is not self.
+            # registered path (an ordinary clone), is not self. This
+            # lstat is a cheap early reject only — it carries no
+            # trust; type and ownership are re-taken below from the
+            # fstat of the read fd.
             dotgit = target / ".git"
             try:
                 st = os.lstat(dotgit)
@@ -171,8 +239,26 @@ def is_registered_worktree_of_self(target: Path, raptor_dir: Path) -> bool:
                 continue
             if not stat.S_ISREG(st.st_mode):
                 continue
-            back = read_git_link(dotgit)
-            if back is None or not back.startswith("gitdir:"):
+            # Type + ownership bound to the READ fd: S_ISREG and
+            # st_uid come from the fstat of the very inode the bytes
+            # came from (the capped read opens with O_NOFOLLOW and
+            # fstats the open fd), so type, ownership, and content are
+            # one atomic observation — an lstat-then-open pair would
+            # leave a swap window between the stat and the read. The
+            # ownership check closes the composite where a
+            # registrant-owned directory is renamed into the vacated
+            # path and the attacker authors the back-link inside it:
+            # a forged back-link file is attacker-owned, and a real
+            # worktree's back-link names its OWN registry entry, not
+            # the nominating one.
+            back, st_git = read_git_link_with_stat(dotgit)
+            if back is None or st_git is None:
+                continue
+            if not stat.S_ISREG(st_git.st_mode):
+                continue
+            if st_git.st_uid != anchor_uid:
+                continue
+            if not back.startswith("gitdir:"):
                 continue
             back_path = Path(back[len("gitdir:"):].strip())
             if not back_path.is_absolute():

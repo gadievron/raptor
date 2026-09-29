@@ -60,8 +60,13 @@ class CappedReadRefused(ValueError):
 
 def _read_capped_or_raise(
     path: Path, max_bytes: int, *, follow_symlinks: bool,
-) -> bytes:
+) -> tuple[bytes, os.stat_result]:
     """The one hardened dance; raises on every refusal.
+
+    Returns ``(data, st)`` where ``st`` is the fstat of the OPEN fd the
+    bytes were read from — the same inode, so a caller that keys trust
+    on stat fields (type, ownership) binds them to the very bytes it
+    consumed instead of to a separate racy path-level stat.
 
     O_NONBLOCK + fstat(S_ISREG) closes the FIFO-DoS and stat-vs-open
     TOCTOU holes. O_NOFOLLOW closes the symlink-redirect hole — the
@@ -112,7 +117,7 @@ def _read_capped_or_raise(
             f"file grew past {max_bytes} byte cap: {path}",
             reason="grew_past_cap",
         )
-    return data
+    return data, st
 
 
 @overload
@@ -157,13 +162,34 @@ def read_capped(
     if raise_on_refusal:
         return _read_capped_or_raise(
             path, max_bytes, follow_symlinks=follow_symlinks,
-        )
+        )[0]
     try:
         return _read_capped_or_raise(
             path, max_bytes, follow_symlinks=follow_symlinks,
-        )
+        )[0]
     except Exception:  # noqa: BLE001 — any I/O surprise fails closed
         return None
+
+
+def read_capped_with_stat(
+    path: Path, max_bytes: int,
+) -> tuple[bytes, os.stat_result] | tuple[None, None]:
+    """:func:`read_capped` (default fail-closed, O_NOFOLLOW stance)
+    plus the fstat of the fd the bytes came from.
+
+    For callers whose trust decision keys on stat fields of the read
+    object (regular-file type, ownership): a separate path-level
+    lstat/stat leaves a window between the stat and the read where the
+    object can be swapped, so those fields must come from the fstat of
+    the very fd that produced the bytes — one atomic observation of
+    one inode. ``(None, None)`` on any refusal.
+    """
+    try:
+        return _read_capped_or_raise(
+            path, max_bytes, follow_symlinks=False,
+        )
+    except Exception:  # noqa: BLE001 — any I/O surprise fails closed
+        return None, None
 
 
 @overload
