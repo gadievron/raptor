@@ -17,19 +17,17 @@ Two wiring pins guard the seam itself, not just the helper:
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from core.audit.orchestrator import _reusable_prepass_census
-
-_RAPTOR_DIR = Path(__file__).resolve().parents[3]
-_CHECKLIST_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist")
+from core.audit.orchestrator import (
+    OrchestratorConfig,
+    _reusable_prepass_census,
+)
+from core.audit.tests.checklist_corpus import ChecklistBuildCache
 
 
 def _cfg(census, keys, *, cached=False):
@@ -104,7 +102,7 @@ class TestReusablePrepassCensus:
             cfg, {"a.c": ""}) is census
 
 
-def _write_target(target: Path) -> None:
+def _callers_c() -> str:
     parts = []
     for i in range(4):
         parts.append(textwrap.dedent(f"""\
@@ -120,33 +118,20 @@ def _write_target(target: Path) -> None:
             return 0;
         }
     """))
-    (target / "callers.c").write_text("\n".join(parts))
+    return "\n".join(parts)
 
 
-def _built_config(tmp_path_factory):
-    target = tmp_path_factory.mktemp("census_reuse_target")
-    _write_target(target)
-    # Nested run dir: prep's cross-run readers scan out_dir.parent —
-    # a private parent keeps that scan away from the session-shared
-    # pytest tmp root (see test_consistency_wiring for the history).
-    out = tmp_path_factory.mktemp("census_reuse_out") / "run"
-    out.mkdir()
-    env = dict(
-        os.environ,
-        CLAUDECODE="1",
-        _RAPTOR_TRUSTED="1",
-        PYTHONPATH=str(_RAPTOR_DIR),
-    )
-    r = subprocess.run(
-        [sys.executable, _CHECKLIST_CLI, str(target), str(out)],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
-    from core.audit.orchestrator import OrchestratorConfig
-
+def _built_config(
+    checklist_builds: ChecklistBuildCache, tmp_path: Path,
+) -> tuple[Path, Path, OrchestratorConfig]:
+    # The checklist build is shared (one CLI run per process for this
+    # corpus); the run dir is this test's private copy. Nested run
+    # dir: prep's cross-run readers scan out_dir.parent — a private
+    # parent keeps that scan away from the session-shared pytest tmp
+    # root (see test_consistency_wiring for the history).
+    build = checklist_builds.build({"callers.c": _callers_c()})
+    target = build.target
+    out = build.make_run_dir(tmp_path / "census_reuse_out" / "run")
     return target, out, OrchestratorConfig(
         target_path=target,
         out_dir=out,
@@ -160,7 +145,7 @@ def _built_config(tmp_path_factory):
 
 class TestPrepOrderPin:
     def test_census_is_stashed_before_the_battery_runs(
-        self, tmp_path_factory, monkeypatch,
+        self, checklist_builds, tmp_path, monkeypatch,
     ):
         """The reuse seam is DEAD CODE if the battery runs before the
         prepass stashes the census (the original review blocker: the
@@ -184,7 +169,7 @@ class TestPrepOrderPin:
         # probe real.
         monkeypatch.setattr(caps_mod, "_angr_available", lambda: False)
 
-        _, _, config = _built_config(tmp_path_factory)
+        _, _, config = _built_config(checklist_builds, tmp_path)
         seen: dict[str, object] = {}
 
         def _battery_stub(gaps, cfg, **kwargs):
@@ -223,7 +208,7 @@ class TestPrepOrderPin:
 @pytest.mark.slow
 class TestBatteryKwargsCapture:
     def test_stashed_census_reaches_the_detector(
-        self, tmp_path_factory, monkeypatch,
+        self, checklist_builds, tmp_path, monkeypatch,
     ):
         """Through the REAL battery: the stashed census object itself
         must arrive as detect_callsite_deviations' census kwarg, and
@@ -232,7 +217,7 @@ class TestBatteryKwargsCapture:
         import core.audit.callsite_consistency as cc
         from core.audit.orchestrator import _run_mechanical_detectors
 
-        target, _, config = _built_config(tmp_path_factory)
+        target, _, config = _built_config(checklist_builds, tmp_path)
         census = {"do_auth": SimpleNamespace(truncated=False)}
         config.consistency_census = census
         config.consistency_census_keys = frozenset(
@@ -276,14 +261,14 @@ class TestBatteryKwargsCapture:
         )
 
     def test_no_stash_means_detector_builds_its_own(
-        self, tmp_path_factory, monkeypatch,
+        self, checklist_builds, tmp_path, monkeypatch,
     ):
         # Reuse absent → census kwarg None → detect_callsite_deviations
         # keeps its historical build-inside behavior.
         import core.audit.callsite_consistency as cc
         from core.audit.orchestrator import _run_mechanical_detectors
 
-        _, _, config = _built_config(tmp_path_factory)
+        _, _, config = _built_config(checklist_builds, tmp_path)
         captured: dict[str, object] = {}
 
         def _capture(source_texts, **kwargs):
