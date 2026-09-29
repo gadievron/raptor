@@ -62,15 +62,30 @@ def _isolated_heap_ledger(tmp_path: Path, monkeypatch) -> None:
 # fixture's path-budget assertion is computed against it.
 _UDS_SOCK_NAME_MAX: int = len("joern.sock")
 # Linux sun_path is 108 bytes including the trailing NUL, so bind()
-# refuses paths longer than 107 characters.
+# refuses paths longer than 107 BYTES. Both directions of that unit
+# choice matter:
+#
+# * bytes, not str characters — the kernel compares the fsencoded
+#   path, so one multibyte UTF-8 TMPDIR character spends its full
+#   encoded width against the cap; a character count under-counts
+#   and admits a root whose socket paths then fail bind() with a
+#   confusing error inside whichever test touches the socket first;
+# * fsencode, not str.encode("utf-8") — a TMPDIR carrying
+#   undecodable bytes reaches Python as surrogate-escaped str, which
+#   .encode() rejects (UnicodeEncodeError) but os.fsencode
+#   round-trips back to the original bytes the kernel will see.
 _SUN_PATH_MAX: int = 107
 
 
 def _uds_budget_ok(root: str) -> bool:
     """Worst-case socket path under a ``mkdtemp(prefix="j")`` child of
-    *root* fits AF_UNIX's sun_path (mkdtemp appends 8 random chars)."""
+    *root* fits AF_UNIX's sun_path (mkdtemp appends 8 random chars).
+
+    Measured in bytes via ``os.fsencode`` — see the unit rationale at
+    ``_SUN_PATH_MAX``.
+    """
     worst = os.path.join(root, "j" + "X" * 8, "n" * _UDS_SOCK_NAME_MAX)
-    return len(worst) <= _SUN_PATH_MAX
+    return len(os.fsencode(worst)) <= _SUN_PATH_MAX
 
 
 @pytest.fixture
@@ -85,8 +100,8 @@ def uds_dir() -> Iterator[str]:
 
     Length budget, both directions:
 
-    * why not longer — sun_path caps the WHOLE path at 107 chars
-      (108 bytes with the NUL); every byte of directory nesting is
+    * why not longer — sun_path caps the WHOLE path at 107 bytes
+      (108 with the NUL); every byte of directory nesting is
       spent against that fixed ceiling, so the fixture creates its
       dir directly under the TMPDIR root with a one-char prefix and
       asserts the worst-case socket filename still fits;
@@ -103,7 +118,7 @@ def uds_dir() -> Iterator[str]:
         f"even {root!r} cannot host an AF_UNIX socket path"
     )
     d = tempfile.mkdtemp(prefix="j", dir=root)  # 0700 by default
-    assert len(d) + 1 + _UDS_SOCK_NAME_MAX <= _SUN_PATH_MAX
+    assert len(os.fsencode(d)) + 1 + _UDS_SOCK_NAME_MAX <= _SUN_PATH_MAX
     try:
         yield d
     finally:
