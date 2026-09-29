@@ -1279,6 +1279,31 @@ class TestProbeCache:
         if verdict is not True:
             assert reason  # non-engaged verdicts must carry a reason
 
+    def test_selfmap_write_refusal_is_definitive_false(self, monkeypatch):
+        # Probe/live-path fidelity fence: hosts exist (Ubuntu's AppArmor
+        # unprivileged-userns restriction) where the combined unshare
+        # succeeds and the identity self-map WRITE is what gets denied
+        # — the live spawn fails closed there, so the probe must say
+        # False, not True. The monkeypatched os functions are inherited
+        # by the probe's forked child: unshare is a no-op (hermetic on
+        # hosts that deny userns creation) and the three self-map opens
+        # raise the venue's EACCES.
+        _MAP_PATHS = ("/proc/self/setgroups", "/proc/self/gid_map",
+                      "/proc/self/uid_map")
+        real_open = os.open
+
+        def deny_selfmap_open(path, flags, *args, **kwargs):
+            if path in _MAP_PATHS:
+                raise PermissionError(errno.EACCES, "Permission denied",
+                                      path)
+            return real_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(os, "unshare", lambda flags: None)
+        monkeypatch.setattr(os, "open", deny_selfmap_open)
+        verdict, reason = probes._probe_pidns_supervision()
+        assert verdict is False
+        assert "self-map write" in reason
+
 
 class TestGuardrails:
     """Not-a-sandbox pins: these strings and shapes are load-bearing —

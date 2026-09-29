@@ -421,20 +421,26 @@ def check_pidns_supervision_available() -> tuple[bool | None, str]:
 
     Consulted by ``core.sandbox.supervised.spawn_supervised`` under
     ``pid_ns="auto"`` / ``"require"``. Exercises the tier's EXACT
-    namespace shape in-process: a single
+    namespace-setup sequence in-process: a single
     ``os.unshare(CLONE_NEWUSER | CLONE_NEWPID)`` call (never staged —
     restricted-userns hosts permit the combined call and refuse a
-    staged second one) followed by a fork whose child must be PID 1 of
-    the new namespace. In-process on purpose, like
-    ``_staged_pidns_selftest``: the real spawn unshares in-process, so
-    an exec'd CLI probe would answer the wrong question.
+    staged second one), then the identity uid/gid self-map writes the
+    tier's ``_ns_setup`` performs (hosts exist — Ubuntu's AppArmor
+    unprivileged-userns restriction — where the combined unshare
+    succeeds and the self-map write is what gets denied; a probe that
+    stops at the unshare says True where the live spawn fails),
+    followed by a fork whose child must be PID 1 of the new namespace.
+    In-process on purpose, like ``_staged_pidns_selftest``: the real
+    spawn unshares in-process, so an exec'd CLI probe would answer the
+    wrong question.
 
     Returns ``(verdict, reason)`` — tri-state:
       True  — the tier engages (cached).
       False — DEFINITIVE refusal: the kernel/LSM denied the unshare
               (EPERM/EACCES — e.g. AppArmor's unprivileged-userns
-              restriction — or ENOSYS/EINVAL), the platform lacks the
-              primitives, or the namespace did not actually take
+              restriction — or ENOSYS/EINVAL), the post-unshare
+              identity self-map write was refused, the platform lacks
+              the primitives, or the namespace did not actually take
               effect. Cached.
       None  — the probe itself could not run (fork failure under
               pressure, signal death, unexpected error). NOT a verdict
@@ -479,9 +485,12 @@ def _probe_pidns_supervision() -> tuple[bool | None, str]:
 
     Fork/exit-code discipline of ``_staged_pidns_selftest``. Child exit
     codes: 0 engaged; 190 EPERM/EACCES; 191 ENOSYS/EINVAL; 192 other
-    unshare failure; 194 the post-unshare fork failed (infrastructure,
-    not a verdict); 195 the fork child was not PID 1 (namespace did
-    not take effect); 196 the grandchild died abnormally.
+    unshare failure; 193 the identity uid/gid self-map write failed
+    (the tier's ``_ns_setup`` performs the same writes and converts
+    the failure into its typed refusal); 194 the post-unshare fork
+    failed (infrastructure, not a verdict); 195 the fork child was not
+    PID 1 (namespace did not take effect); 196 the grandchild died
+    abnormally.
     """
     import sys as _sys
     if _sys.platform != "linux":
@@ -493,6 +502,8 @@ def _probe_pidns_supervision() -> tuple[bool | None, str]:
 
     _CLONE_NEWUSER = getattr(os, "CLONE_NEWUSER", 0x10000000)
     _CLONE_NEWPID = getattr(os, "CLONE_NEWPID", 0x20000000)
+    uid = os.getuid()
+    gid = os.getgid()
     import warnings as _warnings
     with _warnings.catch_warnings():
         _warnings.filterwarnings(
@@ -515,6 +526,24 @@ def _probe_pidns_supervision() -> tuple[bool | None, str]:
             os._exit(192)
         except BaseException:
             os._exit(192)
+        # The identity self-map sequence, verbatim from the tier's
+        # _ns_setup (deny setgroups, then the single-row gid/uid
+        # self-maps): the write is a distinct kernel/LSM permission
+        # from the unshare itself, and the live spawn fails closed on
+        # it — so the probe must too.
+        try:
+            for _path, _data in (
+                ("/proc/self/setgroups", "deny"),
+                ("/proc/self/gid_map", f"{gid} {gid} 1"),
+                ("/proc/self/uid_map", f"{uid} {uid} 1"),
+            ):
+                _fd = os.open(_path, os.O_WRONLY)
+                try:
+                    os.write(_fd, _data.encode("ascii"))
+                finally:
+                    os.close(_fd)
+        except BaseException:
+            os._exit(193)
         try:
             grandchild = os.fork()
         except BaseException:
@@ -551,6 +580,13 @@ def _probe_pidns_supervision() -> tuple[bool | None, str]:
                        "support)")
     if code == 192:
         return (False, "unshare(CLONE_NEWUSER|CLONE_NEWPID) failed")
+    if code == 193:
+        return (False, "post-unshare identity uid/gid self-map write "
+                       "refused (hosts with restricted unprivileged "
+                       "user namespaces — e.g. Ubuntu's AppArmor "
+                       "userns transition — permit the unshare and "
+                       "deny the map write; the supervised tier "
+                       "cannot complete namespace setup)")
     if code == 195:
         return (False, "pid namespace did not take effect (fork child "
                        "was not PID 1)")

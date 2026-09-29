@@ -5,8 +5,13 @@ namespace-empty collapse, PDEATHSIG chains — so the module is gated on
 the same probe the spawn path consults
 (``check_pidns_supervision_available``): hosts where the tier cannot
 engage skip cleanly (CI-hermeticity doctrine — probe, skip, never
-error). Unit-level behaviour that does not need a namespace lives in
-test_supervised.py.
+error). The probe exercises the tier's FULL setup sequence — the
+combined unshare AND the identity self-map writes — because hosts
+exist (Ubuntu's AppArmor unprivileged-userns restriction) that permit
+the unshare and deny the map write: there the live spawn degrades to
+the group tier, and every namespace-premised assertion below would
+fail against a group-tier handle instead of skipping. Unit-level
+behaviour that does not need a namespace lives in test_supervised.py.
 
 Fleet-kill doctrine: every signalled pid/pidfd comes from a spawn this
 file performed, no pid or pgid <= 1 is ever a sentinel, waits are
