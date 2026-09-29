@@ -37,6 +37,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import logging
+import math
 import os
 import threading
 import time
@@ -123,10 +124,20 @@ def parse_budget_s() -> float:
     raw = os.environ.get(_BUDGET_ENV, "")
     if raw:
         try:
-            return float(raw)
+            value = float(raw)
         except ValueError:
             logger.warning(
                 "%s=%r is not a number; using the %ss default",
+                _BUDGET_ENV, raw, DEFAULT_PARSE_BUDGET_S,
+            )
+        else:
+            # nan/inf parse as floats but poison the consumers: nan
+            # defeats the != memo in _sync_budget and int(nan * 1e6)
+            # raises where a junk string merely warned.
+            if math.isfinite(value):
+                return value
+            logger.warning(
+                "%s=%r is not finite; using the %ss default",
                 _BUDGET_ENV, raw, DEFAULT_PARSE_BUDGET_S,
             )
     return DEFAULT_PARSE_BUDGET_S

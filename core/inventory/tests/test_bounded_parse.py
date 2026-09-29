@@ -173,6 +173,25 @@ def test_budget_env_override_and_bad_value(monkeypatch):
     assert _ts_cache.parse_budget_s() == _ts_cache.DEFAULT_PARSE_BUDGET_S
 
 
+def test_nonfinite_budget_env_clamps_to_default(monkeypatch):
+    """nan/inf parse as floats but poison the consumers (nan defeats
+    the != memo in _sync_budget; int(nan * 1e6) raises), so they must
+    clamp to the warned default like a junk string does."""
+    for raw in ("nan", "inf", "-inf", "NaN", "Infinity"):
+        monkeypatch.setenv("RAPTOR_TS_PARSE_BUDGET_S", raw)
+        assert _ts_cache.parse_budget_s() == _ts_cache.DEFAULT_PARSE_BUDGET_S
+
+
+def test_nonfinite_budget_env_never_breaks_parsing(monkeypatch):
+    """End to end: a nan budget in the environment must not crash
+    construction or the parse itself — it degrades to the bounded
+    default."""
+    monkeypatch.setenv("RAPTOR_TS_PARSE_BUDGET_S", "nan")
+    parser = _fresh_js_parser()  # no explicit budget: env-resolved
+    tree = parser.parse(b"var x = 1;\n")
+    assert not tree.root_node.has_error
+
+
 def test_zero_budget_disables_bound():
     parser = _fresh_js_parser(budget_s=0.0)
     tree = parser.parse(b"var x = 1;\n")
