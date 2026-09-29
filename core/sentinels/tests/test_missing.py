@@ -10,8 +10,52 @@ the sentinel's actual location.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import sys
+from typing import Iterator
+
+
+@contextlib.contextmanager
+def _purged_core_json_window() -> Iterator[None]:
+    """Purge ``core.json.*`` from sys.modules, then RESTORE the
+    pre-purge module objects on exit (same shape as
+    ``core/json/tests/test_f046_lazy_reexports.py``).
+
+    Both directions matter. The purge is load-bearing for the survival
+    test — minting fresh ``core.json`` module objects is exactly the
+    hostile reload the sentinel must survive. The restoration is
+    load-bearing for every LATER test in the process: production
+    modules bind ``from core.json import load_json`` at import time,
+    so leaving fresh duplicates in sys.modules detaches those held
+    functions from what a later ``import core.json.utils`` resolves —
+    that test's ``patch.object()`` then lands on a module the
+    executing code never reads (observed: the openant recovery test's
+    stdlib-json forcing was defeated and the live orjson lane rejected
+    its non-finite fixture).
+    """
+    saved = {
+        mod: sys.modules.pop(mod)
+        for mod in list(sys.modules)
+        if mod == "core.json" or mod.startswith("core.json.")
+    }
+    try:
+        yield
+    finally:
+        for mod in list(sys.modules):
+            if mod == "core.json" or mod.startswith("core.json."):
+                del sys.modules[mod]
+        sys.modules.update(saved)
+        # A fresh ``import core.json`` inside the window rebinds the
+        # parent package's ``json`` attribute; point it back at the
+        # restored original (attribute access on an already-imported
+        # package bypasses sys.modules).
+        core_pkg = sys.modules.get("core")
+        if core_pkg is not None:
+            if "core.json" in saved:
+                core_pkg.json = saved["core.json"]
+            else:
+                core_pkg.__dict__.pop("json", None)
 
 
 def test_missing_is_singleton():
@@ -68,14 +112,46 @@ def test_missing_survives_core_json_reload():
     from core.sentinels import MISSING
 
     pre_id = id(MISSING)
-    for mod in list(sys.modules):
-        if mod == "core.json" or mod.startswith("core.json."):
-            del sys.modules[mod]
-    importlib.import_module("core.json")
+    with _purged_core_json_window():
+        importlib.import_module("core.json")
 
-    from core.sentinels import MISSING as MISSING_after
+        from core.sentinels import MISSING as MISSING_after
 
-    assert id(MISSING_after) == pre_id, (
-        "MISSING singleton replaced by core.json.* reload — sentinel "
-        "must live outside any namespace that test suites manipulate."
+        assert id(MISSING_after) == pre_id, (
+            "MISSING singleton replaced by core.json.* reload — "
+            "sentinel must live outside any namespace that test "
+            "suites manipulate."
+        )
+
+
+def test_purged_window_restores_preexisting_modules():
+    """The survival test's purge window must hand back the ORIGINAL
+    ``core.json.*`` module objects when it closes.
+
+    In-process regression for the deterministic 2-test repro: running
+    this file's survival test then packages/openant test_recovery's
+    test_nonfinite_confidence_dropped_record_stays_serializable in one
+    pytest process. recovery.py binds ``from core.json import
+    load_json`` at import time; the recovery test patches ``_orjson``
+    on whatever ``import core.json.utils`` resolves at call time. A
+    purge that leaves fresh duplicates in sys.modules makes those two
+    different module objects, so the patch lands where the executing
+    code never looks.
+    """
+    import core.json.utils as utils_before
+
+    held = utils_before.load_json  # what an import-time consumer holds
+    with _purged_core_json_window():
+        fresh = importlib.import_module("core.json.utils")
+        # The window really is fresh: the re-import mints a new
+        # module object (the survival test's precondition).
+        assert fresh is not utils_before
+
+    import core.json.utils as utils_after
+
+    assert utils_after is utils_before, (
+        "purge window did not restore the pre-purge core.json.utils; "
+        "import-time consumers now hold a module object patch.object() "
+        "can no longer reach"
     )
+    assert held.__globals__ is utils_after.__dict__
