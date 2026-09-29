@@ -103,6 +103,10 @@ not baseline.
 | SCA data-refresh workflow confines the write token to the job that needs it | [`refresh-sca-data.yml`](../.github/workflows/refresh-sca-data.yml) |
 | Squash-merge dedup prevents redundant CI runs when the push-to-main SHA differs from the PR head SHA | `pre_check` job pattern across `tests.yml`, `lint.yml`, `codeql.yml`, `corpus-labels.yml` |
 
+## Runner Sizing
+
+The fast-tier batch jobs in [`tests.yml`](../.github/workflows/tests.yml) and the shuffled iterations in [`nightly_shuffled.yml`](../.github/workflows/nightly_shuffled.yml) pick their runner from the repository variable `RAPTOR_FAST_RUNNER` via `runs-on: ${{ vars.RAPTOR_FAST_RUNNER || 'ubuntu-latest' }}`. Setting the variable (Settings → Secrets and variables → Actions → Variables) to a larger hosted-runner label upsizes those jobs without a workflow change; unset or empty, the expression falls back to `ubuntu-latest`. Every other job keeps its own explicit label.
+
 ## Stuff We Have But Do Not Really Enforce Yet
 
 | Tool | Current state |

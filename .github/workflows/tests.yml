@@ -353,7 +353,10 @@ jobs:
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
       needs.changes.outputs.python == 'true'
-    runs-on: ubuntu-latest
+    # Repo variable RAPTOR_FAST_RUNNER (Settings → Variables) upsizes
+    # the fast-tier batch runners, e.g. a larger hosted-runner label.
+    # Unset or empty, the expression falls back to ubuntu-latest.
+    runs-on: ${{ vars.RAPTOR_FAST_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false

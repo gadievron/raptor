@@ -26,7 +26,10 @@ env:
 
 jobs:
   shuffled-fast:
-    runs-on: ubuntu-latest
+    # Repo variable RAPTOR_FAST_RUNNER (Settings → Variables) upsizes
+    # these runners together with tests.yml's fast-tier batches. Unset
+    # or empty, the expression falls back to ubuntu-latest.
+    runs-on: ${{ vars.RAPTOR_FAST_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
