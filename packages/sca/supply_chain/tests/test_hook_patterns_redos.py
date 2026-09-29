@@ -26,6 +26,24 @@ from packages.sca.supply_chain._hook_patterns import (
 _TIME_BUDGET_SECONDS = 0.5
 
 
+def _timed_analyse(body: str):
+    """``analyse_body`` plus a wall-clock reading de-noised for loaded
+    hosts: on a budget breach, re-measure twice and keep the minimum.
+    The inputs here are deterministic, so a real backtracking blow-up
+    reproduces its cost on every measurement; a descheduled worker
+    under a saturated test host (observed: 0.79s for a ~0.25s scan)
+    does not survive the re-measure."""
+    analysis = None
+    elapsed = float("inf")
+    for _ in range(3):
+        t0 = time.monotonic()
+        analysis = analyse_body(body)
+        elapsed = min(elapsed, time.monotonic() - t0)
+        if elapsed < _TIME_BUDGET_SECONDS:
+            break
+    return analysis, elapsed
+
+
 # ---------------------------------------------------------------------------
 # Timing — pre-fix this was quadratic
 # ---------------------------------------------------------------------------
@@ -34,20 +52,17 @@ def test_curl_many_spaces_no_pipe_completes_fast() -> None:
     """``curl`` + 100k spaces + no pipe.  Pre-fix the overlapping
     quantifiers backtracked quadratically on this shape."""
     body = "curl" + " " * 100_000
-    t0 = time.monotonic()
-    analysis = analyse_body(body)
-    elapsed = time.monotonic() - t0
+    analysis, elapsed = _timed_analyse(body)
     assert elapsed < _TIME_BUDGET_SECONDS, (
-        f"curl + 100k spaces took {elapsed:.3f}s — ReDoS regression"
+        f"curl + 100k spaces took {elapsed:.3f}s (min of 3) — "
+        "ReDoS regression"
     )
     assert "curl piped to shell" not in analysis.reasons
 
 
 def test_wget_many_spaces_no_pipe_completes_fast() -> None:
     body = "wget" + " " * 100_000
-    t0 = time.monotonic()
-    analysis = analyse_body(body)
-    elapsed = time.monotonic() - t0
+    analysis, elapsed = _timed_analyse(body)
     assert elapsed < _TIME_BUDGET_SECONDS
     assert "wget piped to shell" not in analysis.reasons
 
@@ -149,10 +164,11 @@ def test_huge_body_completes_fast() -> None:
     """Multi-megabyte body — the cap keeps total pattern work bounded
     regardless of content."""
     body = ("curl " + " " * 512 + "\n") * 10_000
-    t0 = time.monotonic()
-    analyse_body(body)
-    elapsed = time.monotonic() - t0
-    assert elapsed < _TIME_BUDGET_SECONDS
+    _, elapsed = _timed_analyse(body)
+    assert elapsed < _TIME_BUDGET_SECONDS, (
+        f"multi-megabyte body took {elapsed:.3f}s (min of 3) — "
+        "pattern-work cap regression"
+    )
 
 
 def test_versioned_interpreter_inline_exec_flagged() -> None:
