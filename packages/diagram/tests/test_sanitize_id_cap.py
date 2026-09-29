@@ -44,6 +44,19 @@ def test_observed_honest_ids_identity() -> None:
         assert sanitize_id(honest) == honest
 
 
+def test_cap_runs_after_dash_collapse() -> None:
+    # Pins the documented ORDER inside sanitize_id: dash-run collapse
+    # first, THEN the ID_MAX_LEN cap. A dash run straddling the cap
+    # boundary makes the two orders diverge — collapse-then-cap (the
+    # shipped order) yields 128 chars ending "-B", while cap-then-
+    # collapse would keep the dash run through the cap and collapse it
+    # afterwards, yielding only 127 chars ending "-". Asserting the
+    # exact shipped result keeps an order swap from slipping through.
+    result = sanitize_id("A" * 126 + "-" * 300 + "B" * 50)
+    assert result == "A" * 126 + "-B"
+    assert len(result) == _CAP
+
+
 def test_truncation_collision_surfaces() -> None:
     # Two ids identical through the cap and differing only after it
     # collapse to one sanitized id; detect_id_collisions (which groups
