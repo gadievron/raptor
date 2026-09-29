@@ -492,8 +492,15 @@ jobs:
           # File list comes from test_scope.py's import-graph analysis.
           # No --ignore or --splits needed — the list is already the
           # precise set of affected test files for this batch.
+          # --dist worksteal: idle workers steal from stragglers, so a
+          # tail of slow tests on one worker no longer sets the batch
+          # wallclock (measured 20-26% faster than the default load
+          # mode on a mixed-duration suite, identical pass/fail set).
+          # The shuffled nightly deliberately keeps --dist loadfile —
+          # its file-per-worker grouping is what bounds module/class
+          # fixture instantiation under the seeded shuffle.
           set -f  # word-split $TEST_FILES without glob expansion
-          pytest -n auto $TEST_FILES
+          pytest -n auto --dist worksteal $TEST_FILES
 
       # Note: the CLI smoke tests for raptor.py used to live at
       # test/test_cli_smoke.py with a dedicated group-1 step (to dodge
