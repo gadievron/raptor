@@ -156,7 +156,10 @@ jobs:
   # file list is populated from disk.
   changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    # 5 rather than 2: the best-effort durations step downloads the
+    # shuffled-nightly junit artifacts, and a job-level timeout kill
+    # would override that step's continue-on-error.
+    timeout-minutes: 5
     outputs:
       # Per-tier gates (true/false).
       python: ${{ steps.scope.outputs.python }}
@@ -275,6 +278,42 @@ jobs:
             cat "$out"
           fi
 
+      # Best-effort per-test durations for the batch partitioner: pull
+      # the latest successful shuffled-nightly junit artifacts and
+      # convert them to a durations file so test_scope.py can balance
+      # batches by measured runtime instead of file count. Everything
+      # here is optional-quality-signal, never a gate: the step
+      # no-ops when the converter script is absent, when no successful
+      # nightly run exists yet, or when the artifacts have expired —
+      # and continue-on-error keeps any surprise failure from blocking
+      # dispatch (scope falls back to its no-durations behaviour on an
+      # empty path).
+      - id: durations
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [ -f .github/scripts/junit_durations.py ] || exit 0
+          run_id=$(gh api \
+            "repos/${REPO}/actions/workflows/nightly_shuffled.yml/runs?status=success&per_page=1" \
+            --jq '(.workflow_runs // [])[0].id // empty')
+          [ -n "$run_id" ] || exit 0
+          dl_dir="${RUNNER_TEMP}/shuffled-junit"
+          mkdir -p "$dl_dir"
+          gh run download "$run_id" --repo "$REPO" \
+            --pattern 'nightly-shuffled-fast-iter-*' --dir "$dl_dir" || exit 0
+          xmls=$(find "$dl_dir" -name '*.xml' -type f)
+          [ -n "$xmls" ] || exit 0
+          durations_path="${RUNNER_TEMP}/test_durations.json"
+          # shellcheck disable=SC2086 — the xml paths are runner-local
+          # artifact files, one per matrix iteration; word-splitting is
+          # the intended argv shape.
+          python3 .github/scripts/junit_durations.py \
+            "$durations_path" $xmls
+          echo "path=$durations_path" >> "$GITHUB_OUTPUT"
+
       # Import-graph-based test dispatch. Builds the reverse import
       # graph with stdlib ast, walks outward from changed files, and
       # maps affected test files to their CI tier. Falls back to full
@@ -288,6 +327,9 @@ jobs:
             --repo .
         env:
           CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
+          # Empty when the durations step skipped or failed — the
+          # partitioner treats an unset/empty path as "no durations".
+          RAPTOR_TEST_DURATIONS: ${{ steps.durations.outputs.path }}
 
   deps:
     needs: [pre_check, changes]
