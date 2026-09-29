@@ -633,6 +633,39 @@ def mount_ns_available() -> bool:
         return True
 
 
+def _idmap_denied_in_self_owned_userns(stderr: str) -> bool:
+    """Diagnostic-only detector for the nested-userns id-map refusal.
+
+    True when a newuidmap/newgidmap EPERM happened while THIS process
+    runs inside a user namespace owned by its own (non-root) uid —
+    i.e. pid 1 is our own init, not the root-owned system init
+    (rootless container, pid-namespaced test runner). There the
+    subuid/subgid range is unmapped in the writer's namespace, so the
+    kernel refuses range map writes no matter what /etc/subuid or the
+    setuid helpers say — "fix the host" advice would mislead. Never
+    changes behaviour: the caller only appends explanatory text.
+    """
+    if "Operation not permitted" not in stderr or os.getuid() == 0:
+        return False
+    import array
+    import fcntl
+    ns_get_owner_uid = 0xB704  # _IO(0xb7, 0x4) — linux/nsfs.h
+    try:
+        fd = os.open("/proc/1/ns/user", os.O_RDONLY)
+    except OSError:
+        # Cannot even open pid 1's ns/user: the normal unprivileged
+        # posture on a real host — not the nested case.
+        return False
+    try:
+        owner = array.array("I", [0])
+        fcntl.ioctl(fd, ns_get_owner_uid, owner, True)
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+    return owner[0] == os.getuid()
+
+
 def _run_newuidmap(child_pid: int, binary: str, mapping_lines: Sequence[str]) -> None:
     """Invoke newuidmap or newgidmap with the given mapping lines.
 
@@ -655,6 +688,14 @@ def _run_newuidmap(child_pid: int, binary: str, mapping_lines: Sequence[str]) ->
             f"{binary} for child {child_pid} failed "
             f"(rc={r.returncode}, stderr={r.stderr.strip()!r})"
         )
+        if _idmap_denied_in_self_owned_userns(r.stderr):
+            msg += (
+                " — this process is inside an unprivileged nested "
+                "user namespace (pid 1's user namespace is owned by "
+                "this uid), where subuid/subgid-range maps cannot be "
+                "written: the range is unmapped here, so the kernel "
+                "refuses the write regardless of host configuration"
+            )
         raise RuntimeError(msg)
 
 
