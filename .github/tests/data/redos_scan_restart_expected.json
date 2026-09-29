@@ -154,7 +154,7 @@
    "digests": [
     "7bac92ef17b0"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/auth_witnesses.py\u001f_GETTER_DECL_RE": {
@@ -322,14 +322,14 @@
    "digests": [
     "aa7b1d8b05bf"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/compile_probe.py\u001f_DETERMINE_BUILTIN_RE": {
    "digests": [
     "35c6628de792"
    ],
-   "exp": 1.01,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/audit/compile_probe.py\u001f_IDENT_EXPR_RE": {
@@ -343,7 +343,7 @@
    "digests": [
     "0f64f014c82d"
    ],
-   "exp": 1.9,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/audit/compiler_sweep.py\u001f_DIAG_SUPPRESSION_RE": {
@@ -504,7 +504,7 @@
    "digests": [
     "be592db3fa7b"
    ],
-   "exp": 1.01,
+   "exp": 0.99,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001f_GO_ATOI_RE": {
@@ -610,7 +610,7 @@
    "digests": [
     "a56ab90d3d8a"
    ],
-   "exp": 0.98,
+   "exp": 0.99,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001fwrapper_re": {
@@ -708,14 +708,14 @@
    "digests": [
     "c7576fa032bf"
    ],
-   "exp": 2.03,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/audit/dark_verify/_resolve.py\u001f_PY_EXT_SUFFIX_GLOBS[3]": {
    "digests": [
     "9337696cf86c"
    ],
-   "exp": 2.02,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/audit/decompiler_sanitise.py\u001f_CLASS_MEMBER_RE": {
@@ -996,7 +996,7 @@
    "digests": [
     "ae40fb5f77d0"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/path_feasibility.py\u001fif_patterns": {
@@ -1059,7 +1059,7 @@
    "digests": [
     "0d3f53af0a22"
    ],
-   "exp": 1.01,
+   "exp": 0.99,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b\\w{0,256}len\\w*\\s*[<>=!]+": {
@@ -1234,7 +1234,7 @@
    "digests": [
     "6791b0fd26a9"
    ],
-   "exp": 1.04,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/audit/ptr_lifecycle.py\u001f_RCU_DEREF_RE": {
@@ -1269,7 +1269,7 @@
    "digests": [
     "87a22b640da8"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/release_order.py\u001f[\\w\\*\\s]\\b([A-Za-z_]\\w*)\\s*[,)]": {
@@ -1311,7 +1311,7 @@
    "digests": [
     "a0cc73423185"
    ],
-   "exp": 1.0,
+   "exp": 1.04,
    "verdict": "linear"
   },
   "core/audit/return_contracts.py\u001fdecl_re": {
@@ -1557,7 +1557,7 @@
    "digests": [
     "a99a1964e15b"
    ],
-   "exp": 1.04,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/binary/glibc_versions.py\u001f_SEARCH_RE": {
@@ -1599,7 +1599,7 @@
    "digests": [
     "8fe688d1a940"
    ],
-   "exp": 1.03,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/concepts/study.py\u001f\\b(struct\\s+\\w+|[A-Za-z_]\\w{3,}_[A-Za-z_": {
@@ -1711,7 +1711,7 @@
    "digests": [
     "37de29a408f1"
    ],
-   "exp": 1.98,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/inventory/extractors.py\u001fPATTERNS[1]": {
@@ -1724,6 +1724,13 @@
   "core/inventory/extractors.py\u001fPATTERNS[4]": {
    "digests": [
     "925bcf89fac2"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/extractors.py\u001f_ALLMAN_HEAD": {
+   "digests": [
+    "92e1b7b0f232"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -1858,7 +1865,7 @@
    "digests": [
     "44a2e5aa9242"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/inventory/translation_view.py\u001f_CALL_IN_BODY": {
@@ -1872,21 +1879,21 @@
    "digests": [
     "5f33a892b9ad"
    ],
-   "exp": 1.96,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[2]": {
    "digests": [
     "74f670123f14"
    ],
-   "exp": 2.0,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[3]": {
    "digests": [
     "0fb08c380bf3"
    ],
-   "exp": 1.98,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[4]": {
@@ -1900,7 +1907,7 @@
    "digests": [
     "88e933d23e53"
    ],
-   "exp": 2.01,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[6]": {
@@ -1914,7 +1921,7 @@
    "digests": [
     "8eba6201f599"
    ],
-   "exp": 1.99,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/license/detector.py\u001f(?:please\\s+)?see\\s+(?:the\\s+file\\s+)?((": {
@@ -1990,6 +1997,13 @@
   "core/llm/client.py\u001f_HTTP_500_STATUS_RE": {
    "digests": [
     "9bedfdedbdf2"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/llm/client.py\u001f_OVERLOADED_STATUS_RE": {
+   "digests": [
+    "0e59087ed842"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -2527,7 +2541,7 @@
    "digests": [
     "db21eb0cc688"
    ],
-   "exp": 2.04,
+   "exp": 1.98,
    "verdict": "adjudicated"
   },
   "packages/ghidra/ebpf_probe.py\u001fPROBE_OBJECTS[70]": {
@@ -2820,13 +2834,6 @@
   "packages/web/fuzzer.py\u001fbasic_payloads[13]": {
    "digests": [
     "856b9d79f725"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/llm/client.py\u001f_OVERLOADED_STATUS_RE": {
-   "digests": [
-    "0e59087ed842"
    ],
    "exp": 1.0,
    "verdict": "linear"
