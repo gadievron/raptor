@@ -130,10 +130,6 @@ _RESULT_FIELDS: tuple[str, ...] = (
     "errors", "rule_id", "raw_output", "details",
 )
 
-_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
-_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
-_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
-
 #: Record field carrying the per-record HMAC token (the review
 #: journal's ``TOKEN_KEY`` convention). Excluded from the canonical
 #: payload before hashing so the token covers everything else.
@@ -418,7 +414,9 @@ class SweepCheckpoint:
             # every legitimate trail is).
             fd = os.open(
                 str(self._path),
-                os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK,
+                os.O_RDONLY | os.O_NOFOLLOW
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NONBLOCK", 0),
             )
         except FileNotFoundError:
             return
