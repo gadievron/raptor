@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from packages.sca.platform_matrix import PlatformPair, ProjectPlatformMatrix
 from packages.sca.platform_matrix.glibc_db import LibcVersion
 from packages.sca.wheel_compat.compat import (
@@ -465,6 +467,73 @@ def test_recommendation_cache_does_not_cache_failure():
     assert find_compatible_version(pypi, "z3-solver", matrix) is None
     # Second call retries (cache wasn't poisoned) and succeeds.
     assert find_compatible_version(pypi, "z3-solver", matrix) == "4.15.8.0"
+
+
+def test_stub_swap_poison_confined_by_per_test_isolation(
+    _fresh_recommendation_cache: Callable[[], None],
+) -> None:
+    """The cache key is ``(name, matrix-shape)`` and deliberately
+    ignores the client, so a test whose stub has NO compatible
+    version caches ``None`` and a later test's different stub for the
+    same (name, shape) reads that poisoned ``None`` instead of its own
+    releases. The autouse ``_fresh_recommendation_cache`` fixture is
+    what confines each stub's answers to its own test; this test
+    reproduces the poisoning pair around the fixture's boundary-clear
+    and fails if that isolation is removed."""
+    from packages.sca.wheel_compat.compat import find_compatible_version
+
+    matrix = ProjectPlatformMatrix()
+    matrix.add(_pair("aarch64", "glibc", (2, 36)))
+
+    # Poisoner half: a stub where every release needs glibc 2.38 →
+    # no compatible version → the negative result is cached under
+    # ("z3-solver", {aarch64/glibc-2.36 shape}).
+    poisoner = _StubPyPI({
+        "z3-solver": {
+            "releases": {
+                "4.16.0.0": [
+                    {"filename":
+                     "z3_solver-4.16.0.0-py3-none-manylinux_2_38_aarch64.whl"},
+                ],
+            },
+        },
+    })
+    assert find_compatible_version(poisoner, "z3-solver", matrix) is None
+
+    # The hazard, demonstrated: a DIFFERENT stub that DOES carry a
+    # compatible 4.15.8.0 still reads the poisoned entry — the key
+    # ignores which client answered.
+    victim = _StubPyPI({
+        "z3-solver": {
+            "releases": {
+                "4.16.0.0": [
+                    {"filename":
+                     "z3_solver-4.16.0.0-py3-none-manylinux_2_38_aarch64.whl"},
+                ],
+                "4.15.8.0": [
+                    {"filename":
+                     "z3_solver-4.15.8.0-py3-none-manylinux_2_34_aarch64.whl"},
+                ],
+            },
+        },
+    })
+    assert find_compatible_version(victim, "z3-solver", matrix) is None
+
+    # The protection: the autouse fixture clears the cache at every
+    # test boundary. Reproduce that boundary here via the clear the
+    # fixture yields — if the fixture stops providing isolation, this
+    # assertion (or the recommendation below) fails exactly like the
+    # cross-file CI bite.
+    boundary_clear = _fresh_recommendation_cache
+    assert callable(boundary_clear), (
+        "per-test cache isolation fixture no longer supplies its "
+        "boundary clear — stub-swapping tests are unprotected"
+    )
+    boundary_clear()
+
+    # Victim half, post-boundary: the walk-back sees the victim
+    # stub's own releases again.
+    assert find_compatible_version(victim, "z3-solver", matrix) == "4.15.8.0"
 
 
 # ---------------------------------------------------------------------------
