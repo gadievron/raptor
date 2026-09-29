@@ -77,22 +77,40 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      - name: Create venv and install deps
-        shell: bash
-        run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          # Dev deps + grammar wheels in one export (grammars are an
-          # optional-dependency group in pyproject.toml, locked in
-          # uv.lock).
-          uv export --locked --no-hashes --extra grammars | uv pip install -r -
-          # semgrep is deliberately NOT a pyproject.toml dep (optional
-          # tool, same as radare2/LLVM below), but the audit-pipeline
-          # slow tests exercise real sweeps: G2's receipt gate demands
-          # an EXECUTED confirmed sweep, so without the binary those
-          # tests can only skip. Installed here so the nightly keeps
-          # covering the sweep → record → report → feedback chain.
-          uv tool install semgrep==1.177.0
+      # Grammars-flavoured venv (dev deps + grammar wheels, an
+      # optional-dependency group in pyproject.toml, locked in uv.lock)
+      # under its own cache-key prefix so a prefix-match restore never
+      # hands this job the plain venv that lacks the grammar wheels.
+      # save-on-rebuild: no other job saves this flavour, so the
+      # rebuild cost is paid once per uv.lock change instead of nightly.
+      - name: Restore or rebuild venv (with grammars)
+        uses: ./.github/actions/setup-venv
+        with:
+          cache-key-prefix: venv-grammars
+          uv-export-extra-args: --extra grammars
+          save-on-rebuild: 'true'
+
+      - name: Install semgrep
+        # semgrep is deliberately NOT a pyproject.toml dep (optional
+        # tool, same as radare2/LLVM below), but the audit-pipeline
+        # slow tests exercise real sweeps: G2's receipt gate demands
+        # an EXECUTED confirmed sweep, so without the binary those
+        # tests can only skip. Installed here so the nightly keeps
+        # covering the sweep → record → report → feedback chain.
+        run: uv tool install semgrep==1.177.0
+
+      # The toolchain .debs are cached so the warm path installs from
+      # local files instead of round-tripping apt.llvm.org every night
+      # (the install step's most outage-prone leg). The key carries no
+      # package-version component — a cached LLVM 21.x point release is
+      # fine for these test families; bump the -v1 suffix to force a
+      # refresh.
+      - name: Restore apt toolchain cache (radare2 + LLVM 21 .debs)
+        id: apt-debs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+        with:
+          path: ${{ runner.temp }}/apt-debs
+          key: apt-debs-${{ runner.os }}-llvm21-radare2-v1
 
       - name: Install binary-analysis toolchain (radare2 + LLVM 21)
         # continue-on-error so a transient apt/LLVM mirror outage doesn't
@@ -101,15 +119,44 @@ jobs:
         # reddens the RUN afterwards so the outage can't silently convert
         # the r2/llvm families into permanent skips (same rationale as
         # weekly_corpus.yml's all-skipped guard).
+        id: toolchain
         continue-on-error: true
+        env:
+          DEBS_DIR: ${{ runner.temp }}/apt-debs
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends radare2
-          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
-          chmod +x /tmp/llvm.sh
-          sudo /tmp/llvm.sh 21
-          sudo apt-get install -y --no-install-recommends llvm-21 clang-21
+          if ls "$DEBS_DIR"/*.deb >/dev/null 2>&1; then
+            # Warm path: install straight from the cached .debs — no
+            # network. dpkg resolves inter-deb ordering itself; a
+            # dependency that left the runner image since the cache
+            # was cut is mopped up from the network by ``apt-get -f``,
+            # and the refuse step below still guards the end state.
+            sudo dpkg -i "$DEBS_DIR"/*.deb \
+              || sudo apt-get install -f -y --no-install-recommends
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends radare2
+            wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+            chmod +x /tmp/llvm.sh
+            sudo /tmp/llvm.sh 21
+            sudo apt-get install -y --no-install-recommends llvm-21 clang-21
+            # Capture this run's full apt transaction closure as .debs
+            # for the cache: on a fresh runner the history log holds
+            # only this job's installs, and --reinstall --download-only
+            # fetches exactly those packages (dependencies included)
+            # without touching the installed state.
+            mkdir -p "$DEBS_DIR/partial"
+            # Entries in the log line look like ``name:arch (version,
+            # automatic)`` — match on the ``name:arch (`` shape so the
+            # comma inside the parens can't leak stray tokens.
+            pkgs=$(sed -n 's/^Install: //p' /var/log/apt/history.log \
+                     | grep -oE '[A-Za-z0-9][A-Za-z0-9.+-]*:[a-z0-9-]+ \(' \
+                     | sed 's/:.*//' | sort -u)
+            [ -n "$pkgs" ]
+            sudo apt-get install -y --reinstall --download-only \
+              -o Dir::Cache::archives="$DEBS_DIR" $pkgs
+            sudo rm -rf "$DEBS_DIR/partial"
+          fi
           sudo update-alternatives --install /usr/bin/clang clang \
             /usr/bin/clang-21 100
           sudo update-alternatives --install /usr/bin/clang++ clang++ \
@@ -119,6 +166,16 @@ jobs:
           clang --version || true
           /usr/lib/llvm-21/bin/llvm-cov --version || true
           /usr/lib/llvm-21/bin/llvm-profdata --version || true
+
+      # Explicit save (not actions/cache's implicit post-job save) so a
+      # partial download from a failed cold path can never be cached:
+      # only a fully successful install step banks its .debs.
+      - name: Save apt toolchain cache
+        if: steps.apt-debs.outputs.cache-hit != 'true' && steps.toolchain.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
+        with:
+          path: ${{ runner.temp }}/apt-debs
+          key: apt-debs-${{ runner.os }}-llvm21-radare2-v1
 
       # RAPTOR_MAX_SESSION_SECONDS: tier wallclock tripwire (root
       # conftest) — flags the session with a named summary when the
