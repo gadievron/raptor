@@ -762,6 +762,12 @@ _CONFLICT_RATIO = 2.0
 VERDICT_FITS = "fits"
 VERDICT_TIGHT = "tight"
 VERDICT_CONFLICT = "conflict"
+# No envelope means there is nothing to gate on — a distinct state,
+# not a pass. Reporting it as "fits" would launder an unbounded spend
+# posture into an affirmative verdict; "ungated" keeps the banner
+# honest. Parking stays conflict-only: an ungated engagement is the
+# operator's declared posture, never a parkable fault.
+VERDICT_UNGATED = "ungated"
 
 # Money ceiling on any figure read back from the document — the
 # document sits inside sandbox write grants, so read-side budget math
@@ -943,6 +949,10 @@ class FeasibilityVerdict:
             f"Engagement feasibility: policy wants ~${self.want_usd:.2f}"
             f" vs envelope {env} — {self.verdict}",
         ]
+        if self.verdict == VERDICT_UNGATED:
+            out.append(
+                "  no envelope set — spend is not gated"
+                " (--envelope persists one on the engagement)")
         for tier in sorted(self.by_tier, reverse=True):
             out.append(f"  {_esc(tier):<4s} ~${self.by_tier[tier]:.2f}")
         out.append(f"  estimates: {_esc(self.estimate_source)}")
@@ -988,7 +998,7 @@ def launch_feasibility(
     want, by_tier, source = policy_want(doc, model=model)
     envelope = _envelope(doc, envelope_usd)
     if envelope is None:
-        verdict = VERDICT_FITS
+        verdict = VERDICT_UNGATED
     else:
         remaining = max(0.0, envelope - committed_usd(doc))
         if want > remaining * _CONFLICT_RATIO:
@@ -1431,6 +1441,7 @@ __all__ = [
     "VERDICT_CONFLICT",
     "VERDICT_FITS",
     "VERDICT_TIGHT",
+    "VERDICT_UNGATED",
     "DepthAssignment",
     "DepthPolicy",
     "FeasibilityVerdict",

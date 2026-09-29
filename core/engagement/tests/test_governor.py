@@ -35,6 +35,7 @@ from core.engagement.governor import (
     VERDICT_CONFLICT,
     VERDICT_FITS,
     VERDICT_TIGHT,
+    VERDICT_UNGATED,
     assign_depth,
     depth_label,
 )
@@ -953,7 +954,7 @@ class TestFeasibility:
         assert gov.launch_feasibility(doc, want / 2 - 1).verdict \
             == VERDICT_CONFLICT
         assert gov.launch_feasibility(doc, None).verdict \
-            == VERDICT_FITS  # uncapped
+            == VERDICT_UNGATED  # no envelope: distinct state, not a pass
 
     def test_unattended_conflict_parks_before_spend(self, tmp_path):
         out, doc = _build(tmp_path)
@@ -1038,8 +1039,29 @@ class TestFeasibility:
         assert "policy wants ~$42.50 vs envelope $30.00 — tight" \
             in lines[0]
         v2 = gov.FeasibilityVerdict(
-            verdict=VERDICT_FITS, want_usd=1.0, envelope_usd=None)
+            verdict=VERDICT_UNGATED, want_usd=1.0, envelope_usd=None)
         assert "uncapped" in v2.lines()[0]
+        assert "ungated" in v2.lines()[0]
+        # the no-gate hint renders only for the ungated verdict
+        assert any("spend is not gated" in ln for ln in v2.lines())
+        assert not any("spend is not gated" in ln for ln in lines)
+
+    def test_no_envelope_records_ungated_never_parks(self, tmp_path):
+        """No envelope is the operator's declared posture — recorded
+        honestly as ungated, never parked, even unattended."""
+        out, doc = _build(tmp_path)
+        slots, _fresh = gov.ensure_policy(out, doc)
+        for aid in slots:
+            ledger_mod.set_artifact_policy(out, aid,
+                                           policy=_t3_slot(slots[aid]))
+        doc = ledger_mod.load_ledger(out)
+        v = gov.enforce_feasibility(out, doc, None, attended=False)
+        assert v.verdict == VERDICT_UNGATED
+        assert v.envelope_usd is None
+        doc = ledger_mod.load_ledger(out)
+        assert not gov.is_engagement_parked(doc)
+        assert doc["policy"]["feasibility"]["verdict"] \
+            == VERDICT_UNGATED
 
 
 class TestDegradationLadder:
