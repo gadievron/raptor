@@ -11,41 +11,32 @@ from __future__ import annotations
 
 import ast
 import logging
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
+
+from core.audit.tests.checklist_corpus import ChecklistBuildCache
 
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture()
-def prep_run_dir(tmp_path: Path) -> tuple[Path, Path]:
-    """A real checklist for a tiny target, built the way prep expects."""
-    target = tmp_path / "target"
-    target.mkdir()
-    (target / "app.py").write_text(
-        "def entry(data):\n    return data.strip()\n"
+def prep_run_dir(
+    checklist_builds: ChecklistBuildCache, tmp_path: Path,
+) -> tuple[Path, Path]:
+    """A real checklist for a tiny target, built the way prep expects.
+
+    The corpus is shared with every other test starting from the same
+    trivial tree (one CLI build per process); the run dir is this
+    test's private copy — prep writes journals/artifacts into it. The
+    ``out`` parent stays a private near-empty dir: prep's cross-run
+    readers scan ``out_dir.parent``.
+    """
+    build = checklist_builds.build(
+        {"app.py": "def entry(data):\n    return data.strip()\n"},
     )
-    out = tmp_path / "out" / "run"
-    out.mkdir(parents=True)
-    env = dict(
-        os.environ,
-        CLAUDECODE="1",
-        _RAPTOR_TRUSTED="1",
-        PYTHONPATH=str(RAPTOR_DIR),
-    )
-    r = subprocess.run(
-        [sys.executable,
-         str(RAPTOR_DIR / "libexec" / "raptor-build-checklist"),
-         str(target), str(out)],
-        env=env, capture_output=True, text=True, check=False,
-    )
-    assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
-    assert (out / "checklist.json").exists()
-    return target, out
+    out = build.make_run_dir(tmp_path / "out" / "run")
+    return build.target, out
 
 
 def test_prep_graph_boost_degrades_on_permission_error(
