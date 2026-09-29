@@ -12,14 +12,6 @@ from packages.ghidra.diff_priority import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _isolated_mac_key(tmp_path, monkeypatch):
-    """The boost write routes through the core.inventory accessors,
-    whose frame MAC keys off ``$XDG_DATA_HOME/raptor/`` — point it at
-    a per-test tmp dir so stamping never touches the real key."""
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
-
-
 @pytest.fixture()
 def version_diff(tmp_path):
     diff = {
