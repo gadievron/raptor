@@ -29,46 +29,50 @@ from core.llm.scorecard import cli as cli_mod
 
 
 @pytest.fixture
-def seeded_scorecard(tmp_path):
+def seeded_scorecard(tmp_path: Path) -> Path:
     """Three cells across two models so the renderers have
     something representative to work with: trustworthy, learning,
-    and fall-through."""
+    and fall-through.
+
+    Seeded through ``record_events`` — ONE lock/fsync cycle for all
+    180 observations. This fixture is function-scoped (tests mutate
+    the file via mark/pin/reset), so per-event ``record_event``
+    seeding re-paid ~180 full flock + load + fsync + rename cycles
+    for every test in this module — seconds of pure disk churn per
+    test on CI runners, the exact bulk-seeding waste the batch API's
+    docstring names.
+    """
     path = tmp_path / "sc.json"
     sc = ModelScorecard(path)
 
-    # trustworthy
-    for _ in range(100):
-        sc.record_event(
-            "codeql:py/sql-injection", "claude-haiku-4-5",
-            EventType.CHEAP_SHORT_CIRCUIT, "correct",
-        )
-    # learning (n<10)
-    for _ in range(5):
-        sc.record_event(
-            "codeql:cpp/uncontrolled-format", "claude-haiku-4-5",
-            EventType.CHEAP_SHORT_CIRCUIT, "correct",
-        )
-    # fall-through (high miss rate) + samples
-    for _ in range(20):
-        sc.record_event(
-            "codeql:js/path-injection", "claude-haiku-4-5",
-            EventType.CHEAP_SHORT_CIRCUIT, "correct",
-        )
-    for i in range(5):
-        sc.record_event(
-            "codeql:js/path-injection", "claude-haiku-4-5",
-            EventType.CHEAP_SHORT_CIRCUIT, "incorrect",
-            sample={
-                "this_reasoning": f"cheap thought FP {i}",
-                "other_reasoning": f"full found real bug {i}",
-            },
-        )
-    # second model
-    for _ in range(50):
-        sc.record_event(
-            "codeql:py/sql-injection", "gemini-2.5-flash-lite",
-            EventType.CHEAP_SHORT_CIRCUIT, "correct",
-        )
+    def _batch(n: int, dc: str, model: str, outcome: str = "correct",
+               sample_fmt: dict[str, str] | None = None) -> list[dict]:
+        return [
+            {"decision_class": dc, "model": model,
+             "event_type": EventType.CHEAP_SHORT_CIRCUIT,
+             "outcome": outcome,
+             **({"sample": {k: v.format(i=i)
+                            for k, v in sample_fmt.items()}}
+                if sample_fmt else {})}
+            for i in range(n)
+        ]
+
+    sc.record_events([
+        # trustworthy
+        *_batch(100, "codeql:py/sql-injection", "claude-haiku-4-5"),
+        # learning (n<10)
+        *_batch(5, "codeql:cpp/uncontrolled-format", "claude-haiku-4-5"),
+        # fall-through (high miss rate) + samples
+        *_batch(20, "codeql:js/path-injection", "claude-haiku-4-5"),
+        *_batch(5, "codeql:js/path-injection", "claude-haiku-4-5",
+                outcome="incorrect",
+                sample_fmt={
+                    "this_reasoning": "cheap thought FP {i}",
+                    "other_reasoning": "full found real bug {i}",
+                }),
+        # second model
+        *_batch(50, "codeql:py/sql-injection", "gemini-2.5-flash-lite"),
+    ])
     return path
 
 

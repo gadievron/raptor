@@ -108,16 +108,28 @@ def test_below_floor_returns_learning(tmp_path):
 _REPOS = ("/proj/alpha", "/proj/beta", "/proj/gamma")
 
 
-def _record_correct(sc, dc, model, n):
-    for i in range(n):
-        sc.record_event(dc, model, EventType.CHEAP_SHORT_CIRCUIT, "correct",
-                        repo=_REPOS[i % len(_REPOS)])
+def _record_correct(sc: ModelScorecard, dc: str, model: str, n: int) -> None:
+    # One batched write (record_events), not n record_event calls:
+    # each single call is a full flock + load + verify + fsync +
+    # rename cycle, so seeding 200 events one-by-one costs seconds of
+    # pure disk churn on CI runners (the exact waste the bulk API's
+    # docstring names). Per-event recording keeps its own coverage in
+    # the single-event tests and the concurrency battery.
+    sc.record_events([
+        {"decision_class": dc, "model": model,
+         "event_type": EventType.CHEAP_SHORT_CIRCUIT,
+         "outcome": "correct", "repo": _REPOS[i % len(_REPOS)]}
+        for i in range(n)
+    ])
 
 
-def _record_incorrect(sc, dc, model, n):
-    for i in range(n):
-        sc.record_event(dc, model, EventType.CHEAP_SHORT_CIRCUIT, "incorrect",
-                        repo=_REPOS[i % len(_REPOS)])
+def _record_incorrect(sc: ModelScorecard, dc: str, model: str, n: int) -> None:
+    sc.record_events([
+        {"decision_class": dc, "model": model,
+         "event_type": EventType.CHEAP_SHORT_CIRCUIT,
+         "outcome": "incorrect", "repo": _REPOS[i % len(_REPOS)]}
+        for i in range(n)
+    ])
 
 
 def test_clean_run_eventually_trusted(tmp_path):
@@ -564,11 +576,13 @@ def test_samples_capped_at_max(tmp_path):
     """Beyond MAX_DISAGREEMENT_SAMPLES we keep the most recent —
     older entries reflect older model snapshots, less useful."""
     sc = ModelScorecard(tmp_path / "sc.json")
-    for i in range(MAX_DISAGREEMENT_SAMPLES + 5):
-        sc.record_event(
-            "x:y", "m", EventType.CHEAP_SHORT_CIRCUIT, "incorrect",
-            sample={"this_reasoning": f"sample-{i}"},
-        )
+    sc.record_events([
+        {"decision_class": "x:y", "model": "m",
+         "event_type": EventType.CHEAP_SHORT_CIRCUIT,
+         "outcome": "incorrect",
+         "sample": {"this_reasoning": f"sample-{i}"}}
+        for i in range(MAX_DISAGREEMENT_SAMPLES + 5)
+    ])
     stats = sc.get_stat("x:y", "m")
     assert len(stats.disagreement_samples) == MAX_DISAGREEMENT_SAMPLES
     # Most recent kept.
@@ -744,10 +758,15 @@ def _trusted_cell(sc, dc="x:y", model="m"):
     """Build out a trustworthy cell: 200 correct → Wilson UB safely
     under 5%, so without any shadow_rate the cell should
     short-circuit deterministically. Evidence spans three targets so
-    the diversity floor is cleared (see ``_REPOS``)."""
-    for i in range(200):
-        sc.record_event(dc, model, EventType.CHEAP_SHORT_CIRCUIT, "correct",
-                        repo=_REPOS[i % len(_REPOS)])
+    the diversity floor is cleared (see ``_REPOS``). Seeded through
+    the batch API — one lock/fsync cycle, not 200 (see
+    ``_record_correct``)."""
+    sc.record_events([
+        {"decision_class": dc, "model": model,
+         "event_type": EventType.CHEAP_SHORT_CIRCUIT,
+         "outcome": "correct", "repo": _REPOS[i % len(_REPOS)]}
+        for i in range(200)
+    ])
 
 
 def test_shadow_rate_zero_never_shadows(tmp_path):
@@ -777,10 +796,11 @@ def test_shadow_rate_does_not_affect_fall_through(tmp_path):
     call, so SHADOW would be redundant — and confusing."""
     sc = ModelScorecard(tmp_path / "sc.json", shadow_rate=1.0)
     # 50/50 → Wilson UB way over ceiling → fall through
-    for _ in range(50):
-        sc.record_event("x:y", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct")
-    for _ in range(50):
-        sc.record_event("x:y", "m", EventType.CHEAP_SHORT_CIRCUIT, "incorrect")
+    sc.record_events([
+        {"decision_class": "x:y", "model": "m",
+         "event_type": EventType.CHEAP_SHORT_CIRCUIT, "outcome": outcome}
+        for outcome in ["correct"] * 50 + ["incorrect"] * 50
+    ])
     # Even with shadow_rate=1, this never returns SHADOW because
     # the cell is fall-through.
     seen = {sc.should_short_circuit("x:y", "m") for _ in range(50)}
