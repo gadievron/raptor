@@ -42,7 +42,7 @@ This page is split into:
 
 ### Gate details and local reproduction
 
-- **Python lint gate** — [`lint.yml`](../.github/workflows/lint.yml) on `pull_request` and `merge_group`. Rules `F401`, `F811`, `F821`, `F841`; Python 3.10 target (config in `pyproject.toml`). Locally: `ruff check <changed .py files>`.
+- **Python lint gate** — [`lint.yml`](../.github/workflows/lint.yml) on `pull_request` and `merge_group`. Rules `F401`, `F811`, `F821`, `F841`; Python 3.12 target (config in `pyproject.toml`). Locally: `ruff check <changed .py files>`.
 - **Full-tree Python lint audit** — [`lint.yml`](../.github/workflows/lint.yml) on `push: main`, weekly cron, manual run. Same rule set as the PR gate. Locally: `ruff check .`.
 - **Fast Python test suite** — [`tests.yml`](../.github/workflows/tests.yml) on PRs, pushes, merge queue; tiers computed by [`test_scope.py`](../.github/scripts/test_scope.py). Default excludes `slow` and `integration` (markers in `pytest.ini`); `RAPTOR_MAX_TEST_SECONDS=10` per-test wall-clock guard. Locally: `python3 -m pytest core packages engine` (the `engine/` rule-precision tests skip themselves when coccinelle/semgrep are not installed).
 - **Sandbox slow/integration tier** — [`tests.yml`](../.github/workflows/tests.yml), second step of the sandbox job on sandbox-gated PRs, with a package-scoped mirror step in the exploit-feasibility job for PRs that fire only that gate. Any CI-equivalent local gate run must include it: `python3 -m pytest -m "slow or integration" core/sandbox packages/exploit_feasibility` (~90s serial).
@@ -85,6 +85,7 @@ This page is split into:
 | [`refit-sca-calibration.yml`](../.github/workflows/refit-sca-calibration.yml) | Re-fits risk-score multipliers when the calibration corpus says the current weights drifted | Monthly | Auto-PR against `packages/sca/risk.py` and refit reports |
 | [`refresh-sca-data.yml`](../.github/workflows/refresh-sca-data.yml) | Refreshes bundled popular-package data used by typosquat detection | Weekly | Auto-PR against `packages/sca/data/popular/` |
 | [`typosquat-reaudit.yml`](../.github/workflows/typosquat-reaudit.yml) | Re-checks previously reviewed-legit typosquat names against current registry state | Monthly | Issue comment or new issue when a contradiction appears |
+| [`python-floor-canary.yml`](../.github/workflows/python-floor-canary.yml) | Verifies the documented Python 3.12 floor still holds: installs the lockfile on 3.12, import-smokes floor-sensitive runtime modules, and runs a small fast test subset. Also fires on PRs that touch `pyproject.toml` / `uv.lock` | Weekly (and on dependency-surface PRs) | Workflow logs |
 
 Baseline files (`.github/scripts/*_baseline.json`) are per-detector
 exception lists. Each entry requires a review note, and the target for
@@ -112,7 +113,7 @@ The fast-tier batch jobs in [`tests.yml`](../.github/workflows/tests.yml) and th
 | Tool | Current state |
 |---|---|
 | `mypy` | Pinned in `pyproject.toml`, but there is no CI job running it yet |
-| Python 3.10 floor (runtime) | The README states Python 3.10+. Ruff's `target-version = "py310"` (root `pyproject.toml`) enforces this at the syntax level on every lint run, but the CI test suite executes on a single recent interpreter — 3.10-only API regressions would not be caught by tests |
+| Python 3.12 floor (runtime) | The README states Python 3.12+ (`requires-python` in `pyproject.toml`; the sandbox hard-requires `os.unshare`, 3.12+). Ruff's `target-version = "py312"` enforces the floor at the syntax level on every lint run, and the weekly [`python-floor-canary.yml`](../.github/workflows/python-floor-canary.yml) lane import-smokes and runs a small fast subset on 3.12 — but the full CI test suite still executes on a single recent interpreter, so 3.12-only API regressions outside that subset would not be caught by tests |
 | Ruff formatter | Ruff linting is enforced; `ruff format` is not |
 | Semgrep self-scan | RAPTOR ships and uses Semgrep for target analysis, but the repo does not currently have a dedicated Semgrep-against-RAPTOR CI workflow |
 

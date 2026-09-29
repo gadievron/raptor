@@ -59,7 +59,7 @@ the code.
 ## Prerequisites
 
 - **Claude Code** with an active subscription (Max, Pro, Team, or Enterprise) or an Anthropic API key. This is the orchestration layer for the interactive `raptor` shell -- optional if you only need the standalone CLIs, see [Running fully standalone](#running-fully-standalone-no-claude-code) below.
-- **Python 3.10+** and **Node.js 18+**.
+- **Python 3.12+** and **Node.js 18+**.
 - **Semgrep** (`pip install semgrep`) for static analysis. CodeQL is optional but recommended.
 
 For the analysis dispatch layer (the LLM that analyses individual findings), Claude Code itself handles everything by default -- no extra API keys needed. If you want multi-model analysis (e.g. Claude + GPT + Gemini) or a fully local setup, you will need to configure the other provider(s). See [Using a different LLM](#using-a-different-llm) below.

@@ -3,7 +3,10 @@ name = "raptor"
 version = "3.1.0"
 description = "Autonomous offensive/defensive security research framework"
 readme = "README.md"
-requires-python = ">=3.10,<4.0"
+# 3.12 floor, probed empirically: the sandbox hard-requires os.unshare
+# (3.12+) and runtime modules use typing.Self (3.11+) — the suite fails
+# at import/setup on 3.10 and 3.11 and passes in full on 3.12.
+requires-python = ">=3.12,<4.0"
 license = "MIT"
 authors = [
     { name = "Gadi Evron" },
@@ -109,7 +112,7 @@ override-dependencies = [
 ]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 # Keep this in one place. The CI lint workflow reads Ruff's normal config

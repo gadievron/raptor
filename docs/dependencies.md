@@ -9,8 +9,10 @@ See also: [README](README.md), [architecture](architecture.md).
 
 ## Python
 
-Python **3.10+** is required. RAPTOR uses PEP 604 union syntax (`X | Y`) at
-function-definition time, which is a syntax error on 3.9 and earlier.
+Python **3.12+** is required. The sandbox layer hard-requires
+`os.unshare` (added in 3.12), and runtime modules use `typing.Self`
+(3.11+) and PEP 604 union syntax (`X | Y`) at function-definition time —
+the suite fails at import/setup on 3.11 and earlier.
 
 
 ## Core Tools

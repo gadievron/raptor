@@ -1,0 +1,100 @@
+name: Python floor canary
+
+# Verifies the documented Python 3.12 floor (requires-python in
+# pyproject.toml) still holds. The main test suite runs on a single
+# recent interpreter, so a dependency or runtime-module change could
+# silently break 3.12 between releases. This lane installs the
+# lockfile on 3.12, import-smokes the floor-sensitive runtime modules
+# (typing.Self users, the os.unshare-dependent sandbox entry), and
+# runs a small fast test subset. Weekly plus any PR that touches the
+# dependency surface — deliberately NOT every PR: the floor moves when
+# the lockfile or pyproject moves, not when unrelated code does.
+
+on:
+  schedule:
+    # 06:30 UTC Monday — clear of the nightly lanes (07:00/07:15 daily)
+    # and cheap enough that pool contention is a non-issue.
+    - cron: '30 6 * * 1'
+  pull_request:
+    paths:
+      - 'pyproject.toml'
+      - 'uv.lock'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.12'
+  VENV_PATH: .venv
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  floor-canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      # The lockfile itself is the artifact under test: `uv export
+      # --locked` fails if uv.lock and pyproject.toml disagree, and the
+      # install fails if any locked wheel refuses the 3.12 floor.
+      - name: Create venv from the lockfile on the floor interpreter
+        shell: bash
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv export --locked --no-hashes | uv pip install -r -
+
+      # Floor-sensitive runtime modules: the direct typing.Self users
+      # (3.11+), the os.unshare-dependent sandbox mount-ns backend
+      # (3.12+), and representative entry modules whose import closures
+      # pull in most of core/ and packages/.
+      - name: Import smoke
+        run: |
+          source $VENV_PATH/bin/activate
+          python - <<'EOF'
+          import importlib
+
+          MODULES = [
+              "core.logging",
+              "core.sandbox.mount_ns",
+              "core.dataflow.smt_barrier",
+              "core.run.output",
+              "core.orchestration",
+              "packages.sca.cli",
+              "packages.exploit_feasibility.api",
+              "packages.joern.server",
+              "packages.web.scanner",
+              "packages.binary_analysis.graph_store",
+          ]
+          for name in MODULES:
+              importlib.import_module(name)
+              print(f"ok {name}")
+          print(f"{len(MODULES)} modules imported")
+          EOF
+
+      # Small, fast, dependency-light subset — enough to execute real
+      # code paths on 3.12 without re-running the whole suite here.
+      - name: Fast test subset
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest core/inventory core/dataflow -q -n auto
