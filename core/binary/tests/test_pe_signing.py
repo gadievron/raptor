@@ -29,6 +29,8 @@ import struct
 import time
 from pathlib import Path
 
+import pytest
+
 from core.binary import pe as pe_mod
 from core.binary.pe import (
     _skim_claimed_signer,
@@ -662,15 +664,17 @@ class TestSkimMutationFuzz:
                     assert len(name) <= 4 * pe_mod._MAX_SIGNER_NAME_BYTES
         assert worst < 0.5
 
-    def test_mutated_whole_images_never_raise(self, tmp_path):
+    def _mutated_whole_images(
+            self, tmp_path: Path, rounds: int) -> None:
         """The same contract through the full extractor with the
-        certificate table in play (2,000 mutations biased into the
-        table region)."""
+        certificate table in play (mutations biased into the table
+        region). Seeded, so every run replays a prefix of the
+        identical corpus."""
         base = image_with_table(win_cert(simple_blob()))
         table_start = len(base) - len(win_cert(simple_blob()))
         p = tmp_path / "mut.exe"
         rng = random.Random(0x516F00D)
-        for _ in range(2_000):
+        for _ in range(rounds):
             blob = bytearray(base)
             for _ in range(rng.randint(1, 6)):
                 if rng.random() < 0.7:
@@ -681,6 +685,22 @@ class TestSkimMutationFuzz:
             p.write_bytes(bytes(blob))
             facts = extract_pe_facts(p)   # must never raise
             assert facts is None or facts.claimed_signer is not None
+
+    def test_mutated_whole_images_smoke_never_raises(self, tmp_path):
+        # Default-tier smoke: the leading 300 mutations of the same
+        # seeded corpus keep the whole-image never-raises contract
+        # exercised on every push.
+        self._mutated_whole_images(tmp_path, 300)
+
+    @pytest.mark.slow  # genuine fuzz battery: 2,000 seeded rounds,
+    # each a whole-image file write plus a full extract (headers,
+    # tables, certificate walk, DER skim) — cheap alone, but the
+    # corpus rides the default-tier time budget on a loaded CI
+    # runner. The smoke above keeps default-tier coverage; the
+    # in-memory 30k skim battery above stays default-tier (no file
+    # I/O, milliseconds per round).
+    def test_mutated_whole_images_never_raise(self, tmp_path):
+        self._mutated_whole_images(tmp_path, 2_000)
 
 
 # ---------------------------------------------------------------------------

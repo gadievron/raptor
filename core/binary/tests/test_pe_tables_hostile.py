@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import random
 import struct
+from pathlib import Path
 
 import pytest
 
@@ -118,7 +119,7 @@ class TestMutationFuzz:
         """Nightly tier: 30,000 full parses are genuine multi-second
         CPU (several seconds unloaded; several times that on a
         contended runner) — far past the default-tier budget. The
-        default tier keeps this file's no-fabrication mutation probe
+        default tier keeps this file's no-fabrication mutation smoke
         and the cap/boundary suites for per-PR coverage.
 
         The never-raises contract under random damage, across
@@ -181,18 +182,21 @@ class TestNoFabricatedReads:
         for text in strings:
             assert text.encode("utf-8") in blob, repr(text)
 
-    def test_probe_holds_under_mutation(self, tmp_path):
-        """The same probe over 2,000 seeded mutations: whatever a
-        damaged table makes the walks retain, it is still made of
-        input bytes. Names containing U+FFFD are skipped — the
-        replacement character marks a lossy decode, so re-encoding
-        cannot reproduce the raw bytes (decode fidelity, not
-        fabrication)."""
+    def _probe_under_mutation(
+            self, tmp_path: Path, rounds: int, floor: int) -> None:
+        """The same probe over seeded mutations: whatever a damaged
+        table makes the walks retain, it is still made of input
+        bytes. Names containing U+FFFD are skipped — the replacement
+        character marks a lossy decode, so re-encoding cannot
+        reproduce the raw bytes (decode fidelity, not fabrication).
+        Seeded, so every run replays a prefix of the identical
+        corpus; ``floor`` keeps the probe non-vacuous (it must see
+        real retained names, not an all-None degradation)."""
         base = _rich_tables_image()
         rng = random.Random(0xD1FF_BEEF)
         p = tmp_path / "mutprobe.exe"
         checked = 0
-        for _ in range(2_000):
+        for _ in range(rounds):
             blob = bytearray(base)
             for _ in range(rng.randint(1, 6)):
                 blob[rng.randrange(len(blob))] = rng.randrange(256)
@@ -206,7 +210,22 @@ class TestNoFabricatedReads:
                     continue
                 assert text.encode("utf-8") in data, repr(text)
                 checked += 1
-        assert checked > 1_000     # the probe exercised real names
+        assert checked > floor     # the probe exercised real names
+
+    def test_probe_smoke_holds_under_mutation(self, tmp_path):
+        # Default-tier smoke: the leading 300 mutations of the same
+        # seeded corpus keep the no-fabrication contract exercised
+        # on every push.
+        self._probe_under_mutation(tmp_path, 300, 150)
+
+    @pytest.mark.slow  # genuine fuzz battery: 2,000 seeded parses,
+    # each a file write plus full table walks plus a byte-substring
+    # probe over every retained name — cheap alone, but the corpus
+    # rides the default-tier time budget on a loaded CI runner. The
+    # smoke above keeps default-tier probe coverage; the full corpus
+    # runs in the nightly tier.
+    def test_probe_holds_under_mutation(self, tmp_path):
+        self._probe_under_mutation(tmp_path, 2_000, 1_000)
 
 
 class TestRenderContractOnRichImage:
