@@ -3403,7 +3403,10 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
     locations whose read failed or yielded no rows despite non-empty
     content — the loader degrades those to a logged warning and an
     empty list, which the ``0`` return alone cannot distinguish from
-    a genuinely empty journal.
+    a genuinely empty journal. ``"refused"`` counts never-verified
+    newer rows the replacement trust gate declined over a verified
+    stored copy (see the gate comment in the merge loop) — rows the
+    ``0``-shaped return would otherwise pass off as an empty run.
     """
     # fresh=True: this merge writes the DURABLE project index that
     # cross-run verdict reuse imports at $0 — durable authority never
@@ -3472,12 +3475,19 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
         # verify the moment the key is back. Under an unusable key
         # the merge carries tokens verbatim (the pre-rule posture,
         # which self-heals on restore); folds already demote
-        # unverifiable rows transiently and safely.
+        # unverifiable rows transiently and safely. This ONE sample
+        # guards only that destructive strip: verification itself
+        # runs per row below, so both of the replacement gate's
+        # authority inputs (incoming here, stored via
+        # _row_provenance_ok) observe the same live key state — a key
+        # that becomes usable between this sample and the row loop
+        # never refuses an honest stamped row.
         key_ok = journal_mac.key_usable()
 
         stripped = 0
         upgraded = 0
         healed = 0
+        refused = 0
         # Each merged key remembers the PRE-RUN value it displaced so
         # the byte-eviction arm below can RESTORE it: an evicted
         # incoming identity reaches the index as an aggregate, and the
@@ -3490,7 +3500,12 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
             key = entry.index_key
             row = entry.to_dict()
             token = row.get(journal_mac.TOKEN_KEY)
-            if key_ok and token:
+            # Whether THIS row positively verified under the install
+            # key in the block below — the replacement gate's
+            # authority input. Distinct from token presence: a
+            # stripped token and a never-minted row both read False.
+            incoming_verified = False
+            if token:
                 if not journal_mac.verify_row(row, token):
                     # A token is persisted ONLY with content it
                     # verifies over. The dataclass round-trip above is
@@ -3513,29 +3528,75 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
                     # copy would pass _row_provenance_ok and block
                     # that same-``ts`` heal forever — the strip is
                     # load-bearing for healability, not an
-                    # optimization target.
-                    row.pop(journal_mac.TOKEN_KEY, None)
-                    stripped += 1
-                elif (journal_mac.token_generation(token)
-                        != journal_mac.GENERATION_CURRENT):
-                    # Legacy-generation upgrade: the token verifies
-                    # (same authority as a current-form token), so the
-                    # index copy is re-stamped at the CURRENT
-                    # generation — the ladder's live population
-                    # shrinks at every merge instead of growing until
-                    # a rung falls off. Only ever after a successful
-                    # verify: re-stamping is a restatement of already-
-                    # proven provenance, never a laundering of an
-                    # unverified row. Mint failure (key outage mid-
-                    # merge) keeps the verified legacy token — losing
-                    # authority to an upgrade attempt would invert the
-                    # feature.
-                    fresh = journal_mac.mint_row(row)
-                    if fresh:
-                        row[journal_mac.TOKEN_KEY] = fresh
-                        upgraded += 1
+                    # optimization target. The strip is DESTRUCTIVE,
+                    # so it alone keeps the merge-level key_ok guard
+                    # (see that sample's comment above): under an
+                    # unusable key the failed verify says nothing
+                    # about the row, and the token is carried
+                    # verbatim instead.
+                    if key_ok:
+                        row.pop(journal_mac.TOKEN_KEY, None)
+                        stripped += 1
+                else:
+                    incoming_verified = True
+                    if (journal_mac.token_generation(token)
+                            != journal_mac.GENERATION_CURRENT):
+                        # Legacy-generation upgrade: the token verifies
+                        # (same authority as a current-form token), so
+                        # the index copy is re-stamped at the CURRENT
+                        # generation — the ladder's live population
+                        # shrinks at every merge instead of growing
+                        # until a rung falls off. Only ever after a
+                        # successful verify: re-stamping is a
+                        # restatement of already-proven provenance,
+                        # never a laundering of an unverified row. Mint
+                        # failure (key outage mid-merge) keeps the
+                        # verified legacy token — losing authority to
+                        # an upgrade attempt would invert the feature.
+                        fresh = journal_mac.mint_row(row)
+                        if fresh:
+                            row[journal_mac.TOKEN_KEY] = fresh
+                            upgraded += 1
             existing = index.get(key)
             if existing is None or entry.ts > _row_ts(existing):
+                if (existing is not None and not incoming_verified
+                        and _row_provenance_ok(existing)):
+                    # Replacement trust gate: a stored row that
+                    # POSITIVELY verifies under this install's MAC key
+                    # refuses replacement by a never-verified newer
+                    # row. Why refuse: ``ts`` is self-declared writer
+                    # content — any same-user writer inside the
+                    # project tree (a planted marker-less run dir the
+                    # legacy containment probe admits, a hand-appended
+                    # journal line in a real run) can fabricate a
+                    # future stamp, and under plain latest-wins that
+                    # fabrication durably demoted the honest verified
+                    # row to the unstamped tier (token gone, verdict
+                    # reuse revoked) with every re-merge re-applying
+                    # it. What still wins, by design: a VERIFIED newer
+                    # row (every locally-appended row is stamped at
+                    # ``append_entry``) replaces normally — legitimate
+                    # progress, including mark/unmark supersedes, is
+                    # untouched; a never-verified newer row still wins
+                    # over a never-verified stored row (plain
+                    # latest-wins, so pre-MAC legacy journals keep
+                    # converging); and a stored row that cannot
+                    # positively verify here (key outage, rotated or
+                    # foreign key) earns NO refusal authority — the
+                    # merge stands down to the pre-gate posture, same
+                    # fail direction as the strip rule's key-outage
+                    # arm above, so transient key trouble never wedges
+                    # the index. Accepted cost, both directions
+                    # weighed: an honest row whose append-time mint
+                    # failed (key outage during the producing run)
+                    # cannot displace an older verified row for the
+                    # same identity — the run journal keeps its full
+                    # copy and folds still read run journals directly;
+                    # the alternative (let it displace) is exactly the
+                    # attack, since the merge cannot tell the two
+                    # apart.
+                    refused += 1
+                    continue
                 slot = merged_rows.get(key)
                 if slot is None:
                     merged_rows[key] = [entry, existing, 1]
@@ -3593,14 +3654,24 @@ def merge_into_index(project_dir: Path, run_dir: Path, *,
                 "failed provenance — replaced by the run journal's "
                 "verifying copy at the same timestamp", healed,
             )
+        if refused:
+            logger.warning(
+                "journal: %d newer row(s) from %s carry no verifying "
+                "provenance token and were refused as replacements "
+                "for MAC-verified index rows (a self-declared ts "
+                "never outranks proven provenance; the run journal "
+                "keeps the rows — a later verifying copy of the same "
+                "identity merges normally)", refused, run_dir,
+            )
         if stats is not None:
             # Caller-visible mirror of the disclosures above, recorded
             # at the point they are logged. The byte-eviction arm
-            # below sheds ROWS, never the strip/heal events that
-            # already happened on the way in — so these counts always
-            # match the log lines.
+            # below sheds ROWS, never the strip/heal/refuse events
+            # that already happened on the way in — so these counts
+            # always match the log lines.
             stats["stripped"] = stats.get("stripped", 0) + stripped
             stats["healed"] = stats.get("healed", 0) + healed
+            stats["refused"] = stats.get("refused", 0) + refused
 
         # Slim at the write boundary — incoming rows AND any fat rows
         # an earlier writer left behind (the merge rewrites the whole

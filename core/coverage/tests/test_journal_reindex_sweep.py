@@ -103,7 +103,7 @@ class TestMergeStats:
 
         stats: dict[str, int] = {}
         assert merge_into_index(project, run, stats=stats) == 1
-        assert stats == {"stripped": 0, "healed": 1}
+        assert stats == {"stripped": 0, "healed": 1, "refused": 0}
 
     def test_stats_reports_stripped(self, tmp_path):
         project = tmp_path / "project"
@@ -119,7 +119,7 @@ class TestMergeStats:
 
         stats: dict[str, int] = {}
         assert merge_into_index(project, run, stats=stats) == 1
-        assert stats == {"stripped": 1, "healed": 0}
+        assert stats == {"stripped": 1, "healed": 0, "refused": 0}
 
     def test_stats_accumulate_across_calls(self, tmp_path):
         project = tmp_path / "project"
@@ -132,7 +132,7 @@ class TestMergeStats:
         stats: dict[str, int] = {}
         merge_into_index(project, run, stats=stats)   # heals once
         merge_into_index(project, run, stats=stats)   # clean no-op
-        assert stats == {"stripped": 0, "healed": 1}
+        assert stats == {"stripped": 0, "healed": 1, "refused": 0}
 
     def test_merge_run_into_index_threads_stats_to_subdirs(self, tmp_path):
         project = tmp_path / "project"
@@ -147,7 +147,7 @@ class TestMergeStats:
 
         stats: dict[str, int] = {}
         assert merge_run_into_index(project, run, stats=stats) == 2
-        assert stats == {"stripped": 0, "healed": 2}
+        assert stats == {"stripped": 0, "healed": 2, "refused": 0}
 
     def test_omitting_stats_is_the_existing_contract(self, tmp_path):
         project = tmp_path / "project"
