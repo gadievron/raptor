@@ -86,7 +86,8 @@ def _has_run_dir_param(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return any(p.arg == "run_dir" for p in params)
 
 
-def _gate_import_aliases(tree: ast.Module) -> dict[str, str]:
+def _gate_import_aliases(
+        importfroms: list[ast.ImportFrom]) -> dict[str, str]:
     """asname → gate for every ``from … import <gate> as <asname>``.
 
     Unlike an alias assignment or ``functools.partial``, an import
@@ -95,9 +96,7 @@ def _gate_import_aliases(tree: ast.Module) -> dict[str, str]:
     letting it end the sweep.
     """
     aliases: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom):
-            continue
+    for node in importfroms:
         for alias in node.names:
             if alias.name in GATE_NAMES and alias.asname:
                 aliases[alias.asname] = alias.name
@@ -131,7 +130,9 @@ def _module_keys(rel: str) -> tuple[str, ...]:
     return tuple(keys)
 
 
-def _imports(tree: ast.Module, rel: str) -> tuple[tuple[str, str, str], ...]:
+def _imports(
+    importfroms: list[ast.ImportFrom], rel: str,
+) -> tuple[tuple[str, str, str], ...]:
     """(local name, source-module dotted spelling, original name) for
     every ``from X import name [as alias]`` in the module — the seam a
     shared forwarding wrapper crosses. ``from X import *`` records a
@@ -145,9 +146,7 @@ def _imports(tree: ast.Module, rel: str) -> tuple[tuple[str, str, str], ...]:
         parts = rel[: -len(".py")].split("/")
         pkg = parts[:-1]  # the current package (__init__ included)
     out: list[tuple[str, str, str]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom):
-            continue
+    for node in importfroms:
         if node.level:
             if pkg is None or node.level - 1 > len(pkg):
                 continue  # not resolvable as a repo package member
@@ -173,6 +172,127 @@ class _ModuleCensus(NamedTuple):
     imports: tuple[tuple[str, str, str], ...]  # (local, src, orig)
 
 
+#: run_dir keyword state at a call site (precomputed at collection —
+#: the state is a property of the call's literal shape, independent
+#: of which names end up censused).
+_KW_MISSING = 0
+_KW_NONE_LITERAL = 1
+_KW_OK = 2
+
+
+class _CollectedModule(NamedTuple):
+    """One module's parsed census inputs — everything the sweep needs,
+    gathered in a single AST pass so the cross-module fixpoint can
+    re-census a module (with more imported wrappers in scope) without
+    re-parsing or re-walking its tree.
+    """
+
+    #: (name, callee-name set) for every function WITH a ``run_dir``
+    #: parameter — the only wrapper candidates.
+    fn_callees: tuple[tuple[str, frozenset[str]], ...]
+    #: asname → gate for gate import aliases.
+    gate_aliases: dict[str, str]
+    #: (lineno, spelled callee name, run_dir keyword state) for every
+    #: named call in the module.
+    calls: tuple[tuple[int, str, int], ...]
+    #: ``from … import`` edges (see :func:`_imports`).
+    imports: tuple[tuple[str, str, str], ...]
+
+
+def _collect_module(source: str, *, rel: str = "<memory>") -> _CollectedModule:
+    """Parse *source* and gather the census inputs in ONE tree walk
+    (functions, ``from`` imports, and calls all come out of the same
+    pass; per-function callee names are computed once per function,
+    not once per fixpoint iteration).
+    """
+    tree = ast.parse(source)
+    functions: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    importfroms: list[ast.ImportFrom] = []
+    calls: list[tuple[int, str, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            functions.append(node)
+        elif isinstance(node, ast.ImportFrom):
+            importfroms.append(node)
+        elif isinstance(node, ast.Call):
+            name = _callee_name(node)
+            if name is None:
+                continue
+            kw = next(
+                (k for k in node.keywords if k.arg == "run_dir"), None)
+            if kw is None:
+                state = _KW_MISSING
+            elif (isinstance(kw.value, ast.Constant)
+                    and kw.value.value is None):
+                state = _KW_NONE_LITERAL
+            else:
+                state = _KW_OK
+            calls.append((node.lineno, name, state))
+    fn_callees = tuple(
+        (fn.name, frozenset(
+            name for name in (
+                _callee_name(node) for node in ast.walk(fn)
+                if isinstance(node, ast.Call))
+            if name is not None))
+        for fn in functions if _has_run_dir_param(fn))
+    return _CollectedModule(fn_callees, _gate_import_aliases(importfroms),
+                            tuple(calls), _imports(importfroms, rel))
+
+
+def _apply_census(
+    collected: _CollectedModule,
+    imported_wrappers: frozenset[str] = frozenset(),
+) -> _ModuleCensus:
+    """Sweep one collected module (see :func:`_census_source` for the
+    wrapper semantics). Pure over the collected inputs — the
+    cross-module fixpoint calls this repeatedly with growing
+    *imported_wrappers* without touching the AST again.
+    """
+    # Censused spelling → canonical name (gates map through their
+    # import aliases; wrappers are their own canonical).
+    censused: dict[str, str] = {name: name for name in GATE_NAMES}
+    censused.update(collected.gate_aliases)
+    censused.update({name: name for name in imported_wrappers})
+    local_wrappers: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for fn_name, callees in collected.fn_callees:
+            if fn_name in censused:
+                continue
+            if not callees.isdisjoint(censused):
+                censused[fn_name] = fn_name
+                local_wrappers.add(fn_name)
+                changed = True
+
+    violations: list[tuple[str, str]] = []
+    gate_calls = 0
+    wrapper_calls = 0
+    for lineno, name, state in collected.calls:
+        if name not in censused:
+            continue
+        canonical = censused[name]
+        if canonical in GATE_NAMES:
+            gate_calls += 1
+        else:
+            wrapper_calls += 1
+        # Violations carry the CANONICAL name (allowlist entries stay
+        # stable however a caller spells its import); the message
+        # cites the spelling at the call site.
+        if state == _KW_MISSING:
+            violations.append((canonical, (
+                f"line {lineno}: {name}(...) without run_dir — "
+                "thread the caller's run directory, or allowlist with "
+                "a rationale when it genuinely has none")))
+        elif state == _KW_NONE_LITERAL:
+            violations.append((canonical, (
+                f"line {lineno}: {name}(run_dir=None) literal — "
+                "an explicit None defeats the audit-log placement; "
+                "run-dir-less callers belong on the allowlist instead")))
+    return _ModuleCensus(violations, gate_calls, wrapper_calls,
+                         frozenset(local_wrappers), collected.imports)
+
+
 def _census_source(
     source: str,
     *,
@@ -188,65 +308,7 @@ def _census_source(
     that satisfies the gate internally (e.g. deriving the run dir
     from a config argument) ends the obligation there.
     """
-    tree = ast.parse(source)
-    functions = [
-        node for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    ]
-
-    # Censused spelling → canonical name (gates map through their
-    # import aliases; wrappers are their own canonical).
-    censused: dict[str, str] = {name: name for name in GATE_NAMES}
-    censused.update(_gate_import_aliases(tree))
-    censused.update({name: name for name in imported_wrappers})
-    local_wrappers: set[str] = set()
-    changed = True
-    while changed:
-        changed = False
-        for fn in functions:
-            if fn.name in censused or not _has_run_dir_param(fn):
-                continue
-            calls_censused = any(
-                isinstance(node, ast.Call)
-                and _callee_name(node) in censused
-                for node in ast.walk(fn)
-            )
-            if calls_censused:
-                censused[fn.name] = fn.name
-                local_wrappers.add(fn.name)
-                changed = True
-
-    violations: list[tuple[str, str]] = []
-    gate_calls = 0
-    wrapper_calls = 0
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        name = _callee_name(node)
-        if name is None or name not in censused:
-            continue
-        canonical = censused[name]
-        if canonical in GATE_NAMES:
-            gate_calls += 1
-        else:
-            wrapper_calls += 1
-        kw = next(
-            (k for k in node.keywords if k.arg == "run_dir"), None)
-        # Violations carry the CANONICAL name (allowlist entries stay
-        # stable however a caller spells its import); the message
-        # cites the spelling at the call site.
-        if kw is None:
-            violations.append((canonical, (
-                f"line {node.lineno}: {name}(...) without run_dir — "
-                "thread the caller's run directory, or allowlist with "
-                "a rationale when it genuinely has none")))
-        elif isinstance(kw.value, ast.Constant) and kw.value.value is None:
-            violations.append((canonical, (
-                f"line {node.lineno}: {name}(run_dir=None) literal — "
-                "an explicit None defeats the audit-log placement; "
-                "run-dir-less callers belong on the allowlist instead")))
-    return _ModuleCensus(violations, gate_calls, wrapper_calls,
-                         frozenset(local_wrappers), _imports(tree, rel))
+    return _apply_census(_collect_module(source, rel=rel), imported_wrappers)
 
 
 def _census_repo(
@@ -263,10 +325,10 @@ def _census_repo(
     (see the fixpoint below).
     """
     censuses: dict[str, _ModuleCensus] = {}
-    sources: dict[str, str] = {}
+    collected: dict[str, _CollectedModule] = {}
     for rel, source in modules.items():
         try:
-            censuses[rel] = _census_source(source, rel=rel)
+            collected[rel] = _collect_module(source, rel=rel)
         except SyntaxError:
             # A module the census cannot parse can only hide a gate
             # caller if it names a gate at all.
@@ -274,7 +336,7 @@ def _census_repo(
                 f"{rel}: names a route gate but does not parse — "
                 "the census cannot sweep it")
             continue
-        sources[rel] = source
+        censuses[rel] = _apply_census(collected[rel])
     # Cross-module sweep: a compliant forwarding wrapper factored
     # into a shared module keeps its ``from … import`` call sites
     # obligated. Re-census every importer with the imported wrapper
@@ -302,8 +364,7 @@ def _census_repo(
             if imported == applied.get(rel, frozenset()):
                 continue
             applied[rel] = imported
-            census = _census_source(
-                sources[rel], rel=rel, imported_wrappers=imported)
+            census = _apply_census(collected[rel], imported)
             censuses[rel] = census
             for key in _module_keys(rel):
                 exported.setdefault(key, set()).update(census.wrappers)
