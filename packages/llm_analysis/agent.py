@@ -1170,7 +1170,15 @@ class AutonomousSecurityAgentV2:
                     return next((p for p in paths if p.get("id") == path_id), None)
             return None
         except (json.JSONDecodeError, OSError, StopIteration) as e:
-            logger.debug("Failed to load attack path from '%s': %s", ref, e)
+            # `ref` is LLM/SARIF-derived (untrusted), and an OSError
+            # message can embed the ref-derived filename — escape +
+            # bound both before the log record. Identity for honest
+            # short printable refs.
+            from core.security.log_sanitisation import sanitise_excerpt
+            logger.debug(
+                "Failed to load attack path from '%s': %s",
+                sanitise_excerpt(ref), sanitise_excerpt(e),
+            )
             return None
 
     def validate_dataflow(self, vuln: VulnerabilityContext) -> dict[str, Any]:
