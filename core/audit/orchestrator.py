@@ -29321,8 +29321,18 @@ def _promote_smt_clean(
         dm, target_path=config.target_path,
     )
 
+    binary_skipped = 0
     for i, outcome in enumerate(result.outcomes):
         if outcome.status != "clean":
+            continue
+
+        if outcome.file.startswith(BINARY_PATH_PREFIX):
+            # Binary outcomes carry no source path or line geometry:
+            # _read_raw_source can never resolve them, so the checks
+            # below are unreachable — without this gate the line=0
+            # warning fires once per binary function on the way to
+            # that dead end.
+            binary_skipped += 1
             continue
 
         is_c = any(outcome.file.endswith(ext) for ext in _C_EXTS)
@@ -29489,6 +29499,12 @@ def _promote_smt_clean(
                 "smt-clean escalated %s:%s to suspicious via %s",
                 outcome.file, outcome.function, tool_hit,
             )
+
+    if binary_skipped:
+        logger.debug(
+            "smt-clean: %d binary outcome(s) skipped — no source "
+            "geometry for the source-SMT checks", binary_skipped,
+        )
 
 
 def _demote_self_contradictions(result: OrchestratorResult) -> None:

@@ -231,6 +231,26 @@ def provision_codeql_dbs(
         ))
         return provision
 
+    if not target_path.is_dir():
+        # A non-directory target (binary chains hand the artifact
+        # path straight through) has no source tree to detect
+        # languages in or build a database from — a predictable
+        # state, not a detection failure worth a traceback in the
+        # run log. Persisted so the report sees the skip; the other
+        # early returns above predate status writing and keep their
+        # stdout-only contract.
+        provision.skipped.append(CodeqlSkip(
+            language="*",
+            reason="target is not a directory — no source tree for "
+                   "CodeQL (binary targets use the decompiler "
+                   "Semgrep sweep)",
+            remedy="pass --codeql-db <path> if a database built from "
+                   "the matching source tree exists",
+        ))
+        if out_dir is not None:
+            provision.write_status(out_dir)
+        return provision
+
     try:
         from packages.codeql.database_manager import (
             AUTOBUILD_LANGUAGES,

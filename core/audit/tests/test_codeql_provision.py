@@ -8,6 +8,7 @@ the loud report degradation for languages left without a database.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from concurrent.futures import Future
 from pathlib import Path
@@ -105,6 +106,39 @@ def _wait(provision, timeout=10):
     if provision.build_future is None:
         return []
     return provision.build_future.result(timeout=timeout)
+
+
+class TestSingleFileTarget:
+    def test_file_target_skips_cleanly_before_detection(
+        self, fake_env, tmp_path, caplog, monkeypatch,
+    ):
+        # Mirror the real detector's contract — a non-directory path
+        # raises (LanguageDetector refuses files) — so the gate must
+        # answer BEFORE detection ever runs, or the pass degrades to
+        # a traceback warning instead of a clean skip.
+        class _RaisingDetector:
+            def __init__(self, repo_path):
+                raise ValueError(
+                    f"Repository path is not a directory: {repo_path}")
+
+        monkeypatch.setattr(ldet, "LanguageDetector", _RaisingDetector)
+        binary = tmp_path / "prog.bin"
+        binary.write_bytes(b"\x7fELF\x02\x01\x01")
+        out = tmp_path / "out"
+        out.mkdir()
+        with caplog.at_level(logging.WARNING):
+            provision = provision_codeql_dbs(binary, out_dir=out)
+        assert [s.language for s in provision.skipped] == ["*"]
+        assert "not a directory" in provision.skipped[0].reason
+        assert provision.db_paths == []
+        assert provision.build_future is None
+        assert not [r for r in caplog.records
+                    if "language detection failed" in r.getMessage()]
+        # The skip is persisted, so the report surfaces it — the
+        # run-start stderr line must not be the only trace.
+        status = load_provision_status(out)
+        assert status is not None
+        assert status["skipped"][0]["language"] == "*"
 
 
 class TestDiscovery:
