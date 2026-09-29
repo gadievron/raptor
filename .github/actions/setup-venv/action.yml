@@ -19,7 +19,9 @@ description: >
        and attempt 1 succeeds.
     2. Retry with restore-keys -- 30s backoff + prefix-match
        fallback so a transient 429 OR an evicted exact-key
-       both recover by reusing a slightly older venv.
+       both recover by reusing a slightly older venv.  The
+       prefix fallback is suppressed for self-saving flavoured
+       venvs (save-on-rebuild) -- see the attempt-2 step.
     3. Rebuild -- install uv + ``uv pip install``.  Last-resort
        backstop; runs only if all restore attempts failed.
 
@@ -44,6 +46,10 @@ inputs:
       Save the venv back to the cache after a rebuild ("true"/"false").
       Callers whose key no other job saves (flavoured venvs) set this
       so the rebuild cost is paid once per uv.lock change, not nightly.
+      Also disables the attempt-2 prefix fallback: with no other job
+      saving the exact key, a prefix hit would satisfy every future
+      run and the rebuild+save path would never fire again after a
+      uv.lock change -- the venv would be permanently stale.
     required: false
     default: 'false'
 
@@ -76,8 +82,16 @@ runs:
       with:
         path: ${{ env.VENV_PATH }}
         key: ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-        restore-keys: |
-          ${{ inputs.cache-key-prefix }}-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+        # Prefix fallback only when another job saves the exact key for
+        # the current uv.lock (the default-venv prefix, saved by the
+        # deps job): there the stale hit is a one-run bridge. A
+        # self-saving flavoured venv (save-on-rebuild) has no such
+        # saver -- a prefix hit here would mask every future exact-key
+        # miss, the rebuild+save path would never fire, and the venv
+        # would stay stale forever after a uv.lock change. For those,
+        # attempt 2 is an exact-key retry only (the 429/backoff case);
+        # a real key change falls through to the rebuild backstop.
+        restore-keys: ${{ inputs.save-on-rebuild != 'true' && format('{0}-{1}-py{2}-', inputs.cache-key-prefix, runner.os, env.PYTHON_VERSION) || '' }}
 
     - name: Install uv (rebuild fallback when both restore attempts failed)
       if: steps.cache-1.outcome == 'failure' && steps.cache-2.outputs.cache-matched-key == ''
