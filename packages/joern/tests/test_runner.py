@@ -1667,7 +1667,7 @@ class TestSandboxCpuLimitsPlumbing:
         target.mkdir()
         calls: list = []
 
-        def strict_runner(cmd, capture_output, text, timeout):
+        def strict_runner(cmd, capture_output, text, timeout, cwd):
             calls.append(cmd)
             return SimpleNamespace(stdout="", stderr="", returncode=0)
 

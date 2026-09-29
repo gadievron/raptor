@@ -214,3 +214,36 @@ def _no_sentinel_server_handles(
             "aimed at a sentinel pid/pgid (killpg(1, sig) is a same-uid "
             "kill(-1, sig) broadcast at GC time): " + "; ".join(offenders)
         )
+
+
+# ── Repo-root workspace tripwire ────────────────────────────────────
+# A fleet battery once left a `workspace/cpg.bin/` tree at a worktree
+# root: the shape Joern writes under the process cwd when a spawn
+# lane runs with an unpinned cwd (packages/joern/runner.py pins every
+# lane's cwd to a run-owned directory). Self-contained addition — it
+# reads and edits nothing else in this file.
+
+def _repo_root() -> Path:
+    """The root the tripwire watches — a seam the meta-test
+    (test_workspace_tripwire_meta.py) retargets at a scratch root so
+    the REAL fixture below is what its nested sessions exercise."""
+    return Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_repo_root_workspace_debris() -> Iterator[None]:
+    """Fail the session when a joern suite drops `workspace/` at the
+    repo root: some spawn ran with the caller's cwd unpinned. A
+    pre-existing `workspace/` is not this session's debris and is
+    left alone (and unblamed)."""
+    debris = _repo_root() / "workspace"
+    existed_before = debris.exists()
+    yield
+    if debris.exists() and not existed_before:
+        pytest.fail(
+            "joern tests left workspace/ debris at the repo root "
+            f"({debris}) — a spawn lane ran with an unpinned cwd; "
+            "pin cwd to a run-owned directory "
+            "(see packages/joern/runner.py cwd pins)",
+            pytrace=False,
+        )
