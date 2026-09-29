@@ -653,22 +653,22 @@ def test_fuzz_output_stays_serialisable(packs) -> None:
 # ── growth-ratio pin (reconstruction-heavy shape) ────────────────────
 
 
-def _timed_diamonds(n: int, packs: PackSet) -> float:
+def _timed_leg(
+    package: tuple[dict[str, str], PackageCallGraph, RouteModels],
+    packs: PackSet,
+) -> float:
     # CPU time, not wall: the ratio below is a complexity pin on
-    # in-process work, and its two legs are sampled at different
-    # moments — runner contention that hits one leg harder than the
-    # other skews a wall ratio on unchanged code (a nightly measured
-    # 2.80 that way; see core.testing.wallclock). A super-linear
-    # regression still burns CPU; a descheduled worker accumulates
-    # none.
-    texts, graph, routes = _diamond_package(n)
-    best = float("inf")
-    for _ in range(3):
-        start = time.process_time()
-        res = _run(texts, graph, routes, packs)
-        best = min(best, time.process_time() - start)
-        assert res.candidates and res.candidates[0].alternatives
-    return best
+    # in-process work — runner contention that hits one sample harder
+    # than another skews a wall ratio on unchanged code (a nightly
+    # measured 2.80 that way; see core.testing.wallclock). A
+    # super-linear regression still burns CPU; a descheduled worker
+    # accumulates none.
+    texts, graph, routes = package
+    start = time.process_time()
+    res = _run(texts, graph, routes, packs)
+    elapsed = time.process_time() - start
+    assert res.candidates and res.candidates[0].alternatives
+    return elapsed
 
 
 def test_growth_ratio_pin_n_vs_2n_with_alternatives(packs) -> None:
@@ -684,8 +684,26 @@ def test_growth_ratio_pin_n_vs_2n_with_alternatives(packs) -> None:
     # hides super-linear blowups, lowering it flakes on interpreter
     # noise. Trend belt; the diamond-flood wall above is the
     # absolute rail.
-    t_n = _timed_diamonds(120, packs)
-    t_2n = _timed_diamonds(240, packs)
+    #
+    # The legs INTERLEAVE (n,2n three times; min per leg) instead of
+    # sampling each leg in its own window. CPU time is contention-
+    # skewed too — neighbours thrashing the shared cache raise
+    # cycles-per-instruction, and the 2n leg's larger working set
+    # suffers more — so a load transient covering one leg's whole
+    # window biases the ratio on unchanged code. Interleaving spreads
+    # both legs across the same window: a transient must now cover
+    # every sample of one leg and none of the other to bias the min,
+    # and an early transient inflates the DENOMINATOR — the safe
+    # direction. (Measured on a full-core cache-thrash transient over
+    # the second half: sequential legs 2.6-3.4, interleaved 1.9-2.3,
+    # quiet host 2.0 for both.)
+    small = _diamond_package(120)
+    big = _diamond_package(240)
+    t_n = float("inf")
+    t_2n = float("inf")
+    for _ in range(3):
+        t_n = min(t_n, _timed_leg(small, packs))
+        t_2n = min(t_2n, _timed_leg(big, packs))
     assert t_n > 0
     ratio = t_2n / t_n
     assert ratio <= 2.6, f"super-linear growth: ratio {ratio:.2f}"
