@@ -219,8 +219,7 @@ Agent boundaries, tool inventories, dispatch gates and the Rule of Two
 capability constraint are documented in [Agent Security](agent-security.md).
 This section covers the repository-facing threat model and process-level
 controls; the agent guide covers per-agent capability declarations, network
-hooks, credential isolation, SAGE trust boundaries, and the full residual-risk
-inventory.
+hooks, credential isolation, and SAGE trust boundaries.
 
 ---
 
