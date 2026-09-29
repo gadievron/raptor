@@ -144,33 +144,59 @@ class BoundedParser:
     delegate to the wrapped parser.
     """
 
-    __slots__ = ("_parser", "_label", "_budget_s")
+    __slots__ = ("_parser", "_label", "_budget_s", "_explicit_budget",
+                 "_knob_ok")
 
     def __init__(self, parser: Any, label: str = "",
                  budget_s: float | None = None) -> None:
-        global _missing_knob_warned
         self._parser = parser
         self._label = label
-        self._budget_s = parse_budget_s() if budget_s is None else budget_s
-        if self._budget_s > 0:
-            # Probe the CLASS descriptor — a hasattr on the instance
-            # would invoke the (deprecation-warning) getter.
-            if hasattr(type(parser), "timeout_micros"):
-                with warnings.catch_warnings():
-                    # The deprecation points at progress_callback,
-                    # which is a no-op for bytestring parses — see
-                    # the mechanism-choice note above.
-                    warnings.simplefilter("ignore", DeprecationWarning)
-                    parser.timeout_micros = int(self._budget_s * 1_000_000)
-            else:
-                self._budget_s = 0.0
-                if not _missing_knob_warned:
-                    _missing_knob_warned = True
-                    logger.warning(
-                        "tree-sitter binding lacks Parser.timeout_micros; "
-                        "parses run UNBOUNDED — crafted input can stall "
-                        "analysis for minutes per file",
-                    )
+        self._explicit_budget = budget_s
+        # Probe the CLASS descriptor — a hasattr on the instance
+        # would invoke the (deprecation-warning) getter.
+        self._knob_ok = hasattr(type(parser), "timeout_micros")
+        self._budget_s = 0.0
+        self._sync_budget()
+
+    def _sync_budget(self) -> float:
+        """Resolve the CURRENT budget and stamp it on the parser.
+
+        Re-resolved on every parse, not just at construction: parsers
+        are cached per-thread for the life of the process
+        (``cached_parser``), so a construction-time read would freeze
+        whatever the environment said when the FIRST caller built the
+        parser and silently ignore the knob afterwards. An explicit
+        constructor ``budget_s`` stays fixed; only the env-resolved
+        default is live.
+        """
+        global _missing_knob_warned
+        budget = (
+            self._explicit_budget
+            if self._explicit_budget is not None
+            else parse_budget_s()
+        )
+        if not self._knob_ok:
+            if budget > 0 and not _missing_knob_warned:
+                _missing_knob_warned = True
+                logger.warning(
+                    "tree-sitter binding lacks Parser.timeout_micros; "
+                    "parses run UNBOUNDED — crafted input can stall "
+                    "analysis for minutes per file",
+                )
+            return 0.0
+        if budget != self._budget_s:
+            self._budget_s = budget
+            with warnings.catch_warnings():
+                # The deprecation points at progress_callback,
+                # which is a no-op for bytestring parses — see
+                # the mechanism-choice note above.
+                warnings.simplefilter("ignore", DeprecationWarning)
+                # 0 clears a previously stamped timeout (the
+                # binding's "no timeout" spelling).
+                self._parser.timeout_micros = int(
+                    max(budget, 0.0) * 1_000_000,
+                )
+        return budget
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._parser, name)
@@ -179,7 +205,7 @@ class BoundedParser:
         # The binding rejects an explicit ``old_tree=None`` (it
         # demands a Tree), so only forward it when provided.
         args = (source,) if old_tree is None else (source, old_tree)
-        if self._budget_s <= 0:
+        if self._sync_budget() <= 0:
             return self._parser.parse(*args)
         started = time.monotonic()
         try:
