@@ -58,11 +58,29 @@ else:
 
 
 def _proc_alive(pid: int) -> bool:
-    """Check /proc/<pid> existence — works for orphans we don't own."""
+    """Liveness for orphans we don't own: absent from /proc OR dead-
+    but-unreaped (zombie) counts as killed.
+
+    Bare ``/proc/<pid>`` existence is NOT hermetic here: a SIGKILLed
+    orphan is reparented to the nearest reaper — normally the host
+    init, which wait()s promptly and the entry vanishes, but inside a
+    pid namespace that reaper is the namespace's own init (the test
+    runner's ancestor), which never reaps foreign children, so the
+    kernel keeps the dead task visible in state ``Z`` indefinitely.
+    Reading the stat state field keeps the assertion meaningful in
+    both environments: a real regression (signal never delivered)
+    still shows the grandchild running/sleeping and fails; a
+    delivered kill never masquerades as a survivor."""
     try:
-        return Path(f"/proc/{pid}").exists()
+        stat = Path(f"/proc/{pid}/stat").read_text()
     except OSError:
         return False
+    # State is the first field after the comm's closing paren —
+    # rsplit, because comm itself may contain ')'.
+    if ")" not in stat:
+        return False
+    state = stat.rsplit(")", 1)[1].split()[0]
+    return state not in ("Z", "X", "x")
 
 
 def test_kill_and_reap_kills_grandchildren_in_session():
