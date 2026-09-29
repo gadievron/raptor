@@ -1,6 +1,6 @@
 {
   "_source": {
-    "fetched_at": "2026-09-22T10:33:26Z",
+    "fetched_at": "2026-09-29T11:47:17Z",
     "license": "Public Domain (US Government work)",
     "name": "CISA KEV",
     "provenance": "CISA Known Exploited Vulnerabilities Catalog. Public Domain; embedded verbatim.",
@@ -11676,6 +11676,13 @@
       "ransomware_use": false,
       "vendor": "Linux"
     },
+    "CVE-2026-5430": {
+      "date_added": "2026-09-24",
+      "kev": true,
+      "product": "Multiple Products",
+      "ransomware_use": false,
+      "vendor": "WSO2"
+    },
     "CVE-2026-54420": {
       "date_added": "2026-06-15",
       "kev": true,
@@ -11778,7 +11785,7 @@
       "date_added": "2026-08-05",
       "kev": true,
       "product": "TeamCity",
-      "ransomware_use": false,
+      "ransomware_use": true,
       "vendor": "JetBrains"
     },
     "CVE-2026-64849": {
@@ -11795,6 +11802,13 @@
       "ransomware_use": false,
       "vendor": "Apple"
     },
+    "CVE-2026-65660": {
+      "date_added": "2026-09-25",
+      "kev": true,
+      "product": "SharePoint",
+      "ransomware_use": false,
+      "vendor": "Microsoft"
+    },
     "CVE-2026-66384": {
       "date_added": "2026-08-27",
       "kev": true,
@@ -11804,6 +11818,13 @@
     },
     "CVE-2026-67277": {
       "date_added": "2026-09-10",
+      "kev": true,
+      "product": "RouterOS",
+      "ransomware_use": false,
+      "vendor": "MikroTik"
+    },
+    "CVE-2026-67279": {
+      "date_added": "2026-09-25",
       "kev": true,
       "product": "RouterOS",
       "ransomware_use": false,
@@ -11822,6 +11843,13 @@
       "product": "Endpoint Manager Mobile (EPMM)",
       "ransomware_use": false,
       "vendor": "Ivanti"
+    },
+    "CVE-2026-71362": {
+      "date_added": "2026-09-24",
+      "kev": true,
+      "product": "Commerce and Magento ",
+      "ransomware_use": false,
+      "vendor": "Adobe"
     },
     "CVE-2026-72529": {
       "date_added": "2026-08-20",
@@ -11963,6 +11991,13 @@
       "ransomware_use": false,
       "vendor": "Google"
     },
+    "CVE-2026-85102": {
+      "date_added": "2026-09-22",
+      "kev": true,
+      "product": "Multiple Products",
+      "ransomware_use": false,
+      "vendor": "Check Point"
+    },
     "CVE-2026-85706": {
       "date_added": "2026-09-11",
       "kev": true,
@@ -12005,6 +12040,27 @@
       "ransomware_use": false,
       "vendor": "Acronis"
     },
+    "CVE-2026-87902": {
+      "date_added": "2026-09-25",
+      "kev": true,
+      "product": "Core",
+      "ransomware_use": false,
+      "vendor": "WordPress"
+    },
+    "CVE-2026-88771": {
+      "date_added": "2026-09-27",
+      "kev": true,
+      "product": "NetScaler",
+      "ransomware_use": false,
+      "vendor": "Citrix"
+    },
+    "CVE-2026-88772": {
+      "date_added": "2026-09-27",
+      "kev": true,
+      "product": "NetScaler",
+      "ransomware_use": false,
+      "vendor": "Citrix"
+    },
     "CVE-2026-9082": {
       "date_added": "2026-05-22",
       "kev": true,
@@ -12018,6 +12074,27 @@
       "product": "Langflow",
       "ransomware_use": false,
       "vendor": "IBM"
+    },
+    "CVE-2026-93616": {
+      "date_added": "2026-09-22",
+      "kev": true,
+      "product": "Multiple Products",
+      "ransomware_use": false,
+      "vendor": "Check Point"
+    },
+    "CVE-2026-93952": {
+      "date_added": "2026-09-22",
+      "kev": true,
+      "product": "VeloCloud Orchestrator",
+      "ransomware_use": false,
+      "vendor": "Arista"
+    },
+    "CVE-2026-94127": {
+      "date_added": "2026-09-22",
+      "kev": true,
+      "product": "BIG-IP APM",
+      "ransomware_use": false,
+      "vendor": "F5"
     },
     "CVE-2026-9586": {
       "date_added": "2026-09-02",
