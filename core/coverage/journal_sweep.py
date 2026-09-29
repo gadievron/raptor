@@ -22,6 +22,14 @@ would have had absent damage. Pinned by
 
 Safety:
 
+* The project ``.op.lock`` is held for the sweep's WHOLE duration —
+  live-writer gate, index pre-flight, and every merge run inside it.
+  Without it the gate was check-then-act: a run that STARTED
+  mid-sweep was unfenced, and the window was two-sided (a run
+  start's own contention gate holds this flock across its
+  check-and-write window, so a lockless sweep was invisible to it).
+  Lock order and acquisition posture: see the rationale comment in
+  :func:`reindex_project_journals`.
 * Wholesale refusal BEFORE any merge while a live run owns the
   project (``core.run.metadata._live_conflicting_run`` — the same
   gate run starts use), with ``self_session_pid=None`` so even this
@@ -45,6 +53,10 @@ Safety:
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # import cycle: project.py imports core.coverage
+    from core.project.project import Project
 
 from core.coverage.journal import (
     INDEX_FILENAME,
@@ -120,8 +132,9 @@ def reindex_project_journals(project_name: str) -> SweepReport:
 
     Returns a :class:`SweepReport` with one :class:`RunOutcome` per
     enumerated run dir. Raises :class:`SweepRefused` for an invalid or
-    unknown project name, an unreadable index, or a live conflicting
-    run — always before any index write in the live-run case.
+    unknown project name, an unreadable index, a live conflicting
+    run — always before any index write in the live-run case — or a
+    held project op lock.
     """
     from core.project.project import ProjectManager
     try:
@@ -142,9 +155,58 @@ def reindex_project_journals(project_name: str) -> SweepReport:
     if not project_dir.is_dir():
         # A registered project whose output dir was never created (or
         # was cleaned away) has no runs and no index — an empty sweep,
-        # not an error.
+        # not an error. Deliberately BEFORE the lock acquisition:
+        # taking the op lock mkdirs the project dir and mints the lock
+        # file, a write side effect a read-only no-op must not have.
         return report
 
+    from core.project.oplock import OpLockContention, project_op_lock
+
+    # Hold the project ``.op.lock`` for the sweep's WHOLE duration.
+    # Why: the live-writer gate below is otherwise check-then-act —
+    # it runs once, so a run that STARTS mid-sweep is unfenced, and
+    # the window is two-sided: run starts hold this flock across
+    # their own [contention check → metadata write] window
+    # (``core.run.metadata._project_run_gate``), so a lockless sweep
+    # was invisible to them too. With the lock held, a mid-sweep run
+    # start queues behind it (the run gate enters with ``wait=True``)
+    # and proceeds only after the sweep releases.
+    #
+    # LOCK ORDER (no ABBA by construction): ``.op.lock`` is strictly
+    # OUTERMOST — acquired here before ANY journal-stack lock, and
+    # every lock taken inside is from that stack: the per-merge index
+    # flock (``merge_into_index``), and the journal shard/sidecar
+    # flocks whose own total order is ``sidecar < shard_1 < …``
+    # (``journal_compact.SidecarWriter.open``). Nothing in
+    # ``core.coverage`` ever acquires ``.op.lock`` (it lives in
+    # ``core.project.oplock``; the journal stack does not import it),
+    # so no path waits for ``.op.lock`` while holding a journal-stack
+    # lock — the existing holders (run-start gate, mutating /project
+    # subcommands, whose ``adopt`` already merges into the index
+    # under it) all acquire in this same outermost-first direction.
+    #
+    # Acquisition posture: non-waiting with the bounded mutator grace
+    # — contention (a run start's check-and-write window, a mutating
+    # /project subcommand) converts to ``SweepRefused`` naming the
+    # holder, never an unbounded wait; the sweep is a retryable
+    # remedy command. The other direction (waiting) would silently
+    # serialise behind a wedged holder with no operator signal.
+    # Without fcntl or with an uncreatable lock file, the lock
+    # degrades to unserialised (its documented posture, same fail
+    # direction as every sibling RMW lock) — identical to the
+    # pre-lock sweep, never a new refusal on degraded hosts.
+    try:
+        with project_op_lock(project_dir, "journal-reindex-sweep"):
+            _sweep_project_locked(project, project_dir, report)
+    except OpLockContention as exc:
+        raise SweepRefused(f"refusing to sweep: {exc}") from exc
+    return report
+
+
+def _sweep_project_locked(project: "Project", project_dir: Path,
+                          report: SweepReport) -> None:
+    """Gate, pre-flight, and per-run merge loop — the caller holds the
+    project op lock for this whole call."""
     import core.run.metadata as metadata
 
     # Refuse wholesale BEFORE any merge while a run is writing the
@@ -220,4 +282,3 @@ def reindex_project_journals(project_name: str) -> SweepReport:
         outcome.stripped = stats.get("stripped", 0)
         outcome.healed = stats.get("healed", 0)
         outcome.unreadable = stats.get("unreadable", 0)
-    return report
