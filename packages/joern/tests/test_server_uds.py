@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import socketserver
 import subprocess
 import sys
@@ -303,6 +304,99 @@ class TestMakeUdsDir:
         finally:
             os.rmdir(d)
         assert not any(long_root.iterdir())  # long candidate cleaned up
+
+    def test_multibyte_tmpdir_budgeted_in_bytes(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        request: pytest.FixtureRequest,
+    ) -> None:
+        """The ceiling is a BYTE budget: a TMPDIR that fits in str
+        characters but not in fsencoded bytes must trigger the /tmp
+        fallback — a character count admits it and every later
+        ``bind()`` fails with a confusing error instead."""
+        base = tempfile.mkdtemp(prefix="jm", dir="/tmp")
+        request.addfinalizer(lambda: shutil.rmtree(base, ignore_errors=True))
+        # 30 two-byte characters: the root fits the ceiling counted in
+        # characters (worst-case socket path 83 <= 100) but not in
+        # bytes ("/raptor-joern-uds-XXXXXXXX" adds 26, "/joern.sock"
+        # adds 11 on top of the 76-byte root: 113 > 100).
+        multi_root = os.path.join(base, "é" * 30)
+        os.mkdir(multi_root)
+        assert len(multi_root) + 26 + 11 <= server_mod._SUN_PATH_MAX_SAFE
+        assert (
+            len(os.fsencode(multi_root)) + 26 + 11
+            > server_mod._SUN_PATH_MAX_SAFE
+        )
+        real_mkdtemp = tempfile.mkdtemp
+
+        def fake_mkdtemp(prefix: str, dir: str | None = None) -> str:
+            # No explicit dir = the TMPDIR-honouring call.
+            if dir is None:
+                dir = multi_root
+            return real_mkdtemp(prefix=prefix, dir=dir)
+
+        monkeypatch.setattr(server_mod.tempfile, "mkdtemp", fake_mkdtemp)
+        d = server_mod._make_uds_dir()
+        try:
+            sock = os.path.join(d, "joern.sock")
+            assert len(os.fsencode(sock)) <= server_mod._SUN_PATH_MAX_SAFE
+            assert d.startswith("/tmp/")
+            assert not d.startswith(multi_root)
+        finally:
+            os.rmdir(d)
+        assert not any(os.scandir(multi_root))  # candidate cleaned up
+
+    def test_surrogate_escaped_tmpdir_does_not_crash(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        request: pytest.FixtureRequest,
+    ) -> None:
+        """A TMPDIR carrying undecodable bytes reaches Python as
+        surrogate-escaped str; ``os.fsencode`` round-trips it where
+        ``str.encode("utf-8")`` raises UnicodeEncodeError. The budget
+        check must survive such roots and keep counting exactly: an
+        under-budget one is used as-is, an over-budget one still
+        diverts to the /tmp fallback instead of crashing."""
+        base = tempfile.mkdtemp(prefix="js", dir="/tmp")
+        request.addfinalizer(lambda: shutil.rmtree(base, ignore_errors=True))
+        # One raw \x80 byte -> '\udc80' after fsdecode; encoding it
+        # back is exactly the step a str.encode() regression breaks.
+        sur_ok = os.fsdecode(os.path.join(os.fsencode(base), b"x\x80y"))
+        os.mkdir(sur_ok)
+        assert (
+            len(os.fsencode(sur_ok)) + 26 + 11
+            <= server_mod._SUN_PATH_MAX_SAFE
+        )
+        sur_over = os.fsdecode(os.path.join(os.fsencode(base), b"\x80" * 60))
+        os.mkdir(sur_over)
+        assert (
+            len(os.fsencode(sur_over)) + 26 + 11
+            > server_mod._SUN_PATH_MAX_SAFE
+        )
+        real_mkdtemp = tempfile.mkdtemp
+        target = sur_ok
+
+        def fake_mkdtemp(prefix: str, dir: str | None = None) -> str:
+            # No explicit dir = the TMPDIR-honouring call.
+            if dir is None:
+                dir = target
+            return real_mkdtemp(prefix=prefix, dir=dir)
+
+        monkeypatch.setattr(server_mod.tempfile, "mkdtemp", fake_mkdtemp)
+        d = server_mod._make_uds_dir()
+        try:
+            assert d.startswith(sur_ok)  # fits in bytes: used as-is
+        finally:
+            os.rmdir(d)
+
+        target = sur_over
+        d = server_mod._make_uds_dir()
+        try:
+            assert d.startswith("/tmp/")
+            assert not d.startswith(sur_over)
+        finally:
+            os.rmdir(d)
+        assert not any(os.scandir(sur_over))  # candidate cleaned up
 
 
 class TestNetnsProbeCache:

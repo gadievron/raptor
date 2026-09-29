@@ -80,8 +80,14 @@ _AUTH_SUPPORT_CACHE: dict[str, bool] = {}
 _FORWARDER_SCRIPT = Path(__file__).resolve().parent / "netns_forwarder.py"
 _UDS_SOCKET_NAME = "joern.sock"
 _NETNS_PROBE_TIMEOUT_S = 30
-# Conservative ceiling for the socket path: sun_path is 108 bytes on
-# Linux (including the NUL); leave headroom.
+# Conservative ceiling for the socket path, in BYTES of the
+# fsencoded form — the kernel compares those, so one multibyte UTF-8
+# TMPDIR character spends its full encoded width (a str character
+# count under-counts and admits a path every later bind() refuses).
+# Both directions of the value: sun_path is 108 bytes on Linux
+# including the NUL, so 107 is the hard usable cap — 100 leaves
+# headroom; materially lower would reject workable TMPDIRs and force
+# the /tmp fallback needlessly.
 _SUN_PATH_MAX_SAFE = 100
 
 # Per-process cache for the netns-tier probe (one python spawn).
@@ -793,7 +799,9 @@ def _make_uds_dir() -> str:
     where the probe proved the mechanism works.
     """
     d = tempfile.mkdtemp(prefix="raptor-joern-uds-")
-    if len(os.path.join(d, _UDS_SOCKET_NAME)) <= _SUN_PATH_MAX_SAFE:
+    # Bytes, not characters — see the rationale at _SUN_PATH_MAX_SAFE.
+    sock_bytes = len(os.fsencode(os.path.join(d, _UDS_SOCKET_NAME)))
+    if sock_bytes <= _SUN_PATH_MAX_SAFE:
         return d
     shutil.rmtree(d, ignore_errors=True)
     logger.debug(
