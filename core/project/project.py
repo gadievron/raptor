@@ -27,10 +27,45 @@ try:
 except ImportError:                                    # pragma: no cover
     _HAS_FCNTL = False
 
+from . import registry_home as _registry_home
+
 logger = get_logger()
 
-# Default locations
-PROJECTS_DIR = Path.home() / ".raptor" / "projects"
+
+def _projects_dir() -> Path:
+    """The projects registry directory for THIS call.
+
+    Historically a module-level ``PROJECTS_DIR`` constant computed at
+    import time — which resolved the REAL home with no override seam
+    (env-less product misuse; conftest-less test extracts). Now
+    resolved at call time through the shared operator-registry seam
+    (``core.project.registry_home`` — one resolution for this
+    registry, the ``.active`` bookmark and the sessions registry,
+    honouring ``RAPTOR_REGISTRY_HOME``).
+
+    Test-estate compatibility: a module-dict entry named
+    ``PROJECTS_DIR`` (the suite-wide ``monkeypatch.setattr`` /
+    ``mock.patch`` pin spelling) takes precedence over the seam, so
+    every existing per-test registry pin keeps working unchanged.
+    """
+    override = globals().get("PROJECTS_DIR")
+    if override is not None:
+        return Path(override)
+    return _registry_home.projects_dir()
+
+
+def __getattr__(name: str) -> Path:
+    # PEP 562: the historical constant name stays importable
+    # (``from core.project.project import PROJECTS_DIR`` and the
+    # attribute spelling both work) but now resolves at ACCESS time
+    # through the seam. Only reached when no module-dict override
+    # exists — a test's setattr wins by construction.
+    if name == "PROJECTS_DIR":
+        return _registry_home.projects_dir()
+    raise AttributeError(
+        f"module {__name__!r} has no attribute {name!r}")
+
+
 # Anchored to the repo-rooted out/ dir. Pre-fix this was the
 # cwd-relative Path("out/projects"): create() minted default output
 # dirs relative to whatever cwd the process happened to have, the
@@ -855,7 +890,7 @@ class ProjectManager:
     """Manages project lifecycle."""
 
     def __init__(self, projects_dir: Path | None = None) -> None:
-        self.projects_dir = projects_dir or PROJECTS_DIR
+        self.projects_dir = projects_dir or _projects_dir()
         self.projects_dir.mkdir(parents=True, exist_ok=True)
 
     # Reserved names that cannot be used as project names

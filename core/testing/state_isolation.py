@@ -69,12 +69,21 @@ def pin_user_state_dirs(monkeypatch: "pytest.MonkeyPatch",
     registry = base / "projects"
 
     import core.startup as startup
-    from core.project import project, sessions
+    from core.project import project, registry_home, sessions
 
     monkeypatch.setattr(project, "PROJECTS_DIR", registry)
     monkeypatch.setattr(startup, "PROJECTS_DIR", registry)
     monkeypatch.setattr(startup, "ACTIVE_LINK", registry / ".active")
     monkeypatch.setattr(sessions, "SESSIONS_DIR", base / "sessions.d")
+    # Same base through the resolution seam's env override: the
+    # module-attribute pins above cover in-process consumers, the env
+    # covers everything that resolves through
+    # ``core.project.registry_home`` afresh — child processes (bash
+    # hooks, libexec helpers) and any consumer module reloaded or
+    # imported after the pins. The seam's layout (``<base>/projects``,
+    # ``<base>/sessions.d``, ``.active`` inside the projects dir)
+    # matches the attribute pins by construction.
+    monkeypatch.setenv(registry_home.ENV_REGISTRY_HOME, str(base))
     monkeypatch.setattr(sessions, "_walk_session_pid", lambda: None)
     monkeypatch.delenv(sessions.ENV_SESSION_PID, raising=False)
     monkeypatch.delenv(sessions.ENV_SESSION_TOKEN, raising=False)

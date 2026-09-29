@@ -43,6 +43,17 @@ Authority demands what the advisory registry never needed:
   token-verified pids. Explicit-pid callers are trusted internal
   surfaces.
 
+Registry-resolution invariant (uncached seam): lock acquisition and
+the locked mutation each resolve the registry base independently at
+call time — ``_ledger_lock`` and the read-modify-write it protects
+both call ``_sessions_dir()`` afresh, as do the pre-lock gates. So
+``RAPTOR_REGISTRY_HOME`` must not change while a ledger or entry
+operation is in flight: the lock would be held in one registry while
+the mutation lands, unlocked, in the other. Today the only writer of
+that variable is the test substrate (``core.testing.state_isolation``),
+which flips it at fixture boundaries only — never mid-operation. Any
+future runtime setter must preserve this invariant.
+
 A sibling file ``sessions.d/<pid>.run`` is the session's RUN LEDGER:
 one line per run — ``<status> <epoch> <run-id> <abs-run-dir>`` with
 status in running|completed|failed|cancelled|interrupted — appended at
@@ -68,9 +79,44 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from . import registry_home as _registry_home
+
 logger = logging.getLogger(__name__)
 
-SESSIONS_DIR = Path.home() / ".local" / "share" / "raptor" / "sessions.d"
+
+def _sessions_dir() -> Path:
+    """The sessions registry directory for THIS call.
+
+    Historically a module-level ``SESSIONS_DIR`` constant computed at
+    import time — which resolved the REAL home with no override seam
+    (env-less product misuse; conftest-less test extracts). Now every
+    in-module consumer resolves at call time through the shared
+    operator-registry seam (``core.project.registry_home`` — one
+    resolution for the projects registry, the ``.active`` bookmark and
+    this directory, honouring ``RAPTOR_REGISTRY_HOME``).
+
+    Test-estate compatibility: a module-dict entry named
+    ``SESSIONS_DIR`` (the suite-wide ``monkeypatch.setattr`` /
+    ``mock.patch`` pin spelling) takes precedence over the seam, so
+    every existing per-test registry pin keeps working unchanged.
+    """
+    override = globals().get("SESSIONS_DIR")
+    if override is not None:
+        return Path(override)
+    return _registry_home.sessions_dir()
+
+
+def __getattr__(name: str) -> Path:
+    # PEP 562: the historical constant name stays importable
+    # (``from core.project.sessions import SESSIONS_DIR`` and the
+    # attribute spelling both work) but now resolves at ACCESS time
+    # through the seam. Only reached when no module-dict override
+    # exists — a test's setattr wins by construction.
+    if name == "SESSIONS_DIR":
+        return _registry_home.sessions_dir()
+    raise AttributeError(
+        f"module {__name__!r} has no attribute {name!r}")
+
 
 #: Bound-to-none sentinel — rejected by _NAME_RE, so it can never
 #: collide with a real project name.
@@ -373,7 +419,7 @@ def _env_session_pid() -> int | None:
         return None
     try:
         pid = int(raw)
-        fields = _parse_entry(SESSIONS_DIR / str(pid))
+        fields = _parse_entry(_sessions_dir() / str(pid))
         if not fields:
             return None
         entry_token = fields.get("token", "")
@@ -410,7 +456,7 @@ def _walk_session_pid() -> int | None:
         if _claude_shaped(_comm(pid)):
             candidates.append(pid)
     for cand in candidates:  # nearest-first: first with a VALID entry wins
-        fields = _parse_entry(SESSIONS_DIR / str(cand))
+        fields = _parse_entry(_sessions_dir() / str(cand))
         if fields and _identity_matches(cand, fields):
             return cand
     if candidates:
@@ -477,8 +523,8 @@ def _ensure_dir() -> bool:
         # 0700: which project each session works on is operator
         # telemetry — not for other local users. chmod covers a dir
         # created looser by an older writer.
-        SESSIONS_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-        SESSIONS_DIR.chmod(0o700)
+        _sessions_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
+        _sessions_dir().chmod(0o700)
     except OSError:
         return False
     return True
@@ -561,10 +607,10 @@ def record_session(project: str | None, pid: int | None = None,
             # across, the removal. Unlinking the lock file last is
             # safe: writers verify their fd still names the path
             # after acquiring and retry when it doesn't.
-            (SESSIONS_DIR / str(pid)).unlink(missing_ok=True)
+            (_sessions_dir() / str(pid)).unlink(missing_ok=True)
             with _ledger_lock(pid):
-                (SESSIONS_DIR / f"{pid}.run").unlink(missing_ok=True)
-            (SESSIONS_DIR / f"{pid}.run.lock").unlink(missing_ok=True)
+                (_sessions_dir() / f"{pid}.run").unlink(missing_ok=True)
+            (_sessions_dir() / f"{pid}.run.lock").unlink(missing_ok=True)
         except OSError:
             return None
         return pid
@@ -574,7 +620,7 @@ def record_session(project: str | None, pid: int | None = None,
         return None
     if not _ensure_dir():
         return None
-    entry = SESSIONS_DIR / str(pid)
+    entry = _sessions_dir() / str(pid)
     # The per-pid ledger lock doubles as the ENTRY RMW lock: without
     # it, delete/rename's binding rewrites and a concurrent
     # /project use are a lost-update race (both read, both write,
@@ -637,10 +683,10 @@ def _record_session_locked(project: str, pid: int,
         # stays — unlinking a held lock splits it.
         if (not _own_repair
                 and fields.get("v") == ENTRY_VERSION
-                and (SESSIONS_DIR / f"{pid}.run").exists()):
+                and (_sessions_dir() / f"{pid}.run").exists()):
             # Caller already holds this pid's ledger lock.
             with contextlib.suppress(OSError):
-                (SESSIONS_DIR / f"{pid}.run").unlink(missing_ok=True)
+                (_sessions_dir() / f"{pid}.run").unlink(missing_ok=True)
     if token:
         fields["token"] = token
     if seeded_by:
@@ -665,7 +711,7 @@ def rebind_session_if(pid: int, expected: str,
     session that switched projects between the snapshot and the write
     was clobbered with a decision made against its old binding.
     ``new_project=None`` binds the none sentinel."""
-    entry = SESSIONS_DIR / str(pid)
+    entry = _sessions_dir() / str(pid)
     with _ledger_lock_nb(pid) as held:
         if not held:
             logger.warning(
@@ -711,7 +757,7 @@ def session_binding(pid: int | None = None) -> tuple[str | None, str]:
         pid = resolve_session_pid()
     if pid is None:
         return None, "absent"
-    entry_path = SESSIONS_DIR / str(pid)
+    entry_path = _sessions_dir() / str(pid)
     fields = _parse_entry(entry_path)
     if not fields:
         # Distinguish "no entry" (symlink layer applies) from "entry
@@ -809,7 +855,7 @@ def read_sessions(prune: bool = True,
     """
     sessions: dict[int, dict] = {}
     try:
-        children = list(SESSIONS_DIR.iterdir())
+        children = list(_sessions_dir().iterdir())
     except OSError:
         return sessions
     for f in children:
@@ -836,11 +882,11 @@ def read_sessions(prune: bool = True,
                 with _ledger_lock(pid):
                     if _entry_state(pid, _parse_entry(f)) == "stale":
                         f.unlink(missing_ok=True)
-                        (SESSIONS_DIR / f"{pid}.run").unlink(
+                        (_sessions_dir() / f"{pid}.run").unlink(
                             missing_ok=True)
                         removed = True
                 if removed:
-                    (SESSIONS_DIR / f"{pid}.run.lock").unlink(
+                    (_sessions_dir() / f"{pid}.run.lock").unlink(
                         missing_ok=True)
         if state in ("live", "advisory") or include_stale:
             if include_stale:
@@ -862,7 +908,7 @@ def read_sessions(prune: bool = True,
             # stem must round-trip through int: a planted '007.run'
             # would otherwise lock/unlink pid 7's files.
             if (_pid_from_name(stem) is None
-                    or (SESSIONS_DIR / stem).exists()):
+                    or (_sessions_dir() / stem).exists()):
                 continue
             with contextlib.suppress(OSError):
                 with _ledger_lock(int(stem)):
@@ -870,10 +916,10 @@ def read_sessions(prune: bool = True,
                     # re-register (entry + fresh ledger) between the
                     # orphan check above and this acquisition — the
                     # fresh session's first records must survive.
-                    if (SESSIONS_DIR / stem).exists():
+                    if (_sessions_dir() / stem).exists():
                         continue
                     f.unlink(missing_ok=True)
-                (SESSIONS_DIR / f"{stem}.run.lock").unlink(missing_ok=True)
+                (_sessions_dir() / f"{stem}.run.lock").unlink(missing_ok=True)
         # Lone lock files (entry AND ledger gone — a crash between the
         # three-file removal's unlinks) are never reaped by the passes
         # above, which key on entries and ledgers.
@@ -882,13 +928,13 @@ def read_sessions(prune: bool = True,
                 continue
             stem = f.name[:-len(".run.lock")]
             if (_pid_from_name(stem) is None
-                    or (SESSIONS_DIR / stem).exists()
-                    or (SESSIONS_DIR / f"{stem}.run").exists()):
+                    or (_sessions_dir() / stem).exists()
+                    or (_sessions_dir() / f"{stem}.run").exists()):
                 continue
             with contextlib.suppress(OSError):
                 with _ledger_lock_nb(int(stem)) as held:
-                    if held and not (SESSIONS_DIR / stem).exists() \
-                            and not (SESSIONS_DIR / f"{stem}.run").exists():
+                    if held and not (_sessions_dir() / stem).exists() \
+                            and not (_sessions_dir() / f"{stem}.run").exists():
                         f.unlink(missing_ok=True)
     return sessions
 
@@ -930,7 +976,7 @@ def awareness_lines(project: str, exclude_pid: int | None = None) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _ledger_path(pid: int) -> Path:
-    return SESSIONS_DIR / f"{pid}.run"
+    return _sessions_dir() / f"{pid}.run"
 
 
 @contextlib.contextmanager
@@ -953,7 +999,7 @@ def _ledger_lock_nb(pid: int,
     if not _ensure_dir():
         yield True
         return
-    lock_path = SESSIONS_DIR / f"{pid}.run.lock"
+    lock_path = _sessions_dir() / f"{pid}.run.lock"
     for _ in range(attempts):
         try:
             fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
@@ -1009,7 +1055,7 @@ def _ledger_lock(pid: int) -> Iterator[None]:
     # the NFS implementation — same posture as the metadata/project
     # file locks. Any OSError below degrades to an UNLOCKED
     # read-modify-write; that is logged, never silent.
-    lock_path = SESSIONS_DIR / f"{pid}.run.lock"
+    lock_path = _sessions_dir() / f"{pid}.run.lock"
     # Verify-after-lock: the prune paths (read_sessions, the launcher
     # sweep, record_session removal) UNLINK lock files of sessions they
     # can prove dead — but a finishing run of that session may hold the
@@ -1163,7 +1209,7 @@ def _write_ledger(pid: int, records: list[dict],
     # window where a straggling finisher that passed the pre-lock gate
     # rewrites a just-removed ledger under a recycled pid's fresh
     # session — foreign history and foreign pin witnesses included.
-    if not (SESSIONS_DIR / str(pid)).exists():
+    if not (_sessions_dir() / str(pid)).exists():
         return False
     _zombie_correct(records)
     finished = [r for r in records if r["status"] != "running"]
@@ -1315,7 +1361,7 @@ def ledger_record_start(run_dir: str | os.PathLike[str],
     # too — records written over it would be wiped by the next
     # identity refresh anyway, taking this run's attribution with
     # them.
-    _entry_fields = _parse_entry(SESSIONS_DIR / str(pid))
+    _entry_fields = _parse_entry(_sessions_dir() / str(pid))
     if not _entry_fields:
         logger.debug("sessions: no registry entry for pid %d — "
                      "ledger skipped", pid)
@@ -1339,7 +1385,7 @@ def ledger_record_start(run_dir: str | os.PathLike[str],
     if pin_source and pin_source.isalpha():
         pin_value = f"{pin_value}:{pin_source}"
     with _ledger_lock(pid):
-        if not _parse_entry(SESSIONS_DIR / str(pid)):
+        if not _parse_entry(_sessions_dir() / str(pid)):
             return  # entry pruned since the pre-lock gate — no orphan
         # Dedup requires run-id AND dir (the finish CAS doctrine): two
         # live runs whose dirs share a basename must not erase each
@@ -1394,7 +1440,7 @@ def ledger_record_finish(run_dir: str | os.PathLike[str], status: str,
     # lock, so an unregistered context never even creates a lock file.
     # A v2 entry with a stale stamp is a recycled pid's leftover:
     # refuse, like the start writer does.
-    _fin_fields = _parse_entry(SESSIONS_DIR / str(pid))
+    _fin_fields = _parse_entry(_sessions_dir() / str(pid))
     if not _fin_fields:
         return
     if (_fin_fields.get("v") == ENTRY_VERSION
@@ -1472,7 +1518,7 @@ def ledger_pin_witness(
         # session whose identity verifies — otherwise a forged pid
         # points the lookup at an arbitrary stale/orphan ledger and
         # its pins would read as authority.
-        fields = _parse_entry(SESSIONS_DIR / str(pid))
+        fields = _parse_entry(_sessions_dir() / str(pid))
         if not fields:
             return False, None, None
         if (fields.get("v") == ENTRY_VERSION
@@ -1506,7 +1552,7 @@ def ledger_rewrite_pin_project(old_name: str, new_name: str) -> None:
     Best-effort per ledger; same-uid files only (0600 under our own
     sessions.d)."""
     try:
-        children = list(SESSIONS_DIR.iterdir())
+        children = list(_sessions_dir().iterdir())
     except OSError:
         return
     for f in children:
@@ -1551,7 +1597,7 @@ def ledger_pinned_dirs(project: str) -> list[dict]:
     """
     out: list[dict] = []
     try:
-        children = list(SESSIONS_DIR.iterdir())
+        children = list(_sessions_dir().iterdir())
     except OSError:
         return out
     for f in children:
@@ -1560,7 +1606,7 @@ def ledger_pinned_dirs(project: str) -> list[dict]:
         stem = f.name[:-len(".run")]
         if _pid_from_name(stem) is None:
             continue
-        if not (SESSIONS_DIR / stem).exists():
+        if not (_sessions_dir() / stem).exists():
             continue  # orphan ledger — never steers discovery
         try:
             _records, pins, _unknown = _read_ledger_full(int(stem))
@@ -1585,7 +1631,7 @@ def ledger_repair_witnesses_for_dir(run_dir, new_project: str,
     """
     try:
         resolved = str(Path(run_dir).resolve())
-        children = list(SESSIONS_DIR.iterdir())
+        children = list(_sessions_dir().iterdir())
     except OSError:
         return
     for f in children:
@@ -1627,7 +1673,7 @@ def ledger_runs_pinned_to(project: str) -> list[dict]:
     """
     out: list[dict] = []
     try:
-        children = list(SESSIONS_DIR.iterdir())
+        children = list(_sessions_dir().iterdir())
     except OSError:
         return out
     for f in children:
@@ -1636,7 +1682,7 @@ def ledger_runs_pinned_to(project: str) -> list[dict]:
         stem = f.name[:-len(".run")]
         if _pid_from_name(stem) is None:
             continue
-        if not (SESSIONS_DIR / stem).exists():
+        if not (_sessions_dir() / stem).exists():
             continue  # orphan ledger — never steers discovery
         try:
             records, pins, _unknown = _read_ledger_full(int(stem))
@@ -1672,7 +1718,7 @@ def ledger_running_runs_all_sessions() -> list[dict]:
     """
     out: list[dict] = []
     try:
-        children = list(SESSIONS_DIR.iterdir())
+        children = list(_sessions_dir().iterdir())
     except OSError:
         return out
     for f in children:
@@ -1682,7 +1728,7 @@ def ledger_running_runs_all_sessions() -> list[dict]:
         pid = _pid_from_name(stem)
         if pid is None:
             continue
-        entry = _parse_entry(SESSIONS_DIR / stem)
+        entry = _parse_entry(_sessions_dir() / stem)
         if not entry:
             continue  # orphan ledger — never steers observation
         if entry.get("v") == ENTRY_VERSION:
@@ -1744,7 +1790,7 @@ def ledger_record_drain_request(run_dir: str | os.PathLike[str],
         pid = resolve_session_pid()
     if pid is None:
         return False
-    fields = _parse_entry(SESSIONS_DIR / str(pid))
+    fields = _parse_entry(_sessions_dir() / str(pid))
     if not fields:
         return False
     if (fields.get("v") == ENTRY_VERSION
@@ -1752,7 +1798,7 @@ def ledger_record_drain_request(run_dir: str | os.PathLike[str],
         return False
     run_id = Path(resolved).name
     with _ledger_lock(pid):
-        if not _parse_entry(SESSIONS_DIR / str(pid)):
+        if not _parse_entry(_sessions_dir() / str(pid)):
             return False  # entry pruned since the pre-lock gate
         records, pins, unknown = _read_ledger_full(pid)
         kept: list[str] = []
@@ -1781,7 +1827,7 @@ def ledger_drain_requests(
     out: list[dict] = []
     try:
         resolved = str(Path(run_dir).resolve())
-        children = list(SESSIONS_DIR.iterdir())
+        children = list(_sessions_dir().iterdir())
     except OSError:
         return out
     for f in children:
@@ -1791,7 +1837,7 @@ def ledger_drain_requests(
         pid = _pid_from_name(stem)
         if pid is None:
             continue
-        if not (SESSIONS_DIR / stem).exists():
+        if not (_sessions_dir() / stem).exists():
             continue  # orphan ledger — never steers
         try:
             _records, _pins, unknown = _read_ledger_full(pid)
@@ -1814,7 +1860,7 @@ def ledger_clear_drain_requests(
     cleared = 0
     try:
         resolved = str(Path(run_dir).resolve())
-        children = list(SESSIONS_DIR.iterdir())
+        children = list(_sessions_dir().iterdir())
     except OSError:
         return 0
     for f in children:
@@ -1824,7 +1870,7 @@ def ledger_clear_drain_requests(
         pid = _pid_from_name(stem)
         if pid is None:
             continue
-        if not (SESSIONS_DIR / stem).exists():
+        if not (_sessions_dir() / stem).exists():
             continue
         try:
             with _ledger_lock_nb(pid) as held:

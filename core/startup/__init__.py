@@ -3,8 +3,61 @@ from pathlib import Path
 
 # core/startup/__init__.py → core/ → raptor/ (repo root)
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PROJECTS_DIR = Path.home() / ".raptor" / "projects"
-ACTIVE_LINK = PROJECTS_DIR / ".active"
+
+
+def _projects_dir() -> Path:
+    """The projects registry directory for THIS call.
+
+    Historically an import-time copy of ``Path.home() / ".raptor" /
+    "projects"`` — which resolved the REAL home with no override seam
+    (env-less product misuse; conftest-less test extracts). Now
+    resolved at call time through the shared operator-registry seam
+    (``core.project.registry_home``, honouring
+    ``RAPTOR_REGISTRY_HOME``) — imported inside the accessor so a bare
+    ``import core.startup`` stays as light as before.
+
+    Test-estate compatibility: a module-dict entry named
+    ``PROJECTS_DIR`` (the suite-wide ``monkeypatch.setattr`` /
+    ``mock.patch`` pin spelling) takes precedence over the seam.
+    """
+    override = globals().get("PROJECTS_DIR")
+    if override is not None:
+        return Path(override)
+    from core.project import registry_home
+    return registry_home.projects_dir()
+
+
+def _active_link() -> Path:
+    """The ``.active`` bookmark path for THIS call.
+
+    Derivation order keeps the single-location contract under every
+    pin spelling: an explicit ``ACTIVE_LINK`` module-dict override
+    wins; else a ``PROJECTS_DIR`` override anchors the link INSIDE the
+    patched registry (pre-seam, a test that pinned only
+    ``PROJECTS_DIR`` left the import-time ``ACTIVE_LINK`` pointing at
+    the real home); else the seam resolves both from one base.
+    """
+    override = globals().get("ACTIVE_LINK")
+    if override is not None:
+        return Path(override)
+    projects_override = globals().get("PROJECTS_DIR")
+    if projects_override is not None:
+        return Path(projects_override) / ".active"
+    from core.project import registry_home
+    return registry_home.active_link()
+
+
+def __getattr__(name: str) -> Path:
+    # PEP 562: the historical constant names stay importable but now
+    # resolve at ACCESS time through the seam. Only reached when no
+    # module-dict override exists — a test's setattr wins by
+    # construction.
+    if name == "PROJECTS_DIR":
+        return _projects_dir()
+    if name == "ACTIVE_LINK":
+        return _active_link()
+    raise AttributeError(
+        f"module {__name__!r} has no attribute {name!r}")
 
 
 def _expired_light(name):
@@ -22,7 +75,7 @@ def _expired_light(name):
     except Exception:  # noqa: BLE001 — predicate unavailable: fail open
         return False
     try:
-        data = json.loads((PROJECTS_DIR / f"{name}.json").read_text(
+        data = json.loads((_projects_dir() / f"{name}.json").read_text(
             encoding="utf-8"))
         expires = data.get("expires_at") if isinstance(data, dict) else None
         if not expires:
@@ -63,7 +116,7 @@ def get_active_name():
     except Exception:  # noqa: BLE001 — registry failure = symlink layer
         name, state = None, "absent"
     if state == "bound" and name is not None:
-        if not (PROJECTS_DIR / f"{name}.json").exists():
+        if not (_projects_dir() / f"{name}.json").exists():
             return None  # stale binding — authoritative none
         if _expired_light(name):
             return None
@@ -71,12 +124,12 @@ def get_active_name():
     if state == "none":
         return None
     try:
-        target = os.readlink(ACTIVE_LINK)
+        target = os.readlink(_active_link())
     except OSError:
         return None
     if target.endswith(".json") and "/" not in target and "\\" not in target:
         name = target[:-5]
-        if not (PROJECTS_DIR / target).exists():
+        if not (_projects_dir() / target).exists():
             return None  # dangling bookmark — same answer get_active gives
         if _expired_light(name):
             return None
