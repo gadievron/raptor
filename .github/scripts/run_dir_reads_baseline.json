@@ -1,7 +1,6 @@
 {
-  "comment": "Adjudicated raw run-artifact reads. Every entry is a deliberate exception with a reason; new raw reads must route through core.json / core.source (or carry an inline '# raw-open: <why>' marker) instead of growing this file. Current entries: libexec/raptor-self-test reads artifacts it wrote itself moments earlier into its own scratch run directory; core/audit/refutation.py re-reads only the byte region it just appended to the discharge trail (offset seek on an append-only single-writer file - durability verification, not artifact consumption); core/labeled_attempts/test_store.py reads back the file its own _write_atomic call published into the test tmp_path.",
+  "comment": "Adjudicated raw run-artifact reads. Every entry is a deliberate exception with a reason; new raw reads must route through core.json / core.source (or carry an inline '# raw-open: <why>' marker) instead of growing this file. Current entries: libexec/raptor-self-test reads artifacts it wrote itself moments earlier into its own scratch run directory; core/labeled_attempts/test_store.py reads back the file its own _write_atomic call published into the test tmp_path.",
   "keys": [
-    "core/audit/refutation.py::suppressions.jsonl::open",
     "core/labeled_attempts/test_store.py::sandbox-x-aaaaaa.json::read_text",
     "libexec/raptor-self-test::.audit-log.jsonl::read_text",
     "libexec/raptor-self-test::.raptor-run.json::json.loads",
