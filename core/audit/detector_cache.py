@@ -220,6 +220,16 @@ def _module_imports(name: str, path: Path, root: Path) -> set[str]:
                     handle(stmt)
                     visit(stmt)
                 continue
+            # Import nodes are statements, and statements live only
+            # in statement lists — an expression subtree (the bulk of
+            # any module's AST) cannot carry one. Pruning those keeps
+            # the walk linear in statements rather than nodes;
+            # excepthandler and match_case are the two non-stmt
+            # wrappers whose children include statement lists.
+            if not isinstance(
+                child, (ast.stmt, ast.excepthandler, ast.match_case),
+            ):
+                continue
             handle(child)
             visit(child)
 
@@ -259,8 +269,9 @@ def detector_modules() -> tuple[str, ...]:
     entry points, their transitive in-repo import closure, and the
     glue. Derived, not hand-listed — a detector growing a helper
     dependency joins the identity automatically, so the registry can
-    never silently rot. The walk costs about a second once per
-    process, small next to the battery it keys. Transitive
+    never silently rot. The walk costs a few seconds once per process
+    (statement-pruned AST parse of the whole closure, growing with
+    the tree) — small next to the battery it keys. Transitive
     third-party engines (tree-sitter grammars, z3, spatch) are
     captured as environment markers in the lane keys instead.
     """
