@@ -121,13 +121,19 @@ def _enclosing_from_source(
     last pre-cap definition.
     """
     from core.source import open_regular_beneath
+    from core.source.lines import split_lines
 
     from ._util import find_enclosing_function
 
     try:
+        # newline="" so the finding's line number (a \n-only count
+        # from the reporting tool) indexes the same lines the tool
+        # saw: universal-newline reads turn bare \r into \n and shift
+        # every subsequent index on \r-planted sources. split_lines
+        # owns the \n-only model (and trims the \r\n carriage).
         fh = open_regular_beneath(
             target_path, file_path, "r",
-            encoding="utf-8", errors="replace",
+            encoding="utf-8", errors="replace", newline="",
         )
         if fh is None:
             return ""
@@ -135,7 +141,7 @@ def _enclosing_from_source(
             content = fh.read(_MAX_ATTRIBUTION_SOURCE_BYTES)
     except (OSError, ValueError):
         return ""
-    lines = content.split("\n")
+    lines = split_lines(content)
     if line > len(lines) and len(content) >= _MAX_ATTRIBUTION_SOURCE_BYTES:
         # The claimed line lies BEYOND the capped read: clamping to the
         # last pre-cap line would stamp a confident wrong name from
