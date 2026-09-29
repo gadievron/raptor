@@ -145,11 +145,21 @@ def _track_server_handles() -> Iterator[None]:
         _LIVE_SERVERS.add(obj)
         return obj
 
+    def default_new(cls: type, *args: object, **kwargs: object) -> JoernServer:
+        return object.__new__(cls)
+
     JoernServer.__new__ = tracking_new  # type: ignore[method-assign]
     try:
         yield
     finally:
-        del JoernServer.__new__
+        # NOT ``del JoernServer.__new__``: assigning a Python-level
+        # __new__ installs slot_tp_new on the class, and deleting the
+        # attribute does not uninstall it — the slot keeps forwarding
+        # constructor args to the inherited object.__new__, which
+        # rejects them (TypeError on any post-session
+        # ``JoernServer(<args>)``). Restore an arg-dropping default
+        # that reproduces the pre-hook construction path instead.
+        JoernServer.__new__ = default_new  # type: ignore[method-assign]
         _LIVE_SERVERS.clear()
 
 
