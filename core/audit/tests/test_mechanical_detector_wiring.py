@@ -15,6 +15,18 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
+import pytest
+
+# Slow tier (whole module): every test here exercises the real
+# _run_mechanical_detectors battery, and whichever battery test runs
+# first in a process also pays the once-per-process detector-set
+# fingerprint (an AST parse of the whole detector import closure) —
+# multi-second work that breaches the default-tier budget on loaded
+# runners. Gating individual tests would only move that first-payer
+# cost onto the next battery test in the file, so the whole module
+# rides the slow tier together.
+pytestmark = pytest.mark.slow
+
 # Four-branch if/elif chain: three branches validate, the fourth
 # doesn't — the block-level sibling outlier shape.
 _BLOCK_SIBLING_SRC = textwrap.dedent('''\

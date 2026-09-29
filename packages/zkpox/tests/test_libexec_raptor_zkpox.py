@@ -279,6 +279,10 @@ def test_bundle_then_reproduce_happy_path(tmp_path):
             assert "spawn_failure" in rec, rec
 
 
+# Slow tier: compiles a real C target, bundles it, and drives three
+# sandboxed replay executions through the real CLI — the spawn-retry
+# path under test only exists across multiple full sandbox runs.
+@pytest.mark.slow
 @_needs_sandbox
 @pytest.mark.skipif(
     shutil.which("cc") is None and shutil.which("gcc") is None,

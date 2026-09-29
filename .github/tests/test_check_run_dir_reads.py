@@ -16,6 +16,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from check_run_dir_reads import finding_key, main, run_census
@@ -197,6 +199,12 @@ class TestBaselineGate:
         capsys.readouterr()
 
 
+# Slow tier: both tests sweep every Python file in the shipped tree —
+# whole-repo AST work that grows with the tree and breaches the
+# default-tier budget on loaded runners. The gate itself still runs
+# on every PR via the detector CLI in the repo-invariants lint job
+# (and the daily miswiring scan); nightly runs these pytest wrappers.
+@pytest.mark.slow
 class TestShippedTree:
     def test_repo_is_gate_clean(self, capsys):
         # The gate as wired in CI: the shipped tree plus the shipped

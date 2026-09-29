@@ -403,6 +403,11 @@ def test_ready_fd_not_held_below_supervisor(tmp_path, uds_dir: str):
 # ── pidns-tier orphan watchdog fires on RAPTOR death ─────────────────
 
 
+# Slow tier: spawns the real supervision stack and then genuinely
+# waits out the orphan-idle TTL before the watchdog may reap — the
+# wait is the contract under test, so the multi-second cost is
+# irreducible.
+@pytest.mark.slow
 @needs_pidns
 def test_pidns_orphan_watchdog_reaps_after_raptor_death(
     tmp_path, uds_dir: str,

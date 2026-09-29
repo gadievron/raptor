@@ -24,6 +24,7 @@ import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 
 from core.audit.orchestrator import _reusable_prepass_census
 
@@ -213,6 +214,13 @@ class TestPrepOrderPin:
         assert "callers.c" in {Path(k).name for k in seen["keys"]}
 
 
+# Slow tier: both tests run the REAL mechanical-detector battery, and
+# whichever battery test runs first in a process also pays the
+# once-per-process detector-set fingerprint (an AST parse of the whole
+# detector import closure) — multi-second work that breaches the
+# default-tier budget on loaded runners. The stubbed-battery tests
+# below stay in the default tier.
+@pytest.mark.slow
 class TestBatteryKwargsCapture:
     def test_stashed_census_reaches_the_detector(
         self, tmp_path_factory, monkeypatch,

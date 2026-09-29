@@ -37,6 +37,8 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 #: The shared route gates (core.llm.dispatcher.lifecycle). All three
@@ -417,6 +419,12 @@ def _python_sources() -> Iterator[tuple[str, Path]]:
 
 
 class TestRouteGateRunDirCensus:
+    # Slow tier: parses and sweeps every Python module in the repo —
+    # the parse of the whole module universe dominates and grows with
+    # the tree, so the census breaches the default-tier budget on
+    # loaded runners. The in-memory unit tests below keep the census
+    # LOGIC in the default tier; nightly runs the real-tree sweep.
+    @pytest.mark.slow
     def test_every_gate_call_threads_run_dir(self) -> None:
         modules = {
             rel: path.read_text(encoding="utf-8", errors="replace")
