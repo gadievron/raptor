@@ -182,9 +182,16 @@ class TestSendTruncationReported:
     be able to see that the stimulus was incomplete.
     """
 
-    # Reads stdin only after the send deadline has long expired, then
-    # reports how many bytes actually arrived.
-    _SLOW_READER = "sleep 2; wc -c"
+    # Reads stdin only after the send deadline has expired, then
+    # reports how many bytes actually arrived. The tests below pass
+    # per_recv_timeout=0.5, which is also the handlers' SEND deadline
+    # (_send_capped's timeout argument), so the reader's sleep must
+    # stay comfortably ABOVE 0.5s — a reader that wakes inside the
+    # send window drains everything and zeroes stdin_bytes_dropped.
+    # Host load can only delay the wake (the safe direction); the
+    # sleep is also each test's wall-time floor, so keep it the
+    # smallest value that clears the deadline with real margin.
+    _SLOW_READER = "sleep 1; wc -c"
 
     def test_probe_reply_flags_partial_send(self):
         resp = _run_handler_bounded(daemon._handle_probe, {

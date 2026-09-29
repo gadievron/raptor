@@ -15,6 +15,7 @@ Linux-gated because the teardown assertion tracks descendant PIDs via /proc.
 """
 
 import os
+import select
 import subprocess
 import sys
 import time
@@ -199,14 +200,39 @@ class TestSeatbeltShim:
         os.close(sw)
         os.close(dr)
         try:
-            time.sleep(0.7)  # let the target start
+            # Target startup is an event, not a wall-clock guess: the
+            # trampoline writes the readiness byte to the status pipe
+            # immediately before exec'ing the target in place (same
+            # pid), so K proves a live in-sandbox descendant exists.
+            # The watcher's G-report may precede K on the same
+            # channel — read until K, generous ceiling: cheap when
+            # fast, safe under load.
+            data = b""
+            deadline = time.monotonic() + 10.0
+            while _READY_BYTE not in data:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, (
+                    f"no readiness byte within 10s: {data!r}")
+                r, _w, _x = select.select([sr], [], [], remaining)
+                if r:
+                    chunk = os.read(sr, 4096)
+                    assert chunk, (
+                        f"status pipe EOF before readiness: {data!r}")
+                    data += chunk
             tree = [q for q in _descendants(p.pid) if _alive(q)]
             assert tree, "expected a running sandbox subtree"
             os.close(dw)  # orchestrator "dies" -> EOF
             rc = p.wait(timeout=5)
-            time.sleep(0.5)
+            # The group SIGKILL lands before the shim exits; only the
+            # pid table's settling remains. Poll it out rather than
+            # sleeping a fixed window — a real leak still fails, at
+            # the 5s ceiling instead of instantly-past-one-sleep.
+            deadline = time.monotonic() + 5.0
+            while (any(_alive(q) for q in tree)
+                   and time.monotonic() < deadline):
+                time.sleep(0.02)
             survivors = [q for q in tree if _alive(q)]
-            data = _drain(sr)
+            data += _drain(sr)
             assert rc == 137, f"expected teardown exit, got {rc}"
             assert _READY_BYTE in data
             assert survivors == [], f"leaked sandbox procs: {survivors}"

@@ -221,10 +221,18 @@ def test_exited_zero_target_with_grandchild_is_not_a_timeout(tmp_path):
     from core.sandbox.seccomp import check_seccomp_available
     if not (check_ptrace_available() and check_seccomp_available()):
         pytest.skip("ptrace/libseccomp unavailable")
+    # Two margins pull in opposite directions: the target's echo+exit
+    # must land well INSIDE the deadline even on a loaded runner
+    # (raise `timeout` if the exit ever races it), while the
+    # grandchild must hold the pipes well PAST it (raise its sleep if
+    # the deadline ever overtakes the hold). The drain runs to pipe
+    # EOF, so the grandchild's sleep is this test's wall-time floor —
+    # keep it the smallest value that still clears the deadline
+    # comfortably.
     result = mod.run_landlock_audit(
-        ["/bin/sh", "-c", "echo hello; sleep 5 & exit 0"],
+        ["/bin/sh", "-c", "echo hello; sleep 3 & exit 0"],
         audit_run_dir=str(tmp_path),
-        timeout=2.0,
+        timeout=1.5,
         capture_output=True,
     )
     assert result.returncode == 0

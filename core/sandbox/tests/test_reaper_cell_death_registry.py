@@ -52,6 +52,21 @@ def test_plain_lane_death_w_registered_while_run_in_flight(
         baseline = set(_spawn._LIVE_DEATH_W)
 
     errors: list[BaseException] = []
+    release_flag = tmp_path / "release"
+    # Event-held payload: it idles only until the test has observed
+    # the mid-flight registration, then exits on the release flag —
+    # no fixed lifetime to wait out. The payload's own deadline is a
+    # wedge backstop (an assertion-failure path that never writes the
+    # flag), far above any poll latency; the run's timeout=30 backs
+    # even that up. Tighten it only with the release path in mind,
+    # never below the observation loop's 10s deadline.
+    payload = (
+        "import os, time\n"
+        f"flag = {str(release_flag)!r}\n"
+        "deadline = time.monotonic() + 20\n"
+        "while not os.path.exists(flag) and time.monotonic() < deadline:\n"
+        "    time.sleep(0.02)\n"
+    )
 
     def _run() -> None:
         try:
@@ -64,7 +79,7 @@ def test_plain_lane_death_w_registered_while_run_in_flight(
                 with sandbox(target=str(tmp_path), output=str(tmp_path),
                              block_network=False,
                              restrict_reads=True) as run:
-                    run([_SYS_PY, "-c", "import time; time.sleep(2)"],
+                    run([_SYS_PY, "-c", payload],
                         capture_output=True, text=True, timeout=30)
         except BaseException as e:
             errors.append(e)
@@ -87,6 +102,7 @@ def test_plain_lane_death_w_registered_while_run_in_flight(
             f"EOF (run errors: {errors})"
         )
     finally:
+        release_flag.touch()  # let the payload exit on every path
         t.join(timeout=30)
     assert not errors, f"plain-lane run failed: {errors}"
     with _spawn._DEATH_W_LOCK:
@@ -98,10 +114,12 @@ def test_plain_lane_death_w_registered_while_run_in_flight(
     )
 
 
-def test_teardown_first_timeout_close_is_registry_routed() -> None:
+def test_teardown_first_timeout_close_is_registry_routed(
+        monkeypatch: _pytest.MonkeyPatch) -> None:
     """The timeout path's death_w close must unregister atomically;
     the follow-up close from run()'s finally (either order) must
     refuse rather than double-close a possibly-reused fd number."""
+    from core.sandbox import context as _ctx
     from core.sandbox._spawn import (
         _DEATH_W_LOCK,
         _LIVE_DEATH_W,
@@ -109,6 +127,14 @@ def test_teardown_first_timeout_close_is_registry_routed() -> None:
         open_death_pipe,
     )
     from core.sandbox.context import _run_teardown_first_timeout
+
+    # The property under test is the registry routing of the close,
+    # not the sweeper grace length: the target here is a plain sleep
+    # with no EOF watcher, so the full production grace would always
+    # be waited out to its kill path. Keep the shrunken grace above
+    # zero (the post-close communicate must still run) but well below
+    # the production value this test must not bill.
+    monkeypatch.setattr(_ctx, "_TEARDOWN_SWEEP_GRACE_S", 0.3)
 
     death_r, death_w = open_death_pipe()
     holder: list = [death_w]

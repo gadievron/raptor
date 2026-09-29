@@ -275,6 +275,12 @@ def test_stalled_tunnel_still_dies_at_idle(monkeypatch):
     """End-to-end: a tunnel that goes silent is reaped by the idle
     timeout long before the absolute cap."""
     monkeypatch.setattr(proxy_mod, "_ip_is_blocked", lambda ip: False)
+    # A silent client first waits out the post-CONNECT SNI peek before
+    # the relay (and its idle clock) even starts; that window is not
+    # the property under test, so shrink it instead of billing the
+    # production peek timeout to this test's wall time. Keep it above
+    # zero — the peek path must still run and expire on its own.
+    monkeypatch.setattr(proxy_mod, "_TLS_PEEK_TIMEOUT_S", 0.2)
     srv, up_port, thread = _echo_upstream()
     proxy = proxy_mod.EgressProxy(
         allowed_hosts={"127.0.0.1"}, idle_timeout=0.3, total_timeout=60.0,

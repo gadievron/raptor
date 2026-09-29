@@ -126,7 +126,19 @@ class TestLandlockOnlyTeardownSweep(unittest.TestCase):
         payload = (_DAEMON.format(mark=self.mark)
                    + f'daemon("sleep 2; echo late > {canary}; ")\n')
         self._ll_run(payload)
-        time.sleep(3)
+        # Sweep-then-write ordering, without waiting out the write
+        # horizon: once no marked process survives (the same 0.3s
+        # settle grace the sibling tests use), nothing can write the
+        # canary later — a dead daemon has no pending 2s write. The
+        # canary check then pins the write-surface half: a survivor
+        # that already wrote is caught even if it died between the
+        # sweep and the scan. Widen the grace (or re-lengthen the
+        # daemon's delay) only if the settle ever races the sweep;
+        # never assert the canary alone without the survivor scan, or
+        # the test degrades back to a wall-clock wait.
+        time.sleep(0.3)
+        self.assertEqual(_survivors(self.mark), [],
+                         "late-writer daemon survived teardown")
         self.assertFalse(os.path.exists(canary),
                          "post-teardown host write landed — late "
                          "writer survived the sweep")
@@ -134,10 +146,24 @@ class TestLandlockOnlyTeardownSweep(unittest.TestCase):
     def test_timeout_stragglers_swept(self):
         """Timeout kills Popen.pid (the sweeper) — the marked-process
         backstop must still reap the daemon and the payload."""
+        # The run timeout is this test's wall-time floor: it must fire
+        # (the payload idles far past it), but only AFTER the daemon
+        # is staged. The staged-marker assert keeps the shrunken value
+        # honest — a timeout that beats the daemon spawn now fails
+        # loudly as inconclusive instead of passing vacuously with
+        # nothing to sweep. Raise the timeout if that assert ever
+        # fires on a loaded runner; don't shrink it further without
+        # widening the daemon-spawn margin some other way.
+        staged = os.path.join(self.out, "daemon-staged")
         payload = (_DAEMON.format(mark=self.mark)
-                   + "daemon()\ntime.sleep(60)\n")
+                   + "daemon()\n"
+                   + f"open({staged!r}, 'w').close()\n"
+                   + "time.sleep(60)\n")
         with self.assertRaises(subprocess.TimeoutExpired):
-            self._ll_run(payload, timeout=3)
+            self._ll_run(payload, timeout=2)
+        self.assertTrue(os.path.exists(staged),
+                        "run timed out before the daemon was staged — "
+                        "sweep never exercised, test inconclusive")
         time.sleep(0.5)
         self.assertEqual(_survivors(self.mark), [],
                          "daemon survived a run timeout")
@@ -171,6 +197,10 @@ class TestLandlockOnlyTeardownSweep(unittest.TestCase):
         composition escaped teardown entirely. The teardown-first
         timeout closes the death pipe before any kill, so the sweeper
         reaps by pid tracking even on the timeout path."""
+        # Same shrunken-timeout doctrine as test_timeout_stragglers_
+        # swept: the timeout is the wall floor, the staged marker
+        # keeps it honest against a vacuous early expiry.
+        staged = os.path.join(self.out, "daemon-staged")
         payload = textwrap.dedent(f"""
             import os, time
             pid = os.fork()
@@ -182,10 +212,14 @@ class TestLandlockOnlyTeardownSweep(unittest.TestCase):
                               {{}})
                 os._exit(0)
             os.waitpid(pid, 0)
+            open({staged!r}, "w").close()
             time.sleep(60)
         """)
         with self.assertRaises(subprocess.TimeoutExpired):
-            self._ll_run(payload, timeout=3)
+            self._ll_run(payload, timeout=2)
+        self.assertTrue(os.path.exists(staged),
+                        "run timed out before the daemon was staged — "
+                        "sweep never exercised, test inconclusive")
         time.sleep(0.5)
         self.assertEqual(_survivors(self.mark), [],
                          "env-scrubbed daemon survived a run timeout — "
