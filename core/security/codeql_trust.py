@@ -86,14 +86,16 @@ import errno
 import logging
 import os
 import re
-import stat
 from pathlib import Path
 
 from core.security._trust_common import (
+    GIT_LINK_MAX_BYTES,
     RAPTOR_DIR as _RAPTOR_DIR,
     FileScan,
     Finding,
+    is_registered_worktree_of_self as _is_registered_worktree_of_self,
     mask as _mask,
+    read_git_link,
     read_trust_config as _read_capped,
     render_scan_report,
     resolve_supplied_target,
@@ -315,122 +317,18 @@ def _path_present(p: Path) -> bool:
 # Self-recognition: registered worktrees of RAPTOR's own repo
 # ---------------------------------------------------------------------------
 
-# A git link file (a registry ``gitdir`` file or a worktree's ``.git``
-# file) is a single path line; PATH_MAX is 4096 on Linux, so 8 KiB
-# comfortably bounds every legitimate shape. Anything over the cap is
-# treated as malformed → not self → the normal pack scan runs.
-_GIT_LINK_MAX_BYTES = 8192
-
-
-def _read_git_link(path: Path) -> str | None:
-    """Read a single-line git link file, bounded and fail-closed.
-
-    Returns the stripped one-line payload, or None on ANY problem:
-    unreadable, non-regular, symlink (O_NOFOLLOW via the shared capped
-    read), oversized, empty, or multi-line.
-    """
-    raw = _read_capped(path)
-    if raw is None or len(raw) > _GIT_LINK_MAX_BYTES:
-        return None
-    text = os.fsdecode(raw).strip()
-    if not text or any(c in text for c in ("\n", "\r", "\x00")):
-        return None
-    return text
-
-
-def _is_registered_worktree_of_self(target: Path) -> bool:
-    """True iff ``target`` (already resolved) is a git worktree of
-    RAPTOR's own repo, proven by BOTH sides of the worktree link.
-
-    INVARIANT — candidates come ONLY from trusted-side data: worktree
-    roots are enumerated from ``_RAPTOR_DIR/.git/worktrees/<name>/
-    gitdir`` registry files (RAPTOR's own git metadata, written by the
-    operator's ``git worktree add``) via direct file reads — no
-    subprocess, no ``git`` binary, so the gate stays dependency-free
-    and fast. Target-side content NEVER nominates a candidate: a
-    hostile repo shipping a forged ``.git`` file that points at
-    RAPTOR's gitdir gains nothing unless RAPTOR's own registry
-    independently lists that exact path. The target's ``.git`` is read
-    only AFTER a registry match, purely as the back-link confirmation
-    — both sides must agree on the exact registry entry that nominated
-    the match.
-
-    Fail closed everywhere: any OSError, unreadable/oversized/
-    malformed file, symlinked ``.git`` (lstat first, never followed),
-    a symlink at the registered root itself, or missing piece → False
-    → the normal pack scan runs. No exception escapes. Known residual
-    (operator-side control is registry hygiene via ``git worktree
-    prune``): a stale registry entry whose worktree was deleted would
-    trust hostile content later planted as a REAL directory at that
-    exact path with a forged back-link.
-    """
-    try:
-        worktrees_dir = _RAPTOR_DIR / ".git" / "worktrees"
-        # RAPTOR itself checked out as a linked worktree: its ``.git``
-        # is a FILE, so there is no registry to enumerate here — no
-        # candidates, fail closed.
-        if not worktrees_dir.is_dir():
-            return False
-        for entry in sorted(worktrees_dir.iterdir()):
-            payload = _read_git_link(entry / "gitdir")
-            if payload is None:
-                continue
-            # Registry payload = path of the worktree's ``.git`` entry
-            # (one absolute path line); the worktree root is its
-            # parent.
-            wt_git = Path(payload)
-            if not wt_git.is_absolute():
-                continue
-            # The registered root must be a real DIRECTORY before any
-            # resolve: a symlink at a registered path re-aims trust at
-            # a path the registry never named (resolve() would follow
-            # it, equating the link's target with the registered root,
-            # and a forged back-link in that target would complete the
-            # bidirectional check). os.lstat never follows — a symlink
-            # (or anything else non-directory) is not a candidate.
-            # ``git worktree add`` always creates a real directory, so
-            # no legitimate shape is refused.
-            try:
-                st_root = os.lstat(wt_git.parent)
-            except OSError:
-                continue
-            if not stat.S_ISDIR(st_root.st_mode):
-                continue
-            try:
-                root = wt_git.parent.resolve()
-            except (OSError, RuntimeError):
-                continue
-            if root != target:
-                continue
-            # Bidirectional link check. The target's own ``.git`` must
-            # be a regular FILE — os.lstat first (never followed): a
-            # symlink, or a real ``.git`` DIRECTORY squatting the
-            # registered path (an ordinary clone), is not self.
-            dotgit = target / ".git"
-            try:
-                st = os.lstat(dotgit)
-            except OSError:
-                continue
-            if not stat.S_ISREG(st.st_mode):
-                continue
-            back = _read_git_link(dotgit)
-            if back is None or not back.startswith("gitdir:"):
-                continue
-            back_path = Path(back[len("gitdir:"):].strip())
-            if not back_path.is_absolute():
-                # git can write the back-link relative to the worktree
-                # root (relative-path worktrees).
-                back_path = target / back_path
-            try:
-                if back_path.resolve() == entry.resolve():
-                    return True
-            except (OSError, RuntimeError):
-                continue
-        return False
-    except Exception:
-        # Fail closed: recognition is best-effort — anything
-        # surprising means "not self" and the normal pack scan runs.
-        return False
+# The recognition proof (trusted-side registry enumeration + the
+# bidirectional link check, fail closed everywhere) lives in the shared
+# trust-gate helper layer — core/security/_trust_common.py,
+# ``is_registered_worktree_of_self`` — so BOTH gates (this one and
+# cc_trust) run the SAME code and a fix lands once; the divergence
+# tripwire (test_trust_gate_crosspin.py) pins the identity. The gate's
+# own module-level ``_RAPTOR_DIR`` is passed at each call site, so the
+# existing monkeypatch seam keeps working. The aliases below keep the
+# historical names importable from this module
+# (test_codeql_trust_self_worktree.py imports _GIT_LINK_MAX_BYTES).
+_GIT_LINK_MAX_BYTES = GIT_LINK_MAX_BYTES
+_read_git_link = read_git_link
 
 
 # ---------------------------------------------------------------------------
@@ -660,7 +558,8 @@ def _scan_repo(resolved_path: str) -> tuple[tuple[FileScan, ...], bool]:
     # same trust domain — recognised strictly from RAPTOR's OWN
     # worktree registry plus a bidirectional link check, fail closed
     # (_is_registered_worktree_of_self).
-    if target == _RAPTOR_DIR or _is_registered_worktree_of_self(target):
+    if (target == _RAPTOR_DIR
+            or _is_registered_worktree_of_self(target, _RAPTOR_DIR)):
         return ((), False)
 
     # Walk for pack files. This pre-CodeQL trust gate faces hostile

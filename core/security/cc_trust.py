@@ -69,6 +69,7 @@ from core.security._trust_common import (
     RAPTOR_DIR as _RAPTOR_DIR,
     FileScan,
     Finding,
+    is_registered_worktree_of_self as _is_registered_worktree_of_self,
     mask as _mask,
     read_trust_config as _read_capped,
     render_scan_report,
@@ -788,7 +789,32 @@ def _scan_cached(resolved_path: str,
     verdict. Side-effect free so repeated cache hits don't suppress
     operator-visible warnings (handled in the caller)."""
     target = Path(resolved_path)
-    if target == _RAPTOR_DIR:
+    # Skip RAPTOR's own repo — RAPTOR's own .claude config (hooks and
+    # helpers it legitimately ships) would always flag if scanned.
+    # Operator running RAPTOR against itself is implicitly trusted. A
+    # git worktree of RAPTOR itself (e.g. a pristine source-only
+    # checkout used as an audit target) is the same trust domain —
+    # recognised strictly from RAPTOR's OWN worktree registry plus a
+    # bidirectional link check, fail closed (the shared helper
+    # _trust_common.is_registered_worktree_of_self, same code as the
+    # codeql gate's skip). Cache note: the recognition input (RAPTOR's
+    # own .git/worktrees registry — trusted-side state only the
+    # operator's `git worktree add/remove` mutates, never the target)
+    # is not part of the cache key. A registry entry ADDED mid-process
+    # leaves an already-cached scan verdict in place (conservative:
+    # the operator's own worktree keeps being scanned until a new
+    # process). An entry PRUNED mid-process leaves a trusted verdict
+    # cached for that (path, config-bytes) pair — reusing it requires
+    # planting config files BYTE-IDENTICAL to the trusted worktree's
+    # own. The config BYTES were already trusted at that path, but the
+    # verdict attaches to the directory: relative hook/helper commands
+    # in those bytes would resolve against whatever non-config files
+    # sit beside them at the recaptured path. That exposure is
+    # strictly narrower than (same capability as) the stale-registry
+    # residual documented on the shared helper (operator control:
+    # `git worktree prune`).
+    if (target == _RAPTOR_DIR
+            or _is_registered_worktree_of_self(target, _RAPTOR_DIR)):
         return ((), False)
 
     candidates = _config_candidates(target)

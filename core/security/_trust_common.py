@@ -31,6 +31,7 @@ credentials ride through :func:`mask`, and lengths are bounded by
 from __future__ import annotations
 
 import os
+import stat
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -61,6 +62,135 @@ def read_trust_config(path: Path) -> bytes | None:
     (fail-closed: callers treat an unreadable candidate as a blocking
     finding, never as absent)."""
     return read_capped(path, MAX_TRUST_CONFIG_BYTES)
+
+
+# ---------------------------------------------------------------------------
+# Self-recognition: registered worktrees of RAPTOR's own repo
+# ---------------------------------------------------------------------------
+
+# A git link file (a registry ``gitdir`` file or a worktree's ``.git``
+# file) is a single path line; PATH_MAX is 4096 on Linux, so 8 KiB
+# comfortably bounds every legitimate shape. Anything over the cap is
+# treated as malformed → not self → the caller's normal scan runs.
+GIT_LINK_MAX_BYTES = 8192
+
+
+def read_git_link(path: Path) -> str | None:
+    """Read a single-line git link file, bounded and fail-closed.
+
+    Returns the stripped one-line payload, or None on ANY problem:
+    unreadable, non-regular, symlink (O_NOFOLLOW via the shared capped
+    read), oversized, empty, or multi-line.
+    """
+    raw = read_trust_config(path)
+    if raw is None or len(raw) > GIT_LINK_MAX_BYTES:
+        return None
+    text = os.fsdecode(raw).strip()
+    if not text or any(c in text for c in ("\n", "\r", "\x00")):
+        return None
+    return text
+
+
+def is_registered_worktree_of_self(target: Path, raptor_dir: Path) -> bool:
+    """True iff ``target`` (already resolved) is a git worktree of
+    RAPTOR's own repo, proven by BOTH sides of the worktree link.
+
+    ``raptor_dir`` is supplied by each gate (its module-level
+    ``_RAPTOR_DIR``, normally this module's :data:`RAPTOR_DIR`) rather
+    than read here, so each gate keeps its own monkeypatch seam and no
+    hidden global couples the gates' tests.
+
+    INVARIANT — candidates come ONLY from trusted-side data: worktree
+    roots are enumerated from ``raptor_dir/.git/worktrees/<name>/
+    gitdir`` registry files (RAPTOR's own git metadata, written by the
+    operator's ``git worktree add``) via direct file reads — no
+    subprocess, no ``git`` binary, so the gates stay dependency-free
+    and fast. Target-side content NEVER nominates a candidate: a
+    hostile repo shipping a forged ``.git`` file that points at
+    RAPTOR's gitdir gains nothing unless RAPTOR's own registry
+    independently lists that exact path. The target's ``.git`` is read
+    only AFTER a registry match, purely as the back-link confirmation
+    — both sides must agree on the exact registry entry that nominated
+    the match.
+
+    Fail closed everywhere: any OSError, unreadable/oversized/
+    malformed file, symlinked ``.git`` (lstat first, never followed),
+    a symlink at the registered root itself, or missing piece → False
+    → the caller's normal scan runs. No exception escapes. Known
+    residual (operator-side control is registry hygiene via ``git
+    worktree prune``): a stale registry entry whose worktree was
+    deleted would trust hostile content later planted as a REAL
+    directory at that exact path with a forged back-link.
+    """
+    try:
+        worktrees_dir = raptor_dir / ".git" / "worktrees"
+        # RAPTOR itself checked out as a linked worktree: its ``.git``
+        # is a FILE, so there is no registry to enumerate here — no
+        # candidates, fail closed.
+        if not worktrees_dir.is_dir():
+            return False
+        for entry in sorted(worktrees_dir.iterdir()):
+            payload = read_git_link(entry / "gitdir")
+            if payload is None:
+                continue
+            # Registry payload = path of the worktree's ``.git`` entry
+            # (one absolute path line); the worktree root is its
+            # parent.
+            wt_git = Path(payload)
+            if not wt_git.is_absolute():
+                continue
+            # The registered root must be a real DIRECTORY before any
+            # resolve: a symlink at a registered path re-aims trust at
+            # a path the registry never named (resolve() would follow
+            # it, equating the link's target with the registered root,
+            # and a forged back-link in that target would complete the
+            # bidirectional check). os.lstat never follows — a symlink
+            # (or anything else non-directory) is not a candidate.
+            # ``git worktree add`` always creates a real directory, so
+            # no legitimate shape is refused.
+            try:
+                st_root = os.lstat(wt_git.parent)
+            except OSError:
+                continue
+            if not stat.S_ISDIR(st_root.st_mode):
+                continue
+            try:
+                root = wt_git.parent.resolve()
+            except (OSError, RuntimeError):
+                continue
+            if root != target:
+                continue
+            # Bidirectional link check. The target's own ``.git`` must
+            # be a regular FILE — os.lstat first (never followed): a
+            # symlink, or a real ``.git`` DIRECTORY squatting the
+            # registered path (an ordinary clone), is not self.
+            dotgit = target / ".git"
+            try:
+                st = os.lstat(dotgit)
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            back = read_git_link(dotgit)
+            if back is None or not back.startswith("gitdir:"):
+                continue
+            back_path = Path(back[len("gitdir:"):].strip())
+            if not back_path.is_absolute():
+                # git can write the back-link relative to the worktree
+                # root (relative-path worktrees).
+                back_path = target / back_path
+            try:
+                if back_path.resolve() == entry.resolve():
+                    return True
+            except (OSError, RuntimeError):
+                continue
+        return False
+    except Exception:
+        # Fail closed: recognition is best-effort — anything
+        # surprising means "not self" and the caller's normal scan
+        # runs.
+        return False
+
 
 # U+2028/U+2029 line-separators — Zl/Zp categories slip past the Cc/Cf
 # strip below but terminals render them as newlines, which could split

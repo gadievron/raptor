@@ -19,6 +19,7 @@ to land twice. These pins red the moment the gates diverge again:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,7 @@ _SHARED_NAMES = [
     ("Finding", "Finding"),
     ("FileScan", "FileScan"),
     ("_RAPTOR_DIR", "RAPTOR_DIR"),
+    ("_is_registered_worktree_of_self", "is_registered_worktree_of_self"),
 ]
 
 
@@ -74,6 +76,8 @@ class TestNoPrivateReDerivation:
         "_EXTRA_STRIP =",
         "_MAX_CONFIG_BYTES =",
         "_RAPTOR_DIR = Path(",
+        "def _read_git_link(",
+        "def _is_registered_worktree_of_self(",
     )
 
     @pytest.mark.parametrize("mod", [cc, ql], ids=["cc_trust", "codeql_trust"])
@@ -84,6 +88,44 @@ class TestNoPrivateReDerivation:
                 f"{Path(mod.__file__).name} re-defines {banned!r} — "
                 "that helper lives in core/security/_trust_common.py; "
                 "fix it there so BOTH gates get the fix")
+
+    @pytest.mark.parametrize("mod", [cc, ql], ids=["cc_trust", "codeql_trust"])
+    def test_link_cap_not_rederived_at_any_literal(self, mod):
+        # Ban NUMERIC re-definition of the link-file cap at any value,
+        # not just the current one (the alias
+        # `_GIT_LINK_MAX_BYTES = GIT_LINK_MAX_BYTES` stays allowed).
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        assert not re.search(r"_GIT_LINK_MAX_BYTES\s*=\s*\d", src), (
+            f"{Path(mod.__file__).name} re-derives the link-file cap "
+            "as a numeric literal — the cap lives in "
+            "core/security/_trust_common.py; alias it, never re-state "
+            "the value")
+
+
+class TestSharedHelperBeltAndBraces:
+    """The lstat S_ISREG gate on the target's ``.git`` sits in FRONT
+    of the capped read, which independently refuses non-regular files
+    (O_NOFOLLOW + fstat on the open fd) where the platform provides
+    O_NOFOLLOW. Pin the lstat belt on its own: with the reader stubbed
+    permissive, a ``.git`` DIRECTORY must still be refused — so the
+    belt survives even where the braces don't exist."""
+
+    def test_dotgit_directory_refused_with_permissive_reader(
+            self, tmp_path, monkeypatch):
+        raptor_dir = tmp_path / "raptor"
+        entry = raptor_dir / ".git" / "worktrees" / "wt"
+        entry.mkdir(parents=True)
+        target = (tmp_path / "wt").resolve()
+        (target / ".git").mkdir(parents=True)  # .git as a DIRECTORY
+
+        def permissive_read(path):
+            if Path(path) == entry / "gitdir":
+                return str(target / ".git")
+            return "gitdir: " + str(entry)
+
+        monkeypatch.setattr(common, "read_git_link", permissive_read)
+        assert common.is_registered_worktree_of_self(
+            target, raptor_dir) is False
 
 
 _GATES = [
