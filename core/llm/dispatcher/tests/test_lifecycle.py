@@ -403,6 +403,7 @@ class TestSocketPathBudget:
         <sock_dir>/llm-child.sock past the limit and bind() failed at
         dispatcher init. The fallback must land the socket somewhere
         bindable."""
+        import os
         import tempfile as _tempfile
 
         from core.llm.dispatcher.auth import CredentialStore
@@ -425,7 +426,9 @@ class TestSocketPathBudget:
             )
             try:
                 assert d.socket_path.exists()
-                assert len(str(d.child_socket_path).encode()) <= 104
+                # Bytes, via os.fsencode: sun_path is a byte cap and
+                # bare .encode() crashes on surrogate-escaped paths.
+                assert len(os.fsencode(d.child_socket_path)) <= 104
             finally:
                 d.shutdown()
         finally:
