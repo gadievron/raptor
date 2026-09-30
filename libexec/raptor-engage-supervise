@@ -20,10 +20,12 @@ or wall bound — auto-resumable).
 
 Usage:
     raptor-engage-supervise <ledger-dir>
+        (--max-cost USD | --envelope USD | --uncapped
+         | --mechanical-only)
     raptor-engage-supervise <ledger-dir> --resume
         [--acknowledge PARK-ID] [--accept-code-drift]
         [--target-root DIR] [--model M] [--max-cost USD]
-        [--envelope USD] [--mechanical-only]
+        [--envelope USD] [--uncapped] [--mechanical-only]
     raptor-engage-supervise <ledger-dir> --parks
     raptor-engage-supervise <ledger-dir> --request-drain
 """
@@ -138,6 +140,13 @@ def main() -> int:
                          "it; passing the flag on --resume replaces "
                          "the persisted figure (recorded in the "
                          "residual map and policy amendments).")
+    ap.add_argument("--uncapped", action="store_true",
+                    help="Explicitly launch (or resume) with NO LLM "
+                         "spend ceiling. A fresh LLM-capable launch "
+                         "refuses to start without a budget or this "
+                         "flag; the choice is persisted and recorded "
+                         "in the residual map. Contradicts "
+                         "--max-cost/--envelope.")
     ap.add_argument("--mechanical-only", action="store_true",
                     help="Skip the LLM stages — each skip is a "
                          "recorded degradation a later full "
@@ -179,6 +188,7 @@ def main() -> int:
         model=parsed.model,
         max_cost=parsed.max_cost,
         envelope_usd=parsed.envelope,
+        uncapped=parsed.uncapped,
         mechanical_only=parsed.mechanical_only,
     )
 

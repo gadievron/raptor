@@ -101,13 +101,109 @@ def test_missing_ledger_is_usage(tmp_path):
 def test_relaunch_without_resume_is_usage(tmp_path, monkeypatch):
     out, _ = _build(tmp_path)
     _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    assert sup.supervise(out) == sup.RC_NOTHING
-    assert sup.supervise(out) == sup.RC_USAGE
+    assert sup.supervise(out, uncapped=True) == sup.RC_NOTHING
+    assert sup.supervise(out, uncapped=True) == sup.RC_USAGE
 
 
 def test_resume_without_launch_is_usage(tmp_path):
     out, _ = _build(tmp_path)
     assert sup.supervise(out, resume=True) == sup.RC_USAGE
+
+
+# ── spend gate (DF: silent uncapped launches) ────────────────────────
+
+def test_bare_llm_launch_refuses_uncapped_spend(
+        tmp_path, monkeypatch, capsys):
+    """A fresh LLM-capable launch with no budget and no --uncapped
+    never starts: uncapped engagement spend is an operator decision,
+    not a default."""
+    out, _ = _build(tmp_path)
+    stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    assert sup.supervise(out) == sup.RC_USAGE
+    assert sup.load_state(out) is None, "gate must refuse pre-state"
+    assert not stub.calls, "no chain work before the spend decision"
+    msg = capsys.readouterr().out
+    assert "uncapped" in msg
+    assert "--max-cost" in msg and "--envelope" in msg
+    assert "--uncapped" in msg
+
+
+def test_budgeted_launch_passes_the_gate(tmp_path, monkeypatch):
+    out, _ = _build(tmp_path)
+    _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    assert sup.supervise(out, max_cost=1.0) == sup.RC_NOTHING
+
+
+def test_uncapped_launch_persists_the_choice(tmp_path, monkeypatch):
+    out, _ = _build(tmp_path)
+    _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    assert sup.supervise(out, uncapped=True) == sup.RC_NOTHING
+    assert sup.load_state(out).get("uncapped") is True
+    assert "uncapped_launch" in _residual_kinds(out)
+    # The interim report distinguishes a chosen uncapped run from an
+    # accidental one.
+    report = sup.write_interim_report(out, trigger="test")
+    assert "uncapped (operator choice)" in report.read_text()
+
+
+def test_uncapped_contradicts_budget_flags(tmp_path, monkeypatch):
+    out, _ = _build(tmp_path)
+    stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    assert sup.supervise(out, uncapped=True,
+                         max_cost=1.0) == sup.RC_USAGE
+    assert sup.supervise(out, uncapped=True,
+                         envelope_usd=5.0) == sup.RC_USAGE
+    assert sup.load_state(out) is None
+    assert not stub.calls
+
+
+def test_mechanical_only_launch_is_exempt_from_the_gate(
+        tmp_path, monkeypatch):
+    """Mechanical-only dispatches no LLM stages — there is no spend
+    to gate at that launch."""
+    out, _ = _build(tmp_path)
+    _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    assert sup.supervise(out,
+                         mechanical_only=True) == sup.RC_NOTHING
+
+
+def test_undecided_resume_warns_but_proceeds(
+        tmp_path, monkeypatch, capsys):
+    """A ledger with no budget and no recorded uncapped choice (a
+    pre-gate launch, or a mechanical-only one) must keep resuming —
+    refusing would strand live engagements — but never silently."""
+    out, _ = _build(tmp_path)
+    _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    sup.supervise(out, mechanical_only=True)
+    capsys.readouterr()
+    assert sup.supervise(out, resume=True) == sup.RC_NOTHING
+    msg = capsys.readouterr().out
+    assert "uncapped" in msg
+    assert "--uncapped" in msg
+
+
+def test_resume_uncapped_records_choice_and_silences_the_notice(
+        tmp_path, monkeypatch, capsys):
+    out, _ = _build(tmp_path)
+    _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    sup.supervise(out, mechanical_only=True)
+    assert sup.supervise(out, resume=True,
+                         uncapped=True) == sup.RC_NOTHING
+    assert sup.load_state(out).get("uncapped") is True
+    assert "uncapped_recorded" in _residual_kinds(out)
+    capsys.readouterr()
+    assert sup.supervise(out, resume=True) == sup.RC_NOTHING
+    assert "LLM spend is uncapped" not in capsys.readouterr().out
+
+
+def test_resume_uncapped_refuses_when_a_budget_persists(
+        tmp_path, monkeypatch):
+    out, _ = _build(tmp_path)
+    _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
+    sup.supervise(out, max_cost=1.0)
+    assert sup.supervise(out, resume=True,
+                         uncapped=True) == sup.RC_USAGE
+    assert sup.load_state(out).get("uncapped") is None
 
 
 def test_resume_is_idempotent_and_cron_safe(tmp_path, monkeypatch):
@@ -116,7 +212,7 @@ def test_resume_is_idempotent_and_cron_safe(tmp_path, monkeypatch):
     out, _ = _build(tmp_path)
     stub = _ChainStub(monkeypatch,
                       chain_elf.RC_OK, chain_elf.RC_OK)
-    assert sup.supervise(out) == sup.RC_OK
+    assert sup.supervise(out, uncapped=True) == sup.RC_OK
     for _ in range(3):
         assert sup.supervise(out, resume=True) == sup.RC_NOTHING
     assert not sup.marker_path(out).exists()
@@ -127,7 +223,7 @@ def test_resume_is_idempotent_and_cron_safe(tmp_path, monkeypatch):
 def test_launch_records_code_pin_and_segments(tmp_path, monkeypatch):
     out, _ = _build(tmp_path)
     _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     state = sup.load_state(out)
     assert state["code_pin"] == _PIN
     assert state["segments"] >= 2
@@ -140,7 +236,7 @@ def test_chain_failure_returns_failed_and_records_death(
         tmp_path, monkeypatch):
     out, doc = _build(tmp_path, names=("alpha",))
     _ChainStub(monkeypatch, default=chain_elf.RC_FAILED)
-    assert sup.supervise(out) == sup.RC_FAILED
+    assert sup.supervise(out, uncapped=True) == sup.RC_FAILED
     aid = doc["rows"][0]["artifact_id"]
     res = _row(out, aid)["reservation"]
     assert res["deaths"] == 1
@@ -151,7 +247,7 @@ def test_death_cap_parks_with_operator_park_id(tmp_path, monkeypatch):
     out, doc = _build(tmp_path, names=("alpha",))
     aid = doc["rows"][0]["artifact_id"]
     _ChainStub(monkeypatch, default=chain_elf.RC_FAILED)
-    assert sup.supervise(out) == sup.RC_FAILED
+    assert sup.supervise(out, uncapped=True) == sup.RC_FAILED
     for _ in range(gov.PARK_AFTER_DEATHS - 1):
         sup.supervise(out, resume=True)
     # Row parked at the cap; the registry carries an operator target.
@@ -173,7 +269,7 @@ def test_acknowledge_artifact_park_requeues_and_resets_deaths(
     aid = doc["rows"][0]["artifact_id"]
     _ChainStub(monkeypatch, default=chain_elf.RC_FAILED)
     for _ in range(gov.PARK_AFTER_DEATHS):
-        sup.supervise(out) if not sup.load_state(out) \
+        sup.supervise(out, uncapped=True) if not sup.load_state(out) \
             else sup.supervise(out, resume=True)
     park_id = sup.unacknowledged_parks(out)[0]["park_id"]
     stub = _ChainStub(monkeypatch, default=chain_elf.RC_OK)
@@ -194,7 +290,7 @@ def test_acknowledge_resets_deaths_before_any_rerun(
     aid = doc["rows"][0]["artifact_id"]
     _ChainStub(monkeypatch, default=chain_elf.RC_FAILED)
     for _ in range(gov.PARK_AFTER_DEATHS):
-        sup.supervise(out) if not sup.load_state(out) \
+        sup.supervise(out, uncapped=True) if not sup.load_state(out) \
             else sup.supervise(out, resume=True)
     park_id = sup.unacknowledged_parks(out)[0]["park_id"]
     assert _row(out, aid)["reservation"]["deaths"] \
@@ -207,7 +303,7 @@ def test_acknowledge_resets_deaths_before_any_rerun(
 def test_acknowledge_unknown_park_is_usage(tmp_path, monkeypatch):
     out, _ = _build(tmp_path)
     _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     rc = sup.supervise(out, resume=True, acknowledge="park-bogus00")
     assert rc == sup.RC_USAGE
 
@@ -217,7 +313,7 @@ def test_acknowledge_unknown_park_is_usage(tmp_path, monkeypatch):
 def test_code_drift_parks_sticky(tmp_path, monkeypatch):
     out, _ = _build(tmp_path)
     stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     n_launch_calls = len(stub.calls)
     moved = dict(_PIN, base_sha="b" * 40, dirty=True)
     monkeypatch.setattr(sup, "code_snapshot", lambda: moved)
@@ -237,7 +333,7 @@ def test_accept_code_drift_resumes_and_records_acceptance(
         tmp_path, monkeypatch):
     out, _ = _build(tmp_path)
     _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     moved = dict(_PIN, base_sha="b" * 40)
     monkeypatch.setattr(sup, "code_snapshot", lambda: moved)
     sup.supervise(out, resume=True)  # parks
@@ -258,7 +354,7 @@ def test_accept_code_drift_resumes_and_records_acceptance(
 def test_models_hash_alone_is_drift(tmp_path, monkeypatch):
     out, _ = _build(tmp_path)
     _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     monkeypatch.setattr(
         sup, "code_snapshot",
         lambda: dict(_PIN, models_sha256="n" * 64))
@@ -274,7 +370,7 @@ def test_unverifiable_pin_records_residual_not_drift(
     monkeypatch.setattr(sup, "code_snapshot", lambda: dict(blind))
     out, _ = _build(tmp_path)
     _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    assert sup.supervise(out) == sup.RC_NOTHING
+    assert sup.supervise(out, uncapped=True) == sup.RC_NOTHING
     assert "code_pin_unverifiable" in _residual_kinds(out)
     assert sup.supervise(out, resume=True) == sup.RC_NOTHING
 
@@ -323,7 +419,7 @@ def _register_session(monkeypatch):
 def test_drain_request_pauses_at_the_boundary(tmp_path, monkeypatch):
     out, _ = _build(tmp_path)
     stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     n = len(stub.calls)
     _register_session(monkeypatch)
     assert sessions.ledger_record_drain_request(out, pid=os.getpid())
@@ -339,7 +435,7 @@ def test_drain_request_pauses_at_the_boundary(tmp_path, monkeypatch):
 def test_wall_bound_pauses_resumable(tmp_path, monkeypatch):
     out, _ = _build(tmp_path)
     stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     n = len(stub.calls)
     import core.run.supervisor as run_supervisor
     monkeypatch.setattr(
@@ -382,7 +478,7 @@ def test_clean_close_reconciles_reservation_to_measured(
     save_json(chain_dir / "study" / "spend-floor.json",
               {"spend_usd": 0.75})
     _ChainStub(monkeypatch, chain_elf.RC_OK)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     res = _row(out, aid)["reservation"]
     assert res["state"] == "reconciled"
     assert res["actual_usd"] == pytest.approx(0.75)
@@ -394,7 +490,7 @@ def test_verdicted_at_tier_is_skipped(tmp_path, monkeypatch):
     out, doc = _build(tmp_path, names=("alpha",))
     aid = doc["rows"][0]["artifact_id"]
     _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     tier = _row(out, aid)["policy"]["tier"]
     ledger_mod.set_artifact_status(out, aid, "verdicted", depth=tier)
     stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
@@ -410,7 +506,7 @@ def test_analysed_settles_only_under_mechanical_only(
     out, doc = _build(tmp_path, names=("alpha",))
     aid = doc["rows"][0]["artifact_id"]
     _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     tier = _row(out, aid)["policy"]["tier"]
     ledger_mod.set_artifact_status(out, aid, "analysed", depth=tier)
     stub = _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
@@ -436,7 +532,7 @@ def test_non_elf_row_runs_without_reservation(tmp_path, monkeypatch):
                      ".recover_static_channels"}]
     save_json(lp, raw)
     stub = _ChainStub(monkeypatch, chain_elf.RC_OK)
-    assert sup.supervise(out) == sup.RC_OK
+    assert sup.supervise(out, uncapped=True) == sup.RC_OK
     assert stub.calls and stub.calls[0][0] == aid
     assert "reservation" not in _row(out, aid)
 
@@ -453,7 +549,7 @@ def test_t0_rows_never_enter_the_chain(tmp_path, monkeypatch):
          if r["artifact_id"] == aid)["class"] = "data-opaque"
     save_json(lp, raw)
     stub = _ChainStub(monkeypatch, default=chain_elf.RC_OK)
-    assert sup.supervise(out) == sup.RC_NOTHING
+    assert sup.supervise(out, uncapped=True) == sup.RC_NOTHING
     assert not stub.calls
 
 
@@ -477,7 +573,7 @@ def test_interim_report_escapes_hostile_reasons(
         tmp_path, monkeypatch):
     out, _ = _build(tmp_path)
     _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     sup.mint_park(out, scope="engagement", kind="governor_park",
                   reason="bad \x1b[31mreason\x1b[0m")
     path = sup.write_interim_report(out, trigger="test")
@@ -662,7 +758,7 @@ def test_dispatch_marker_written_during_and_cleared_after(
         return chain_elf.RC_OK
 
     monkeypatch.setattr(chain_elf, "run_chain", _chain)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     assert seen and all(a == m for a, m in seen), (
         "the durable dispatch marker must name the in-flight "
         "artifact while the chain runs")
@@ -678,7 +774,7 @@ def test_supervisor_fatal_segment_books_the_death(
     out, doc = _build(tmp_path, names=("alpha",))
     aid = doc["rows"][0]["artifact_id"]
     _ChainStub(monkeypatch, default=chain_elf.RC_FAILED)
-    sup.supervise(out)  # one observed death, reservation stays open
+    sup.supervise(out, uncapped=True)  # one observed death, reservation stays open
     state = sup.load_state(out)
     state["in_flight"] = {"artifact_id": aid,
                           "segment": state["segments"], "at": "t"}
@@ -700,7 +796,7 @@ def test_out_of_band_governor_park_is_adopted(tmp_path, monkeypatch):
     target on the next tick."""
     out, _ = _build(tmp_path)
     _ChainStub(monkeypatch, default=chain_elf.RC_NOTHING)
-    sup.supervise(out)
+    sup.supervise(out, uncapped=True)
     gov.park_engagement(out, "operator hold")
     assert sup.supervise(out, resume=True) == sup.RC_PARKED
     parks = sup.unacknowledged_parks(out, scope="engagement")

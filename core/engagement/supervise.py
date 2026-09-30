@@ -31,6 +31,16 @@ Contract (operator-schedulable, cron-safe):
   records the replacement (residual map; policy amendment for the
   envelope). A supervisor that only enforced the launch shell's
   argv would run every cron re-entry uncapped.
+* Spend gate: a fresh LLM-capable launch REFUSES to start unless it
+  carries a budget (``--max-cost`` and/or ``--envelope``) or the
+  explicit ``--uncapped`` opt-out — silent uncapped spend across a
+  whole engagement is never a default. ``--uncapped`` is persisted
+  in the supervisor state (and recorded in the residual map) so the
+  decision is the operator's, once, at launch. Mechanical-only
+  launches are exempt (no LLM stages dispatch). Ledgers that predate
+  the gate — or were launched mechanical-only — resume as before but
+  say so loudly each re-entry until a budget or ``--uncapped``
+  records the decision.
 * Parks are STICKY and never silent (M5): every park mints a park-id
   in the durable registry, refreshes the ``PARKED`` marker the
   project status view surfaces, and writes an interim report. Only
@@ -464,7 +474,9 @@ def write_interim_report(output_dir: Path | str, *,
     envelope = block.get("envelope_usd")
     env_s = (f"${envelope:.2f}"
              if isinstance(envelope, (int, float))
-             and not isinstance(envelope, bool) else "uncapped")
+             and not isinstance(envelope, bool)
+             else "uncapped (operator choice)"
+             if state.get("uncapped") else "uncapped")
     lines.append(f"Spend committed: ${committed:.2f} of {env_s}")
     feasibility = block.get("feasibility")
     if isinstance(feasibility, dict):
@@ -525,6 +537,18 @@ def _persisted_max_cost(state: dict[str, Any]) -> float | None:
     money-clamp doctrine) — a forged overclaim caps out, garbage
     reads as absent."""
     figure = state.get("max_cost_usd")
+    if (isinstance(figure, (int, float))
+            and not isinstance(figure, bool)):
+        return governor._usd(figure)
+    return None
+
+
+def _persisted_envelope(doc: dict[str, Any]) -> float | None:
+    """The engagement envelope persisted on the ledger policy block
+    (``governor.set_envelope``); ``None`` when uncapped."""
+    block = doc.get("policy") if isinstance(doc.get("policy"), dict) \
+        else {}
+    figure = block.get("envelope_usd")
     if (isinstance(figure, (int, float))
             and not isinstance(figure, bool)):
         return governor._usd(figure)
@@ -634,6 +658,7 @@ def supervise(output_dir: Path | str, *,
               model: str | None = None,
               max_cost: float | None = None,
               envelope_usd: float | None = None,
+              uncapped: bool = False,
               mechanical_only: bool = False) -> int:
     """Run (or resume) the full engagement loop. See the module
     docstring for the contract; returns an ``RC_*`` code."""
@@ -652,6 +677,13 @@ def supervise(output_dir: Path | str, *,
             _say(f"invalid {label} figure — need a finite USD value "
                  f"between 0 and {governor._MAX_USD:g}")
             return RC_USAGE
+    if uncapped and (max_cost is not None or envelope_usd is not None):
+        # One flag says "no ceiling", the other sets one — refuse the
+        # contradiction instead of guessing which the operator meant.
+        _say("--uncapped contradicts --max-cost/--envelope — pass "
+             "budget figures or the explicit uncapped choice, not "
+             "both")
+        return RC_USAGE
     state = load_state(out)
     if state is None and resume:
         _say("nothing to resume — no engagement state here; launch "
@@ -661,6 +693,19 @@ def supervise(output_dir: Path | str, *,
         _say("engagement already launched — re-enter with --resume "
              "(idempotent; a complete engagement reports "
              "nothing-to-do)")
+        return RC_USAGE
+    if (state is None and not mechanical_only and not uncapped
+            and max_cost is None and envelope_usd is None):
+        # Spend gate: an LLM-capable launch never defaults to
+        # uncapped spend across a whole engagement. Mechanical-only
+        # launches dispatch no LLM stages, so they carry no spend to
+        # gate (the resume-time notice below covers a later
+        # full-capability re-entry).
+        _say("refusing launch: engagement LLM spend would be "
+             "uncapped — no --max-cost (per-stage chain budget) or "
+             "--envelope (engagement spend envelope) was given. Pass "
+             "a budget, or relaunch with --uncapped to record the "
+             "uncapped choice on the engagement.")
         return RC_USAGE
 
     from core.audit.run_lock import AuditRunLocked, acquire_run_lock
@@ -695,7 +740,17 @@ def supervise(output_dir: Path | str, *,
             # re-reads it from here, so the figure the operator set
             # at launch keeps riding every later segment.
             state["max_cost_usd"] = round(float(max_cost), 6)
+        if uncapped:
+            # The uncapped choice is an operator decision made once,
+            # at launch — persist it so every re-entry knows spend is
+            # deliberately unbounded rather than accidentally so.
+            state["uncapped"] = True
         _save_state(out, state)
+        if uncapped:
+            append_residual(
+                out, "uncapped_launch",
+                "launched with --uncapped: engagement LLM spend has "
+                "no ceiling by operator choice")
         if envelope_usd is not None:
             # Persist the launch envelope on the ledger policy block —
             # governor._envelope() falls back to the persisted figure,
@@ -765,6 +820,25 @@ def supervise(output_dir: Path | str, *,
                 out, "max_cost_updated",
                 f"resume --max-cost replaced the persisted per-stage "
                 f"chain budget: {prior_s} -> ${float(max_cost):.2f}")
+        if uncapped and not state.get("uncapped"):
+            # Recording the choice on resume is the escape hatch for
+            # ledgers that predate the spend gate (or launched
+            # mechanical-only): it silences the uncapped-spend notice
+            # below. With a budget already persisted the flag is the
+            # same contradiction the launch path refuses.
+            if (_persisted_max_cost(state) is not None
+                    or _persisted_envelope(doc) is not None):
+                _say("--uncapped contradicts the persisted budget "
+                     "figures — budgets persist across resumes; "
+                     "update them with --max-cost/--envelope instead")
+                return RC_USAGE
+            state["uncapped"] = True
+            _save_state(out, state)
+            append_residual(
+                out, "uncapped_recorded",
+                "resume --uncapped recorded the uncapped-spend "
+                "choice: engagement LLM spend has no ceiling by "
+                "operator choice")
         pin = state.get("code_pin")
         changed = pin_drift(pin if isinstance(pin, dict) else {},
                             current_pin)
@@ -803,6 +877,17 @@ def supervise(output_dir: Path | str, *,
     # governor._envelope()'s persisted-policy fallback.
     if max_cost is None:
         max_cost = _persisted_max_cost(state)
+    if (resume and not mechanical_only and not state.get("uncapped")
+            and max_cost is None and envelope_usd is None
+            and _persisted_envelope(doc) is None):
+        # Pre-gate ledger or mechanical-only launch: no budget
+        # anywhere and no recorded uncapped decision. Refusing here
+        # would strand live engagements mid-run, so the resume
+        # proceeds — but never silently.
+        _say("engagement LLM spend is uncapped — no budget is "
+             "persisted and no uncapped choice is recorded. Cap "
+             "future segments with --resume --max-cost/--envelope, "
+             "or record the choice with --resume --uncapped.")
 
     # ── operator acknowledgment (M5) ──
     if acknowledge:
