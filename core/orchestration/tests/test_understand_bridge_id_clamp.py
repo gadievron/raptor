@@ -98,6 +98,37 @@ def test_honest_string_trace_id_untouched(tmp_path: Path) -> None:
     assert paths[0]["id"] == "TRACE-001"
 
 
+def test_long_carried_string_id_persists_byte_identical(tmp_path: Path) -> None:
+    """An over-bound trace-carried id is stored unclamped and keys dedup.
+
+    The clamp is FALLBACK-only: a string id the trace carries itself
+    must reach attack-paths.json byte-identical even far past the
+    element-id bound, and that same unclamped id must be the dedup
+    key — a re-import against the persisted row stays a no-op.
+    """
+    long_carried = "TRACE-" + "z" * 300
+    understand_dir = tmp_path / "understand"
+    validate_dir = tmp_path / "validate"
+    understand_dir.mkdir()
+    validate_dir.mkdir()
+    trace_file = understand_dir / "flow-trace-carried.json"
+    trace_file.write_text(json.dumps({"id": long_carried, "steps": []}))
+    first = _import_flow_traces(understand_dir, validate_dir)
+    assert first["imported_as_paths"] == 1
+    paths = json.loads((validate_dir / "attack-paths.json").read_text())
+    assert paths[0]["id"] == long_carried, (
+        "trace-carried id must persist byte-identical: stored "
+        f"len={len(paths[0]['id'])}, carried len={len(long_carried)}"
+    )
+    # Dedup keys on the carried id unchanged: the persisted row above
+    # holds the full unclamped id, so the re-import is a no-op only if
+    # the key matches it byte-for-byte.
+    second = _import_flow_traces(understand_dir, validate_dir)
+    assert second["imported_as_paths"] == 0
+    persisted = json.loads((validate_dir / "attack-paths.json").read_text())
+    assert len(persisted) == 1
+
+
 def test_clamped_id_is_stable_dedup_key(tmp_path: Path) -> None:
     """Persisted id and dedup key agree: a re-import is a no-op."""
     understand_dir = tmp_path / "understand"
