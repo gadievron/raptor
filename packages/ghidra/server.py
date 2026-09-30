@@ -14,7 +14,14 @@ Two transports, chosen by a boot-time pre-flight
 worker binds itself (primary — keeps the namespace sandbox lane), or
 an inherited socketpair half (``--socket-fd``) on hosts whose sandbox
 lane denies ``socket(2)`` to the child (nested sandboxes: the worker
-would otherwise die at bind with EPERM).
+would otherwise die at bind with EPERM). The pre-flight is a
+host-level verdict, but the sandbox picks its lane per call — a
+per-call demotion can deny ``socket(AF_UNIX)`` even where the
+pre-flight said the pathname transport would serve. A pathname boot
+that dies at the worker's socket setup with EPERM is therefore
+retried ONCE on the socketpair transport (the worker then never
+creates a socket), and the denial is memoised for the process so
+later boots skip the doomed pathname attempt.
 
 Usage::
 
@@ -67,6 +74,32 @@ class GhidraServerError(Exception):
 class GhidraServerDied(GhidraServerError):
     """The worker process died mid-run (watchdog self-kill on a
     wedged JVM call, crash, sandbox reap). restart() recovers."""
+
+
+class GhidraWorkerSocketDenied(GhidraServerError):
+    """The worker died at its AF_UNIX socket setup with EPERM.
+
+    The per-call sandbox lane denies ``socket(AF_UNIX)`` to the child
+    even though the host-level transport pre-flight predicted a
+    socket-capable lane. Recoverable: the boot is retried on the
+    inherited-socketpair transport, where the worker never creates a
+    socket."""
+
+
+#: Process-level memo: True once a pathname-transport boot died at the
+#: worker's AF_UNIX socket setup with EPERM. The transport pre-flight
+#: (``check_child_unix_sockets_available``) is a HOST-level verdict,
+#: but the sandbox chooses its lane per call — a demotion (command
+#: outside the mount-ns bind tree, a cached exec failure for the
+#: interpreter, a runtime namespace failure) lands the worker on a
+#: lane whose seccomp policy denies unix-socket creation
+#: unconditionally. Once observed, later boots in this process start
+#: on the socketpair transport directly instead of paying a doomed
+#: pathname boot per server. Deliberately NOT persisted across
+#: processes: the demotion can be per-command and transient, and a
+#: fresh process re-earns the pathname transport (full mount-ns
+#: isolation for the worker) whenever its lane serves it.
+_PATHNAME_TRANSPORT_DENIED = False
 
 
 class GhidraServer:
@@ -139,23 +172,67 @@ class GhidraServer:
             raise
 
     def _boot(self) -> None:
-        """Boot one sandboxed worker against the prepared work dir."""
+        """Boot one sandboxed worker against the prepared work dir.
+
+        Transport pre-flight first (pathname primary), with ONE
+        reactive fallback: the pre-flight is a host-level verdict,
+        but the sandbox chooses its lane per call — a per-call
+        demotion (command outside the mount-ns bind tree, a cached
+        exec failure, a runtime namespace failure) lands the worker
+        on a lane whose seccomp policy denies ``socket(AF_UNIX)``
+        unconditionally, killing it at socket setup with EPERM. When
+        the pathname boot dies with that signature, retry once on the
+        inherited-socketpair transport — the worker then never calls
+        ``socket(2)`` — and memoise the denial so later boots in this
+        process skip the doomed pathname attempt. The fallback trades
+        the worker's mount-ns isolation for the subprocess+preexec
+        lane, exactly the posture a pre-flight False verdict already
+        accepts for such hosts; it never widens any sandbox policy.
+        """
+        global _PATHNAME_TRANSPORT_DENIED
+        use_pathname = (not _PATHNAME_TRANSPORT_DENIED
+                        and check_child_unix_sockets_available())
+        try:
+            self._boot_transport(use_pathname=use_pathname)
+        except GhidraWorkerSocketDenied as denial:
+            _PATHNAME_TRANSPORT_DENIED = True
+            logger.warning(
+                "ghidra server: worker died at AF_UNIX socket setup "
+                "(EPERM) — this call's sandbox lane denies "
+                "unix-socket creation despite the host pre-flight; "
+                "retrying the boot on the inherited-socketpair "
+                "transport (the worker inherits a connected "
+                "descriptor and never creates a socket): %s", denial,
+            )
+            # The failed boot's _serve thread must be fully finished
+            # before its state slots (_result, _thread) are reused —
+            # a still-running thread could book its result into the
+            # retry's box. The worker died pre-bind, so the sandbox
+            # call returns promptly; a thread still alive past the
+            # grace means something else is wrong — surface the
+            # original denial rather than racing a second boot.
+            if self._thread is not None:
+                self._thread.join(timeout=_SHUTDOWN_GRACE_S * 2)
+                if self._thread.is_alive():
+                    raise
+            self._boot_transport(use_pathname=False)
+
+    def _boot_transport(self, *, use_pathname: bool) -> None:
+        """Boot one worker on the given transport (no fallback here)."""
         self._boot_seq += 1
         self._result = {}
         worker = Path(__file__).parent / "server_worker.py"
 
-        # Transport pre-flight. The pathname unix socket stays PRIMARY:
-        # an inherited-fd child forces the subprocess+preexec sandbox
-        # lane (pass_fds is not plumbed through the namespace spawn
-        # chain), which would downgrade healthy hosts from mount-ns
-        # isolation. Hosts whose sandboxed child cannot CREATE AF_UNIX
-        # sockets at all — nested sandboxes, where the namespace lane
-        # cannot engage and the preexec seccomp lane denies
-        # socket(AF_UNIX) unconditionally, killing the worker at bind
-        # with EPERM — get the socketpair transport instead: the pair
-        # is created HERE and inherited, so the worker never calls
-        # socket(2).
-        use_pathname = check_child_unix_sockets_available()
+        # The pathname unix socket stays PRIMARY: an inherited-fd
+        # child forces the subprocess+preexec sandbox lane (pass_fds
+        # is not plumbed through the namespace spawn chain), which
+        # would downgrade healthy hosts from mount-ns isolation.
+        # Hosts whose sandboxed child cannot CREATE AF_UNIX sockets
+        # at all — nested sandboxes, where the namespace lane cannot
+        # engage and the preexec seccomp lane denies socket(AF_UNIX)
+        # unconditionally, killing the worker at bind with EPERM —
+        # get the socketpair transport instead: the pair is created
+        # HERE and inherited, so the worker never calls socket(2).
         socket_path: Optional[Path] = None
         parent_sock: Optional[socket.socket] = None
         child_sock: Optional[socket.socket] = None
@@ -176,11 +253,11 @@ class GhidraServer:
             ]
         else:
             logger.info(
-                "ghidra server: sandboxed child cannot create AF_UNIX "
-                "sockets on this host (namespace lane unavailable; the "
-                "preexec seccomp lane denies socket creation) — using "
-                "the inherited-socketpair transport on the "
-                "Landlock-only lane"
+                "ghidra server: sandboxed worker cannot create "
+                "AF_UNIX sockets on its lane (host pre-flight "
+                "negative, or a per-call lane demotion observed as "
+                "EPERM at socket setup) — using the "
+                "inherited-socketpair transport"
             )
             parent_sock, child_sock = socket.socketpair()
             self._child_sock = child_sock
@@ -331,14 +408,16 @@ class GhidraServer:
         ).strip()
         msg = f"worker died during boot: {detail}"
         if pathname and "Operation not permitted" in detail:
-            msg += (
-                " — EPERM at worker socket setup: this host's sandbox "
-                "lane denies AF_UNIX socket creation to the child "
-                "(preexec seccomp policy), so the pathname transport "
-                "cannot boot. The transport pre-flight "
-                "(check_child_unix_sockets_available) should have "
-                "selected the socketpair fallback here; its verdict "
-                "was wrong for this host."
+            return GhidraWorkerSocketDenied(
+                msg
+                + " — EPERM at worker socket setup: this call's "
+                "sandbox lane denies AF_UNIX socket creation to the "
+                "child (seccomp socket-family policy), so the "
+                "pathname transport cannot boot. The transport "
+                "pre-flight (check_child_unix_sockets_available) is "
+                "host-level and cannot see per-call lane demotions; "
+                "the boot is retried on the inherited-socketpair "
+                "transport."
             )
         return GhidraServerError(msg)
 

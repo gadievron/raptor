@@ -123,6 +123,396 @@ class TestClampDomainModel:
         assert (out / "domain-model.json").read_text() == '"prose"'
 
 
+class TestDecompileServerLoss:
+    """A dead decompile server is a run-level capability loss —
+    _decompile_batch reports it distinctly from routine per-function
+    skips, the clamp reports its count, and the consolidated WARNING
+    names exactly what was lost."""
+
+    def _db(self, mod, tmp_path):
+        redb = tmp_path / "re-database.json"
+        _write_redb(redb)
+        return mod._load_db(redb)
+
+    def test_batch_reports_server_unavailable(self, monkeypatch,
+                                              tmp_path):
+        mod = _load_cli(monkeypatch)
+        db = self._db(mod, tmp_path)
+        import packages.ghidra.server as server_mod
+
+        class _DeniedServer:
+            def __init__(self, gpr):
+                raise server_mod.GhidraServerError(
+                    "worker died during boot: Operation not permitted")
+
+        monkeypatch.setattr(server_mod, "GhidraServer", _DeniedServer)
+        got, lost = mod._decompile_batch(
+            db, tmp_path / "p.gpr", ["a"], 4)
+        assert got == 0
+        assert lost is not None
+        assert "Operation not permitted" in lost
+
+    def test_batch_served_reports_no_loss(self, monkeypatch, tmp_path):
+        mod = _load_cli(monkeypatch)
+        db = self._db(mod, tmp_path)
+        import packages.ghidra.server as server_mod
+
+        class _Server:
+            def __init__(self, gpr):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return None
+
+            def open(self):
+                return {}
+
+            def decompile(self, name, timeout=30):
+                return "int x;"
+
+        monkeypatch.setattr(server_mod, "GhidraServer", _Server)
+        got, lost = mod._decompile_batch(
+            db, tmp_path / "p.gpr", ["a"], 4)
+        assert got == 1
+        assert lost is None
+        assert db.functions[0].decompilation == "int x;"
+
+    def test_empty_batch_reports_no_loss(self, monkeypatch, tmp_path):
+        mod = _load_cli(monkeypatch)
+        db = self._db(mod, tmp_path)
+        got, lost = mod._decompile_batch(
+            db, tmp_path / "p.gpr", ["no_such_name"], 4)
+        assert (got, lost) == (0, None)
+
+    def _db2(self, mod, tmp_path):
+        redb = tmp_path / "re-database.json"
+        redb.write_text(json.dumps({
+            "source_tool": "ghidra", "binary_path": "/fw/demo",
+            "functions": [
+                {"name": "a", "address": 1, "size": 2,
+                 "source_tool": "ghidra"},
+                {"name": "b", "address": 3, "size": 2,
+                 "source_tool": "ghidra"},
+            ],
+        }))
+        return mod._load_db(redb)
+
+    def _mid_batch_server(self, calls, exc_factory):
+        class _DyingServer:
+            def __init__(self, gpr):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return None
+
+            def open(self):
+                return {}
+
+            def decompile(self, name, timeout=30):
+                calls.append(name)
+                if len(calls) == 1:
+                    return "int x;"
+                raise exc_factory()
+
+        return _DyingServer
+
+    def test_mid_batch_death_reports_loss(self, monkeypatch, tmp_path):
+        """A server that boots then DIES mid-batch is a run-level
+        loss: every remaining decompile would fail the same way, so
+        the per-function skip channel must not swallow it."""
+        mod = _load_cli(monkeypatch)
+        db = self._db2(mod, tmp_path)
+        import packages.ghidra.server as server_mod
+        calls: list[str] = []
+        monkeypatch.setattr(
+            server_mod, "GhidraServer",
+            self._mid_batch_server(
+                calls,
+                lambda: server_mod.GhidraServerDied(
+                    "worker connection lost (BrokenPipeError)")))
+        got, lost = mod._decompile_batch(
+            db, tmp_path / "p.gpr", ["a", "b"], 4)
+        assert got == 1
+        assert lost is not None
+        assert "connection lost" in lost
+        assert calls == ["a", "b"]  # broke out at the death
+
+    def test_not_connected_state_reports_loss(self, monkeypatch,
+                                              tmp_path):
+        mod = _load_cli(monkeypatch)
+        db = self._db2(mod, tmp_path)
+        import packages.ghidra.server as server_mod
+        calls: list[str] = []
+        monkeypatch.setattr(
+            server_mod, "GhidraServer",
+            self._mid_batch_server(
+                calls,
+                lambda: server_mod.GhidraServerError(
+                    "server not connected")))
+        got, lost = mod._decompile_batch(
+            db, tmp_path / "p.gpr", ["a", "b"], 4)
+        assert got == 1
+        assert lost is not None
+        assert "not connected" in lost
+
+    def test_routine_error_is_a_skip_not_loss(self, monkeypatch,
+                                              tmp_path):
+        """The loss channel is for the SERVER dying — an ordinary
+        per-function decompile error stays a routine skip and the
+        rest of the batch is still served."""
+        mod = _load_cli(monkeypatch)
+        db = self._db2(mod, tmp_path)
+        import packages.ghidra.server as server_mod
+        calls: list[str] = []
+
+        class _GrumpyServer:
+            def __init__(self, gpr):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return None
+
+            def open(self):
+                return {}
+
+            def decompile(self, name, timeout=30):
+                calls.append(name)
+                if name == "a":
+                    raise server_mod.GhidraServerError(
+                        "no high function for a")
+                return "int y;"
+
+        monkeypatch.setattr(server_mod, "GhidraServer", _GrumpyServer)
+        got, lost = mod._decompile_batch(
+            db, tmp_path / "p.gpr", ["a", "b"], 4)
+        assert (got, lost) == (1, None)
+        assert calls == ["a", "b"]  # batch continued past the skip
+
+    def test_poisoned_symbol_name_stays_a_skip(self, monkeypatch,
+                                               tmp_path):
+        """Worker errors quote hostile-binary symbol names verbatim —
+        a symbol literally containing "server not connected" must NOT
+        steer a routine not-found skip into the run-level loss
+        channel (which would abort the batch at the poisoned symbol
+        every pass and fire a false loss WARNING)."""
+        mod = _load_cli(monkeypatch)
+        poisoned = "evil server not connected sym"
+        redb = tmp_path / "re-database.json"
+        redb.write_text(json.dumps({
+            "source_tool": "ghidra", "binary_path": "/fw/demo",
+            "functions": [
+                {"name": poisoned, "address": 1, "size": 2,
+                 "source_tool": "ghidra"},
+                {"name": "b", "address": 3, "size": 2,
+                 "source_tool": "ghidra"},
+            ],
+        }))
+        db = mod._load_db(redb)
+        import packages.ghidra.server as server_mod
+        calls: list[str] = []
+
+        class _NotFoundServer:
+            def __init__(self, gpr):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return None
+
+            def open(self):
+                return {}
+
+            def decompile(self, name, timeout=30):
+                calls.append(name)
+                if name == poisoned:
+                    # the worker-relayed shape: prefix + verbatim name
+                    raise server_mod.GhidraServerError(
+                        f"function not found: {name}")
+                return "int y;"
+
+        monkeypatch.setattr(server_mod, "GhidraServer",
+                            _NotFoundServer)
+        got, lost = mod._decompile_batch(
+            db, tmp_path / "p.gpr", [poisoned, "b"], 4)
+        assert (got, lost) == (1, None)
+        assert calls == [poisoned, "b"]  # batch continued
+
+    def test_clamp_returns_count(self, monkeypatch, tmp_path):
+        mod = _load_cli(monkeypatch)
+        out = tmp_path / "out"
+        tree = out / "decomp-tree"
+        tree.mkdir(parents=True)
+        (out / "domain-model.json").write_text(json.dumps({
+            "concepts": [
+                {"id": "c1", "confidence": "tested", "evidence": []},
+                {"id": "c2", "confidence": "traced", "evidence": []},
+            ],
+            "invariants": [
+                {"id": "i1", "confidence": "documented",
+                 "mechanical_rule": {"kind": "x"}},
+            ],
+            "contracts": [],
+        }))
+        # c1 demoted + i1 demoted + i1's rule stripped = 3; c2 is
+        # already at the ceiling and does not count.
+        assert mod._clamp_domain_model(out, tree) == 3
+        # no model / wrong shape count zero
+        empty = tmp_path / "empty"
+        (empty / "decomp-tree").mkdir(parents=True)
+        assert mod._clamp_domain_model(
+            empty, empty / "decomp-tree") == 0
+
+    def test_warning_names_the_loss(self, monkeypatch, tmp_path,
+                                    capsys):
+        mod = _load_cli(monkeypatch)
+        mod._warn_server_loss(
+            "worker died during boot: Operation not permitted",
+            pending=115, clamped=115)
+        err = capsys.readouterr().err
+        assert "WARNING" in err
+        assert "decompile server unavailable" in err
+        assert "server-resolved reading was lost" in err
+        assert "115 reading-list item(s)" in err
+        assert "115 grading(s)/rule(s)" in err
+
+
+class TestServerLossMainWiring:
+    """main() owns the end-of-run degradation WARNING: it fires when
+    a server loss survives the pass loop, stays silent on a healthy
+    run, and a later pass's SUCCESSFUL batch clears a stale loss memo
+    (only real server contact clears — an empty batch proves nothing
+    and a persistent loss keeps warning)."""
+
+    def _drive(self, mod, monkeypatch, tmp_path, pendings, batches):
+        import sys as _sys
+        redb = tmp_path / "re-database.json"
+        _write_redb(redb)
+        out = tmp_path / "out"
+        monkeypatch.setattr(
+            mod, "_run", lambda cmd, verbose, gap_dir=None: 0)
+        pend_iter = iter(pendings)
+        monkeypatch.setattr(
+            mod, "_pending_reading_names", lambda od: next(pend_iter))
+        batch_iter = iter(batches)
+        batch_calls: list[list[str]] = []
+
+        def _fake_batch(db, gpr, names, batch):
+            batch_calls.append(list(names))
+            return next(batch_iter)
+
+        monkeypatch.setattr(mod, "_decompile_batch", _fake_batch)
+        monkeypatch.setattr(_sys, "argv", [
+            "raptor-binary-study", str(redb), str(out),
+            "--gpr", str(tmp_path / "p.gpr"), "--no-bridge-seeds",
+            "--max-passes", "4",
+        ])
+        rc = mod.main()
+        return rc, batch_calls
+
+    def test_warning_fires_on_loss(self, monkeypatch, tmp_path,
+                                   capsys):
+        mod = _load_cli(monkeypatch)
+        rc, calls = self._drive(
+            mod, monkeypatch, tmp_path,
+            pendings=[["a"], []],
+            batches=[(0, "worker died during boot: "
+                         "Operation not permitted")])
+        err = capsys.readouterr().err
+        assert rc == 0
+        assert len(calls) == 1
+        assert "WARNING — decompile server unavailable" in err
+        assert "server-resolved reading was lost" in err
+        assert "1 reading-list item(s)" in err
+
+    def test_no_warning_on_healthy_run(self, monkeypatch, tmp_path,
+                                       capsys):
+        mod = _load_cli(monkeypatch)
+        rc, calls = self._drive(
+            mod, monkeypatch, tmp_path,
+            pendings=[["a"], []],
+            batches=[(1, None)])
+        err = capsys.readouterr().err
+        assert rc == 0
+        assert len(calls) == 1
+        assert "decompile server unavailable" not in err
+        assert "server-resolved reading was lost" not in err
+
+    def test_stale_loss_cleared_by_later_success(self, monkeypatch,
+                                                 tmp_path, capsys):
+        """Transient pass-1 boot failure + clean pass-2 service: the
+        stale memo (its counted reading has since been served) must
+        not emit the loss WARNING."""
+        mod = _load_cli(monkeypatch)
+        rc, calls = self._drive(
+            mod, monkeypatch, tmp_path,
+            pendings=[["a"], ["b"], []],
+            batches=[(0, "transient boot denial"), (1, None)])
+        err = capsys.readouterr().err
+        assert rc == 0
+        assert len(calls) == 2
+        assert "server-resolved reading was lost" not in err
+
+    def test_persistent_loss_still_warns(self, monkeypatch, tmp_path,
+                                         capsys):
+        mod = _load_cli(monkeypatch)
+        rc, calls = self._drive(
+            mod, monkeypatch, tmp_path,
+            pendings=[["a"], ["b"], []],
+            batches=[(0, "first denial"), (0, "second denial")])
+        err = capsys.readouterr().err
+        assert rc == 0
+        assert len(calls) == 2
+        assert "WARNING — decompile server unavailable" in err
+        assert "second denial" in err
+        assert "1 reading-list item(s)" in err
+
+    def test_empty_batch_keeps_recorded_loss(self, monkeypatch,
+                                             tmp_path, capsys):
+        """Only real server contact clears the memo: a later EMPTY
+        batch (got 0, no loss — the server was never engaged) proves
+        nothing about the server and must keep the recorded loss
+        warning."""
+        mod = _load_cli(monkeypatch)
+        rc, calls = self._drive(
+            mod, monkeypatch, tmp_path,
+            pendings=[["a"], ["b"], []],
+            batches=[(0, "denial-reason"), (0, None)])
+        err = capsys.readouterr().err
+        assert rc == 0
+        assert len(calls) == 2
+        assert "WARNING — decompile server unavailable" in err
+        assert "denial-reason" in err
+        assert "1 reading-list item(s)" in err
+
+    def test_loss_count_excludes_already_served(self, monkeypatch,
+                                                tmp_path, capsys):
+        """Functions the dying batch served BEFORE the loss were
+        freshly decompiled — the WARNING counts only what the loss
+        actually left unresolved."""
+        mod = _load_cli(monkeypatch)
+        rc, calls = self._drive(
+            mod, monkeypatch, tmp_path,
+            pendings=[["a", "b", "c"], []],
+            batches=[(2, "died mid-batch")])
+        err = capsys.readouterr().err
+        assert rc == 0
+        assert len(calls) == 1
+        assert "WARNING — decompile server unavailable" in err
+        assert "died mid-batch" in err
+        assert "1 reading-list item(s)" in err
+
+
 class TestPendingReadingNames:
     def test_names_from_pending_items(self, monkeypatch, tmp_path):
         mod = _load_cli(monkeypatch)

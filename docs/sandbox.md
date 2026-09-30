@@ -1217,6 +1217,23 @@ Rust's `std::process::Command` uses `socketpair(AF_UNIX, ...)`
 internally; the sandbox permits this explicitly. If you see EPERM on
 `socketpair` itself, check for a custom seccomp override.
 
+### EPERM creating unix sockets inside the sandbox
+
+`socket(AF_UNIX)` is permitted only on the full mount-namespace lane
+(a fresh tmpfs masks the host's pathname sockets and abstract sockets
+are namespace-scoped there). A call the sandbox demotes to a weaker
+lane — the command resolves outside the mount bind tree, a previous
+exec failure was cached for that binary, or a namespace failed at
+runtime — runs under a seccomp policy that denies unix-socket
+*creation* unconditionally, so the same tool can see EPERM on one
+invocation and not the next. Tools that host a socket server inside
+the sandbox should be handed an inherited, already-connected
+`socketpair` half instead of creating their own listener (inherited
+descriptors are admitted; creation is what the policy blocks). The
+persistent Ghidra decompile server does this automatically: a boot
+that dies at socket setup with EPERM is retried once on its
+inherited-socketpair transport and the run continues.
+
 ### CodeQL "Failed to download pack"
 
 The egress proxy allowlist needs the full set of GHCR hosts:

@@ -61,8 +61,12 @@ from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa
 import argparse  # noqa: E402
 import re  # noqa: E402
 import subprocess  # noqa: E402
+from typing import TYPE_CHECKING  # noqa: E402
 
 from core.json import load_json, save_json  # noqa: E402
+
+if TYPE_CHECKING:
+    from packages.ghidra.model import REDatabase
 
 #: Read ceiling shared with the other RE-database readers AND the
 #: write-side guard below — bound to the ONE core constant
@@ -278,12 +282,22 @@ def _pending_reading_names(output_dir: Path) -> list[str]:
     return out
 
 
-def _decompile_batch(db, gpr: Path, names: list[str], batch: int) -> int:
+def _decompile_batch(
+    db: "REDatabase", gpr: Path, names: list[str], batch: int,
+) -> "tuple[int, str | None]":
     """Decompile up to *batch* named functions into *db* in place.
 
     Uses the sandboxed persistent decompile server (same engine
-    raptor-ghidra decompile prefers); failures skip the function with
-    a note — a batch member must never abort the pass.
+    raptor-ghidra decompile prefers); per-function failures skip the
+    function with a note — a batch member must never abort the pass.
+
+    Returns ``(decompiled_count, server_unavailable_reason)``: the
+    reason is None while the server served the batch; a non-None
+    reason means the server itself was unavailable — it failed to
+    boot, died mid-batch, or lost its connection — and server-
+    resolved reading was lost, and the caller owns surfacing that
+    capability loss as a WARNING (a skipped function is routine, a
+    dead server degrades the whole run).
     """
     want = []
     queued: set[int] = set()
@@ -322,16 +336,45 @@ def _decompile_batch(db, gpr: Path, names: list[str], batch: int) -> int:
               "name(s) skipped (ambiguous duplicate symbol names — "
               "the server resolves by name)", file=sys.stderr)
     if not want:
-        return 0
+        return 0, None
     done = 0
     try:
-        from packages.ghidra.server import GhidraServer
+        from packages.ghidra.server import (
+            GhidraServer,
+            GhidraServerDied,
+            GhidraServerError,
+        )
         with GhidraServer(gpr) as srv:
             srv.open()
             for f in want:
                 try:
                     code = srv.decompile(f.name, timeout=30)
                 except Exception as exc:  # noqa: BLE001 — skip, keep batch
+                    # The not-connected test is an EXACT match, never
+                    # a substring one: worker per-function errors
+                    # relay hostile-binary symbol names verbatim
+                    # ("function not found: <name>"), so a symbol
+                    # containing "server not connected" could steer a
+                    # routine skip into the loss channel — aborting
+                    # the batch at the poisoned symbol every pass and
+                    # firing a false loss WARNING. The parent mints
+                    # exactly this string for a torn-down connection
+                    # (and worker-relayed errors always carry a
+                    # prefix), so exact match separates cleanly.
+                    if isinstance(exc, GhidraServerDied) or (
+                            isinstance(exc, GhidraServerError)
+                            and str(exc) == "server not connected"):
+                        # The worker DIED mid-batch (or the connection
+                        # is already torn down): every remaining name
+                        # would fail the same way — that is the same
+                        # run-level capability loss as a boot failure,
+                        # not a routine per-function skip, and it must
+                        # reach the caller's loss channel instead of
+                        # drowning in skip notes.
+                        reason = _sft(str(exc), max_len=300)
+                        print("binary-study: decompile server lost "
+                              f"mid-batch: {reason}", file=sys.stderr)
+                        return done, reason
                     # f.name is an attacker-chosen symbol from the
                     # hostile binary; the exception can quote it too.
                     print(f"binary-study: decompile {_sft(f.name, max_len=120)} "
@@ -342,12 +385,34 @@ def _decompile_batch(db, gpr: Path, names: list[str], batch: int) -> int:
                     f.decompilation = str(code)
                     done += 1
     except Exception as exc:  # noqa: BLE001 — server unavailable
+        reason = _sft(str(exc), max_len=300)
         print(f"binary-study: decompile server unavailable: "
-              f"{_sft(str(exc), max_len=300)}", file=sys.stderr)
-    return done
+              f"{reason}", file=sys.stderr)
+        return done, reason
+    return done, None
 
 
-def _clamp_domain_model(output_dir: Path, tree_root: Path) -> None:
+def _warn_server_loss(reason: str, pending: int, clamped: int) -> None:
+    """ONE consolidated end-of-run WARNING for a dead decompile server.
+
+    Honest degradation: the run finished, but WITHOUT the sandboxed
+    decompile server — name exactly what was lost instead of leaving
+    the loss scattered across per-batch stderr notes. The confidence
+    clamp itself is by-design for every binary study; the loss is the
+    reading the server would have resolved.
+    """
+    print(
+        "binary-study: WARNING — decompile server unavailable "
+        f"({reason}); server-resolved reading was lost for this run: "
+        f"{pending} reading-list item(s) could not be resolved by "
+        "fresh decompilation, and the domain model rests on the "
+        f"pre-existing decompilation only ({clamped} grading(s)/"
+        "rule(s) at the binary evidence ceiling)",
+        file=sys.stderr,
+    )
+
+
+def _clamp_domain_model(output_dir: Path, tree_root: Path) -> int:
     """Clamp the whole model to the binary confidence ceiling.
 
     Every entry in a binary study derives from decompilation: the
@@ -359,13 +424,16 @@ def _clamp_domain_model(output_dir: Path, tree_root: Path) -> None:
     of compiled mechanical rules. A future corroboration channel
     (runtime evidence, source alignment) must come with VERIFIED
     receipts and its own explicit exemption here.
+
+    Returns the number of gradings/rules clamped (0 when no model
+    exists) so degradation reporting can name the count.
     """
     path = output_dir / "domain-model.json"
     if not path.is_file():
-        return
+        return 0
     data = load_json(path, max_bytes=_MAX_DB_BYTES)
     if not isinstance(data, dict):
-        return
+        return 0
     del tree_root  # every entry clamps; kept for signature stability
 
     def _clamp(conf: object) -> str:
@@ -448,6 +516,7 @@ def _clamp_domain_model(output_dir: Path, tree_root: Path) -> None:
     except Exception as exc:  # noqa: BLE001 — promotion is best-effort
         print(f"binary-study: canonical re-promotion failed: "
               f"{str(_sft(str(exc), max_len=300))[:200]}", file=sys.stderr)
+    return clamped
 
 
 def _persist_enriched_db(redb_path: Path, enriched: dict) -> bool:
@@ -648,6 +717,12 @@ def main() -> int:
     last_pending: "set[str] | None" = None
     loop_rc = 0
     spent_total = 0.0
+    # Server-loss accounting for the end-of-run degradation WARNING:
+    # a dead decompile server must not stay a scattered per-batch
+    # stderr note — the run-level capability loss (server-resolved
+    # reading) gets ONE consolidated WARNING after the clamp.
+    server_loss_reason: "str | None" = None
+    server_loss_pending = 0
     for pass_no in range(1, max(1, parsed.max_passes) + 1):
         cmd = [sys.executable, str(libexec / "raptor-study-loop"),
                str(tree_root), str(output_dir),
@@ -703,8 +778,24 @@ def main() -> int:
         last_pending = set(pending)
 
         if parsed.gpr is not None:
-            got = _decompile_batch(db, parsed.gpr, pending,
-                                   parsed.decompile_batch)
+            got, lost = _decompile_batch(db, parsed.gpr, pending,
+                                         parsed.decompile_batch)
+            if lost is not None:
+                server_loss_reason = lost
+                # Functions the dying batch served BEFORE the loss
+                # WERE freshly decompiled — count only what the loss
+                # actually left unresolved, or the WARNING overstates.
+                server_loss_pending = len(pending) - got
+            elif got:
+                # A later batch ENGAGED the server successfully: a
+                # memo from an earlier transient failure is now stale
+                # (the reading it counted has since been served) and
+                # warning on it would overstate the loss. Only real
+                # server contact clears — an empty batch (got == 0,
+                # lost None) proves nothing about the server and must
+                # keep a recorded loss visible.
+                server_loss_reason = None
+                server_loss_pending = 0
             if got:
                 print(f"binary-study: decompiled {got} function(s) "
                       "for the reading list; refreshing the tree",
@@ -723,7 +814,10 @@ def main() -> int:
         # handful of reading-list entries re-spends the whole study.
         (output_dir / "study-list.json").unlink(missing_ok=True)
 
-    _clamp_domain_model(output_dir, tree_root)
+    clamped_total = _clamp_domain_model(output_dir, tree_root)
+    if server_loss_reason is not None:
+        _warn_server_loss(server_loss_reason, server_loss_pending,
+                          clamped_total)
     if loop_rc != 0:
         return loop_rc
 

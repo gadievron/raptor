@@ -691,6 +691,13 @@ class TestServerTransportSelection:
             server_mod, "prepare_working_copy",
             lambda gpr, wd: wd / "copy.gpr",
         )
+        # The denial memo is process-level state: an earlier test (or
+        # any earlier boot in this worker process) that observed the
+        # EPERM signature would otherwise steer THIS test's transport
+        # selection.
+        monkeypatch.setattr(
+            server_mod, "_PATHNAME_TRANSPORT_DENIED", False,
+        )
         monkeypatch.setattr(sandbox_pkg, "run", self._fake_sandbox_run)
         gpr = tmp_path / "p.gpr"
         gpr.write_text("")
@@ -839,19 +846,94 @@ class TestServerTransportSelection:
             flooder.join(timeout=10)
             assert not flooder.is_alive()
 
+    def test_pathname_eperm_boot_falls_back_to_socketpair(
+        self, tmp_path, monkeypatch,
+    ):
+        """The live defect: the host pre-flight predicts the pathname
+        transport, but the per-call sandbox lane denies socket(AF_UNIX)
+        and the worker dies at socket setup with EPERM. The boot must
+        recover on the inherited-socketpair transport instead of
+        failing the server (and losing server-resolved reading)."""
+        import core.sandbox as sandbox_pkg
+        import packages.ghidra.server as server_mod
+        srv = self._server(tmp_path, monkeypatch, capable=True)
+        calls: list = []
+
+        def _lane_denied_run(cmd, **kwargs):
+            calls.append(list(cmd))
+            if "--socket-fd" in cmd:
+                # The inherited descriptor works on the denying lane.
+                return self._fake_sandbox_run(cmd, **kwargs)
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                returncode=1,
+                stderr=("PermissionError: [Errno 1] "
+                        "Operation not permitted"),
+            )
+
+        monkeypatch.setattr(sandbox_pkg, "run", _lane_denied_run)
+        srv.start()
+        try:
+            assert len(calls) == 2
+            assert "--socket-fd" not in calls[0]
+            assert "--socket-fd" in calls[1]
+            assert srv._request({"op": "ping"}).get("pong") is True
+            # ... and the denial is memoised for the process so the
+            # next server boot skips the doomed pathname attempt.
+            assert server_mod._PATHNAME_TRANSPORT_DENIED is True
+        finally:
+            srv.stop()
+
+    def test_denial_memo_boots_socketpair_directly(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.sandbox as sandbox_pkg
+        import packages.ghidra.server as server_mod
+        srv = self._server(tmp_path, monkeypatch, capable=True)
+        monkeypatch.setattr(
+            server_mod, "_PATHNAME_TRANSPORT_DENIED", True,
+        )
+        calls: list = []
+
+        def _recording_run(cmd, **kwargs):
+            calls.append(list(cmd))
+            return self._fake_sandbox_run(cmd, **kwargs)
+
+        monkeypatch.setattr(sandbox_pkg, "run", _recording_run)
+        srv.start()
+        try:
+            assert len(calls) == 1
+            assert "--socket-fd" in calls[0]
+            assert srv._request({"op": "ping"}).get("pong") is True
+        finally:
+            srv.stop()
+
     def test_pathname_eperm_death_names_seccomp_policy(
         self, tmp_path, monkeypatch,
     ):
-        """The signature that motivated the fallback: a nested-sandbox
-        host kills the worker's bind(2) with EPERM. When the pre-flight
-        wrongly picked the pathname transport anyway, the boot error
-        must attribute the death to the sandbox socket policy instead
-        of surfacing a bare traceback."""
+        """The denial signature raises the typed socket-denial error
+        with policy attribution (pathname transport only), and a boot
+        whose socketpair retry ALSO dies still surfaces a boot death
+        after exactly one retry."""
         import core.sandbox as sandbox_pkg
         import packages.ghidra.server as server_mod
         srv = self._server(tmp_path, monkeypatch, capable=True)
 
+        srv._result = {"stderr": ("PermissionError: [Errno 1] "
+                                  "Operation not permitted")}
+        err = srv._boot_death_error(pathname=True)
+        assert isinstance(err, server_mod.GhidraWorkerSocketDenied)
+        assert "denies AF_UNIX socket creation" in str(err)
+        # The socketpair transport never creates a socket — an EPERM
+        # there is NOT the socket-policy signature.
+        err = srv._boot_death_error(pathname=False)
+        assert not isinstance(err, server_mod.GhidraWorkerSocketDenied)
+        srv._result = {}
+
+        calls: list = []
+
         def _eperm_run(cmd, **kwargs):
+            calls.append(list(cmd))
             from types import SimpleNamespace
             return SimpleNamespace(
                 returncode=1,
@@ -861,8 +943,46 @@ class TestServerTransportSelection:
 
         monkeypatch.setattr(sandbox_pkg, "run", _eperm_run)
         with pytest.raises(
-            server_mod.GhidraServerError,
-            match="denies AF_UNIX socket creation",
-        ) as ei:
+            server_mod.GhidraServerError, match="died during boot",
+        ):
             srv.start()
-        assert "pre-flight" in str(ei.value)
+        assert len(calls) == 2  # pathname attempt + socketpair retry
+        assert "--socket-fd" in calls[1]
+        assert server_mod._PATHNAME_TRANSPORT_DENIED is True
+
+    def test_non_eperm_boot_death_does_not_retry(
+        self, tmp_path, monkeypatch,
+    ):
+        """Denial-signature selectivity: a pathname boot that dies
+        WITHOUT the EPERM signature (e.g. a JVM crash) is a plain
+        boot death — no typed denial, no socketpair retry, and the
+        process-level denial memo stays untouched."""
+        import core.sandbox as sandbox_pkg
+        import packages.ghidra.server as server_mod
+        srv = self._server(tmp_path, monkeypatch, capable=True)
+
+        jvm_crash = ('Exception in thread "main" '
+                     "java.lang.OutOfMemoryError: Java heap space")
+        srv._result = {"stderr": jvm_crash}
+        err = srv._boot_death_error(pathname=True)
+        assert not isinstance(err, server_mod.GhidraWorkerSocketDenied)
+        srv._result = {}
+
+        calls: list = []
+
+        def _jvm_crash_run(cmd, **kwargs):
+            calls.append(list(cmd))
+            from types import SimpleNamespace
+            return SimpleNamespace(returncode=1, stderr=jvm_crash)
+
+        monkeypatch.setattr(sandbox_pkg, "run", _jvm_crash_run)
+        with pytest.raises(
+            server_mod.GhidraServerError, match="died during boot",
+        ) as excinfo:
+            srv.start()
+        assert not isinstance(
+            excinfo.value, server_mod.GhidraWorkerSocketDenied,
+        )
+        assert len(calls) == 1  # exactly one attempt — no retry
+        assert "--socket-fd" not in calls[0]
+        assert server_mod._PATHNAME_TRANSPORT_DENIED is False
