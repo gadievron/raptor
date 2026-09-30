@@ -572,8 +572,23 @@ requires_toolchain = pytest.mark.skipif(
 )
 
 
+@pytest.mark.slow
 @requires_toolchain
 class TestLiveToolchain:
+    """Slow tier: assembling and disassembling the whole probe corpus
+    is two real toolchain subprocess spawns (clang + llvm-objdump)
+    per probe object — cost that is runner-dependent, not compute
+    bound: sub-second on an unloaded host, past the default tier's
+    per-test budget (``RAPTOR_MAX_TEST_SECONDS``) on a loaded
+    runner — the marker's loaded-runner-variance clause exactly. The
+    live-toolchain contract this proves — the corpus objects
+    assemble and the ground-truth disassembly carries every checked
+    feature — only moves when the corpus or the toolchain moves, so
+    the nightly slow lane (which installs the pinned toolchain, like
+    the sibling ``TestLiveProbe`` already marked slow) keeps the
+    coverage; mocking the assembly step would gut exactly the live
+    part the class name promises."""
+
     def test_corpus_assembles_and_ground_truth_matches(self, tmp_path):
         from packages.ghidra.ebpf_probe import disassemble_ground_truth
         generated = generate_objects(_TOOLCHAIN, tmp_path)
