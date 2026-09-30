@@ -85,9 +85,11 @@ from __future__ import annotations
 
 import array
 import contextlib
+import ctypes
 import logging
 import os
 import select
+import struct
 import signal
 import socket
 import subprocess
@@ -156,6 +158,35 @@ _READY_DEADLINE_S = 15.0
 # teardown under heavy load misreads as a stall. Too high: callers
 # hang on a genuinely wedged tree with no signal to act on.
 _KILL_REAP_BUDGET_S = 5.0
+
+# procfs superblock magic (linux/magic.h PROC_SUPER_MAGIC): what
+# fstatfs() reports for a file genuinely served by procfs. The group
+# scan requires it of the mounts fd it latches — a non-procfs object
+# bind-mounted at /proc/self/mounts serves an attacker-authored table,
+# so a mismatch is occlusion.
+_PROC_SUPER_MAGIC = 0x9FA0
+
+# Bounded rescan budget for CHURN-ONLY occlusion in
+# _group_sighted_members: when a scan's only occlusion signal is the
+# verdict poll's "mount table changed mid-scan", the scan re-latches
+# on a fresh fd and tries again, at most this many scans TOTAL. Not
+# lower (1 = no retry): the mount-event counter is namespace-global
+# and container hosts mount in bursts at pod/exec churn points, so a
+# single unrelated transient event would turn the one-shot call sites
+# (the natural-exit view, the graceful-rung check) into spurious
+# occlusion refusals. Not higher: each attempt costs a full /proc
+# scan (~25-45 ms at ~1000 entries), the loop-shaped callers already
+# rescan every ~20 ms inside a 5 s budget, and exhaustion terminates
+# in the pre-existing fail-closed refusal plumbing — more attempts
+# would only let sustained churn (an unprivileged co-resident looping
+# a setuid mount helper such as fusermount3 can produce it) hold
+# every caller longer without changing the verdict class.
+_SCAN_CHURN_RETRIES = 3
+
+# Occlusion wording shared by the no-argument detector read and the
+# scan's own latched-fd reads.
+_MOUNTS_UNREADABLE = ("/proc/self/mounts is unreadable — mount "
+                      "options unknown")
 
 # Type accepted for stdout/stderr: an fd, an open file object, or
 # subprocess.DEVNULL; None inherits. subprocess.PIPE and
@@ -701,7 +732,7 @@ class _GroupView(NamedTuple):
     occlusion: str | None
 
 
-def _proc_pid_view_filtered() -> str | None:
+def _proc_pid_view_filtered(table: bytes | None = None) -> str | None:
     """Mount-declared occlusion of the procfs pid view. Two shapes:
     ``hidepid=`` other than 0/off or ``subset=`` on the /proc mount
     (the mount that actually backs /proc is the LAST /proc line in
@@ -713,6 +744,10 @@ def _proc_pid_view_filtered() -> str | None:
     declaration found, or None for a clean view; an unreadable mounts
     table is itself occlusion (conservative).
 
+    ``table`` lets the group scan pass bytes it read through its own
+    latched fd (see ``_group_scan_attempt``); with no argument the
+    helper reads /proc/self/mounts itself.
+
     A per-pid overmount is flagged regardless of a later /proc mount.
     The last-/proc-line-wins rule exists for the standard shape of a
     stale filtered /proc line under a fresh ``--mount-proc``; a
@@ -720,11 +755,12 @@ def _proc_pid_view_filtered() -> str | None:
     container runtimes mask non-pid paths (/proc/sys, /proc/kcore,
     ...) only — so the conservative reading errs toward refusal,
     never verification."""
-    try:
-        with open("/proc/self/mounts", "rb") as f:
-            table = f.read()
-    except OSError:
-        return "/proc/self/mounts is unreadable — mount options unknown"
+    if table is None:
+        try:
+            with open("/proc/self/mounts", "rb") as f:
+                table = f.read()
+        except OSError:
+            return _MOUNTS_UNREADABLE
     verdict: str | None = None
     pid_overmount: str | None = None
     for line in table.splitlines():
@@ -772,10 +808,137 @@ def _proc_self_stat_pid() -> int | None:
         return None
 
 
+def _mounts_latch_open() -> int | None:
+    """Open the group scan's own fd on /proc/self/mounts — THE OPEN IS
+    THE LATCH: it captures this mount namespace's mount-event counter,
+    and every table mutation after it leaves a signal pending on the
+    fd until a poll consumes it (change-and-revert cannot clear it).
+    Deliberately opened BEFORE the pre-scan declaration read — churn
+    landing between the open and the end of that read also flags, a
+    slightly wider occluded window than the evidence strictly needs,
+    and strictly fail-safe; do not "optimize" the open closer to the
+    scan. Returns None when the open fails — the caller declares the
+    table unreadable (occlusion, today's behaviour)."""
+    try:
+        return os.open("/proc/self/mounts", os.O_RDONLY)
+    except OSError:
+        return None
+
+
+def _fstatfs_f_type(fd: int) -> int | None:
+    """``fstatfs(fd)``'s ``f_type``, or None when the capability is
+    unavailable on this host (no resolvable libc/fstatfs symbol) — the
+    caller must then add NO signal, degrading to the plain reads.
+    Raises OSError when the syscall itself fails. ``f_type`` is the
+    first ``__fsword_t`` (native long) of ``struct statfs`` on every
+    Linux libc this module runs under."""
+    libc = _get_libc()
+    if libc is None:
+        return None
+    try:
+        fstatfs = libc.fstatfs
+    except AttributeError:
+        return None
+    # 256 bytes comfortably covers struct statfs on every Linux ABI
+    # (88-120 bytes); only the leading f_type word is decoded.
+    buf = ctypes.create_string_buffer(256)
+    if fstatfs(ctypes.c_int(fd), buf) != 0:
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno))
+    return struct.unpack_from("@l", buf.raw)[0]
+
+
+def _mounts_fd_not_procfs(fd: int) -> str | None:
+    """Superblock-magic check on the scan's latched mounts fd: a
+    reason string when the object behind the fd is provably NOT served
+    by procfs (a non-procfs file bind-mounted at /proc/self/mounts
+    feeds the declaration reads an attacker-authored table), or when
+    the check errors (fail-closed: the fd is process-private, no
+    external party can provoke that). None when the fd is genuine
+    procfs — or when fstatfs is unavailable on this host, which adds
+    no signal (graceful degradation, never a false refusal)."""
+    try:
+        f_type = _fstatfs_f_type(fd)
+    except OSError as exc:
+        return (f"fstatfs on the /proc/self/mounts fd failed "
+                f"({exc.__class__.__name__}) — the mounts table's "
+                f"filesystem cannot be confirmed as procfs")
+    if f_type is None or f_type == _PROC_SUPER_MAGIC:
+        return None
+    return (f"/proc/self/mounts is not served by procfs (fstatfs "
+            f"f_type {f_type:#x}) — the mount table read through it "
+            f"is not the kernel's")
+
+
+def _mounts_table_read(fd: int) -> bytes:
+    """Rewind and read the whole mounts table through the scan's
+    latched fd. An open mounts fd is a LIVE table, not a snapshot, so
+    the re-read at the scan's far end sees current state — and reads
+    never touch the latch, so the pending-signal verdict survives
+    both reads. Raises OSError; the caller treats that as an
+    unreadable table (occlusion)."""
+    os.lseek(fd, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _mounts_churn_pending(fd: int) -> bool:
+    """The scan's VERDICT POLL: True when a mount-table mutation
+    signal is pending on the latched fd (``POLLERR|POLLPRI`` is the
+    kernel's mounts-changed report; kernels whose mounts file lacks
+    the poll hook never raise it, so absence of the mechanism reads
+    as absence of churn — exactly today's behaviour). THE POLL
+    CONSUMES THE SIGNAL and re-latches: each pending signal is
+    delivered exactly once, so this must be the fd's ONLY poll-type
+    operation and must run AFTER the last evidence read (the
+    single-consumer contract — a stray select(), a second call here,
+    or an EPOLL_CTL_ADD registration would EAT the signal the verdict
+    depends on and turn real churn into a silent clean scan). Raises
+    OSError; the caller treats that as occlusion (fail-closed)."""
+    poller = select.poll()
+    poller.register(fd, select.POLLPRI)
+    events = poller.poll(0)
+    return any(ev & (select.POLLERR | select.POLLPRI)
+               for _watched, ev in events)
+
+
 def _group_sighted_members(pgid: int) -> _GroupView | None:
     """/proc scan for the group-tier death proof: every process whose
     pgrp is ``pgid``, or None when /proc itself cannot be listed (no
     view, no proof — the caller must refuse, never claim death).
+
+    Retry shape: churn-only occlusion — a scan whose SOLE occlusion
+    signal is the verdict poll's mid-scan mount-table change — is
+    transient by nature, so the scan re-latches on a FRESH fd (the
+    consumed signal died with the closed one) and rescans, at most
+    ``_SCAN_CHURN_RETRIES`` scans total, then returns the
+    churn-occluded view. Exhaustion therefore terminates in the
+    callers' pre-existing fail-closed refusal plumbing; no occlusion
+    is ever cleared or downgraded, and kills never gate on any of
+    this. The priced trade: any mount churn in this namespace —
+    including an unprivileged co-resident looping a setuid mount
+    helper such as fusermount3 — can DELAY or REFUSE verification
+    loudly; it can never suppress a kill or manufacture a false
+    verify. Scan semantics per attempt: ``_group_scan_attempt``."""
+    view: _GroupView | None = None
+    for _attempt in range(_SCAN_CHURN_RETRIES):
+        view, churn_only = _group_scan_attempt(pgid)
+        if view is None or not churn_only:
+            return view
+    return view
+
+
+def _group_scan_attempt(pgid: int) -> tuple[_GroupView | None, bool]:
+    """One latched /proc scan — the single-attempt body of
+    ``_group_sighted_members``. Returns ``(view, churn_only)``;
+    ``churn_only`` is True only when the view's sole occlusion signal
+    is the verdict poll's churn report (the one retriable shape —
+    every other occlusion is declared state or a failed read, which a
+    rescan cannot honestly clear).
 
     Field parsing splits on the LAST ')' — comm may contain spaces and
     parens. Entries that VANISH mid-scan (ENOENT/ESRCH) are gone, not
@@ -785,65 +948,130 @@ def _group_sighted_members(pgid: int) -> _GroupView | None:
     the ENOENT/EACCES distinction ``_member_provably_dead`` draws. A
     listing that omits this process's own pid, a /proc/self/stat that
     disagrees with getpid (a foreign pid namespace's view), or a
-    mount-declared filter, is occlusion for the same reason. The
-    mount declarations are read again AFTER the scan, so a filter
-    mounted between the first read and the listing is still seen."""
-    filtered = _proc_pid_view_filtered()
+    mount-declared filter, is occlusion for the same reason.
+
+    Mount declarations are read at BOTH ends of the scan through one
+    fd whose OPEN latches the namespace's mount-event counter
+    (``_mounts_latch_open``); after the post-scan read, a single
+    verdict poll on that fd (``_mounts_churn_pending``) turns any
+    mount-table mutation inside the window — attach, detach, move,
+    remount, propagated events, and attach-and-detach pairs that the
+    two reads alone would miss — into occlusion. That NARROWS the
+    scan-window race, it does not close it: a hidepid-class option
+    flipped on the shared proc SUPERBLOCK from a sibling mount
+    namespace never bumps this namespace's event counter, so a
+    flip-and-revert through that channel stays invisible mid-scan
+    (bounded to other-uid members — hidepid hides only those; a
+    PERSISTING flip is still declared by the ordinary reads), and a
+    coherently forged /proc mounted before the scan opened was never
+    detectable by reads through it — the pidns tier's pidfd witness
+    is the answer to that attacker. On kernels whose mounts file
+    lacks the poll hook the verdict poll never fires and the scan
+    degrades to exactly the two-read behaviour."""
+    latch_fd = _mounts_latch_open()
     try:
-        entries = os.listdir("/proc")
-    except OSError:
-        return None  # /proc unavailable: cannot prove anything
-    occlusion = filtered
-    if occlusion is None and str(os.getpid()) not in entries:
-        occlusion = ("the /proc listing omits this process's own pid "
-                     "— a filtered or foreign pid view")
-    if occlusion is None:
-        self_pid = _proc_self_stat_pid()
-        if self_pid is None:
-            occlusion = ("/proc/self/stat is unreadable — the view "
-                         "cannot be confirmed as this pid "
-                         "namespace's")
-        elif self_pid != os.getpid():
-            occlusion = (f"/proc/self/stat reads pid {self_pid} but "
-                         f"this process is pid {os.getpid()} — a "
-                         f"foreign pid view")
-    members: list[_GroupMember] = []
-    for entry in entries:
-        if not entry.isdigit():
-            continue
+        filtered: str | None
+        if latch_fd is None:
+            filtered = _MOUNTS_UNREADABLE
+        else:
+            filtered = _mounts_fd_not_procfs(latch_fd)
+            if filtered is None:
+                try:
+                    filtered = _proc_pid_view_filtered(
+                        _mounts_table_read(latch_fd))
+                except OSError:
+                    filtered = _MOUNTS_UNREADABLE
         try:
-            with open(f"/proc/{entry}/stat", "rb") as f:
-                raw = f.read()
-        except (FileNotFoundError, ProcessLookupError):
-            continue  # vanished mid-scan — gone, not occluded
-        except OSError as exc:
-            if occlusion is None:
-                occlusion = (f"/proc/{entry}/stat is present but "
-                             f"unreadable ({exc.__class__.__name__}) — "
-                             f"hidepid-class occlusion, the entry "
-                             f"cannot be attributed")
-            continue
-        if not raw:
-            continue  # exited between open and read — gone
-        try:
-            rest = raw.rsplit(b")", 1)[1].split()
-            state, proc_pgrp = rest[0], int(rest[2])
-            start_time = int(rest[19])
-        except (IndexError, ValueError):
-            if occlusion is None:
-                occlusion = (f"/proc/{entry}/stat is unparseable — "
-                             f"the entry cannot be attributed")
-            continue
-        if proc_pgrp == pgid:
-            members.append(_GroupMember(int(entry), state, start_time))
-    if occlusion is None:
-        # A filter or per-pid overmount landing AFTER the mounts
-        # table was read but BEFORE (or during) the listing is
-        # applied to the scan yet undeclared by the first read:
-        # re-read once the scan is complete, so a mount present at
-        # either end of the scan window occludes the view.
-        occlusion = _proc_pid_view_filtered()
-    return _GroupView(tuple(members), occlusion)
+            entries = os.listdir("/proc")
+        except OSError:
+            return None, False  # /proc unavailable: cannot prove anything
+        occlusion = filtered
+        if occlusion is None and str(os.getpid()) not in entries:
+            occlusion = ("the /proc listing omits this process's own "
+                         "pid — a filtered or foreign pid view")
+        if occlusion is None:
+            self_pid = _proc_self_stat_pid()
+            if self_pid is None:
+                occlusion = ("/proc/self/stat is unreadable — the view "
+                             "cannot be confirmed as this pid "
+                             "namespace's")
+            elif self_pid != os.getpid():
+                occlusion = (f"/proc/self/stat reads pid {self_pid} but "
+                             f"this process is pid {os.getpid()} — a "
+                             f"foreign pid view")
+        members: list[_GroupMember] = []
+        for entry in entries:
+            if not entry.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry}/stat", "rb") as f:
+                    raw = f.read()
+            except (FileNotFoundError, ProcessLookupError):
+                continue  # vanished mid-scan — gone, not occluded
+            except OSError as exc:
+                if occlusion is None:
+                    occlusion = (f"/proc/{entry}/stat is present but "
+                                 f"unreadable "
+                                 f"({exc.__class__.__name__}) — "
+                                 f"hidepid-class occlusion, the entry "
+                                 f"cannot be attributed")
+                continue
+            if not raw:
+                continue  # exited between open and read — gone
+            try:
+                rest = raw.rsplit(b")", 1)[1].split()
+                state, proc_pgrp = rest[0], int(rest[2])
+                start_time = int(rest[19])
+            except (IndexError, ValueError):
+                if occlusion is None:
+                    occlusion = (f"/proc/{entry}/stat is unparseable — "
+                                 f"the entry cannot be attributed")
+                continue
+            if proc_pgrp == pgid:
+                members.append(
+                    _GroupMember(int(entry), state, start_time))
+        if occlusion is None and latch_fd is not None:
+            # A filter or per-pid overmount landing AFTER the mounts
+            # table was read but BEFORE (or during) the listing is
+            # applied to the scan yet undeclared by the first read:
+            # re-read once the scan is complete — through the SAME
+            # latched fd — so a mount present at either end of the
+            # scan window occludes the view. (Reads never touch the
+            # latch; the verdict poll below still covers the middle.)
+            try:
+                occlusion = _proc_pid_view_filtered(
+                    _mounts_table_read(latch_fd))
+            except OSError:
+                occlusion = _MOUNTS_UNREADABLE
+        if occlusion is None and latch_fd is not None:
+            # SINGLE-CONSUMER CONTRACT: the verdict poll runs AFTER
+            # the last evidence read and is this fd's ONLY poll-type
+            # operation, ever. The poll CONSUMES the pending signal
+            # (the kernel latch contract: the open latches, reads
+            # never touch the latch, a poll consumes and re-latches)
+            # — any earlier poll/select/epoll registration on this fd
+            # would eat the signal this verdict depends on and turn
+            # real mid-scan churn into a silent clean scan. Never add
+            # one; the fd is fresh and process-private per scan
+            # precisely to bound that exposure.
+            try:
+                if _mounts_churn_pending(latch_fd):
+                    return _GroupView(
+                        tuple(members),
+                        ("the mount table changed during the scan "
+                         "(mount-event signal latched on "
+                         "/proc/self/mounts) — an attach-and-detach "
+                         "inside the scan window cannot be ruled "
+                         "out")), True
+            except OSError as exc:
+                occlusion = (f"the mount-churn verdict poll failed "
+                             f"({exc.__class__.__name__}) — mid-scan "
+                             f"table changes cannot be ruled out")
+        return _GroupView(tuple(members), occlusion), False
+    finally:
+        if latch_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(latch_fd)
 
 
 def _fd_readable_now(fd: int) -> bool:

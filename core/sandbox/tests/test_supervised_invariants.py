@@ -313,7 +313,7 @@ class TestGroupTeardownProofs:
         # per-entry condition can set occlusion first.
         calls = {"n": 0}
 
-        def racing_detector():
+        def racing_detector(*_table):
             calls["n"] += 1
             return (None if calls["n"] == 1
                     else "hidepid=2 (mounted mid-scan)")

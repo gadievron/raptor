@@ -865,7 +865,7 @@ class TestGroupTier:
             pgid = os.getpgid(h.pid)
             monkeypatch.setattr(
                 sup, "_proc_pid_view_filtered",
-                lambda: "hidepid=2 (simulated)", raising=False)
+                lambda *_table: "hidepid=2 (simulated)", raising=False)
             monkeypatch.setattr(sup, "_KILL_REAP_BUDGET_S", 1.5)
             with pytest.raises(SupervisedTeardownError, match="occluded"):
                 h.terminate(grace_s=0.5)
@@ -956,7 +956,7 @@ class TestGroupTier:
 
             monkeypatch.setattr(
                 sup, "_proc_pid_view_filtered",
-                lambda: "hidepid=2 (simulated)", raising=False)
+                lambda *_table: "hidepid=2 (simulated)", raising=False)
             monkeypatch.setattr(os, "listdir", filtered_listdir)
             monkeypatch.setattr(os, "killpg", recording_killpg)
             with pytest.raises(SupervisedTeardownError):
