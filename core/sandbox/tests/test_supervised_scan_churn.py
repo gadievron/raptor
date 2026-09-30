@@ -18,8 +18,11 @@ against this process's own group with the /proc listing pinned to the
 test's own pid.
 """
 
+import builtins
+import io
 import os
 import sys
+import typing
 
 import pytest
 
@@ -426,3 +429,78 @@ class TestTaskReadsInsideLatchedWindow:
         assert view.members[0].provably_dead is True, (
             "the scan's in-window death verdict does not travel on "
             "the sighted member")
+
+
+class TestDeathProofRefuseArms:
+    """The REAL ``_member_provably_dead``'s present-but-unreadable
+    arms refuse (False) — they never convert unprovable evidence into
+    a death claim. Only VANISHED evidence (ENOENT) proves death; an
+    EACCES-class task-dir listing and a readable-but-garbled tid stat
+    are each "cannot prove", the refuse direction. These pin the real
+    function directly: the seam pins above replace it wholesale (they
+    bind the call shape and the baked verdict, not the arms), and the
+    live probe forges ENOENT only — so a fail-open drift of either
+    refuse arm (a death verdict for a sighted Z-leader whose worker
+    threads may run on, fed to the verify paths as trusted in-window
+    evidence) is invisible to both without these.
+
+    Fleet-kill doctrine: no test here signals anything; both pins run
+    the proof against this process's own pid with the evidence channel
+    forged in-process."""
+
+    def test_unreadable_task_dir_refuses_death_claim(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A /proc/<pid>/task that is present but unreadable
+        # (hidepid-class EACCES — an OSError that is NOT
+        # FileNotFoundError) is not a death proof: the arm must
+        # refuse. The pid is this live process, so a fail-open arm
+        # here claims death for something demonstrably alive.
+        task_dir = f"/proc/{os.getpid()}/task"
+        real_listdir = os.listdir
+        denied: list[str] = []
+
+        def deny_task_dir(path: str) -> list[str]:
+            if str(path) == task_dir:
+                denied.append(str(path))
+                raise PermissionError(13, "Permission denied", path)
+            return real_listdir(path)
+
+        monkeypatch.setattr(os, "listdir", deny_task_dir)
+        verdict = sup._member_provably_dead(os.getpid(), b"Z")
+        assert denied == [task_dir], (
+            "the pin never reached the task-dir listing — nothing "
+            "was proven about the unreadable arm")
+        assert verdict is False, (
+            "a present-but-unreadable /proc/<pid>/task produced a "
+            "death claim — the refuse arm fails open")
+
+    def test_garbled_tid_stat_refuses_death_claim(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A tid stat that READS but does not parse (no comm/state
+        # fields, so the state extraction raises) is not a death
+        # proof either: the tid-loop arm must refuse, never treat
+        # unparseable bytes as an all-Z task tree.
+        pid = os.getpid()
+        tid_stat_prefix = f"/proc/{pid}/task/"
+        real_open = builtins.open
+        garbled: list[str] = []
+
+        def garble_tid_stat(
+                path: object, *args: object,
+                **kwargs: object) -> typing.IO[typing.Any]:
+            name = str(path)
+            if (name.startswith(tid_stat_prefix)
+                    and name.endswith("/stat")):
+                garbled.append(name)
+                return io.BytesIO(b"no stat fields in here\n")
+            return real_open(path, *args, **kwargs)  # type: ignore[call-overload]
+
+        monkeypatch.setattr(builtins, "open", garble_tid_stat)
+        verdict = sup._member_provably_dead(pid, b"Z")
+        monkeypatch.undo()
+        assert garbled, (
+            "the pin never reached a tid stat read — nothing was "
+            "proven about the garbled-stat arm")
+        assert verdict is False, (
+            "a readable-but-garbled tid stat produced a death claim "
+            "— the refuse arm fails open")
