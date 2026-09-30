@@ -4212,9 +4212,14 @@ class TestIterativeReReview:
         """No re-review pass when the initial pass finds nothing."""
         target, out = _setup_target(tmp_path)
 
-        call_count = [0]
+        # list.append is atomic across the executor's worker threads
+        # (auto max_workers > 1 dispatches both reviews concurrently);
+        # a bare ``count[0] += 1`` read-modify-write can lose an
+        # increment to a thread switch.
+        calls: list[str] = []
+
         def review_fn(ctx, config):
-            call_count[0] += 1
+            calls.append(ctx["function"])
             return ReviewOutcome(
                 file=ctx["file"],
                 function=ctx["function"],
@@ -4225,9 +4230,28 @@ class TestIterativeReReview:
         config = OrchestratorConfig(
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0, propagate_constraints=True,
+            # hermetic: the clean-check rescue is a separate, documented
+            # second review call for clean verdicts whose trigger is
+            # CPG-arrival timing — when the Joern build is still pending
+            # at dispatch (gap["_joern_pending"], routine under load),
+            # the pre-run is skipped and the post-verdict rescue re-calls
+            # review_fn on the taint-approx flows both toy functions
+            # carry. That channel is not the no-findings re-review gate
+            # under test; pin it off so the call tally is deterministic.
+            clean_check=False,
+            # hermetic: same interleaving, second channel — reviews that
+            # finish while the CPG is still building are queued on
+            # shared.reviewed_before_joern, and the post-loop pass
+            # re-reviews clean verdicts that gained Joern evidence.
+            # Also a documented pass distinct from the no-findings
+            # re-review gate; keeping the joern channel off makes the
+            # call tally deterministic (and drops the JVM spawn).
+            joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
-        assert call_count[0] == 2
+        # Exactly one review per checklist function, none re-reviewed —
+        # any iterative re-review would add a duplicate entry here.
+        assert sorted(calls) == ["check_pw", "validate"]
         assert result.findings == 0
 
     def test_convergence_no_infinite_loop(self, tmp_path: Path):
