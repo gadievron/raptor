@@ -1008,12 +1008,19 @@ class RuleLibrary:
         if not entries:
             return "Rule library: empty"
         # Same rated-only denominator as stats()["avg_tp_rate"] — the
-        # two operator surfaces must agree.
+        # two operator surfaces must agree. With no rated entry there
+        # is no precision figure to print: "avg precision 0%" on a
+        # never-replayed library reads as a precision collapse when
+        # there is simply no data yet.
         rated = [e for e in active if e.tp_rate > 0]
-        avg = sum(e.tp_rate for e in rated) / len(rated) if rated else 0.0
+        if rated:
+            avg = sum(e.tp_rate for e in rated) / len(rated)
+            precision = f"avg precision {avg:.0%}"
+        else:
+            precision = "no replay data yet"
         return (
             f"Rule library: {len(active)} active, {archived} archived, "
-            f"avg precision {avg:.0%}"
+            f"{precision}"
         )
 
     def stats(self) -> dict[str, Any]:

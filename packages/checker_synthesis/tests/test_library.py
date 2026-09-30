@@ -1449,6 +1449,31 @@ class TestPrecisionDenominatorsAgree:
         assert "avg precision 100%" in lib.summary()
 
 
+class TestSummaryWithoutReplayData:
+    def test_unrated_library_reports_no_replay_data(self, tmp_path):
+        # No rule has been replayed yet — "avg precision 0%" would
+        # read as a precision collapse when there is simply no data.
+        lib = RuleLibrary(tmp_path / "lib")
+        lib.add_rule("unrated", "semgrep", "rules:\n  - id: unrated\n",
+                     cwe="CWE-79", dual_control=True)
+        s = lib.summary()
+        assert "1 active" in s
+        assert "no replay data yet" in s
+        assert "avg precision" not in s
+
+    def test_rated_library_keeps_the_precision_figure(self, tmp_path):
+        lib = RuleLibrary(tmp_path / "lib")
+        lib.add_rule("rated", "semgrep", "rules:\n  - id: rated\n",
+                     cwe="CWE-89", dual_control=True)
+        m = [Match(file="a.py", line=1)]
+        lib.update("rated", "t1", m,
+                   [MatchTriage(match=m[0], status="variant",
+                                reasoning="")])
+        s = lib.summary()
+        assert "avg precision 100%" in s
+        assert "no replay data yet" not in s
+
+
 class TestDefaultLibraryDirAnchor:
     def test_default_dir_anchors_at_raptor_dir(self, tmp_path, monkeypatch):
         monkeypatch.setenv("RAPTOR_DIR", str(tmp_path))
