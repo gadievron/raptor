@@ -40,6 +40,10 @@ from core.sandbox import (  # noqa: E402
 from core.sandbox import (  # noqa: E402
     run as sandbox_run,
 )
+from core.sandbox.tests.capability import (  # noqa: E402
+    own_pid_collides_with_sandbox_pidns,
+    pidns_isolation_available,
+)
 
 
 import pytest
@@ -1641,19 +1645,62 @@ class TestE2ELandlockReadRestriction(unittest.TestCase):
     def test_proc_host_pid_environ_blocked_under_restrict_reads(self):
         """Host-PID /proc/<pid>/environ must not be readable from sandbox.
 
-        In Landlock-only mode (no block_network, no mount-ns), the child
-        shares the host PID namespace by default, so /proc/<host_pid>/
-        environ of any same-UID host process is readable — including the
-        parent RAPTOR process's env (ANTHROPIC_API_KEY, SSH creds, etc).
+        Without a PID-namespace unshare (no block_network, no mount-ns)
+        the child shares the host PID namespace, so host pids stay
+        visible and /proc/<host_pid>/environ of any same-UID host
+        process — the parent RAPTOR process's env (ANTHROPIC_API_KEY,
+        SSH creds, etc) included — is one read away. On Landlock-capable
+        kernels the sandbox's own Landlock ptrace scoping still denies
+        that read (the target is outside the sandbox domain), but on a
+        Landlock-less kernel nothing does: Yama gates only ptrace
+        ATTACH-mode checks, never the READ check environ opens use.
 
         The fix: restrict_reads=True triggers a PID-namespace unshare,
-        so the kernel's ns-level /proc access check denies reads to any
-        host-pid /proc/<pid>/environ even though /proc is wholesale
-        allowlisted at the Landlock layer.
+        so the probed host pid does not EXIST inside the sandbox — the
+        read gets ENOENT from pid hiding, independent of any LSM, even
+        though /proc is wholesale allowlisted at the Landlock layer.
 
         Uses sandbox() with block_network=False so only the PID-ns path
         is exercised (not the net-ns fallback).
+
+        Two truthful gates guard the oracle (both from
+        core.sandbox.tests.capability):
+
+        * When the namespace backend cannot engage at all, the sandbox
+          runs Landlock-only and there is no PID-namespace hiding to
+          guard — host pids stay visible, and the environ denial that
+          remains comes from the sandbox's Landlock ptrace scoping
+          (pinned separately by
+          test_environ_confidentiality_under_landlock_only_demotion),
+          not from the mechanism this test regresses. Skip with the
+          posture named.
+        * When this test itself runs inside a nested pid namespace
+          (an unshare-wrapped battery), its own pid can be small
+          enough to be RE-ALLOCATED inside the sandbox's fresh pid
+          namespace — /proc/<own-pid> then names the sandbox's own
+          init shim, whose environ image mirrors the parent's (with
+          credential values zeroed), so the read "succeeding" is a
+          pid collision, not a host leak, and the oracle is
+          unfalsifiable. Skip with the collision named.
         """
+        if not pidns_isolation_available():
+            self.skipTest(
+                "environment demotes the sandbox to Landlock-only "
+                "(no unprivileged user namespaces): the PID-namespace "
+                "hiding this test guards cannot engage — host pids "
+                "stay visible in /proc; out-of-domain environ reads "
+                "remain denied by the sandbox's Landlock ptrace "
+                "scoping (pinned by test_environ_confidentiality_"
+                "under_landlock_only_demotion); see docs/sandbox.md "
+                "OS-capability degradation map")
+        if own_pid_collides_with_sandbox_pidns():
+            self.skipTest(
+                f"test process pid {os.getpid()} can be re-allocated "
+                "inside the sandbox's fresh PID namespace (the test "
+                "itself runs inside a nested pid namespace): "
+                "/proc/<pid> may name the sandbox's own init shim, so "
+                "the denial oracle cannot distinguish isolation from "
+                "pid collision")
         host_pid = os.getpid()
         with TemporaryDirectory() as out:
             r = sandbox_run(
@@ -1666,13 +1713,121 @@ class TestE2ELandlockReadRestriction(unittest.TestCase):
                                 "host /proc/<pid>/environ should have been "
                                 "denied by PID-ns isolation")
             # PID-ns hides host pids: /proc/<host_pid> does not exist
-            # inside the sandbox, so cat gets ENOENT rather than the
-            # EACCES returned by Landlock alone. Either = defense worked.
-            denied = ("Permission denied" in r.stderr
-                      or "No such file" in r.stderr)
-            self.assertTrue(denied,
-                            f"expected EACCES or ENOENT; got stderr="
-                            f"{r.stderr[:200]!r}")
+            # inside the sandbox, so the ONLY signature of the guarded
+            # mechanism is ENOENT. A "Permission denied" here would
+            # come from a host-side LSM check (the sandbox's own
+            # Landlock domain scoping gates out-of-domain environ
+            # reads even without a PID namespace) — accepting it would
+            # let the oracle pass with the PID-namespace unshare
+            # silently regressed.
+            self.assertIn("No such file", r.stderr,
+                          f"expected ENOENT (pid hidden by the PID "
+                          f"namespace); got stderr={r.stderr[:200]!r}")
+
+    def test_environ_confidentiality_under_landlock_only_demotion(self):
+        """Pin what the Landlock-only posture actually guarantees for
+        host /proc/<pid>/environ reads — and attribute the denial to
+        the sandbox, not to host configuration.
+
+        Forces the demotion through the same probe seam production
+        keys the namespace backend on (check_net_available → False),
+        then reads a live same-UID host process's environ from inside
+        the sandbox. With no PID namespace the host pid stays VISIBLE
+        (world-readable /proc entries like cmdline are served), but
+        the environ read is DENIED: /proc/<pid>/environ opens require
+        a kernel ptrace-mode READ access check, and the sandbox's
+        Landlock domain scopes that check — an in-domain process may
+        not read the environ of an out-of-domain process, on any Yama
+        setting.
+
+        The unsandboxed control read discriminates the attribution:
+        Yama's ptrace hook gates only ATTACH-mode checks (it never
+        gates the READ check environ opens use), so a bare same-UID
+        non-descendant read of the same file must SUCCEED. If the
+        control is ever denied, some other host-side mechanism is
+        gating environ reads and the sandbox attribution no longer
+        holds — the pin reds rather than passing for the wrong
+        reason. (/proc/<pid>/mem differs: its opens are ATTACH-gated,
+        so Yama does apply there; this pin deliberately covers only
+        environ.)
+
+        Landlock-less hosts skip via this class's setUp gate.
+        """
+        from unittest import mock
+
+        import core.sandbox.context as context_mod
+
+        sentinel = "RAPTOR-E2E-LLONLY-ENVIRON-SENTINEL"
+        env = dict(os.environ)
+        env["RAPTOR_E2E_LLONLY_SENTINEL"] = sentinel
+        helper = subprocess.Popen(["sleep", "30"], env=env)
+        try:
+            # Control (no sandbox): the reading cat is a SIBLING of
+            # the helper — same UID, not an ancestor — so success here
+            # proves no host-side mechanism (Yama included) is denying
+            # bare environ reads: any denial inside the sandbox below
+            # is then the sandbox's own doing.
+            control = subprocess.run(
+                ["cat", f"/proc/{helper.pid}/environ"],
+                capture_output=True, text=True, timeout=5,
+            )
+            self.assertEqual(
+                control.returncode, 0,
+                "bare same-UID non-descendant environ read was denied "
+                f"(stderr={control.stderr[:200]!r}) — a host-side "
+                "mechanism is gating environ reads, so the sandboxed "
+                "denial below can no longer be attributed to Landlock "
+                "domain scoping; re-adjudicate this pin and the "
+                "docs/sandbox.md degradation map")
+            self.assertIn(
+                sentinel, control.stdout,
+                "control read succeeded but the sentinel is missing — "
+                "the helper's environ was not what this pin planted")
+            with mock.patch.object(context_mod, "check_net_available",
+                                   return_value=False):
+                with TemporaryDirectory() as out:
+                    r = sandbox_run(
+                        ["cat", f"/proc/{helper.pid}/environ"],
+                        target=out, output=out,
+                        restrict_reads=True,
+                        capture_output=True, text=True, timeout=5,
+                    )
+                with TemporaryDirectory() as out:
+                    r_cmdline = sandbox_run(
+                        ["cat", f"/proc/{helper.pid}/cmdline"],
+                        target=out, output=out,
+                        restrict_reads=True,
+                        capture_output=True, text=True, timeout=5,
+                    )
+            self.assertEqual(
+                r.sandbox_info.get("containment_tier"), "landlock",
+                "forcing the userns probe False must demote the run "
+                f"to the Landlock-only tier; got {r.sandbox_info!r}")
+            self.assertNotEqual(
+                r.returncode, 0,
+                "the Landlock-only posture must deny out-of-domain "
+                "/proc/<pid>/environ reads (Landlock ptrace scoping) "
+                "— the docs/sandbox.md degradation map claims this "
+                "guarantee; if it no longer holds, that is a real "
+                "confidentiality regression")
+            self.assertNotIn(
+                sentinel, r.stdout,
+                "sentinel leaked through the Landlock-only sandbox")
+            # The genuine loss in this posture is VISIBILITY, not
+            # environ confidentiality: the host pid exists inside the
+            # sandbox and its world-readable (fs-only, no ptrace gate)
+            # entries are served.
+            self.assertEqual(
+                r_cmdline.returncode, 0,
+                "host /proc/<pid>/cmdline should be readable in the "
+                "Landlock-only posture (no PID namespace to hide the "
+                f"pid); stderr={r_cmdline.stderr[:200]!r}")
+            self.assertIn(
+                "sleep", r_cmdline.stdout,
+                "cmdline read succeeded but does not show the helper")
+        finally:
+            helper.kill()
+            helper.wait()
 
     def test_fake_home_isolates_child_from_real_home(self):
         """run_untrusted defaults fake_home=True. The child's HOME
