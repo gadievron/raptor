@@ -58,9 +58,9 @@ libexec/raptor-run-sandboxed --output-dir <working-dir> <project-dir>/program
 # Creates trace_<tid>.log files
 ```
 
-### Step 4: Convert to Perfetto
+### Step 4: Convert to Perfetto (sandboxed — the log bytes came from the untrusted target, and the converter is native code)
 ```bash
-./trace_to_perfetto trace_*.log -o trace.json
+libexec/raptor-run-sandboxed --output-dir <working-dir> ./trace_to_perfetto trace_*.log -o trace.json
 # Open trace.json in ui.perfetto.dev
 ```
 
@@ -86,7 +86,7 @@ libexec/raptor-run-sandboxed --output-dir <working-dir> <project-dir>/program
 4. Add `-L$(LIBTRACE_DIR) -Wl,-rpath,$(LIBTRACE_DIR) -ltrace -ldl -lpthread` to LDFLAGS
 5. Build project via `libexec/raptor-run-sandboxed --output-dir <project-dir> ...`
 6. Run the instrumented binary via `libexec/raptor-run-sandboxed --output-dir <working-dir> ...` (the rpath resolves `libtrace.so`)
-7. Convert logs: `./trace_to_perfetto trace_*.log -o trace.json`
+7. Convert logs via `libexec/raptor-run-sandboxed --output-dir <working-dir> ./trace_to_perfetto trace_*.log -o trace.json` (untrusted log bytes into a native parser)
 8. Provide link to ui.perfetto.dev
 
 ### Build System Detection

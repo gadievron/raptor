@@ -11,6 +11,8 @@ rr provides deterministic record-replay debugging with full reverse execution ca
 ## Core Workflow
 
 1. **Record**: `rr record <program> [args]`
+
+   **Sandbox exemption (documented decision):** rr needs `ptrace` and perf counters, which `libexec/raptor-run-sandboxed` denies, so recording runs the untrusted binary unsandboxed — behavior observed under earlier sandboxed runs says nothing about what the payload does with this ambient authority. Keep the recorded invocation to exactly the reproduced crash command (never a broader test suite or build), and treat any unexpected network or filesystem activity during recording as a finding in itself. Replay carries no such residual: it re-executes the recorded trace under gdb, not the binary against the host.
 2. **Replay**: `rr replay -- -nx -iex 'set auto-load off' -iex 'set auto-load safe-path /dev/null'` (enters gdb interface with reverse execution). The flags after `--` go to gdb and disable auto-load with no trusted directory: the recorded binary is untrusted, and a permissive gdb config (e.g. an operator `~/.gdbinit` widening `auto-load safe-path`) would otherwise execute scripts the binary or its build tree plants (.debug_gdb_scripts, *-gdb.py). Same hardening set as scripts/crash_trace.py — use it on EVERY manual replay.
 
 ## Reverse Execution Commands

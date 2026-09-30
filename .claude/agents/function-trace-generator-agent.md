@@ -48,9 +48,9 @@ To generate function-level execution traces, you need to:
    # This creates trace_<tid>.log files
    ```
 
-4. **Convert to Perfetto format** (optional but useful):
+4. **Convert to Perfetto format** (optional but useful). The `trace_*.log` bytes were written by the instrumented untrusted target, and `trace_to_perfetto` is a native parser — parsing them gets the same containment as the run that produced them:
    ```bash
-   ./trace_to_perfetto trace_*.log -o traces/trace.json
+   libexec/raptor-run-sandboxed --output-dir <working-dir> ./trace_to_perfetto trace_*.log -o traces/trace.json
    # Can be viewed at ui.perfetto.dev
    ```
 

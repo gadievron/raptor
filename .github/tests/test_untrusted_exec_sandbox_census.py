@@ -20,6 +20,13 @@ vulnerability trigger in the PoC because RAPTOR runs PoCs under
 Landlock and cross-binary execution is blocked; a persona telling the
 model to `system("./vulnerable_binary ...")` re-opens the bare-exec
 lane for every free-Bash session that loads it.
+
+One documented exemption: `rr record`. rr needs `ptrace` and perf
+counters, which the sandbox denies, so recording the untrusted binary
+runs bare by explicit decision. The census does not ban the idiom; it
+pins that the exemption rationale travels IN THE SAME FILE as every
+`rr record` recipe (test below) — a bare recording instruction with no
+stated residual is drift, not a decision.
 """
 
 from __future__ import annotations
@@ -35,17 +42,20 @@ REPO = Path(__file__).resolve().parents[2]
 # Instruction files whose fenced examples drive builds/runs of the
 # untrusted crash-analysis target.
 _CRASH_LANES = (
+    ".claude/agents/crash-analysis-agent.md",
     ".claude/agents/function-trace-generator-agent.md",
     ".claude/agents/crash-analyzer-agent.md",
     ".claude/agents/crash-analyzer-checker-agent.md",
     ".claude/agents/coverage-analysis-generator-agent.md",
     ".claude/skills/crash-analysis/function-tracing/SKILL.md",
     ".claude/skills/crash-analysis/gcov-coverage/SKILL.md",
+    ".claude/skills/crash-analysis/rr-debugger/SKILL.md",
 )
 
 # Lanes that instruct a rebuild / preprocess / execution of the
 # untrusted tree and must therefore name the sandbox wrapper.
 _MUST_NAME_SANDBOX = (
+    ".claude/agents/crash-analysis-agent.md",
     ".claude/agents/function-trace-generator-agent.md",
     ".claude/agents/crash-analyzer-agent.md",
     ".claude/agents/crash-analyzer-checker-agent.md",
@@ -64,14 +74,26 @@ _LOADER_EXPORT_RE = re.compile(
     r"^\s*(?:export\s+)?LD_(?:LIBRARY_PATH|PRELOAD)=", re.MULTILINE)
 
 # Bare build/run command lines inside fenced examples of the crash
-# lanes: the target build (`make ...` — every make target executes
-# the untrusted Makefile's commands, `clean` included) or the
-# produced binary (`./program`, `./test_suite`) invoked with no
-# wrapper.
+# lanes: the target build (`make` / `cmake --build` / `ninja` — every
+# build-tool target executes the untrusted build scripts' commands,
+# `clean` included) or any produced binary (`./program`, `./a.out`,
+# `./trace_to_perfetto` — native code, or a parser fed bytes the
+# untrusted target emitted) invoked with no wrapper. An `env VAR=...`
+# prefix does not launder the run.
 _BARE_RUN_RE = re.compile(
-    r"^\s*(?:make\b[^\n]*|\./program\b[^\n]*|\./test_suite\b[^\n]*)$",
+    r"^\s*(?:env\s+(?:[A-Za-z_]\w*=\S*\s+)+)?"
+    r"(?:make\b[^\n]*"
+    r"|cmake\s+--build\b[^\n]*"
+    r"|ninja\b[^\n]*"
+    r"|\./[\w.\-]+(?:\s[^\n]*)?"
+    r")$",
     re.MULTILINE,
 )
+
+# The one sanctioned bare-execution idiom (see module docstring): the
+# exemption text that must accompany it in the same file.
+_RR_RECORD_RE = re.compile(r"\brr record\b")
+_RR_EXEMPTION_RE = re.compile(r"[Ss]andbox exemption")
 
 # Persona instructions to spawn the analysed target from the PoC.
 _SPAWN_TARGET_RES = (
@@ -140,6 +162,26 @@ class UntrustedExecSandboxCensusTests(unittest.TestCase):
         self.assertEqual(problems, [], msg=(
             "bare build/run examples found — wrap them in "
             "libexec/raptor-run-sandboxed --output-dir <dir> ...:\n"
+            + "\n".join(problems)))
+
+    def test_rr_record_exemption_is_documented(self):
+        """`rr record` cannot ride libexec/raptor-run-sandboxed (rr
+        needs ptrace and perf counters the sandbox denies), so
+        recording the untrusted binary is a documented unsandboxed
+        residual. Any lane showing `rr record` must carry the
+        exemption rationale in the same file — never a silent bare
+        run."""
+        problems = []
+        for rel in _CRASH_LANES:
+            text = _read(rel)
+            if not _RR_RECORD_RE.search(text):
+                continue
+            if not (_RR_EXEMPTION_RE.search(text) and "ptrace" in text):
+                problems.append(rel)
+        self.assertEqual(problems, [], msg=(
+            "`rr record` recipe without the in-file sandbox-exemption "
+            "rationale (ptrace/perf-counter requirement, residual "
+            "scope) — document the decision next to the recipe:\n"
             + "\n".join(problems)))
 
     def test_personas_never_instruct_spawning_the_target(self):
