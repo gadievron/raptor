@@ -33,6 +33,7 @@ The three-tier search in find_understand_output() covers:
   3. Global out/ scan (match by checklist target_path — no project needed)
 """
 
+import hashlib
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,6 +61,55 @@ _BRIDGE_GENERATOR = "understand-bridge"
 # Label used in attack-paths to mark entries imported from /understand traces.
 # Stage B uses this to distinguish its own paths from pre-loaded ones.
 TRACE_SOURCE_LABEL = "understand:trace"
+
+# Bound on ids this bridge mints itself (the flow-trace filename-stem
+# fallback below). Mirrors ``packages/diagram/sanitize.ID_MAX_LEN``
+# (=128) — core must not import from packages, so the value is
+# mirrored, not imported; keep the two equal. The same mirror lives in
+# ``core/understand_graph/queries.py`` for the graph-path compound
+# mint. Churn-prone limit — rationale in both directions:
+#
+# * Not smaller: attack-path ids legally embed compound producer
+#   forms (``graph-path-<ep>-<sink>``, ``binary-handoff:<escaped>``
+#   at up to ~116 chars); 128 keeps every observed honest id passing
+#   through the clamp byte-identical.
+# * Not larger: the minted id persists byte-exact into
+#   attack-paths.json and lands in unquoted Mermaid node positions,
+#   where the diagram sanitizer truncates at ITS 128 — a wider mint
+#   bound would let two distinct long ids silently collapse into one
+#   rendered node there.
+_ELEMENT_ID_MAX_LEN = 128
+
+# len("-" + sha256[:8]) — the suffix _clamp_element_id appends.
+_CLAMP_SUFFIX_LEN = 9
+
+
+def _clamp_element_id(raw: str) -> str:
+    """Bound a bridge-minted id to ``_ELEMENT_ID_MAX_LEN``.
+
+    Ids at or under the bound pass through byte-identical — the clamp
+    is behavior-invisible for the observed honest vocabulary. Over the
+    bound, the id is truncated and suffixed with ``-<sha256[:8]>`` of
+    the FULL raw id, so:
+
+    * distinct long ids stay distinct (the hash differs even when the
+      truncated prefixes are identical),
+    * the mapping is deterministic (dedup keys and persisted ids
+      computed independently always agree), and
+    * the mapping is idempotent (a clamped id is under the bound, so
+      re-clamping is the identity).
+
+    Length-bounding only — no charset rewriting and no refusal: no row
+    is ever dropped or renamed away from its short honest form.
+    """
+    if len(raw) <= _ELEMENT_ID_MAX_LEN:
+        return raw
+    # backslashreplace: filename stems decoded with surrogateescape can
+    # carry lone surrogates that a plain .encode() would refuse.
+    digest = hashlib.sha256(
+        raw.encode("utf-8", "backslashreplace")).hexdigest()[:8]
+    return raw[:_ELEMENT_ID_MAX_LEN - _CLAMP_SUFFIX_LEN] + "-" + digest
+
 
 # BVProfile name shorthands accepted on the optional ``path_profile`` field
 # of a flow trace.  Mirrors the names accepted by ``raptor-smt-validate-path``
@@ -1852,6 +1902,28 @@ def _trace_references_stale(trace: dict[str, Any], stale_files: set[str]) -> boo
     return False
 
 
+def _trace_path_id(trace: dict[str, Any], trace_file: Path) -> str:
+    """Resolve the attack-path id for an imported flow trace.
+
+    Single choke point for both consumers — the import loop's dedup
+    key and the persisted entry built by ``_trace_to_attack_path`` —
+    so the two can never diverge.
+
+    An LLM-shaped non-string id (dict/list) is unhashable — the dedup
+    membership check crashed pre-fix — and an absent/empty id has
+    nothing to key on: both fall back to the filename stem. Trace
+    files are LLM-named (``flow-trace-<entry-id>.json``) with an
+    unpinned entry id, so the stem runs up to ~250 filesystem-bounded
+    chars — the FALLBACK is clamped to the element-id bound. A string
+    id the trace carries itself passes through untouched, as does any
+    stem already under the bound.
+    """
+    path_id = trace.get("id", "")
+    if not isinstance(path_id, str) or not path_id:
+        return _clamp_element_id(trace_file.stem)
+    return path_id
+
+
 def _import_flow_traces(
     understand_dir: Path,
     validate_dir: Path,
@@ -1923,12 +1995,7 @@ def _import_flow_traces(
                            escape_nonprintable(str(trace_file)))
             continue
 
-        path_id = trace.get("id", trace_file.stem)
-        if not isinstance(path_id, str) or not path_id:
-            # An LLM-shaped non-string id (dict/list) is unhashable —
-            # the membership check below crashed pre-fix. Fall back to
-            # the filename stem, which is always a usable id.
-            path_id = trace_file.stem
+        path_id = _trace_path_id(trace, trace_file)
         if path_id in existing_ids:
             logger.debug("understand_bridge: skipping already-imported trace %s",
                          escape_nonprintable(str(path_id)))
@@ -2189,11 +2256,9 @@ def _import_graph_attack_paths(
 def _trace_to_attack_path(trace: dict[str, Any], trace_file: Path) -> dict[str, Any]:
     #Convert a flow-trace dict into an attack-paths entry.
 
-    # Same non-string-id fallback as the import loop's dedup key, so
-    # the persisted id and the dedup id can never diverge.
-    path_id = trace.get("id", trace_file.stem)
-    if not isinstance(path_id, str) or not path_id:
-        path_id = trace_file.stem
+    # Same resolver as the import loop's dedup key, so the persisted
+    # id and the dedup id can never diverge.
+    path_id = _trace_path_id(trace, trace_file)
     # Clamp proximity to the attack-path schema's 0-10 integer range:
     # the field is LLM-authored in the trace file, and an out-of-range
     # or non-numeric value would rank the imported path above every
