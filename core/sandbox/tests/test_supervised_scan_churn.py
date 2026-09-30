@@ -1,0 +1,233 @@
+"""Seam-level pins for the group scan's mount-churn verdict —
+hermetic on any Linux host (no mount capability needed; the kernel
+latch contract itself is pinned live in
+test_supervised_scan_churn_live.py).
+
+The two-sided race these pin: a mount attached after the pre-scan
+declaration read and detached before the post-scan one is applied to
+the scan yet appears in neither read. The scan therefore latches a
+mount-event signal at its fd OPEN and takes exactly ONE verdict poll
+after the last evidence read; a pending signal is occlusion. The poll
+CONSUMES the signal, which makes any extra poll-type operation on the
+fd a silent-verify vector of its own — the single-consumer contract
+gets its own pins here (call count, position, and the fresh-fd-per-
+attempt retry shape).
+
+Fleet-kill doctrine: no test here signals anything; all scans run
+against this process's own group with the /proc listing pinned to the
+test's own pid.
+"""
+
+import os
+import sys
+
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="supervised trees are Linux-only (fork/pidfd/procfs)",
+)
+
+if sys.platform == "linux":
+    from core.sandbox import supervised as sup
+
+
+def _pin_listing_to_self(monkeypatch):
+    """Pin the /proc listing to this process only, so no per-entry
+    condition (foreign EACCES entries and the like) can set occlusion
+    before the signals under test do."""
+    own = str(os.getpid())
+    real_listdir = os.listdir
+    monkeypatch.setattr(
+        os, "listdir",
+        lambda path: ([own] if str(path) == "/proc"
+                      else real_listdir(path)))
+
+
+def _clean_detector(monkeypatch, log=None):
+    """Declaration seam reports clean at BOTH reads (the exact
+    both-ends-missed condition of the two-sided race)."""
+    def detector(*_table):
+        if log is not None:
+            log.append("declare")
+        return None
+
+    monkeypatch.setattr(sup, "_proc_pid_view_filtered", detector)
+
+
+def _counting_latch(monkeypatch):
+    """Record every latch open and the fd it returned."""
+    real = getattr(sup, "_mounts_latch_open", None)
+    opened: list[int] = []
+
+    def counting():
+        fd = real()
+        opened.append(fd)
+        return fd
+
+    monkeypatch.setattr(sup, "_mounts_latch_open", counting,
+                        raising=False)
+    return opened
+
+
+class TestChurnVerdict:
+    """The verdict poll's occlusion contract: churn is occlusion,
+    signals are only ever ADDED, absence of the mechanism is absence
+    of churn."""
+
+    def test_midscan_churn_is_occlusion(self, monkeypatch):
+        # The vector class the latch closes: both declaration reads
+        # clean, yet the churn seam reports a pending mount event —
+        # an attach-and-detach inside the scan window. The view MUST
+        # come back occluded, naming the mid-scan table change; a
+        # mutant that drops the verdict poll (or pre-fix code, which
+        # never consults the seam) returns a clean view here and
+        # feeds the permanent _group_verified latch a false verify.
+        _pin_listing_to_self(monkeypatch)
+        _clean_detector(monkeypatch)
+        monkeypatch.setattr(sup, "_mounts_churn_pending",
+                            lambda fd: True, raising=False)
+        view = sup._group_sighted_members(os.getpgrp())
+        assert view is not None
+        assert view.occlusion is not None, (
+            "mid-scan mount churn produced a CLEAN view — the "
+            "two-sided attach-and-detach race is undetected")
+        assert "changed during the scan" in view.occlusion
+
+    def test_verdict_poll_exactly_once_after_post_read(self, monkeypatch):
+        # Single-consumer contract: the poll consumes the pending
+        # signal and re-latches, so each signal is delivered exactly
+        # once — a stray select(), a second call into the churn
+        # helper, or an EPOLL_CTL_ADD registration before the verdict
+        # poll would EAT the signal and turn real churn into a silent
+        # clean scan (a silent-verify vector introduced by the
+        # mechanism itself). Pin the real code's call shape: per scan
+        # attempt, both declaration reads first, then EXACTLY ONE
+        # verdict poll, last.
+        events: list[str] = []
+        _pin_listing_to_self(monkeypatch)
+        _clean_detector(monkeypatch, log=events)
+
+        def verdict(fd):
+            events.append("verdict")
+            return True
+
+        monkeypatch.setattr(sup, "_mounts_churn_pending", verdict,
+                            raising=False)
+        view = sup._group_sighted_members(os.getpgrp())
+        assert view is not None and view.occlusion is not None
+        # Sustained churn exhausts the bounded retry: three attempts,
+        # each declare(pre), declare(post), then one verdict poll.
+        assert events == ["declare", "declare", "verdict"] * 3, (
+            f"verdict poll count/position violates the "
+            f"single-consumer contract: {events}")
+
+    def test_quiet_churn_seam_leaves_view_unchanged(self, monkeypatch):
+        # Degradation pin, direction (a): no pending signal (the
+        # no-mounts-poll-hook kernel, or simply no churn) must add
+        # nothing — one scan attempt, both declaration reads, a clean
+        # view with this process sighted. Exactly the pre-latch
+        # behaviour.
+        events: list[str] = []
+        _pin_listing_to_self(monkeypatch)
+        _clean_detector(monkeypatch, log=events)
+        monkeypatch.setattr(sup, "_mounts_churn_pending",
+                            lambda fd: False, raising=False)
+        view = sup._group_sighted_members(os.getpgrp())
+        assert view is not None
+        assert view.occlusion is None
+        assert [m.pid for m in view.members] == [os.getpid()]
+        assert events == ["declare", "declare"]
+
+    def test_churn_poll_oserror_is_occlusion(self, monkeypatch):
+        # Degradation pin, direction (b): the verdict poll erroring is
+        # occlusion (fail-closed — the fd is process-private, so no
+        # external party can provoke this), and it is NOT the
+        # retriable churn shape: exactly one scan attempt.
+        events: list[str] = []
+        _pin_listing_to_self(monkeypatch)
+        _clean_detector(monkeypatch, log=events)
+
+        def broken(fd):
+            raise OSError(5, "poll failed")
+
+        monkeypatch.setattr(sup, "_mounts_churn_pending", broken,
+                            raising=False)
+        view = sup._group_sighted_members(os.getpgrp())
+        assert view is not None
+        assert view.occlusion is not None and "verdict poll" in view.occlusion
+        assert events == ["declare", "declare"], (
+            "a failed verdict poll must fail closed in ONE attempt, "
+            "not be retried as churn")
+
+
+class TestChurnRetryBound:
+    """Churn-only occlusion is retried on a FRESH fd (a re-latch is a
+    re-open — the consumed signal died with the closed fd), bounded to
+    _SCAN_CHURN_RETRIES scans total, then returned occluded."""
+
+    def test_sustained_churn_bounded_at_three_scans(self, monkeypatch):
+        _pin_listing_to_self(monkeypatch)
+        _clean_detector(monkeypatch)
+        opened = _counting_latch(monkeypatch)
+        polled: list[int] = []
+
+        def verdict(fd):
+            polled.append(fd)
+            return True
+
+        monkeypatch.setattr(sup, "_mounts_churn_pending", verdict,
+                            raising=False)
+        view = sup._group_sighted_members(os.getpgrp())
+        assert view is not None
+        assert view.occlusion is not None
+        assert "changed during the scan" in view.occlusion
+        # The bound is the livelock guard: exactly three scans, no
+        # more (sustained churn — e.g. an unprivileged co-resident
+        # looping a setuid mount helper — must terminate in the
+        # callers' fail-closed refusal plumbing, not spin here).
+        assert len(polled) == sup._SCAN_CHURN_RETRIES == 3
+        # A re-latch is a re-open: every attempt polled the fd it
+        # opened, one fresh fd per attempt.
+        assert polled == opened
+        assert len(opened) == 3
+
+    def test_transient_churn_recovered_by_relatch_retry(self, monkeypatch):
+        # Churn on attempt 1 only: attempt 2 re-latches and its CLEAN
+        # view is returned — transient unrelated mount events (pod/
+        # exec churn bursts) must not convert one-shot call sites into
+        # spurious occlusion refusals.
+        _pin_listing_to_self(monkeypatch)
+        _clean_detector(monkeypatch)
+        opened = _counting_latch(monkeypatch)
+        answers = iter([True, False, False])
+        monkeypatch.setattr(sup, "_mounts_churn_pending",
+                            lambda fd: next(answers), raising=False)
+        view = sup._group_sighted_members(os.getpgrp())
+        assert view is not None
+        assert view.occlusion is None
+        assert [m.pid for m in view.members] == [os.getpid()]
+        assert len(opened) == 2, (
+            "the retry must re-latch on a fresh fd — the consumed "
+            "signal died with the first attempt's closed fd")
+
+
+class TestMountsFdMagic:
+    """The fstatfs superblock-magic rider: a non-procfs object bind-
+    mounted at /proc/self/mounts serves an attacker-authored table, so
+    the latched fd must provably be procfs (or the check must
+    truthfully degrade to no signal where fstatfs is unavailable)."""
+
+    def test_fstatfs_magic_discriminates_procfs(self):
+        mounts_fd = os.open("/proc/self/mounts", os.O_RDONLY)
+        try:
+            if sup._fstatfs_f_type(mounts_fd) is None:
+                pytest.skip("fstatfs unavailable on this host — the "
+                            "magic check degrades to no signal by "
+                            "design")
+            assert sup._mounts_fd_not_procfs(mounts_fd) is None
+        finally:
+            os.close(mounts_fd)
+        with open(__file__, "rb") as regular:
+            verdict = sup._mounts_fd_not_procfs(regular.fileno())
+        assert verdict is not None and "not served by procfs" in verdict
