@@ -3210,8 +3210,9 @@ class AnthropicProvider(LLMProvider):
                 # SHARED aggregate counters before/after the call —
                 # under parallel workers that delta swallows every
                 # concurrent call's spend and multiply-books the same
-                # money (observed live: a $38 run enforced as $85+ and
-                # terminated at 25/40 reviews). The exact figures are
+                # money (observed live: one run's spend enforced as
+                # more than double actual and terminated at 25/40
+                # reviews). The exact figures are
                 # computed right here; return them.
                 return StructuredResponse(
                     result=result_dict,
@@ -4484,8 +4485,9 @@ class ClaudeCodeLLMProvider(LLMProvider):
         # Per-CALL abort ceiling (claude -p --max-budget-usd), not a
         # run budget — orchestrators cap total spend via --max-cost.
         # Audit-sized structured reviews (system prompt + context
-        # slice + schema) measure $0.9-1.3 per call on Opus-class
-        # models; the old "1.00" default aborted them mid-response
+        # slice + schema) routinely measure around or above the old
+        # "1.00" per-call default on Opus-class models; that default
+        # aborted them mid-response
         # with subtype error_max_budget_usd. On pricier backends the
         # biggest call classes (Mode 2 checker synthesis: multi-KB
         # system prompt, no cross-process cache reuse) can exceed

@@ -32,8 +32,8 @@ MAX_WORKERS_CAP = 32
 # (multi-second boot, hundreds of MB RSS), and N parallel first
 # requests with an identical prompt prefix race the server-side
 # prompt cache — each pays the full cache WRITE instead of one
-# writing and N-1 reading (measured ~19k tokens / ~$0.25 per miss vs
-# ~$0.02 per hit). A small pool keeps the pipeline parallel while the
+# writing and N-1 reading (measured ~19k tokens per miss — an
+# order-of-magnitude cost multiple over a hit). A small pool keeps the pipeline parallel while the
 # cache warms after call one. ``RAPTOR_CC_MAX_WORKERS`` overrides;
 # ``tuning.json``'s ``max_llm_workers`` still beats both.
 CC_MAX_WORKERS_DEFAULT = 4

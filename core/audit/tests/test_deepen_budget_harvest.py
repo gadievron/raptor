@@ -4,7 +4,7 @@ booked, only never-dispatched work is discarded (A3).
 The final comparison audit's deepen phase announced 5 re-reviews and
 executed all 5, but the collection loop checked the budget BEFORE
 harvesting each completed future and ``break``-ed: the two calls that
-completed at/after the cap ($10.25 of finished LLM output) were thrown
+completed at/after the cap (finished, paid-for LLM output) were thrown
 away — no journal entry, no phase booking. These tests replay that
 shape against the shared driver
 :func:`core.audit.orchestrator._collect_reviews_until_budget`.
@@ -60,7 +60,7 @@ class TestParallelHarvestAtCap:
     def test_all_completed_results_survive_late_cap(self):
         """Results that completed before the cap check must be
         harvested — the pre-fix loop discarded them all (break before
-        harvest), which is exactly the $10.25-thrown-away anomaly."""
+        harvest), which is exactly the paid-work-thrown-away anomaly."""
         collected = _collect_reviews_until_budget(
             [1, 2, 3, 4, 5],
             lambda item: item,

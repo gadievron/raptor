@@ -1262,8 +1262,9 @@ _GLANCE_BATCH_SIZE = 10
 # glance tier exists to keep cheap, and the checklist size that drives
 # the derivation is TARGET-derived — a hostile tree inflating its
 # function count must not be able to buy unbounded escalation spend,
-# hence the absolute ceiling (2,000 ≈ $200-1,000 at typical per-review
-# cost, itself still inside the run's LLM budget guard, which remains
+# hence the absolute ceiling (2,000 full reviews is already a large
+# spend at typical per-review cost, itself still inside the run's LLM
+# budget guard, which remains
 # the hard backstop). Exhaustion is disclosed loudly: one warning plus
 # a per-function suppressions.jsonl record (dropped=false) so coverage
 # accounting can see which verdicts committed at glance depth.

@@ -3911,7 +3911,8 @@ def review_one_function(
                         # the journal, but the outcome-level booking
                         # already happened — without this the second
                         # call of every two-call review vanished from
-                        # the phase ledger ($8.93 on one measured run).
+                        # the phase ledger (a material under-report on
+                        # one measured run).
                         result.cost_tracker.record_call(
                             "clean_check",
                             cost_usd=revised.cost_usd,
@@ -11152,16 +11153,17 @@ def _reconcile_cost_ledgers(config, result) -> None:
     totals.total_spend_usd / failed_attempts_cost_usd /
     unattributed_cost_usd, and stash it on the result for the
     operator-facing "Cost:" summary line. Without this, one run
-    produced three unexplained numbers: $8.08 (client), $4.52 (review
-    phase), $2.82 (summary).
+    produced three unexplained numbers — the client ledger, the review
+    phase and the summary each reported a different total for the same
+    money.
 
     Before injecting, book call classes no phase captured (audit,
     iris, summary, glance_batch, …) from the telemetry sink's
     per-class ledger. Pre-fix their spend either printed under
     "failed/timed-out" (budget-client spend the phases missed) or
     vanished from the summary entirely (standalone-client spend
-    outside the budget ledger — one run reported $36.85 while
-    telemetry showed $38.84). Afterwards, assert the telemetry ledger
+    outside the budget ledger — one run's report fell measurably
+    short of its telemetry total). Afterwards, assert the telemetry ledger
     and the summary ledger describe the same money: warn when they
     diverge by more than 1% (unbooked or double-booked spend).
     """
@@ -11221,7 +11223,8 @@ def _reconcile_cost_ledgers(config, result) -> None:
     # reconciling (no prior ledger dict), where booking only the dict
     # dropped every segment before the immediately-prior one — the
     # final ledger then under-reported the run by the whole early
-    # spend (observed live: $47.29 booked of ~$4,534).
+    # spend (observed live: segment 4 booked only its own sliver of
+    # the run's spend — a ~99% under-report).
     prior_breakdown = getattr(config, "prior_cost_breakdown", None)
     prior_booked = max(
         0.0,
@@ -14307,7 +14310,7 @@ def _run_llm_client(config: OrchestratorConfig) -> Any:
     ledger enforces --max-cost: a fresh ``LLMClient()`` carries its own
     (default) cap, so its calls bypass the per-call reservation gate
     AND never reach the run's authoritative spend ledger — one measured
-    run booked $24.10 while telemetry showed $29.18 because iris /
+    run's ledger fell well short of its telemetry total because iris /
     spec_inference / post-loop classes each built private clients.
 
     Falls back to a fresh client (pinned to the run's primary model)
@@ -16881,7 +16884,8 @@ def _study_consumer_loop(
                 # report's Cost line AND the --max-cost gate read
                 # result.total_cost_usd, so a run under-reported (and
                 # under-enforced) by every Phase 2/3 study call —
-                # observed $2.87 reported vs $6.16 scorecard actual.
+                # one observed run reported well under half of its
+                # scorecard actual.
                 # Delta over the client's per-class ledger: the shared
                 # budget client also carries review/iris spend, so
                 # reading total_cost here would book the whole run
@@ -24320,7 +24324,7 @@ def _collect_reviews_until_budget(
       collected and flows into the caller's booking/journal loop. The
       money is spent and the text is paid for; pre-fix the check ran
       before the harvest and ``break`` threw away completed-at/after-
-      cap results ($10.25 of finished deepen re-reviews discarded,
+      cap results (finished, paid-for deepen re-reviews discarded,
       journal-less, in the final comparison audit).
 
     *dispatch_gate* (``environment.make_dispatch_gate(config,
@@ -25848,8 +25852,8 @@ def _untally_outcome(result: OrchestratorResult, outcome: ReviewOutcome) -> None
     outcome, but the original call's money was still spent. Subtracting
     it made ``result.total_cost_usd`` a "cost of surviving outcomes"
     number that drifted below both the phase ledger and the LLM
-    client's ledger (observed $2.82 vs $4.52 vs $8.08 for one run) and
-    under-enforced the --max-cost gate.
+    client's ledger (one observed run showed three diverging totals
+    for the same money) and under-enforced the --max-cost gate.
     """
     with result._lock:
         if outcome.status == "finding":

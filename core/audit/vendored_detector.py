@@ -5,8 +5,8 @@ layer can route their functions into the cheap skip/glance tier
 instead of full hypothesis review. Motivating incident: an audit of a
 target that vendored Eurydice-generated ML-KEM/ML-DSA headers and a
 single-header PKCS#11 constant catalog sent thousands of generated
-one-line functions through full hypothesis review at ~$0.52/function
-— the demotions were correct, but the review budget was spent on code
+one-line functions through full hypothesis review at full per-function
+cost — the demotions were correct, but the review budget was spent on code
 no human wrote.
 
 Signals are generic generator/vendoring SHAPES, never a hardcoded

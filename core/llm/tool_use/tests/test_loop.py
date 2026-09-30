@@ -1514,7 +1514,8 @@ def test_submission_warning_callable_exception_logged_but_does_not_crash_loop(
 ) -> None:
     """If the submission_warning callable raises, the loop must NOT
     crash — log a warning and treat this iteration as "no warning."
-    A bug in the consumer's nudge logic can't take down a $15 fire."""
+    A bug in the consumer's nudge logic can't take down an expensive
+    in-flight run."""
     fp = _FakeProvider([
         _tool_call_response(("c1", "echo", {"a": 1})),
         _text_response("ok"),
@@ -1598,7 +1599,7 @@ def test_in_fire_mutator_callable_exception_logged_but_does_not_crash_loop(
     caplog,
 ) -> None:
     """If the mutator raises, log it and continue — a bug in the
-    steering logic must not take down a $15 fire."""
+    steering logic must not take down an expensive in-flight run."""
     fp = _FakeProvider([
         _tool_call_response(("c1", "echo", {"a": 1})),
         _text_response("ok"),

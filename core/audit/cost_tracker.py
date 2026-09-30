@@ -5,7 +5,7 @@ can see where the budget goes. Written to cost-breakdown.json at
 the end of each run.
 
 Ledger semantics — one audit run has three cost surfaces that MUST
-reconcile (a real run once showed $8.08 / $4.52 / $2.82 for the same
+reconcile (a real run once showed three different totals for the same
 money, all "true" for different ledgers):
 
 * ``phases.<p>.cost_usd``    — spend on calls that produced a usable
@@ -487,7 +487,7 @@ def format_cost_summary(result: Any) -> str | None:
     ledger, which includes failed/timed-out attempts) with the
     completed-vs-failed split when they differ, e.g.::
 
-        Cost: $8.08 ($2.82 across 3 completed reviews; $5.26 on
+        Cost: $3.00 ($2.00 across 3 completed reviews; $1.00 on
         failed/timed-out attempts)
 
     Returns None when the run spent nothing (no line printed).

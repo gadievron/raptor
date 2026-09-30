@@ -1,7 +1,7 @@
 """Run-cost ledgers must reconcile or explain themselves.
 
-Observed field failure: one run showed $8.08 (LLM client ledger),
-$4.52 (cost-breakdown review phase) and $2.82 (final summary) with no
+Observed field failure: one run showed three different totals (LLM
+client ledger, cost-breakdown review phase, final summary) with no
 way to relate them. The fix defines the semantics (see
 core/audit/cost_tracker.py module docstring) and these tests pin them.
 """
@@ -104,8 +104,8 @@ class TestFailedAttemptLedger:
 
 class TestClassBooking:
     """Telemetry call classes no phase captured are booked, not lumped
-    into a mislabelled residual. Observed: telemetry $38.84 vs summary
-    $36.85 — audit+iris class spend missing from the summary ledger."""
+    into a mislabelled residual. Observed live: telemetry above summary
+    — audit+iris class spend missing from the summary ledger."""
 
     def test_books_unphased_classes(self):
         ct = PhaseCostLedger()
@@ -297,8 +297,8 @@ class TestFormatCostSummary:
         return SimpleNamespace(**base)
 
     def test_observed_scenario(self):
-        """The real run: $8.08 spent, $2.82 across 3 completed
-        reviews (15 reviewed, 12 errors), rest on failed attempts."""
+        """The observed shape: total spend split across completed
+        reviews (15 reviewed, 12 errors) and failed attempts."""
         line = format_cost_summary(self._result(
             total_cost_usd=2.82, llm_spend_usd=8.08,
             failed_attempts_cost_usd=5.26, reviewed=15, errors=12,

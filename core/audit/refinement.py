@@ -149,7 +149,7 @@ def merge_outcomes(original: Any, refined: Any) -> Any:
     cost / duration / token usage of both rounds. The merge picks a
     verdict, not a bill — replacing the ledger fields silently dropped
     every earlier refinement round's spend from the journal and
-    cost-breakdown (one measured run under-reported by $5.27, which
+    cost-breakdown (one measured run under-reported its spend, which
     then surfaced as an unexplained budget death).
 
     The mechanical dispatch record (tools_dispatched / tools_errored /

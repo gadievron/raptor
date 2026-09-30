@@ -1522,9 +1522,10 @@ def run_cc_streaming(
     NOT the parent's cwd: the CLI loads project context (CLAUDE.md,
     settings hooks, memory bootstrap) from its working directory, so
     inheriting the parent's cwd makes every pure-LLM call boot
-    whatever project lives there — measured 98s / $0.35 for a
-    one-line prompt from the RAPTOR repo vs 7s / $0.05 from a neutral
-    dir — and executes that project's hooks, which is an injection
+    whatever project lives there — measured 98s for a one-line prompt
+    from the RAPTOR repo vs 7s from a neutral dir, with per-call cost
+    inflated by a similar factor — and executes that project's hooks,
+    which is an injection
     surface when the cwd is not operator-controlled. Pass an explicit
     path only when a caller genuinely wants project context loaded.
     """

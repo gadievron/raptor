@@ -316,7 +316,7 @@ class TestMultiResumeCostContinuity:
     immediately-prior segment's ledger — pre-fix a segment whose
     predecessor died unreconciled restarted the chain, and the final
     ledger under-reported the run by all earlier segments' spend
-    (observed live: segment 4 booked $47.29 of a ~$4,534 run).
+    (observed live: segment 4 booked only ~1% of its run's spend).
     """
 
     def _segment(self, tmp_path, segment, own_spend, *, reconcile=True):

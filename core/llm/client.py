@@ -135,11 +135,12 @@ _BUDGET_RESERVATION = 0.10
 # Conservative per-call cost estimate used before any completed call of
 # a class has been observed (locally or in the run's telemetry sink).
 # Sized for the expensive end of real call classes (full-context review
-# calls land in the $3-5 range; most classes are far cheaper and their
-# history takes over after the first completion). A too-small default
-# recreates the overshoot this machinery exists to prevent: with N
-# workers, N in-flight calls that each reserved $0.10 but cost $4 land
-# ~N × $4 past the cap.
+# calls are the priciest observed class; most classes are far cheaper
+# and their history takes over after the first completion). A too-small
+# default recreates the overshoot this machinery exists to prevent:
+# with N workers, N in-flight calls that each reserved only the flat
+# _BUDGET_RESERVATION while actually costing a large multiple of it
+# land ~N full calls past the cap.
 _DEFAULT_CALL_COST_ESTIMATE = 2.00
 
 # The DEFAULT (no-history) estimate never exceeds this fraction of the
@@ -2055,7 +2056,7 @@ class LLMClient:
                 # Live-API-leak attribution: a PAID call under pytest is
                 # flagged by the run-end scorecard line, but the flag
                 # alone cannot say WHICH test fired it (observed as an
-                # unattributable one-shot $0.27 session-default call
+                # unattributable one-shot paid session-default call
                 # during a combined suite run; PYTEST_CURRENT_TEST is
                 # unset by the time the atexit flush runs). Capture the
                 # test id at record time; the aggregated flush prints
@@ -3772,9 +3773,9 @@ class LLMClient:
                             # failing after a 6-minute timeout booked
                             # every concurrent worker's spend from that
                             # window into the enforced ledger a second
-                            # time (observed live: 11 timeouts booked
-                            # ~$26 each on a run whose real total spend
-                            # was $38, tripping the cap at 25/40
+                            # time (observed live: 11 timeouts each
+                            # booked most of the run's real total
+                            # spend again, tripping the cap at 25/40
                             # reviews). Money genuinely spent by a
                             # failed attempt (e.g. the JSON fallback
                             # completed an API call before the parse
@@ -3813,9 +3814,9 @@ class LLMClient:
                         # across parallel workers, so a before/after
                         # diff swallows every concurrent call's spend
                         # and multiply-books the same money into this
-                        # ledger (observed live: $38 of real spend
-                        # enforced as budget-exhausted, terminating a
-                        # run at 25/40 reviews with 62% of the cap
+                        # ledger (observed live: a run's real spend
+                        # enforced as budget-exhausted, terminating it
+                        # at 25/40 reviews with 62% of the cap
                         # unspent). Deltas remain the fallback for
                         # legacy providers that return no usage.
                         _pc_cost = float(

@@ -286,8 +286,8 @@ def resolve_prior_spend(out_dir: Path) -> tuple[float, str]:
     The resolved figure MUST be what the resumed segment carries
     forward: booking only the prior ledger used to drop every segment
     before the immediately-prior one whenever a segment died
-    unreconciled (observed live: segment 4 booked $47.29 of a ~$4,534
-    run — a ~99% under-report in the final ledger).
+    unreconciled (observed live: segment 4 booked only its own sliver
+    of the run's spend — a ~99% under-report in the final ledger).
     """
     out_dir = Path(out_dir)
     breakdown = load_prior_cost_breakdown(out_dir)

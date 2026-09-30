@@ -451,8 +451,8 @@ def max_of_evidence(
     ties (callers order sources most-authoritative-first). Booking
     only one source used to drop every segment before the
     immediately-prior one whenever a segment died unreconciled
-    (observed live: segment 4 booked $47.29 of a ~$4,534 run — a ~99%
-    under-report in the final ledger).
+    (observed live: segment 4 booked only its own sliver of the run's
+    spend — a ~99% under-report in the final ledger).
 
     Values are clamped through :func:`spend_value`; non-numeric
     entries read as $0. An empty sequence books $0 with an empty note.

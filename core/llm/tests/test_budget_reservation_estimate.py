@@ -1,8 +1,8 @@
 """Reservation-based budgeting — per-call-class estimates.
 
-The pre-fix reservation was a flat $0.10: with 4 workers and $3-5
-review calls in flight, every dispatcher passed the cap check and the
-run overshot a $25 cap by 47%. The reservation is now sized from the
+The pre-fix reservation was a small flat constant: with 4 workers and
+much pricier review calls in flight, every dispatcher passed the cap
+check and one run overshot its cap by 47%. The reservation is now sized from the
 call class's observed cost history (local client history first, run
 telemetry second, conservative constant last), so a dispatch only
 proceeds while spent + reserved + estimate fits under the cap and
