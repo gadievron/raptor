@@ -583,7 +583,10 @@ def _projects_registry_in_tmp(monkeypatch):
 # offenders, so the signal is "this test got slow", not "killed mid-run".
 #
 # A genuinely-heavy test is not a bug — mark it @pytest.mark.slow (moves
-# it to the nightly tier, out of this guard's scope).
+# it to the nightly tier, out of this guard's scope). A deliberate
+# default-tier SENTINEL that must keep running every PR can instead
+# carry @pytest.mark.wall_budget(seconds) — a raise-only per-test
+# widening of this guard's budget (see the marker block below).
 
 # ---------------------------------------------------------------------------
 # Randomised test order
@@ -637,6 +640,8 @@ def pytest_collection_modifyitems(config, items):
                 item.add_marker(pytest.mark.skip(
                     reason="requires the real "
                            f"{'/'.join(sorted(allowed))} kernel"))
+    for item in items:
+        _validate_wall_budget_marker(item)
     if _RANDOMISE_SEED_RAW is None:
         return
     import random as _random
@@ -701,6 +706,124 @@ _slow_test_overruns: "list[tuple[str, str, float]]" = []
 # listing (never a failure) so the drift is visible run-over-run.
 _slow_test_warnings: "list[tuple[str, str, float]]" = []
 
+# Per-test wall-budget override: a deliberate default-tier SENTINEL —
+# a pin that must run on every PR, so @pytest.mark.slow (which moves
+# it to the nightly tier) is not an option — whose honest schedule
+# costs more wall on a slow runner than the global budget allows can
+# carry ``@pytest.mark.wall_budget(seconds)``. Raise-only: the
+# effective budget is max(global, marker) — the marker widens the net
+# for its own declared cost, never tightens it (a tighter bound is
+# the test's own assert's job) and never disables it (a marked test
+# that overruns ITS budget still flags, and because the override can
+# only exceed the global budget the FAILED summary's "exceeded
+# RAPTOR_MAX_TEST_SECONDS" line stays literally true for marked
+# offenders too). The warn band scales with the effective budget
+# (half of it), so a correctly sized override also stops the
+# run-over-run half-band warning noise for the sentinel's known
+# cost. The budget rides to ``pytest_runtest_logreport`` inside
+# ``report.user_properties`` — the documented per-report channel
+# xdist serialises — because that hook sees only the report, never
+# the item. Use sites must justify their figure both directions
+# (churn-prone-limits doctrine), same as any other bound.
+_WALL_BUDGET_MARK = "wall_budget"
+_WALL_BUDGET_PROP = "raptor-wall-budget"
+
+
+def _wall_budget_seconds(item) -> "float | None":
+    """The item's wall_budget override in seconds, or None.
+
+    Assumes the marker already passed collection-time validation
+    (``_validate_wall_budget_marker``), which is what guarantees the
+    single positive finite numeric argument read here.
+    """
+    marker = item.get_closest_marker(_WALL_BUDGET_MARK)
+    if marker is None:
+        return None
+    return float(marker.args[0])
+
+
+def _validate_wall_budget_marker(item) -> None:
+    """Fail collection loudly on a malformed wall_budget marker.
+
+    Validated for every collected item in every tier — not just when
+    RAPTOR_MAX_TEST_SECONDS is set — so a bad marker is caught by the
+    author's local run, not first by CI.
+    """
+    marker = item.get_closest_marker(_WALL_BUDGET_MARK)
+    if marker is None:
+        return
+    import math
+    usage = (
+        f"{item.nodeid}: @pytest.mark.wall_budget takes exactly one "
+        "positional argument — the per-test wall budget as a positive "
+        "finite number of seconds, e.g. @pytest.mark.wall_budget(20.0)"
+    )
+    if len(marker.args) != 1 or marker.kwargs:
+        raise pytest.UsageError(usage)
+    seconds = marker.args[0]
+    if (
+        isinstance(seconds, bool)
+        or not isinstance(seconds, (int, float))
+        or not math.isfinite(seconds)
+        or seconds <= 0
+    ):
+        raise pytest.UsageError(usage)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Stamp a wall_budget item's override onto its phase reports.
+
+    ``TestReport.__init__`` COPIES ``item.user_properties`` into each
+    phase report, so the setup and call reports are stamped
+    independently, each on its own list. The stamp is appended
+    UNCONDITIONALLY: a duplicate or a colliding entry under the same
+    key (``record_property`` writes to ``item.user_properties``, which
+    the call report's copy already carries) is harmless because the
+    reader below takes the max of every valid entry — whereas a
+    presence check here would let a colliding entry suppress the
+    genuine stamp and spuriously flag the marked test. junitxml
+    renders testcase properties from the teardown report, which is
+    never stamped; only its call-report fallback for a test that
+    fails in BOTH call and teardown would show the stamp, as one
+    inert extra property. The guard below reads only setup/call
+    reports.
+    """
+    report = yield
+    if _slow_test_threshold is None or report is None:
+        return report
+    if report.when not in ("setup", "call"):
+        return report
+    budget = _wall_budget_seconds(item)
+    if budget is None:
+        return report
+    report.user_properties.append((_WALL_BUDGET_PROP, budget))
+    return report
+
+
+def _effective_wall_budget(report) -> float:
+    """The report's guard threshold: the global budget, raised (never
+    lowered) by the item's wall_budget stamp when one rode along.
+
+    Transport-hardened to mirror the marker validation: only finite
+    positive numbers raise the threshold, and every matching entry is
+    considered (max, not first-match), so a colliding entry written
+    under the same key via ``record_property`` can neither disable
+    the guard (inf/NaN) nor shadow the real stamp.
+    """
+    import math
+    threshold = _slow_test_threshold
+    for key, value in getattr(report, "user_properties", []):
+        if (
+            key == _WALL_BUDGET_PROP
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and value > 0
+        ):
+            threshold = max(threshold, float(value))
+    return threshold
+
 # Per-TIER wallclock tripwire, companion to the per-test guard above:
 # RAPTOR_MAX_TEST_SECONDS catches one slow test; this catches the
 # aggregate drift no single test explains (suite growth, a fixture
@@ -730,10 +853,11 @@ def pytest_runtest_logreport(report):
         return
     if report.when not in ("setup", "call"):
         return
-    if report.duration > _slow_test_threshold:
+    threshold = _effective_wall_budget(report)
+    if report.duration > threshold:
         _slow_test_overruns.append(
             (report.nodeid, report.when, report.duration))
-    elif report.duration > _slow_test_threshold / 2:
+    elif report.duration > threshold / 2:
         _slow_test_warnings.append(
             (report.nodeid, report.when, report.duration))
 
@@ -1059,7 +1183,10 @@ def pytest_terminal_summary(terminalreporter):
         "A default-tier test this slow is almost always real I/O that "
         "should be mocked (subprocess / network / time.sleep / sandbox "
         "setup). Fix it — or, if the cost is genuine, mark it "
-        "@pytest.mark.slow so it runs in the nightly tier instead.",
+        "@pytest.mark.slow so it runs in the nightly tier instead. A "
+        "deliberate default-tier sentinel can raise its own budget "
+        "with @pytest.mark.wall_budget(seconds) — raise-only, so a "
+        "marked test in this list exceeded its own higher budget.",
     )
     for nodeid, phase, dur in sorted(
             _slow_test_overruns, key=lambda x: -x[2]):
