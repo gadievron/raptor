@@ -11,12 +11,17 @@ if TYPE_CHECKING:
 
 _PROBE_ORIGINS = [
     "https://evil.example.com",
-    "null",
     # RFC-2606 reserved (base.py PROBE_HOST doctrine): a target that
     # reflects / link-generates from the probe origin must not be
     # steered at someone else's real infrastructure — attacker.com is
     # a registrable third-party domain.
     "https://evil2.example.com",
+    # 'null' is probed for the WILDCARD arm only (a server may emit
+    # 'ACAO: *' just for null-origin requests); the reflection arm skips
+    # it because a reflected null is indistinguishable from a literal
+    # null allowlist entry — V14.5.2 owns that, incl. the credentialed
+    # escalation.
+    "null",
 ]
 
 
@@ -63,29 +68,28 @@ class CorsWildcardWithCredentialsCheck(Check):
                 ))
                 break
 
-            if acao and acao == probe_origin and acac.lower() == "true":
-                if probe_origin != "null":
-                    findings.append(self._result(
-                        passed=False, url=target_url,
-                        evidence=(
-                            f"Origin: {probe_origin} -> "
-                            f"Access-Control-Allow-Origin: {acao}, "
-                            f"Access-Control-Allow-Credentials: {acac}"
-                        ),
-                        detail=(
-                            f"The server reflects the attacker-supplied origin '{probe_origin}' "
-                            "back in Access-Control-Allow-Origin while also setting "
-                            "Access-Control-Allow-Credentials: true. This allows any website "
-                            "to make credentialed cross-origin requests and read the response, "
-                            "enabling session token theft and CSRF bypass."
-                        ),
-                        recommendation=(
-                            "Maintain an explicit allowlist of trusted origins. Validate the "
-                            "incoming Origin header against this list -- never reflect it back unconditionally."
-                        ),
-                        severity="critical", asvs_ref="ASVS 5.0 V14.5.1",
-                    ))
-                    break
+            if acao and acao == probe_origin and probe_origin != "null" and acac.lower() == "true":
+                findings.append(self._result(
+                    passed=False, url=target_url,
+                    evidence=(
+                        f"Origin: {probe_origin} -> "
+                        f"Access-Control-Allow-Origin: {acao}, "
+                        f"Access-Control-Allow-Credentials: {acac}"
+                    ),
+                    detail=(
+                        f"The server reflects the attacker-supplied origin '{probe_origin}' "
+                        "back in Access-Control-Allow-Origin while also setting "
+                        "Access-Control-Allow-Credentials: true. This allows any website "
+                        "to make credentialed cross-origin requests and read the response, "
+                        "enabling session token theft and CSRF bypass."
+                    ),
+                    recommendation=(
+                        "Maintain an explicit allowlist of trusted origins. Validate the "
+                        "incoming Origin header against this list -- never reflect it back unconditionally."
+                    ),
+                    severity="critical", asvs_ref="ASVS 5.0 V14.5.1",
+                ))
+                break
 
         return findings
 
@@ -102,22 +106,41 @@ class CorsNullOriginCheck(Check):
         acao = resp.headers.get("Access-Control-Allow-Origin", "")
         acac = resp.headers.get("Access-Control-Allow-Credentials", "")
 
-        if acao == "null":
-            return [self._result(
-                passed=False, url=target_url,
-                evidence=f"Origin: null -> Access-Control-Allow-Origin: {acao}, Allow-Credentials: {acac}",
-                detail=(
-                    "The server accepts 'null' as a trusted CORS origin. The null origin is sent "
-                    "by sandboxed iframes, local files, and redirected requests -- all attacker-controllable "
-                    "contexts. Accepting it effectively bypasses CORS protections."
-                ),
-                recommendation=(
-                    "Remove 'null' from the allowed origins list. Only explicitly allowlisted "
-                    "HTTPS origins should be trusted."
-                ),
-                severity="high", asvs_ref="ASVS 5.0 V14.5.2",
-            )]
-        return []
+        if acao != "null":
+            return []
+
+        if acac.lower() == "true":
+            # Credentialed null trust is the worst CORS configuration:
+            # any website can source a sandboxed iframe (Origin: null),
+            # make credentialed requests, and read the responses.
+            detail = (
+                "The server accepts 'null' as a trusted CORS origin AND allows "
+                "credentialed requests from it (Access-Control-Allow-Credentials: "
+                "true). The null origin is sent by sandboxed iframes, local files, "
+                "and redirected requests -- all attacker-controllable contexts -- "
+                "so any website can make credentialed cross-origin requests from a "
+                "sandboxed iframe and read the responses, enabling session token "
+                "theft and CSRF bypass."
+            )
+            severity = "critical"
+        else:
+            detail = (
+                "The server accepts 'null' as a trusted CORS origin. The null origin is sent "
+                "by sandboxed iframes, local files, and redirected requests -- all attacker-controllable "
+                "contexts. Accepting it effectively bypasses CORS protections."
+            )
+            severity = "high"
+
+        return [self._result(
+            passed=False, url=target_url,
+            evidence=f"Origin: null -> Access-Control-Allow-Origin: {acao}, Allow-Credentials: {acac}",
+            detail=detail,
+            recommendation=(
+                "Remove 'null' from the allowed origins list. Only explicitly allowlisted "
+                "HTTPS origins should be trusted."
+            ),
+            severity=severity, asvs_ref="ASVS 5.0 V14.5.2",
+        )]
 
 
 @registry.register(CheckCategory.CORS, "V14.5.3", "Sensitive headers exposed via CORS")

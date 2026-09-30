@@ -698,3 +698,94 @@ def test_successful_bypass_probes_do_not_count(monkeypatch):
     client = _CountingClient(lambda *a, **k: FakeResponse(200, "ok"))
     HttpsRedirectCheck().run(client, "https://t.example")
     assert client.transport_errors == 0
+
+
+# -- CORS null-origin credential escalation ------------------------------------
+
+
+def _cors_findings(check_name: str, respond):
+    """Run one cors.py check against a server whose CORS headers are
+    computed from the request's Origin header by ``respond``."""
+    from packages.web.checks import cors
+
+    def handler(method, path, headers=None, **_kw):
+        return FakeResponse(200, "", headers=respond((headers or {}).get("Origin", "")))
+
+    return getattr(cors, check_name)().run(FakeClient(handler), "https://t.example")
+
+
+def _null_only_server(credentialed: bool):
+    """CORS policy that trusts exactly the null origin (allowlist entry
+    or reflection — indistinguishable on the wire)."""
+    def respond(origin: str) -> dict:
+        if origin != "null":
+            return {}
+        out = {"Access-Control-Allow-Origin": "null"}
+        if credentialed:
+            out["Access-Control-Allow-Credentials"] = "true"
+        return out
+    return respond
+
+
+def test_credentialed_null_origin_is_critical() -> None:
+    findings = _cors_findings("CorsNullOriginCheck", _null_only_server(credentialed=True))
+    assert len(findings) == 1
+    assert findings[0].severity == "critical"
+    assert "credentialed" in findings[0].detail
+
+
+def test_null_origin_without_credentials_stays_high() -> None:
+    findings = _cors_findings("CorsNullOriginCheck", _null_only_server(credentialed=False))
+    assert len(findings) == 1
+    assert findings[0].severity == "high"
+
+
+def test_null_origin_ownership_stays_with_the_null_check() -> None:
+    # The wildcard/reflection check must not grow a null REFLECTION arm:
+    # a null-only credentialed server is V14.5.2's, reported there at
+    # critical, and nothing from V14.5.1 (its null probe exists only to
+    # feed the wildcard arm).
+    assert _cors_findings(
+        "CorsWildcardWithCredentialsCheck", _null_only_server(credentialed=True),
+    ) == []
+
+
+def test_reflected_origin_with_credentials_still_critical() -> None:
+    def respond(origin: str) -> dict:
+        if not origin:
+            return {}
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+        }
+    findings = _cors_findings("CorsWildcardWithCredentialsCheck", respond)
+    assert len(findings) == 1
+    assert findings[0].severity == "critical"
+
+
+def test_wildcard_with_credentials_still_flagged() -> None:
+    def respond(origin: str) -> dict:
+        return {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Credentials": "true",
+        }
+    findings = _cors_findings("CorsWildcardWithCredentialsCheck", respond)
+    assert len(findings) == 1
+    assert findings[0].severity == "high"
+
+
+def test_null_conditioned_wildcard_with_credentials_still_flagged() -> None:
+    # Some servers emit 'ACAO: *' (+ credentials) ONLY for null-origin
+    # requests — e.g. a wildcard header gated behind an origin regex
+    # that matches 'null'. The null probe must keep feeding the
+    # wildcard arm so this configuration stays detected.
+    def respond(origin: str) -> dict:
+        if origin != "null":
+            return {}
+        return {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Credentials": "true",
+        }
+    findings = _cors_findings("CorsWildcardWithCredentialsCheck", respond)
+    assert len(findings) == 1
+    assert findings[0].severity == "high"
