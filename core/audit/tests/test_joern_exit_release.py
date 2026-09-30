@@ -199,11 +199,17 @@ class TestExitReleaseWiring:
         target, out = _setup_target(tmp_path)
         stub = _StubServer()
         hang = threading.Event()
+        stop_returned = threading.Event()
         attempts: list = []
 
         def _wedged_stop(server) -> None:
             attempts.append(server)
-            hang.wait(30.0)
+            # Generous ceiling: only failure latency, never load
+            # sensitivity — a run that comes back before this wait
+            # expires provably abandoned the stop rather than
+            # completing it.
+            hang.wait(120.0)
+            stop_returned.set()
 
         monkeypatch.setattr(
             orch, "_start_joern_server_raw", lambda *a, **k: stub,
@@ -214,12 +220,15 @@ class TestExitReleaseWiring:
             orch._sigterm_event.set()  # drain from here on
             return _clean(ctx, config)
 
-        t0 = time.monotonic()
         with caplog.at_level(logging.WARNING, logger=orch.__name__):
             run_orchestrator(_config(target, out), _review)
-        elapsed = time.monotonic() - t0
         assert attempts == [stub]  # the stop WAS attempted
-        assert elapsed < 20.0  # returned at the bound, not the hang
+        # The bounding MECHANISM, not a stopwatch: run_orchestrator
+        # returned while the wedged stop was still hanging — the exit
+        # abandoned it at the bound instead of waiting it out. (A
+        # wall-clock ceiling on the whole run raced loaded-host
+        # scheduling; this cannot.)
+        assert not stop_returned.is_set()
         assert [
             r for r in caplog.records if "abandoning" in r.getMessage()
         ]
