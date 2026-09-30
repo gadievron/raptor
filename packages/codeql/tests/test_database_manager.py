@@ -1218,6 +1218,32 @@ class TestRepoHashDirtyTree:
         assert db_manager.compute_repo_hash(repo) != clean_base
         assert not marker.exists()
 
+    def test_unknowable_dirt_never_reuses_the_pristine_cache_key(
+        self, db_manager, tmp_path,
+    ):
+        """A hostile target can make the dirty probe fail on demand
+        (ship a corrupt .git/index) while its worktree differs from
+        HEAD. UNKNOWABLE must never collapse onto the pristine
+        checkout's cache key — that serves the tampered tree a stale
+        (or pre-poisoned) cached database."""
+        repo = self._git_repo(tmp_path)
+        pristine = db_manager.compute_repo_hash(repo)
+        (repo / "a.py").write_text("x = 999\n")
+        (repo / ".git" / "index").write_text("GARBAGE\n")
+        assert db_manager.compute_repo_hash(repo) != pristine
+
+    def test_unknowable_dirt_disables_caching_entirely(
+        self, db_manager, tmp_path,
+    ):
+        """Two computations over an unknowable tree must not agree
+        with each other either — any stable value is a key an
+        attacker can steer collisions onto."""
+        repo = self._git_repo(tmp_path)
+        (repo / ".git" / "index").write_text("GARBAGE\n")
+        h1 = db_manager.compute_repo_hash(repo)
+        h2 = db_manager.compute_repo_hash(repo)
+        assert h1 != h2
+
     def test_non_git_fallback_detects_size_preserving_edit(
         self, db_manager, tmp_path,
     ):

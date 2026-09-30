@@ -564,7 +564,8 @@ class DatabaseManager:
                 # dirty-file listing plus size/mtime of each dirty
                 # path, so re-editing an already-dirty file also
                 # invalidates. Clean tree → digest is None → key is
-                # unchanged from before (cache continuity).
+                # unchanged from before (cache continuity). Probe
+                # can't tell → per-call nonce digest → caching off.
                 combined = f"{repo_path}:{git_hash}"
                 dirty_digest = self._dirty_tree_digest(repo_path)
                 if dirty_digest:
@@ -655,8 +656,9 @@ class DatabaseManager:
         return hasher.hexdigest()[:16]
 
     def _dirty_tree_digest(self, repo_path: Path) -> str | None:
-        """Short digest of the working tree's uncommitted state, or
-        None when the tree is clean / the probe fails.
+        """Short digest of the working tree's uncommitted state; None
+        only when the tree is KNOWN clean; a per-call unique token
+        when the probe cannot tell.
 
         The target repo can arrive with its own hostile ``.git``: a
         committed ``* filter=x`` .gitattributes plus a
@@ -677,7 +679,14 @@ class DatabaseManager:
         """
         dirt = probe_worktree_dirt(repo_path)
         if dirt.tracked is None or dirt.untracked is None:
-            return None
+            # UNKNOWABLE is not clean. A hostile target can make the
+            # probe fail on demand (e.g. ship a corrupt .git/index)
+            # while its worktree differs from HEAD; returning None
+            # here handed the tampered tree the pristine checkout's
+            # cache key, serving a stale (or pre-poisoned) database.
+            # A fresh nonce makes the key unique per call — caching is
+            # simply disabled until the tree becomes knowable.
+            return f"unknowable-{secrets.token_hex(16)}"
         if not dirt.tracked and not dirt.untracked:
             return None
         hasher = hashlib.sha256()
