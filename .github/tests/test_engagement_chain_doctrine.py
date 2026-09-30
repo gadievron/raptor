@@ -183,11 +183,97 @@ def test_json_store_writes_are_atomic() -> None:
     assert "artifact_lock(" in source  # chain-state writes hold it
 
 
+#: Package prefix whose bare ``import ...`` forms are never
+#: allowlistable: a bare module import binds a module OBJECT, and
+#: attribute access on it (``ledger._private_seam(...)``) reaches
+#: every seam — public and private alike — without ever appearing in
+#: the ``ImportFrom`` verb census. The allowlist can only govern
+#: ``from ... import <verb>``; module-object imports defeat it, so
+#: they are refused outright rather than allowlisted.
+_ENGAGEMENT_PKG = "core.engagement"
+
+
+def _bare_engagement_imports(tree: ast.Module) -> list[str]:
+    """Spellings that bind an engagement module OBJECT (aliases do not
+    matter — the binding still hands back the module):
+
+    - ``import core.engagement[.anything]`` at any dotted depth;
+    - ``from core import engagement`` — the ImportFrom form whose
+      bound name IS the package root, not a verb inside it;
+    - any relative import — the chain lives in ``core.engagement``,
+      so ``from . import ledger`` binds the ledger module while the
+      absolute-prefix censuses here never see the package name.
+      The module must import absolutely so the fence can see it.
+    """
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if (alias.name == _ENGAGEMENT_PKG
+                        or alias.name.startswith(_ENGAGEMENT_PKG + ".")):
+                    hits.append(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                dots = "." * node.level
+                for alias in node.names:
+                    hits.append(
+                        f"from {dots}{node.module or ''} "
+                        f"import {alias.name}")
+            elif node.module:
+                for alias in node.names:
+                    if f"{node.module}.{alias.name}" == _ENGAGEMENT_PKG:
+                        hits.append(f"{node.module}.{alias.name}")
+    return hits
+
+
+def test_ledger_import_census_sees_bare_import_evasions() -> None:
+    """Probe pin: the module-object census flags every evasion
+    spelling (bare import — plain, aliased, deeper submodule, package
+    root, multi-name statement — plus ``from core import engagement``
+    and the relative forms) and stays silent on the ImportFrom verbs
+    the allowlist already governs and on lookalike module names
+    outside the package."""
+    flagged: tuple[str, ...] = (
+        "import core.engagement.ledger",
+        "import core.engagement.ledger as _l",
+        "import core.engagement.ledger.frames",
+        "import core.engagement",
+        "import os, core.engagement.ledger",
+        "from core import engagement",
+        "from core import engagement as _e",
+        "from . import ledger",
+        "from .ledger import load_ledger",
+    )
+    for snippet in flagged:
+        assert _bare_engagement_imports(ast.parse(snippet)), (
+            f"census missed a bare-import evasion: {snippet}")
+    clear: tuple[str, ...] = (
+        "from core.engagement.ledger import load_ledger",
+        "from core import config",
+        "import core.engagements_other",
+        "import subprocess",
+    )
+    for snippet in clear:
+        assert not _bare_engagement_imports(ast.parse(snippet)), (
+            f"census over-matched a non-evasion: {snippet}")
+
+
 def test_ledger_writes_go_through_the_public_api() -> None:
     """The chain touches the ledger only via its public verbs (read
     and write) — never a private seam, never a direct rewrite of
     ledger.json."""
     tree = _module_ast()
+    # A module-object import — bare ``import core.engagement.ledger``
+    # (any alias, any dotted depth, or the package root), ``from core
+    # import engagement``, or a relative spelling — bypasses the verb
+    # allowlist below: the census there walks absolute ImportFrom
+    # verbs only, and attribute access on a module object defeats
+    # verb-level allowlisting. Refuse every such form — none is
+    # allowlistable.
+    bare = _bare_engagement_imports(tree)
+    assert not bare, (
+        f"chain binds engagement/ledger module objects (attribute "
+        f"access evades the verb allowlist): {bare}")
     # read_artifact_checklist belongs here: it is the ledger's
     # frame-authenticated read chokepoint — it verifies the checklist
     # slot's integrity token, refuses tampered frames, and strips the
