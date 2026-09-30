@@ -980,8 +980,10 @@ Two tiers, selected automatically:
   and detached entirely inside the window -- the task reads' span
   included -- goes undetected there. A co-resident able to churn
   mounts (for example via a setuid FUSE helper) can delay or force
-  loud refusal of verification, never a silent false verify -- and
-  kills themselves are never suppressed by occlusion.
+  loud refusal of verification -- never a silent false verify on
+  kernels with the mounts poll hook; without it that guarantee
+  narrows by exactly the in-window attach-and-detach blindness just
+  priced -- and kills themselves are never suppressed by occlusion.
 
 Every spawn states its fate explicitly: `on_parent_death="kill"` ties
 the tree's lifetime to the owning process; `"survive"` lets it outlive
