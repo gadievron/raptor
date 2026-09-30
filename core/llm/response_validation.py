@@ -424,6 +424,111 @@ _DOMAIN_VALIDATORS: dict[str, Any] = {
 }
 
 
+# ---- Schema enum enforcement -------------------------------------------------
+
+def _enforce_enum(value: Any, enum_values: list[Any]) -> tuple[Any, bool, bool]:
+    """Check a value against a schema ``enum`` list.
+
+    Returns ``(value, ok, coerced)``. Exact membership passes the value
+    untouched; a string that strip/casefolds onto a string member is
+    coerced to that member (mirroring the severity/confidence domain
+    normalisers); anything else fails — the caller nulls it. Non-string
+    enum members (integers, booleans) require exact membership.
+    """
+    try:
+        if value in enum_values:
+            return value, True, False
+    except TypeError:
+        return value, False, False
+    if isinstance(value, str):
+        folded = value.strip().casefold()
+        for member in enum_values:
+            if isinstance(member, str) and member.strip().casefold() == folded:
+                return member, True, True
+    return value, False, False
+
+
+def _validate_array_items(
+    values: list[Any], items_spec: dict[str, Any],
+) -> tuple["list[Any] | None", bool, bool]:
+    """Validate array elements against the schema ``items`` spec.
+
+    Returns ``(cleaned, coerced, lossy)``. Object items keep undeclared
+    keys as-is; each declared property present on the item is
+    type-coerced and enum-checked, and a failing property becomes None
+    (the item survives so its good properties still flow). Nested
+    arrays recurse. Scalar items failing type coercion or the enum are
+    dropped. ``cleaned`` is None when every element of a non-empty
+    array was dropped — silently returning ``[]`` would hide a
+    wholesale discard, the same doctrine as the array branch of
+    ``_coerce_value``. ``lossy`` reports any dropped item or nulled
+    property so the caller can flag the field for the corrective retry.
+    """
+    item_type = _get_field_type(items_spec)
+    cleaned: list[Any] = []
+    coerced = False
+    lossy = False
+    if item_type == "object":
+        item_props = items_spec.get("properties")
+        for item in values:
+            if not isinstance(item, dict):
+                lossy = True
+                continue
+            if not isinstance(item_props, dict):
+                cleaned.append(item)
+                continue
+            new_item = dict(item)
+            for prop_name, prop_spec in item_props.items():
+                if prop_name not in new_item:
+                    continue
+                pv = new_item[prop_name]
+                if pv is None:
+                    continue
+                prop_type = _get_field_type(prop_spec)
+                pv, prop_coerced = _coerce_value(pv, prop_type)
+                coerced = coerced or prop_coerced
+                if pv is None:
+                    new_item[prop_name] = None
+                    lossy = True
+                    continue
+                enum_values = (prop_spec.get("enum")
+                               if isinstance(prop_spec, dict) else None)
+                if isinstance(enum_values, list) and enum_values:
+                    pv, enum_ok, enum_coerced = _enforce_enum(pv, enum_values)
+                    coerced = coerced or enum_coerced
+                    if not enum_ok:
+                        new_item[prop_name] = None
+                        lossy = True
+                        continue
+                if (prop_type == "array" and isinstance(pv, list)
+                        and isinstance(prop_spec, dict)
+                        and isinstance(prop_spec.get("items"), dict)):
+                    pv, sub_coerced, sub_lossy = _validate_array_items(
+                        pv, prop_spec["items"])
+                    coerced = coerced or sub_coerced
+                    lossy = lossy or sub_lossy
+                new_item[prop_name] = pv
+            cleaned.append(new_item)
+    else:
+        enum_values = items_spec.get("enum")
+        for item in values:
+            item, item_coerced = _coerce_value(item, item_type)
+            if item is None:
+                lossy = True
+                continue
+            if isinstance(enum_values, list) and enum_values:
+                item, enum_ok, enum_coerced = _enforce_enum(item, enum_values)
+                item_coerced = item_coerced or enum_coerced
+                if not enum_ok:
+                    lossy = True
+                    continue
+            coerced = coerced or item_coerced
+            cleaned.append(item)
+    if values and not cleaned:
+        return None, coerced, True
+    return cleaned, coerced, lossy
+
+
 # ---- Type coercion -----------------------------------------------------------
 
 def _coerce_value(value: Any, field_type: str) -> tuple[Any, bool]:
@@ -575,6 +680,32 @@ def validate_structured_response(
             value, norm_coerced = normaliser(value)
             was_coerced = was_coerced or norm_coerced
 
+        # Schema enum enforcement. The schema's own ``enum`` list is
+        # the schema author's declared value set — honoured for EVERY
+        # field, not just the names the domain tables happen to cover
+        # (pre-fix, a field like "severity" with a schema enum but no
+        # domain entry accepted arbitrary free text). The field-name
+        # domain tables below remain the STRICTER overlay: a value the
+        # schema enum admits can still be nulled by its domain
+        # validator.
+        enum_values = (field_spec.get("enum")
+                       if isinstance(field_spec, dict) else None)
+        if (isinstance(enum_values, list) and enum_values
+                and value is not None):
+            value, enum_ok, enum_coerced = _enforce_enum(value, enum_values)
+            was_coerced = was_coerced or enum_coerced
+            if not enum_ok:
+                data[field_name] = None
+                status = "coerced" if was_coerced else "invalid"
+                fields[field_name] = FieldResult(status=status, original=original)
+                incomplete.append(field_name)
+                if was_coerced:
+                    coerced_fields.append(field_name)
+                    weighted_score += weight * 0.5
+                else:
+                    weighted_score += weight * 0.25
+                continue
+
         # Domain validation. Rejected values are NULLED, honouring the
         # module contract ("nulls bad ones") — keeping them let e.g. a
         # score of 8 on a 0-1 scale flow into triage. Both branches
@@ -593,6 +724,37 @@ def validate_structured_response(
             else:
                 weighted_score += weight * 0.25
             continue
+
+        # Array item validation. A declared ``items`` spec is a
+        # per-element contract — pre-fix the array passed as one
+        # opaque blob, so nested enum fields (verdicts, confidence
+        # tiers) carried arbitrary free text into consumers.
+        items_spec = (field_spec.get("items")
+                      if isinstance(field_spec, dict) else None)
+        if (field_type == "array" and isinstance(value, list)
+                and isinstance(items_spec, dict)):
+            cleaned, items_coerced, lossy = _validate_array_items(
+                value, items_spec)
+            was_coerced = was_coerced or items_coerced
+            if cleaned is None:
+                # Every element failed — nulling beats returning [] at
+                # near-full credit (wholesale discard must be visible).
+                data[field_name] = None
+                fields[field_name] = FieldResult(status="invalid", original=original)
+                incomplete.append(field_name)
+                weighted_score += weight * 0.25
+                continue
+            value = cleaned
+            if lossy:
+                # Some elements/properties were dropped or nulled —
+                # keep the good remainder but flag the field so the
+                # corrective retry can target the loss.
+                data[field_name] = value
+                fields[field_name] = FieldResult(status="coerced", original=original)
+                coerced_fields.append(field_name)
+                incomplete.append(field_name)
+                weighted_score += weight * 0.5
+                continue
 
         # Passed
         data[field_name] = value
