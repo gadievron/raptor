@@ -270,10 +270,16 @@ class TestRelayLimits:
         try:
             token = _worker_token(d)
             received = _post(d, token)
-            assert received
             assert b"HTTP/1.0" not in received
             assert b"event: error" not in received
-            assert set(received) == {ord("x")}  # body bytes only
+            # Whatever arrived is genuine upstream body bytes — and
+            # possibly nothing at all: the relay's one-chunk lookahead
+            # withholds the last-received chunk, so an abort whose
+            # first upstream read already crossed the cap (chunk
+            # coalescing under load) delivers a zero-byte body. Empty
+            # is still the shape this test pins: a transport error,
+            # never a truncated-but-apparently-successful payload.
+            assert set(received) <= {ord("x")}
             assert _wait_relay_abort(d)
         finally:
             upstream.shutdown()

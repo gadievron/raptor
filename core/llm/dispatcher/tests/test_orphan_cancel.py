@@ -597,6 +597,83 @@ class TestOrphanCancel:
             upstream.shutdown()
             d.shutdown()
 
+    def test_worker_close_during_post_body_dwell_is_normal_completion(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        """The load flake above, pinned deterministically: the relay
+        thread can lose the CPU between relaying the last body byte
+        and stopping the watcher (the final iterator advance sits
+        inside that window).  Simulated by dwelling in the upstream
+        iterator AFTER its final chunk, so several watcher polls run
+        inside the window.  A worker that closes on the complete
+        response there must still read as a healthy completion: the
+        relay holds the final chunk back until the watcher is
+        stopped, so the worker cannot observe completion while a
+        poll could still classify its close as an abandonment."""
+        _inject_fast_poll(monkeypatch)
+        real_iter_raw = httpx.Response.iter_raw
+
+        def _dwelling_iter_raw(resp, *args, **kwargs):
+            yield from real_iter_raw(resp, *args, **kwargs)
+            time.sleep(_FAST_POLL_S * 6)
+
+        monkeypatch.setattr(
+            httpx.Response, "iter_raw", _dwelling_iter_raw,
+        )
+        upstream = _CaptiveUpstream("json_quick")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token = _worker_token(d)
+            s = _raw_worker_request(d, token)
+            raw = _recv_until(s, b'{"ok": true}')
+            assert b"200" in raw.split(b"\r\n", 1)[0]
+            s.close()
+            assert _wait_audit(d, "request.dispatch", timeout=5.0)
+            time.sleep(_FAST_POLL_S * 3)
+            assert not _audit_events(d, "request.orphan_cancel")
+            assert not _audit_events(d, "request.error")
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_final_chunk_is_held_until_watcher_stop_returns(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        """Companion ordering pin for the dwell test above: the
+        invariant is stop() happens-before the final chunk release,
+        not merely "stop() runs near the drain".  Simulated by
+        dwelling at the head of stop() itself, so polls keep running
+        for several intervals after the relay decides to stop.  With
+        the correct ordering the worker is still waiting on the held
+        final chunk for the whole dwell — its close can only follow a
+        completed stop().  Under the inverted ordering (final chunk
+        written before stop()) the worker holds the complete body
+        during the dwell, closes, and a still-live poll audits the
+        healthy close as an orphan."""
+        _inject_fast_poll(monkeypatch)
+        real_stop = _OrphanWatcher.stop
+
+        def _dwelling_stop(watcher_self):
+            time.sleep(_FAST_POLL_S * 6)
+            real_stop(watcher_self)
+
+        monkeypatch.setattr(_OrphanWatcher, "stop", _dwelling_stop)
+        upstream = _CaptiveUpstream("json_quick")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token = _worker_token(d)
+            s = _raw_worker_request(d, token)
+            raw = _recv_until(s, b'{"ok": true}')
+            assert b"200" in raw.split(b"\r\n", 1)[0]
+            s.close()
+            assert _wait_audit(d, "request.dispatch", timeout=5.0)
+            time.sleep(_FAST_POLL_S * 3)
+            assert not _audit_events(d, "request.orphan_cancel")
+            assert not _audit_events(d, "request.error")
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
     def test_worker_disconnect_during_head_dwell_aborts_at_head(
         self, fake_creds, tmp_path, monkeypatch,
     ):

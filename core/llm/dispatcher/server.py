@@ -3407,36 +3407,69 @@ def _make_request_handler(
                                 "upstream relay exceeded the "
                                 f"{_relay_deadline_s()}s total deadline"
                             )
-                        if scanner is None:
-                            # No spend ledger on this token: nothing
-                            # to order against — relay directly.
+                        if scanner is None and response_is_sse:
+                            # Unscoped SSE: real-time delivery, each
+                            # event out as it lands. No lookahead
+                            # needed for the watcher ordering below —
+                            # an SSE worker can only observe
+                            # completion at connection close (no
+                            # in-band length), which cannot precede
+                            # stop() — and holding events one
+                            # inter-event gap would break real-time
+                            # consumers (inter-event timeouts,
+                            # incremental display). Accepted residual:
+                            # a worker that treats a terminal SSE
+                            # event as completion and closes before
+                            # transport EOF re-enters the poll window
+                            # — transport-level completion is the only
+                            # signal the relay can order against.
                             self.wfile.write(chunk)
                             continue
-                        scanner.feed(chunk)
-                        # One-chunk lookahead (scoped tokens only):
-                        # the final chunk is held until the scanned
-                        # usage is BOOKED, so a client can never
-                        # observe a completed response whose cost has
-                        # not yet landed on spent_usd — pipelining a
-                        # follow-up request the instant the body ends
-                        # must meet the updated ledger at admission.
-                        # Reservations bound the overrun only while
-                        # actual cost stays within the admission
-                        # ceiling; this ordering closes the gap for
-                        # responses that over-report usage relative
-                        # to the request. Cost: each chunk is
-                        # delayed by one upstream inter-chunk gap.
+                        if scanner is not None:
+                            scanner.feed(chunk)
+                        # One-chunk lookahead: the final chunk is held
+                        # until the post-drain bookkeeping below has
+                        # run, so a worker can never observe a
+                        # completed response while that bookkeeping is
+                        # still pending. Two duties:
+                        #  * watcher ordering (any token, non-SSE): a
+                        #    Content-Length worker sees completion
+                        #    in-band, and one that closes the instant
+                        #    it has the full body is a HEALTHY close —
+                        #    the relay stops the watcher before the
+                        #    final chunk goes out, so that close can
+                        #    never be polled as an abandonment.
+                        #    Pre-fix, unscoped relays wrote every
+                        #    chunk in-loop, and a relay descheduled
+                        #    for one poll interval between its last
+                        #    write and stop() had the worker's healthy
+                        #    close audited as request.orphan_cancel;
+                        #  * spend ordering (scoped tokens, SSE
+                        #    included): the scanned usage is BOOKED
+                        #    before the body ends, so a client
+                        #    pipelining a follow-up request the
+                        #    instant the response completes must meet
+                        #    the updated ledger at admission.
+                        #    Reservations bound the overrun only
+                        #    while actual cost stays within the
+                        #    admission ceiling; this ordering closes
+                        #    the gap for responses that over-report
+                        #    usage relative to the request.
+                        # Cost: each chunk is delayed by one upstream
+                        # inter-chunk gap.
                         if _prev_chunk is not None:
                             self.wfile.write(_prev_chunk)
                         _prev_chunk = chunk
                     # Stream drained: stop the watcher BEFORE the
-                    # response leaves scope. A worker that closes the
-                    # instant it has the full body is a HEALTHY close
-                    # — past this line a detection could otherwise
-                    # shut down an upstream socket already returned
-                    # to the shared pool (stop() and the cancel
-                    # action exclude each other under the watcher's
-                    # lock).
+                    # final chunk (and the response's scope exit)
+                    # below. A worker that closes the instant it has
+                    # the full body is a HEALTHY close — it can only
+                    # observe completion after this line, so a
+                    # detection can neither audit its close as an
+                    # abandonment nor shut down an upstream socket
+                    # already returned to the shared pool (stop() and
+                    # the cancel action exclude each other under the
+                    # watcher's lock).
                     watcher.stop()
                     if scanner is not None:
                         dispatcher._book_child_usage(
