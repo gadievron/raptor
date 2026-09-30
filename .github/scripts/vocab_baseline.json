@@ -21,7 +21,7 @@
   "core/analysis/binary_oracle.py::enrich_inventory_with_binary_oracle": {
     "count": 10,
     "kind": "literal",
-    "note": "inventory['binary_oracle'] summary result-dict field manifest (suppression-authority flags + per-channel demotion accounting: identity pins, guessed env builds, coverage floor) — persistence schema keys read by the chokepoint/cache consumers, not a learned name vocabulary; crossed the 9-name seed threshold when the identity-demotion channel added any_identity_demoted / identity_demoted"
+    "note": "inventory['binary_oracle'] summary result-dict field manifest (suppression-authority flags + per-channel demotion accounting: identity pins, guessed env builds, coverage floor) \u2014 persistence schema keys read by the chokepoint/cache consumers, not a learned name vocabulary; crossed the 9-name seed threshold when the identity-demotion channel added any_identity_demoted / identity_demoted"
   },
   "core/analysis/binary_oracle_precision.py::to_dict": {
     "count": 12,
@@ -1229,7 +1229,7 @@
     "note": "subprocess env allowlist (infrastructure env-var names, not a learned name vocabulary); grew by the RAPTOR_SANITIZER_CUT* transport family"
   },
   "core/config/__init__.py::TARGET_ENV_STRIP_SET": {
-    "count": 15,
+    "count": 16,
     "kind": "literal",
     "note": "target-facing env strip set (trust markers, session credential, framework-identity tells incl. the RAPTOR_SANITIZER_CUT* transport family) - infrastructure env-var names, not a learned name vocabulary; crossed the seed threshold when the sanitizer-cut transport joined"
   },
@@ -1684,7 +1684,7 @@
     "note": "mechanical-warm report field names (raw/warm FP counts, per-CWE rows, damage list), not name vocabulary \u2014 same class as the recall-report field-name entries"
   },
   "core/reporting/findings.py::counts": {
-    "count": 12,
+    "count": 13,
     "kind": "literal"
   },
   "core/reporting/formatting.py::_DISPLAY_NAMES": {
@@ -1692,7 +1692,7 @@
     "kind": "literal"
   },
   "core/reporting/formatting.py::status_map": {
-    "count": 15,
+    "count": 16,
     "kind": "literal"
   },
   "core/reporting/scan_coverage.py::_findings_for_tool": {
@@ -1747,11 +1747,11 @@
     "note": "RPC reply payload keys (wire shape of the spawn verb, not a name vocabulary)"
   },
   "core/sandbox/context.py::_NETWORKED_ALLOWED_KWARGS": {
-    "count": 18,
+    "count": 19,
     "kind": "literal"
   },
   "core/sandbox/context.py::_UNTRUSTED_ALLOWED_KWARGS": {
-    "count": 23,
+    "count": 24,
     "kind": "literal"
   },
   "core/sandbox/escalation_signatures.py::ESCAPE_PRIMITIVE_SYSCALLS": {
@@ -1770,7 +1770,7 @@
     "note": "kernel-defined /proc/softirqs row names (fixed external contract mirrored verbatim for the persona stub) - not a learnable vocabulary"
   },
   "core/sandbox/profiles.py::_SANDBOX_KWARGS": {
-    "count": 33,
+    "count": 34,
     "kind": "literal"
   },
   "core/sandbox/proxy.py::_KNOWN_DOH_PROVIDERS": {
@@ -1940,7 +1940,7 @@
     "note": "libc/POSIX call-summary axiom table (strlen/abs/min-max family) \u2014 language-runtime names, doctrine-sanctioned hardcoding; project-API summaries must come from learned vocabulary, never this table (enforced by the table comment)"
   },
   "core/status/__init__.py::_STATUS_ALIASES": {
-    "count": 24,
+    "count": 26,
     "kind": "literal"
   },
   "core/taint/emission.py::_scan_finding": {
@@ -2066,11 +2066,11 @@
     "kind": "literal"
   },
   "libexec/raptor-review::dispatch": {
-    "count": 16,
+    "count": 17,
     "kind": "literal"
   },
   "libexec/raptor-review::known_commands": {
-    "count": 16,
+    "count": 17,
     "kind": "literal"
   },
   "libexec/raptor-run-feasibility::main": {
@@ -2082,7 +2082,7 @@
     "kind": "literal"
   },
   "libexec/raptor-seatbelt-shim::_strip": {
-    "count": 17,
+    "count": 18,
     "kind": "literal",
     "note": "target environment-strip tuple mirrored from core.config.TARGET_ENV_STRIP_SET for the isolated macOS shim, not a learned name vocabulary"
   },
@@ -2598,7 +2598,7 @@
     "kind": "literal"
   },
   "packages/exploitability_validation/orchestrator.py::STATUS_DISPLAY": {
-    "count": 19,
+    "count": 20,
     "kind": "literal"
   },
   "packages/exploitability_validation/orchestrator.py::_run_stage_e": {
