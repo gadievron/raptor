@@ -562,7 +562,12 @@ _DRAINING_ORCHESTRATOR = textwrap.dedent("""\
         # The incident shape: the drain stamps a TERMINAL status while
         # the process (and its lock) is still alive.
         _write("interrupted")
-        print("DRAINING", flush=True)
+        # Signal-safe write: SIGTERM can land while the main thread is
+        # still inside the buffered writer that flushed "READY" — a
+        # print() here then dies with "RuntimeError: reentrant call
+        # inside <_io.BufferedWriter>" and takes the child down
+        # mid-drain. os.write to the raw fd cannot re-enter the buffer.
+        os.write(1, b"DRAINING\\n")
     signal.signal(signal.SIGTERM, _drain)
     print("READY", os.getpid(), flush=True)
     sys.stdin.read()          # actual exit releases the lock
