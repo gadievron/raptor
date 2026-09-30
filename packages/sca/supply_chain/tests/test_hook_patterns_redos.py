@@ -20,26 +20,37 @@ from packages.sca.supply_chain._hook_patterns import (
     _MAX_HOOK_BODY_BYTES,
     _MAX_HOOK_SCAN_BYTES,
     SCAN_TRUNCATED_REASON,
+    HookAnalysis,
     analyse_body,
 )
 
-_TIME_BUDGET_SECONDS = 0.5
+# CPU-time budget for the ReDoS regressions below. Two directions:
+# lower it and the legitimate multi-megabyte scan (~0.1-0.2s CPU
+# observed) starts flaking on slower hardware; raise it and a
+# quadratic regression (the pre-fix 100k-space shape backtracked for
+# minutes) still trips, but a milder super-linear regression gains
+# room to hide.
+_CPU_BUDGET_SECONDS = 0.5
 
 
-def _timed_analyse(body: str):
-    """``analyse_body`` plus a wall-clock reading de-noised for loaded
-    hosts: on a budget breach, re-measure twice and keep the minimum.
-    The inputs here are deterministic, so a real backtracking blow-up
-    reproduces its cost on every measurement; a descheduled worker
-    under a saturated test host (observed: 0.79s for a ~0.25s scan)
-    does not survive the re-measure."""
+def _timed_analyse(body: str) -> tuple[HookAnalysis, float]:
+    """``analyse_body`` plus a CPU-time reading (min of up to 3 runs).
+
+    CPU time (``time.process_time``), not wall clock: a real
+    backtracking blow-up burns CPU on every run of its deterministic
+    input, so its cost shows up in CPU time regardless of host load,
+    while a worker descheduled by a saturated test host accrues no
+    CPU while parked.  Wall clock plus min-of-3 was not enough: one
+    fully loaded host breached all three re-measures on a healthy
+    scan.  The min-of-3 stays to absorb what CPU time still sees
+    (allocator/GC pauses, cold caches on the first run)."""
     analysis = None
     elapsed = float("inf")
     for _ in range(3):
-        t0 = time.monotonic()
+        t0 = time.process_time()
         analysis = analyse_body(body)
-        elapsed = min(elapsed, time.monotonic() - t0)
-        if elapsed < _TIME_BUDGET_SECONDS:
+        elapsed = min(elapsed, time.process_time() - t0)
+        if elapsed < _CPU_BUDGET_SECONDS:
             break
     return analysis, elapsed
 
@@ -53,8 +64,8 @@ def test_curl_many_spaces_no_pipe_completes_fast() -> None:
     quantifiers backtracked quadratically on this shape."""
     body = "curl" + " " * 100_000
     analysis, elapsed = _timed_analyse(body)
-    assert elapsed < _TIME_BUDGET_SECONDS, (
-        f"curl + 100k spaces took {elapsed:.3f}s (min of 3) — "
+    assert elapsed < _CPU_BUDGET_SECONDS, (
+        f"curl + 100k spaces took {elapsed:.3f}s CPU (min of 3) — "
         "ReDoS regression"
     )
     assert "curl piped to shell" not in analysis.reasons
@@ -63,7 +74,7 @@ def test_curl_many_spaces_no_pipe_completes_fast() -> None:
 def test_wget_many_spaces_no_pipe_completes_fast() -> None:
     body = "wget" + " " * 100_000
     analysis, elapsed = _timed_analyse(body)
-    assert elapsed < _TIME_BUDGET_SECONDS
+    assert elapsed < _CPU_BUDGET_SECONDS
     assert "wget piped to shell" not in analysis.reasons
 
 
@@ -165,8 +176,8 @@ def test_huge_body_completes_fast() -> None:
     regardless of content."""
     body = ("curl " + " " * 512 + "\n") * 10_000
     _, elapsed = _timed_analyse(body)
-    assert elapsed < _TIME_BUDGET_SECONDS, (
-        f"multi-megabyte body took {elapsed:.3f}s (min of 3) — "
+    assert elapsed < _CPU_BUDGET_SECONDS, (
+        f"multi-megabyte body took {elapsed:.3f}s CPU (min of 3) — "
         "pattern-work cap regression"
     )
 
