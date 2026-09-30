@@ -278,6 +278,15 @@ def test_terminal_signal_in_prespawn_window_exits_before_spawn(
         _sweep_stub_stragglers(stub_marker)
 
 
+# Slow by construction, not by accident: the subject under test IS the
+# unreleased gate lapsing after its full _TEST_PRESPAWN_GATE_TIMEOUT_S
+# (10.0s), so the call phase always costs at least that — exactly the
+# default tier's RAPTOR_MAX_TEST_SECONDS budget. It cannot be made
+# faster in-test: the constant is read inside the spawned supervisor
+# subprocess, which a monkeypatch cannot cross. Don't shrink the
+# product bound to speed this up either — the window test above needs
+# the hold to stay long enough for its held/signal/release handshake.
+@pytest.mark.slow
 @needs_userns
 def test_prespawn_gate_hold_is_bounded(
     uds_dir: str, stub_marker: str, tmp_path: Path,
