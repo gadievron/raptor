@@ -925,7 +925,6 @@ class _checklist_lock:
         self._create = create
 
     def __enter__(self):
-        import fcntl
         import os
         flags = os.O_WRONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
         if self._create:
@@ -940,7 +939,27 @@ class _checklist_lock:
             return self
         self._lock_file = os.fdopen(fd, "w", encoding="utf-8")
         try:
-            fcntl.flock(self._lock_file, fcntl.LOCK_EX)
+            # Regularity + foreign-uid refusal, then bounded
+            # announce-once acquisition (shared helpers): the lock
+            # file sits in the run dir, so a pre-created foreign lock
+            # file must not be adopted — its holder would park every
+            # checklist writer forever — and a wedged holder fails
+            # the update loudly after the generous deadline instead
+            # of blocking it silently and unboundedly.
+            from core.atomic_fs.fs_lock import (
+                acquire_flock_bounded,
+                validate_lock_fd,
+            )
+            validate_lock_fd(fd, self._lock_path)
+            if not acquire_flock_bounded(
+                    fd, self._lock_path,
+                    subject="inventory checklist", stamp=True):
+                msg = (
+                    f"checklist lock {self._lock_path} still held "
+                    "past the bounded wait — refusing to proceed "
+                    "unserialised"
+                )
+                raise OSError(msg)
         except OSError:
             self._lock_file.close()
             self._lock_file = None
