@@ -9,7 +9,6 @@ import json
 import logging
 import os
 import re
-import stat as _stat_mod
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -745,15 +744,23 @@ def _metadata_lock(meta_path: Path):
             | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
             0o600,
         )
-        if not _stat_mod.S_ISREG(os.fstat(fd).st_mode):
-            raise OSError(
-                f"lock path {lock_path} is not a regular file")
+        # Regularity plus foreign-uid refusal (shared checker): the
+        # sandboxed child can pre-create the predictable `.lock`
+        # sibling; adopting it — the open SUCCEEDS, so the degrade arm
+        # below never fired — hands the child a standing hold over
+        # every lifecycle finaliser.
+        from core.atomic_fs.fs_lock import (
+            acquire_flock_bounded,
+            validate_lock_fd,
+        )
+        validate_lock_fd(fd, lock_path)
     except OSError as exc:
         # Lock file uncreatable (read-only dir mid-teardown, ENOSPC) or
         # tamper-shaped (symlink → ELOOP, FIFO → ENXIO / S_ISREG
-        # refusal) — proceed unserialised rather than failing the
-        # lifecycle, but LOUDLY: a silent unlocked degrade turned an
-        # injected error into invisible lost-update windows.
+        # refusal, foreign-uid lock file) — proceed unserialised rather
+        # than failing the lifecycle, but LOUDLY: a silent unlocked
+        # degrade turned an injected error into invisible lost-update
+        # windows.
         if fd is not None:
             with contextlib.suppress(OSError):
                 os.close(fd)
@@ -765,7 +772,18 @@ def _metadata_lock(meta_path: Path):
         yield
         return
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        if not acquire_flock_bounded(
+                fd, lock_path, subject="metadata", stamp=True):
+            # A holder that outlives the generous bounded wait is
+            # wedged or hostile — same loud unserialised disposition
+            # as an unopenable lock, never an unbounded silent stall.
+            logger.warning(
+                "metadata lock for %s: still held past the wait "
+                "deadline — proceeding UNSERIALISED; concurrent "
+                "status updates may be lost", path.name,
+            )
+            yield
+            return
         try:
             yield
         finally:
