@@ -61,6 +61,32 @@ class TestDetectGitProvenance:
         result = detect_git_provenance(tmp_path)
         assert result.dirty is True
 
+    def test_dirty_probe_never_executes_repo_configured_filters(
+            self, tmp_path):
+        """The described target can arrive with its own hostile .git:
+        a committed `* filter=evil` .gitattributes plus
+        `filter.evil.clean=<cmd>` in .git/config turns any
+        worktree-re-hashing probe (`git status`, index refresh) into
+        command execution at the operator's uid. The dirty flag must
+        come from plumbing that never re-hashes content."""
+        repo = tmp_path / "target"
+        _init_repo(repo)
+        marker = tmp_path / "filter-executed"
+        (repo / ".gitattributes").write_text("* filter=evil\n")
+        _git(repo, "add", ".gitattributes")
+        _git(repo, "commit", "-m", "attrs")
+        _git(repo, "config", "filter.evil.clean", f"touch {marker} && cat")
+        (repo / "f.txt").write_text("edited after commit\n")
+
+        result = detect_git_provenance(repo)
+
+        assert result.dirty is True
+        assert not marker.exists(), (
+            "the repo-configured clean filter EXECUTED during the "
+            "dirty probe — attacker-shipped .git config ran a command "
+            "outside any sandbox"
+        )
+
     def test_detached_head_branch_is_none(self, tmp_path):
         _init_repo(tmp_path)
         # Add a second commit so we have something to detach to

@@ -9,7 +9,10 @@ shared ``_git`` helper with ``untrusted=True`` — that layers
 ``safe_git_command``'s per-invocation overrides which
 neutralise hostile ``.git/config`` vectors
 (``core.fsmonitor`` / ``core.hooksPath`` / CVE-2024-32002
-family).
+family) — and the dirty flag comes from
+``core.git.dirty.probe_worktree_dirt``, which never lets git
+open a worktree file (clean-filter drivers have repo-chosen
+config names the overrides cannot blanket-disable).
 
 Best-effort throughout: a non-git target, a missing git
 binary, a timeout, or any individual command failure yields
@@ -24,6 +27,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from core.git.dirty import probe_worktree_dirt
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -35,7 +40,7 @@ class GitProvenance:
     git is unavailable, or every call timed out)."""
     branch: str | None           # current branch name; None when detached HEAD
     commit_short: str | None     # 7-12 char SHA
-    dirty: bool | None           # True/False, or None when status couldn't be read
+    dirty: bool | None           # True/False, or None when the probe couldn't read
     last_commit_date: str | None  # ISO 8601 (e.g. "2026-05-30T14:22:11+00:00")
 
 
@@ -61,13 +66,13 @@ def detect_git_provenance(target_path: Path) -> GitProvenance:
         target_path, "symbolic-ref", "--short", "HEAD", untrusted=True,
     )
 
-    # status --porcelain is empty on clean. Distinguish "couldn't read" (None)
-    # from "clean" (empty) from "dirty" (non-empty).
-    status = _git(target_path, "status", "--porcelain", untrusted=True)
-    if status is None:
-        dirty: bool | None = None
-    else:
-        dirty = bool(status)
+    # Dirtiness via core.git.dirty — `git status` (and even worktree
+    # plumbing like `diff-index HEAD`) re-hashes racily-clean entries
+    # through the repo's own clean-filter chain, i.e. command
+    # execution from a hostile .git. The probe compares index stat
+    # data against os.lstat instead and never lets git open a
+    # worktree file. True/False, or None when a channel failed.
+    dirty = probe_worktree_dirt(target_path).dirty
 
     # %cI = strict ISO 8601 committer date. Parseable by every datetime
     # library; readable by humans.
