@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TYPE_CHECKING
 
+from core.inventory.binary_builder import BINARY_PATH_PREFIX
 from core.source import read_text_capped, split_lines
 
 from ._util import safe_join
@@ -52,6 +53,11 @@ class TriageResult:
     # routed this function. Structured so the suppressions.jsonl audit
     # trail never depends on the wording of a prose reason string.
     vendor_tier: str | None = None
+    # The routing verdict's signal (banner/extension/path/structure/
+    # checklist/toolchain), stamped whenever vendor_tier is. Structured
+    # for the same reason: the executor's glance-escalation exemption
+    # keys on SIGNAL_TOOLCHAIN, never on prose.
+    vendor_signal: str | None = None
 
 
 _DEEP_DIVE_SLOC = 200
@@ -268,6 +274,7 @@ def classify_function(
                     token_budget=TOKEN_BUDGETS[TriageBucket.GLANCE],
                     priority_score=priority_score,
                     vendor_tier=vendor_verdict.kind,
+                    vendor_signal=vendor_verdict.signal,
                 )
             if vendor_verdict.corroborated:
                 if (
@@ -298,6 +305,7 @@ def classify_function(
                         token_budget=TOKEN_BUDGETS[TriageBucket.GLANCE],
                         priority_score=priority_score,
                         vendor_tier=vendor_verdict.kind,
+                        vendor_signal=vendor_verdict.signal,
                     )
                 reasons.append(
                     f"generated code ({vendor_verdict.signal}): "
@@ -309,6 +317,7 @@ def classify_function(
                     token_budget=TOKEN_BUDGETS[TriageBucket.SKIP],
                     priority_score=priority_score,
                     vendor_tier=vendor_verdict.kind,
+                    vendor_signal=vendor_verdict.signal,
                 )
             reasons.append(
                 f"generated code ({vendor_verdict.signal}): "
@@ -320,6 +329,7 @@ def classify_function(
                 token_budget=TOKEN_BUDGETS[TriageBucket.GLANCE],
                 priority_score=priority_score,
                 vendor_tier=vendor_verdict.kind,
+                vendor_signal=vendor_verdict.signal,
             )
         if not boundary:
             reasons.append(
@@ -332,6 +342,7 @@ def classify_function(
                 token_budget=TOKEN_BUDGETS[TriageBucket.GLANCE],
                 priority_score=priority_score,
                 vendor_tier=vendor_verdict.kind,
+                vendor_signal=vendor_verdict.signal,
             )
         # Boundary-adjacent vendored code: normal routing below.
 
@@ -421,8 +432,10 @@ def classify_all(
     ``file:function`` keys — a registration site knows the handler's
     name, not its defining file.
 
-    ``vendor_verdicts`` are per-FILE vendored/generated verdicts (see
-    core.audit.vendored_detector). Pinned and force-review gaps are
+    ``vendor_verdicts`` are per-FILE vendored/generated verdicts,
+    plus per-FUNCTION ``<file>::<name>`` toolchain verdicts for
+    binary checklist rows (see core.audit.vendored_detector). Pinned
+    and force-review gaps are
     exempt — an operator pin (or a corpus label pin) is an explicit
     review order the vendored tier must never eat.
     """
@@ -465,6 +478,20 @@ def classify_all(
             and not gap.get("force_review")
         ):
             vendor_verdict = vendor_verdicts.get(gap["file"])
+            if vendor_verdict is None and gap["file"].startswith(
+                BINARY_PATH_PREFIX
+            ):
+                # Binary checklist rows ONLY: the detector keys
+                # toolchain verdicts per FUNCTION (the shared
+                # binary:<stem> file key would demote the whole
+                # binary) — same joiner as toolchain_verdict_key,
+                # constructed never parsed. The prefix gate keeps a
+                # source gap from ever matching a FILE-keyed verdict
+                # whose (target-controlled) path happens to end
+                # ``::<name>``.
+                vendor_verdict = vendor_verdicts.get(
+                    f"{gap['file']}::{gap['name']}"
+                )
 
         # Import-resolved dangerous-callee signal for the corroborated
         # generated skip candidates only (the per-function mechanical

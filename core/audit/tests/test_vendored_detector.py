@@ -426,3 +426,175 @@ class TestTableLineWhitespaceRun:
             assert _TABLE_LINE_RE.match(row), row
         for non_row in ("int x = 5;", "0x1f )", "case 3:"):
             assert _TABLE_LINE_RE.match(non_row) is None, non_row
+
+
+# ── Toolchain names (binary checklist rows) ──────────────────────────
+
+
+def _binary_gap(name, provenance="demangled", file="binary:libx", **kw):
+    g = {
+        "file": file,
+        "name": name,
+        "line_start": 0,
+        "line_end": 0,
+        "sloc": 0,
+        "kind": "function",
+        "metadata": {"name_provenance": provenance},
+    }
+    g.update(kw)
+    return g
+
+
+class TestToolchainNameRules:
+    def test_implementation_namespaces_classify(self):
+        from core.audit.vendored_detector import classify_toolchain_name
+
+        for name in (
+            "std::vector<int>::_M_realloc_insert(int&&)",
+            "std::__cxx11::basic_string<char>::append(char const*)",
+            "__gnu_cxx::__normal_iterator<char*>::base() const",
+            "__cxxabiv1::__si_class_type_info::~__si_class_type_info()",
+        ):
+            assert classify_toolchain_name(name), name
+
+    def test_runtime_symbols_classify(self):
+        from core.audit.vendored_detector import classify_toolchain_name
+
+        for name in ("__cxa_throw", "__cxa_guard_acquire",
+                     "_Unwind_Resume", "_Unwind_Backtrace"):
+            assert classify_toolchain_name(name), name
+
+    def test_allocation_operators_classify(self):
+        from core.audit.vendored_detector import classify_toolchain_name
+
+        for name in (
+            "operator new(unsigned long)",
+            "operator new[](unsigned long)",
+            "operator delete(void*)",
+            "operator delete[](void*, unsigned long)",
+        ):
+            assert classify_toolchain_name(name), name
+
+    def test_reserved_members_classify(self):
+        from core.audit.vendored_detector import classify_toolchain_name
+
+        # Qualified and bare reserved-member spellings both classify —
+        # partial demangles drop the class qualifier.
+        assert classify_toolchain_name(
+            "__gnu_cxx::__ops::_Iter_less_iter::_M_apply(int*, int*)"
+        )
+        assert classify_toolchain_name("_M_realloc_insert")
+        assert classify_toolchain_name("_S_construct")
+
+    def test_disambiguation_suffix_stripped(self):
+        from core.audit.vendored_detector import (
+            _ADDR_SUFFIX_RE,
+            classify_toolchain_name,
+        )
+
+        # The strip is defensive normalization (every rule matches at
+        # the name start or anywhere, so the suffix cannot flip an
+        # outcome today) — pin the normalizer itself on all three
+        # builder-minted forms: bare, one-'+', multi-'+'.
+        assert _ADDR_SUFFIX_RE.sub("", "foo@0x1234") == "foo"
+        assert _ADDR_SUFFIX_RE.sub("", "foo@0x1234+") == "foo"
+        assert _ADDR_SUFFIX_RE.sub("", "foo@0x1234++") == "foo"
+        # And suffixed toolchain names still classify end-to-end.
+        assert classify_toolchain_name("std::string::size() const@0x1234")
+        assert classify_toolchain_name("__cxa_throw@0xdeadbeef+")
+
+    def test_first_party_names_never_classify(self):
+        from core.audit.vendored_detector import classify_toolchain_name
+
+        for name in (
+            "auparse_get_field_int",
+            "main",
+            "my_std::thing::run()",          # prefix must match exactly
+            "stdio_reader::read()",
+            "handle(std::_Rb_tree_iterator<int>)",   # std:: in params only
+            # _M_ member in the PARAMETER LIST only — pins the
+            # param-cut in the reserved-member rule (the name above
+            # pins the namespace rule, not the cut).
+            "handle_iter(std::vector<int>::_M_realloc_insert(int&&))",
+            "parse_config(std::string const&)",
+            "operator_new_wrapper",           # not the operator itself
+            "FUN_00401000",
+            "",
+        ):
+            assert classify_toolchain_name(name) == "", name
+
+
+class TestToolchainBinaryRows:
+    def test_trusted_provenances_earn_composite_verdicts(self):
+        from core.audit.vendored_detector import (
+            SIGNAL_TOOLCHAIN,
+            toolchain_verdict_key,
+        )
+
+        for provenance in (
+            "dwarf", "symtab", "dynsym_plt", "demangled",
+            "pattern_recovered",
+        ):
+            gap = _binary_gap(
+                "std::vector<int>::push_back(int const&)",
+                provenance=provenance,
+            )
+            verdicts = detect_vendored_files([gap])
+            key = toolchain_verdict_key(
+                "binary:libx", "std::vector<int>::push_back(int const&)",
+            )
+            assert set(verdicts) == {key}, provenance
+            v = verdicts[key]
+            assert v.kind == KIND_VENDORED
+            assert v.signal == SIGNAL_TOOLCHAIN
+            assert v.corroborated is False
+            assert provenance in v.detail
+
+    def test_untrusted_provenance_never_classifies(self):
+        # A guessed name (decompiler/LLM), a tool placeholder, or
+        # unknown provenance must not buy a review demotion.
+        for provenance in ("llm", "tool_synthetic", "decompiler", ""):
+            gap = _binary_gap("std::string::c_str() const",
+                              provenance=provenance)
+            assert detect_vendored_files([gap]) == {}, provenance
+
+    def test_missing_metadata_never_classifies(self):
+        gap = _binary_gap("std::string::c_str() const")
+        del gap["metadata"]
+        assert detect_vendored_files([gap]) == {}
+        gap["metadata"] = "not-a-dict"
+        assert detect_vendored_files([gap]) == {}
+
+    def test_binary_file_key_never_emitted(self):
+        # The shared binary:<stem> FILE key would demote every function
+        # in the binary — verdicts for binary rows are per-function.
+        gaps = [
+            _binary_gap("std::vector<int>::clear()"),
+            _binary_gap("auparse_init", provenance="dwarf"),
+        ]
+        verdicts = detect_vendored_files(gaps)
+        assert "binary:libx" not in verdicts
+        assert len(verdicts) == 1  # only the STL row, composite-keyed
+
+    def test_first_party_binary_rows_unclassified(self):
+        gap = _binary_gap("auparse_get_field_int", provenance="dwarf")
+        assert detect_vendored_files([gap]) == {}
+
+    def test_source_rows_unaffected_in_mixed_call(self, tmp_path):
+        from core.audit.vendored_detector import toolchain_verdict_key
+
+        gen = tmp_path / "wire.c"
+        gen.write_text(
+            "/* Code generated by protoc-c. DO NOT EDIT. */\n"
+            "int wire_f(void) { return 0; }\n"
+        )
+        gaps = [
+            _gap(file="wire.c", name="wire_f"),
+            _binary_gap("std::vector<int>::clear()"),
+        ]
+        verdicts = detect_vendored_files(gaps, target_path=tmp_path)
+        assert set(verdicts) == {
+            "wire.c",
+            toolchain_verdict_key("binary:libx", "std::vector<int>::clear()"),
+        }
+        assert verdicts["wire.c"].kind == KIND_GENERATED

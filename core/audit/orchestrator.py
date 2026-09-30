@@ -4732,7 +4732,11 @@ def _vendored_triage_verdicts(
         return {}
     vendor_verdicts: dict[str, Any] = {}
     try:
-        from .vendored_detector import KIND_GENERATED, detect_vendored_files
+        from .vendored_detector import (
+            KIND_GENERATED,
+            SIGNAL_TOOLCHAIN,
+            detect_vendored_files,
+        )
 
         vendor_verdicts = detect_vendored_files(
             gaps, target_path=config.target_path, checklist=checklist,
@@ -4743,13 +4747,21 @@ def _vendored_triage_verdicts(
         )
         return {}
     if vendor_verdicts:
+        # Binary rows are keyed per function (binary:<stem>::<name>);
+        # counting them as "files" would be untrue at any scale.
+        _n_toolchain = sum(
+            1 for v in vendor_verdicts.values()
+            if getattr(v, "signal", "") == SIGNAL_TOOLCHAIN
+        )
+        _n_files = len(vendor_verdicts) - _n_toolchain
         _n_gen = sum(
             1 for v in vendor_verdicts.values() if v.kind == KIND_GENERATED
         )
         logger.info(
             "vendored/generated triage: %d files detected "
-            "(%d generated, %d vendored)",
-            len(vendor_verdicts), _n_gen, len(vendor_verdicts) - _n_gen,
+            "(%d generated, %d vendored) + %d binary toolchain "
+            "function(s)",
+            _n_files, _n_gen, _n_files - _n_gen, _n_toolchain,
         )
     return vendor_verdicts
 
@@ -4781,6 +4793,14 @@ def _record_vendored_suppressions(
     skipped = glanced = 0
     for gap in gaps:
         verdict = vendor_verdicts.get(gap["file"])
+        if verdict is None and gap["file"].startswith(BINARY_PATH_PREFIX):
+            # Binary rows ONLY: toolchain verdicts are keyed per
+            # function (same joiner as
+            # vendored_detector.toolchain_verdict_key) — the shared
+            # binary:<stem> file key never carries one. The prefix
+            # gate keeps a source gap from matching a FILE-keyed
+            # verdict whose path happens to end ``::<name>``.
+            verdict = vendor_verdicts.get(f"{gap['file']}::{gap['name']}")
         if verdict is None:
             continue
         key = f"{gap['file']}:{gap['name']}"
@@ -6420,9 +6440,18 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         logger.debug("triage suppression records failed", exc_info=True)
     # MANDATORY audit trail: every vendored/generated skip/glance
     # decision leaves one suppressions.jsonl record — nothing is
-    # silently dropped. Counts surface in the run summary.
+    # silently dropped. Counts surface in the run summary. Binary
+    # toolchain verdicts are per-FUNCTION keys — counted apart so
+    # "files" stays true.
+    from core.audit.vendored_detector import SIGNAL_TOOLCHAIN as _SIG_TC
+    _n_tc = sum(
+        1 for v in vendor_verdicts.values()
+        if getattr(v, "signal", "") == _SIG_TC
+    )
     vendored_triage_counts = {
-        "files": len(vendor_verdicts), "skipped": 0, "glanced": 0,
+        "files": len(vendor_verdicts) - _n_tc,
+        "toolchain_functions": _n_tc,
+        "skipped": 0, "glanced": 0,
     }
     try:
         _n_vskip, _n_vglance = _record_vendored_suppressions(

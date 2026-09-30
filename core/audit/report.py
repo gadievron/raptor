@@ -233,6 +233,15 @@ def generate_report(
     if glance_capped:
         report["glance_escalation_capped"] = glance_capped
 
+    # Toolchain-screen depth stops (per-function dropped=False records
+    # in suppressions.jsonl) — binary toolchain rows that kept their
+    # glance verdict by DESIGN (name-evidence screen), not because a
+    # budget ran out. Counted here for parity with the cap downgrade
+    # above: both are depth stops the summary must disclose.
+    toolchain_screened = _load_toolchain_screen(out_dir)
+    if toolchain_screened:
+        report["toolchain_glance_screened"] = toolchain_screened
+
     # Analysis gaps: files a parser abandoned (budget exceeded,
     # escaped parse error). Counted here so a crafted file that
     # defeats a parser is visible in the report, never a silent skip.
@@ -1858,6 +1867,35 @@ def _load_glance_cap(out_dir: Path) -> int:
     return capped
 
 
+def _load_toolchain_screen(out_dir: Path) -> int:
+    """Count toolchain glance screens from the suppressions.jsonl
+    audit trail (rule_id ``audit:toolchain-screen``, written
+    ``dropped=False`` — the glance verdict survives; the record marks
+    the by-design withheld full review). Returns ``0`` when nothing
+    was screened."""
+    path = out_dir / "suppressions.jsonl"
+    if not path.exists():
+        return 0
+    screened = 0
+    try:
+        with Path(path).open(encoding="utf-8") as f:  # raw-open: RAPTOR-written report artifact in the run dir
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                if rec.get("rule_id") == "audit:toolchain-screen":
+                    screened += 1
+    except OSError:
+        return 0
+    return screened
+
+
 def _load_findings(out_dir: Path) -> list[dict[str, Any]]:
     path = out_dir / "findings.json"
     if not path.exists():
@@ -2285,6 +2323,14 @@ def _format_summary(report: dict[str, Any]) -> str:
             "function(s) kept their glance verdict without a full "
             "review (escalation budget exhausted) — per-function "
             "records in suppressions.jsonl"
+        )
+    toolchain_screened = report.get("toolchain_glance_screened")
+    if toolchain_screened:
+        lines.append(
+            f"Toolchain screen: {toolchain_screened} binary toolchain "
+            "function(s) kept their glance verdict without a full "
+            "review (by-design name-evidence screen, not budget) — "
+            "per-function records in suppressions.jsonl"
         )
 
     findings = report.get("findings", [])

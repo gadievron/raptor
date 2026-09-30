@@ -1420,6 +1420,78 @@ def _record_glance_cap_disclosure(
     )
 
 
+def _toolchain_screened(task: Any, shared: Any) -> bool:
+    """True when triage routed this task on a TOOLCHAIN verdict —
+    statically-linked C++ stdlib/runtime code identified by name
+    provenance (core.audit.vendored_detector.SIGNAL_TOOLCHAIN).
+
+    Keys on the structured ``vendor_signal`` field, never prose.
+    Pinned / force-review rows never carry a vendor verdict (the
+    triage lookup is gated), so an operator pin always keeps its
+    escalation. Fail direction: no triage state, no verdict, or any
+    other signal → False — the row competes for escalation as before.
+    """
+    triage_results = getattr(shared, "triage_results", None)
+    if not triage_results:
+        return False
+    tr = triage_results.get(task.key)
+    if tr is None:
+        return False
+    try:
+        from .vendored_detector import SIGNAL_TOOLCHAIN
+    except ImportError:
+        return False
+    return getattr(tr, "vendor_signal", None) == SIGNAL_TOOLCHAIN
+
+
+def _record_toolchain_screen_disclosure(
+    config: Any, task: Any, outcome: Any,
+) -> None:
+    """suppressions.jsonl record for a glance-suspicious verdict that
+    committed WITHOUT competing for an escalation because the row is
+    toolchain-screened.
+
+    Same channel and shape as the cap disclosure: ``dropped=False``
+    (nothing suppressed — the glance verdict committed, and a finding
+    still passes the refutation gates); the record marks that the
+    depth stopped at glance BY DESIGN so downstream readers can
+    distinguish it from a cap exhaustion. Best-effort — a failure
+    here never blocks the commit path.
+    """
+    out_dir = getattr(config, "out_dir", None)
+    if not out_dir:
+        return
+    try:
+        from pathlib import Path
+
+        from core.analysis.reach_chokepoint import record_suppression
+    except ImportError:
+        return
+    file_path = task.gap.get("file", "") or ""
+    function = task.gap.get("name", "") or ""
+    line = task.gap.get("line_start", 0) or 0
+    record_suppression(
+        Path(out_dir),
+        finding={
+            "finding_id": f"audit-toolchain-screen:{file_path}:{function}:{line}",
+            "rule_id": "audit:toolchain-screen",
+            "file_path": file_path,
+            "line": line,
+            "function": function,
+        },
+        verdict="toolchain_glance_screened",
+        reason=(
+            "glance flagged suspicious but the function is "
+            "toolchain-screened (statically-linked C++ stdlib/runtime "
+            "code, name-provenance gated) — the glance verdict "
+            "committed without burning a paid escalation"
+        ),
+        dropped=False,
+        extra={"stage": "glance-escalation",
+               "glance_status": str(outcome.status)},
+    )
+
+
 def _is_glance(task: Any, shared: Any) -> bool:
     """True when the task is classified as GLANCE by the triage pass."""
     triage_results = getattr(shared, "triage_results", None)
@@ -1562,13 +1634,23 @@ def _process_glance_batch_inner(
             # the full review) but its LLM spend stays on the ledger.
             # Past the cap the guess commits as before, but never
             # silently: the depth downgrade is disclosed per function.
+            # Toolchain-screened rows (triage's structured toolchain
+            # verdict: statically-linked stdlib/runtime code) never
+            # enter the cap race — their suspicious guesses commit at
+            # glance depth by design, disclosed per function, so
+            # first-party rows keep the paid escalations.
             glance_escalates = False
             if outcome.status == "suspicious":
-                glance_escalates = _escalate_glance_suspicious(
-                    task, shared, result,
-                )
-                if not glance_escalates:
-                    _record_glance_cap_disclosure(config, task, outcome)
+                if _toolchain_screened(task, shared):
+                    _record_toolchain_screen_disclosure(
+                        config, task, outcome,
+                    )
+                else:
+                    glance_escalates = _escalate_glance_suspicious(
+                        task, shared, result,
+                    )
+                    if not glance_escalates:
+                        _record_glance_cap_disclosure(config, task, outcome)
             if glance_escalates:
                 if outcome.cost_usd:
                     with result._lock:

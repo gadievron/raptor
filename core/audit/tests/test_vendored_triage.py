@@ -683,3 +683,171 @@ class TestFlagThreading:
             vendored_triage=False,
         )
         assert self._build(opts).vendored_triage is False
+
+
+# ── Binary toolchain rows (composite file::name verdict keys) ─────────
+
+
+def _toolchain():
+    from core.audit.vendored_detector import SIGNAL_TOOLCHAIN
+
+    return VendorVerdict(
+        kind=KIND_VENDORED,
+        signal=SIGNAL_TOOLCHAIN,
+        detail="C++ implementation namespace (std::…) "
+               "[name provenance: demangled]",
+    )
+
+
+def _binary_gap(name, file="binary:libx", **kw):
+    g = {
+        "file": file,
+        "name": name,
+        "line_start": 0,
+        "line_end": 0,
+        "sloc": 0,
+        "kind": "function",
+        "metadata": {"name_provenance": "demangled"},
+    }
+    g.update(kw)
+    return g
+
+
+class TestToolchainRouting:
+    def test_toolchain_verdict_glances(self):
+        tr = classify_function(
+            file="binary:libx",
+            function="std::vector<int>::push_back(int const&)",
+            sloc=0,
+            vendor_verdict=_toolchain(),
+        )
+        assert tr.bucket == TriageBucket.GLANCE
+        assert vendor_decision(tr) == "glance"
+        assert tr.vendor_tier == KIND_VENDORED
+        assert tr.vendor_signal == "toolchain"
+
+    def test_toolchain_boundary_keeps_normal_routing(self):
+        tr = classify_function(
+            file="binary:libx",
+            function="std::vector<int>::push_back(int const&)",
+            sloc=0,
+            is_sink=True,
+            vendor_verdict=_toolchain(),
+        )
+        assert vendor_decision(tr) is None
+        assert tr.vendor_signal is None
+
+    def test_vendor_signal_stamped_on_every_vendor_route(self):
+        # The structured signal rides every vendor-routed result, not
+        # just toolchain rows (the executor exemption must be able to
+        # trust its absence as much as its presence).
+        tr_path = classify_function(
+            file="third_party/z.c", function="f", sloc=100,
+            vendor_verdict=_vendored(),
+        )
+        assert tr_path.vendor_signal == "path"
+        tr_gen = classify_function(
+            file="gen/wire.c", function="f", sloc=3,
+            vendor_verdict=_generated(corroborated=True),
+        )
+        assert tr_gen.vendor_signal == "banner"
+
+    def test_classify_all_composite_key_lookup(self):
+        gaps = [
+            _binary_gap("std::vector<int>::push_back(int const&)"),
+            _binary_gap("auparse_init"),
+        ]
+        verdicts = {
+            "binary:libx::std::vector<int>::push_back(int const&)":
+                _toolchain(),
+        }
+        results = classify_all(gaps, vendor_verdicts=verdicts)
+        stl = results[
+            "binary:libx:std::vector<int>::push_back(int const&):0"
+        ]
+        assert stl.bucket == TriageBucket.GLANCE
+        assert stl.vendor_signal == "toolchain"
+        first_party = results["binary:libx:auparse_init:0"]
+        assert first_party.vendor_tier is None
+        assert first_party.vendor_signal is None
+
+    def test_composite_lookup_gated_on_binary_prefix(self):
+        # A SOURCE gap must never match a FILE-keyed verdict whose
+        # (target-controlled) path happens to end ``::<name>`` — the
+        # composite fallback only runs for binary:* checklist rows.
+        gaps = [
+            {
+                "file": "x.c", "name": "evil", "line_start": 0,
+                "line_end": 0, "sloc": 5, "kind": "function",
+            },
+        ]
+        verdicts = {"x.c::evil": _generated(corroborated=True)}
+        results = classify_all(gaps, vendor_verdicts=verdicts)
+        tr = results["x.c:evil:0"]
+        assert vendor_decision(tr) is None
+        assert tr.vendor_tier is None
+        assert tr.vendor_signal is None
+
+    def test_recorder_composite_lookup_gated_on_binary_prefix(
+        self, tmp_path,
+    ):
+        from core.audit.orchestrator import _record_vendored_suppressions
+
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        gaps = [
+            {
+                "file": "x.c", "name": "evil", "line_start": 0,
+                "line_end": 0, "sloc": 5, "kind": "function",
+            },
+        ]
+        verdicts = {"x.c::evil": _generated(corroborated=True)}
+        triage = classify_all(gaps, vendor_verdicts=verdicts)
+        skipped, glanced = _record_vendored_suppressions(
+            gaps, triage, verdicts, out_dir,
+        )
+        assert (skipped, glanced) == (0, 0)
+        assert not (out_dir / "suppressions.jsonl").exists()
+
+    def test_pinned_binary_gap_exempt_from_composite_lookup(self):
+        gaps = [
+            _binary_gap(
+                "std::vector<int>::push_back(int const&)", pinned=True,
+            ),
+        ]
+        verdicts = {
+            "binary:libx::std::vector<int>::push_back(int const&)":
+                _toolchain(),
+        }
+        results = classify_all(gaps, vendor_verdicts=verdicts)
+        tr = results[
+            "binary:libx:std::vector<int>::push_back(int const&):0"
+        ]
+        assert vendor_decision(tr) is None
+        assert tr.vendor_signal is None
+
+    def test_composite_glance_decision_recorded(self, tmp_path):
+        from core.audit.orchestrator import _record_vendored_suppressions
+
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        gaps = [_binary_gap("std::vector<int>::push_back(int const&)")]
+        verdicts = {
+            "binary:libx::std::vector<int>::push_back(int const&)":
+                _toolchain(),
+        }
+        triage = classify_all(gaps, vendor_verdicts=verdicts)
+
+        skipped, glanced = _record_vendored_suppressions(
+            gaps, triage, verdicts, out_dir,
+        )
+        assert (skipped, glanced) == (0, 1)
+        rec = json.loads(
+            (out_dir / "suppressions.jsonl").read_text().splitlines()[0]
+        )
+        assert rec["verdict"] == "vendored_code"
+        assert rec["tier"] == "glance"
+        assert rec["signal"] == "toolchain"
+        assert rec["function"] == "std::vector<int>::push_back(int const&)"
+        assert rec["file_path"] == "binary:libx"
+        assert rec["dropped"] is False

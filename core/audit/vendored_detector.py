@@ -21,7 +21,16 @@ project list:
 * vendored-path conventions (``vendor/``, ``third_party/``,
   ``external/``, ``node_modules/``, …);
 * formatting signatures of generated code (enormous constant tables;
-  swarms of one-line functions with near-zero comment variance).
+  swarms of one-line functions with near-zero comment variance);
+* toolchain-runtime NAMES on binary checklist rows (``std::`` /
+  ``__gnu_cxx::`` namespaces, ``__cxa_*`` / ``_Unwind_*`` runtime
+  symbols, reserved ``_M_``/``_S_`` members, ``operator
+  new``/``delete``) — binary rows have no path, banner, or readable
+  text to classify, so statically-linked libstdc++/libgcc code the
+  target never wrote reaches full review priced like first-party
+  code. Name-keyed: verdicts for binary rows use the composite
+  ``<file>::<name>`` key (the ``binary:<stem>`` file key is shared by
+  every function in the binary and must never demote all of them).
 
 Trust model (mirrors the inventory builder's anti-evasion rule): the
 in-file banner AND the filename are TARGET-CONTROLLED. Any single
@@ -29,7 +38,14 @@ such signal — a banner alone, a generated-output filename alone —
 therefore NEVER earns the skip tier, only the glance tier (the
 function still gets a cheap LLM look, and every decision leaves a
 suppressions.jsonl record; nothing becomes invisible on the target's
-say-so). The skip tier requires TWO distinct signals: a banner
+say-so). Binary toolchain names are target-controlled too (symbol
+tables are attacker-writable in a hostile binary), so they follow the
+same rule — glance, never skip — and are additionally gated on name
+PROVENANCE: only names minted from the binary's own symbol data
+(dwarf / symtab / dynsym_plt / demangled / pattern_recovered) ever
+classify; tool placeholders, decompiler reconstructions, LLM-assigned
+names, and unknown provenance never do (a guessed name must not buy a
+demotion). The skip tier requires TWO distinct signals: a banner
 corroborated by an independent generated-shaped path or filename
 (``core.inventory.exclusions.generated_marker_corroborated`` — the
 same corroboration the inventory layer demands before excluding a
@@ -51,7 +67,15 @@ from pathlib import Path, PurePosixPath
 from core.source import open_regular
 from typing import Any
 
+from core.inventory.binary_builder import BINARY_PATH_PREFIX
 from core.inventory.exclusions import generated_marker_corroborated
+from packages.ghidra.model import (
+    NAME_PROVENANCE_DEMANGLED,
+    NAME_PROVENANCE_DWARF,
+    NAME_PROVENANCE_DYNSYM_PLT,
+    NAME_PROVENANCE_PATTERN_RECOVERED,
+    NAME_PROVENANCE_SYMTAB,
+)
 
 from ._util import safe_join
 
@@ -59,6 +83,11 @@ logger = logging.getLogger(__name__)
 
 KIND_GENERATED = "generated"
 KIND_VENDORED = "vendored"
+
+# Signal value for binary toolchain-name verdicts. Structured (the
+# executor's escalation exemption keys on it via TriageResult.
+# vendor_signal) — never derived from prose.
+SIGNAL_TOOLCHAIN = "toolchain"
 
 # Banner scan window: wider than the inventory builder's 10 lines —
 # generator banners routinely sit BELOW a license block (the Eurydice
@@ -153,6 +182,120 @@ _VENDORED_SEGMENTS = frozenset({
     "deps", "node_modules", "bundled", "subprojects",
 })
 
+# ── Toolchain names (binary checklist rows) ──────────────────────────
+#
+# Statically-linked C++ standard-library and compiler-runtime code
+# survives in stripped-adjacent binaries under its demangled linkage
+# names. Checklist items carry those names ALREADY demangled
+# (packages.ghidra import seam), so the rules match demangled
+# spellings only — mangled ``_ZNSt…`` names simply never match.
+#
+# Provenance gate: a name only classifies when it was minted from the
+# binary's own symbol data or a signature match against known library
+# code. Decompiler reconstructions and LLM-assigned names are the
+# tool's/model's GUESS about what the code is — a guess must never
+# buy a review demotion — and tool placeholders (FUN_*) carry no name
+# evidence at all. Empty provenance is unknown: lowest trust class,
+# never assume better (packages.ghidra.model doctrine).
+_TOOLCHAIN_NAME_PROVENANCES = frozenset({
+    NAME_PROVENANCE_DWARF,
+    NAME_PROVENANCE_SYMTAB,
+    NAME_PROVENANCE_DYNSYM_PLT,
+    NAME_PROVENANCE_DEMANGLED,
+    NAME_PROVENANCE_PATTERN_RECOVERED,
+})
+
+# Implementation namespaces: the name (not a parameter type) lives in
+# a namespace reserved for the C++ implementation.
+_TOOLCHAIN_NS_PREFIXES: tuple[str, ...] = (
+    "std::", "__gnu_cxx::", "__cxxabiv1::",
+)
+# C++ ABI / unwinder runtime entry points (Itanium ABI reserved).
+_TOOLCHAIN_RUNTIME_PREFIXES: tuple[str, ...] = (
+    "__cxa_", "_Unwind_",
+)
+# Global allocation operators (libstdc++/libsupc++ replaceable
+# operators; a project REPLACING operator new is boundary-adjacent by
+# other signals and keeps normal routing there).
+_TOOLCHAIN_OPERATOR_PREFIXES: tuple[str, ...] = (
+    "operator new", "operator delete",
+)
+# Reserved implementation-space members: ``_M_`` (member) / ``_S_``
+# (static member) prefixes are libstdc++'s internal convention, and
+# any ``_<capital>`` identifier is reserved for the implementation in
+# every scope (C++ [lex.name]). Matched against the qualified
+# function name only — the parameter list is cut first so a
+# first-party ``handle(std::vector<int>::_M_realloc_insert(int&&))``
+# never classifies on its parameter types.
+_RESERVED_MEMBER_RE = re.compile(r"(?:^|::)_[MS]_\w")
+
+# Duplicate-name disambiguation suffix minted by the inventory
+# builder: ``foo@0x1234`` for the first duplicate, optional ``+``
+# de-collision tails after that. Stripping it is defensive
+# normalization — every rule above matches at the name start
+# (``startswith``) or anywhere (``search``), so a trailing suffix
+# cannot flip an outcome today; the strip keeps that true if a rule
+# ever anchors at the end or exact-matches.
+_ADDR_SUFFIX_RE = re.compile(r"@0x[0-9a-fA-F]+\+*$")
+
+
+def classify_toolchain_name(name: str) -> str:
+    """Evidence detail when *name* is a C++ toolchain-runtime name,
+    else "". Matches demangled spellings only; conservative by
+    construction — no rule match → ""."""
+    base = _ADDR_SUFFIX_RE.sub("", name).strip()
+    if not base:
+        return ""
+    for prefix in _TOOLCHAIN_NS_PREFIXES:
+        if base.startswith(prefix):
+            return f"C++ implementation namespace ({prefix}…)"
+    for prefix in _TOOLCHAIN_RUNTIME_PREFIXES:
+        if base.startswith(prefix):
+            return f"C++ ABI/unwinder runtime symbol ({prefix}*)"
+    for prefix in _TOOLCHAIN_OPERATOR_PREFIXES:
+        if base.startswith(prefix):
+            return f"global allocation operator ({prefix})"
+    # Qualified name only — cut the parameter list before looking for
+    # reserved members ("(" never appears in a qualifier; "operator()"
+    # loses its parens here but carries no _M_/_S_ member anyway).
+    qualified = base.split("(", 1)[0]
+    if _RESERVED_MEMBER_RE.search(qualified):
+        return "reserved implementation-space member (_M_/_S_ prefix)"
+    return ""
+
+
+def toolchain_verdict_key(file_path: str, name: str) -> str:
+    """Composite verdict-map key for one binary checklist row.
+
+    Binary rows share one ``binary:<stem>`` file key across the whole
+    binary — a FILE-level verdict there would demote every function
+    in it. Verdicts for binary rows are therefore keyed per function;
+    the joiner is only ever CONSTRUCTED (here) and looked up with the
+    same call, never parsed apart."""
+    return f"{file_path}::{name}"
+
+
+def _classify_binary_gap(gap: dict[str, Any]) -> VendorVerdict | None:
+    """Toolchain verdict for one binary checklist gap, or None."""
+    name = gap.get("name") or ""
+    if not name:
+        return None
+    metadata = gap.get("metadata")
+    provenance = ""
+    if isinstance(metadata, dict):
+        provenance = str(metadata.get("name_provenance") or "")
+    if provenance not in _TOOLCHAIN_NAME_PROVENANCES:
+        return None
+    detail = classify_toolchain_name(name)
+    if not detail:
+        return None
+    return VendorVerdict(
+        kind=KIND_VENDORED,
+        signal=SIGNAL_TOOLCHAIN,
+        detail=f"{detail} [name provenance: {provenance}]",
+    )
+
+
 # ── Structural signatures ─────────────────────────────────────────────
 #
 # Constant-table shape: a file that is mostly numeric-literal rows or
@@ -230,6 +373,11 @@ def detect_vendored_files(
 ) -> dict[str, VendorVerdict]:
     """Classify every distinct gap file. Returns ``{file: verdict}``.
 
+    Binary checklist gaps (``binary:<stem>`` file sentinel) have no
+    readable text or path to classify; they are routed through the
+    toolchain NAME classifier instead and keyed per function
+    (:func:`toolchain_verdict_key`) — never by their shared file key.
+
     ``checklist`` (optional) supplies the inventory builder's own
     ``generated_marker: "uncorroborated"`` flags so banner evidence
     the builder already found is consumed without re-reading files.
@@ -237,10 +385,19 @@ def detect_vendored_files(
     banner/structure evidence (path and filename signals still apply).
     """
     by_file: dict[str, list[dict[str, Any]]] = {}
+    binary_verdicts: dict[str, VendorVerdict] = {}
     for gap in gaps:
         file_path = gap.get("file", "")
-        if file_path:
-            by_file.setdefault(file_path, []).append(gap)
+        if not file_path:
+            continue
+        if file_path.startswith(BINARY_PATH_PREFIX):
+            verdict = _classify_binary_gap(gap)
+            if verdict is not None:
+                binary_verdicts[
+                    toolchain_verdict_key(file_path, gap.get("name") or "")
+                ] = verdict
+            continue
+        by_file.setdefault(file_path, []).append(gap)
 
     marker_flags = _checklist_marker_flags(checklist)
 
@@ -255,6 +412,7 @@ def detect_vendored_files(
         )
         if verdict is not None:
             verdicts[file_path] = verdict
+    verdicts.update(binary_verdicts)
     return verdicts
 
 

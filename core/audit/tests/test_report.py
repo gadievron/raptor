@@ -242,6 +242,54 @@ class TestFormatSummary:
         assert "Findings" not in summary.split("Tool-confirmed")[0]
 
 
+class TestToolchainScreenSurfacing:
+    @staticmethod
+    def _screen_record(function: str) -> str:
+        return json.dumps({
+            "rule_id": "audit:toolchain-screen",
+            "verdict": "toolchain_glance_screened",
+            "file_path": "binary:libx",
+            "function": function,
+            "dropped": False,
+        })
+
+    def test_loader_counts_screen_records(self, tmp_path: Path):
+        from core.audit.report import _load_toolchain_screen
+
+        (tmp_path / "suppressions.jsonl").write_text(
+            "\n".join([
+                self._screen_record("std::vector<int>::push_back(int)"),
+                self._screen_record("__cxa_throw"),
+                json.dumps({"rule_id": "audit:glance-escalation-cap"}),
+            ]) + "\n"
+        )
+        assert _load_toolchain_screen(tmp_path) == 2
+
+    def test_loader_zero_without_records(self, tmp_path: Path):
+        from core.audit.report import _load_toolchain_screen
+
+        assert _load_toolchain_screen(tmp_path) == 0
+        (tmp_path / "suppressions.jsonl").write_text(
+            json.dumps({"rule_id": "audit:vendored-triage"}) + "\n"
+        )
+        assert _load_toolchain_screen(tmp_path) == 0
+
+    def test_report_field_and_summary_line(self, tmp_path: Path):
+        (tmp_path / "suppressions.jsonl").write_text(
+            self._screen_record("std::vector<int>::push_back(int)")
+            + "\n"
+        )
+        report = generate_report(tmp_path)
+        assert report["toolchain_glance_screened"] == 1
+        assert "Toolchain screen: 1 binary toolchain" in report["summary"]
+        assert "by-design name-evidence screen" in report["summary"]
+
+    def test_no_summary_line_without_records(self, tmp_path: Path):
+        report = generate_report(tmp_path)
+        assert "toolchain_glance_screened" not in report
+        assert "Toolchain screen:" not in report["summary"]
+
+
 class TestGenerateReport:
     def test_basic_report(self, tmp_path: Path):
         # Post-migration: review state comes from the review journal,

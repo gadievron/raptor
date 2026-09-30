@@ -447,3 +447,146 @@ class TestReportSurface:
         )
         assert _load_glance_cap(out_dir) == 0
         assert "Glance-escalation cap" not in _format_summary({"stats": {}})
+
+
+class TestToolchainScreen:
+    """Toolchain-screened rows (triage vendor_signal="toolchain")
+    commit suspicious glance verdicts WITHOUT competing for a paid
+    escalation — disclosed per function in suppressions.jsonl."""
+
+    @staticmethod
+    def _screened_shared(task, signal="toolchain"):
+        shared = _shared(task)
+        shared.triage_results[task.key] = TriageResult(
+            bucket=TriageBucket.GLANCE,
+            reasons=("vendored code (toolchain): std:: namespace",),
+            token_budget=TOKEN_BUDGETS[TriageBucket.GLANCE],
+            vendor_tier="vendored",
+            vendor_signal=signal,
+        )
+        return shared
+
+    def test_suspicious_toolchain_row_commits_without_cap_burn(
+        self, tmp_path, env,
+    ):
+        import json
+
+        task = _task(file="binary:libx", name="std::vector<int>::clear()",
+                     line=0)
+        shared = self._screened_shared(task)
+        result = _result()
+        config = _config(tmp_path)
+        review_calls: list = []
+
+        _run_batch(
+            [task],
+            [_glance_outcome("suspicious", file="binary:libx",
+                             function="std::vector<int>::clear()")],
+            shared, config, result, review_calls,
+        )
+
+        # No full review, no escalation slot consumed, no cap denial.
+        assert review_calls == []
+        assert result.glance_escalated == 0
+        assert result.glance_escalation_capped == 0
+        # The glance verdict committed.
+        assert len(env) == 1
+        assert result.suspicious == 1
+        assert "force_review" not in task.gap
+        assert shared.triage_results[task.key].bucket == TriageBucket.GLANCE
+        # Per-function disclosure, distinguishable from cap exhaustion.
+        recs = [
+            json.loads(line) for line in
+            (config.out_dir / "suppressions.jsonl")
+            .read_text().splitlines() if line.strip()
+        ]
+        screened = [r for r in recs
+                    if r.get("verdict") == "toolchain_glance_screened"]
+        assert len(screened) == 1
+        rec = screened[0]
+        assert rec["rule_id"] == "audit:toolchain-screen"
+        assert rec["function"] == "std::vector<int>::clear()"
+        assert rec["dropped"] is False
+        assert not any(
+            r.get("verdict") == "glance_escalation_capped" for r in recs
+        )
+
+    def test_mixed_batch_first_party_row_still_escalates(
+        self, tmp_path, env,
+    ):
+        stl = _task(file="binary:libx", name="std::string::append(char)",
+                    line=0)
+        fp = _task(file="binary:libx", name="auparse_init", line=0)
+        shared = self._screened_shared(stl)
+        shared.triage_results[fp.key] = TriageResult(
+            bucket=TriageBucket.GLANCE,
+            reasons=("small helper",),
+            token_budget=TOKEN_BUDGETS[TriageBucket.GLANCE],
+        )
+        result = _result()
+        review_calls: list = []
+
+        _run_batch(
+            [stl, fp],
+            [_glance_outcome("suspicious", file="binary:libx",
+                             function="std::string::append(char)"),
+             _glance_outcome("suspicious", file="binary:libx",
+                             function="auparse_init")],
+            shared, _config(tmp_path), result, review_calls,
+        )
+
+        # The first-party row took the escalation; the STL row did not.
+        assert review_calls == [fp.gap]
+        assert result.glance_escalated == 1
+        assert result.glance_escalation_capped == 0
+        assert len(env) == 1  # the screened STL glance committed
+
+    def test_other_vendor_signals_are_not_screened(self, tmp_path, env):
+        # Only the structured toolchain signal exempts — path/banner
+        # vendored rows keep competing for escalation as before.
+        task = _task(file="third_party/z.c", name="f")
+        shared = self._screened_shared(task, signal="path")
+        result = _result()
+        review_calls: list = []
+
+        _run_batch(
+            [task], [_glance_outcome("suspicious", file="third_party/z.c")],
+            shared, _config(tmp_path), result, review_calls,
+        )
+
+        assert review_calls == [task.gap]
+        assert result.glance_escalated == 1
+
+    def test_screened_row_past_cap_records_screen_not_cap(
+        self, tmp_path, env,
+    ):
+        import json
+
+        from core.audit.executor import _GLANCE_ESCALATION_FLOOR
+
+        task = _task(file="binary:libx", name="std::vector<int>::clear()",
+                     line=0)
+        shared = self._screened_shared(task)
+        result = _result()
+        result.glance_escalated = _GLANCE_ESCALATION_FLOOR
+        config = _config(tmp_path)
+        review_calls: list = []
+
+        _run_batch(
+            [task],
+            [_glance_outcome("suspicious", file="binary:libx",
+                             function="std::vector<int>::clear()")],
+            shared, config, result, review_calls,
+        )
+
+        # Screened before the cap race: the denial counter never moves
+        # and the record names the DESIGNED depth stop, not exhaustion.
+        assert result.glance_escalation_capped == 0
+        recs = [
+            json.loads(line) for line in
+            (config.out_dir / "suppressions.jsonl")
+            .read_text().splitlines() if line.strip()
+        ]
+        assert [r.get("verdict") for r in recs] == [
+            "toolchain_glance_screened",
+        ]
