@@ -224,6 +224,50 @@ class TestRuledOutUnverifiedDisplay(unittest.TestCase):
         }), "Ruled Out (Unverified)")
 
 
+class TestDisplayVocabularyClosure(unittest.TestCase):
+    """The title-case fallback for unknown statuses is an open channel
+    into the counting vocabulary: "EXPLOITABLE" misses every exact
+    status_map key, title-cases to "Exploitable", and counts as a full
+    exploitable verdict without any pipeline stage having issued one.
+    Unknown statuses may still render as prose, but never as (or
+    prefixed by) verdict vocabulary."""
+
+    def test_all_caps_status_never_renders_exploitable(self):
+        self.assertEqual(get_display_status({"status": "EXPLOITABLE"}),
+                         "Unknown")
+
+    def test_all_caps_final_status_never_renders_exploitable(self):
+        self.assertEqual(
+            get_display_status({"final_status": "EXPLOITABLE"}), "Unknown")
+
+    def test_title_case_ruling_never_renders_ruled_out(self):
+        self.assertEqual(get_display_status(
+            {"ruling": {"status": "Ruled Out"}}), "Unknown")
+
+    def test_confirmed_prefix_never_counts(self):
+        # build_findings_summary buckets startswith("Confirmed") into
+        # confirmed_unrestricted — the fallback must not mint that
+        # prefix from an unknown status.
+        self.assertEqual(get_display_status({"status": "confirmed maybe"}),
+                         "Unknown")
+
+    def test_error_prefix_never_counts(self):
+        self.assertEqual(get_display_status({"status": "error_ish"}),
+                         "Unknown")
+
+    def test_disproven_variant_never_renders(self):
+        self.assertEqual(get_display_status({"status": "DISPROVEN"}),
+                         "Unknown")
+
+    def test_non_verdict_unknown_status_still_renders(self):
+        # The open fallback stays open for genuinely new NON-verdict
+        # statuses — producers aren't blocked on a table update.
+        self.assertEqual(get_display_status({"status": "pending"}),
+                         "Pending")
+        self.assertEqual(get_display_status({"status": "needs_rebuild"}),
+                         "Needs Rebuild")
+
+
 class TestTitleCaseType(unittest.TestCase):
 
     def test_buffer_overflow(self):

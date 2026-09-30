@@ -51,6 +51,20 @@ _SECURITY_RULING_STATUSES = frozenset({
     "exploitable",
 })
 
+#: Display strings (prefixes) reserved for the exact status_map
+#: entries in get_display_status. The open title-case fallback exists
+#: so NEW non-verdict statuses render without a table update — but it
+#: must never mint verdict vocabulary: "EXPLOITABLE" misses every
+#: exact map key yet title-cases to "Exploitable", which
+#: build_findings_summary counts as a full exploitable verdict (and
+#: its startswith("Confirmed") / startswith("Error") buckets make the
+#: whole prefix space counting-relevant, not just exact strings).
+#: Fallback results matching these prefixes render as "Unknown".
+_VERDICT_DISPLAY_PREFIXES = (
+    "Exploitable", "Confirmed", "Ruled Out", "False Positive",
+    "Unconfirmed", "Error", "Disproven",
+)
+
 
 def _stage_ruling_status(finding: dict[str, Any]) -> str:
     """A validate-pipeline security ruling for the finding, or "".
@@ -178,7 +192,18 @@ def get_display_status(finding: dict[str, Any]) -> str:
         "mitigated": "Ruled Out",
         "unreachable": "Ruled Out",
     }
-    return status_map.get(status, status.replace("_", " ").title() if status else "Unknown")
+    mapped = status_map.get(status)
+    if mapped is not None:
+        return mapped
+    if not status:
+        return "Unknown"
+    # Open fallback for unknown NON-verdict statuses only — verdict
+    # vocabulary comes exclusively from the exact map entries above
+    # (see _VERDICT_DISPLAY_PREFIXES).
+    title = status.replace("_", " ").title()
+    if title.startswith(_VERDICT_DISPLAY_PREFIXES):
+        return "Unknown"
+    return title
 
 
 _DISPLAY_NAMES = {
