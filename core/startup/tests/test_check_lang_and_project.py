@@ -125,6 +125,31 @@ class CheckActiveProjectTest(unittest.TestCase):
             line = startup_init.check_active_project()
         self.assertIsNone(line)
 
+    def test_project_line_escapes_control_bytes(self) -> None:
+        """The target field is deliberately charset-unrestricted
+        (paths may carry odd bytes), so the READ side owns escaping:
+        a registry target with ESC/OSC/BEL/bidi bytes must render
+        inert on the banner line — which reaches the operator's
+        terminal at every session start and is reprinted verbatim
+        from .startup-output."""
+        import json
+        with TemporaryDirectory() as d:
+            projects_dir = Path(d)
+            name = "demo-proj"
+            hostile_target = "/srv/repo\x1b]0;pwned\x07\x1b[2J‮-clone"
+            (projects_dir / f"{name}.json").write_text(json.dumps(
+                {"version": 1, "name": name, "target": hostile_target}
+            ))
+            with mock.patch("core.startup.get_active_name",
+                            return_value=name), \
+                 mock.patch("core.startup.PROJECTS_DIR", projects_dir):
+                line = startup_init.check_active_project()
+            self.assertIsNotNone(line)
+            for raw in ("\x1b", "\x07", "‮"):
+                self.assertNotIn(raw, line)
+            self.assertIn("pwned", line)  # content survives, escaped
+            self.assertIn("/srv/repo", line)
+
     def test_seeded_by_auto_returns_auto_detected_line(self) -> None:
         """The auto-detect variant comes from the session entry's
         seeded_by field (the retired machine-global `.auto` marker

@@ -1154,14 +1154,25 @@ def check_active_project() -> str | None:
         except Exception:  # noqa: BLE001 — banner is best-effort
             pass
 
+        # The target field is deliberately charset-unrestricted (paths
+        # may carry odd bytes) and the registry files are plain JSON on
+        # disk — escape at render like check_llm/check_env do, since
+        # the banner line reaches the operator terminal at every
+        # session start (and is reprinted verbatim from
+        # .startup-output).
+        from core.security.log_sanitisation import (
+            escape_nonprintable as _esc_np,
+        )
+        disp_name = _esc_np(str(name))
+        disp_target = _esc_np(str(proj_target))
         suffix = "`/project none` to clear for this session"
         if seeded_by == "auto":
-            line = (f"Auto-detected project: {name} ({proj_target}) "
+            line = (f"Auto-detected project: {disp_name} ({disp_target}) "
                     f"— {suffix}")
         else:
-            line = f"Project: {name} ({proj_target}) — {suffix}"
+            line = f"Project: {disp_name} ({disp_target}) — {suffix}"
         if bookmark and bookmark != name:
-            line += f" (default: {bookmark})"
+            line += f" (default: {_esc_np(str(bookmark))})"
         return line
     except Exception:  # noqa: BLE001
         return None
