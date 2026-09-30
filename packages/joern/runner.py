@@ -37,7 +37,7 @@ from .tunables import sandbox_cpu_limits
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -143,8 +143,51 @@ SCALA_FLOW_EMIT_DEF = (
 )
 
 
+#: Per-thread pin for the default sandbox runner. The default seam
+#: below re-resolves ``core.sandbox.run`` at every call, so a spawn
+#: made from a thread that outlives its submitter (the audit joern
+#: presweep) picks up whatever is globally live at SPAWN time — a
+#: transient process-wide patch of ``core.sandbox.run`` (test
+#: fixtures monkeypatch that seam) then silently steers a background
+#: build it never targeted. Submitters resolve the runner once via
+#: :func:`resolve_sandbox_runner` and pin it in the worker with
+#: :func:`bound_sandbox_runner`; an explicit ``subprocess_runner``
+#: argument still wins (the pin only replaces DEFAULT resolution).
+_thread_bound_runner = threading.local()
+
+
+def resolve_sandbox_runner() -> Callable[..., Any]:
+    """Resolve the default sandbox runner NOW, in the calling thread.
+
+    Submit-time companion to :func:`bound_sandbox_runner`: a caller
+    handing joern work to a background thread resolves the runner
+    while its own context is authoritative, then pins that resolution
+    for the worker. Raises exactly like the default seam (fail-closed
+    ``SandboxUnavailableError`` without the explicit opt-out).
+    """
+    return _default_sandbox_runner()
+
+
+@contextlib.contextmanager
+def bound_sandbox_runner(runner: Callable[..., Any]) -> Iterator[None]:
+    """Pin *runner* as the CURRENT thread's default sandbox runner.
+
+    Scoped and re-entrant: restores the previous pin (or none) on
+    exit. Other threads are unaffected.
+    """
+    prev = getattr(_thread_bound_runner, "runner", None)
+    _thread_bound_runner.runner = runner
+    try:
+        yield
+    finally:
+        _thread_bound_runner.runner = prev
+
+
 def _default_sandbox_runner():
     """Return the default sandbox runner for subprocess calls.
+
+    A thread-pinned runner (:func:`bound_sandbox_runner`) wins over
+    live resolution — see ``_thread_bound_runner``.
 
     Fail-closed: when ``core.sandbox`` cannot be imported this raises
     ``core.run.sandbox_policy.SandboxUnavailableError`` instead of
@@ -154,6 +197,9 @@ def _default_sandbox_runner():
     via ``RAPTOR_ALLOW_UNSANDBOXED_TOOLS=1`` (loud warning +
     security-event emission).
     """
+    bound = getattr(_thread_bound_runner, "runner", None)
+    if bound is not None:
+        return bound
     try:
         from core.sandbox import run as sandbox_run
         return sandbox_run

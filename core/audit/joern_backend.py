@@ -1821,14 +1821,42 @@ def resolve_joern_evidence(
     if joern_server is not None and joern_server.is_alive():
         _progress("Joern pre-sweep (server mode, background)...")
 
+    # The presweep thread outlives this call and, left to itself,
+    # would resolve its spawn seam (``core.sandbox.run``) lazily at
+    # each spawn — picking up whatever is globally live at that
+    # instant, including a transient process-wide patch some OTHER
+    # code in this process has installed by then (test fixtures
+    # monkeypatch that seam; a patched-in fake once dropped the cwd
+    # pin and left joern's ``workspace/`` debris at the caller's
+    # cwd). Resolve the runner NOW, while this caller's context is
+    # authoritative, and pin it for the worker. Resolution failure
+    # keeps its original surface — lazily, inside the thread, at
+    # first spawn (the future carries it to the drain).
+    from packages.joern.runner import bound_sandbox_runner, resolve_sandbox_runner
+    try:
+        pinned_runner = resolve_sandbox_runner()
+    except Exception:  # noqa: BLE001 — fail exactly where the lazy seam would
+        pinned_runner = None
+
+    def _presweep_job() -> dict[str, list] | None:
+        kwargs = dict(
+            abort_check=abort_event.is_set if abort_event is not None else None,
+            deadline_monotonic=deadline_monotonic,
+            scope_exclude_dirs=scope_exclude_dirs,
+        )
+        if pinned_runner is None:
+            return build_joern_evidence(
+                target_path, out_dir, joern_overrides, _progress,
+                joern_server, **kwargs,
+            )
+        with bound_sandbox_runner(pinned_runner):
+            return build_joern_evidence(
+                target_path, out_dir, joern_overrides, _progress,
+                joern_server, **kwargs,
+            )
+
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="joern-cpg")
-    future = executor.submit(
-        build_joern_evidence, target_path, out_dir, joern_overrides,
-        _progress, joern_server,
-        abort_check=abort_event.is_set if abort_event is not None else None,
-        deadline_monotonic=deadline_monotonic,
-        scope_exclude_dirs=scope_exclude_dirs,
-    )
+    future = executor.submit(_presweep_job)
     executor.shutdown(wait=False)
     return (None, future)
 
