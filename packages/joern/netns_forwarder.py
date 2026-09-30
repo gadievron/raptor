@@ -227,6 +227,41 @@ def _pump(src: socket.socket, dst: socket.socket) -> None:
         dst.shutdown(socket.SHUT_WR)
 
 
+#: The two terminal signals ``main()`` installs Python-level handlers
+#: for. Worker threads must BLOCK exactly these: a process-directed
+#: signal is delivered to any one thread whose mask allows it, and a
+#: handled signal consumed by a worker only trips CPython's C-level
+#: flag — the Python handler runs on the main thread, which sits in an
+#: uninterrupted ``child.wait()`` (waitpid never sees EINTR when the
+#: signal landed elsewhere), so the handler is deferred until the child
+#: dies on its own: the stop request is silently absorbed. Blocking
+#: them in every worker forces kernel delivery onto the main thread,
+#: whose waitpid then returns EINTR and runs the handler promptly.
+#: Only these two: unhandled terminal signals (HUP, QUIT) take the
+#: whole-process default disposition from any thread, so masking them
+#: would change nothing — and masking more than we handle would turn a
+#: future handler bug into a silent no-delivery hang.
+_HANDLED_TERMINAL_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+
+
+def _start_signal_shielded(t: threading.Thread) -> None:
+    """Start ``t`` with the handled terminal signals blocked in it.
+
+    The mask is applied on the CREATING thread and restored right
+    after ``start()`` — a new thread inherits its creator's mask
+    atomically at creation, so there is no window where the worker
+    runs unmasked, and the creator's own delivery eligibility is
+    unchanged outside this call.
+    """
+    old_mask = signal.pthread_sigmask(
+        signal.SIG_BLOCK, _HANDLED_TERMINAL_SIGNALS,
+    )
+    try:
+        t.start()
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+
+
 class Forwarder:
     """Splices unix-socket client connections to a TCP upstream.
 
@@ -269,7 +304,7 @@ class Forwarder:
         t = threading.Thread(
             target=self._accept_loop, name="joern-uds-accept", daemon=True,
         )
-        t.start()
+        _start_signal_shielded(t)
         self._accept_thread = t
 
     def stop(self) -> None:
@@ -337,9 +372,9 @@ class Forwarder:
                 with contextlib.suppress(OSError):
                     conn.close()
                 return
-            threading.Thread(
+            _start_signal_shielded(threading.Thread(
                 target=self._handle, args=(conn,), daemon=True,
-            ).start()
+            ))
 
     def _handle(self, conn: socket.socket) -> None:
         upstream: socket.socket | None = None
@@ -360,7 +395,7 @@ class Forwarder:
             back = threading.Thread(
                 target=_pump, args=(upstream, conn), daemon=True,
             )
-            back.start()
+            _start_signal_shielded(back)
             _pump(conn, upstream)
             back.join()
         except OSError:
@@ -733,7 +768,7 @@ def _start_orphan_watchdog(
     t = threading.Thread(
         target=_watch, name="orphan-watchdog", daemon=True,
     )
-    t.start()
+    _start_signal_shielded(t)
     return t
 
 
