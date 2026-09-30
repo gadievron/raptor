@@ -1247,14 +1247,38 @@ class TestDomainBugPatterns:
         old = signal.signal(signal.SIGALRM, _on_alarm)
         signal.alarm(30)
         try:
-            t0 = time.perf_counter()
-            block = domain_bug_patterns(tmp_path, "a.c", "f", src)
-            dt = time.perf_counter() - t0
+            # CPU time of THIS thread, not wall clock: the evaluation
+            # is single-threaded in-process regex work (the no-thread
+            # tripwire on the superset product path lives in
+            # test_hostile_pattern_list_slice_hash_bounded), so thread
+            # CPU time IS its cost and a loaded host's scheduler
+            # delays — which stretch wall clock without adding a cycle
+            # of regex work — cannot inflate it. Min-of-3: bill the
+            # cheapest run, so cache-cold first-run work (guard and
+            # pattern lru misses) and residual CPU jitter are not
+            # billed as the admitted shapes' cost. The wall-clock hang
+            # net stays with the alarm above.
+            samples: list[float] = []
+            for _ in range(3):
+                t0 = time.thread_time()
+                block = domain_bug_patterns(tmp_path, "a.c", "f", src)
+                samples.append(time.thread_time() - t0)
+                assert block is None
+            dt = min(samples)
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old)
-        assert block is None
-        assert dt < 5.0, f"milder admitted shapes took {dt:.3f}s at clamp"
+        # Two directions: not tighter, because the two admitted shapes
+        # legitimately cost ~0.3-0.4 s CPU each at the clamp on one
+        # host and per-core throughput varies across hosts — slower
+        # cores must still pass; not looser, because these shapes are
+        # pinned as MILD — a cost regression lifting them toward the
+        # constructed admitted worst (~3.4 s CPU at the clamp, bounded
+        # at 8.0 in test_worst_admitted_shape_cost_bounded) must fail
+        # here rather than hide under a slack bound.
+        assert dt < 5.0, (
+            f"milder admitted shapes took {dt:.3f}s CPU at clamp"
+        )
 
     def test_hostile_pattern_list_slice_hash_bounded(
         self, tmp_path, monkeypatch,
@@ -1267,6 +1291,7 @@ class TestDomainBugPatterns:
         the staleness gate makes per journal row returns promptly
         (pre-refusal this call outlived a 15 s bound)."""
         import signal
+        import threading
         import time
 
         from core.concepts import audit_bridge as ab
@@ -1286,17 +1311,57 @@ class TestDomainBugPatterns:
             msg = "hostile-list slice recompute exceeded the alarm"
             raise AssertionError(msg)
 
+        # thread_time() below bills ONLY the calling thread, so work
+        # offloaded to a helper thread would vanish from the bill.
+        # Tripwire (shared by the sibling CPU-time pins in this
+        # class, which measure the same domain_bug_patterns machinery
+        # this call renders through): the measured slice recompute is
+        # single-threaded today — if the product path ever
+        # legitimately spawns a thread, this fails loudly and the
+        # billing scheme must be re-decided, never silently
+        # under-billed.
+        spawned: list[threading.Thread] = []
+        real_start = threading.Thread.start
+
+        def _recording_start(
+            thread: threading.Thread, *args: object, **kwargs: object,
+        ) -> None:
+            spawned.append(thread)
+            real_start(thread, *args, **kwargs)
+
+        monkeypatch.setattr(threading.Thread, "start", _recording_start)
         old = signal.signal(signal.SIGALRM, _on_alarm)
         signal.alarm(30)
         try:
-            t0 = time.perf_counter()
-            digest = ab.domain_slice_hash(tmp_path, "a.c", "f", src)
-            dt = time.perf_counter() - t0
+            # CPU time of THIS thread, not wall clock: the recompute
+            # is single-threaded in-process work (tripwire above), so
+            # thread CPU time IS its cost and a loaded host's
+            # scheduler delays cannot inflate it. Min-of-3: bill the
+            # cheapest run, so cache-cold first-run work (memo build,
+            # demotion logging, lru misses) and residual CPU jitter
+            # are not billed as the recompute's cost. The wall-clock
+            # hang net stays with the alarm above.
+            samples: list[float] = []
+            for _ in range(3):
+                t0 = time.thread_time()
+                digest = ab.domain_slice_hash(tmp_path, "a.c", "f", src)
+                samples.append(time.thread_time() - t0)
+                assert digest is not None
+            dt = min(samples)
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old)
-        assert digest is not None
-        assert dt < 5.0, f"40-hint slice recompute took {dt:.3f}s"
+        assert not spawned, "measured slice recompute spawned threads"
+        # Two directions: not tighter, because forty demoted hints
+        # still buy real work — forty substring scans over an
+        # at-clamp lowered source plus the render, canonicalise and
+        # hash of the slice — and per-core throughput varies across
+        # hosts; not looser, because pre-refusal this same call
+        # outlived 15 s — a guard neutralization that re-admits the
+        # quantified-group hints puts every evaluation back in the
+        # seconds regime, and the bound must sit far below that
+        # regime to fail on it.
+        assert dt < 5.0, f"40-hint slice recompute took {dt:.3f}s CPU"
 
     def test_group_split_bypass_list_slice_hash_bounded(
         self, tmp_path, monkeypatch,
@@ -1332,14 +1397,38 @@ class TestDomainBugPatterns:
         old = signal.signal(signal.SIGALRM, _on_alarm)
         signal.alarm(30)
         try:
-            t0 = time.perf_counter()
-            digest = ab.domain_slice_hash(tmp_path, "a.c", "f", src)
-            dt = time.perf_counter() - t0
+            # CPU time of THIS thread, not wall clock: the recompute
+            # is single-threaded in-process work (the no-thread
+            # tripwire on this same product path lives in
+            # test_hostile_pattern_list_slice_hash_bounded), so
+            # thread CPU time IS its cost and a loaded host's
+            # scheduler delays cannot inflate it. Min-of-3: bill the
+            # cheapest run, so cache-cold first-run work (memo build,
+            # demotion logging, lru misses) and residual CPU jitter
+            # are not billed as the recompute's cost. The wall-clock
+            # hang net stays with the alarm above.
+            samples: list[float] = []
+            for _ in range(3):
+                t0 = time.thread_time()
+                digest = ab.domain_slice_hash(tmp_path, "a.c", "f", src)
+                samples.append(time.thread_time() - t0)
+                assert digest is not None
+            dt = min(samples)
         finally:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old)
-        assert digest is not None
-        assert dt < 5.0, f"bypass-list slice recompute took {dt:.3f}s"
+        # Two directions: not tighter, because forty demoted hints
+        # still buy real work — forty substring scans over an
+        # at-clamp lowered source plus the render, canonicalise and
+        # hash of the slice — and per-core throughput varies across
+        # hosts; not looser, because under the raw "|" branch split
+        # these forty hints were ADMITTED and this same call measured
+        # ~15-25 s per recompute — a scanner regression back to a raw
+        # split puts the call back in that regime, and the bound must
+        # sit far below it to fail on it.
+        assert dt < 5.0, (
+            f"bypass-list slice recompute took {dt:.3f}s CPU"
+        )
 
 
 class TestGrepHintGuard:
