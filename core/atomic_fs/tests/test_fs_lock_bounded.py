@@ -261,3 +261,129 @@ class TestLimits:
         must consciously update this pin with it."""
         assert fs_lock._ACQUIRE_DEADLINE_S == 60.0
         assert fs_lock._ACQUIRE_POLL_S == 0.1
+
+
+def _rchar() -> int:
+    """This process's cumulative read-bytes counter (Linux procfs)."""
+    with open("/proc/self/io") as fh:
+        for line in fh:
+            if line.startswith("rchar:"):
+                return int(line.split()[1])
+    return -1
+
+
+class TestHintContainment:
+    """The stamp hint must never reintroduce the shapes the lock
+    machinery refuses: a planted FIFO wedging the waiter before the
+    deadline starts, or a stuffed file slurped whole on every
+    contended acquire."""
+
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"),
+                        reason="mkfifo unavailable (non-POSIX)")
+    def test_fifo_swapped_at_lock_path_never_wedges_the_waiter(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Path swapped to a reader-less FIFO between the waiter's
+        open and its first contention: the hint read must not block
+        the bounded wait."""
+        monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.5,
+                            raising=False)
+        monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
+                            raising=False)
+        lock = tmp_path / "a.json.lock"
+        lock.write_bytes(b"")
+        holder_fd = os.open(str(lock), os.O_WRONLY)
+        victim_fd = os.open(str(lock), os.O_WRONLY)
+        result: list[bool] = []
+        done = threading.Event()
+
+        def waiter() -> None:
+            result.append(fs_lock.acquire_flock_bounded(
+                victim_fd, lock, subject="hint probe", stamp=True))
+            done.set()
+
+        thread = threading.Thread(target=waiter, daemon=True)
+        try:
+            import fcntl
+            fcntl.flock(holder_fd, fcntl.LOCK_EX)
+            fs_lock.validate_lock_fd(victim_fd, lock)
+            # The attacker's swap lands after the victim validated its
+            # (regular, own-uid) fd but before the contended acquire.
+            os.unlink(lock)
+            os.mkfifo(lock)
+            thread.start()
+            assert done.wait(timeout=10), (
+                "acquire_flock_bounded wedged on the planted FIFO — "
+                "the hint read blocked before the deadline started"
+            )
+            assert result == [False]
+        finally:
+            os.close(holder_fd)
+            os.close(victim_fd)
+            thread.join(timeout=10)
+
+    @pytest.mark.skipif(not os.path.exists("/proc/self/io"),
+                        reason="procfs io counters unavailable")
+    def test_stuffed_lock_file_is_not_slurped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A same-uid-stuffed sidecar lock file costs a capped read,
+        never a whole-file slurp, on the contended path."""
+        monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.2,
+                            raising=False)
+        monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
+                            raising=False)
+        size = 50 * 1024 * 1024
+        lock = tmp_path / "b.json.lock"
+        with open(lock, "wb") as fh:
+            fh.truncate(size)  # sparse
+        import fcntl
+        holder_fd = os.open(str(lock), os.O_WRONLY)
+        victim_fd = os.open(str(lock), os.O_WRONLY)
+        try:
+            fcntl.flock(holder_fd, fcntl.LOCK_EX)
+            before = _rchar()
+            got = fs_lock.acquire_flock_bounded(
+                victim_fd, lock, subject="hint probe", stamp=True)
+            delta = _rchar() - before
+            assert got is False
+            assert delta < size // 10, (
+                f"contended acquire read {delta} bytes of a "
+                f"{size}-byte lock file — the hint read is not capped"
+            )
+        finally:
+            os.close(holder_fd)
+            os.close(victim_fd)
+
+    @pytest.mark.skipif(not os.path.exists("/proc/self/io"),
+                        reason="procfs io counters unavailable")
+    def test_data_file_flock_never_reads_a_hint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Without ``stamp`` the lock path is a DATA file (journal
+        shard idiom): contention must not read it at all."""
+        monkeypatch.setattr(fs_lock, "_ACQUIRE_DEADLINE_S", 0.2,
+                            raising=False)
+        monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
+                            raising=False)
+        size = 50 * 1024 * 1024
+        shard = tmp_path / "journal-shard.jsonl"
+        with open(shard, "wb") as fh:
+            fh.truncate(size)  # sparse
+        import fcntl
+        holder_fd = os.open(str(shard), os.O_WRONLY)
+        victim_fd = os.open(str(shard), os.O_WRONLY)
+        try:
+            fcntl.flock(holder_fd, fcntl.LOCK_EX)
+            before = _rchar()
+            got = fs_lock.acquire_flock_bounded(
+                victim_fd, shard, subject="journal shard")
+            delta = _rchar() - before
+            assert got is False
+            assert delta < 1024 * 1024, (
+                f"data-file contention read {delta} bytes of the "
+                f"shard — the hint must be skipped for stamp=False"
+            )
+        finally:
+            os.close(holder_fd)
+            os.close(victim_fd)

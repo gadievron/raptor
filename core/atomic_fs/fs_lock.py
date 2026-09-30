@@ -141,13 +141,37 @@ def stamp_lock_holder(fd: int) -> None:
 def _holder_hint(lock_path: Path) -> str:
     """Parse the advisory pid stamp for the contention warning.
 
-    Strictly an integer parse of a short read — the lock file sits in
-    directories hostile writers can reach, so nothing but a decimal
-    pid is ever echoed into the log.
+    Strictly an integer parse of a HARDENED, CAPPED read — the lock
+    path sits in directories hostile writers can reach, and it can be
+    swapped between the waiter's open and its first contention, so the
+    hint read must survive the same shapes as the lock open itself:
+
+    - a planted FIFO must not wedge the read (a bare ``Path.read_bytes``
+      open blocks on a reader-less FIFO — before the deadline loop even
+      starts, defeating the bounded-wait contract);
+    - a stuffed lock file must not be slurped whole (``read_bytes()``
+      reads EVERYTHING before any slice — an attacker-sized
+      allocation per contended acquire);
+    - nothing but a decimal pid is ever echoed into the log.
+
+    ``core.source.read_text_capped`` provides exactly that
+    (``O_NOFOLLOW`` / ``O_NONBLOCK`` / regularity refusal / capped
+    bytes). Every failure shape degrades to "no hint".
     """
+    from core.source import read_text_capped  # lazy, matching peers
+
+    # 64 chars: a pid stamp is "%d\n" (<= 21 chars even for a 64-bit
+    # pid); the headroom tolerates whitespace padding while anything
+    # larger is not a stamp and must not parse.
+    got = read_text_capped(lock_path, 64)
+    if got is None:
+        return ""
+    text, truncated = got
+    if truncated:
+        return ""
     try:
-        pid = int(lock_path.read_bytes()[:64].decode("ascii").strip())
-    except (OSError, ValueError, UnicodeDecodeError):
+        pid = int(text.strip())
+    except ValueError:
         return ""
     if pid <= 0:
         return ""
@@ -196,9 +220,14 @@ def acquire_flock_bounded(
         if stamp:
             stamp_lock_holder(fd)
         return True
+    # The stamp hint is read only where stamping happens (sidecar lock
+    # fds). For data-file flocks *lock_path* IS the data file: it never
+    # carries a stamp, and reading it for a hint would touch
+    # shard-sized content on every contended acquire.
+    hint = _holder_hint(lock_path) if stamp else ""
     logger.warning(
         "%s lock %s: held by another process%s; waiting up to %.0fs",
-        subject, lock_path, _holder_hint(lock_path), deadline_s,
+        subject, lock_path, hint, deadline_s,
     )
     deadline = time.monotonic() + deadline_s
     while True:
