@@ -207,6 +207,26 @@ class TestChurnRetryBound:
             "the retry must re-latch on a fresh fd — the consumed "
             "signal died with the first attempt's closed fd")
 
+    def test_retry_bound_within_sane_ceiling(self) -> None:
+        # Named ceiling pin on the constant ITSELF: the behavioural
+        # `== 3` pin above can only run after _group_sighted_members
+        # returns, so an absurd bound (say 10_000_000) surfaces only
+        # as a suite hang under sustained churn — precisely the
+        # livelock the bound exists to prevent. Pin the value into a
+        # small sane range so bound drift fails by name instead. Not
+        # lower than 2: one scan is no retry at all, and transient
+        # unrelated mount events would turn the one-shot call sites
+        # into spurious occlusion refusals. Not higher than 10: each
+        # attempt costs a full /proc scan (~25-45 ms at ~1000
+        # entries) and the loop-shaped callers rescan every ~20 ms
+        # inside 5 s budgets — a larger bound only lets sustained
+        # churn hold every caller longer without changing the verdict
+        # class.
+        assert 2 <= sup._SCAN_CHURN_RETRIES <= 10, (
+            f"_SCAN_CHURN_RETRIES={sup._SCAN_CHURN_RETRIES} is outside "
+            f"the sane retry ceiling — an absurd bound livelocks the "
+            f"scan's callers under sustained churn")
+
 
 class TestMountsFdMagic:
     """The fstatfs superblock-magic rider: a non-procfs object bind-
