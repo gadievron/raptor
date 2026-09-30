@@ -860,15 +860,17 @@ def sanitise_findings_evidence(
         # junk in place would hand downstream/external truthy readers
         # a value the tri-state accessor refuses.
         _claim = read_verdict(finding, "is_exploitable")
-        # Key-presence check, never a value read: on abstention the
-        # key holds either the explicit None (left alone) or a junk
-        # shape (normalised); an absent key stays absent. Spelled as
-        # key membership so no raw verdict value is ever bound or
-        # compared — the tri-state idiom closure needs no exemption.
+        # Shape check, never a value read: on abstention the key
+        # holds either the explicit None (left alone) or a junk
+        # shape (normalised); an absent key stays absent (its read
+        # binds None, which the isinstance arm excludes). The bound
+        # raw value is inspected only for its type — the spelling
+        # the tri-state accessor itself uses — so it is never
+        # truth-tested or identity-compared as a verdict.
+        _stored = finding.get("is_exploitable")
         _junk = (
             _claim is None
-            and "is_exploitable" in finding
-            and finding.get("is_exploitable") is not None
+            and not isinstance(_stored, (bool, type(None)))
         )
         if _claim is True or _junk:
             feasibility = finding.get("feasibility")

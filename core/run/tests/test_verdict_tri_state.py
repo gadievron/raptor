@@ -579,6 +579,17 @@ class TestVerdictIdiomClosure:
         # misread no package-rooted sweep could see.
         assert any(f.name == "raptor_fuzzing.py" for f in files)
 
+    def test_evidence_demotion_chokepoint_is_clean(self):
+        # Fast single-file arm for the highest-risk site: the
+        # evidence-demotion chokepoint mixes read_verdict reads with
+        # a shape probe on the same key, and the whole-tree scans
+        # below are slow-marked (nightly lane only) — a misread
+        # regression in this file must redden the default tier too,
+        # not wait for the slow lane.
+        f = REPO_ROOT / "core" / "witness" / "provenance.py"
+        assert f.is_file()
+        assert _violations_in(f) == []
+
     def test_scanner_catches_each_hostile_idiom(self, tmp_path: Path):
         # The scanner itself is behaviour under test: feed it one
         # planted mutation per idiom family and a set of clean
