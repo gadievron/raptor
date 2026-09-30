@@ -191,11 +191,12 @@ def test_ledger_writes_go_through_the_public_api() -> None:
     # read_artifact_checklist belongs here: it is the ledger's
     # frame-authenticated read chokepoint — it verifies the checklist
     # slot's integrity token, refuses tampered frames, and strips the
-    # token before returning. The bypass (checklist_slot_path + a raw
-    # json load) would skip authentication entirely — the exact defect
-    # class the chain must not reintroduce. Do NOT admit private
-    # "_"-prefixed seams or raw-rewrite verbs.
-    allowed = {"STATUS_STATES", "checklist_slot_path", "load_ledger",
+    # token before returning. ``checklist_slot_path`` is deliberately
+    # NOT granted: the chain no longer imports it, and re-admitting it
+    # would reopen the bypass (checklist_slot_path + a raw json load)
+    # that skips the authenticated readers entirely. Do NOT admit
+    # private "_"-prefixed seams or raw-rewrite verbs.
+    allowed = {"STATUS_STATES", "load_ledger",
                "read_artifact_checklist", "set_artifact_status",
                "write_artifact_checklist"}
     for node in ast.walk(tree):
