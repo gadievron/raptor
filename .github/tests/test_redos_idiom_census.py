@@ -4489,6 +4489,47 @@ class LadderExponentPins(unittest.TestCase):
         self.assertAlmostEqual(got, 1.5)
         self.assertEqual(clock.call_count, 2)
 
+    def test_fallback_prices_a_50x_jump_superlinear(self) -> None:
+        """The fail-open corner: a final probe over the trust floor
+        with every earlier probe stuck in timer noise leaves fewer
+        than two fittable samples, so the fit falls back to the
+        last-two log-ratio — a >=50x one-doubling jump must price
+        wildly superlinear, never crash on an empty fit and never
+        be diluted toward linear by the sub-noise probes."""
+        probes = [(n, 1e-7) for n in (500, 1000, 2000, 4000, 8000,
+                                      16000)]
+        probes.append((32000, 6e-3))
+        exponent, status = _ladder_exponent(probes)
+        self.assertEqual(status, "ok")
+        self.assertGreater(exponent, 10.0)
+
+    def test_quantized_bottom_cannot_hide_genuine_superlinear(
+            self) -> None:
+        """Inversion guard on the noise-floor filter, suppression
+        direction: a genuine quadratic whose bottom probes quantize
+        to near zero must fit on the ABOVE-floor probes (slope ~2),
+        never on the quantized ones (slope 0) — a filter that keeps
+        the wrong side silences a real finding while every other
+        pin stays green."""
+        probes = ([(500, 1e-7), (1000, 1e-7)]
+                  + [(n, 2e-10 * n ** 2)
+                     for n in (2000, 4000, 8000, 16000, 32000)])
+        exponent, status = _ladder_exponent(probes)
+        self.assertEqual(status, "ok")
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+
+    def test_sub_noise_slope_cannot_mint_superlinear(self) -> None:
+        """Inversion guard, false-positive direction: the same
+        wrong-side filter fits ONLY the quantization junk, and two
+        sub-noise samples carrying a wild fake slope then mint a
+        superlinear verdict from a clean linear ladder."""
+        probes = ([(500, 1e-7), (1000, 9e-5)]
+                  + [(n, 2e-7 * n)
+                     for n in (2000, 4000, 8000, 16000, 32000)])
+        exponent, status = _ladder_exponent(probes)
+        self.assertEqual(status, "ok")
+        self.assertLess(exponent, _SUPERLINEAR_EXP)
+
 
 class NestedQuantifierCensus(unittest.TestCase):
     """Rule N arm: exponential-composition membership is static and
