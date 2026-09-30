@@ -57,7 +57,7 @@ def _clean_detector(monkeypatch, log=None):
 
 def _counting_latch(monkeypatch):
     """Record every latch open and the fd it returned."""
-    real = getattr(sup, "_mounts_latch_open", None)
+    real = sup._mounts_latch_open
     opened: list[int] = []
 
     def counting():
@@ -65,8 +65,7 @@ def _counting_latch(monkeypatch):
         opened.append(fd)
         return fd
 
-    monkeypatch.setattr(sup, "_mounts_latch_open", counting,
-                        raising=False)
+    monkeypatch.setattr(sup, "_mounts_latch_open", counting)
     return opened
 
 
@@ -86,7 +85,7 @@ class TestChurnVerdict:
         _pin_listing_to_self(monkeypatch)
         _clean_detector(monkeypatch)
         monkeypatch.setattr(sup, "_mounts_churn_pending",
-                            lambda fd: True, raising=False)
+                            lambda fd: True)
         view = sup._group_sighted_members(os.getpgrp())
         assert view is not None
         assert view.occlusion is not None, (
@@ -112,8 +111,7 @@ class TestChurnVerdict:
             events.append("verdict")
             return True
 
-        monkeypatch.setattr(sup, "_mounts_churn_pending", verdict,
-                            raising=False)
+        monkeypatch.setattr(sup, "_mounts_churn_pending", verdict)
         view = sup._group_sighted_members(os.getpgrp())
         assert view is not None and view.occlusion is not None
         # Sustained churn exhausts the bounded retry: three attempts,
@@ -132,7 +130,7 @@ class TestChurnVerdict:
         _pin_listing_to_self(monkeypatch)
         _clean_detector(monkeypatch, log=events)
         monkeypatch.setattr(sup, "_mounts_churn_pending",
-                            lambda fd: False, raising=False)
+                            lambda fd: False)
         view = sup._group_sighted_members(os.getpgrp())
         assert view is not None
         assert view.occlusion is None
@@ -151,8 +149,7 @@ class TestChurnVerdict:
         def broken(fd):
             raise OSError(5, "poll failed")
 
-        monkeypatch.setattr(sup, "_mounts_churn_pending", broken,
-                            raising=False)
+        monkeypatch.setattr(sup, "_mounts_churn_pending", broken)
         view = sup._group_sighted_members(os.getpgrp())
         assert view is not None
         assert view.occlusion is not None and "verdict poll" in view.occlusion
@@ -176,8 +173,7 @@ class TestChurnRetryBound:
             polled.append(fd)
             return True
 
-        monkeypatch.setattr(sup, "_mounts_churn_pending", verdict,
-                            raising=False)
+        monkeypatch.setattr(sup, "_mounts_churn_pending", verdict)
         view = sup._group_sighted_members(os.getpgrp())
         assert view is not None
         assert view.occlusion is not None
@@ -202,7 +198,7 @@ class TestChurnRetryBound:
         opened = _counting_latch(monkeypatch)
         answers = iter([True, False, False])
         monkeypatch.setattr(sup, "_mounts_churn_pending",
-                            lambda fd: next(answers), raising=False)
+                            lambda fd: next(answers))
         view = sup._group_sighted_members(os.getpgrp())
         assert view is not None
         assert view.occlusion is None
@@ -251,8 +247,7 @@ class TestUnreadableMountsArms:
             polled.append(fd)
             return False
 
-        monkeypatch.setattr(sup, "_mounts_churn_pending", verdict,
-                            raising=False)
+        monkeypatch.setattr(sup, "_mounts_churn_pending", verdict)
         return polled
 
     def test_latch_open_failure_is_occlusion_without_poll(
@@ -276,8 +271,7 @@ class TestUnreadableMountsArms:
             opens.append(None)
             return None
 
-        monkeypatch.setattr(sup, "_mounts_latch_open", failing_open,
-                            raising=False)
+        monkeypatch.setattr(sup, "_mounts_latch_open", failing_open)
         view = sup._group_sighted_members(os.getpgrp())
         assert view is not None
         assert view.occlusion is not None, (
@@ -309,8 +303,7 @@ class TestUnreadableMountsArms:
             reads.append(fd)
             raise OSError(5, "read failed")
 
-        monkeypatch.setattr(sup, "_mounts_table_read", broken_read,
-                            raising=False)
+        monkeypatch.setattr(sup, "_mounts_table_read", broken_read)
         view = sup._group_sighted_members(os.getpgrp())
         assert view is not None
         assert view.occlusion is not None, (
@@ -341,8 +334,7 @@ class TestUnreadableMountsArms:
                 raise OSError(5, "read failed")
             return b""
 
-        monkeypatch.setattr(sup, "_mounts_table_read", read_then_break,
-                            raising=False)
+        monkeypatch.setattr(sup, "_mounts_table_read", read_then_break)
         view = sup._group_sighted_members(os.getpgrp())
         assert view is not None
         assert view.occlusion is not None, (
