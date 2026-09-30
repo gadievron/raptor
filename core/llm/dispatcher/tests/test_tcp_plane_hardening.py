@@ -101,8 +101,24 @@ def test_tcp_connection_cap_refuses_over_cap(
         for _ in range(4):
             held.append(
                 socket.create_connection(("127.0.0.1", port), timeout=5))
-        # Give the accept loop a beat to hand all four to handlers.
-        time.sleep(0.2)
+        # create_connection returns at kernel handshake completion —
+        # possibly before the accept loop has handed a socket to its
+        # handler and claimed its cap slot. Wait for the observable
+        # state (all four slots held) under a bounded deadline
+        # instead of a fixed beat, so the fifth connection below
+        # provably contends with a full plane.
+        slots = d._tcp_server._conn_slots
+
+        def _all_slots_claimed() -> bool:
+            return slots._value == 0
+
+        deadline = time.monotonic() + 5.0
+        while not _all_slots_claimed() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert _all_slots_claimed(), (
+            "accept loop did not claim all 4 in-cap connections "
+            f"within the deadline ({slots._value} slot(s) still free)"
+        )
         extra = socket.create_connection(("127.0.0.1", port), timeout=5)
         try:
             extra.settimeout(5)

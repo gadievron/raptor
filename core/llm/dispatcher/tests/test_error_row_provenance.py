@@ -183,17 +183,32 @@ class TestErrorRowProvenance:
         """request.retry shares the writer and the shape: a stale-reuse
         retry is pre-response by construction and fires within the
         retry ceiling of the send."""
-        # 3x the idle threshold guarantees the mock's condemnation
-        # (a precise socket timeout) fired before the reuse; the
-        # threshold itself only has to exceed a healthy request's
-        # connect-to-first-write gap so it never fires mid-handshake.
+        # The idle threshold only has to exceed a healthy request's
+        # connect-to-first-write gap so it never fires mid-handshake;
+        # the reuse below waits on the mock's condemnation counter,
+        # not on a multiple of this value.
         idle_s = 0.15
         upstream = MockUpstream("half-open", idle_s=idle_s)
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
             token = _worker_token(d)
             assert _post(d, token).status_code == 200
-            time.sleep(idle_s * 3)  # idle the pooled connection past teardown
+
+            # The mock condemns the pooled connection after ``idle_s``
+            # of silence (a socket timeout on its handler thread) and
+            # counts the condemnation the moment the timer fires —
+            # wait for that observable state instead of sleeping a
+            # margin multiple of the threshold.
+            def _condemned() -> bool:
+                return upstream.counters()["condemnations"] > 0
+
+            deadline = time.monotonic() + 5.0
+            while not _condemned() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert _condemned(), (
+                "mock never condemned the pooled connection within "
+                "the deadline"
+            )
             assert _post(d, token).status_code == 200
             rows = _wait_audit(d, "request.retry")
             assert rows

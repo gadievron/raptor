@@ -729,10 +729,23 @@ class TestWatcherAbortIsNotShardEvidence:
             errors = _wait_audit(d, "request.error", timeout=6.0)
             assert errors
             assert errors[0]["worker_disconnected"] is True
-            # Give the relay's release its beat (thread scheduling
-            # only — no window of the dispatcher's is involved), then
-            # pin: no drain, the shard client is still in rotation.
-            time.sleep(0.25)
+            # The relay returns its shard hold in its ``finally``,
+            # which lags the error row by a scheduler beat — and a
+            # drain (the failure this test pins as ABSENT) would
+            # happen inside that release. Wait for the release itself
+            # (every hold returned) under a bounded deadline instead
+            # of a fixed beat, then pin: no drain, the shard client
+            # is still in rotation.
+            def _hold_returned() -> bool:
+                return not any(shards.in_flight)
+
+            deadline = time.monotonic() + 5.0
+            while not _hold_returned() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert _hold_returned(), (
+                "relay never returned its shard hold within the "
+                f"deadline (in_flight={shards.in_flight})"
+            )
             assert shards.clients[0] is pooled
             assert not pooled.is_closed
         finally:

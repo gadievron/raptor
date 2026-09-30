@@ -46,6 +46,10 @@ failed": ``requests_processed`` increments only when a full request
 was parsed and handling began — the double-send evidence a retry
 audit needs. ``stale_hits`` counts request bytes that arrived on a
 connection already condemned by its teardown mode (never processed).
+``condemnations`` counts idle timers firing (the instant an idle
+mode condemns a kept-alive connection) so tests can wait on the
+condemnation itself instead of sleeping a margin multiple of
+``idle_s``.
 """
 
 from __future__ import annotations
@@ -102,6 +106,7 @@ class MockUpstream:
         self.requests_processed = 0
         self.responses_completed = 0
         self.stale_hits = 0
+        self.condemnations = 0
 
         self._stop = threading.Event()
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -140,6 +145,7 @@ class MockUpstream:
                 "requests_processed": self.requests_processed,
                 "responses_completed": self.responses_completed,
                 "stale_hits": self.stale_hits,
+                "condemnations": self.condemnations,
             }
 
     def _bump(self, name: str) -> None:
@@ -248,6 +254,7 @@ class MockUpstream:
                 conn.close()
 
     def _on_idle_timeout(self, conn: socket.socket) -> None:
+        self._bump("condemnations")
         if self.mode == "idle-close-fin":
             conn.close()
             return
